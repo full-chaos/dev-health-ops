@@ -44,3 +44,61 @@ The provider has no published host port. It exists only in the
 `ask-dev-acceptance` profile on the internal `ask-dev-acceptance` network. A
 successful run removes the dedicated acceptance project and volumes; a failed
 run retains them and prints recent Ops, provider, and Web logs for diagnosis.
+
+## Live provider profiles
+
+Live provider smokes supplement the deterministic oracle above; they never
+replace it as the release gate. Each profile starts a disposable Ops stack,
+generates the same seeded organization data, enables Ask Dev through the public
+admin API, and invokes the real administrator readiness action. Readiness proves
+the OpenAI-compatible structured-output turn and its tool-result continuation.
+The smoke then creates a conversation and requires a bounded, contract-valid
+`answer.completed` event from the real `/api/v1/dev/**` REST/SSE surface with
+`provider_source=platform`. A selected profile fails on missing configuration,
+provider errors, invalid output, or an error terminal; it never turns those
+conditions into a skip.
+
+For the current local LM Studio profile, LM Studio is listening on the host at
+`127.0.0.1:1234` with `google/gemma-4-e4b` loaded. The launcher maps the host
+endpoint to Compose and deliberately selects the platform `local` environment
+bundle used by normal deployments:
+
+```console
+scripts/acceptance/run_ask_dev_provider_profile.sh --profile lmstudio-local
+```
+
+Override either exact value only when intentionally validating another loaded
+model or endpoint:
+
+```console
+ASK_DEV_PROVIDER_MODEL=my/model \
+ASK_DEV_PROVIDER_BASE_URL=http://host.docker.internal:1234/v1 \
+  scripts/acceptance/run_ask_dev_provider_profile.sh --profile lmstudio-local
+```
+
+For a local Ollama daemon, provide the exact installed model. Ollama's documented
+OpenAI-compatible default is `http://localhost:11434/v1`; the Compose profile
+uses the equivalent host bridge address:
+
+```console
+ASK_DEV_PROVIDER_MODEL=qwen3:8b \
+  scripts/acceptance/run_ask_dev_provider_profile.sh --profile ollama-local
+```
+
+Ollama Cloud is opt-in and requires both an exact cloud model and an
+`OLLAMA_API_KEY` injected by the operator's shell credential store or CI secret.
+Do not put the key in a command-line argument or checked-in environment file.
+The profile uses the OpenAI-compatible `https://ollama.com/v1` endpoint unless
+`ASK_DEV_PROVIDER_BASE_URL` explicitly overrides it:
+
+```console
+export OLLAMA_API_KEY
+ASK_DEV_PROVIDER_MODEL=gpt-oss:120b-cloud \
+  scripts/acceptance/run_ask_dev_provider_profile.sh --profile ollama-cloud
+```
+
+Local Ollama and Ollama Cloud use the `OLLAMA_*` platform aliases; LM Studio's
+validated `local` profile uses `LOCAL_LLM_*`. The overlay also sets the generic
+`LLM_MODEL` and `LLM_BASE_URL` to the same values and clears unrelated provider
+aliases, so the smoke proves the documented source-bound environment resolution
+instead of inheriting a developer's unrelated `.env` provider.

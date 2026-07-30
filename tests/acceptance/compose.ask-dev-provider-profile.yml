@@ -1,0 +1,41 @@
+services:
+  postgres:
+    ports: !reset []
+
+  pgbouncer:
+    ports: !reset []
+
+  clickhouse:
+    ports: !reset []
+
+  valkey:
+    ports: !reset []
+
+  migrate:
+    environment:
+      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
+
+  api:
+    ports: !override
+      - "127.0.0.1:18081:8000"
+    environment:
+      ENVIRONMENT: acceptance
+      ASK_DEV_LIVE_ACCEPTANCE: "0"
+      JWT_SECRET_KEY: ask-dev-provider-profile-jwt-secret-key-v1
+      LLM_PROVIDER: ${ASK_DEV_PROFILE_PROVIDER:?select a provider profile through the launcher}
+      LLM_MODEL: ${ASK_DEV_PROFILE_MODEL:?select a model through the launcher}
+      LLM_BASE_URL: ${ASK_DEV_PROFILE_BASE_URL:?select a base URL through the launcher}
+      LLM_API_KEY: ""
+      LOCAL_LLM_BASE_URL: ${ASK_DEV_PROFILE_LOCAL_BASE_URL:-}
+      LOCAL_LLM_MODEL: ${ASK_DEV_PROFILE_LOCAL_MODEL:-}
+      LOCAL_LLM_API_KEY: ""
+      OLLAMA_BASE_URL: ${ASK_DEV_PROFILE_OLLAMA_BASE_URL:-}
+      OLLAMA_MODEL: ${ASK_DEV_PROFILE_OLLAMA_MODEL:-}
+      OLLAMA_API_KEY: ${ASK_DEV_PROFILE_OLLAMA_API_KEY:-}
+      LMSTUDIO_BASE_URL: ""
+      LMSTUDIO_MODEL: ""
+      LMSTUDIO_API_KEY: ""
+      OPENAI_BASE_URL: ""
+      OPENAI_API_KEY: ""
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

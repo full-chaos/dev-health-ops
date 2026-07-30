@@ -292,6 +292,24 @@ def _checked_at(value: str | None) -> datetime | None:
     return parsed
 
 
+def _failed_readiness_state(safe_error_code: str | None) -> tuple[ReadinessState, str]:
+    if safe_error_code == "provider_not_configured":
+        return (
+            "missing_credentials",
+            "Ask Dev could not authenticate with the configured model endpoint.",
+        )
+    if safe_error_code == "timeout":
+        return "degraded", "The configured Ask Dev model timed out during readiness."
+    if safe_error_code == "invalid_response":
+        return (
+            "unsupported_model",
+            "The configured model did not satisfy the Ask Dev agent capability contract.",
+        )
+    if safe_error_code == "provider_unavailable":
+        return "degraded", "The configured Ask Dev model endpoint is unavailable."
+    return "degraded", "The configured Ask Dev model failed readiness."
+
+
 async def _admin_response(
     session: AsyncSession,
     *,
@@ -341,8 +359,9 @@ async def _admin_response(
                 and readiness_record.readiness_version == READINESS_VERSION
                 and readiness_record.outcome is AgentReadinessOutcome.FAILED
             ):
-                readiness = "degraded"
-                failure_reason = "The configured Ask Dev model failed certification."
+                readiness, failure_reason = _failed_readiness_state(
+                    readiness_record.safe_error_code
+                )
             else:
                 readiness = "stale_readiness"
                 failure_reason = (

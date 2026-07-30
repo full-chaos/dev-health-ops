@@ -81,7 +81,7 @@ class FakeReadinessProvider:
                 model_fingerprint="model",
             )
         return AgentDecisionResult(
-            decision=AgentFinalAnswer(value={}),
+            decision=AgentFinalAnswer(value={"nonce": "ready-v1"}),
             usage=AgentUsage(input_tokens=4, output_tokens=1),
             latency_ms=1,
             provider_fingerprint="provider",
@@ -214,6 +214,30 @@ async def test_admin_projection_and_readiness_are_safe_and_shared(admin_context)
         "conversation",
     ):
         assert forbidden not in serialized
+
+
+@pytest.mark.parametrize(
+    ("safe_error_code", "state", "message"),
+    [
+        (
+            "provider_not_configured",
+            "missing_credentials",
+            "could not authenticate",
+        ),
+        ("timeout", "degraded", "timed out"),
+        ("invalid_response", "unsupported_model", "capability contract"),
+        ("provider_unavailable", "degraded", "endpoint is unavailable"),
+    ],
+)
+def test_failed_readiness_exposes_only_specific_safe_remediation(
+    safe_error_code: str, state: str, message: str
+) -> None:
+    readiness, reason = ask_dev_admin._failed_readiness_state(safe_error_code)
+
+    assert readiness == state
+    assert message in reason
+    assert "api_key" not in reason
+    assert "base_url" not in reason
 
 
 @pytest.mark.asyncio

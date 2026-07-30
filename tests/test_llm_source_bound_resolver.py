@@ -292,6 +292,22 @@ def test_resolve_llm_credentials_is_source_bound_for_org():
     assert anthropic_creds.base_url != "https://api.openai.com/v1"
 
 
+def test_ollama_cloud_uses_provider_specific_platform_api_key_alias():
+    with patch.dict(
+        os.environ,
+        {
+            "OLLAMA_API_KEY": "ollama-platform-key",
+            "OLLAMA_BASE_URL": "https://ollama.com/v1",
+        },
+        clear=True,
+    ):
+        with _patch_org({}):
+            resolved = creds.resolve_llm_credentials("ollama", org_id=None)
+
+    assert resolved.api_key == "ollama-platform-key"
+    assert resolved.base_url == "https://ollama.com/v1"
+
+
 def test_org_byo_model_is_source_bound_not_platform_env():
     """Review finding (CHAOS-2550): when org BYO wins, the model must come from
     the org (or provider default), NOT a platform env model var. Otherwise an

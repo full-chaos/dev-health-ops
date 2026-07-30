@@ -399,6 +399,7 @@ class DevOrchestrator:
         model_fingerprint: str | None = None
         prompt_checksum: str | None = None
         resolution: DevScopeResolution | None = None
+        provider_continuation: tuple[AgentMessage, ...] = ()
         terminal_written = False
         repair_count = 0
         retry_count = 0
@@ -542,6 +543,7 @@ class DevOrchestrator:
                 messages = (
                     AgentMessage(AgentMessageRole.SYSTEM, composed.system_text),
                     AgentMessage(AgentMessageRole.USER, composed.user_text),
+                    *provider_continuation,
                 )
                 tools = self._provider_tools()
                 while True:
@@ -658,6 +660,18 @@ class DevOrchestrator:
                         )
                     tool_results.append(execution.result)
                     tool_bytes_total = next_total
+                    provider_continuation += (
+                        AgentMessage(
+                            AgentMessageRole.ASSISTANT,
+                            "",
+                            tool_request=decision,
+                        ),
+                        AgentMessage(
+                            AgentMessageRole.TOOL,
+                            execution.result.model_dump_json(),
+                            tool_call_id=decision.call_id,
+                        ),
+                    )
                     await self._recorder.record_tool(
                         ordinal=len(tool_results) - 1,
                         request=tool_request,
@@ -682,12 +696,36 @@ class DevOrchestrator:
                         tool_results=tuple(tool_results),
                     )
                     candidate = dict(decision.value)
+                    canonical_data = self._canonical_answer_data(tuple(tool_results))
+                    if canonical_data is None:
+                        return await finish(
+                            RunState.FAILED,
+                            error=error(
+                                "answer_validation_failed",
+                                "The answer failed grounding validation.",
+                            ),
+                        )
+                    canonical_metrics, canonical_evidence = canonical_data
+                    now = datetime.now(UTC)
                     candidate.update(
                         {
                             "schema_version": "dev_answer.v1",
                             "answer_id": answer_id,
                             "conversation_id": conversation_id,
+                            "generated_at": now,
                             "resolved_scope": resolution.model_dump(mode="json"),
+                            "as_of": now,
+                            "metrics": [
+                                item.model_dump(mode="json")
+                                for item in canonical_metrics
+                            ],
+                            "evidence": [
+                                item.model_dump(mode="json")
+                                for item in canonical_evidence
+                            ],
+                            "coverage": self._coverage_from_tool_results(
+                                tuple(tool_results), now
+                            ).model_dump(mode="json"),
                             "versions": self._versions.model_dump(mode="json"),
                             "model": model.model_dump(mode="json"),
                         }
@@ -889,11 +927,48 @@ class DevOrchestrator:
             AgentToolDefinition(
                 tool_id=str(item["tool_id"]),
                 description=str(item["description"]),
-                input_schema=DevToolRequest.model_json_schema(mode="validation"),
+                input_schema=self._provider_tool_input_schema(
+                    ToolID(str(item["tool_id"])), int(item["max_items"])
+                ),
             )
             for item in tools
             if isinstance(item, Mapping)
         )
+
+    @staticmethod
+    def _provider_tool_input_schema(tool_id: ToolID, max_items: int) -> dict[str, Any]:
+        """Expose only model-owned arguments accepted by the exact tool contract."""
+
+        properties: dict[str, Any] = {
+            "limit": {"type": "integer", "enum": list(range(1, max_items + 1))}
+        }
+        if tool_id is ToolID.QUERY_METRIC:
+            properties = {
+                "metric_id": {"type": "string"},
+                "include_comparison": {"type": "boolean"},
+                **properties,
+            }
+        elif tool_id in {ToolID.RESOLVE_SCOPE, ToolID.SEARCH_EVIDENCE}:
+            properties = {"query": {"type": "string"}, **properties}
+        elif tool_id is ToolID.GET_EVIDENCE:
+            properties = {
+                "evidence_ref_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                **properties,
+            }
+        elif tool_id in {ToolID.STATUS_SNAPSHOT, ToolID.CHANGE_SUMMARY}:
+            properties = {
+                "include_comparison": {"type": "boolean"},
+                **properties,
+            }
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": properties,
+            "required": sorted(properties),
+        }
 
     def _budget_answer(
         self,
@@ -906,30 +981,12 @@ class DevOrchestrator:
     ) -> DevAnswer | None:
         """Return only canonical retrieved data when a later model call is blocked."""
 
-        evidence: dict[str, DevEvidenceRef] = {}
-        metrics: dict[str, DevMetricRef] = {}
-        for result in tool_results:
-            for evidence_item in result.evidence:
-                current_evidence = evidence.setdefault(
-                    evidence_item.evidence_ref_id, evidence_item
-                )
-                if current_evidence != evidence_item:
-                    return None
-            for metric_item in result.metrics:
-                current_metric = metrics.setdefault(
-                    metric_item.metric_ref_id, metric_item
-                )
-                if current_metric != metric_item:
-                    return None
-        if not evidence and not metrics:
+        canonical_data = self._canonical_answer_data(tool_results)
+        if canonical_data is None:
             return None
-        canonical_evidence = list(evidence.values())[: self._limits.evidence_refs]
-        allowed_evidence_ids = {item.evidence_ref_id for item in canonical_evidence}
-        canonical_metrics = [
-            item
-            for item in metrics.values()
-            if set(item.evidence_ref_ids) <= allowed_evidence_ids
-        ][: self._limits.metrics]
+        canonical_metrics, canonical_evidence = canonical_data
+        if not canonical_evidence and not canonical_metrics:
+            return None
         now = datetime.now(UTC)
         degraded = any(
             result.status in {"unavailable", "error"} for result in tool_results
@@ -967,6 +1024,58 @@ class DevOrchestrator:
                 provider_family=self._provider_family,
                 model_fingerprint=model_fingerprint,
             ),
+        )
+
+    def _canonical_answer_data(
+        self, tool_results: tuple[DevToolResult, ...]
+    ) -> tuple[list[DevMetricRef], list[DevEvidenceRef]] | None:
+        evidence: dict[str, DevEvidenceRef] = {}
+        metrics: dict[str, DevMetricRef] = {}
+        for result in tool_results:
+            for evidence_item in result.evidence:
+                current_evidence = evidence.setdefault(
+                    evidence_item.evidence_ref_id, evidence_item
+                )
+                if current_evidence != evidence_item:
+                    return None
+            for metric_item in result.metrics:
+                current_metric = metrics.setdefault(
+                    metric_item.metric_ref_id, metric_item
+                )
+                if current_metric != metric_item:
+                    return None
+        canonical_evidence = list(evidence.values())[: self._limits.evidence_refs]
+        allowed_evidence_ids = {item.evidence_ref_id for item in canonical_evidence}
+        canonical_metrics = [
+            item
+            for item in metrics.values()
+            if set(item.evidence_ref_ids) <= allowed_evidence_ids
+        ][: self._limits.metrics]
+        return canonical_metrics, canonical_evidence
+
+    @staticmethod
+    def _coverage_from_tool_results(
+        tool_results: tuple[DevToolResult, ...], as_of: datetime
+    ) -> DevCoverage:
+        available = [
+            result for result in tool_results if result.status in {"success", "partial"}
+        ]
+        unavailable = [
+            result.tool_id.value
+            for result in tool_results
+            if result.status in {"unavailable", "error"}
+        ]
+        stale = [
+            result.tool_id.value
+            for result in tool_results
+            if any(item.freshness == "stale" for item in result.data_health)
+        ]
+        return DevCoverage(
+            required_source_count=len(tool_results),
+            available_source_count=len(available),
+            unavailable_required_sources=sorted(set(unavailable)),
+            stale_required_sources=sorted(set(stale)),
+            as_of=as_of,
         )
 
     @staticmethod

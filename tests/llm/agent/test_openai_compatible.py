@@ -106,6 +106,36 @@ async def test_normalizes_native_tool_decision_and_usage() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gpt5_request_omits_unsupported_temperature() -> None:
+    call = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(name="lookup", arguments='{"id":"WU-1"}'),
+    )
+    client = Client([response(tool_call=call)])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-nano", client=client
+    )
+
+    await provider.decide(
+        [AgentMessage(AgentMessageRole.USER, "question")],
+        [
+            AgentToolDefinition(
+                "lookup",
+                "Lookup a work unit",
+                {"type": "object", "properties": {"id": {"type": "string"}}},
+            )
+        ],
+        {"type": "object"},
+        1,
+        256,
+    )
+
+    sent = client.chat.completions.calls[0]
+    assert sent["model"] == "gpt-5-nano"
+    assert "temperature" not in sent
+
+
+@pytest.mark.asyncio
 async def test_normalizes_json_tool_decision_for_openai_compatible_fallback() -> None:
     client = Client(
         [

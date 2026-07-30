@@ -3,7 +3,11 @@ from __future__ import annotations
 from dev_health_ops.llm.errors import (
     LLMAuthError,
     LLMError,
+    LLMInvalidRequestError,
+    LLMModelNotFoundError,
     LLMRateLimitError,
+    LLMTimeoutError,
+    LLMTransportError,
     classify_provider_error,
     is_retryable,
 )
@@ -68,10 +72,37 @@ def test_model_not_found_names_provider_default() -> None:
         RuntimeError("model_not_found"), provider="openai", model="bogus-model"
     )
 
-    assert type(err) is LLMError
+    assert isinstance(err, LLMModelNotFoundError)
     assert not is_retryable(err)
     assert "bogus-model" in str(err)
     assert "gpt-5-mini" in str(err)
+
+
+def test_unsupported_parameter_is_an_invalid_request() -> None:
+    err = classify_provider_error(
+        RuntimeError("Unsupported parameter: 'temperature'"),
+        provider="openai",
+        model="gpt-5-nano",
+    )
+
+    assert isinstance(err, LLMInvalidRequestError)
+    assert not is_retryable(err)
+
+
+def test_timeout_and_transport_have_distinct_error_types() -> None:
+    timeout = classify_provider_error(
+        TimeoutError(), provider="openai", model="gpt-5-nano"
+    )
+    transport = classify_provider_error(
+        ConnectionError("connection refused"),
+        provider="openai",
+        model="gpt-5-nano",
+    )
+
+    assert isinstance(timeout, LLMTimeoutError)
+    assert isinstance(transport, LLMTransportError)
+    assert is_retryable(timeout)
+    assert is_retryable(transport)
 
 
 class HugeNumericRetryAfterError(Exception):

@@ -8,9 +8,13 @@ Error hierarchy
 ---------------
 LLMError (base)
 ├── LLMAuthError          — bad/missing API key
+├── LLMModelNotFoundError — configured model unavailable to the account
+├── LLMInvalidRequestError — invalid/unsupported provider request
 ├── LLMRateLimitError     — 429 / quota exceeded
 ├── LLMContextLengthError — prompt exceeds model context window
 ├── LLMServerError        — 5xx from provider
+├── LLMTimeoutError       — provider call timed out
+├── LLMTransportError     — endpoint/DNS/TLS connection failure
 └── LLMOutputError        — empty or invalid output from model
 
 Retry utilities
@@ -170,6 +174,14 @@ class LLMAuthError(LLMError):
     """Invalid or missing API key / credentials."""
 
 
+class LLMModelNotFoundError(LLMError):
+    """Configured provider model is unavailable to this account."""
+
+
+class LLMInvalidRequestError(LLMError):
+    """Provider rejected an invalid or unsupported request parameter."""
+
+
 class LLMRateLimitError(LLMError):
     """Rate limit or quota exceeded (HTTP 429)."""
 
@@ -192,6 +204,14 @@ class LLMServerError(LLMError):
     """Transient server-side error (HTTP 5xx)."""
 
 
+class LLMTimeoutError(LLMError):
+    """Provider call exceeded its transport timeout."""
+
+
+class LLMTransportError(LLMError):
+    """Provider endpoint could not be reached."""
+
+
 class LLMOutputError(LLMError):
     """Model returned empty or unparseable output."""
 
@@ -203,6 +223,8 @@ class LLMOutputError(LLMError):
 _RETRYABLE_TYPES: tuple[type[LLMError], ...] = (
     LLMRateLimitError,
     LLMServerError,
+    LLMTimeoutError,
+    LLMTransportError,
     LLMOutputError,
 )
 
@@ -243,11 +265,14 @@ def classify_provider_error(
             original=exc,
         )
 
-    if any(k in msg_lower for k in ("model_not_found", "model not found")):
+    if any(
+        k in msg_lower
+        for k in ("model_not_found", "model not found", "model does not exist")
+    ):
         default_model = _default_model_for_provider(provider)
         hint = f" Provider default is '{default_model}'." if default_model else ""
         configured = f" configured model '{model}'" if model else " configured model"
-        return LLMError(
+        return LLMModelNotFoundError(
             f"LLM model not found for provider '{provider}' using{configured}.{hint} Check --model or provider defaults.",
             provider=provider,
             model=model,
@@ -304,6 +329,50 @@ def classify_provider_error(
             original=exc,
         )
 
+    if status_code in {400, 422} or any(
+        k in msg_lower
+        for k in (
+            "unsupported parameter",
+            "unsupported value",
+            "invalid parameter",
+            "invalid_request_error",
+            "invalid request",
+        )
+    ):
+        return LLMInvalidRequestError(
+            "LLM provider rejected an unsupported request parameter.",
+            provider=provider,
+            model=model,
+            original=exc,
+        )
+
+    type_name = type(exc).__name__.lower()
+    if "timeout" in type_name or any(k in msg_lower for k in ("timeout", "timed out")):
+        return LLMTimeoutError(
+            "LLM provider request timed out.",
+            provider=provider,
+            model=model,
+            original=exc,
+        )
+
+    if "connection" in type_name or any(
+        k in msg_lower
+        for k in (
+            "connection error",
+            "connection refused",
+            "network is unreachable",
+            "name or service not known",
+            "dns error",
+            "tls error",
+        )
+    ):
+        return LLMTransportError(
+            "LLM provider endpoint could not be reached.",
+            provider=provider,
+            model=model,
+            original=exc,
+        )
+
     # Server errors
     if any(
         k in msg_lower
@@ -311,14 +380,6 @@ def classify_provider_error(
     ) or (status_code is not None and status_code >= 500):
         return LLMServerError(
             "Transient LLM provider server error.",
-            provider=provider,
-            model=model,
-            original=exc,
-        )
-
-    if any(k in msg_lower for k in ("timeout", "timed out", "connection error")):
-        return LLMServerError(
-            "Transient LLM provider transport error.",
             provider=provider,
             model=model,
             original=exc,

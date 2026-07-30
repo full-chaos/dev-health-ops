@@ -1124,6 +1124,8 @@ class DevOrchestrator:
             AgentProviderErrorCode.PROVIDER_NOT_CONFIGURED: "provider_not_configured",
             AgentProviderErrorCode.MODEL_NOT_SUPPORTED: "model_not_supported",
             AgentProviderErrorCode.PROVIDER_UNAVAILABLE: "provider_unavailable",
+            AgentProviderErrorCode.INVALID_REQUEST: "invalid_request",
+            AgentProviderErrorCode.RATE_LIMITED: "rate_limited",
             AgentProviderErrorCode.INVALID_RESPONSE: "internal_error",
             AgentProviderErrorCode.TIMEOUT: "provider_unavailable",
             AgentProviderErrorCode.CANCELLED: "cancelled",

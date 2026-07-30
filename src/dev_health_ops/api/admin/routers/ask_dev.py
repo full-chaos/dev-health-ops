@@ -300,6 +300,18 @@ def _failed_readiness_state(safe_error_code: str | None) -> tuple[ReadinessState
         )
     if safe_error_code == "timeout":
         return "degraded", "The configured Ask Dev model timed out during readiness."
+    if safe_error_code == "rate_limited":
+        return "degraded", "The configured Ask Dev model rate limit was reached."
+    if safe_error_code == "model_not_supported":
+        return (
+            "unsupported_model",
+            "The configured Ask Dev model is unavailable to this provider account.",
+        )
+    if safe_error_code == "invalid_request":
+        return (
+            "unsupported_model",
+            "The configured Ask Dev model rejected a required agent request capability.",
+        )
     if safe_error_code == "invalid_response":
         return (
             "unsupported_model",

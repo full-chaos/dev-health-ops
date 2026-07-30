@@ -46,6 +46,7 @@ from .batch import (
     BatchJobSubmission,
     BatchProviderFeature,
 )
+from .openai_capabilities import supports_temperature
 
 logger = logging.getLogger(__name__)
 
@@ -590,9 +591,7 @@ class _OpenAIProviderBase(LLMProviderBase):
             client.close()
 
     def _supports_temperature(self) -> bool:
-        # GPT-5 ignores temperature; keep for legacy and future overrides.
-        m = (self.cfg.model or "").strip()
-        return not m.startswith(("gpt-5", "o1", "o3"))
+        return supports_temperature(self.cfg.model or "")
 
     async def complete(self, prompt: str) -> CompletionResult:
         raise NotImplementedError

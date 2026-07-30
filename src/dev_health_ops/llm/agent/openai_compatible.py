@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from dev_health_ops.llm.providers._http import make_hardened_async_httpx_client
+from dev_health_ops.llm.providers.openai_capabilities import supports_temperature
 
 from .contracts import (
     AgentDecisionResult,
@@ -169,9 +170,10 @@ class OpenAICompatibleAgentProvider:
             "messages": [self._message_payload(item) for item in messages],
             "tools": [self._tool_payload(item) for item in tools] or None,
             "tool_choice": "auto" if tools else None,
-            "temperature": 0,
             "max_completion_tokens": max_output_tokens,
         }
+        if supports_temperature(self.model):
+            completion_kwargs["temperature"] = 0
         if allow_final_answer:
             completion_kwargs["response_format"] = {
                 "type": "json_schema",

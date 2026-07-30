@@ -88,7 +88,12 @@ spec:
               if [ -n "$POSTGRES_URI" ] || [ -n "$DATABASE_URI" ]
               || [ "${MIGRATION_DATABASE_URI+x}" = x ]
               || [ "${MIGRATION_DATABASE_URI_FILE+x}" = x ];
-              then dev-hops migrate postgres; fi
+              then dev-hops migrate postgres
+              && if [ -n "$POSTGRES_URI" ] || [ -n "$DATABASE_URI" ];
+              then dev-hops admin features seed;
+              elif [ "${MIGRATION_DATABASE_URI+x}" = x ];
+              then dev-hops --db "$MIGRATION_DATABASE_URI" admin features seed;
+              else dev-hops --db "$(cat "$MIGRATION_DATABASE_URI_FILE")" admin features seed; fi; fi
               && dev-hops migrate clickhouse
           envFrom:
             - configMapRef:

@@ -610,6 +610,7 @@ def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
     assert "helm.sh/hook: pre-install,pre-upgrade" in template
     assert "helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded" in template
     assert "dev-hops migrate clickhouse" in template
+    assert "dev-hops admin features seed" in template
     assert "unset MIGRATION_DATABASE_URI" in template
     assert "MIGRATION_DATABASE_URI_FILE+x" in template
 

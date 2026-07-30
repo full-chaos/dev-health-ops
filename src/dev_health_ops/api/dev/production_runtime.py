@@ -20,6 +20,7 @@ from dev_health_ops.llm.agent.openai_compatible import (
     OpenAICompatibleAgentProvider,
 )
 from dev_health_ops.llm.agent.policy import (
+    CERTIFIED_PLATFORM_AGENT_PROVIDERS,
     AgentFallbackPolicy,
     AgentProviderCandidate,
     AgentProviderPolicy,
@@ -29,7 +30,12 @@ from dev_health_ops.llm.agent.policy import (
 from dev_health_ops.llm.agent.readiness import SettingsAgentReadinessStore
 from dev_health_ops.llm.agent.scripted_openai_service import SCRIPTED_OPENAI_MODEL
 from dev_health_ops.llm.budget import attach_agent_budget_guard
-from dev_health_ops.llm.credentials import LLMCredentials
+from dev_health_ops.llm.credentials import LLMCredentials, resolve_llm_credentials
+from dev_health_ops.llm.errors import LLMAuthError
+from dev_health_ops.llm.providers import (
+    resolve_model_name,
+    resolve_provider_name,
+)
 from dev_health_ops.llm.providers.base import DEFAULT_MODEL_BY_PROVIDER
 from dev_health_ops.models.settings import SettingCategory
 
@@ -244,22 +250,29 @@ async def _provider_candidates(
     )
 
     acceptance = _acceptance_openai_configuration()
-    platform_provider_name = os.getenv("LLM_PROVIDER", "").strip().lower()
+    try:
+        platform_provider_name = resolve_provider_name("auto", org_id=None)
+    except LLMAuthError:
+        platform_provider_name = ""
     if acceptance is not None:
         platform_model = ACCEPTANCE_OPENAI_MODEL
         platform_credentials = LLMCredentials(
             api_key=acceptance.api_key, base_url=acceptance.base_url
         )
     else:
-        platform_model = (
-            os.getenv("LLM_MODEL", "").strip() or os.getenv("OPENAI_MODEL", "").strip()
-        )
-        if platform_provider_name in {"", "openai"} and not platform_model:
-            platform_model = DEFAULT_MODEL_BY_PROVIDER["openai"]
-        platform_credentials = LLMCredentials(
-            api_key=(os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or ""),
-            base_url=(os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or ""),
-        )
+        if platform_provider_name == "none":
+            platform_model = ""
+            platform_credentials = LLMCredentials()
+        else:
+            platform_model = (
+                resolve_model_name(platform_provider_name or "openai") or ""
+            )
+            try:
+                platform_credentials = resolve_llm_credentials(
+                    platform_provider_name or "openai", org_id=None
+                )
+            except LLMAuthError:
+                platform_credentials = LLMCredentials()
     platform = _candidate(
         provider_name=platform_provider_name,
         model=platform_model,
@@ -346,16 +359,10 @@ def _candidate(
     ):
         return None
     provider_name = provider_name or "openai"
-    if provider_name != "openai":
-        return AgentProviderCandidate(
-            provider=provider_name,
-            model=model,
-            credentials=credentials,
-            source=source,
-            readiness_current=False,
-        )
     candidate_type = (
-        _AcceptanceOpenAICandidate if acceptance else AgentProviderCandidate
+        _AcceptanceOpenAICandidate
+        if acceptance and provider_name == "openai"
+        else AgentProviderCandidate
     )
     candidate = candidate_type(
         provider=provider_name,
@@ -401,12 +408,12 @@ def _readiness_fingerprint(candidate: AgentProviderCandidate) -> str:
 
 
 def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
-    if candidate.provider != "openai":
+    if candidate.provider not in CERTIFIED_PLATFORM_AGENT_PROVIDERS:
         raise DevRuntimeUnavailable(
             "model_not_supported", "The configured Ask Dev model is not supported."
         )
     return OpenAICompatibleAgentProvider(
-        api_key=candidate.credentials.api_key,
+        api_key=candidate.credentials.api_key or "platform-openai-compatible",
         model=candidate.model,
         base_url=candidate.credentials.base_url or None,
         disclosure_key=(

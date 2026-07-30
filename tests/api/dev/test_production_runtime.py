@@ -14,7 +14,8 @@ from dev_health_ops.api.dev.production_runtime import ProductionProviderResoluti
 from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
 from dev_health_ops.api.dev.tool_registry import ToolExecutionContext
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
-from dev_health_ops.llm.agent.policy import AgentProviderSource
+from dev_health_ops.llm.agent.policy import AgentProviderCandidate, AgentProviderSource
+from dev_health_ops.llm.credentials import LLMCredentials
 
 
 class FakeProvider:
@@ -39,10 +40,32 @@ class FakeSettingsService:
         return self.values.get(key, default)
 
 
-def _fingerprint(base_url: str = "", model: str = "certified-model") -> str:
+def _fingerprint(
+    base_url: str = "", model: str = "certified-model", provider: str = "openai"
+) -> str:
     return hashlib.sha256(
-        "\0".join(("platform", "openai", model, base_url, READINESS_VERSION)).encode()
+        "\0".join(("platform", provider, model, base_url, READINESS_VERSION)).encode()
     ).hexdigest()[:24]
+
+
+def test_readiness_fingerprint_changes_when_source_changes() -> None:
+    credentials = LLMCredentials(base_url="https://models.example.com/v1")
+    platform = AgentProviderCandidate(
+        provider="openai",
+        model="certified-model",
+        credentials=credentials,
+        source=AgentProviderSource.PLATFORM,
+    )
+    byo = AgentProviderCandidate(
+        provider="openai",
+        model="certified-model",
+        credentials=credentials,
+        source=AgentProviderSource.BYO,
+    )
+
+    assert production_runtime._readiness_fingerprint(
+        platform
+    ) != production_runtime._readiness_fingerprint(byo)
 
 
 @pytest.mark.asyncio
@@ -95,6 +118,106 @@ async def test_provider_resolution_requires_current_certification(
     )
     with pytest.raises(DevRuntimeUnavailable) as exc_info:
         await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_platform_local_provider_uses_only_operator_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    candidates: list[Any] = []
+
+    def provider(candidate):
+        candidates.append(candidate)
+        return FakeProvider()
+
+    monkeypatch.setattr(production_runtime, "_provider", provider)
+    attached: list[dict[str, Any]] = []
+
+    def attach(value, **kwargs):
+        attached.append(kwargs)
+        return value
+
+    monkeypatch.setattr(production_runtime, "attach_agent_budget_guard", attach)
+    monkeypatch.setenv("LLM_PROVIDER", "local")
+    monkeypatch.setenv("LLM_MODEL", "google/gemma-4-e4b")
+    monkeypatch.setenv("LOCAL_LLM_MODEL", "google/gemma-4-e4b")
+    monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://host.docker.internal:1234/v1")
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
+    FakeSettingsService.values = {
+        "ask_dev_agent_readiness": json.dumps(
+            {
+                "fingerprint": _fingerprint(
+                    provider="local",
+                    model="google/gemma-4-e4b",
+                    base_url="http://host.docker.internal:1234/v1",
+                ),
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        # A complete organization BYO bundle remains database-owned and does
+        # not overwrite the independently resolved platform candidate.
+        "provider": "openai",
+        "model": "gpt-5-mini",
+        "api_key": "sk-org",
+        "base_url": "https://api.openai.com/v1",
+    }
+
+    resolved = await production_runtime.resolve_production_provider(
+        cast(Any, object()), org_id="org_01"
+    )
+
+    assert resolved.source is AgentProviderSource.PLATFORM
+    assert resolved.family == "local"
+    assert resolved.model == "google/gemma-4-e4b"
+    assert len(candidates) == 1
+    assert candidates[0].credentials.api_key == ""
+    assert candidates[0].credentials.base_url == "http://host.docker.internal:1234/v1"
+    assert attached == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_fail_closed_prevents_platform_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "local")
+    monkeypatch.setenv("LOCAL_LLM_MODEL", "local-agent-model")
+    monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://host.docker.internal:1234/v1")
+    FakeSettingsService.values = {
+        "ask_dev_agent_readiness": json.dumps(
+            {
+                "fingerprint": _fingerprint(
+                    provider="local",
+                    model="local-agent-model",
+                    base_url="http://host.docker.internal:1234/v1",
+                ),
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        "provider": "openai",
+        "model": "gpt-5-mini",
+        "api_key": "sk-org",
+        "base_url": "https://api.openai.com/v1",
+        "ask_dev_platform_fallback": "fail_closed",
+    }
+
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(
+            cast(Any, object()), org_id="org_01"
+        )
+
     assert exc_info.value.code == "provider_not_configured"
 
 

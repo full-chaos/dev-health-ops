@@ -91,14 +91,18 @@ Unknown events and malformed authority must fail closed.
 ## Ask Dev model readiness
 
 Ask Dev uses a separate multi-turn model contract; a provider that works for
-categorization or explanation can still be unavailable for Ask Dev. The V1
-certified surfaces are the platform OpenAI-compatible connection, a workspace
-BYO OpenAI-compatible connection, and the scripted OpenAI-compatible service
-used only by deterministic release acceptance. The scripted service is not a
-customer-selectable provider family and cannot be enabled through organization
-settings. Other provider families return `model_not_supported`; no model or tool
-work starts, and an admitted submission is closed as a safe failed run for audit
-and idempotent retry.
+categorization or explanation can still be unavailable for Ask Dev. Ask Dev
+certifies the connection by source and readiness, not by family label alone.
+The V1 certified surfaces are the platform OpenAI-compatible connection, a
+workspace BYO OpenAI-compatible connection, and the scripted OpenAI-compatible
+service used only by deterministic release acceptance. The scripted service is
+not a customer-selectable provider family and cannot be enabled through
+organization settings. A platform-managed Ask Dev connection may use a local
+OpenAI-compatible endpoint, including LM Studio, Ollama, or vLLM, when that
+endpoint is configured as the platform connection and has a passing readiness
+result for the exact provider/model fingerprint. Other provider families return
+`model_not_supported`; no model or tool work starts, and an admitted submission
+is closed as a safe failed run for audit and idempotent retry.
 
 Re-run readiness after changing provider, model, endpoint, credentials, or the
 capability-test version. The stored result contains only a derived fingerprint,
@@ -109,7 +113,9 @@ and tool contract; it never retrieves tenant evidence. A changed provider,
 model, base URL, or readiness-test version produces `stale_readiness` until the
 test is rerun.
 
-Workspace BYO is evaluated first. If it is unusable, Ask Dev fails closed unless
-the workspace explicitly permits platform fallback. Global disable and
-provider/model deny rules always win. Usage created by both readiness checks and
-live calls is attributed to the `ask_dev` use case.
+Workspace BYO is evaluated first. If it is unusable, Ask Dev falls back to the
+platform connection by default for configured orgs; an explicit organization
+fail_closed choice opts out of that fallback. Global disable and provider/model
+deny rules always win. Usage created by both readiness checks and live calls is
+attributed to the `ask_dev` use case and remains source-tagged so
+platform-managed and BYO accounting stay separate.

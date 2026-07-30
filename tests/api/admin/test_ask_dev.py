@@ -229,6 +229,7 @@ async def test_operator_maxima_do_not_raise_the_unconfigured_org_defaults(
     body = response.json()
     assert body["settings"]["platform_monthly_request_limit"] == 1000
     assert body["settings"]["platform_monthly_cost_limit_microusd"] == 100_000_000
+    assert body["settings"]["fallback_policy"] == "platform"
     assert body["platform_allowance_bounds"]["request_maximum"] == 5000
     assert body["platform_allowance_bounds"]["cost_maximum_microusd"] == 500_000_000
 

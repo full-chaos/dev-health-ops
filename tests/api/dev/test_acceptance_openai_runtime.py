@@ -401,7 +401,7 @@ async def test_acceptance_openai_rejects_non_allowlisted_or_ambiguous_targets(
 
 
 @pytest.mark.asyncio
-async def test_normal_platform_base_url_still_rejects_loopback(
+async def test_operator_platform_base_url_accepts_loopback(
     monkeypatch: pytest.MonkeyPatch,
     settings_session: AsyncSession,
 ) -> None:
@@ -409,9 +409,15 @@ async def test_normal_platform_base_url_still_rejects_loopback(
     monkeypatch.setenv("LLM_MODEL", "customer-model")
     monkeypatch.setenv("LLM_API_KEY", "customer-key")
     monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:8001/v1")
-    with pytest.raises(DevRuntimeUnavailable) as exc_info:
-        await resolve_certification_provider(settings_session, org_id=_ORG_ID)
-    assert exc_info.value.code == "provider_not_configured"
+    resolution = await resolve_certification_provider(settings_session, org_id=_ORG_ID)
+    provider = cast(OpenAICompatibleAgentProvider, resolution.provider)
+    try:
+        assert resolution.family == "openai"
+        assert resolution.source is AgentProviderSource.PLATFORM
+        assert resolution.model == "customer-model"
+        assert provider.base_url == "http://127.0.0.1:8001/v1"
+    finally:
+        await provider.aclose()
 
 
 @pytest.mark.asyncio

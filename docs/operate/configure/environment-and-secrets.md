@@ -90,15 +90,25 @@ A configuration rollout is complete only after all required processes use the sa
 
 Ask Dev reuses the existing source-bound LLM credential bundles: workspace BYO
 key and base URL stay together, and platform key and base URL stay together.
-Never combine a platform key with a workspace endpoint. OpenAI-compatible BYO
-base URLs pass the existing public-HTTPS and SSRF validation before they can be
-certified.
+Treat the source label separately from the provider family label. A connection
+may be `platform` or `byo` regardless of whether the endpoint family is
+OpenAI-compatible, local, Ollama, LM Studio, or another supported server.
+
+Never combine a platform key with a workspace endpoint or a workspace key with a
+platform endpoint. OpenAI-compatible BYO base URLs pass the existing
+public-HTTPS and SSRF validation before they can be certified.
 
 Enabling Ask Dev is not sufficient to admit model traffic. Admission also
 requires a current readiness result for the exact provider/model fingerprint.
-Global LLM disable, the Ask Dev emergency disable, and provider/model deny rules
-must remain available during rollout. Workspace-to-platform fallback is an
-explicit policy choice; absence of that choice is fail-closed.
+The platform connection may use an OpenAI-compatible endpoint, including a local
+one, but Ask Dev only admits that connection after readiness succeeds for that
+exact fingerprint. Global LLM disable, the Ask Dev emergency disable, and
+provider/model deny rules must remain available during rollout.
+
+Workspace-to-platform fallback defaults to platform after a configured org BYO
+is evaluated; an explicit organization fail_closed choice opts out of that
+fallback. Source-tagged accounting keeps platform-managed usage and BYO usage
+separate.
 
 Organization policy is stored through the dedicated Ask Dev administrator API,
 not environment variables or the generic settings endpoint. A malformed stored

@@ -8,9 +8,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
+import tomllib
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_PYPROJECT = _REPO_ROOT / "pyproject.toml"
 _PROFILES = _REPO_ROOT / "deploy" / "go-workers" / "profiles.json"
 _APP_DOCKERFILE = _REPO_ROOT / "docker" / "Dockerfile"
 _GO_WORKER_DOCKERFILE = _REPO_ROOT / "docker" / "go-worker.Dockerfile"
@@ -480,6 +482,34 @@ def test_reconciler_image_packages_both_runtime_contract_roots() -> None:
         + "/runtime/reconciler/app/contracts/sync-dispatch/v1;"
         in dockerfile
     )
+
+
+def test_python_image_packages_and_validates_job_contracts() -> None:
+    project = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))
+    data_files = project["tool"]["setuptools"]["data-files"]
+    patterns = {
+        pattern
+        for destination, destination_patterns in data_files.items()
+        if destination == "contracts/jobs/v1"
+        or destination.startswith("contracts/jobs/v1/")
+        for pattern in destination_patterns
+    }
+    packaged = {
+        path.relative_to(_REPO_ROOT)
+        for pattern in patterns
+        for path in _REPO_ROOT.glob(pattern)
+    }
+    expected = {
+        path.relative_to(_REPO_ROOT)
+        for path in (_REPO_ROOT / "contracts/jobs/v1").rglob("*")
+        if path.is_file() and path.suffix in {".json", ".md"}
+    }
+    assert packaged == expected
+
+    dockerfile = _APP_DOCKERFILE.read_text(encoding="utf-8")
+    runtime = dockerfile.split("FROM python:3.14-slim AS runtime", maxsplit=1)[1]
+    runtime = runtime.split("FROM runtime AS api", maxsplit=1)[0]
+    assert "load_registry(); load_migration_jobs()" in runtime
 
 
 def test_scheduler_image_packages_runtime_policy_inputs() -> None:

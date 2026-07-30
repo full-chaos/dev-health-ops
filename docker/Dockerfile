@@ -94,6 +94,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git wget \
 COPY --from=builder /install /usr/local
 COPY --from=go-migrator-builder /out/dev-health-worker-migrate /usr/local/bin/dev-health-worker-migrate
 
+# Fail the image build if the installed distribution cannot load the exact job
+# contract artifacts used by Python worker routing.
+RUN python -c "from dev_health_ops.workers.job_contracts.registry import load_migration_jobs, load_registry; load_registry(); load_migration_jobs()"
+
 RUN useradd --uid 10001 --create-home --shell /bin/bash appuser
 
 WORKDIR /app

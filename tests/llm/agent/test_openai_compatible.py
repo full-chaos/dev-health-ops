@@ -101,7 +101,9 @@ async def test_normalizes_native_tool_decision_and_usage() -> None:
     assert result.usage.cached_input_tokens == 3
     sent = client.chat.completions.calls[0]
     assert sent["tools"][0]["function"]["name"] == "lookup"
+    assert sent["tool_choice"] == "required"
     assert sent["temperature"] == 0
+    assert "reasoning_effort" not in sent
     assert "response_format" not in sent
 
 
@@ -133,6 +135,7 @@ async def test_gpt5_request_omits_unsupported_temperature() -> None:
     sent = client.chat.completions.calls[0]
     assert sent["model"] == "gpt-5-nano"
     assert "temperature" not in sent
+    assert sent["reasoning_effort"] == "minimal"
 
 
 @pytest.mark.asyncio
@@ -586,6 +589,7 @@ async def test_tool_result_continuation_allows_tools_and_strict_final_answer() -
         "refusal",
     ]
     assert schema["properties"]["value"]["anyOf"][0]["required"] == ["ok"]
+    assert client.chat.completions.calls[0]["tool_choice"] == "auto"
 
 
 @pytest.mark.asyncio

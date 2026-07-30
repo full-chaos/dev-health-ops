@@ -136,7 +136,12 @@ class AgentReadinessService:
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["nonce"],
-                "properties": {"nonce": {"const": "ready-v1"}},
+                "properties": {
+                    "nonce": {
+                        "type": "string",
+                        "const": "ready-v1",
+                    }
+                },
             }
             first = await provider.decide(
                 [

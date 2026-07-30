@@ -13,8 +13,11 @@ import uuid
 
 import pytest
 import pytest_asyncio
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.auth.router import get_current_user
@@ -58,6 +61,36 @@ async def session_maker(tmp_path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES)
         )
+
+    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        yield maker
+    finally:
+        await engine.dispose()
+
+
+def _apply_ask_dev_catalog_migrations(connection: Connection) -> None:
+    migration_context = MigrationContext.configure(connection)
+    migration_modules = (
+        "dev_health_ops.alembic.versions.0067_seed_ask_dev_feature_flag",
+        "dev_health_ops.alembic.versions.0070_seed_ask_dev_contextual_entrypoints_feature_flag",
+    )
+    with Operations.context(migration_context):
+        for module_name in migration_modules:
+            importlib.import_module(module_name).upgrade()
+
+
+@pytest_asyncio.fixture
+async def migrated_catalog_session_maker(tmp_path):
+    """Build the catalog as the current Ask Dev seed migrations do."""
+    db_path = tmp_path / "migrated-feature-catalog.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+
+    async with engine.begin() as conn:
+        await conn.run_sync(
+            lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES)
+        )
+        await conn.run_sync(_apply_ask_dev_catalog_migrations)
 
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     try:
@@ -208,3 +241,56 @@ async def test_patch_nonexistent_flag_returns_404(session_maker):
         )
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_superuser_list_includes_canonical_ask_dev_migration_rows(
+    migrated_catalog_session_maker,
+):
+    app = _make_app(
+        migrated_catalog_session_maker,
+        _build_user(superuser=True),
+    )
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/admin/feature-flags")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert [row["key"] for row in rows] == [
+        "ask_dev",
+        "ask_dev_contextual_entrypoints",
+    ]
+    assert [
+        {
+            "key": row["key"],
+            "name": row["name"],
+            "category": row["category"],
+            "min_tier": row["min_tier"],
+            "is_enabled": row["is_enabled"],
+            "is_beta": row["is_beta"],
+            "is_deprecated": row["is_deprecated"],
+        }
+        for row in rows
+    ] == [
+        {
+            "key": "ask_dev",
+            "name": "Ask Dev",
+            "category": "analytics",
+            "min_tier": "community",
+            "is_enabled": True,
+            "is_beta": False,
+            "is_deprecated": False,
+        },
+        {
+            "key": "ask_dev_contextual_entrypoints",
+            "name": "Ask Dev Contextual Entrypoints",
+            "category": "analytics",
+            "min_tier": "community",
+            "is_enabled": True,
+            "is_beta": False,
+            "is_deprecated": False,
+        },
+    ]
+    assert len({row["id"] for row in rows}) == 2

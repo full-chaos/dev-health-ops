@@ -5,9 +5,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import dev_health_ops.api.services.sync_coverage as sync_coverage_module
 from dev_health_ops.api.services.sync_coverage import (
     CoverageInterval,
     EffectiveScope,
+    SyncCoverageComplexityError,
     UnitWindow,
     _effective_dataset_keys_for_unit,
     _query_dataset_keys_for_scope,
@@ -262,6 +264,83 @@ def test_backfill_intent_exposes_gap_without_failed_unit():
         (gap["since"], gap["before"]) for gap in summary["datasets"][0]["gaps"]
     ] == [(_dt(2), _dt(3))]
     assert summary["sources"][0]["gap_count"] == 1
+
+
+def test_payload_accepts_scope_at_exact_pair_limit(monkeypatch):
+    monkeypatch.setattr(sync_coverage_module, "MAX_COVERAGE_PAIRS", 2)
+    source_a = uuid.uuid4()
+    source_b = uuid.uuid4()
+    config = _config()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(_source(source_a), _source(source_b)),
+        dataset_keys=("commits",),
+    )
+
+    summary = _summary([], config=config, scope=scope)
+
+    assert len(summary["sources"]) == 2
+
+
+def test_payload_rejects_source_dataset_pair_expansion(monkeypatch):
+    monkeypatch.setattr(sync_coverage_module, "MAX_COVERAGE_PAIRS", 1)
+    config = _config()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(_source(uuid.uuid4()), _source(uuid.uuid4())),
+        dataset_keys=("commits",),
+    )
+
+    with pytest.raises(SyncCoverageComplexityError) as caught:
+        _summary([], config=config, scope=scope)
+
+    assert caught.value.stage == "source_dataset_pairs"
+    assert caught.value.limit == 1
+    assert caught.value.observed == 2
+
+
+def test_payload_rejects_legacy_backfill_pair_expansion(monkeypatch):
+    monkeypatch.setattr(
+        sync_coverage_module,
+        "MAX_COVERAGE_BACKFILL_PAIR_INTERVALS",
+        1,
+    )
+    source_id = uuid.uuid4()
+    config = _config()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(_source(source_id),),
+        dataset_keys=("commits", "issues"),
+    )
+
+    with pytest.raises(SyncCoverageComplexityError) as caught:
+        _summary(
+            [],
+            backfill_requested=[CoverageInterval(_dt(1), _dt(2))],
+            config=config,
+            scope=scope,
+        )
+
+    assert caught.value.stage == "expanded_backfill_pair_intervals"
+    assert caught.value.limit == 1
+    assert caught.value.observed == 2
+
+
+def test_payload_rejects_expanded_unit_windows(monkeypatch):
+    monkeypatch.setattr(sync_coverage_module, "MAX_COVERAGE_UNIT_WINDOWS", 1)
+    source_id = uuid.uuid4()
+
+    with pytest.raises(SyncCoverageComplexityError) as caught:
+        _summary(
+            [
+                _window(_dt(1), _dt(2), source_id=source_id),
+                _window(_dt(2), _dt(3), source_id=source_id),
+            ]
+        )
+
+    assert caught.value.stage == "expanded_unit_windows"
+    assert caught.value.limit == 1
+    assert caught.value.observed == 2
 
 
 def test_dataset_gaps_are_computed_per_source_before_rollup():

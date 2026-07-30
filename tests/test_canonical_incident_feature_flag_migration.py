@@ -104,7 +104,7 @@ def test_canonical_incident_feature_seed_is_global_only_and_idempotent() -> None
         engine.dispose()
 
 
-def test_canonical_incident_feature_seed_is_in_single_head_graph() -> None:
+def test_canonical_incident_feature_seed_is_in_application_schema_graph() -> None:
     migration = _canonical_incident_migration_module()
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
@@ -112,17 +112,20 @@ def test_canonical_incident_feature_seed_is_in_single_head_graph() -> None:
 
     assert migration.down_revision == "0041"
     assert migration.revision in revisions
-    # The invariant this test is named for is that the graph has exactly ONE
-    # head — i.e. nobody branched the chain — not that the head is any
-    # particular revision. Pinning the literal head ("0064") made every
-    # legitimately-added migration fail this test: CUT-05 added
-    # 0065_add_fixed_schedule_occurrences and the pin was left behind, which
-    # is churn that teaches people to bump the number without reading why.
-    # The head must still be the highest-numbered revision, so a stray branch
-    # or an out-of-order down_revision is caught rather than waved through.
+    # Ordinary schema and the explicitly authorized River ownership cutover
+    # intentionally branch after 0065. Keep this seed on the ordinary schema
+    # lineage, and pin both named heads so an accidental third branch or an
+    # out-of-order down_revision still fails loudly.
     heads = scripts.get_heads()
-    assert len(heads) == 1, f"migration graph has branched: {heads}"
-    assert heads[0] == max(revisions)
+    assert set(heads) == {"0066", "0071"}
+    application_head = scripts.get_revision("application_schema@head").revision
+    assert application_head == max(revisions)
+    application_revisions = {
+        script.revision
+        for script in scripts.iterate_revisions(application_head, "base")
+    }
+    assert migration.revision in application_revisions
+    assert scripts.get_revision("river_cutover@head").revision == "0066"
     assert scripts.get_revision("0043").down_revision == "0042"
     assert scripts.get_revision("0044").down_revision == "0043"
     assert scripts.get_revision("0045").down_revision == "0044"

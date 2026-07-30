@@ -208,6 +208,7 @@ jobs:
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           SECONDARY_DATABASE_URI: mongodb://localhost:27017
           COVERAGE_THRESHOLD: "70"
+          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           OTEL_ENABLED: "false"
           PYTEST_XDIST_WORKERS: "4"
         run: |

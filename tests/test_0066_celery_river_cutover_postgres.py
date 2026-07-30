@@ -107,13 +107,19 @@ def migrated_to_0065(
         admin_engine.dispose()
 
 
-def _revision(engine: Engine) -> str:
+def _revisions(engine: Engine) -> set[str]:
     with engine.connect() as connection:
-        return str(
-            connection.execute(
+        return {
+            str(row[0])
+            for row in connection.execute(
                 sa.text("SELECT version_num FROM alembic_version")
-            ).scalar_one()
-        )
+            )
+        }
+
+
+def _table_exists(engine: Engine, table_name: str) -> bool:
+    with engine.connect() as connection:
+        return bool(sa.inspect(connection).has_table(table_name))
 
 
 def _routes(engine: Engine, migration: ModuleType) -> list[tuple[str, str, bool, int]]:
@@ -143,11 +149,11 @@ def test_0066_real_postgres_refuses_without_opt_in_without_advancing_revision(
     with pytest.raises(RuntimeError, match=f"{_CUTOVER_ENV}=1"):
         command.upgrade(_migration_config(), "0066")
 
-    assert _revision(migrated_to_0065.engine) == "0065"
+    assert _revisions(migrated_to_0065.engine) == {"0065"}
     assert _routes(migrated_to_0065.engine, migration) == before
 
 
-def test_application_migrator_defers_0066_without_opt_in(
+def test_application_migrator_applies_safe_schema_without_0066_opt_in(
     migrated_to_0065: PostgresMigrationHarness,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,7 +165,9 @@ def test_application_migrator_defers_0066_without_opt_in(
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
 
-    assert _revision(migrated_to_0065.engine) == "0065"
+    assert _revisions(migrated_to_0065.engine) == {"0071"}
+    assert _table_exists(migrated_to_0065.engine, "dev_runs")
+    assert _table_exists(migrated_to_0065.engine, "dev_conversations")
     assert _routes(migrated_to_0065.engine, migration) == before
 
 
@@ -172,7 +180,7 @@ def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
 
     command.upgrade(_migration_config(), "0066")
 
-    assert _revision(migrated_to_0065.engine) == "0066"
+    assert _revisions(migrated_to_0065.engine) == {"0066"}
     assert _routes(migrated_to_0065.engine, migration) == [
         (kind, "river", False, 2) for kind in sorted(migration._KINDS)
     ]
@@ -181,17 +189,62 @@ def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
     from dev_health_ops.migrate import _run_upgrade
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
-    assert _revision(migrated_to_0065.engine) == "0071"
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0071"}
+    assert _table_exists(migrated_to_0065.engine, "dev_runs")
     assert _routes(migrated_to_0065.engine, migration) == [
         (kind, "river", False, 2) for kind in sorted(migration._KINDS)
     ]
 
     command.downgrade(_migration_config(), "0065")
 
-    assert _revision(migrated_to_0065.engine) == "0065"
+    assert _revisions(migrated_to_0065.engine) == {"0065"}
     assert _routes(migrated_to_0065.engine, migration) == [
         (kind, "celery", False, 3) for kind in sorted(migration._KINDS)
     ]
+
+
+def test_application_migrator_opt_in_applies_both_heads(
+    migrated_to_0065: PostgresMigrationHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = _migration()
+    monkeypatch.setenv(_CUTOVER_ENV, "1")
+
+    from dev_health_ops.migrate import _run_upgrade
+
+    assert _run_upgrade(Namespace(db=None, revision="head")) == 0
+
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0071"}
+    assert _table_exists(migrated_to_0065.engine, "dev_runs")
+    assert _routes(migrated_to_0065.engine, migration) == [
+        (kind, "river", False, 2) for kind in sorted(migration._KINDS)
+    ]
+
+
+def test_old_linear_0071_provenance_converges_to_both_heads(
+    migrated_to_0065: PostgresMigrationHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Databases that applied the former 0066 -> 0071 chain remain valid.
+
+    Before the branch split, Alembic recorded only 0071 even though 0066 had
+    retargeted the routes. Reapplying the new 0066 sibling is intentionally
+    idempotent and restores explicit two-head provenance without another route
+    generation change.
+    """
+    migration = _migration()
+    monkeypatch.setenv(_CUTOVER_ENV, "1")
+    command.upgrade(_migration_config(), "heads")
+    command.stamp(_migration_config(), "0071", purge=True)
+    before = _routes(migrated_to_0065.engine, migration)
+
+    assert _revisions(migrated_to_0065.engine) == {"0071"}
+
+    from dev_health_ops.migrate import _run_upgrade
+
+    assert _run_upgrade(Namespace(db=None, revision="head")) == 0
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0071"}
+    assert _routes(migrated_to_0065.engine, migration) == before
 
 
 def test_0066_real_postgres_locks_routes_before_retargeting(

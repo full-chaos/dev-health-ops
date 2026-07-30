@@ -31,11 +31,13 @@ logger = logging.getLogger(__name__)
 _ALEMBIC_DIR = Path(__file__).resolve().parent / "alembic"
 _CELERY_RIVER_CUTOVER_ENV = "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
 _CELERY_RIVER_CUTOVER_REVISION = "0066"
-_PRE_CELERY_RIVER_CUTOVER_REVISION = "0065"
-# tests/test_migrate_commands.py pins the current head and requires it to descend
-# from 0066. Descendants are intentionally deferred with the cutover because an
-# ordinary pre-cutover upgrade remains capped at 0065. A separate Alembic branch
-# would be required for migrations that must advance without crossing 0066.
+_APPLICATION_SCHEMA_BRANCH = "application_schema"
+_APPLICATION_SCHEMA_MINIMUM_REVISION = "0071"
+
+# Revision 0066 changes worker execution ownership and remains an explicit
+# operator action. Application schema migrations branch from 0065 separately,
+# so a normal upgrade can keep Celery active while still applying every schema
+# required by the running API (including Ask Dev persistence).
 
 
 def _get_migration_database_uri() -> str | None:
@@ -142,25 +144,62 @@ def _database_has_revision(
     return False
 
 
+def _cutover_is_authorized() -> bool:
+    return os.getenv(_CELERY_RIVER_CUTOVER_ENV) == "1"
+
+
+def _application_schema_head(cfg) -> str:
+    """Return the installed application's safe schema head revision."""
+    from alembic.script import ScriptDirectory
+
+    scripts = ScriptDirectory.from_config(cfg)
+    head = scripts.get_revision(f"{_APPLICATION_SCHEMA_BRANCH}@head")
+    if head is None or not _database_has_revision(
+        cfg, (head.revision,), _APPLICATION_SCHEMA_MINIMUM_REVISION
+    ):
+        raise RuntimeError(
+            "installed migration package does not contain the required "
+            f"application schema revision {_APPLICATION_SCHEMA_MINIMUM_REVISION}"
+        )
+    return str(head.revision)
+
+
+def _required_postgres_revisions(cfg) -> tuple[str, ...]:
+    required = [_application_schema_head(cfg)]
+    if _cutover_is_authorized():
+        required.append(_CELERY_RIVER_CUTOVER_REVISION)
+    return tuple(required)
+
+
+def _postgres_revision_status(
+    cfg,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    current = _current_postgres_heads(cfg)
+    required = _required_postgres_revisions(cfg)
+    missing = tuple(
+        revision
+        for revision in required
+        if not _database_has_revision(cfg, current, revision)
+    )
+    return current, required, missing
+
+
 def _effective_postgres_upgrade_revision(cfg, requested_revision: str) -> str:
-    """Keep an ordinary upgrade below the explicit Celery-to-River cutover."""
+    """Apply safe schema by default and include River only with explicit opt-in."""
     if requested_revision != "head":
         return requested_revision
-    if os.getenv(_CELERY_RIVER_CUTOVER_ENV) == "1":
-        return requested_revision
-
-    current_heads = _current_postgres_heads(cfg)
-    if _database_has_revision(cfg, current_heads, _CELERY_RIVER_CUTOVER_REVISION):
-        # The cutover already ran in this database. Never turn an upgrade into a
-        # backwards target merely because a one-shot authorization is absent.
-        return requested_revision
+    _application_schema_head(cfg)
+    if _cutover_is_authorized():
+        return "heads"
 
     logger.info(
-        "Deferring Celery-to-River cutover revision %s; set %s=1 to apply it",
+        "Deferring Celery-to-River cutover revision %s; applying the %s branch. "
+        "Set %s=1 only for the authorized ownership cutover",
         _CELERY_RIVER_CUTOVER_REVISION,
+        _APPLICATION_SCHEMA_BRANCH,
         _CELERY_RIVER_CUTOVER_ENV,
     )
-    return _PRE_CELERY_RIVER_CUTOVER_REVISION
+    return f"{_APPLICATION_SCHEMA_BRANCH}@head"
 
 
 def _run_upgrade(ns: argparse.Namespace) -> int:
@@ -178,6 +217,13 @@ def _run_upgrade(ns: argparse.Namespace) -> int:
     cfg = _make_alembic_config(explicit_db)
     revision = _effective_postgres_upgrade_revision(cfg, ns.revision)
     command.upgrade(cfg, revision)
+    if ns.revision == "head":
+        _current, _required, missing = _postgres_revision_status(cfg)
+        if missing:
+            raise RuntimeError(
+                "PostgreSQL migration finished without required revision(s): "
+                + ", ".join(missing)
+            )
     return _run_river_upgrade()
 
 
@@ -218,6 +264,19 @@ def _run_current(ns: argparse.Namespace) -> int:
 
     cfg = _make_alembic_config(getattr(ns, "db", None))
     command.current(cfg, verbose=ns.verbose)
+    return 0
+
+
+def _run_postgres_status(ns: argparse.Namespace) -> int:
+    """Show whether PostgreSQL satisfies this application's migration contract."""
+    cfg = _make_alembic_config(getattr(ns, "db", None))
+    current, required, missing = _postgres_revision_status(cfg)
+    print(f"Current PostgreSQL revision heads: {', '.join(current) or '(base)'}")
+    print(f"Required PostgreSQL revisions: {', '.join(required)}")
+    if missing:
+        print(f"Pending required PostgreSQL revisions: {', '.join(missing)}")
+        return 1 if bool(getattr(ns, "check", False)) else 0
+    print("PostgreSQL application schema is current.")
     return 0
 
 
@@ -440,6 +499,20 @@ def _register_postgres_subcommands(
     cur = sub.add_parser("current", help="Show current revision.")
     cur.add_argument("-v", "--verbose", action="store_true")
     cur.set_defaults(func=_run_current)
+
+    status = sub.add_parser(
+        "status", help="Show whether required PostgreSQL migrations are applied."
+    )
+    status.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Exit 1 if a required migration is pending, 0 if the application "
+            "schema is current. Read-only; the River cutover is required only "
+            f"when {_CELERY_RIVER_CUTOVER_ENV}=1."
+        ),
+    )
+    status.set_defaults(func=_run_postgres_status)
 
     hist = sub.add_parser("history", help="Show migration history.")
     hist.add_argument("-v", "--verbose", action="store_true")

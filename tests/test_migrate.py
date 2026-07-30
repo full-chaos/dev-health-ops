@@ -53,7 +53,7 @@ class TestAlembicDirResolution:
         package_dir = Path(migrate_mod.__file__).resolve().parent
         assert package_dir / "alembic" == _ALEMBIC_DIR
 
-    def test_postgres_revision_graph_has_unique_single_head(self):
+    def test_postgres_revision_graph_has_expected_branch_heads(self):
         cfg = _make_alembic_config(
             db_url="postgresql+asyncpg://unused:unused@localhost/unused"
         )
@@ -64,7 +64,9 @@ class TestAlembicDirResolution:
             heads = script.get_heads()
             revisions = list(script.walk_revisions())
 
-        assert len(heads) == 1
+        assert set(heads) == {"0066", "0071"}
+        assert script.get_revision("river_cutover@head").revision == "0066"
+        assert script.get_revision("application_schema@head").revision == "0071"
         assert revisions
 
 
@@ -178,9 +180,15 @@ class TestCommandDispatch:
     @pytest.fixture(autouse=True)
     def _isolate_revision_selection(self):
         """Keep command-dispatch tests independent of live database state."""
-        with patch(
-            "dev_health_ops.migrate._effective_postgres_upgrade_revision",
-            side_effect=lambda _cfg, requested_revision: requested_revision,
+        with (
+            patch(
+                "dev_health_ops.migrate._effective_postgres_upgrade_revision",
+                side_effect=lambda _cfg, requested_revision: requested_revision,
+            ),
+            patch(
+                "dev_health_ops.migrate._postgres_revision_status",
+                return_value=(("0071",), ("0071",), ()),
+            ),
         ):
             yield
 

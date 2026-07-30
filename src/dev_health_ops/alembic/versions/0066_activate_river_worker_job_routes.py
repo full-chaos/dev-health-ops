@@ -53,7 +53,7 @@ from sqlalchemy.sql.selectable import TableClause
 
 revision: str = "0066"
 down_revision: str | None = "0065"
-branch_labels = None
+branch_labels = ("river_cutover",)
 depends_on = None
 
 _RIVER_TRANSPORT = "river"

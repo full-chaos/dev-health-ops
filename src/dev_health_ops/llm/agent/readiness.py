@@ -31,6 +31,7 @@ from .errors import (
 )
 
 READINESS_SETTING_KEY = "ask_dev_agent_readiness"
+READINESS_MAX_OUTPUT_TOKENS = 512
 
 
 class AgentReadinessOutcome(str, Enum):
@@ -116,7 +117,7 @@ class AgentReadinessService:
         provider_name: str,
         model: str,
         fingerprint: str,
-        timeout_seconds: float = 10,
+        timeout_seconds: float = 30,
         signal: CancellationSignal | None = None,
     ) -> AgentReadinessRecord:
         usage = AgentUsage()
@@ -134,11 +135,8 @@ class AgentReadinessService:
             response_schema: Mapping[str, object] = {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["kind", "value"],
-                "properties": {
-                    "kind": {"const": "final_answer"},
-                    "value": {"type": "object"},
-                },
+                "required": ["nonce"],
+                "properties": {"nonce": {"const": "ready-v1"}},
             }
             first = await provider.decide(
                 [
@@ -150,7 +148,7 @@ class AgentReadinessService:
                 [tool],
                 response_schema,
                 timeout_seconds,
-                128,
+                READINESS_MAX_OUTPUT_TOKENS,
                 signal,
             )
             usage = _add_usage(usage, first.usage)
@@ -176,15 +174,24 @@ class AgentReadinessService:
                         '{"nonce":"ready-v1"}',
                         tool_call_id=first.decision.call_id,
                     ),
+                    AgentMessage(
+                        AgentMessageRole.USER,
+                        (
+                            "Return a final_answer now with value exactly "
+                            '{"nonce":"ready-v1"}. Do not request another tool.'
+                        ),
+                    ),
                 ],
-                [tool],
+                [],
                 response_schema,
                 timeout_seconds,
-                128,
+                READINESS_MAX_OUTPUT_TOKENS,
                 signal,
             )
             usage = _add_usage(usage, second.usage)
             if not isinstance(second.decision, AgentFinalAnswer):
+                raise AgentProviderError(AgentProviderErrorCode.INVALID_RESPONSE)
+            if second.decision.value != {"nonce": "ready-v1"}:
                 raise AgentProviderError(AgentProviderErrorCode.INVALID_RESPONSE)
             record = AgentReadinessRecord(
                 fingerprint=fingerprint,

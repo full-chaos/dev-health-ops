@@ -156,8 +156,14 @@ def test_readiness_bootstrap_uses_public_http_contracts() -> None:
 class _FakeAcceptanceApi:
     token: str | None = None
 
-    def __init__(self, *, disabled_key: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        disabled_key: str | None = None,
+        model: str = "ask-dev-scripted-v1",
+    ) -> None:
         self.disabled_key = disabled_key
+        self.model = model
         self.calls: list[tuple[str, str, dict[str, Any] | None]] = []
 
     def request(
@@ -198,7 +204,7 @@ class _FakeAcceptanceApi:
                 "full_page_available": True,
                 "provider_source": "platform",
                 "readiness": "ready",
-                "effective_model_label": "ask-dev-scripted-v1",
+                "effective_model_label": self.model,
                 "readiness_checked_at": "2026-07-29T00:00:00+00:00",
             }
         if path == "/api/v1/dev/capabilities":
@@ -211,7 +217,7 @@ class _FakeAcceptanceApi:
                 "evidence_resolver": True,
                 "provider_source": "platform",
                 "readiness": "ready",
-                "effective_model_label": "ask-dev-scripted-v1",
+                "effective_model_label": self.model,
             }
         raise AssertionError(f"unexpected request: {method} {path}")
 
@@ -237,3 +243,14 @@ def test_readiness_bootstrap_fails_closed_on_global_kill_switch() -> None:
     api = _FakeAcceptanceApi(disabled_key="ask_dev")
     with pytest.raises(AcceptanceFailure, match="globally disabled: ask_dev"):
         prepare(api, email="admin@devhealth.example", password="devhealth123")  # type: ignore[arg-type]
+
+
+def test_readiness_bootstrap_accepts_an_exact_live_profile_model() -> None:
+    api = _FakeAcceptanceApi(model="google/gemma-4-e4b")
+    org_id = prepare(
+        api,  # type: ignore[arg-type]
+        email="admin@devhealth.example",
+        password="devhealth123",
+        expected_model="google/gemma-4-e4b",
+    )
+    assert org_id == "0a155cab-8833-42ac-a4ef-0d121725a7b0"

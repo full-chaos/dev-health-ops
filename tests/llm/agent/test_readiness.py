@@ -8,6 +8,7 @@ from dev_health_ops.llm.agent.contracts import (
     AgentUsage,
 )
 from dev_health_ops.llm.agent.readiness import (
+    READINESS_MAX_OUTPUT_TOKENS,
     AgentReadinessOutcome,
     AgentReadinessRecord,
     AgentReadinessService,
@@ -25,9 +26,27 @@ class Store:
         self.record = record
 
 
+class CapturingScriptedProvider(ScriptedAgentProvider):
+    def __init__(self, steps: list[ScriptedStep]):
+        super().__init__(steps)
+        self.calls: list[dict[str, object]] = []
+
+    async def decide(self, *args, **kwargs):
+        self.calls.append(
+            {
+                "response_schema": args[2],
+                "tool_count": len(args[1]),
+                "last_message": args[0][-1].content,
+                "timeout_seconds": args[3],
+                "max_output_tokens": args[4],
+            }
+        )
+        return await super().decide(*args, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_certification_proves_tool_continuation_and_final_answer() -> None:
-    provider = ScriptedAgentProvider(
+    provider = CapturingScriptedProvider(
         [
             ScriptedStep(
                 AgentToolRequest("readiness_echo", {"nonce": "ready-v1"}, "call-1"),
@@ -49,6 +68,22 @@ async def test_certification_proves_tool_continuation_and_final_answer() -> None
         fingerprint=provider.provider_fingerprint,
         readiness_version=provider.capabilities.readiness_version,
     )
+    assert [call["timeout_seconds"] for call in provider.calls] == [30, 30]
+    assert [call["tool_count"] for call in provider.calls] == [1, 0]
+    assert provider.calls[1]["last_message"] == (
+        'Return a final_answer now with value exactly {"nonce":"ready-v1"}. '
+        "Do not request another tool."
+    )
+    assert [call["max_output_tokens"] for call in provider.calls] == [
+        READINESS_MAX_OUTPUT_TOKENS,
+        READINESS_MAX_OUTPUT_TOKENS,
+    ]
+    assert provider.calls[0]["response_schema"] == {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["nonce"],
+        "properties": {"nonce": {"const": "ready-v1"}},
+    }
 
 
 @pytest.mark.asyncio
@@ -61,6 +96,29 @@ async def test_failed_certification_persists_only_safe_error_code() -> None:
         model="scripted-v1",
         fingerprint=provider.provider_fingerprint,
     )
+    assert record.outcome is AgentReadinessOutcome.FAILED
+    assert record.safe_error_code == "invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_repeated_tool_request_on_final_answer_turn_fails_closed() -> None:
+    provider = ScriptedAgentProvider(
+        [
+            ScriptedStep(
+                AgentToolRequest("readiness_echo", {"nonce": "ready-v1"}, "call-1")
+            ),
+            ScriptedStep(
+                AgentToolRequest("readiness_echo", {"nonce": "ready-v1"}, "call-2")
+            ),
+        ]
+    )
+    record = await AgentReadinessService(Store()).certify(
+        provider,
+        provider_name="scripted",
+        model="scripted-v1",
+        fingerprint=provider.provider_fingerprint,
+    )
+
     assert record.outcome is AgentReadinessOutcome.FAILED
     assert record.safe_error_code == "invalid_response"
 

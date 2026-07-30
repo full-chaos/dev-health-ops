@@ -43,6 +43,19 @@ def _tool_results_from_messages(payload: dict[str, Any]) -> list[dict[str, Any]]
     return []
 
 
+def _requested_tool_names_from_messages(payload: dict[str, Any]) -> set[str]:
+    names: set[str] = set()
+    for message in payload.get("messages") or []:
+        if message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            name = function.get("name")
+            if isinstance(name, str):
+                names.add(name)
+    return names
+
+
 def _acceptance_answer(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
     available_tool_ids = {
@@ -207,6 +220,7 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
         self.server.requests.append(payload)
         tool_names = [item["function"]["name"] for item in payload.get("tools") or []]
         tool_results = _tool_results_from_messages(payload)
+        requested_tool_names = _requested_tool_names_from_messages(payload)
         result_tool_ids = {str(result.get("tool_id") or "") for result in tool_results}
         if not tool_results:
             arguments: dict[str, Any]
@@ -295,7 +309,7 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
         else:
             value = (
                 {"nonce": "ready-v1"}
-                if "readiness_echo" in tool_names
+                if "readiness_echo" in requested_tool_names
                 else _acceptance_answer(tool_results)
             )
             message = {

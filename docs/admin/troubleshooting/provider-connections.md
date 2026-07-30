@@ -104,6 +104,13 @@ result for the exact provider/model fingerprint. Other provider families return
 `model_not_supported`; no model or tool work starts, and an admitted submission
 is closed as a safe failed run for audit and idempotent retry.
 
+For local LM Studio, use either the `local` bundle with `LOCAL_LLM_BASE_URL` and
+`LOCAL_LLM_MODEL`, or the `lmstudio` bundle with `LMSTUDIO_BASE_URL` and
+`LMSTUDIO_MODEL`. For Ollama, use `OLLAMA_BASE_URL` and `OLLAMA_MODEL`; add
+`OLLAMA_API_KEY` for an authenticated cloud-compatible endpoint. The generic
+`LLM_API_KEY` alias remains supported. Environment-configured local and cloud
+endpoints are platform connections and do not require workspace BYO setup.
+
 Re-run readiness after changing provider, model, endpoint, credentials, or the
 capability-test version. The stored result contains only a derived fingerprint,
 test version, timestamp, outcome, and safe error code. It never contains the
@@ -112,6 +119,13 @@ The organization-administrator readiness action uses a fixed synthetic nonce
 and tool contract; it never retrieves tenant evidence. A changed provider,
 model, base URL, or readiness-test version produces `stale_readiness` until the
 test is rerun.
+
+Readiness permits both native OpenAI `tool_calls` and the provider-neutral JSON
+tool-decision envelope. It uses the runtime's 30-second provider-call timeout and
+then requires a strict structured final response after the synthetic tool result.
+The administrator state distinguishes rejected authentication/configuration,
+timeout, temporary endpoint unavailability, and a response that does not satisfy
+the Ask Dev agent-capability contract. Raw provider responses are never returned.
 
 Workspace BYO is evaluated first. If it is unusable, Ask Dev falls back to the
 platform connection by default for configured orgs; an explicit organization

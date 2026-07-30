@@ -105,6 +105,30 @@ one, but Ask Dev only admits that connection after readiness succeeds for that
 exact fingerprint. Global LLM disable, the Ask Dev emergency disable, and
 provider/model deny rules must remain available during rollout.
 
+Supported platform OpenAI-compatible bundles include:
+
+```dotenv
+# Generic/local OpenAI-compatible server (for example LM Studio or vLLM)
+LLM_PROVIDER=local
+LOCAL_LLM_BASE_URL=http://host.docker.internal:1234/v1
+LOCAL_LLM_MODEL=your-model-id
+
+# LM Studio provider aliases
+LLM_PROVIDER=lmstudio
+LMSTUDIO_BASE_URL=http://host.docker.internal:1234/v1
+LMSTUDIO_MODEL=your-model-id
+
+# Local Ollama or authenticated Ollama Cloud-compatible endpoint
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
+OLLAMA_MODEL=your-model-id
+OLLAMA_API_KEY=optional-cloud-key
+```
+
+`OLLAMA_API_KEY` is the provider-specific platform alias; `LLM_API_KEY` remains
+supported. Omit the key for an unauthenticated local host. These environment
+bundles are platform configuration, never organization BYO settings.
+
 Workspace-to-platform fallback defaults to platform after a configured org BYO
 is evaluated; an explicit organization fail_closed choice opts out of that
 fallback. Source-tagged accounting keeps platform-managed usage and BYO usage
@@ -133,3 +157,10 @@ disabled, provider not configured, model not supported, provider unavailable,
 invalid response, timeout, or cancelled. Inspect provider logs through the
 approved secret-redacting path; do not copy raw provider bodies into settings or
 support records.
+
+The readiness provider-call timeout is 30 seconds, matching the Ask Dev runtime
+contract. The synthetic exchange accepts either an OpenAI-native `tool_calls`
+decision or the normalized JSON decision envelope, then verifies tool-result
+continuation and a strict final response. A timeout, authentication failure,
+temporarily unavailable endpoint, and invalid agent response remain distinct
+safe administrative outcomes.

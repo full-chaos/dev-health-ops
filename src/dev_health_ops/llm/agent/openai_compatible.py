@@ -33,8 +33,37 @@ from .errors import (
     safe_agent_provider_error,
 )
 
-READINESS_VERSION = "ask-dev-agent-v1"
+READINESS_VERSION = "ask-dev-agent-v2"
 PLATFORM_PRICE_BOOK_VERSION = "openai-2026-07-29"
+
+_DECISION_FIELDS = frozenset(
+    {
+        "kind",
+        "tool_id",
+        "arguments",
+        "call_id",
+        "value",
+        "prompt",
+        "candidates",
+        "code",
+        "message",
+    }
+)
+
+_STRUCTURAL_SCHEMA_KEYS = frozenset(
+    {
+        "$defs",
+        "$ref",
+        "type",
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "anyOf",
+        "enum",
+        "const",
+    }
+)
 
 # Server-owned conservative prices in microUSD per million tokens. Cached input
 # is intentionally charged at the full input rate because the normalized usage
@@ -68,7 +97,7 @@ def _estimated_cost_microusd(
 
 
 class OpenAICompatibleAgentProvider:
-    """Normalize a native tool-capable OpenAI-compatible endpoint."""
+    """Normalize native and JSON tool decisions from OpenAI-compatible endpoints."""
 
     def __init__(
         self,
@@ -132,23 +161,31 @@ class OpenAICompatibleAgentProvider:
             )
         started = time.monotonic()
         create_completion = cast(Any, self._client.chat.completions.create)
-        provider_task = asyncio.create_task(
-            create_completion(
-                model=self.model,
-                messages=[self._message_payload(item) for item in messages],
-                tools=[self._tool_payload(item) for item in tools] or None,
-                tool_choice="auto" if tools else None,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "ask_dev_decision",
-                        "strict": True,
-                        "schema": dict(response_schema),
-                    },
-                },
-                max_completion_tokens=max_output_tokens,
-            )
+        allow_final_answer = not tools or any(
+            message.role is AgentMessageRole.TOOL for message in messages
         )
+        completion_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [self._message_payload(item) for item in messages],
+            "tools": [self._tool_payload(item) for item in tools] or None,
+            "tool_choice": "auto" if tools else None,
+            "temperature": 0,
+            "max_completion_tokens": max_output_tokens,
+        }
+        if allow_final_answer:
+            completion_kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "ask_dev_decision",
+                    "strict": True,
+                    "schema": self._decision_response_schema(
+                        self._answer_draft_schema(response_schema),
+                        tools,
+                        allow_final_answer=True,
+                    ),
+                },
+            }
+        provider_task = asyncio.create_task(create_completion(**completion_kwargs))
         cancel_task = asyncio.create_task(signal.wait()) if signal is not None else None
         try:
             waiters = {provider_task}
@@ -176,7 +213,9 @@ class OpenAICompatibleAgentProvider:
                 await asyncio.gather(cancel_task, return_exceptions=True)
 
         try:
-            decision = self._normalize_response(response)
+            decision = self._normalize_response(
+                response, allowed_tool_ids=frozenset(item.tool_id for item in tools)
+            )
         except (
             AttributeError,
             IndexError,
@@ -245,42 +284,307 @@ class OpenAICompatibleAgentProvider:
             "function": {
                 "name": tool.tool_id,
                 "description": tool.description,
-                "parameters": dict(tool.input_schema),
+                "parameters": OpenAICompatibleAgentProvider._structural_schema(
+                    tool.input_schema
+                ),
                 "strict": True,
             },
         }
 
     @staticmethod
-    def _normalize_response(response: Any) -> Any:
+    def _decision_response_schema(
+        response_schema: Mapping[str, Any],
+        tools: Sequence[AgentToolDefinition],
+        *,
+        allow_final_answer: bool = True,
+    ) -> dict[str, Any]:
+        """Describe every decision in OpenAI's supported root-object subset."""
+
+        final_value_schema = OpenAICompatibleAgentProvider._structural_schema(
+            response_schema
+        )
+        definitions: dict[str, Any] = {}
+        OpenAICompatibleAgentProvider._merge_definitions(
+            definitions, final_value_schema.pop("$defs", None)
+        )
+        argument_schemas: list[dict[str, Any]] = []
+        for tool in tools:
+            arguments_schema = OpenAICompatibleAgentProvider._structural_schema(
+                tool.input_schema
+            )
+            OpenAICompatibleAgentProvider._merge_definitions(
+                definitions, arguments_schema.pop("$defs", None)
+            )
+            argument_schemas.append(arguments_schema)
+
+        nullable_arguments: dict[str, Any]
+        if argument_schemas:
+            nullable_arguments = {"anyOf": [*argument_schemas, {"type": "null"}]}
+        else:
+            nullable_arguments = {"type": "null"}
+
+        schema: dict[str, Any] = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": sorted(_DECISION_FIELDS),
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        *(["tool_request"] if tools else []),
+                        *(["final_answer"] if allow_final_answer else []),
+                        "disambiguation",
+                        "refusal",
+                    ],
+                },
+                "tool_id": {
+                    "type": ["string", "null"],
+                    "enum": [*(tool.tool_id for tool in tools), None],
+                },
+                "arguments": nullable_arguments,
+                "call_id": {
+                    "anyOf": [
+                        {"type": "string", "minLength": 1, "maxLength": 256},
+                        {"type": "null"},
+                    ]
+                },
+                "value": (
+                    {"anyOf": [final_value_schema, {"type": "null"}]}
+                    if allow_final_answer
+                    else {"type": "null"}
+                ),
+                "prompt": {"type": ["string", "null"]},
+                "candidates": {
+                    "anyOf": [
+                        {"type": "array", "items": {"type": "string"}},
+                        {"type": "null"},
+                    ]
+                },
+                "code": {"type": ["string", "null"]},
+                "message": {"type": ["string", "null"]},
+            },
+        }
+        if definitions:
+            schema["$defs"] = definitions
+        return OpenAICompatibleAgentProvider._structural_schema(schema)
+
+    @staticmethod
+    def _structural_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+        """Project runtime-validated JSON Schema into provider grammar syntax."""
+
+        def project(node: Any) -> Any:
+            if isinstance(node, list):
+                return [project(item) for item in node]
+            if not isinstance(node, Mapping):
+                return node
+            result: dict[str, Any] = {}
+            for key, value in node.items():
+                if key not in _STRUCTURAL_SCHEMA_KEYS:
+                    continue
+                if key in {"$defs", "properties"} and isinstance(value, Mapping):
+                    result[key] = {
+                        str(name): project(definition)
+                        for name, definition in value.items()
+                    }
+                else:
+                    result[key] = project(value)
+            properties = result.get("properties")
+            if isinstance(properties, Mapping):
+                result["additionalProperties"] = False
+                result["required"] = sorted(str(name) for name in properties)
+            return result
+
+        return cast(dict[str, Any], project(schema))
+
+    @staticmethod
+    def _answer_draft_schema(schema: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Remove server-owned/defaulted DevAnswer fields from provider grammar."""
+
+        properties = schema.get("properties")
+        if not isinstance(properties, Mapping):
+            return schema
+        draft_fields = {
+            "status",
+            "direct_summary",
+        }
+        if not draft_fields.issubset(properties):
+            return schema
+
+        selected_properties = {
+            field: properties[field] for field in sorted(draft_fields)
+        }
+        definitions = schema.get("$defs")
+        selected_definitions: dict[str, Any] = {}
+        pending: list[Any] = list(selected_properties.values())
+        while pending:
+            node = pending.pop()
+            if isinstance(node, Mapping):
+                reference = node.get("$ref")
+                if isinstance(reference, str) and reference.startswith("#/$defs/"):
+                    name = reference.removeprefix("#/$defs/")
+                    if (
+                        name not in selected_definitions
+                        and isinstance(definitions, Mapping)
+                        and name in definitions
+                    ):
+                        definition = definitions[name]
+                        selected_definitions[name] = definition
+                        pending.append(definition)
+                pending.extend(node.values())
+            elif isinstance(node, list):
+                pending.extend(node)
+
+        draft: dict[str, Any] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": selected_properties,
+            "required": sorted(draft_fields),
+        }
+        if selected_definitions:
+            draft["$defs"] = selected_definitions
+        return draft
+
+    @staticmethod
+    def _merge_definitions(target: dict[str, Any], incoming: object | None) -> None:
+        if incoming is None:
+            return
+        if not isinstance(incoming, Mapping):
+            raise ValueError("JSON schema definitions must be an object")
+        for name, definition in incoming.items():
+            existing = target.get(str(name))
+            if existing is not None and existing != definition:
+                raise ValueError("conflicting JSON schema definitions")
+            target[str(name)] = definition
+
+    @staticmethod
+    def _normalize_response(response: Any, *, allowed_tool_ids: frozenset[str]) -> Any:
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []
         if len(tool_calls) > 1:
             raise ValueError("only one tool decision is allowed")
         if tool_calls:
             call = tool_calls[0]
+            tool_id = str(call.function.name)
+            if tool_id not in allowed_tool_ids:
+                raise ValueError("tool decision is not registered")
+            arguments = json.loads(call.function.arguments)
+            if not isinstance(arguments, dict):
+                raise ValueError("tool arguments must be an object")
+            call_id = str(call.id)
+            if not call_id:
+                raise ValueError("tool decision requires a call ID")
             return AgentToolRequest(
-                tool_id=str(call.function.name),
-                arguments=json.loads(call.function.arguments),
-                call_id=str(call.id),
+                tool_id=tool_id,
+                arguments=arguments,
+                call_id=call_id,
             )
         payload = json.loads(str(message.content or ""))
+        if not isinstance(payload, dict):
+            raise ValueError("agent decision must be an object")
         kind = payload.get("kind")
+        if kind == "tool_request":
+            return OpenAICompatibleAgentProvider._json_tool_request(
+                payload, allowed_tool_ids=allowed_tool_ids
+            )
         if kind == "final_answer":
+            OpenAICompatibleAgentProvider._validate_envelope_fields(
+                payload,
+                compact_fields={"kind", "value"},
+            )
             value = payload.get("value")
             if not isinstance(value, dict):
                 raise ValueError("final answer must be an object")
+            legacy_tool = OpenAICompatibleAgentProvider._legacy_json_tool_request(
+                value, allowed_tool_ids=allowed_tool_ids
+            )
+            if legacy_tool is not None:
+                return legacy_tool
             return AgentFinalAnswer(value=value)
         if kind == "disambiguation":
-            candidates = payload.get("candidates") or []
+            OpenAICompatibleAgentProvider._validate_envelope_fields(
+                payload,
+                compact_fields={"kind", "prompt", "candidates"},
+            )
+            candidates = payload.get("candidates")
+            if not isinstance(payload.get("prompt"), str) or not isinstance(
+                candidates, list
+            ):
+                raise ValueError("invalid disambiguation decision")
+            if not all(isinstance(item, str) for item in candidates):
+                raise ValueError("invalid disambiguation candidates")
             return AgentDisambiguation(
                 prompt=str(payload["prompt"]),
                 candidates=tuple(str(item) for item in candidates),
             )
         if kind == "refusal":
+            OpenAICompatibleAgentProvider._validate_envelope_fields(
+                payload,
+                compact_fields={"kind", "code", "message"},
+            )
+            if not isinstance(payload.get("code"), str) or not isinstance(
+                payload.get("message"), str
+            ):
+                raise ValueError("invalid refusal decision")
             return AgentRefusal(
                 code=str(payload["code"]), message=str(payload["message"])
             )
         raise ValueError("unknown agent decision")
+
+    @staticmethod
+    def _json_tool_request(
+        payload: Mapping[str, Any], *, allowed_tool_ids: frozenset[str]
+    ) -> AgentToolRequest:
+        OpenAICompatibleAgentProvider._validate_envelope_fields(
+            payload,
+            compact_fields={"kind", "tool_id", "arguments", "call_id"},
+        )
+        tool_id = payload.get("tool_id")
+        arguments = payload.get("arguments")
+        call_id = payload.get("call_id")
+        if not isinstance(tool_id, str) or tool_id not in allowed_tool_ids:
+            raise ValueError("tool decision is not registered")
+        if not isinstance(arguments, dict):
+            raise ValueError("tool arguments must be an object")
+        if not isinstance(call_id, str) or not call_id:
+            raise ValueError("tool decision requires a call ID")
+        return AgentToolRequest(tool_id, arguments, call_id)
+
+    @staticmethod
+    def _validate_envelope_fields(
+        payload: Mapping[str, Any],
+        *,
+        compact_fields: set[str],
+    ) -> None:
+        fields = set(payload)
+        if fields == compact_fields:
+            return
+        if fields != _DECISION_FIELDS:
+            raise ValueError("invalid agent decision fields")
+
+    @staticmethod
+    def _legacy_json_tool_request(
+        value: Mapping[str, Any], *, allowed_tool_ids: frozenset[str]
+    ) -> AgentToolRequest | None:
+        """Normalize the exact LM Studio envelope produced by the old bad schema."""
+
+        if set(value) != {"tool_call"}:
+            return None
+        tool_call = value.get("tool_call")
+        if not isinstance(tool_call, dict) or set(tool_call) != {"name", "args"}:
+            raise ValueError("invalid JSON tool decision")
+        tool_id = tool_call.get("name")
+        arguments = tool_call.get("args")
+        if not isinstance(tool_id, str) or tool_id not in allowed_tool_ids:
+            raise ValueError("tool decision is not registered")
+        if not isinstance(arguments, dict):
+            raise ValueError("tool arguments must be an object")
+        canonical = json.dumps(
+            {"tool_id": tool_id, "arguments": arguments},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        call_id = "json-call-" + hashlib.sha256(canonical.encode()).hexdigest()[:16]
+        return AgentToolRequest(tool_id, arguments, call_id)
 
     async def aclose(self) -> None:
         close = getattr(self._client, "close", None)

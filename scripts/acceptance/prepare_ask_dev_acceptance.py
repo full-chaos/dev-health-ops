@@ -19,7 +19,7 @@ _REQUIRED_FEATURES = (
     "ask_dev",
     "ask_dev_contextual_entrypoints",
 )
-_EXPECTED_MODEL = "ask-dev-scripted-v1"
+_DEFAULT_EXPECTED_MODEL = "ask-dev-scripted-v1"
 
 
 class AcceptanceFailure(RuntimeError):
@@ -75,7 +75,13 @@ def _require(condition: bool, message: str) -> None:
         raise AcceptanceFailure(message)
 
 
-def prepare(api: AcceptanceApi, *, email: str, password: str) -> str:
+def prepare(
+    api: AcceptanceApi,
+    *,
+    email: str,
+    password: str,
+    expected_model: str = _DEFAULT_EXPECTED_MODEL,
+) -> str:
     login = api.request(
         "POST",
         "/api/v1/auth/login",
@@ -152,7 +158,7 @@ def prepare(api: AcceptanceApi, *, email: str, password: str) -> str:
         "full_page_available": True,
         "provider_source": "platform",
         "readiness": "ready",
-        "effective_model_label": _EXPECTED_MODEL,
+        "effective_model_label": expected_model,
     }
     for field, expected in expected_readiness.items():
         _require(
@@ -175,7 +181,7 @@ def prepare(api: AcceptanceApi, *, email: str, password: str) -> str:
         "evidence_resolver": True,
         "provider_source": "platform",
         "readiness": "ready",
-        "effective_model_label": _EXPECTED_MODEL,
+        "effective_model_label": expected_model,
     }
     for field, expected in expected_capabilities.items():
         _require(
@@ -194,8 +200,19 @@ def main() -> int:
     )
     email = os.getenv("TEST_SUPERUSER_EMAIL", "admin@devhealth.example")
     password = os.getenv("TEST_SUPERUSER_PASSWORD", "devhealth123")
+    expected_model = os.getenv(
+        "ASK_DEV_ACCEPTANCE_EXPECTED_MODEL", _DEFAULT_EXPECTED_MODEL
+    ).strip()
+    if not expected_model:
+        print("ASK_DEV_ACCEPTANCE_EXPECTED_MODEL must not be empty", file=sys.stderr)
+        return 64
     try:
-        org_id = prepare(api, email=email, password=password)
+        org_id = prepare(
+            api,
+            email=email,
+            password=password,
+            expected_model=expected_model,
+        )
     except AcceptanceFailure as exc:
         print(f"Ask Dev acceptance preparation failed: {exc}", file=sys.stderr)
         return 1

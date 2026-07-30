@@ -80,6 +80,28 @@ def _fingerprint(script_id: str) -> str:
     return hashlib.sha256(script_id.encode()).hexdigest()[:24]
 
 
+def test_provider_tool_schema_exposes_only_registered_model_arguments() -> None:
+    metric = DevOrchestrator._provider_tool_input_schema(ToolID.QUERY_METRIC, 12)
+    evidence = DevOrchestrator._provider_tool_input_schema(ToolID.SEARCH_EVIDENCE, 25)
+
+    assert set(metric["properties"]) == {
+        "metric_id",
+        "include_comparison",
+        "limit",
+    }
+    assert metric["properties"]["limit"]["enum"] == list(range(1, 13))
+    assert set(evidence["properties"]) == {"query", "limit"}
+    for server_owned in {
+        "schema_version",
+        "run_id",
+        "tool_call_id",
+        "tool_id",
+        "scope",
+    }:
+        assert server_owned not in metric["properties"]
+        assert server_owned not in evidence["properties"]
+
+
 def _answer(*, script_id: str, invalid_schema: bool = False) -> dict:
     payload = deepcopy(positive_fixtures()["dev_answer.v1"])
     payload["model"] = {

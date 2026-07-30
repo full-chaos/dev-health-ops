@@ -56,7 +56,7 @@ def platform_operator_cost_limit_microusd() -> int:
 @dataclass(frozen=True, slots=True)
 class AskDevOrgPolicy:
     retention_days: Literal[0, 30] = 30
-    fallback_policy: Literal["fail_closed", "platform"] = "fail_closed"
+    fallback_policy: Literal["fail_closed", "platform"] = "platform"
     emergency_disabled: bool = False
     platform_monthly_request_limit: int = PLATFORM_MONTHLY_REQUEST_LIMIT_DEFAULT
     platform_monthly_cost_limit_microusd: int = (
@@ -94,9 +94,12 @@ async def load_ask_dev_org_policy(settings: SettingsService) -> AskDevOrgPolicy:
     operator_cost_limit = platform_operator_cost_limit_microusd()
 
     retention_days: Literal[0, 30] = 0 if retention == "0" else 30
-    fallback_policy: Literal["fail_closed", "platform"] = (
-        "platform" if fallback in {"platform", "true"} else "fail_closed"
-    )
+    fallback_policy: Literal["fail_closed", "platform"]
+    if fallback is None or fallback in {"platform", "true"}:
+        fallback_policy = "platform"
+    else:
+        # Explicit fail_closed and malformed stored values both remain closed.
+        fallback_policy = "fail_closed"
     # Unknown values are treated as disabled rather than silently reopening a
     # tenant surface after a corrupt or partial administrative write.
     disabled = emergency_disabled not in {None, "", "false", "0"}

@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta, timezone
-from typing import Any
+from datetime import date, datetime, time, timedelta, timezone
+from time import monotonic
+from typing import Any, Protocol
 
 from croniter import croniter as Croniter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.integrations import (
@@ -24,10 +29,26 @@ from dev_health_ops.models.settings import JobStatus, ScheduledJob, SyncConfigur
 from dev_health_ops.sync.datasets import supported_datasets
 from dev_health_ops.sync.planner import family_dataset_keys_from_flags
 
+logger = logging.getLogger(__name__)
+
 HISTORY_LOOKBACK_DAYS = 180
 STALE_MINIMUM_GRACE = timedelta(hours=6)
 STALE_FALLBACK_GRACE = timedelta(hours=48)
 INTERVAL_ADJACENCY_TOLERANCE = timedelta(microseconds=1)
+
+# Code-owned safety limits for this request-time analytical endpoint. These are
+# deliberately not environment overrides: deployment configuration must not be
+# able to silently remove the memory bound. Requests beyond the active-build
+# limit are rejected immediately rather than retained in an unbounded waiter
+# queue. Query and derived-allocation budgets reject pathological scopes before
+# the driver or interval builder can materialize unbounded collections.
+MAX_CONCURRENT_COVERAGE_BUILDS = 2
+MAX_COVERAGE_QUERY_ROWS = 40_000
+MAX_COVERAGE_SOURCES = 5_000
+MAX_COVERAGE_DATASETS = 100
+MAX_COVERAGE_PAIRS = 20_000
+MAX_COVERAGE_UNIT_WINDOWS = 30_000
+MAX_COVERAGE_BACKFILL_PAIR_INTERVALS = 20_000
 
 TERMINAL_UNIT_STATUSES = {
     SyncRunUnitStatus.SUCCESS.value,
@@ -44,6 +65,113 @@ ACTIVE_RUN_STATUSES = {
     SyncRunStatus.DISPATCHING.value,
     SyncRunStatus.RUNNING.value,
 }
+
+
+class SyncCoverageBusyError(RuntimeError):
+    """Raised when the process-local coverage capacity is saturated."""
+
+
+class SyncCoverageComplexityError(RuntimeError):
+    """Raised before a coverage request exceeds a code-owned allocation cap."""
+
+    def __init__(self, *, stage: str, limit: int, observed: int) -> None:
+        self.stage = stage
+        self.limit = limit
+        self.observed = observed
+        super().__init__(
+            f"sync coverage complexity limit exceeded during {stage}: "
+            f"observed {observed} items (limit {limit})"
+        )
+
+
+@dataclass
+class _CoverageQueryBudget:
+    """Shared row budget across potentially multi-row coverage queries."""
+
+    limit: int = MAX_COVERAGE_QUERY_ROWS
+    consumed: int = 0
+
+    @property
+    def sql_limit(self) -> int:
+        """Return a LIMIT that includes one overflow sentinel row."""
+
+        return max(self.limit - self.consumed, 0) + 1
+
+    def consume(self, count: int, *, stage: str) -> None:
+        observed = self.consumed + count
+        if observed > self.limit:
+            raise SyncCoverageComplexityError(
+                stage=stage,
+                limit=self.limit,
+                observed=observed,
+            )
+        self.consumed = observed
+
+
+async def _bounded_query_rows(
+    session: AsyncSession,
+    statement: Any,
+    budget: _CoverageQueryBudget,
+    *,
+    stage: str,
+    stage_limit: int | None = None,
+) -> list[Any]:
+    """Execute with an overflow sentinel so allocation is bounded in SQL."""
+
+    sql_limit = budget.sql_limit
+    if stage_limit is not None:
+        sql_limit = min(sql_limit, stage_limit + 1)
+    rows = list((await session.execute(statement.limit(sql_limit))).all())
+    if stage_limit is not None and len(rows) > stage_limit:
+        raise SyncCoverageComplexityError(
+            stage=stage,
+            limit=stage_limit,
+            observed=len(rows),
+        )
+    budget.consume(len(rows), stage=stage)
+    return rows
+
+
+class _CoverageAdmissionController:
+    """Bound active builds and reject excess work without retaining waiters."""
+
+    def __init__(self, capacity: int) -> None:
+        if capacity < 1:
+            raise ValueError("coverage admission capacity must be positive")
+        self.capacity = capacity
+        self._active = 0
+        self._held: ContextVar[bool] = ContextVar(
+            f"sync_coverage_admission_held_{id(self)}", default=False
+        )
+
+    @asynccontextmanager
+    async def slot(self) -> AsyncIterator[None]:
+        if self._held.get():
+            yield
+            return
+        # This check/increment contains no await, so it is atomic with respect
+        # to other coroutines on this process's event loop. Unlike Semaphore,
+        # saturation creates no waiter objects retaining HTTP/session state.
+        if self._active >= self.capacity:
+            raise SyncCoverageBusyError("sync coverage capacity is busy; retry shortly")
+        self._active += 1
+        token = self._held.set(True)
+        try:
+            yield
+        finally:
+            self._held.reset(token)
+            self._active -= 1
+
+
+_coverage_admission = _CoverageAdmissionController(MAX_CONCURRENT_COVERAGE_BUILDS)
+
+
+@asynccontextmanager
+async def sync_coverage_admission_slot() -> AsyncIterator[None]:
+    """Acquire the route-wide coverage slot before any database checkout."""
+
+    async with _coverage_admission.slot():
+        yield
 
 
 @dataclass(frozen=True)
@@ -71,6 +199,67 @@ class UnitWindow:
     run_id: str
     status: str
     run_time: datetime
+
+
+@dataclass(frozen=True)
+class _CoverageUnitRow:
+    """The narrow persisted projection required by coverage interval math.
+
+    SyncRunUnit.result/error and SyncRun.result/error can be large. Hydrating the
+    full ORM entities for every unit in the 180-day lookback made one coverage
+    request consume hundreds of MiB and allowed concurrent admin page requests
+    to OOM-kill the API container.
+    """
+
+    unit_id: uuid.UUID
+    sync_run_id: uuid.UUID
+    source_id: uuid.UUID
+    dataset_key: str
+    processor_flags: Mapping[str, object] | None
+    since_at: datetime
+    before_at: datetime
+    status: str
+    run_time: datetime
+
+
+class _DatasetKeyUnit(Protocol):
+    """Structural input shared by projected rows and ORM-backed unit tests."""
+
+    @property
+    def dataset_key(self) -> str: ...
+
+    @property
+    def processor_flags(self) -> Mapping[str, object] | None: ...
+
+
+class _BackfillJobLike(Protocol):
+    @property
+    def id(self) -> uuid.UUID: ...
+
+    @property
+    def celery_task_id(self) -> str | None: ...
+
+    @property
+    def since_date(self) -> date: ...
+
+    @property
+    def before_date(self) -> date: ...
+
+
+def _coverage_unit_row(row: Any) -> _CoverageUnitRow:
+    """Convert one narrow SQL result row without hydrating ORM entities."""
+
+    return _CoverageUnitRow(
+        unit_id=row.unit_id,
+        sync_run_id=row.sync_run_id,
+        source_id=row.source_id,
+        dataset_key=str(row.dataset_key),
+        processor_flags=row.processor_flags,
+        since_at=row.since_at,
+        before_at=row.before_at,
+        status=str(row.status),
+        run_time=row.run_time,
+    )
 
 
 @dataclass(frozen=True)
@@ -271,26 +460,21 @@ def _range_to_dict(interval: CoverageInterval) -> dict[str, Any]:
 
 
 def _unit_window_from_row(
-    unit: SyncRunUnit, run: SyncRun, dataset_key: str | None = None
-) -> UnitWindow | None:
+    unit: _CoverageUnitRow, dataset_key: str | None = None
+) -> UnitWindow:
     """Build a ``UnitWindow`` for one row, optionally under an effective
     dataset key (CHAOS-2721 work-item-family expansion) instead of the raw
     persisted ``unit.dataset_key``. Run id/source id/status/timestamps always
     reflect the raw unit -- only the reported dataset key changes.
     """
-    since_at = unit.since_at
-    before_at = unit.before_at
-    if since_at is None or before_at is None:
-        return None
-    run_time = run.completed_at or run.started_at or run.created_at
     return UnitWindow(
-        since=ensure_utc(since_at),
-        before=ensure_utc(before_at),
+        since=ensure_utc(unit.since_at),
+        before=ensure_utc(unit.before_at),
         source_id=str(unit.source_id),
         dataset_key=dataset_key if dataset_key is not None else str(unit.dataset_key),
         run_id=str(unit.sync_run_id),
         status=str(unit.status),
-        run_time=ensure_utc(run_time),
+        run_time=ensure_utc(unit.run_time),
     )
 
 
@@ -327,8 +511,8 @@ def _effective_dataset_keys(
     return family_keys or [str(dataset_key)]
 
 
-def _effective_dataset_keys_for_unit(unit: SyncRunUnit) -> list[str]:
-    """Expand a persisted ``SyncRunUnit`` into its effective coverage dataset keys."""
+def _effective_dataset_keys_for_unit(unit: _DatasetKeyUnit) -> list[str]:
+    """Expand a projected sync unit into its effective coverage dataset keys."""
     return _effective_dataset_keys(unit.dataset_key, unit.processor_flags)
 
 
@@ -374,15 +558,11 @@ def _dataset_keys_for_config(config: SyncConfiguration) -> tuple[str, ...]:
     )
 
 
-def _planner_source_for_config(
-    source: IntegrationSource, config: SyncConfiguration
-) -> bool:
-    metadata = dict(source.metadata_ or {})
-    return metadata.get("planner_managed_sync_config_id") == str(config.id)
-
-
 async def resolve_effective_scope(
-    session: AsyncSession, org_id: str, config: SyncConfiguration
+    session: AsyncSession,
+    org_id: str,
+    config: SyncConfiguration,
+    budget: _CoverageQueryBudget,
 ) -> EffectiveScope:
     """Resolve the source and dataset scope covered by a sync configuration."""
 
@@ -390,23 +570,44 @@ async def resolve_effective_scope(
     if integration_id is None:
         return EffectiveScope(None, (), _dataset_keys_for_config(config))
 
-    source_stmt = select(IntegrationSource).where(
+    source_filters = [
         IntegrationSource.org_id == org_id,
         IntegrationSource.integration_id == integration_id,
         IntegrationSource.is_enabled.is_(True),
-    )
-    source_rows = list((await session.execute(source_stmt)).scalars().all())
+    ]
     if config.source_id is not None:
-        sources = tuple(
-            source for source in source_rows if source.id == config.source_id
+        source_filters.append(IntegrationSource.id == config.source_id)
+    elif bool(config.planner_managed):
+        source_filters.append(
+            IntegrationSource.metadata_["planner_managed_sync_config_id"].as_string()
+            == str(config.id)
         )
+    source_stmt = (
+        select(IntegrationSource)
+        .options(
+            load_only(
+                IntegrationSource.id,
+                IntegrationSource.name,
+                IntegrationSource.full_name,
+            )
+        )
+        .where(*source_filters)
+    )
+    source_rows = [
+        row[0]
+        for row in await _bounded_query_rows(
+            session,
+            source_stmt,
+            budget,
+            stage="effective_sources",
+            stage_limit=MAX_COVERAGE_SOURCES,
+        )
+    ]
+    if config.source_id is not None:
+        sources = tuple(source_rows)
         dataset_keys = _dataset_keys_for_config(config)
     elif bool(config.planner_managed):
-        sources = tuple(
-            source
-            for source in source_rows
-            if _planner_source_for_config(source, config)
-        )
+        sources = tuple(source_rows)
         dataset_keys = ()
     else:
         sources = tuple(source_rows)
@@ -418,7 +619,16 @@ async def resolve_effective_scope(
             IntegrationDataset.integration_id == integration_id,
             IntegrationDataset.is_enabled.is_(True),
         )
-        dataset_keys = tuple((await session.execute(dataset_stmt)).scalars().all())
+        dataset_keys = tuple(
+            row[0]
+            for row in await _bounded_query_rows(
+                session,
+                dataset_stmt,
+                budget,
+                stage="effective_datasets",
+                stage_limit=MAX_COVERAGE_DATASETS,
+            )
+        )
     return EffectiveScope(integration_id, sources, tuple(sorted(set(dataset_keys))))
 
 
@@ -469,6 +679,7 @@ async def _terminal_unit_windows(
     config: SyncConfiguration,
     scope: EffectiveScope,
     truncated_before: datetime,
+    budget: _CoverageQueryBudget,
 ) -> list[UnitWindow]:
     if scope.integration_id is None or not scope.sources or not scope.dataset_keys:
         return []
@@ -484,18 +695,42 @@ async def _terminal_unit_windows(
         SyncRunUnit.before_at.is_not(None),
         SyncRun.org_id == org_id,
     ]
+    # Deliberately project only the columns used by interval math. Selecting
+    # the ORM entities hydrates SyncRunUnit.result/error and SyncRun.result/error
+    # for every unit in the lookback; those JSON/text payloads are unrelated to
+    # coverage and can push concurrent requests beyond the API's memory limit.
+    unit_columns = (
+        SyncRunUnit.id.label("unit_id"),
+        SyncRunUnit.sync_run_id,
+        SyncRunUnit.source_id,
+        SyncRunUnit.dataset_key,
+        SyncRunUnit.processor_flags,
+        SyncRunUnit.since_at,
+        SyncRunUnit.before_at,
+        SyncRunUnit.status,
+        func.coalesce(
+            SyncRun.completed_at,
+            SyncRun.started_at,
+            SyncRun.created_at,
+        ).label("run_time"),
+    )
     recent_stmt = (
-        select(SyncRunUnit, SyncRun)
+        select(*unit_columns)
         .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
         .where(*base_filters, SyncRunUnit.updated_at >= truncated_before)
     )
-    recent_backfill_stmt = select(BackfillJob).where(
+    recent_backfill_stmt = select(BackfillJob.celery_task_id).where(
         BackfillJob.org_id == org_id,
         BackfillJob.sync_config_id == config.id,
         BackfillJob.created_at >= truncated_before,
     )
     recent_backfill_run_ids: set[uuid.UUID] = set()
-    for job in (await session.execute(recent_backfill_stmt)).scalars().all():
+    for job in await _bounded_query_rows(
+        session,
+        recent_backfill_stmt,
+        budget,
+        stage="recent_backfill_jobs",
+    ):
         run_id_str = _backfill_job_sync_run_id(job)
         if run_id_str is None:
             continue
@@ -506,7 +741,7 @@ async def _terminal_unit_windows(
     backfill_unit_stmt = None
     if recent_backfill_run_ids:
         backfill_unit_stmt = (
-            select(SyncRunUnit, SyncRun)
+            select(*unit_columns)
             .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
             .where(*base_filters, SyncRunUnit.sync_run_id.in_(recent_backfill_run_ids))
         )
@@ -528,7 +763,7 @@ async def _terminal_unit_windows(
         .subquery()
     )
     latest_success_stmt = (
-        select(SyncRunUnit, SyncRun)
+        select(*unit_columns)
         .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
         .join(latest_success_ranked, latest_success_ranked.c.unit_id == SyncRunUnit.id)
         .where(
@@ -537,34 +772,57 @@ async def _terminal_unit_windows(
             latest_success_ranked.c.row_num == 1,
         )
     )
-    rows: list[tuple[SyncRunUnit, SyncRun]] = [
-        (unit, run) for unit, run in (await session.execute(recent_stmt)).all()
+    rows = [
+        _coverage_unit_row(row)
+        for row in await _bounded_query_rows(
+            session,
+            recent_stmt,
+            budget,
+            stage="recent_units",
+        )
     ]
-    seen = {(unit.id, run.id) for unit, run in rows}
-    for unit, run in (await session.execute(latest_success_stmt)).all():
-        key = (unit.id, run.id)
+    seen = {unit.unit_id for unit in rows}
+    for row in await _bounded_query_rows(
+        session,
+        latest_success_stmt,
+        budget,
+        stage="latest_success_units",
+    ):
+        key = row.unit_id
         if key not in seen:
-            rows.append((unit, run))
+            rows.append(_coverage_unit_row(row))
             seen.add(key)
     if backfill_unit_stmt is not None:
-        for unit, run in (await session.execute(backfill_unit_stmt)).all():
-            key = (unit.id, run.id)
+        for row in await _bounded_query_rows(
+            session,
+            backfill_unit_stmt,
+            budget,
+            stage="recent_backfill_units",
+        ):
+            key = row.unit_id
             if key not in seen:
-                rows.append((unit, run))
+                rows.append(_coverage_unit_row(row))
                 seen.add(key)
     windows: list[UnitWindow] = []
-    for unit, run in rows:
+    for unit in rows:
         for effective_key in _effective_dataset_keys_for_unit(unit):
             if effective_key not in scope.dataset_keys:
                 continue
-            window = _unit_window_from_row(unit, run, effective_key)
-            if window is not None:
-                windows.append(window)
+            if len(windows) >= MAX_COVERAGE_UNIT_WINDOWS:
+                raise SyncCoverageComplexityError(
+                    stage="expanded_unit_windows",
+                    limit=MAX_COVERAGE_UNIT_WINDOWS,
+                    observed=len(windows) + 1,
+                )
+            windows.append(_unit_window_from_row(unit, effective_key))
     return windows
 
 
 async def _active_run_ids(
-    session: AsyncSession, org_id: str, scope: EffectiveScope
+    session: AsyncSession,
+    org_id: str,
+    scope: EffectiveScope,
+    budget: _CoverageQueryBudget,
 ) -> set[tuple[str, str]]:
     if scope.integration_id is None or not scope.sources or not scope.dataset_keys:
         return set()
@@ -591,7 +849,12 @@ async def _active_run_ids(
     # happens naturally by building a set of expanded (source_id,
     # effective_dataset_key) pairs below.
     pairs: set[tuple[str, str]] = set()
-    for source_id, dataset_key, processor_flags in (await session.execute(stmt)).all():
+    for source_id, dataset_key, processor_flags in await _bounded_query_rows(
+        session,
+        stmt,
+        budget,
+        stage="active_units",
+    ):
         for effective_key in _effective_dataset_keys(dataset_key, processor_flags):
             if effective_key not in scope.dataset_keys:
                 continue
@@ -599,13 +862,13 @@ async def _active_run_ids(
     return pairs
 
 
-def _backfill_interval(job: BackfillJob) -> CoverageInterval:
+def _backfill_interval(job: _BackfillJobLike) -> CoverageInterval:
     since = datetime.combine(job.since_date, time.min, tzinfo=timezone.utc)
     before = datetime.combine(job.before_date, time.max, tzinfo=timezone.utc)
     return CoverageInterval(since=since, before=before, run_ids=(str(job.id),))
 
 
-def _backfill_job_sync_run_id(job: BackfillJob) -> str | None:
+def _backfill_job_sync_run_id(job: _BackfillJobLike) -> str | None:
     """Extract the linked SyncRun id from a backfill job's celery_task_id.
 
     Mirrors the identical helper in ``api/admin/routers/sync.py`` and
@@ -620,7 +883,10 @@ def _backfill_job_sync_run_id(job: BackfillJob) -> str | None:
 
 
 async def _backfill_job_run_pair_windows(
-    session: AsyncSession, org_id: str, run_id: uuid.UUID
+    session: AsyncSession,
+    org_id: str,
+    run_id: uuid.UUID,
+    budget: _CoverageQueryBudget,
 ) -> dict[tuple[str, str], list[CoverageInterval]]:
     """Return each (source_id, dataset_key) pair's merged unit-window union for a SyncRun.
 
@@ -635,29 +901,47 @@ async def _backfill_job_run_pair_windows(
     each of its actually-enabled child datasets rather than the invisible
     canonical "work-items" key.
     """
-    stmt = select(SyncRunUnit).where(
+    stmt = select(
+        SyncRunUnit.source_id,
+        SyncRunUnit.dataset_key,
+        SyncRunUnit.processor_flags,
+        SyncRunUnit.since_at,
+        SyncRunUnit.before_at,
+    ).where(
         SyncRunUnit.org_id == org_id,
         SyncRunUnit.sync_run_id == run_id,
         SyncRunUnit.since_at.is_not(None),
         SyncRunUnit.before_at.is_not(None),
     )
     raw_windows: dict[tuple[str, str], list[CoverageInterval]] = defaultdict(list)
-    for unit in (await session.execute(stmt)).scalars().all():
-        since_at = unit.since_at
-        before_at = unit.before_at
+    for (
+        source_id,
+        dataset_key,
+        processor_flags,
+        since_at,
+        before_at,
+    ) in await _bounded_query_rows(
+        session,
+        stmt,
+        budget,
+        stage="linked_backfill_units",
+    ):
         if since_at is None or before_at is None:
             continue
         interval = CoverageInterval(
             since=ensure_utc(since_at), before=ensure_utc(before_at)
         )
-        for effective_key in _effective_dataset_keys_for_unit(unit):
-            pair = (str(unit.source_id), effective_key)
+        for effective_key in _effective_dataset_keys(dataset_key, processor_flags):
+            pair = (str(source_id), effective_key)
             raw_windows[pair].append(interval)
     return {pair: merge_intervals(intervals) for pair, intervals in raw_windows.items()}
 
 
 async def _resolve_backfill_job_pair_windows(
-    session: AsyncSession, org_id: str, job: BackfillJob
+    session: AsyncSession,
+    org_id: str,
+    job: _BackfillJobLike,
+    budget: _CoverageQueryBudget,
 ) -> dict[tuple[str, str], list[CoverageInterval]] | None:
     """Resolve a backfill job's linked-run pair windows, or ``None`` if unresolvable.
 
@@ -673,7 +957,7 @@ async def _resolve_backfill_job_pair_windows(
         run_uuid = uuid.UUID(run_id_str)
     except ValueError:
         return None
-    return await _backfill_job_run_pair_windows(session, org_id, run_uuid)
+    return await _backfill_job_run_pair_windows(session, org_id, run_uuid, budget)
 
 
 def _clip_intervals(
@@ -695,6 +979,7 @@ async def _backfill_requested_ranges(
     config: SyncConfiguration,
     scope: EffectiveScope,
     truncated_before: datetime,
+    budget: _CoverageQueryBudget,
 ) -> list[CoverageInterval]:
     """Return backfill-driven requested intervals.
 
@@ -722,16 +1007,31 @@ async def _backfill_requested_ranges(
     """
     if not scope.sources:
         return []
-    stmt = select(BackfillJob).where(
+    stmt = select(
+        BackfillJob.id,
+        BackfillJob.celery_task_id,
+        BackfillJob.since_date,
+        BackfillJob.before_date,
+    ).where(
         BackfillJob.org_id == org_id,
         BackfillJob.sync_config_id == config.id,
         BackfillJob.created_at >= truncated_before,
     )
     scope_source_ids = tuple(str(source.id) for source in scope.sources)
     ranges: list[CoverageInterval] = []
-    for job in (await session.execute(stmt)).scalars().all():
+    for job in await _bounded_query_rows(
+        session,
+        stmt,
+        budget,
+        stage="backfill_jobs",
+    ):
         interval = _backfill_interval(job)
-        pair_windows = await _resolve_backfill_job_pair_windows(session, org_id, job)
+        pair_windows = await _resolve_backfill_job_pair_windows(
+            session,
+            org_id,
+            job,
+            budget,
+        )
         if pair_windows is None:
             ranges.append(
                 CoverageInterval(
@@ -833,6 +1133,20 @@ def build_coverage_summary_payload(
     paused = not bool(config.is_active)
     scheduled = active_schedule is not None and has_schedule_row
 
+    if len(windows) > MAX_COVERAGE_UNIT_WINDOWS:
+        raise SyncCoverageComplexityError(
+            stage="expanded_unit_windows",
+            limit=MAX_COVERAGE_UNIT_WINDOWS,
+            observed=len(windows),
+        )
+    pair_count = len(scope.sources) * len(scope.dataset_keys)
+    if pair_count > MAX_COVERAGE_PAIRS:
+        raise SyncCoverageComplexityError(
+            stage="source_dataset_pairs",
+            limit=MAX_COVERAGE_PAIRS,
+            observed=pair_count,
+        )
+
     by_pair: dict[tuple[str, str], list[UnitWindow]] = defaultdict(list)
     for window in windows:
         by_pair[(window.source_id, window.dataset_key)].append(window)
@@ -840,6 +1154,7 @@ def build_coverage_summary_payload(
     scope_source_ids = {str(source.id) for source in scope.sources}
     scope_dataset_keys = set(scope.dataset_keys)
     backfill_by_pair: dict[tuple[str, str], list[CoverageInterval]] = defaultdict(list)
+    expanded_backfill_intervals = 0
     for interval in backfill_requested:
         interval_source_ids = interval.source_ids or tuple(sorted(scope_source_ids))
         # Empty dataset_keys means "legacy/unresolved backfill" -- spread it
@@ -853,6 +1168,13 @@ def build_coverage_summary_payload(
             for dataset_key in interval_dataset_keys:
                 if dataset_key not in scope_dataset_keys:
                     continue
+                expanded_backfill_intervals += 1
+                if expanded_backfill_intervals > MAX_COVERAGE_BACKFILL_PAIR_INTERVALS:
+                    raise SyncCoverageComplexityError(
+                        stage="expanded_backfill_pair_intervals",
+                        limit=MAX_COVERAGE_BACKFILL_PAIR_INTERVALS,
+                        observed=expanded_backfill_intervals,
+                    )
                 backfill_by_pair[(source_id, dataset_key)].append(
                     CoverageInterval(
                         since=interval.since,
@@ -932,9 +1254,15 @@ def build_coverage_summary_payload(
                 )
             )
 
+    pairs_by_dataset: dict[str, list[_PairCoverage]] = defaultdict(list)
+    pairs_by_source: dict[str, list[_PairCoverage]] = defaultdict(list)
+    for pair in pair_coverages:
+        pairs_by_dataset[pair.dataset_key].append(pair)
+        pairs_by_source[pair.source_id].append(pair)
+
     datasets: list[_DatasetCoverage] = []
     for dataset_key in scope.dataset_keys:
-        pairs = [pair for pair in pair_coverages if pair.dataset_key == dataset_key]
+        pairs = pairs_by_dataset[dataset_key]
         requested = merge_intervals(
             interval for pair in pairs for interval in pair.requested
         )
@@ -976,7 +1304,7 @@ def build_coverage_summary_payload(
     source_payloads: list[dict[str, Any]] = []
     for source in scope.sources:
         source_id = str(source.id)
-        pairs = [pair for pair in pair_coverages if pair.source_id == source_id]
+        pairs = pairs_by_source[source_id]
         covered_through = max(
             (pair.covered_through for pair in pairs if pair.covered_through),
             default=None,
@@ -1078,26 +1406,102 @@ async def build_sync_coverage_summary(
 ) -> dict[str, Any]:
     """Query persisted sync state and return a config-scoped coverage summary."""
 
-    now = ensure_utc(generated_at or datetime.now(timezone.utc))
-    truncated_before = now - timedelta(days=lookback_days)
-    scope = await resolve_effective_scope(session, org_id, config)
-    schedule = await _active_schedule(session, org_id, config)
-    has_schedule = await _has_schedule_row(session, org_id, config)
-    windows = await _terminal_unit_windows(
-        session, org_id, config, scope, truncated_before
-    )
-    active_pairs = await _active_run_ids(session, org_id, scope)
-    backfill_requested = await _backfill_requested_ranges(
-        session, org_id, config, scope, truncated_before
-    )
-    return build_coverage_summary_payload(
-        config=config,
-        scope=scope,
-        windows=windows,
-        backfill_requested=backfill_requested,
-        active_pairs=active_pairs,
-        active_schedule=schedule,
-        has_schedule_row=has_schedule,
-        generated_at=now,
-        lookback_days=lookback_days,
-    )
+    started_at = monotonic()
+    log_context = {
+        "org_id": org_id,
+        "sync_config_id": str(config.id),
+        "history_lookback_days": lookback_days,
+    }
+    logger.info("sync_coverage_summary_waiting", extra=log_context)
+    try:
+        async with _coverage_admission.slot():
+            logger.info(
+                "sync_coverage_summary_started",
+                extra={
+                    **log_context,
+                    "admission_wait_seconds": round(monotonic() - started_at, 3),
+                    "concurrency_limit": _coverage_admission.capacity,
+                },
+            )
+            budget = _CoverageQueryBudget()
+            now = ensure_utc(generated_at or datetime.now(timezone.utc))
+            truncated_before = now - timedelta(days=lookback_days)
+            scope = await resolve_effective_scope(session, org_id, config, budget)
+            schedule = await _active_schedule(session, org_id, config)
+            has_schedule = await _has_schedule_row(session, org_id, config)
+            windows = await _terminal_unit_windows(
+                session,
+                org_id,
+                config,
+                scope,
+                truncated_before,
+                budget,
+            )
+            active_pairs = await _active_run_ids(session, org_id, scope, budget)
+            backfill_requested = await _backfill_requested_ranges(
+                session,
+                org_id,
+                config,
+                scope,
+                truncated_before,
+                budget,
+            )
+            logger.info(
+                "sync_coverage_summary_loaded",
+                extra={
+                    **log_context,
+                    "source_count": len(scope.sources),
+                    "dataset_count": len(scope.dataset_keys),
+                    "source_dataset_pair_count": len(scope.sources)
+                    * len(scope.dataset_keys),
+                    "query_row_count": budget.consumed,
+                    "query_row_limit": budget.limit,
+                    "unit_window_count": len(windows),
+                    "active_pair_count": len(active_pairs),
+                    "backfill_range_count": len(backfill_requested),
+                    "elapsed_seconds": round(monotonic() - started_at, 3),
+                },
+            )
+            payload = build_coverage_summary_payload(
+                config=config,
+                scope=scope,
+                windows=windows,
+                backfill_requested=backfill_requested,
+                active_pairs=active_pairs,
+                active_schedule=schedule,
+                has_schedule_row=has_schedule,
+                generated_at=now,
+                lookback_days=lookback_days,
+            )
+            logger.info(
+                "sync_coverage_summary_completed",
+                extra={
+                    **log_context,
+                    "query_row_count": budget.consumed,
+                    "elapsed_seconds": round(monotonic() - started_at, 3),
+                    "gap_count": payload["overall"]["gap_count"],
+                    "failed_range_count": payload["overall"]["failed_range_count"],
+                },
+            )
+            return payload
+    except SyncCoverageBusyError:
+        logger.warning(
+            "sync_coverage_summary_busy",
+            extra={
+                **log_context,
+                "concurrency_limit": _coverage_admission.capacity,
+                "admission_policy": "reject_immediately",
+            },
+        )
+        raise
+    except SyncCoverageComplexityError as exc:
+        logger.warning(
+            "sync_coverage_summary_complexity_rejected",
+            extra={
+                **log_context,
+                "complexity_stage": exc.stage,
+                "complexity_limit": exc.limit,
+                "complexity_observed": exc.observed,
+            },
+        )
+        raise

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
@@ -37,6 +39,9 @@ from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
+sync_coverage_module = importlib.import_module(
+    "dev_health_ops.api.services.sync_coverage"
+)
 
 _TABLES = tables_of(
     User,
@@ -343,6 +348,211 @@ async def test_sync_coverage_api_returns_complete_summary(client, session_maker)
         scope["source_id"]
     ]
     assert data["overall"]["next_scheduled_run_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_queries_do_not_hydrate_unit_or_run_payloads(
+    client, session_maker, caplog
+):
+    """Coverage must not load large result/error payloads into API memory."""
+
+    caplog.set_level("INFO", logger="dev_health_ops.api.services.sync_coverage")
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    before = datetime.now(timezone.utc) - timedelta(minutes=30)
+    await _seed_unit(
+        session_maker,
+        scope,
+        since=before - timedelta(hours=1),
+        before=before,
+    )
+
+    statements: list[str] = []
+
+    def capture_statement(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    engine = session_maker.kw["bind"]
+    event.listen(engine.sync_engine, "before_cursor_execute", capture_statement)
+    try:
+        response = await ac.get(
+            f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage"
+        )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture_statement)
+
+    assert response.status_code == 200, response.text
+    unit_queries = [
+        statement.lower()
+        for statement in statements
+        if "sync_run_units" in statement.lower() and "select" in statement.lower()
+    ]
+    assert unit_queries, "coverage request did not measure any sync-unit query"
+    for statement in unit_queries:
+        assert "sync_run_units.result" not in statement
+        assert "sync_run_units.error" not in statement
+        assert "sync_runs.result" not in statement
+        assert "sync_runs.error" not in statement
+
+    coverage_logs = {
+        record.message: record
+        for record in caplog.records
+        if record.name == "dev_health_ops.api.services.sync_coverage"
+    }
+    assert "sync_coverage_summary_started" in coverage_logs
+    assert (
+        getattr(coverage_logs["sync_coverage_summary_started"], "sync_config_id")
+        == scope["config_id"]
+    )
+    assert (
+        getattr(coverage_logs["sync_coverage_summary_loaded"], "unit_window_count") == 1
+    )
+    assert "sync_coverage_summary_completed" in coverage_logs
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_rejects_history_before_query_budget_is_exceeded(
+    client, session_maker, monkeypatch, caplog
+):
+    """The SQL overflow sentinel must fail closed, never return partial coverage."""
+
+    caplog.set_level("WARNING", logger="dev_health_ops.api.services.sync_coverage")
+    original_budget = sync_coverage_module._CoverageQueryBudget
+    monkeypatch.setattr(
+        sync_coverage_module,
+        "_CoverageQueryBudget",
+        lambda: original_budget(limit=4),
+    )
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    before = datetime.now(timezone.utc) - timedelta(minutes=30)
+    for offset in range(3):
+        await _seed_unit(
+            session_maker,
+            scope,
+            since=before - timedelta(hours=offset + 1),
+            before=before - timedelta(hours=offset),
+        )
+
+    statements: list[str] = []
+
+    def capture_statement(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    engine = session_maker.kw["bind"]
+    event.listen(engine.sync_engine, "before_cursor_execute", capture_statement)
+    try:
+        response = await ac.get(
+            f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage"
+        )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture_statement)
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail == {
+        "code": "sync_coverage_too_large",
+        "message": (
+            "Coverage scope or history is too large to compute safely. "
+            "Reduce the sync configuration scope or retry with a smaller "
+            "history_lookback_days value."
+        ),
+        "stage": "recent_units",
+        "limit": 4,
+        "observed": 5,
+    }
+    unit_queries = [
+        statement.lower()
+        for statement in statements
+        if "sync_run_units" in statement.lower() and "select" in statement.lower()
+    ]
+    assert unit_queries, "overflow path did not execute a measured unit query"
+    assert all(" limit " in statement for statement in unit_queries)
+    assert any(
+        record.message == "sync_coverage_summary_complexity_rejected"
+        and getattr(record, "complexity_stage") == "recent_units"
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_capacity_sheds_only_excess_builds(
+    client, session_maker, monkeypatch, caplog
+):
+    """A fifth-style overlap gets 503 rather than allocating past capacity."""
+
+    caplog.set_level("WARNING", logger="dev_health_ops.api.admin.routers.sync")
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    before = datetime.now(timezone.utc) - timedelta(minutes=30)
+    await _seed_unit(
+        session_maker,
+        scope,
+        since=before - timedelta(hours=1),
+        before=before,
+    )
+
+    controller = sync_coverage_module._CoverageAdmissionController(capacity=1)
+    monkeypatch.setattr(sync_coverage_module, "_coverage_admission", controller)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    terminal_calls = 0
+    original_terminal_windows = sync_coverage_module._terminal_unit_windows
+
+    async def blocking_terminal_windows(*args, **kwargs):
+        nonlocal terminal_calls
+        terminal_calls += 1
+        entered.set()
+        await release.wait()
+        return await original_terminal_windows(*args, **kwargs)
+
+    monkeypatch.setattr(
+        sync_coverage_module,
+        "_terminal_unit_windows",
+        blocking_terminal_windows,
+    )
+    url = f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage"
+    admitted_request = asyncio.create_task(ac.get(url))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+
+        unrelated = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}")
+        assert unrelated.status_code == 200, unrelated.text
+
+        rejected_responses = await asyncio.gather(*(ac.get(url) for _ in range(25)))
+        assert all(response.status_code == 503 for response in rejected_responses)
+        assert all(
+            response.headers["retry-after"] == "5" for response in rejected_responses
+        )
+        assert all(
+            response.json()["detail"]["code"] == "sync_coverage_busy"
+            for response in rejected_responses
+        )
+        assert terminal_calls == 1
+        assert controller._active == 1
+        assert any(
+            record.message == "sync_coverage_request_rejected_busy"
+            and getattr(record, "sync_config_id") == scope["config_id"]
+            for record in caplog.records
+        )
+    finally:
+        release.set()
+    admitted = await asyncio.wait_for(admitted_request, timeout=2)
+    assert admitted.status_code == 200, admitted.text
+    assert controller._active == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_capacity_is_released_after_builder_error():
+    controller = sync_coverage_module._CoverageAdmissionController(capacity=1)
+
+    with pytest.raises(RuntimeError, match="builder failed"):
+        async with controller.slot():
+            raise RuntimeError("builder failed")
+
+    async with controller.slot():
+        assert controller._active == 1
+    assert controller._active == 0
 
 
 @pytest.mark.asyncio

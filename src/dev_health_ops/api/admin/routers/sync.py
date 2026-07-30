@@ -37,8 +37,11 @@ from dev_health_ops.api.services.configuration import (
 from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.api.services.sync_coverage import (
     HISTORY_LOOKBACK_DAYS,
+    SyncCoverageBusyError,
+    SyncCoverageComplexityError,
     build_sync_coverage_summary,
     ensure_utc,
+    sync_coverage_admission_slot,
 )
 from dev_health_ops.models import SyncRun
 from dev_health_ops.models.integrations import (
@@ -1962,16 +1965,54 @@ async def get_sync_config_coverage(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncCoverageSummaryResponse:
-    svc = SyncConfigurationService(session, org_id)
-    config = await svc.get_by_id(config_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Sync configuration not found")
-    payload = await build_sync_coverage_summary(
-        session,
-        org_id,
-        config,
-        lookback_days=history_lookback_days,
-    )
+    try:
+        # Admit before the first database query. Saturated coverage traffic
+        # must not consume PgBouncer connections needed by unrelated routes.
+        async with sync_coverage_admission_slot():
+            svc = SyncConfigurationService(session, org_id)
+            config = await svc.get_by_id(config_id)
+            if config is None:
+                raise HTTPException(
+                    status_code=404, detail="Sync configuration not found"
+                )
+            payload = await build_sync_coverage_summary(
+                session,
+                org_id,
+                config,
+                lookback_days=history_lookback_days,
+            )
+    except SyncCoverageBusyError as exc:
+        logger.warning(
+            "sync_coverage_request_rejected_busy",
+            extra={
+                "org_id": org_id,
+                "sync_config_id": config_id,
+                "history_lookback_days": history_lookback_days,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "sync_coverage_busy",
+                "message": str(exc),
+            },
+            headers={"Retry-After": "5"},
+        ) from exc
+    except SyncCoverageComplexityError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "sync_coverage_too_large",
+                "message": (
+                    "Coverage scope or history is too large to compute safely. "
+                    "Reduce the sync configuration scope or retry with a smaller "
+                    "history_lookback_days value."
+                ),
+                "stage": exc.stage,
+                "limit": exc.limit,
+                "observed": exc.observed,
+            },
+        ) from exc
     return SyncCoverageSummaryResponse.model_validate(payload)
 
 

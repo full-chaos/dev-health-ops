@@ -82,7 +82,12 @@ async def test_certification_proves_tool_continuation_and_final_answer() -> None
         "type": "object",
         "additionalProperties": False,
         "required": ["nonce"],
-        "properties": {"nonce": {"const": "ready-v1"}},
+        "properties": {
+            "nonce": {
+                "type": "string",
+                "const": "ready-v1",
+            }
+        },
     }
 
 

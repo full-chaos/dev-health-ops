@@ -22,11 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.licensing import seed_feature_flags_async
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.licensing import FeatureFlag
+from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
+from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
-_TABLES = tables_of(FeatureFlag)
+_TABLES = tables_of(User, Organization, FeatureFlag, OrgFeatureOverride)
 
 # Import the actual module (not the re-exported router object)
 _features_router_module = importlib.import_module(
@@ -294,3 +296,45 @@ async def test_superuser_list_includes_canonical_ask_dev_migration_rows(
         },
     ]
     assert len({row["id"] for row in rows}) == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_seed_returns_overrideable_ask_dev_feature_ids(session_maker):
+    org_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    current_user = AuthenticatedUser(
+        user_id=str(user_id),
+        email="admin@example.com",
+        org_id=str(org_id),
+        role="owner",
+        is_superuser=True,
+    )
+
+    async with session_maker() as session:
+        session.add_all(
+            [
+                Organization(
+                    id=org_id,
+                    slug="test-org",
+                    name="Test Org",
+                    tier="community",
+                ),
+                User(id=user_id, email="admin@example.com", is_active=True),
+            ]
+        )
+        await seed_feature_flags_async(session)
+
+    app = _make_app(session_maker, current_user)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        catalog = await client.get("/api/v1/admin/feature-flags")
+        assert catalog.status_code == 200
+        feature_ids = {row["key"]: row["id"] for row in catalog.json()}
+
+        for key in ("ask_dev", "ask_dev_contextual_entrypoints"):
+            response = await client.post(
+                f"/api/v1/admin/orgs/{org_id}/feature-overrides",
+                json={"feature_id": feature_ids[key], "is_enabled": True},
+            )
+            assert response.status_code == 201
+            assert response.json()["feature_key"] == key

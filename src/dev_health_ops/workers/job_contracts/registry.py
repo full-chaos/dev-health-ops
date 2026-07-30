@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -132,9 +133,12 @@ class MigrationJob:
 
 
 def default_contract_root() -> Path:
-    """Find the repository contract tree from a source checkout."""
+    """Find the job contract tree in a checkout or installed distribution."""
 
-    return Path(__file__).resolve().parents[4] / "contracts" / "jobs" / "v1"
+    checkout_root = Path(__file__).resolve().parents[4] / "contracts" / "jobs" / "v1"
+    if checkout_root.is_dir():
+        return checkout_root
+    return Path(sysconfig.get_path("data")) / "contracts" / "jobs" / "v1"
 
 
 def load_registry(root: Path | None = None) -> Registry:

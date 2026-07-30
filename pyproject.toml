@@ -152,6 +152,14 @@ include-package-data = true
   "**/*.txt",
 ]
 
+[tool.setuptools.data-files]
+"contracts/jobs/v1" = [
+  "contracts/jobs/v1/*.json",
+  "contracts/jobs/v1/*.md",
+]
+"contracts/jobs/v1/examples" = ["contracts/jobs/v1/examples/*.json"]
+"contracts/jobs/v1/schemas" = ["contracts/jobs/v1/schemas/*.json"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py310"

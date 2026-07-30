@@ -48,6 +48,7 @@ from dev_health_ops.workers.job_contracts import (
     encode_envelope,
     load_registry,
 )
+from dev_health_ops.workers.job_contracts import registry as contract_registry
 
 
 @pytest.mark.parametrize(
@@ -275,3 +276,21 @@ def test_default_contract_root_points_to_regular_artifacts() -> None:
     root = default_contract_root()
     assert isinstance(root, Path)
     assert (root / "registry.json").is_file()
+
+
+def test_default_contract_root_uses_installed_data_scheme(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    installed_module = (
+        tmp_path
+        / "lib/python3.14/site-packages/dev_health_ops/workers/job_contracts/registry.py"
+    )
+    data_root = tmp_path / "installation-data"
+    monkeypatch.setattr(contract_registry, "__file__", str(installed_module))
+    monkeypatch.setattr(
+        contract_registry.sysconfig,
+        "get_path",
+        lambda name: str(data_root) if name == "data" else None,
+    )
+
+    assert default_contract_root() == data_root / "contracts/jobs/v1"

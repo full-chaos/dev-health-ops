@@ -1,7 +1,7 @@
 """Seed the default-disabled Ask Dev entitlement.
 
 Revision ID: 0067
-Revises: 0066
+Revises: 0065
 Create Date: 2026-07-28 00:00:00
 
 The row is globally available so the existing feature decision can act as an
@@ -21,8 +21,8 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0067"
-down_revision: str | None = "0066"
-branch_labels: str | Sequence[str] | None = None
+down_revision: str | None = "0065"
+branch_labels: str | Sequence[str] | None = ("application_schema",)
 depends_on: str | Sequence[str] | None = None
 
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]

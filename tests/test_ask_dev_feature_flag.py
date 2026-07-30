@@ -79,7 +79,8 @@ def test_migration_0067_is_additive_idempotent_and_preserves_other_gates() -> No
         "dev_health_ops.alembic.versions.0067_seed_ask_dev_feature_flag"
     )
     assert migration.revision == "0067"
-    assert migration.down_revision == "0066"
+    assert migration.down_revision == "0065"
+    assert migration.branch_labels == ("application_schema",)
     engine = create_engine("sqlite:///:memory:")
     try:
         with engine.connect() as conn:

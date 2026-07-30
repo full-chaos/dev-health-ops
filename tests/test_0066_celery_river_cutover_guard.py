@@ -78,6 +78,15 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
         "--ignore=tests/test_0066_celery_river_cutover_postgres.py"
     )
 
+    coverage_step = next(
+        step
+        for step in workflow["jobs"]["coverage"]["steps"]
+        if step.get("name") == "Run coverage-gated test contract"
+    )
+    assert coverage_step["env"][_POSTGRES_TEST_URI_ENV] == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
+    )
+
 
 def test_live_e2e_allows_the_disposable_cutover_migration() -> None:
     workflow = yaml.safe_load(

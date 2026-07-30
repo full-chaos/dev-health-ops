@@ -520,9 +520,11 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("migrate", "postgres", "upgrade"): frozenset({_REQ_POSTGRES}),
     ("migrate", "postgres", "downgrade"): frozenset({_REQ_POSTGRES}),
     ("migrate", "postgres", "current"): frozenset({_REQ_POSTGRES}),
+    ("migrate", "postgres", "status"): frozenset({_REQ_POSTGRES}),
     ("migrate", "upgrade"): frozenset({_REQ_POSTGRES}),
     ("migrate", "downgrade"): frozenset({_REQ_POSTGRES}),
     ("migrate", "current"): frozenset({_REQ_POSTGRES}),
+    ("migrate", "status"): frozenset({_REQ_POSTGRES}),
     # Bare ``migrate postgres`` / ``migrate clickhouse`` default to upgrade.
     ("migrate", "postgres"): frozenset({_REQ_POSTGRES}),
     ("migrate", "clickhouse"): frozenset({_REQ_CLICKHOUSE}),

@@ -159,9 +159,9 @@ own compose file(s) for exactly which services exist and where.
 
 **`depends_on` ignores profiles.** A profiled service that declares
 `depends_on: migrate` pulls the *unprofiled* Python migrator into the plan. The
-application migrator now stops at `0065` unless
-`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`, but a deployment carrying that
-one-shot authorization would still run
+application migrator advances ordinary schema on a separate branch and leaves
+`0066` pending unless `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`, but a
+deployment carrying that one-shot authorization would still run
 `0066_activate_river_worker_job_routes` before the downstream Go runtimes can
 start. That is precisely the ordering `0066`'s own docstring forbids: routes
 flip to River before any River consumer is available, and envelopes then
@@ -172,16 +172,17 @@ the Go observation path cannot move real traffic as a side effect.
 `tests/test_compose_config.py::test_go_profile_overlay_never_depends_on_python_migrate`
 is the regression barrier.
 
-Bring the Python schema to the last pre-cutover revision yourself, first:
+Bring the Python application schema current without activating the cutover,
+first:
 
 ```bash
-# Without the cutover opt-in, the application migrator stops at 0065.
+# Without the cutover opt-in, ordinary schema advances and 0066 remains pending.
 docker compose run --rm --entrypoint sh migrate -c \
   'python -m dev_health_ops.cli migrate postgres upgrade'
 
-# Confirm where you actually landed before going further.
+# Confirm the application schema is current before going further.
 docker compose run --rm --entrypoint sh migrate -c \
-  'python -m dev_health_ops.cli migrate postgres current'
+  'python -m dev_health_ops.cli migrate postgres status --check'
 
 # Only then start the Go path.
 docker compose --profile go up -d go-worker go-reconciler
@@ -400,10 +401,11 @@ to `transport='river'` and, per its own docstring, requires Go consumers to
 already be running for every affected queue before it commits. Direct
 `alembic upgrade head` on a database with no Go workers running would silently
 stop background processing for every one of those job kinds. The application
-`migrate postgres` command instead leaves `0066` pending unless
-`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`. If a targeted direct Alembic upgrade
-stopping short of a cutover migration is what you need, use that instead of
-`head`, and confirm first that the
+`migrate postgres` command advances the separate `application_schema` branch
+while leaving the sibling `0066` River activation pending unless
+`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`. Do not use direct
+`alembic upgrade head`: the graph intentionally has multiple heads. Use the
+application migrator, and confirm first that the
 `api`/`migrate` container actually has your target revision's file available
 (root compose mounts `./ops:/app`, so it does if you're on a branch with that
 migration file; it does not against an unmodified `origin/main` checkout).
@@ -415,11 +417,12 @@ running this stack mounts a working copy of this repository into its
 `migrate` service (as the coexistence overlays and CHAOS-3142's own
 repo-root wiring do, so a nested `migrate` target and other Go/Alembic
 artifacts on a feature branch are visible without a rebuild), direct Alembic
-still applies every pending revision. The application migrator prevents an
-unattended `0066` cutover by stopping at `0065` unless
-`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`; that one-shot authorization must
-therefore be scoped to the reviewed cutover run and removed afterward. There
-is no separate interactive confirmation once the authorization is present.
+still applies every explicitly targeted pending revision. The application
+migrator prevents an unattended `0066` cutover by targeting only the
+`application_schema` branch unless `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`;
+that one-shot authorization must therefore be scoped to the reviewed cutover
+run and removed afterward. There is no separate interactive confirmation once
+the authorization is present.
 This is a general operational hazard of mounting a live checkout into a
 migration-running service, not specific to CHAOS-3142 or to this migration —
 it deserves review as its own item, independent of the Go execution path

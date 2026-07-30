@@ -1312,6 +1312,9 @@ dev-hops migrate postgres downgrade -1
 # Show current applied revision
 dev-hops migrate postgres current
 
+# Read-only application-schema check (exit 1 while required revisions are pending)
+dev-hops migrate postgres status --check
+
 # Show migration history
 dev-hops migrate postgres history
 
@@ -1319,13 +1322,22 @@ dev-hops migrate postgres history
 dev-hops migrate postgres heads
 ```
 
-The Celery-to-River ownership cutover at PostgreSQL revision `0066` is deferred
-by default. An ordinary upgrade applies through revision `0065` and exits
-successfully, leaving `0066` pending. Set
-`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1` only on the explicitly authorized
-migration run after the River consumers are ready and Celery is drained. A
-database that has already applied `0066` continues upgrading normally when the
-one-shot variable is absent.
+The migration graph has two branches after revision `0065`:
+
+- `application_schema` contains ordinary application migrations and is always
+  advanced by `dev-hops migrate postgres`;
+- `river_cutover` contains revision `0066`, the Celery-to-River ownership
+  activation, and remains pending by default.
+
+Set `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1` only on the explicitly authorized
+migration run after the River consumers are ready and Celery is drained. With
+that opt-in, the migrator advances both heads. Without it, River support tables
+and route records may remain present but unused while application schema such
+as Ask Dev persistence continues to migrate normally.
+
+`migrate postgres status --check` is read-only. It requires the current
+`application_schema` head and, only when the cutover opt-in is present, the
+`river_cutover` head.
 
 **Backward-compatible aliases:** `dev-hops migrate upgrade`, `dev-hops migrate downgrade`, etc. still work and target PostgreSQL.
 

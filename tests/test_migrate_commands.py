@@ -14,6 +14,7 @@ from dev_health_ops.migrate import (
     _run_clickhouse_repair,
     _run_clickhouse_status,
     _run_clickhouse_upgrade,
+    _run_postgres_status,
     _run_upgrade,
 )
 
@@ -46,6 +47,11 @@ class TestMigrateRouting:
             (["migrate", "postgres", "upgrade", "abc123"], "_run_upgrade"),
             (["migrate", "postgres", "downgrade", "base"], "_run_downgrade"),
             (["migrate", "postgres", "current"], "_run_current"),
+            (["migrate", "postgres", "status"], "_run_postgres_status"),
+            (
+                ["migrate", "postgres", "status", "--check"],
+                "_run_postgres_status",
+            ),
             (["migrate", "postgres", "history"], "_run_history"),
             (["migrate", "postgres", "heads"], "_run_heads"),
             (["migrate", "clickhouse"], "_run_clickhouse_upgrade"),
@@ -63,6 +69,7 @@ class TestMigrateRouting:
             (["migrate", "upgrade", "abc123"], "_run_upgrade"),
             (["migrate", "downgrade", "base"], "_run_downgrade"),
             (["migrate", "current"], "_run_current"),
+            (["migrate", "status", "--check"], "_run_postgres_status"),
             (["migrate", "history"], "_run_history"),
             (["migrate", "heads"], "_run_heads"),
         ],
@@ -157,16 +164,18 @@ class TestMigrateRouting:
 
 
 class TestPostgresUpgrade:
-    def test_cutover_deferral_is_revisited_when_alembic_head_changes(self) -> None:
+    def test_application_schema_and_cutover_are_separate_heads(self) -> None:
         from alembic.script import ScriptDirectory
 
         cfg = _make_alembic_config(
             "postgresql+asyncpg://unused:unused@localhost:5432/unused"
         )
-        current_head = ScriptDirectory.from_config(cfg).get_current_head()
+        scripts = ScriptDirectory.from_config(cfg)
 
-        assert current_head == "0071"
-        assert _database_has_revision(cfg, (current_head,), "0066")
+        assert set(scripts.get_heads()) == {"0066", "0071"}
+        assert scripts.get_revision("application_schema@head").revision == "0071"
+        assert _database_has_revision(cfg, ("0071",), "0065")
+        assert not _database_has_revision(cfg, ("0071",), "0066")
 
     def test_cutover_revision_lineage_detection_uses_real_alembic_graph(self) -> None:
         cfg = _make_alembic_config(
@@ -177,7 +186,7 @@ class TestPostgresUpgrade:
         assert not _database_has_revision(cfg, ("0065",), "0066")
 
     @pytest.mark.parametrize("raw", [None, "", "0"])
-    def test_disabled_cutover_opt_in_defers_head_at_0065(
+    def test_disabled_cutover_opt_in_applies_application_schema_branch(
         self, monkeypatch: pytest.MonkeyPatch, raw: str | None
     ) -> None:
         if raw is None:
@@ -188,15 +197,19 @@ class TestPostgresUpgrade:
         with (
             patch("dev_health_ops.migrate._make_alembic_config", return_value=cfg),
             patch(
-                "dev_health_ops.migrate._current_postgres_heads", return_value=("0051",)
+                "dev_health_ops.migrate._application_schema_head",
+                return_value="0071",
             ),
-            patch("dev_health_ops.migrate._database_has_revision", return_value=False),
+            patch(
+                "dev_health_ops.migrate._postgres_revision_status",
+                return_value=(("0071",), ("0071",), ()),
+            ),
             patch("alembic.command.upgrade") as upgrade,
             patch("dev_health_ops.migrate._run_river_upgrade", return_value=0),
         ):
             assert _run_upgrade(_ns(revision="head")) == 0
 
-        upgrade.assert_called_once_with(cfg, "0065")
+        upgrade.assert_called_once_with(cfg, "application_schema@head")
 
     def test_explicit_cutover_opt_in_keeps_head(
         self, monkeypatch: pytest.MonkeyPatch
@@ -205,16 +218,22 @@ class TestPostgresUpgrade:
         cfg = MagicMock()
         with (
             patch("dev_health_ops.migrate._make_alembic_config", return_value=cfg),
-            patch("dev_health_ops.migrate._current_postgres_heads") as current_heads,
+            patch(
+                "dev_health_ops.migrate._application_schema_head",
+                return_value="0071",
+            ),
+            patch(
+                "dev_health_ops.migrate._postgres_revision_status",
+                return_value=(("0066", "0071"), ("0071", "0066"), ()),
+            ),
             patch("alembic.command.upgrade") as upgrade,
             patch("dev_health_ops.migrate._run_river_upgrade", return_value=0),
         ):
             assert _run_upgrade(_ns(revision="head")) == 0
 
-        current_heads.assert_not_called()
-        upgrade.assert_called_once_with(cfg, "head")
+        upgrade.assert_called_once_with(cfg, "heads")
 
-    def test_unset_opt_in_does_not_move_an_applied_cutover_backwards(
+    def test_upgrade_fails_if_required_application_revision_remains_missing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER", raising=False)
@@ -222,15 +241,20 @@ class TestPostgresUpgrade:
         with (
             patch("dev_health_ops.migrate._make_alembic_config", return_value=cfg),
             patch(
-                "dev_health_ops.migrate._current_postgres_heads", return_value=("0066",)
+                "dev_health_ops.migrate._application_schema_head",
+                return_value="0071",
             ),
-            patch("dev_health_ops.migrate._database_has_revision", return_value=True),
+            patch(
+                "dev_health_ops.migrate._postgres_revision_status",
+                return_value=(("0065",), ("0071",), ("0071",)),
+            ),
             patch("alembic.command.upgrade") as upgrade,
             patch("dev_health_ops.migrate._run_river_upgrade", return_value=0),
+            pytest.raises(RuntimeError, match="required revision.*0071"),
         ):
-            assert _run_upgrade(_ns(revision="head")) == 0
+            _run_upgrade(_ns(revision="head"))
 
-        upgrade.assert_called_once_with(cfg, "head")
+        upgrade.assert_called_once_with(cfg, "application_schema@head")
 
     def test_explicit_revision_keeps_direct_alembic_guard(
         self, monkeypatch: pytest.MonkeyPatch
@@ -239,14 +263,42 @@ class TestPostgresUpgrade:
         cfg = MagicMock()
         with (
             patch("dev_health_ops.migrate._make_alembic_config", return_value=cfg),
-            patch("dev_health_ops.migrate._current_postgres_heads") as current_heads,
+            patch("dev_health_ops.migrate._application_schema_head") as app_head,
             patch("alembic.command.upgrade") as upgrade,
             patch("dev_health_ops.migrate._run_river_upgrade", return_value=0),
         ):
             assert _run_upgrade(_ns(revision="0066")) == 0
 
-        current_heads.assert_not_called()
+        app_head.assert_not_called()
         upgrade.assert_called_once_with(cfg, "0066")
+
+
+class TestPostgresStatus:
+    def test_check_fails_when_required_revision_is_pending(self, capsys) -> None:
+        cfg = MagicMock()
+        with (
+            patch("dev_health_ops.migrate._make_alembic_config", return_value=cfg),
+            patch(
+                "dev_health_ops.migrate._postgres_revision_status",
+                return_value=(("0065",), ("0071",), ("0071",)),
+            ),
+        ):
+            assert _run_postgres_status(_ns(check=True)) == 1
+
+        assert "Pending required PostgreSQL revisions: 0071" in capsys.readouterr().out
+
+    def test_check_passes_when_application_schema_is_current(self, capsys) -> None:
+        cfg = MagicMock()
+        with (
+            patch("dev_health_ops.migrate._make_alembic_config", return_value=cfg),
+            patch(
+                "dev_health_ops.migrate._postgres_revision_status",
+                return_value=(("0071",), ("0071",), ()),
+            ),
+        ):
+            assert _run_postgres_status(_ns(check=True)) == 0
+
+        assert "PostgreSQL application schema is current." in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

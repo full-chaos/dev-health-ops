@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -10,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.internal.acr import router
+from dev_health_ops.api.middleware import OrgIdMiddleware
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.internal_service_credential import (
     InternalServiceCredential,
@@ -74,6 +76,13 @@ def _app() -> FastAPI:
     return app
 
 
+def _app_with_org_middleware() -> FastAPI:
+    app = FastAPI()
+    app.add_middleware(OrgIdMiddleware)
+    app.include_router(router)
+    return app
+
+
 @pytest.mark.asyncio
 async def test_acr_health_returns_exact_contract_for_valid_service_credential(
     session_maker, monkeypatch
@@ -86,6 +95,33 @@ async def test_acr_health_returns_exact_contract_for_valid_service_credential(
         response = await client.get(
             _HEALTH_PATH, headers={"Authorization": f"Bearer {token}"}
         )
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": "acr_service_health.v1",
+        "service": "dev-health-ops",
+        "status": "ok",
+    }
+
+
+@pytest.mark.asyncio
+async def test_acr_health_skips_org_middleware_user_jwt_lookup(
+    session_maker, monkeypatch
+):
+    async with session_maker() as session:
+        token = await _create_credential(session)
+    _patch_session(monkeypatch, session_maker)
+    app = _app_with_org_middleware()
+
+    with patch(
+        "dev_health_ops.api.middleware.get_authenticated_user_from_headers",
+        AsyncMock(side_effect=AssertionError("unexpected user-JWT lookup")),
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                _HEALTH_PATH, headers={"Authorization": f"Bearer {token}"}
+            )
+
     assert response.status_code == 200
     assert response.json() == {
         "schema_version": "acr_service_health.v1",

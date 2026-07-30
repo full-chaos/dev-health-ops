@@ -82,6 +82,12 @@ class OrgIdMiddleware:
             await self.app(scope, receive, send)
             return
 
+        path = scope.get("path", "")
+        if path.startswith("/api/v1/internal/acr/"):
+            # These routes authenticate opaque ACR service credentials themselves.
+            await self.app(scope, receive, send)
+            return
+
         headers = scope.get("headers", [])
         header_org_id: str | None = None
         for key, value in headers:

@@ -104,3 +104,54 @@ def test_catalog_rejects_supporting_evidence_kind() -> None:
         ClickHouseAuthorizedEntityCatalog._query_for(
             cast(EntityKind, "deployment"), exact=False
         )
+
+
+@pytest.mark.asyncio
+async def test_organization_repository_ids_is_tenant_scoped_and_reports_true_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    async def fake_query_dicts(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        observed.append({"sql": sql, "params": params})
+        assert "org_id = {org_id:String}" in sql
+        assert params["org_id"] == "org-a"
+        if "count()" in sql:
+            return [{"total": 25}]
+        assert params["limit"] == 20
+        return [{"repository_id": f"repo-{index:02}"} for index in range(20)]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts
+    )
+    catalog = ClickHouseAuthorizedEntityCatalog(object())
+
+    ids, total = await catalog.organization_repository_ids("org-a", limit=20)
+
+    assert total == 25
+    assert len(ids) == 20
+    assert ids == sorted(ids)
+    assert len(observed) == 2
+    assert any("FROM repos FINAL" in item["sql"] for item in observed)
+
+
+@pytest.mark.asyncio
+async def test_organization_repository_ids_empty_org_reports_zero_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query_dicts(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        return [{"total": 0}] if "count()" in sql else []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts
+    )
+    catalog = ClickHouseAuthorizedEntityCatalog(object())
+
+    ids, total = await catalog.organization_repository_ids("org-a", limit=20)
+
+    assert ids == []
+    assert total == 0

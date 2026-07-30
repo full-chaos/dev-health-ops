@@ -284,6 +284,12 @@ ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
 """
 
+_ORGANIZATION_AUTHORIZED_REPOSITORIES_SQL = """
+SELECT toString(id) AS repository_id
+FROM repos FINAL
+WHERE org_id = {org_id:String}
+"""
+
 _TRANSITIONS_SQL = """
 SELECT transition.work_item_id AS entity_id, item.title AS display_label,
        transition.from_status, transition.to_status,
@@ -578,10 +584,38 @@ class ClickHouseStatusChangeSource:
         self._policies = dict(policies or default_native_freshness_policies())
         self._now = now
 
+    async def _authorized_repository_ids(
+        self, org_id: str, scope: DevScope
+    ) -> list[str]:
+        """Bound status/change reads to the server-owned repository set.
+
+        Organization scope cannot serialize its full authorized repository
+        set onto the wire (``DevScope.repositories`` is capped at 20 entries
+        by the ask-dev/v1 contract), so it is re-derived here directly from
+        the same ``org_id`` boundary every other native query already
+        enforces (CHAOS-3255). This scales to any repository count without
+        truncation or widening. Every other direct scope keeps using the
+        scope's own bounded repository/entity refs.
+        """
+        if scope.direct_scope is not DirectScope.ORGANIZATION:
+            return self._repository_ids(scope)
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+                rows = await query_dicts(
+                    self._client,
+                    _ORGANIZATION_AUTHORIZED_REPOSITORIES_SQL,
+                    {"org_id": org_id},
+                )
+        except Exception:
+            return []
+        return sorted(
+            {str(row["repository_id"]) for row in rows if row.get("repository_id")}
+        )
+
     async def status_snapshot(
         self, *, org_id: str, scope: DevScope, as_of: datetime, limit: int
     ) -> RawStatusSnapshot:
-        repositories = self._repository_ids(scope)
+        repositories = await self._authorized_repository_ids(org_id, scope)
         entity_id = self._entity_id(scope)
         scope_type = scope.direct_scope.value
         warnings: list[str] = []
@@ -938,7 +972,7 @@ class ClickHouseStatusChangeSource:
         limit: int,
     ) -> RawChangeSummary:
         del comparison
-        repositories = self._repository_ids(scope)
+        repositories = await self._authorized_repository_ids(org_id, scope)
         if not repositories:
             return RawChangeSummary(
                 changes=(),

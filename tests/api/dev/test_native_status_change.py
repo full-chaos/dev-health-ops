@@ -1040,3 +1040,150 @@ async def test_native_change_reader_returns_only_canonical_observed_events(
         "repo-a#pr7",
     )
     assert all(change.claim_kind.value == "observed" for change in result.changes)
+
+
+def _org_scope() -> DevScope:
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id="org-a",
+        direct_scope=DirectScope.ORGANIZATION,
+        repositories=[],
+        entity_refs=[],
+        time_range=DevTimeRange(start=NOW - timedelta(days=7), end=NOW, timezone="UTC"),
+        comparison_range=DevTimeRange(
+            start=NOW - timedelta(days=14),
+            end=NOW - timedelta(days=7),
+            timezone="UTC",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_organization_scope_status_snapshot_enumerates_repos_natively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3255: organization scope must not read as an empty repo set.
+
+    ``DevScope.repositories``/``entity_refs`` are empty for organization
+    scope (the wire contract forbids attaching entities to it), so the
+    native source must re-derive the authorized repository set itself from
+    ``org_id`` rather than reading the (empty) bounded scope fields.
+    """
+    observed: list[dict[str, Any]] = []
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        observed.append({"sql": sql, "params": dict(params)})
+        if "FROM repos FINAL" in sql:
+            assert params == {"org_id": "org-a"}
+            return [{"repository_id": "repo-x"}, {"repository_id": "repo-y"}]
+        if "FROM git_pull_requests AS pr" in sql:
+            return [_pull_request_row()]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_org_scope()),
+    )
+
+    pull_request_calls = [
+        item for item in observed if "FROM git_pull_requests AS pr" in item["sql"]
+    ]
+    assert pull_request_calls, "expected the pull_requests read to execute"
+    assert pull_request_calls[0]["params"]["repository_ids"] == ["repo-x", "repo-y"]
+    assert (
+        "Status reads require the complete authorized repository set; "
+        "scope was not widened." not in result.warnings
+    )
+
+
+@pytest.mark.asyncio
+async def test_organization_scope_change_summary_enumerates_repos_natively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        observed.append({"sql": sql, "params": dict(params)})
+        if "FROM repos FINAL" in sql:
+            assert params == {"org_id": "org-a"}
+            return [{"repository_id": "repo-x"}, {"repository_id": "repo-y"}]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    request = ChangeSummaryRequest(
+        scope=_org_scope(),
+        current_start=NOW - timedelta(days=7),
+        current_end=NOW,
+        comparison_start=NOW - timedelta(days=14),
+        comparison_end=NOW - timedelta(days=7),
+    )
+
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).change_summary("org-a", "permission-v1", request)
+
+    transitions_calls = [
+        item for item in observed if "FROM work_item_transitions" in item["sql"]
+    ]
+    assert transitions_calls
+    assert transitions_calls[0]["params"]["repository_ids"] == ["repo-x", "repo-y"]
+    assert "Observed-change scope was not widened." not in result.warnings
+
+
+@pytest.mark.asyncio
+async def test_organization_scope_with_no_authorized_repos_is_explicit_not_masked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM repos FINAL" in sql:
+            return []
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_org_scope()),
+    )
+
+    # Zero authorized repositories must surface as explicit degraded/unavailable
+    # evidence, never as a silently-complete or partial answer.
+    assert result.state is StatusResultState.DEGRADED
+    assert result.declared is None
+    assert (
+        "Status reads require the complete authorized repository set; "
+        "scope was not widened." in result.warnings
+    )
+
+
+def _pull_request_row() -> dict[str, Any]:
+    return {
+        "repository_id": "repo-x",
+        "number": 3,
+        "entity_id": "repo-x#pr3",
+        "display_label": "PR 3",
+        "state": "open",
+        "review_state": None,
+        "changes_requested": 0,
+        "merged": 0,
+        "observed_at": NOW,
+        "last_synced": NOW,
+    }

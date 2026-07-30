@@ -231,6 +231,17 @@ class AuthorizedEntityCatalog(Protocol):
         limit: int,
     ) -> list[AuthorizedEntity]: ...
 
+    async def organization_repository_ids(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[str], int]:
+        """Return up to ``limit`` authorized repository IDs, and the true total.
+
+        The total must reflect every repository authorized for ``org_id``,
+        not just the returned page, so callers can detect when the org
+        exceeds the public ``authorized_repository_ids`` contract cap.
+        """
+        ...
+
 
 class ScopeRequestCache:
     """Small request-local LRU; never share this object across requests."""
@@ -528,6 +539,8 @@ class ScopeResolutionService:
         domain = await self.resolve(org_id, permission_fingerprint, request)
         requested = self._requested_scope(org_id, request, domain.time_range)
         resolved = self._resolved_scope(org_id, request, domain)
+        outcome = domain.outcome
+        warnings = list(domain.warnings)
         repository_ids = sorted(
             {
                 entity.canonical_id
@@ -540,6 +553,15 @@ class ScopeResolutionService:
                 if entity.repository_id is not None
             }
         )
+        if resolved is not None and resolved.direct_scope is DirectScope.ORGANIZATION:
+            (
+                repository_ids,
+                outcome,
+                resolved,
+                warnings,
+            ) = await self._organization_scope_repositories(
+                org_id, permission_fingerprint, outcome, resolved, warnings
+            )
         entity_ids = sorted(
             {
                 entity.canonical_id
@@ -559,14 +581,83 @@ class ScopeResolutionService:
             schema_version="dev_scope_resolution.v1",
             requested_scope=requested,
             resolved_scope=resolved,
-            outcome=domain.outcome,
+            outcome=outcome,
             authorized_repository_ids=repository_ids,
             authorized_entity_ids=entity_ids,
             candidates=candidates,
             fallbacks=list(domain.fallbacks),
-            warnings=list(domain.warnings),
+            warnings=warnings,
             resolved_at=resolved_at or datetime.now(timezone.utc),
         )
+
+    async def _organization_scope_repositories(
+        self,
+        org_id: str,
+        permission_fingerprint: str,
+        outcome: ScopeResolutionOutcome,
+        resolved: DevScope,
+        warnings: list[str],
+    ) -> tuple[list[str], ScopeResolutionOutcome, DevScope | None, list[str]]:
+        """Enumerate the complete server-owned repository set for organization scope.
+
+        ``DevScopeResolution.authorized_repository_ids`` is capped at
+        ``MAX_REPOSITORIES`` entries by the ask-dev/v1 contract. An
+        organization at or under that cap gets the complete set inline. An
+        organization above the cap must never have a truncated, misleadingly
+        "complete" list serialized onto the wire: status and change reads
+        instead re-derive the authorized set themselves, organization-natively,
+        bound only by ``org_id`` — the same boundary every other native query
+        already enforces (CHAOS-3255). Zero authorized repositories is explicit
+        insufficient evidence, never an exact scope with accidental partial
+        coverage.
+        """
+        try:
+            watermark = await self._catalog.watermark(org_id, (EntityKind.REPOSITORY,))
+            cache_key = self._cache_key(
+                "organization_repositories",
+                org_id,
+                permission_fingerprint,
+                {},
+                watermark,
+            )
+            cached = self._cache.get(cache_key)
+            if isinstance(cached, tuple) and len(cached) == 2:
+                repo_ids, total = cached
+            else:
+                repo_ids, total = await self._catalog.organization_repository_ids(
+                    org_id, limit=MAX_REPOSITORIES
+                )
+                self._cache.put(cache_key, (repo_ids, total))
+        except Exception:
+            return (
+                [],
+                ScopeResolutionOutcome.UNRESOLVED,
+                None,
+                [*warnings, "catalog_unavailable"],
+            )
+        if total == 0:
+            return (
+                [],
+                ScopeResolutionOutcome.UNRESOLVED,
+                None,
+                [*warnings, "organization_has_no_authorized_repositories"],
+            )
+        if total > MAX_REPOSITORIES:
+            return (
+                [],
+                outcome,
+                resolved,
+                [
+                    *warnings,
+                    (
+                        f"organization repository set ({total}) exceeds the "
+                        f"{MAX_REPOSITORIES}-repository contract limit; status "
+                        "and change tools resolve the authorized set "
+                        "organization-natively"
+                    ),
+                ],
+            )
+        return sorted(repo_ids), outcome, resolved, warnings
 
     def _requested_scope(
         self,

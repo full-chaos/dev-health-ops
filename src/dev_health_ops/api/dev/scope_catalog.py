@@ -13,6 +13,20 @@ from dev_health_ops.api.services.identity import resolve_scope_display_names
 
 from .scope_service import AuthorizedEntity, EntityKind, ScopeRef
 
+_ORGANIZATION_REPOSITORY_IDS_SQL = """
+    SELECT toString(id) AS repository_id
+    FROM repos FINAL
+    WHERE org_id = {org_id:String}
+    ORDER BY repository_id
+    LIMIT {limit:UInt32}
+"""
+
+_ORGANIZATION_REPOSITORY_COUNT_SQL = """
+    SELECT count() AS total
+    FROM repos FINAL
+    WHERE org_id = {org_id:String}
+"""
+
 _WATERMARK_TABLES: dict[EntityKind, tuple[str, str]] = {
     EntityKind.REPOSITORY: ("repos", "last_synced"),
     EntityKind.PROJECT: ("projects", "updated_at"),
@@ -105,6 +119,27 @@ class ClickHouseAuthorizedEntityCatalog:
             )
         )
         return entities[:limit]
+
+    async def organization_repository_ids(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[str], int]:
+        ids_rows, count_rows = await asyncio.gather(
+            query_dicts(
+                self._client,
+                _ORGANIZATION_REPOSITORY_IDS_SQL,
+                {"org_id": org_id, "limit": limit},
+            ),
+            query_dicts(
+                self._client,
+                _ORGANIZATION_REPOSITORY_COUNT_SQL,
+                {"org_id": org_id},
+            ),
+        )
+        ids = sorted(
+            {str(row["repository_id"]) for row in ids_rows if row.get("repository_id")}
+        )
+        total = int(count_rows[0]["total"]) if count_rows else 0
+        return ids, total
 
     async def _with_repository_display_names(
         self, org_id: str, entities: list[AuthorizedEntity]

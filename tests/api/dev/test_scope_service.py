@@ -770,3 +770,31 @@ async def test_non_organization_scope_never_queries_organization_repositories() 
     assert result.resolved_scope is not None
     assert result.resolved_scope.direct_scope is DirectScope.REPOSITORY
     assert catalog.organization_repository_ids_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_team_filtered_organization_scope_skips_repository_enumeration() -> None:
+    """A team filter narrows organization scope, but no native status/change
+    query applies team filters, so the native execution layer always fails
+    closed for this case regardless of repository count (CHAOS-3255). The
+    contract layer must not report a repository set or a warning describing
+    organization-native execution that will not actually happen."""
+    team = _entity(EntityKind.TEAM, "team-a", "Platform")
+    catalog = FakeCatalog([team], organization_repositories=["repo-a", "repo-b"])
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        ScopeResolveRequest(
+            team_filter_refs=(ScopeRef(EntityKind.TEAM, team.canonical_id),),
+            allow_organization_fallback=True,
+        ),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.FILTERED
+    assert result.resolved_scope is not None
+    assert result.resolved_scope.direct_scope is DirectScope.ORGANIZATION
+    assert result.authorized_repository_ids == []
+    assert catalog.organization_repository_ids_calls == 0
+    assert not any("organization-natively" in warning for warning in result.warnings)

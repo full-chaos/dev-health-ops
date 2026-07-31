@@ -1042,13 +1042,14 @@ async def test_native_change_reader_returns_only_canonical_observed_events(
     assert all(change.claim_kind.value == "observed" for change in result.changes)
 
 
-def _org_scope() -> DevScope:
+def _org_scope(*, team_ids: list[str] | None = None) -> DevScope:
     return DevScope(
         schema_version="dev_scope.v1",
         organization_id="org-a",
         direct_scope=DirectScope.ORGANIZATION,
         repositories=[],
         entity_refs=[],
+        team_ids=team_ids or [],
         time_range=DevTimeRange(start=NOW - timedelta(days=7), end=NOW, timezone="UTC"),
         comparison_range=DevTimeRange(
             start=NOW - timedelta(days=14),
@@ -1080,6 +1081,8 @@ async def test_organization_scope_status_snapshot_enumerates_repos_natively(
             return [{"repository_id": "repo-x"}, {"repository_id": "repo-y"}]
         if "FROM git_pull_requests AS pr" in sql:
             return [_pull_request_row()]
+        if "FROM deployments" in sql:
+            return [_deployment_row()]
         return []
 
     monkeypatch.setattr(
@@ -1093,15 +1096,28 @@ async def test_organization_scope_status_snapshot_enumerates_repos_natively(
         StatusSnapshotRequest(_org_scope()),
     )
 
+    deployment_calls = [item for item in observed if "FROM deployments" in item["sql"]]
     pull_request_calls = [
         item for item in observed if "FROM git_pull_requests AS pr" in item["sql"]
     ]
     assert pull_request_calls, "expected the pull_requests read to execute"
+    assert deployment_calls, "expected the deployments read to execute"
     assert pull_request_calls[0]["params"]["repository_ids"] == ["repo-x", "repo-y"]
     assert (
         "Status reads require the complete authorized repository set; "
         "scope was not widened." not in result.warnings
     )
+    # Assert the SQL text itself carries the organization branch, not just
+    # that a mocked row came back: a mock that returns rows unconditionally
+    # (ignoring the real WHERE clause) would still pass even if the
+    # 'organization' branch were deleted from _PULL_REQUESTS_SQL/
+    # _DEPLOYMENTS_SQL (CHAOS-3255 follow-up — this is the regression the
+    # prior HIGH finding actually shipped, and a table-name-only mock
+    # cannot detect it re-appearing).
+    assert "IN ('organization', 'repository')" in pull_request_calls[0]["sql"]
+    assert "IN ('organization', 'repository')" in deployment_calls[0]["sql"]
+    assert result.pull_requests, "organization scope must surface PR facts"
+    assert result.deployments, "organization scope must surface deployment facts"
 
 
 @pytest.mark.asyncio
@@ -1117,6 +1133,32 @@ async def test_organization_scope_change_summary_enumerates_repos_natively(
         if "FROM repos FINAL" in sql:
             assert params == {"org_id": "org-a"}
             return [{"repository_id": "repo-x"}, {"repository_id": "repo-y"}]
+        if "FROM work_item_transitions" in sql:
+            return [
+                {
+                    "entity_id": "issue-1",
+                    "display_label": "Issue 1",
+                    "from_status": "in_progress",
+                    "to_status": "done",
+                    "observed_at": NOW - timedelta(hours=1),
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM work_graph_edges" in sql:
+            return [
+                {
+                    "change_id": "edge-1",
+                    "source_type": "issue",
+                    "source_id": "issue-1",
+                    "edge_type": "implements",
+                    "target_type": "pr",
+                    "target_id": "repo-x#pr7",
+                    "provenance": "native",
+                    "confidence": 1.0,
+                    "observed_at": NOW - timedelta(minutes=30),
+                    "last_synced": NOW,
+                }
+            ]
         return []
 
     monkeypatch.setattr(
@@ -1137,9 +1179,29 @@ async def test_organization_scope_change_summary_enumerates_repos_natively(
     transitions_calls = [
         item for item in observed if "FROM work_item_transitions" in item["sql"]
     ]
+    relationship_calls = [
+        item for item in observed if "FROM work_graph_edges" in item["sql"]
+    ]
     assert transitions_calls
+    assert relationship_calls
     assert transitions_calls[0]["params"]["repository_ids"] == ["repo-x", "repo-y"]
     assert "Observed-change scope was not widened." not in result.warnings
+    # CHAOS-3255 follow-up: _TRANSITIONS_SQL/_RELATIONSHIPS_SQL previously had
+    # no 'organization' branch, so change_summary.v1 silently dropped status
+    # transitions and work-graph relationships even with a full repo set.
+    # Assert the SQL text itself, not just the mocked row: a table-name-only
+    # mock returns rows regardless of the real WHERE clause and would not
+    # catch the 'organization' branch being deleted again.
+    assert "IN ('organization', 'repository')" in transitions_calls[0]["sql"]
+    assert "IN ('organization', 'repository')" in relationship_calls[0]["sql"]
+    change_ids = {change.change_id for change in result.changes}
+    assert any(
+        change.entity_id == "issue-1" and change.before == "in_progress"
+        for change in result.changes
+    ), "organization scope must surface status transition changes"
+    assert "edge-1" in change_ids, (
+        "organization scope must surface relationship changes"
+    )
 
 
 @pytest.mark.asyncio
@@ -1168,6 +1230,40 @@ async def test_organization_scope_with_no_authorized_repos_is_explicit_not_maske
     # evidence, never as a silently-complete or partial answer.
     assert result.state is StatusResultState.DEGRADED
     assert result.declared is None
+    assert (
+        "Status reads require the complete authorized repository set; "
+        "scope was not widened." in result.warnings
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_filtered_organization_scope_is_never_widened_to_the_full_org(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A team filter narrows organization scope; no native query here applies
+    it, so organization-native enumeration must not kick in and silently
+    return every repository in the org instead of respecting the filter."""
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM repos FINAL" in sql:
+            # If this executes, the org-native repository derivation
+            # incorrectly ran despite the team filter.
+            return [{"repository_id": "repo-x"}, {"repository_id": "repo-y"}]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_org_scope(team_ids=["team-a"])),
+    )
+
     assert (
         "Status reads require the complete authorized repository set; "
         "scope was not widened." in result.warnings

@@ -14,17 +14,11 @@ from dev_health_ops.api.services.identity import resolve_scope_display_names
 from .scope_service import AuthorizedEntity, EntityKind, ScopeRef
 
 _ORGANIZATION_REPOSITORY_IDS_SQL = """
-    SELECT toString(id) AS repository_id
+    SELECT toString(id) AS repository_id, count() OVER () AS total_authorized
     FROM repos FINAL
     WHERE org_id = {org_id:String}
     ORDER BY repository_id
     LIMIT {limit:UInt32}
-"""
-
-_ORGANIZATION_REPOSITORY_COUNT_SQL = """
-    SELECT count() AS total
-    FROM repos FINAL
-    WHERE org_id = {org_id:String}
 """
 
 _WATERMARK_TABLES: dict[EntityKind, tuple[str, str]] = {
@@ -123,22 +117,22 @@ class ClickHouseAuthorizedEntityCatalog:
     async def organization_repository_ids(
         self, org_id: str, *, limit: int
     ) -> tuple[list[str], int]:
-        ids_rows, count_rows = await asyncio.gather(
-            query_dicts(
-                self._client,
-                _ORGANIZATION_REPOSITORY_IDS_SQL,
-                {"org_id": org_id, "limit": limit},
-            ),
-            query_dicts(
-                self._client,
-                _ORGANIZATION_REPOSITORY_COUNT_SQL,
-                {"org_id": org_id},
-            ),
+        # A single query with a window function, not two sequential queries:
+        # `count() OVER ()` reflects every matching row before LIMIT clips the
+        # returned page, so the id page and the true total are one consistent
+        # snapshot. Two separate queries could race a concurrent repository
+        # insert/delete into reporting a truncated page as the complete set.
+        rows = await query_dicts(
+            self._client,
+            _ORGANIZATION_REPOSITORY_IDS_SQL,
+            {"org_id": org_id, "limit": limit},
         )
+        if not rows:
+            return [], 0
         ids = sorted(
-            {str(row["repository_id"]) for row in ids_rows if row.get("repository_id")}
+            {str(row["repository_id"]) for row in rows if row.get("repository_id")}
         )
-        total = int(count_rows[0]["total"]) if count_rows else 0
+        total = int(rows[0]["total_authorized"])
         return ids, total
 
     async def _with_repository_display_names(

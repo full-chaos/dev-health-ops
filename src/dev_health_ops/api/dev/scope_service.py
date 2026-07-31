@@ -553,7 +553,18 @@ class ScopeResolutionService:
                 if entity.repository_id is not None
             }
         )
-        if resolved is not None and resolved.direct_scope is DirectScope.ORGANIZATION:
+        if (
+            resolved is not None
+            and resolved.direct_scope is DirectScope.ORGANIZATION
+            and not domain.team_filters
+        ):
+            # A team-filtered organization scope is deliberately excluded:
+            # no native status/change query applies a team filter, so the
+            # native execution layer always fails closed for it regardless
+            # of repository count (CHAOS-3255). Enumerating the full org
+            # repository set here would report a warning/authorized set
+            # that describes execution behavior that will not actually
+            # happen for this request.
             (
                 repository_ids,
                 outcome,

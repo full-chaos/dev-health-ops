@@ -118,10 +118,14 @@ async def test_organization_repository_ids_is_tenant_scoped_and_reports_true_tot
         observed.append({"sql": sql, "params": params})
         assert "org_id = {org_id:String}" in sql
         assert params["org_id"] == "org-a"
-        if "count()" in sql:
-            return [{"total": 25}]
         assert params["limit"] == 20
-        return [{"repository_id": f"repo-{index:02}"} for index in range(20)]
+        # A single query carries both the page and the true total (via a
+        # window function) so a concurrent insert/delete between two
+        # separate queries can never desync a truncated page from the count.
+        return [
+            {"repository_id": f"repo-{index:02}", "total_authorized": 25}
+            for index in range(20)
+        ]
 
     monkeypatch.setattr(
         "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts
@@ -133,8 +137,9 @@ async def test_organization_repository_ids_is_tenant_scoped_and_reports_true_tot
     assert total == 25
     assert len(ids) == 20
     assert ids == sorted(ids)
-    assert len(observed) == 2
-    assert any("FROM repos FINAL" in item["sql"] for item in observed)
+    assert len(observed) == 1
+    assert "count() OVER ()" in observed[0]["sql"]
+    assert "FROM repos FINAL" in observed[0]["sql"]
 
 
 @pytest.mark.asyncio
@@ -142,9 +147,9 @@ async def test_organization_repository_ids_empty_org_reports_zero_total(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_query_dicts(
-        _client: object, sql: str, _params: dict[str, Any]
+        _client: object, _sql: str, _params: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        return [{"total": 0}] if "count()" in sql else []
+        return []
 
     monkeypatch.setattr(
         "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts

@@ -208,7 +208,7 @@ WHERE pr.org_id = {org_id:String}
         OR concat(toString(pr.repo_id), '#pr', toString(pr.number))
           IN {member_pr_ids:Array(String)}
       ))
-    OR ({scope_type:String} = 'repository')
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
@@ -256,7 +256,7 @@ FROM deployments FINAL
 WHERE org_id = {org_id:String}
   AND toString(repo_id) IN {repository_ids:Array(String)}
   AND (
-    ({scope_type:String} = 'repository')
+    ({scope_type:String} IN ('organization', 'repository'))
     OR ifNull(pull_request_number, 0) IN {pr_numbers:Array(UInt32)}
   )
   AND coalesce(deployed_at, finished_at, started_at, last_synced)
@@ -308,7 +308,7 @@ WHERE transition.org_id = {org_id:String}
     ({scope_type:String} = 'issue' AND transition.work_item_id = {entity_id:String})
     OR ({scope_type:String} = 'project'
       AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-    OR ({scope_type:String} = 'repository')
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at, entity_id, from_status, to_status
 LIMIT {limit:UInt32}
@@ -340,7 +340,7 @@ WHERE org_id = {org_id:String}
           AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
       )
     ))
-    OR ({scope_type:String} = 'repository')
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at, source_type, source_id, edge_type, target_type, target_id
 LIMIT {limit:UInt32}
@@ -596,8 +596,15 @@ class ClickHouseStatusChangeSource:
         enforces (CHAOS-3255). This scales to any repository count without
         truncation or widening. Every other direct scope keeps using the
         scope's own bounded repository/entity refs.
+
+        A team-filtered organization scope (``scope.team_ids``) is excluded
+        from organization-native enumeration: no native query here applies a
+        team filter, so deriving the full org repository set would silently
+        widen a team-scoped request to every repository in the organization.
+        Falling through to the caller's own (empty) bounded fields keeps the
+        prior fail-closed "authorized repository set" behavior instead.
         """
-        if scope.direct_scope is not DirectScope.ORGANIZATION:
+        if scope.direct_scope is not DirectScope.ORGANIZATION or scope.team_ids:
             return self._repository_ids(scope)
         try:
             async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):

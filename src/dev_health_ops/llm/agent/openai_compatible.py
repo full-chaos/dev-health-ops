@@ -19,6 +19,7 @@ from dev_health_ops.llm.providers.openai_capabilities import (
 )
 from dev_health_ops.logging_config import pin_content_carrying_client_loggers
 
+from .budget_policy import model_family_budget
 from .contracts import (
     AgentDecisionResult,
     AgentDisambiguation,
@@ -205,6 +206,7 @@ class OpenAICompatibleAgentProvider:
         allow_final_answer = not tools or any(
             message.role is AgentMessageRole.TOOL for message in messages
         )
+        budget = model_family_budget(self.model)
         completion_kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": [self._message_payload(item) for item in messages],
@@ -212,7 +214,9 @@ class OpenAICompatibleAgentProvider:
             "tool_choice": (
                 ("auto" if allow_final_answer else "required") if tools else None
             ),
-            "max_completion_tokens": max_output_tokens,
+            "max_completion_tokens": budget.request_max_completion_tokens(
+                max_output_tokens
+            ),
         }
         if tools and supports_parallel_tool_calls(self.model):
             # Ask Dev's runtime is a sequential one-decision-per-round state

@@ -938,6 +938,73 @@ async def test_tool_result_continuation_allows_tools_and_strict_final_answer() -
 
 
 @pytest.mark.asyncio
+async def test_combined_tools_auto_and_strict_grammar_shape_pinned_together() -> None:
+    """CHAOS-3285 plan §6.2: the wire shape sent on every production round
+    >= 2 -- tools present *and* tool_choice:"auto" *and* a strict
+    json_schema response_format *and* parallel_tool_calls:false, all
+    simultaneously -- is the exact shape certification never sent
+    (readiness's two probe calls each send only a subset). Pin all four in
+    one kwargs dict from a single round so a regression in any one clause
+    fails this test.
+    """
+    client = Client(
+        [response(content=json.dumps({"kind": "final_answer", "value": {"ok": True}}))]
+    )
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="agent-model", client=client
+    )
+    request = AgentToolRequest("lookup", {"id": "WU-1"}, "call-1")
+
+    await provider.decide(
+        [
+            AgentMessage(AgentMessageRole.USER, "question"),
+            AgentMessage(AgentMessageRole.ASSISTANT, "", tool_request=request),
+            AgentMessage(AgentMessageRole.TOOL, '{"result":1}', tool_call_id="call-1"),
+        ],
+        [AgentToolDefinition("lookup", "Lookup", {"type": "object"})],
+        {"type": "object", "properties": {"ok": {"type": "boolean"}}},
+        1,
+        256,
+    )
+
+    sent = client.chat.completions.calls[0]
+    assert sent["tools"] is not None and len(sent["tools"]) == 1
+    assert sent["tool_choice"] == "auto"
+    assert sent["parallel_tool_calls"] is False
+    assert sent["response_format"]["json_schema"]["strict"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-5-nano", "o3-mini", "agent-model"])
+async def test_max_completion_tokens_unchanged_for_every_family_at_zero_headroom(
+    model: str,
+) -> None:
+    """Behavior-unchanged proof for CHAOS-3285 commit 2's budget_policy
+    wiring: at reasoning_headroom_tokens == 0 (the only value any family has
+    today), the wire max_completion_tokens must equal the caller's visible
+    cap verbatim -- byte-identical to the pre-commit-2 behavior -- for a
+    reasoning-counted family (gpt-5, o-series) and the default family alike.
+    """
+    call = SimpleNamespace(
+        id="call-1", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    client = Client([response(tool_call=call)])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model=model, client=client
+    )
+
+    await provider.decide(
+        [AgentMessage(AgentMessageRole.USER, "question")],
+        [AgentToolDefinition("lookup", "Lookup", {"type": "object"})],
+        {"type": "object"},
+        1,
+        4_096,
+    )
+
+    assert client.chat.completions.calls[0]["max_completion_tokens"] == 4_096
+
+
+@pytest.mark.asyncio
 async def test_finish_reason_length_with_empty_content_raises_output_exhausted() -> (
     None
 ):

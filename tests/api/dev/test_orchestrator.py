@@ -61,6 +61,35 @@ class Recorder:
         self.terminals.append(values["state"])
 
 
+class RecordingProvider:
+    """Wraps ScriptedAgentProvider to capture the exact messages sent on
+    each decide() call, so a test can assert on the repair-prompt content
+    the orchestrator built (CHAOS-3288)."""
+
+    def __init__(self, steps: list[ScriptedStep], *, script_id: str) -> None:
+        self._inner = ScriptedAgentProvider(steps, script_id=script_id)
+        self.calls: list[tuple[Any, ...]] = []
+
+    @property
+    def capabilities(self):
+        return self._inner.capabilities
+
+    @property
+    def provider_fingerprint(self) -> str:
+        return self._inner.provider_fingerprint
+
+    @property
+    def model_fingerprint(self) -> str:
+        return self._inner.model_fingerprint
+
+    async def decide(self, **kwargs):
+        self.calls.append(tuple(kwargs["messages"]))
+        return await self._inner.decide(**kwargs)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
 def _request() -> DevMessageRequest:
     return DevMessageRequest.model_validate(
         positive_fixtures()["dev_message_request.v1"]
@@ -1758,3 +1787,104 @@ async def test_tool_execution_timeout_degrades_instead_of_failing_the_run() -> N
     assert rejected.tool_id is ToolID.STATUS_SNAPSHOT
     assert rejected.error is not None
     assert rejected.error.code == "source_unavailable"
+
+
+# --- CHAOS-3288: an informative repair prompt for a stale-coverage rejection ---
+
+
+@pytest.mark.asyncio
+async def test_stale_complete_repair_prompt_includes_the_actual_validation_reason() -> (
+    None
+):
+    """Literal CHAOS-3288 repro shape: two query_metric.v1 rounds return
+    real but stale data, the model answers status=complete, and the
+    (correct, CHAOS-3257) coverage invariant rejects it. The old generic
+    "fix your JSON" repair prompt gave the model nothing to act on; the
+    repair turn must now name the actual reason so a real model has a
+    chance to self-correct instead of repeating the same mistake and
+    exhausting the one repair attempt.
+    """
+    script_id = "stale-complete-repair-detail"
+
+    async def query_metric_executor(
+        _context: Any, request: DevToolRequest
+    ) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        metric = deepcopy(payload["metrics"][0])
+        metric["freshness"] = "stale"
+        metric["metric_ref_id"] = f"metric:{request.metric_id}"
+        metric["metric_id"] = request.metric_id
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "status": "partial",
+                "metrics": [metric],
+                "evidence": [],
+                "metric_definitions": [],
+                "warnings": ["source_stale"],
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry(
+        {tool_id: query_metric_executor for tool_id in ToolID}
+    )
+    falsely_complete = _answer(script_id=script_id)
+    falsely_complete.update(
+        {"status": "complete", "claims": [], "metrics": [], "evidence": []}
+    )
+    corrected = _answer(script_id=script_id)
+    corrected.update(
+        {"status": "degraded", "claims": [], "metrics": [], "evidence": []}
+    )
+
+    provider = RecordingProvider(
+        [
+            ScriptedStep(
+                decision=AgentToolRequest(
+                    tool_id="query_metric.v1",
+                    arguments={
+                        "metric_id": "cycle_time_p50_hours",
+                        "include_comparison": False,
+                        "limit": 12,
+                    },
+                    call_id="tool_call_01",
+                )
+            ),
+            ScriptedStep(
+                decision=AgentToolRequest(
+                    tool_id="query_metric.v1",
+                    arguments={
+                        "metric_id": "avg_wip",
+                        "include_comparison": False,
+                        "limit": 12,
+                    },
+                    call_id="tool_call_02",
+                )
+            ),
+            ScriptedStep(decision=AgentFinalAnswer(falsely_complete)),
+            ScriptedStep(decision=AgentFinalAnswer(corrected)),
+        ],
+        script_id=script_id,
+    )
+
+    result = await _run(
+        _orchestrator([], script_id=script_id, registry=registry, provider=provider)
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status == "degraded"
+    # 2 tool rounds + 1 rejected final answer + 1 repaired final answer.
+    assert len(provider.calls) == 4
+    repair_messages = provider.calls[3]
+    repair_user_message = next(
+        message for message in repair_messages if message.role.value == "user"
+    )
+    assert (
+        "complete answer requires all required sources fresh and available"
+        in repair_user_message.content
+    )
+    assert "The previous response failed validation" in repair_user_message.content

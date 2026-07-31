@@ -36,11 +36,30 @@ _NON_REPAIRABLE_VALIDATION_MARKERS = (
 # status instead of hard-failing a run that has usable evidence (CHAOS-3257).
 
 
+_MAX_REPAIR_DETAIL_CHARS = 500
+
+
 class AnswerValidationError(ValueError):
-    def __init__(self, message: str, *, code: str, repairable: bool) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        repairable: bool,
+        detail: tuple[str, ...] = (),
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.repairable = repairable
+        # Short, safe, model-facing description of exactly what failed, used
+        # to build an actionable schema-repair prompt turn (CHAOS-3288)
+        # instead of a generic "fix your JSON" instruction the model cannot
+        # act on. Bounded and built only from our own raised messages / the
+        # `msg` field of pydantic error dicts -- never raw echoed input
+        # values, which pydantic keeps in a separate `input`/`ctx` field we
+        # do not touch.
+        joined = "; ".join(part for part in detail if part) or message
+        self.detail = joined[:_MAX_REPAIR_DETAIL_CHARS]
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,10 +115,15 @@ def validate_answer_candidate(
         repairable = not any(
             marker in details for marker in _NON_REPAIRABLE_VALIDATION_MARKERS
         )
+        # `error["msg"]` is the clean "Value error, <our message>" or
+        # "Field required" text; pydantic keeps the echoed input value in a
+        # separate `input`/`ctx` key we deliberately never read here, so
+        # this cannot leak tool/evidence payload content into the prompt.
         raise AnswerValidationError(
             "answer does not conform to dev_answer.v1",
             code="answer_validation_failed",
             repairable=repairable,
+            detail=tuple(str(error.get("msg", "")) for error in exc.errors()),
         ) from exc
 
     if (

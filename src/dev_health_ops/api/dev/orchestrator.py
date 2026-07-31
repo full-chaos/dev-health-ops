@@ -874,10 +874,23 @@ class DevOrchestrator:
                             and repair_count < self._limits.schema_repairs
                         ):
                             repair_count += 1
+                            # Tell the model exactly what was wrong instead of
+                            # a generic "fix your JSON" instruction it cannot
+                            # act on -- e.g. it claimed status=complete while
+                            # a queried metric was stale, and a bare "schema
+                            # validation failed" note gives it nothing to
+                            # change (CHAOS-3288). `exc.detail` is bounded and
+                            # never contains echoed tool/evidence content.
                             prior_turns = prior_turns + (
                                 PromptConversationTurn(
                                     role="assistant",
-                                    content="The previous response failed schema validation. Return one corrected dev_answer.v1 object.",
+                                    content=(
+                                        "The previous response failed validation: "
+                                        f"{exc.detail}. Return one corrected "
+                                        "dev_answer.v1 object that fixes exactly "
+                                        "that issue and keeps everything else "
+                                        "grounded in the same tool results."
+                                    ),
                                 ),
                             )
                             continue

@@ -27,6 +27,7 @@
         "insufficient_evidence",
         "answer_validation_failed",
         "cancelled",
+        "provider_contract_violation",
         "internal_error"
       ],
       "title": "Code",

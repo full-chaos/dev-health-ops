@@ -12,6 +12,7 @@ from typing import Any, cast
 from dev_health_ops.llm.providers._http import make_hardened_async_httpx_client
 from dev_health_ops.llm.providers.openai_capabilities import (
     chat_completion_reasoning_effort,
+    supports_parallel_tool_calls,
     supports_temperature,
 )
 
@@ -37,7 +38,14 @@ from .errors import (
     safe_agent_provider_error,
 )
 
-READINESS_VERSION = "ask-dev-agent-v2"
+READINESS_VERSION = "ask-dev-agent-v3"
+"""Bumped v2 -> v3 for CHAOS-3254: the outbound wire contract changed (native
+tool requests now send ``parallel_tool_calls``, gated by model family -- see
+``supports_parallel_tool_calls``). A v2-certified endpoint has never been
+asked to accept the new parameter, so it must be re-certified rather than
+treated as still current. ``provider_fingerprint`` folds this constant in,
+so bumping it invalidates every existing stored readiness record for every
+provider instance (see ``AgentReadinessRecord.is_current``)."""
 PLATFORM_PRICE_BOOK_VERSION = "openai-2026-07-29"
 
 _DECISION_FIELDS = frozenset(
@@ -53,6 +61,18 @@ _DECISION_FIELDS = frozenset(
         "message",
     }
 )
+
+
+class _SequentialToolContractViolation(ValueError):
+    """A provider returned more than one native tool call in one decision.
+
+    Ask Dev's runtime is a sequential bounded state machine: exactly one tool
+    request per model decision. This is distinct from other malformed/invalid
+    provider responses (``AgentProviderErrorCode.INVALID_RESPONSE``) because
+    it must be classified as a stable provider/decision contract error rather
+    than an opaque application ``internal_error`` (CHAOS-3254).
+    """
+
 
 _STRUCTURAL_SCHEMA_KEYS = frozenset(
     {
@@ -177,6 +197,13 @@ class OpenAICompatibleAgentProvider:
             ),
             "max_completion_tokens": max_output_tokens,
         }
+        if tools and supports_parallel_tool_calls(self.model):
+            # Ask Dev's runtime is a sequential one-decision-per-round state
+            # machine (TRD 11-12, 20.4). Explicitly disabling native parallel
+            # tool calls keeps a standards-compliant OpenAI-compatible model
+            # from returning multiple tool calls in one response, which the
+            # normalizer must otherwise reject (CHAOS-3254).
+            completion_kwargs["parallel_tool_calls"] = False
         if supports_temperature(self.model):
             completion_kwargs["temperature"] = 0
         reasoning_effort = chat_completion_reasoning_effort(self.model)
@@ -226,6 +253,10 @@ class OpenAICompatibleAgentProvider:
             decision = self._normalize_response(
                 response, allowed_tool_ids=frozenset(item.tool_id for item in tools)
             )
+        except _SequentialToolContractViolation:
+            raise AgentProviderError(
+                AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION
+            ) from None
         except (
             AttributeError,
             IndexError,
@@ -471,7 +502,7 @@ class OpenAICompatibleAgentProvider:
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []
         if len(tool_calls) > 1:
-            raise ValueError("only one tool decision is allowed")
+            raise _SequentialToolContractViolation("only one tool decision is allowed")
         if tool_calls:
             call = tool_calls[0]
             tool_id = str(call.function.name)

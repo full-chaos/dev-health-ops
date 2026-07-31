@@ -317,6 +317,12 @@ def _failed_readiness_state(safe_error_code: str | None) -> tuple[ReadinessState
             "unsupported_model",
             "The configured model did not satisfy the Ask Dev agent capability contract.",
         )
+    if safe_error_code == "provider_contract_violation":
+        return (
+            "unsupported_model",
+            "The configured model returned multiple tool decisions in one turn, "
+            "violating Ask Dev's required sequential tool-call contract.",
+        )
     if safe_error_code == "provider_unavailable":
         return "degraded", "The configured Ask Dev model endpoint is unavailable."
     return "degraded", "The configured Ask Dev model failed readiness."

@@ -58,6 +58,7 @@ from .contracts import (
     DevToolResult,
     ScopeResolutionOutcome,
     ToolID,
+    dev_error_remediation,
 )
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from .prompts import PromptComposer, PromptConversationTurn
@@ -1131,13 +1132,18 @@ class DevOrchestrator:
             AgentProviderErrorCode.CANCELLED: "cancelled",
             AgentProviderErrorCode.BUDGET_EXHAUSTED: "cost_limit_reached",
             AgentProviderErrorCode.BUDGET_UNAVAILABLE: "provider_unavailable",
+            AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION: (
+                "provider_contract_violation"
+            ),
         }
+        code = code_map[exc.code]
         return DevError(
             schema_version="dev_error.v1",
             request_id=request_id,
-            code=code_map[exc.code],
+            code=code,
             safe_message=str(exc),
             retryable=exc.retryable,
+            remediation=dev_error_remediation(code),
         )
 
 

@@ -53,6 +53,7 @@ from .contracts import (
     DevMessageRequest,
     DevScope,
     DevTranscriptEntry,
+    dev_error_remediation,
 )
 from .entitlement import (
     AskDevEntitlementDeniedError,
@@ -586,6 +587,11 @@ def _replayed_result(
                     "The prior Ask Dev request did not complete with an answer."
                 ),
                 retryable=code in {"provider_unavailable", "source_unavailable"},
+                # A replayed run must carry the same corrective guidance a
+                # live failure with this code would (CHAOS-3254) -- never
+                # silently drop remediation just because the client is
+                # reading back an idempotent replay instead of a fresh run.
+                remediation=dev_error_remediation(code),
             )
         except ValueError:
             error = DevError(

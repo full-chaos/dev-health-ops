@@ -887,12 +887,34 @@ class DevError(ContractModel):
         "insufficient_evidence",
         "answer_validation_failed",
         "cancelled",
+        "provider_contract_violation",
         "internal_error",
     ]
     safe_message: ShortText
     retryable: bool
     limit_reset_at: AwareDatetime | None = None
     remediation: list[ShortText] = Field(default_factory=list, max_length=5)
+
+
+# Safe, stable remediation text keyed by DevError.code, shared by the live
+# orchestrator error projection (DevOrchestrator._provider_error) and the
+# idempotent-replay projection (router._replayed_result) so a client sees the
+# same guidance whether it observes a fresh run or a replayed one (CHAOS-3254).
+_DEV_ERROR_REMEDIATION: dict[str, tuple[str, ...]] = {
+    "provider_contract_violation": (
+        "Confirm the configured OpenAI-compatible endpoint honors "
+        "parallel_tool_calls=false and returns exactly one tool call per "
+        "decision.",
+        "If this is a self-hosted or third-party OpenAI-compatible server, "
+        "verify it supports sequential single-tool-call decisions before "
+        "certifying it for Ask Dev.",
+    ),
+}
+
+
+def dev_error_remediation(code: str) -> list[str]:
+    """Return the safe remediation list for a DevError code, or none."""
+    return list(_DEV_ERROR_REMEDIATION.get(code, ()))
 
 
 class StreamEventType(StrEnum):

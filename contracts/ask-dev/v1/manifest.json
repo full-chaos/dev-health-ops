@@ -294,7 +294,7 @@
       },
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "4a50d7e3853ddb25c6eb0b2141d6156000547aed28244f9659e4ee18b4a9b13e"
+        "sha256": "8547fecb7f135fc005f0d06e5ca223272994cb118c365208abf9b3bd54ee26f0"
       },
       "schema_version": "dev_tool_result.v1"
     },
@@ -330,7 +330,7 @@
       },
       "schema": {
         "path": "schemas/dev_stream_event.v1.schema.json",
-        "sha256": "1cd0ad8794e65be66b741fe0b5cc4d3d347785f23a1c8c6cfaf127c51dfcf37e"
+        "sha256": "e26991bfcfd4ef628bcfbb6186fcbe1f9034c6259910f85d6d9ab779df1fea49"
       },
       "schema_version": "dev_stream_event.v1"
     },
@@ -348,7 +348,7 @@
       },
       "schema": {
         "path": "schemas/dev_error.v1.schema.json",
-        "sha256": "e68386046905c634c118564dd3d74447fc55387c57d84a6a79ce903f0a4c3907"
+        "sha256": "eb78a38684caab42ef2c88c6a33f558330855b86b9b847024560dfeb68581514"
       },
       "schema_version": "dev_error.v1"
     }

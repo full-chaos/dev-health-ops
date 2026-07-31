@@ -943,6 +943,68 @@ def test_round4_subject_derived_value_rejected_in_each_envelope_id(
         v2.DevAnswerV2.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    ("target", "cell"),
+    [
+        ("answer", "answer_id"),
+        ("answer", "conversation_id"),
+        ("answer", "run_id"),
+        ("frame", "frame_id"),
+        ("frame", "run_id"),
+    ],
+)
+@pytest.mark.parametrize("case", ["upper", "mixed"])
+def test_round5_server_handles_are_lowercase_only(
+    target: str, cell: str, case: str
+) -> None:
+    """Finding 2: the grammar must describe what the mint emits.
+
+    ``str(uuid.uuid4())`` is lowercase on every path, so mixed case was a
+    grammar admitting values the server never produces. Not a disclosure
+    channel -- nothing non-hex fits either way -- but a contract that accepts
+    what its own producer cannot emit invites a second, divergent notion of a
+    valid handle. Covers every identifier cell a no-answer envelope reaches.
+    """
+
+    def mangle(value: str) -> str:
+        return value.upper() if case == "upper" else value[:8].upper() + value[8:]
+
+    payload = no_answer_payload("denied")
+    if target == "answer":
+        payload[cell] = mangle(payload[cell])
+        if cell == "run_id":
+            payload["frame"]["run_id"] = mangle(payload["frame"]["run_id"])
+    else:
+        payload["frame"][cell] = mangle(payload["frame"][cell])
+        if cell == "run_id":
+            payload["run_id"] = mangle(payload["run_id"])
+    with pytest.raises(ValidationError, match=cell):
+        v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round5_every_fixture_handle_is_canonical_lowercase() -> None:
+    """Finding 2: the goldens themselves must be in the mint's own form."""
+
+    handles = [
+        value
+        for payload in positive_fixtures().values()
+        for value in _walk_strings(payload)
+        if re.fullmatch(r"[0-9a-fA-F-]{36}", value)
+    ]
+    assert handles, "no handle-shaped fixture values found"
+    assert all(value == value.lower() for value in handles)
+
+
+def _walk_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for item in value.values() for s in _walk_strings(item)]
+    if isinstance(value, list):
+        return [s for item in value for s in _walk_strings(item)]
+    return []
+
+
 def test_round4_request_boundary_accepts_client_shaped_identifiers() -> None:
     """Finding 1, the other direction: do not pin what the client supplies.
 
@@ -1626,7 +1688,105 @@ _COMPLETION_NARRATION_PAIRS: dict[str, tuple[str, str]] = {
         "Repository dev-health sits at a completion rate of 0.75.",
         "Repository dev-health sits at a completion rate of 0.9.",
     ),
+    # Round 5: the complement is a real rendering of the block, so the false
+    # half here is not an unsupported number — it is the *supported* number
+    # cited with the wrong polarity, which round 4 admitted.
+    "polarity_completed": (
+        "Repository dev-health has completed 75%.",
+        "Repository dev-health has completed 25%.",
+    ),
+    "polarity_remaining": (
+        "Repository dev-health has 25% remaining.",
+        "Repository dev-health has 75% remaining.",
+    ),
+    "polarity_decimal": (
+        "Repository dev-health has a completion rate of 0.75.",
+        "Repository dev-health has a completion rate of 0.25.",
+    ),
+    # Round 5: ordinary typography. The false halves keep the same typography
+    # so the pair isolates the value, not the punctuation.
+    "spaced_percent": (
+        "Repository dev-health is 75 % complete.",
+        "Repository dev-health is 90 % complete.",
+    ),
+    "hyphenated_ratio": (
+        "Repository dev-health has passed 3-of-4 required checks.",
+        "Repository dev-health has passed 2-of-4 required checks.",
+    ),
+    "out_of_ratio": (
+        "Repository dev-health has passed 3 out of 4 required checks.",
+        "Repository dev-health has passed 3 out of 5 required checks.",
+    ),
 }
+
+#: Codex's round-5 payloads, verbatim, kept separate from the generated pairs
+#: so the exact reproduced strings stay greppable against the review.
+_ROUND5_REPORTED_PAYLOADS: dict[str, tuple[str, bool]] = {
+    "false_completed_complement": ("Repository dev-health has completed 25%.", False),
+    "false_decimal_complement": (
+        "Repository dev-health has a completion rate of 0.25.",
+        False,
+    ),
+    "truthful_spaced_percent": ("Repository dev-health is 75 % complete.", True),
+    "truthful_hyphenated_ratio": (
+        "Repository dev-health has passed 3-of-4 required checks.",
+        True,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_ROUND5_REPORTED_PAYLOADS))
+def test_round5_reported_completion_payloads(case: str) -> None:
+    """Finding 1: the four payloads review reproduced, exactly as reported.
+
+    Two were accepted and should not have been (the complement cited as
+    completed, in both percent and decimal form); two were rejected and should
+    not have been (a space before ``%``, a hyphenated ratio). All four were
+    observed in the wrong state against the pre-fix source.
+    """
+
+    body, should_validate = _ROUND5_REPORTED_PAYLOADS[case]
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["narrative"]["body"] = body
+    if should_validate:
+        v2.DevAnswerV2.model_validate(payload)
+    else:
+        with pytest.raises(ValidationError):
+            v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round5_polarity_is_only_enforced_where_it_is_decidable() -> None:
+    """Finding 1, scope: polarity applies where the two sides actually differ.
+
+    At a 1/2 completion block the rate and its complement are the same number,
+    so there is no wrong answer to give and neither phrasing is rejected. A
+    sentence claiming both directions is ambiguous prose rather than a
+    contradiction, and is likewise left alone -- over-rejecting it would be
+    the same defect this round is fixing.
+    """
+
+    half = deepcopy(positive_fixtures()["dev_answer.v2"])
+    half["frame"]["completion"] = {
+        "numerator": 1,
+        "denominator": 2,
+        "rate": 0.5,
+        "calculable": True,
+        "rule_id": "actual_completion",
+        "rule_version": "actual_completion.v1",
+    }
+    for body in (
+        "Repository dev-health has completed 50%.",
+        "Repository dev-health has 50% remaining.",
+    ):
+        payload = deepcopy(half)
+        payload["narrative"]["body"] = body
+        v2.DevAnswerV2.model_validate(payload)
+
+    both = deepcopy(positive_fixtures()["dev_answer.v2"])
+    both["narrative"]["body"] = (
+        "Repository dev-health has 25% remaining of the work to be completed."
+    )
+    v2.DevAnswerV2.model_validate(both)
 
 
 @pytest.mark.parametrize("variant", sorted(_COMPLETION_NARRATION_PAIRS))

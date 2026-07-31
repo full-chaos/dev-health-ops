@@ -192,17 +192,17 @@ class SourceClass(StrEnum):
 #: only to no-answer outcomes would make a legal server behaviour
 #: unrepresentable depending on how the run happened to end.
 #:
-#: Case-insensitive because ``uuid.UUID()`` accepts either and a re-serialized
-#: handle must not fail; the mint itself is lowercase.
+#: Lowercase only. ``str(uuid.uuid4())`` — the mint, on every path — emits
+#: lowercase, so accepting mixed case would be a grammar that describes
+#: something the server never produces. Not a disclosure channel either way
+#: (nothing non-hex fits), but a contract that admits values its own producer
+#: cannot emit invites a second, divergent notion of "a valid handle".
 ServerHandle = Annotated[
     str,
     StringConstraints(
         min_length=36,
         max_length=36,
-        pattern=(
-            r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
-            r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-        ),
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     ),
 ]
 

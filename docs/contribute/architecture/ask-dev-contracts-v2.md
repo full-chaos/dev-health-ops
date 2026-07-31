@@ -150,18 +150,20 @@ why the indirection matters for mutation testing:
 
 ## Post-merge hardening (adversarial review, CHAOS-3294)
 
-Four adversarial-review rounds ran against the merged contracts. Round 1
+Five adversarial-review rounds ran against the merged contracts. Round 1
 reproduced six counterexamples the original five validators did not catch.
 Round 2 then bypassed three of those fixes through adjacent variants, and
 found one new gap. Round 3 cleared most of the round-2 closures but narrowed
 three cells that were still open. Round 4 found the last identifier cell one
 level out from where round 3's partition test was looking, and an
-over-rejection introduced by round 3's own fix. Because that made repeated
-rounds on the same defect classes, the fixes are deliberately **class
-closures** rather than further patches: each replaces the previous check's
-polarity or scope, and each carries an explicit closure argument -- the
-partition of the input space and why every cell is covered -- recorded in the
-sections below and in the `validators` module docstring.
+over-rejection introduced by round 3's own fix. Round 5 found both edges of
+round 4's replacement wrong in opposite directions -- a false claim admitted
+and a truthful one refused. Because that made repeated rounds on the same
+defect classes, the fixes are deliberately **class closures** rather than
+further patches: each replaces the previous check's polarity or scope, and
+each carries an explicit closure argument -- the partition of the input space
+and why every cell is covered -- recorded in the sections below and in the
+`validators` module docstring.
 
 Two lessons generalise beyond the individual fixes, and both came from a
 closure being *stated* more broadly than it was *checked*:
@@ -177,7 +179,10 @@ closure being *stated* more broadly than it was *checked*:
   narration of the frame's own completion block. No fixture caught it because
   every fixture used a word from the list. Tightening is only free when the
   positive path is tested in the same breath -- hence the paired
-  truthful/false variants in `_COMPLETION_NARRATION_PAIRS`.
+  truthful/false variants in `_COMPLETION_NARRATION_PAIRS`. Round 5 found the
+  replacement wrong in *both* directions at once, which is the general shape:
+  a rule loosened to stop over-rejecting will over-accept somewhere adjacent
+  unless the pair is written for the same input.
 
 The three round-3 cells share one shape, worth naming because it is what the
 earlier closures kept getting wrong: **a constraint on a value's form is not
@@ -531,10 +536,10 @@ Each sentence admits exactly:
 | Numerals in the text of facts the narrative references | always (`referenced_fact_ids`, plus the facts of any `referenced_section_ids`) |
 | Numerals in the committed subject's canonical identity forms | always -- server-committed, not producer-chosen |
 | A comparison's `current_value` / `comparison_value` | only in a sentence that names that comparison's label |
-| The completion **proportion** -- rate or its complement -- written with its unit (`75%`, `25%`) or as a bare decimal (`0.75`, `0.25`) | always |
-| The completion **counts** -- numerator, denominator | only in a sentence that renders the block's own ratio (`3 of 4`, `3/4`, `3 out of 4`) |
+| The completion **proportion** -- rate or its complement -- written with its unit (`75%`, `75 %`, `25%`) or as a bare decimal (`0.75`, `0.25`) | always for admission; the **polarity** must then match the sentence's claim (round 5) |
+| The completion **counts** -- numerator, denominator | only in a sentence that renders the block's own ratio (`3 of 4`, `3/4`, `3 out of 4`, `3 of the 4`, `3-of-4`) |
 
-The last two rows are the round-4 revision; see below.
+The last two rows are the round-4 revision as corrected in round 5; see below.
 
 `direct_answer`, `limitations`, `safe_follow_up_questions` and the readiness
 reasons were in the round-2 pool and are **not** in this list: they are
@@ -612,6 +617,69 @@ both directions against the same 3/4 block, so the fix cannot degenerate into
 `test_round4_completion_admission_does_not_depend_on_vocabulary` validates a
 sentence containing *no* stem from the grammar and asserts that absence
 explicitly, which is what distinguishes removing the gate from widening it.
+
+#### Round 5: polarity, and the typography of a truthful claim
+
+Round 4 admitted the completion proportion "wherever it carries its unit",
+and admitted the rate and its complement alike. Review round 5 showed both
+halves of that were too loose and too tight at once.
+
+**Too loose — polarity was lost.** Against a 3/4 (0.75) block, both
+*"has completed 25%"* and *"has a completion rate of 0.25"* validated. Neither
+number is unsupported: 25% is a perfectly real rendering of that block — it is
+simply the wrong one. Admission asks whether a number is *a* rendering of the
+completion block; it cannot, on its own, tell 75% from 25%.
+
+Polarity is now enforced separately from admission. The claim stems are split:
+
+| Polarity | Stems | May cite |
+| --- | --- | --- |
+| Completed | complete/completes/completed/completion, done, finish(es/ed), progress(ed), pass(es/ed), close(s/d), deliver(s/ed), ship(s/ped) | the rate only |
+| Remaining | remaining, remains, remain, outstanding, left, unfinished, incomplete, undone, todo | the complement only |
+
+The check applies to percentages and bare decimals identically -- round 4
+enforced its strict check only over `_PERCENT_TOKEN_PATTERN`, which is why the
+decimal form of the same false claim slipped through. `\bcomplete\b` does not
+match "incomplete" (no word boundary before the `c`), so the two lists stay
+disjoint where it matters.
+
+It is deliberately enforced only where it is **decidable**: when the value
+belongs to exactly one side. At a 1/2 block the rate and its complement are
+the same number, so there is no wrong answer to give; and a sentence claiming
+both directions ("25% remaining of the work to be completed") is ambiguous
+prose, not a contradiction. Rejecting either would be the same over-rejection
+defect this round is also fixing.
+
+**Too tight — ordinary typography was rejected.** Truthful narration failed on
+punctuation alone: *"75 % complete"* (a space before the `%`, which the token
+pattern did not span, so `75` was read as a bare numeral) and
+*"3-of-4 required checks"* (the ratio pattern allowed only whitespace and `/`
+around the connector). Both are the same claim as the forms that passed. The
+supported grammar is now stated explicitly:
+
+* **percentage** -- `\d+(\.\d+)?` with an optional space before `%`;
+* **ratio** -- numerator and denominator joined by `/`, `of`, `out of`, or
+  `of the`, with hyphens and spaces interchangeable around the connector:
+  `3 of 4`, `3/4`, `3 out of 4`, `3 of the 4`, `3-of-4`.
+
+**Closure argument (round 5).** `_ROUND5_REPORTED_PAYLOADS` holds the four
+reported strings verbatim -- two that must now reject, two that must now
+accept -- each observed in the wrong state against the pre-fix source.
+`_COMPLETION_NARRATION_PAIRS` gains six pairs (`polarity_completed`,
+`polarity_remaining`, `polarity_decimal`, `spaced_percent`,
+`hyphenated_ratio`, `out_of_ratio`); the polarity pairs are the sharper form
+of the argument, because their false half is the *supported* number cited with
+the wrong polarity rather than an unsupported one, and the typography pairs
+hold punctuation constant across both halves so the pair isolates the value.
+`test_round5_polarity_is_only_enforced_where_it_is_decidable` pins the two
+cases that must stay accepted.
+
+**Residual (CHAOS-3297).** Everything past this is layer-6 territory: prose
+whose polarity is carried by structure rather than vocabulary ("only a
+quarter is left to do"), non-English phrasing, a proportion attached to
+something other than the completion block by grammar the contract cannot
+parse, and any claim not reducible to a number, a readiness word, the
+subject's identity, or a recommendation reference.
 
 **This is not general semantic contradiction detection.** These checks catch
 exactly the pattern-matchable subset of narrative/frame disagreement; an

@@ -206,6 +206,30 @@ only to decide whether a *percentage* must additionally be checked against
 the completion block. That direction is safe: a missing word makes the
 stricter check apply less often, never opens an admission channel — the
 opposite of its round-3 use, where a missing word caused a refusal.
+
+Round 5 corrected both edges of that rule.
+
+*Polarity.* Admission asks whether a number is *a* rendering of the completion
+block, which cannot distinguish "75% complete" from "25% complete" against a
+3/4 block — both cite a real value of it, one of them the wrong one. Round 4
+admitted the rate and its complement interchangeably, so "has completed 25%"
+validated. The claim stems are now split into ``_COMPLETED_CLAIM_STEMS`` and
+``_REMAINING_CLAIM_STEMS``: a completed claim may cite only the rate, a
+remaining claim only the complement, checked over percentages **and** bare
+decimals (round 4's strict check ran only over percent tokens, which is how
+the decimal form of the same falsehood escaped). Enforced only where it is
+decidable — at a 1/2 block the two coincide, and a sentence claiming both
+directions is ambiguous prose rather than a contradiction; rejecting either
+would be over-rejection again.
+
+*Typography.* Truthful narration was failing on punctuation: ``75 % complete``
+(a space before ``%``, which the token pattern did not span) and ``3-of-4``
+(the ratio pattern allowed only whitespace and ``/``). A percentage may now
+carry an optional space before ``%``, and hyphens and spaces are
+interchangeable around a ratio connector. Anything past that — polarity
+carried by sentence structure rather than vocabulary, non-English phrasing, a
+proportion bound to something other than the completion block by grammar this
+layer cannot parse — is the CHAOS-3297 layer-6 residual.
 """
 
 from __future__ import annotations
@@ -819,9 +843,9 @@ def validate_narrative_fact_references(
 
 #: Any bare numeral or percentage token in prose, e.g. ``100``, ``75%``,
 #: ``0.75``.
-_NUMERIC_TOKEN_PATTERN = re.compile(r"\d+(?:\.\d+)?%?")
+_NUMERIC_TOKEN_PATTERN = re.compile(r"\d+(?:\.\d+)?(?:\s*%)?")
 #: A percentage specifically — the form a completion claim takes.
-_PERCENT_TOKEN_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%")
+_PERCENT_TOKEN_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 _SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
 _WORD_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 _READY_WORD_PATTERN = re.compile(r"\bready\b", re.IGNORECASE)
@@ -836,7 +860,9 @@ _RECOMMENDATION_CLAIM_PATTERN = re.compile(
 #: asymmetry is what makes a generous list safe here: widening this vocabulary
 #: makes the percentage check apply to *more* sentences, so a missing word can
 #: only ever weaken a check, never open an admission channel.
-_COMPLETION_CLAIM_STEMS = (
+#: Prose that claims the **completed** share. A proportion cited in one of
+#: these sentences must be the completion rate, never its complement.
+_COMPLETED_CLAIM_STEMS = (
     "complete",
     "completes",
     "completed",
@@ -859,23 +885,68 @@ _COMPLETION_CLAIM_STEMS = (
     "ship",
     "ships",
     "shipped",
-    "remaining",
-    "outstanding",
 )
+
+#: Prose that claims the **remaining** share — the complement. Round 4 folded
+#: these in with the completed stems, which lost the polarity: "has completed
+#: 25%" validated against a 3/4 block because 25 is a legitimate rendering of
+#: *something* about that block. It is the wrong something.
+#: ``\bcomplete\b`` does not match "incomplete" (no word boundary before the
+#: ``c``), so the two lists stay disjoint on the words that matter.
+_REMAINING_CLAIM_STEMS = (
+    "remaining",
+    "remains",
+    "remain",
+    "outstanding",
+    "left",
+    "unfinished",
+    "incomplete",
+    "undone",
+    "todo",
+)
+
+_COMPLETED_CLAIM_PATTERN = re.compile(
+    r"\b(?:" + "|".join(_COMPLETED_CLAIM_STEMS) + r")\b", re.IGNORECASE
+)
+_REMAINING_CLAIM_PATTERN = re.compile(
+    r"\b(?:" + "|".join(_REMAINING_CLAIM_STEMS) + r")\b", re.IGNORECASE
+)
+#: Either polarity — the sentences to which the "percentage must be supported"
+#: rule applies. Retained under its round-3 name because that rule is unchanged.
+_COMPLETION_CLAIM_STEMS = _COMPLETED_CLAIM_STEMS + _REMAINING_CLAIM_STEMS
 _COMPLETION_CLAIM_PATTERN = re.compile(
     r"\b(?:" + "|".join(_COMPLETION_CLAIM_STEMS) + r")\b", re.IGNORECASE
 )
 
-#: The ratio renderings the completion block itself has: ``3 of 4``, ``3/4``,
-#: ``3 out of 4``, ``3 of the 4``. Built per frame from the block's own
-#: numerator and denominator, so it matches only *that* frame's ratio.
+#: Ordinary typography for the block's own ratio: ``3 of 4``, ``3/4``,
+#: ``3 out of 4``, ``3 of the 4``, ``3-of-4``. Hyphens and spaces are
+#: interchangeable around the connector — a hyphenated ratio is the same claim
+#: as a spaced one, and round 4 rejected it purely on punctuation.
+_RATIO_SEPARATOR = r"[-\s]*"
 _COMPLETION_RATIO_TEMPLATE = (
-    r"\b{numerator}\s*(?:/|of|out\s+of)\s*(?:the\s+)?{denominator}\b"
+    r"\b{numerator}"
+    + _RATIO_SEPARATOR
+    + r"(?:/|of"
+    + _RATIO_SEPARATOR
+    + r"|out"
+    + _RATIO_SEPARATOR
+    + r"of"
+    + _RATIO_SEPARATOR
+    + r")(?:the"
+    + _RATIO_SEPARATOR
+    + r")?{denominator}\b"
 )
 
 
+def _is_percent_token(raw_token: str) -> bool:
+    return raw_token.rstrip().endswith("%")
+
+
 def _numeric_value(raw_token: str) -> float:
-    return float(raw_token[:-1]) if raw_token.endswith("%") else float(raw_token)
+    token = raw_token.strip()
+    if token.endswith("%"):
+        token = token[:-1].strip()
+    return float(token)
 
 
 def _value_in(haystack: set[float], value: float, *, tolerance: float = 1e-6) -> bool:
@@ -959,6 +1030,47 @@ def _completion_count_values(frame: DevAnswerFrame) -> set[float]:
     if completion.denominator is not None:
         values.add(float(completion.denominator))
     return values
+
+
+def _completion_polarity_error(
+    sentence: str, raw_token: str, value: float, frame: DevAnswerFrame
+) -> str | None:
+    """Reject a completion proportion cited with the wrong polarity.
+
+    Admission (above) only asks whether a number is *a* rendering of the
+    completion block. It cannot tell "75% complete" from "25% complete",
+    because both cite a real value of a 3/4 block — one of them is simply the
+    wrong one. Round 4 stopped there, so "has completed 25%" validated.
+
+    Polarity is decided by which vocabulary the sentence uses, and only when
+    the value belongs to exactly one side: at rate 0.5 the two coincide and
+    there is nothing to get wrong, and a sentence claiming both directions
+    ("25% remaining of the work completed") is ambiguous prose rather than a
+    contradiction, so neither is rejected.
+    """
+
+    rate = frame.completion.rate if frame.completion is not None else None
+    if rate is None:
+        return None
+    scale = 100 if _is_percent_token(raw_token) else 1
+    is_rate = abs(value - round(rate * scale, 6)) <= 1e-6
+    is_complement = abs(value - round((1 - rate) * scale, 6)) <= 1e-6
+    if is_rate == is_complement:  # neither, or the two coincide at 50%
+        return None
+
+    claims_completed = bool(_COMPLETED_CLAIM_PATTERN.search(sentence))
+    claims_remaining = bool(_REMAINING_CLAIM_PATTERN.search(sentence))
+    if claims_completed and not claims_remaining and is_complement:
+        return (
+            f"narrative cites {raw_token.strip()} as completed, but that is the "
+            "share of the completion block still remaining"
+        )
+    if claims_remaining and not claims_completed and is_rate:
+        return (
+            f"narrative cites {raw_token.strip()} as remaining, but that is the "
+            "share of the completion block already completed"
+        )
+    return None
 
 
 def _sentence_cites_completion_ratio(sentence: str, frame: DevAnswerFrame) -> bool:
@@ -1086,8 +1198,19 @@ def validate_narrative_numeric_containment(
         for match in _NUMERIC_TOKEN_PATTERN.finditer(sentence):
             raw_token = match.group()
             value = _numeric_value(raw_token)
-            unit_bound = percent_values if raw_token.endswith("%") else decimal_values
-            if _value_in(anywhere, value) or _value_in(unit_bound, value):
+            unit_bound = (
+                percent_values if _is_percent_token(raw_token) else decimal_values
+            )
+            admitted_as_proportion = _value_in(unit_bound, value)
+            if admitted_as_proportion:
+                # Admitted as a completion proportion — so it must be the
+                # proportion this sentence actually claims.
+                polarity_error = _completion_polarity_error(
+                    sentence, raw_token, value, frame
+                )
+                if polarity_error is not None:
+                    raise ValueError(polarity_error)
+            if _value_in(anywhere, value) or admitted_as_proportion:
                 continue
             offenders.add(raw_token)
         if offenders:

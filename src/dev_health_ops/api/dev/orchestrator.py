@@ -1054,27 +1054,59 @@ class DevOrchestrator:
         return canonical_metrics, canonical_evidence
 
     @staticmethod
+    def _tool_result_has_usable_data(result: DevToolResult) -> bool:
+        """Whether a tool result carries any fact an answer could ground on.
+
+        A ``success``/``partial`` status alone is not evidence of coverage: a
+        source that returned zero facts because a required upstream source
+        (e.g. the authorized repository set) was unavailable must not be
+        reported as an available required source (CHAOS-3257).
+        """
+        return bool(
+            result.metrics
+            or result.evidence
+            or result.status_facts
+            or result.graph_edges
+            or result.metric_definitions
+            or result.data_health
+        )
+
+    @classmethod
     def _coverage_from_tool_results(
-        tool_results: tuple[DevToolResult, ...], as_of: datetime
+        cls, tool_results: tuple[DevToolResult, ...], as_of: datetime
     ) -> DevCoverage:
+        # `required_source_count` counts required *source classes* (the
+        # distinct tools the model decided this answer needed), not raw tool
+        # invocations: a tool retried or called with different arguments
+        # still represents one required source.
+        required_sources = sorted({result.tool_id.value for result in tool_results})
+        usable_by_source: dict[str, bool] = {}
+        for result in tool_results:
+            usable = result.status == "success" or (
+                result.status == "partial" and cls._tool_result_has_usable_data(result)
+            )
+            source = result.tool_id.value
+            usable_by_source[source] = usable_by_source.get(source, False) or usable
         available = [
-            result for result in tool_results if result.status in {"success", "partial"}
+            source for source in required_sources if usable_by_source.get(source, False)
         ]
         unavailable = [
-            result.tool_id.value
-            for result in tool_results
-            if result.status in {"unavailable", "error"}
+            source
+            for source in required_sources
+            if not usable_by_source.get(source, False)
         ]
-        stale = [
-            result.tool_id.value
-            for result in tool_results
-            if any(item.freshness == "stale" for item in result.data_health)
-        ]
+        stale = sorted(
+            {
+                result.tool_id.value
+                for result in tool_results
+                if any(item.freshness == "stale" for item in result.data_health)
+            }
+        )
         return DevCoverage(
-            required_source_count=len(tool_results),
+            required_source_count=len(required_sources),
             available_source_count=len(available),
-            unavailable_required_sources=sorted(set(unavailable)),
-            stale_required_sources=sorted(set(stale)),
+            unavailable_required_sources=unavailable,
+            stale_required_sources=stale,
             as_of=as_of,
         )
 

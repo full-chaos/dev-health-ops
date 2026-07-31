@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -112,6 +113,12 @@ def _answer(*, script_id: str, invalid_schema: bool = False) -> dict:
     if invalid_schema:
         payload.pop("direct_summary")
     return payload
+
+
+def _tool_result(**overrides: object) -> DevToolResult:
+    payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+    payload.update(overrides)
+    return DevToolResult.model_validate(payload)
 
 
 def _registry(*, calls: list[DevToolRequest] | None = None) -> AskDevToolRegistry:
@@ -638,3 +645,198 @@ def test_hard_defaults_can_only_be_configured_downward() -> None:
     assert DevRunLimits(model_rounds=2).model_rounds == 2
     with pytest.raises(ValueError, match="configured downward"):
         DevRunLimits(model_rounds=5)
+
+
+# --- CHAOS-3257: coverage must reflect usable evidence, not tool completion ---
+
+
+def test_coverage_excludes_empty_partial_results_from_availability() -> None:
+    """Literal CHAOS-3257 repro: a partial status snapshot with zero facts and
+    a missing-repository-set warning must read as unavailable, not covered.
+    """
+    result = _tool_result(
+        tool_id="status_snapshot.v1",
+        status="partial",
+        metric_definitions=[],
+        metrics=[],
+        evidence=[],
+        status_facts=[],
+        graph_edges=[],
+        data_health=[],
+        warnings=["authorized_repository_set_unavailable"],
+    )
+    coverage = DevOrchestrator._coverage_from_tool_results((result,), datetime.now(UTC))
+    assert coverage.required_source_count == 1
+    assert coverage.available_source_count == 0
+    assert coverage.unavailable_required_sources == ["status_snapshot.v1"]
+
+
+def test_coverage_counts_partial_with_usable_evidence_as_available() -> None:
+    """A genuinely partial result that still carries usable facts is coverage,
+    unlike an empty partial (contrast with the test above).
+    """
+    result = _tool_result(
+        tool_id="status_snapshot.v1",
+        status="partial",
+        metric_definitions=[],
+        metrics=[],
+        evidence=[],
+        status_facts=[
+            {
+                "fact_id": "fact_01",
+                "text": "1 blocker open",
+                "evidence_ref_ids": ["evidence_01"],
+            }
+        ],
+        graph_edges=[],
+        data_health=[],
+        warnings=["some_children_unavailable"],
+    )
+    coverage = DevOrchestrator._coverage_from_tool_results((result,), datetime.now(UTC))
+    assert coverage.available_source_count == 1
+    assert coverage.unavailable_required_sources == []
+
+
+def test_coverage_marks_error_and_unavailable_status_as_unavailable() -> None:
+    error_result = _tool_result(
+        tool_id="search_evidence.v1",
+        status="error",
+        metrics=[],
+        evidence=[],
+        metric_definitions=[],
+        error={
+            "schema_version": "dev_error.v1",
+            "request_id": "run_01",
+            "code": "source_unavailable",
+            "safe_message": "The evidence source could not be reached.",
+            "retryable": True,
+        },
+    )
+    unavailable_result = _tool_result(
+        tool_id="data_health.v1",
+        status="unavailable",
+        metrics=[],
+        evidence=[],
+        metric_definitions=[],
+        warnings=["provider_unreachable"],
+    )
+    coverage = DevOrchestrator._coverage_from_tool_results(
+        (error_result, unavailable_result), datetime.now(UTC)
+    )
+    assert coverage.required_source_count == 2
+    assert coverage.available_source_count == 0
+    assert coverage.unavailable_required_sources == [
+        "data_health.v1",
+        "search_evidence.v1",
+    ]
+
+
+def test_coverage_flags_stale_required_sources_independent_of_availability() -> None:
+    result = _tool_result(
+        tool_id="data_health.v1",
+        status="success",
+        metrics=[],
+        evidence=[],
+        metric_definitions=[],
+        data_health=[
+            {
+                "source_system": "work_items",
+                "freshness": "stale",
+                "last_successful_at": positive_fixtures()["dev_evidence_ref.v1"][
+                    "observed_at"
+                ],
+                "coverage": 0.5,
+                "warning": "watermark behind SLA",
+            }
+        ],
+    )
+    coverage = DevOrchestrator._coverage_from_tool_results((result,), datetime.now(UTC))
+    assert coverage.available_source_count == 1
+    assert coverage.stale_required_sources == ["data_health.v1"]
+
+
+def test_coverage_dedupes_required_source_count_by_tool_not_invocation() -> None:
+    """required_source_count counts required source classes, not raw tool
+    invocations: two calls to the same tool are one required source.
+    """
+    first = _tool_result(tool_id="query_metric.v1", tool_call_id="tool_call_01")
+    second = _tool_result(tool_id="query_metric.v1", tool_call_id="tool_call_02")
+    coverage = DevOrchestrator._coverage_from_tool_results(
+        (first, second), datetime.now(UTC)
+    )
+    assert coverage.required_source_count == 1
+    assert coverage.available_source_count == 1
+
+
+@pytest.mark.asyncio
+async def test_status_question_run_never_shows_full_coverage_with_zero_evidence() -> (
+    None
+):
+    """Full-stack (backend-half) CHAOS-3257 regression: the observed status
+    question, answered from a single empty-partial status snapshot, must
+    complete with coverage that reflects zero usable evidence, never a full
+    "1 of 1" count. (Web copy is out of this lane's scope; see PR notes.)
+    """
+    script_id = "empty-partial-status-run"
+
+    async def empty_partial_status(
+        _context: Any, request: DevToolRequest
+    ) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "status": "partial",
+                "scope_resolution": None,
+                "metric_definitions": [],
+                "metrics": [],
+                "evidence": [],
+                "status_facts": [],
+                "graph_edges": [],
+                "data_health": [],
+                "warnings": ["authorized_repository_set_unavailable"],
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: empty_partial_status for tool_id in ToolID})
+    degraded_answer = _answer(script_id=script_id)
+    degraded_answer.update(
+        {
+            "status": "degraded",
+            "direct_summary": (
+                "Status could not be established because the authorized "
+                "repository set was unavailable."
+            ),
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+            "warnings": ["authorized_repository_set_unavailable"],
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(degraded_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status != "complete"
+    assert result.answer.coverage.required_source_count == 1
+    assert result.answer.coverage.available_source_count == 0
+    assert result.answer.coverage.unavailable_required_sources == ["status_snapshot.v1"]

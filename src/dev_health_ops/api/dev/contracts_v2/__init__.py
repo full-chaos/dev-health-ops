@@ -25,6 +25,7 @@ from .base import (
     EntityKind,
     PublicOutcome,
     QuestionIntentID,
+    ServerHandle,
     SourceClass,
     SourceRequirementState,
 )
@@ -54,6 +55,7 @@ from .plan import (
     DevInvestigationPlan,
     DevPlanStepDependency,
     DevSourceRequirement,
+    PlanRegistryID,
 )
 from .result import DevInvestigationResult, DevRelationshipPath, DevSourceObservation
 from .stream import (
@@ -155,10 +157,12 @@ __all__ = [
     "NO_ANSWER_FRAME_FIELD_POLICY",
     "NO_ANSWER_OUTCOMES",
     "NoAnswerFieldPolicy",
+    "PlanRegistryID",
     "ProgressStateV2",
     "PublicOutcome",
     "QuestionIntentID",
     "ResolutionOutcome",
+    "ServerHandle",
     "SourceClass",
     "SourceRequirementState",
     "StreamEventTypeV2",

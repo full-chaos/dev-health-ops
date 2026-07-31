@@ -70,7 +70,7 @@
     }
   ],
   "finding_refs": [],
-  "frame_id": "frame_01",
+  "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
   "generated_at": "2026-07-28T12:00:00Z",
   "health_profile_refs": [],
   "limitations": [],
@@ -101,7 +101,7 @@
       "target_entity_id": "status_snapshot_01"
     }
   ],
-  "run_id": "run_01",
+  "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
   "safe_follow_up_questions": [
     "What changed since last week?"
   ],
@@ -123,7 +123,7 @@
         "ev_01"
       ],
       "limitation": null,
-      "observation_id": "obs_01",
+      "observation_id": "0f1a2b3c-000c-4a00-8000-000000000001",
       "observed_at": "2026-07-28T12:00:00Z",
       "observed_state": "available_current",
       "query_version": "status_snapshot.v1",

@@ -20,6 +20,7 @@ from .base import (
     EntityKind,
     OpaqueID,
     PlatformVersionToken,
+    QuestionIntentID,
     ShortText,
     SourceClass,
     Version,
@@ -113,7 +114,7 @@ class DevInvestigationPlan(ContractModelV2):
     schema_version: Literal["dev_investigation_plan.v1"]
     plan_id: PlanRegistryID
     plan_version: PlatformVersionToken
-    intent_id: OpaqueID
+    intent_id: QuestionIntentID
     supported_subject_kinds: tuple[EntityKind, ...] = Field(min_length=1, max_length=6)
     supported_cardinalities: tuple[Cardinality, ...] = Field(min_length=1, max_length=3)
     mandatory_steps: tuple[ShortText, ...] = Field(min_length=1, max_length=25)

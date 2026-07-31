@@ -5,7 +5,7 @@
     "ev_01"
   ],
   "limitation": "Provider not configured.",
-  "observation_id": "obs_01",
+  "observation_id": "0f1a2b3c-000c-4a00-8000-000000000001",
   "observed_at": "2026-07-28T12:00:00Z",
   "observed_state": "unconfigured",
   "query_version": "status_snapshot.v1",

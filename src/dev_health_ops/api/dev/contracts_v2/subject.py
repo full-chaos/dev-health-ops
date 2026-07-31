@@ -24,7 +24,15 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, model_validator
 
-from .base import ContractModelV2, EntityKind, Label, OpaqueID, ShortText, Version
+from .base import (
+    ContractModelV2,
+    EntityKind,
+    Label,
+    OpaqueID,
+    ServerHandle,
+    ShortText,
+    Version,
+)
 
 __all__ = [
     "DevEntityRefV2",
@@ -52,7 +60,7 @@ class DevEntityRefV2(ContractModelV2):
 
 class DevSubjectMention(ContractModelV2):
     schema_version: Literal["dev_subject_mention.v1"]
-    mention_id: OpaqueID
+    mention_id: ServerHandle
     mention_ordinal: int = Field(ge=0, le=24)
     original_text_span: ShortText
     requested_entity_kind: EntityKind
@@ -90,7 +98,7 @@ class DevResolutionEntry(ContractModelV2):
     """
 
     entry_ordinal: int = Field(ge=0, le=99)
-    mention_id: OpaqueID
+    mention_id: ServerHandle
     outcome: ResolutionOutcome
     committed_entity_ref: DevEntityRefV2 | None = None
     candidates: tuple[DevResolutionCandidate, ...] = Field(
@@ -124,8 +132,8 @@ class DevResolutionEntry(ContractModelV2):
 
 class DevResolutionLedger(ContractModelV2):
     schema_version: Literal["dev_resolution_ledger.v1"]
-    ledger_id: OpaqueID
-    mention_ids: tuple[OpaqueID, ...] = Field(min_length=1, max_length=25)
+    ledger_id: ServerHandle
+    mention_ids: tuple[ServerHandle, ...] = Field(min_length=1, max_length=25)
     entries: tuple[DevResolutionEntry, ...] = Field(min_length=1, max_length=100)
     updated_at: AwareDatetime
 
@@ -188,16 +196,16 @@ class DevSubjectSet(ContractModelV2):
     """A homogeneous, bounded, authorization-safe committed subject cohort."""
 
     schema_version: Literal["dev_subject_set.v1"]
-    set_id: OpaqueID
+    set_id: ServerHandle
     entity_kind: EntityKind
     committed_entity_refs: tuple[DevEntityRefV2, ...] = Field(
         min_length=1, max_length=25
     )
     original_mention_count: int = Field(ge=0, le=100)
-    unresolved_mention_ids: tuple[OpaqueID, ...] = Field(
+    unresolved_mention_ids: tuple[ServerHandle, ...] = Field(
         default_factory=tuple, max_length=100
     )
-    ambiguous_mention_ids: tuple[OpaqueID, ...] = Field(
+    ambiguous_mention_ids: tuple[ServerHandle, ...] = Field(
         default_factory=tuple, max_length=100
     )
     cohort_complete: bool

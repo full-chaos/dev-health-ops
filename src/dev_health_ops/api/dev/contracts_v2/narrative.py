@@ -21,16 +21,16 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from dev_health_ops.api.dev.contracts import DevModelMetadata
 
-from .base import ContractModelV2, LongText, OpaqueID, ShortText
+from .base import ContractModelV2, LongText, OpaqueID, ServerHandle, ShortText
 
 __all__ = ["DevNarrative"]
 
 
 class DevNarrative(ContractModelV2):
     schema_version: Literal["dev_narrative.v1"]
-    narrative_id: OpaqueID
-    run_id: OpaqueID
-    frame_id: OpaqueID
+    narrative_id: ServerHandle
+    run_id: ServerHandle
+    frame_id: ServerHandle
     mode: Literal["provider", "deterministic_fallback"]
     body: LongText
     referenced_fact_ids: tuple[OpaqueID, ...] = Field(

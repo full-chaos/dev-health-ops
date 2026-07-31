@@ -38,6 +38,7 @@ from .base import (
     OpaqueID,
     PlatformVersionToken,
     PublicOutcome,
+    ServerHandle,
     ShortText,
 )
 from .embedded import DevCoverageV2, DevEvidenceRefV2, DevMetricRefV2
@@ -147,8 +148,8 @@ class DevFrameVersions(ContractModelV2):
 
 class DevAnswerFrame(ContractModelV2):
     schema_version: Literal["dev_answer_frame.v1"]
-    frame_id: OpaqueID
-    run_id: OpaqueID
+    frame_id: ServerHandle
+    run_id: ServerHandle
     generated_at: AwareDatetime
     public_outcome: PublicOutcome
     subject_ref: DevEntityRefV2 | None = None

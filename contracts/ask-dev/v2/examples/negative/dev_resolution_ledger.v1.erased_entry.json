@@ -10,7 +10,7 @@
         "team_id": null
       },
       "entry_ordinal": 1,
-      "mention_id": "mention_01",
+      "mention_id": "0f1a2b3c-0009-4a00-8000-000000000001",
       "outcome": "exact_match",
       "query_version": "resolve_scope.v1",
       "repository_attribution": "repo_dev_health",
@@ -19,9 +19,9 @@
       "team_attribution": null
     }
   ],
-  "ledger_id": "ledger_01",
+  "ledger_id": "0f1a2b3c-0008-4a00-8000-000000000001",
   "mention_ids": [
-    "mention_01"
+    "0f1a2b3c-0009-4a00-8000-000000000001"
   ],
   "schema_version": "dev_resolution_ledger.v1",
   "updated_at": "2026-07-28T12:00:00Z"

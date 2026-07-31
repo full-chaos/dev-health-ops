@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
+from enum import StrEnum
 from typing import Any, get_args, get_origin
 
 import pytest
@@ -183,7 +184,7 @@ def test_subject_set_rejects_heterogeneous_entity_kinds() -> None:
 def _second_entry() -> dict[str, object]:
     return {
         "entry_ordinal": 1,
-        "mention_id": "mention_02",
+        "mention_id": "0f1a2b3c-0009-4a00-8000-000000000002",
         "outcome": "no_authorized_match",
         "committed_entity_ref": None,
         "candidates": [],
@@ -200,7 +201,7 @@ def test_ledger_extension_accepts_pure_append() -> None:
         positive_fixtures()["dev_resolution_ledger.v1"]
     )
     extended_payload = deepcopy(positive_fixtures()["dev_resolution_ledger.v1"])
-    extended_payload["mention_ids"].append("mention_02")
+    extended_payload["mention_ids"].append("0f1a2b3c-0009-4a00-8000-000000000002")
     extended_payload["entries"].append(_second_entry())
     extended = v2.DevResolutionLedger.model_validate(extended_payload)
 
@@ -212,7 +213,7 @@ def test_ledger_extension_rejects_rewriting_a_prior_entry() -> None:
         positive_fixtures()["dev_resolution_ledger.v1"]
     )
     extended_payload = deepcopy(positive_fixtures()["dev_resolution_ledger.v1"])
-    extended_payload["mention_ids"].append("mention_02")
+    extended_payload["mention_ids"].append("0f1a2b3c-0009-4a00-8000-000000000002")
     extended_payload["entries"].append(_second_entry())
 
     rewritten_payload = deepcopy(extended_payload)
@@ -229,7 +230,7 @@ def test_ledger_extension_rejects_shrinking() -> None:
         positive_fixtures()["dev_resolution_ledger.v1"]
     )
     extended_payload = deepcopy(positive_fixtures()["dev_resolution_ledger.v1"])
-    extended_payload["mention_ids"].append("mention_02")
+    extended_payload["mention_ids"].append("0f1a2b3c-0009-4a00-8000-000000000002")
     extended_payload["entries"].append(_second_entry())
     extended = v2.DevResolutionLedger.model_validate(extended_payload)
 
@@ -690,6 +691,230 @@ def _no_answer_frame_policy_cells() -> dict[v2.NoAnswerFieldPolicy, set[str]]:
     for name, rule in v2.NO_ANSWER_FRAME_FIELD_POLICY.items():
         cells.setdefault(rule, set()).add(name)
     return cells
+
+
+_IDENTIFIER_FIELD_NAME = re.compile(r"(^|_)(id|ids)$")
+_SERVER_HANDLE_PATTERN = get_args(v2.ServerHandle)[1].pattern
+
+
+def _field_pattern(field: Any) -> str | None:
+    for meta in field.metadata:
+        pattern = getattr(meta, "pattern", None)
+        if pattern:
+            return pattern
+    return None
+
+
+def _is_server_handle(model: type[BaseModel], name: str) -> bool:
+    field = model.model_fields[name]
+    if _field_pattern(field) == _SERVER_HANDLE_PATTERN:
+        return True
+    # tuple[ServerHandle, ...] / ServerHandle | None
+    for arg in get_args(field.annotation):
+        for meta in get_args(arg)[1:]:
+            if getattr(meta, "pattern", None) == _SERVER_HANDLE_PATTERN:
+                return True
+    return False
+
+
+def _reaches_only_closed_values(model: type[BaseModel], name: str) -> bool:
+    """True when the field's own annotation is a closed enum or Literal."""
+
+    annotation = model.model_fields[name].annotation
+    if isinstance(annotation, type) and issubclass(annotation, StrEnum):
+        return True
+    args = get_args(annotation)
+    if args and all(isinstance(arg, str) for arg in args):
+        return True
+    return any(
+        isinstance(arg, type) and issubclass(arg, StrEnum)
+        for arg in args
+        if isinstance(arg, type)
+    )
+
+
+def _models_reachable_on_a_no_answer_projection() -> set[type[BaseModel]]:
+    """The models a no-answer answer can actually carry.
+
+    Follows only fields the no-answer policy does *not* classify ``ABSENT``,
+    so a model reachable exclusively through an absent field (every one of
+    ``DevFrameVersions``, ``DevAnswerFact``, ``DevNarrative``, ...) is
+    correctly excluded: nothing in it can appear on a denial.
+    """
+
+    reachable: set[type[BaseModel]] = set()
+    stack: list[type[BaseModel]] = [v2.DevAnswerV2]
+    policies = {
+        v2.DevAnswerV2: v2.NO_ANSWER_ANSWER_FIELD_POLICY,
+        v2.DevAnswerFrame: v2.NO_ANSWER_FRAME_FIELD_POLICY,
+    }
+    while stack:
+        model = stack.pop()
+        if model in reachable:
+            continue
+        reachable.add(model)
+        policy = policies.get(model, {})
+        for name, field in model.model_fields.items():
+            if policy.get(name) is v2.NoAnswerFieldPolicy.ABSENT:
+                continue
+            for candidate in (field.annotation, *get_args(field.annotation)):
+                if isinstance(candidate, type) and issubclass(candidate, BaseModel):
+                    stack.append(candidate)
+    return reachable
+
+
+def test_round4_every_identifier_on_a_denied_envelope_is_an_opaque_handle() -> None:
+    """Finding 1, closure: the partition now covers the whole envelope.
+
+    The round-3 claim was scoped to ``DevAnswerFrame`` and asserted against the
+    frame policy table alone, so it was *inaccurate at the envelope level*:
+    ``DevAnswerV2.answer_id`` and ``conversation_id`` sat one level out, were
+    never enumerated, and accepted ``"private/Nightfall"`` on a denied answer.
+
+    This walks the answer envelope itself -- every model a no-answer outcome
+    can carry, following only fields the policy does not blank -- and requires
+    every identifier cell that survives to be a server-minted opaque handle.
+    There are no named exceptions: the residual round 3 recorded is closed.
+    """
+
+    reachable = _models_reachable_on_a_no_answer_projection()
+    assert reachable == {v2.DevAnswerV2, v2.DevAnswerFrame, v2.DevCoverageV2}
+
+    policies = {
+        v2.DevAnswerV2: v2.NO_ANSWER_ANSWER_FIELD_POLICY,
+        v2.DevAnswerFrame: v2.NO_ANSWER_FRAME_FIELD_POLICY,
+    }
+    surviving = [
+        (model, name)
+        for model in sorted(reachable, key=lambda m: m.__name__)
+        for name in model.model_fields
+        if _IDENTIFIER_FIELD_NAME.search(name)
+        and policies.get(model, {}).get(name) is not v2.NoAnswerFieldPolicy.ABSENT
+    ]
+    assert {f"{m.__name__}.{n}" for m, n in surviving} == {
+        "DevAnswerV2.answer_id",
+        "DevAnswerV2.conversation_id",
+        "DevAnswerV2.run_id",
+        "DevAnswerFrame.frame_id",
+        "DevAnswerFrame.run_id",
+    }
+    unrestricted = [
+        f"{model.__name__}.{name}"
+        for model, name in surviving
+        if not _is_server_handle(model, name)
+    ]
+    assert unrestricted == []
+
+
+#: Identifier cells across the whole v2 package that are deliberately *not*
+#: server-minted handles, each with the reason it cannot be one. Anything not
+#: listed here and not a handle, closed vocabulary, or provenance token fails
+#: ``test_round4_every_v2_identifier_is_classified``.
+_NON_HANDLE_IDENTIFIER_REASONS: dict[str, str] = {
+    # Provider-derived: these name real external entities, so they are
+    # subject-derived by construction. All are ABSENT on a no-answer outcome.
+    "DevEntityRefV2.entity_id": "provider entity key",
+    "DevEntityRefV2.repository_id": "provider entity key",
+    "DevEntityRefV2.team_id": "provider entity key",
+    "DevEvidenceRefV2.entity_id": "provider entity key",
+    "DevEvidenceRefV2.repository_ids": "provider entity key",
+    "DevEvidenceRefV2.valid_entity_ids": "provider entity key",
+    "DevInvestigationResult.subject_entity_id": "provider entity key",
+    "DevRelationshipPath.source_entity_id": "provider entity key",
+    "DevRelationshipPath.target_entity_id": "provider entity key",
+    "DevScopeV2.organization_id": "provider entity key",
+    "DevScopeV2.team_ids": "provider entity key",
+    # Intra-document reference keys: scoped to one document, meaningless
+    # outside it, and ABSENT on a no-answer outcome.
+    "DevAnswerFact.fact_id": "intra-document key",
+    "DevAnswerFact.evidence_ref_ids": "intra-document key",
+    "DevAnswerFact.relationship_path_ids": "intra-document key",
+    "DevAnswerSection.section_id": "intra-document key",
+    "DevAnswerSection.fact_ids": "intra-document key",
+    "DevEvidenceRefV2.evidence_ref_id": "intra-document key",
+    "DevFrameConflict.evidence_ref_ids": "intra-document key",
+    "DevMetricRefV2.evidence_ref_ids": "intra-document key",
+    "DevMetricRefV2.metric_ref_id": "intra-document key",
+    "DevNarrative.referenced_fact_ids": "intra-document key",
+    "DevNarrative.referenced_section_ids": "intra-document key",
+    "DevReadinessBlock.blocking_fact_ids": "intra-document key",
+    "DevRelationshipPath.path_id": "intra-document key",
+    "DevRelationshipPath.evidence_ref_ids": "intra-document key",
+    "DevSourceObservation.evidence_ref_ids": "intra-document key",
+    "DevPlanStepDependency.step_id": "intra-document key",
+    # Server-owned rule/adapter registries, versioned tokens rather than mints.
+    "DevCompletionBlock.rule_id": "rule registry token",
+    "DevReadinessBlock.rule_id": "rule registry token",
+    "DevInvestigationPlan.completion_rule_id": "rule registry token",
+    "DevSourceRequirement.applicability_rule_id": "rule registry token",
+    "DevSourceObservation.adapter_id": "adapter registry token",
+    "DevSourceRequirement.adapter_id": "adapter registry token",
+}
+
+
+def test_round4_every_v2_identifier_is_classified() -> None:
+    """Finding 1, closure: no identifier cell anywhere is simply unexamined.
+
+    Enumerated from the models rather than from a hand-written list, so a new
+    identifier field fails here until it is either a server handle, a closed
+    vocabulary, a provenance token, or named above with a reason.
+    """
+
+    unclassified: list[str] = []
+    for model in _all_v2_contract_models():
+        for name in model.model_fields:
+            if not _IDENTIFIER_FIELD_NAME.search(name):
+                continue
+            key = f"{model.__name__}.{name}"
+            if _is_server_handle(model, name):
+                continue
+            if _reaches_only_closed_values(model, name):
+                continue
+            if (
+                _field_pattern(model.model_fields[name])
+                == get_args(v2.PlanRegistryID)[1].pattern
+            ):
+                continue
+            if key in _NON_HANDLE_IDENTIFIER_REASONS:
+                continue
+            unclassified.append(key)
+    assert unclassified == []
+
+    # The reasons table may not drift into naming fields that no longer exist.
+    known = {
+        f"{model.__name__}.{name}"
+        for model in _all_v2_contract_models()
+        for name in model.model_fields
+    }
+    assert set(_NON_HANDLE_IDENTIFIER_REASONS) <= known
+
+
+@pytest.mark.parametrize(
+    ("target", "cell"),
+    [
+        ("answer", "answer_id"),
+        ("answer", "conversation_id"),
+        ("answer", "run_id"),
+        ("frame", "frame_id"),
+        ("frame", "run_id"),
+    ],
+)
+def test_round4_subject_derived_value_rejected_in_each_envelope_id(
+    target: str, cell: str
+) -> None:
+    """Finding 1: the reproduced payload, per cell, on a denied answer."""
+
+    payload = no_answer_payload("denied")
+    if target == "answer":
+        payload[cell] = "private/Nightfall"
+        if cell == "run_id":
+            payload["frame"]["run_id"] = "private/Nightfall"
+    else:
+        payload["frame"][cell] = "private/Nightfall"
+        if cell == "run_id":
+            payload["run_id"] = "private/Nightfall"
+    with pytest.raises(ValidationError, match=cell):
+        v2.DevAnswerV2.model_validate(payload)
 
 
 def test_round3_denied_projection_admits_no_producer_chosen_string() -> None:
@@ -1282,6 +1507,126 @@ def test_round3_frame_free_text_no_longer_grounds_a_narrative_number() -> None:
     )
     payload["narrative"]["referenced_fact_ids"] = ["fact_01", "fact_sources"]
     v2.DevAnswerV2.model_validate(payload)
+
+
+#: Truthful and false narrations of the *same* 3/4 completion block, one pair
+#: per supported completion verb. The positive half is the point: round 3
+#: gated admission on a five-word regex, so every truthful phrasing outside
+#: that list was rejected — over-rejection on the positive path, which is the
+#: defect this wave exists to prevent. The negative half is what stops the fix
+#: from being a blanket "admit any number near a completion word".
+_COMPLETION_NARRATION_PAIRS: dict[str, tuple[str, str]] = {
+    "progress": (
+        "Repository dev-health has made 75% progress.",
+        "Repository dev-health has made 90% progress.",
+    ),
+    "passed": (
+        "Repository dev-health has passed 3 of 4 required checks.",
+        "Repository dev-health has passed 4 of 5 required checks.",
+    ),
+    "closed": (
+        "Repository dev-health has closed 3 of 4 required issues.",
+        "Repository dev-health has closed 4 of 4 required issues.",
+    ),
+    "delivered": (
+        "Repository dev-health has delivered 75% of the required work.",
+        "Repository dev-health has delivered 100% of the required work.",
+    ),
+    "remaining": (
+        "Repository dev-health has 25% remaining.",
+        "Repository dev-health has 40% remaining.",
+    ),
+    "ratio_slash": (
+        "Repository dev-health has 3/4 required checks closed.",
+        "Repository dev-health has 2/4 required checks closed.",
+    ),
+    "decimal_rate": (
+        "Repository dev-health sits at a completion rate of 0.75.",
+        "Repository dev-health sits at a completion rate of 0.9.",
+    ),
+}
+
+
+@pytest.mark.parametrize("variant", sorted(_COMPLETION_NARRATION_PAIRS))
+def test_round4_completion_narration_accepts_truth_and_rejects_falsehood(
+    variant: str,
+) -> None:
+    """Finding 2, both directions: the same block, narrated truthfully or not."""
+
+    truthful, false = _COMPLETION_NARRATION_PAIRS[variant]
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["narrative"]["body"] = truthful
+    v2.DevAnswerV2.model_validate(payload)
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["narrative"]["body"] = false
+    with pytest.raises(ValidationError):
+        v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round4_completion_admission_does_not_depend_on_vocabulary() -> None:
+    """Finding 2, closure: admission is by citation shape, not by keyword.
+
+    This sentence contains no word from ``_COMPLETION_CLAIM_STEMS`` at all and
+    still validates, because ``75%`` is a completion proportion written with
+    its unit. That is what makes the fix a removal of the keyword gate rather
+    than a longer keyword list.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["narrative"]["body"] = "Repository dev-health sits at 75% of the target."
+    assert not validators_module._COMPLETION_CLAIM_PATTERN.search(
+        payload["narrative"]["body"]
+    )
+    v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round4_bare_completion_count_needs_a_referenced_fact() -> None:
+    """Finding 2, the stated limitation and its escape hatch.
+
+    A bare completion count is genuinely ambiguous — nothing distinguishes
+    "3 required checks" from "3 open incidents" — so it is admitted only via
+    the block's own ratio rendering or a fact the narrative references. The
+    pair proves the escape hatch works rather than leaving the limitation as
+    an unqualified refusal.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["narrative"]["body"] = (
+        "Repository dev-health has 3 required checks outstanding."
+    )
+    with pytest.raises(ValidationError, match="cites number"):
+        v2.DevAnswerV2.model_validate(payload)
+
+    payload["frame"]["facts"].append(
+        {
+            "fact_id": "fact_checks",
+            "text": "3 required checks are outstanding.",
+            "kind": "observed",
+            "evidence_ref_ids": ["ev_01"],
+            "relationship_path_ids": [],
+            "confidence": 1.0,
+        }
+    )
+    payload["narrative"]["referenced_fact_ids"] = ["fact_01", "fact_checks"]
+    v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round4_completion_counts_need_the_ratio_not_mere_co_occurrence() -> None:
+    """Finding 2: admitting the pair on co-occurrence would reopen round 3.
+
+    "4 open security incidents and 3 unresolved alerts" contains both the
+    numerator and the denominator and grounds neither, so the counts are
+    admitted only where the sentence renders the block's own ratio.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["narrative"]["body"] = (
+        "Repository dev-health has 4 open security incidents and 3 unresolved alerts."
+    )
+    with pytest.raises(ValidationError, match="cites number"):
+        v2.DevAnswerV2.model_validate(payload)
 
 
 def test_round2_narrative_may_name_the_subject_by_its_short_form() -> None:

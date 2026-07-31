@@ -168,6 +168,25 @@
       "title": "EntityKind",
       "type": "string"
     },
+    "QuestionIntentID": {
+      "description": "The twelve Wave 3.1 launch intents (Amendment TRD v2 \u00a74.1).",
+      "enum": [
+        "entity_status",
+        "portfolio_status",
+        "remaining_work",
+        "observed_change",
+        "registered_statistics",
+        "metric_comparison",
+        "data_trust",
+        "project_health",
+        "team_health",
+        "team_workload_balance",
+        "operational_deficiency_inventory",
+        "bounded_investigation"
+      ],
+      "title": "QuestionIntentID",
+      "type": "string"
+    },
     "SourceClass": {
       "description": "The closed platform vocabulary of investigable source classes.\n\nA *source class* names a kind of platform data an investigation step can\ndraw on. It is deliberately a closed enum rather than an ``OpaqueID``,\nbecause the same token is what ``dev_coverage``'s\n``unavailable_required_sources``/``stale_required_sources`` disclose on a\n**denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):\nadversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle\na subject-derived identifier (``\"private/Nightfall\"``) out through a frame\nwhose every other field was correctly empty. A closed vocabulary means the\ncoverage counts stay answerable for a denial while carrying nothing a\nproducer chose.\n\nAdding a source class is therefore a deliberate contract change, not an\nincidental string: a new adapter must add its member here (and regenerate\nthe exported schemas) before it can appear on the wire.",
       "enum": [
@@ -228,11 +247,7 @@
       "type": "boolean"
     },
     "intent_id": {
-      "maxLength": 128,
-      "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
-      "title": "Intent Id",
-      "type": "string"
+      "$ref": "#/$defs/QuestionIntentID"
     },
     "mandatory_steps": {
       "items": {

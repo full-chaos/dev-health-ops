@@ -42,6 +42,7 @@ __all__ = [
     "QuestionIntentID",
     "RelativePath",
     "SchemaVersion",
+    "ServerHandle",
     "ShortText",
     "SourceClass",
     "SourceRequirementState",
@@ -164,6 +165,45 @@ class SourceClass(StrEnum):
     OPERATIONAL_CONTROL = "operational_control"
     SOURCE_HEALTH = "source_health"
 
+
+#: A **server-minted opaque handle**: the canonical hyphenated UUID form.
+#:
+#: Pinned to what the Ask Dev persistence layer actually mints and stores.
+#: Every correlation identifier in ``models/dev_persistence.py`` is a ``GUID``
+#: column with ``default=uuid.uuid4`` — ``DevConversation.id`` (line 45),
+#: ``DevMessage.id``/``client_message_id``/``answer_id`` (106-113),
+#: ``DevRun.id``/``request_id``/``retry_of_run_id``/``answer_id`` (171-182) —
+#: and the router serializes them with ``str(...)``
+#: (``router.py:305,318,483,607``), while ``orchestrator_persistence.py:149``
+#: parses ``uuid.UUID(answer.answer_id)`` on the way back in. A non-UUID
+#: ``answer_id`` was therefore already a runtime failure; this makes the wire
+#: contract say so.
+#:
+#: Why it matters beyond tidiness: an identifier is the last field class on a
+#: **denied** answer that a producer could otherwise fill with a
+#: subject-derived string. Round 3 left ``frame_id``/``run_id`` as a documented
+#: residual and round 4 found the same hole one level out, on the answer
+#: envelope's ``answer_id``/``conversation_id``. Hex digits and hyphens cannot
+#: spell a project name, so this closes the class rather than the instance.
+#:
+#: Applied **uniformly across every outcome**, deliberately: a run ID is minted
+#: at ``run.started`` before the outcome is known, so a grammar that applied
+#: only to no-answer outcomes would make a legal server behaviour
+#: unrepresentable depending on how the run happened to end.
+#:
+#: Case-insensitive because ``uuid.UUID()`` accepts either and a re-serialized
+#: handle must not fail; the mint itself is lowercase.
+ServerHandle = Annotated[
+    str,
+    StringConstraints(
+        min_length=36,
+        max_length=36,
+        pattern=(
+            r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+            r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        ),
+    ),
+]
 
 #: A platform provenance token: a dotted, lowercase, version-suffixed
 #: identifier such as ``intent_interpreter.v1``, ``status.entity.v2.1`` or

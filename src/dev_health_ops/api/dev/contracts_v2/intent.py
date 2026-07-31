@@ -29,6 +29,7 @@ from .base import (
     IdempotencyKey,
     OpaqueID,
     QuestionIntentID,
+    ServerHandle,
     ShortText,
 )
 from .embedded import DevScopeV2
@@ -48,11 +49,11 @@ class DevMessageRequestV2(ContractModelV2):
     """
 
     schema_version: Literal["dev_message_request.v2"]
-    request_id: OpaqueID
-    client_message_id: OpaqueID
-    conversation_id: OpaqueID | None = None
+    request_id: ServerHandle
+    client_message_id: ServerHandle
+    conversation_id: ServerHandle | None = None
     idempotency_key: IdempotencyKey
-    retry_of_run_id: OpaqueID | None = None
+    retry_of_run_id: ServerHandle | None = None
     question: _QuestionText = Field(json_schema_extra={"x-max-utf8-bytes": 8_192})
     scope: DevScopeV2
     requested_metric_ids: tuple[MetricID, ...] = Field(

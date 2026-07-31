@@ -68,7 +68,7 @@ from dev_health_ops.api.dev.contracts import (
 )
 
 from . import validators as _validators
-from .base import ContractModelV2, Label, OpaqueID, ShortText, SourceClass
+from .base import ContractModelV2, Label, OpaqueID, ServerHandle, ShortText, SourceClass
 
 __all__ = [
     "DevCoverageV2",
@@ -143,6 +143,7 @@ class DevMetricRefV2(ContractModelV2, DevMetricRef):
 
 
 class DevErrorV2(ContractModelV2, DevError):
+    request_id: ServerHandle
     remediation: tuple[ShortText, ...] = Field(  # type: ignore[assignment]
         default_factory=tuple, max_length=5
     )

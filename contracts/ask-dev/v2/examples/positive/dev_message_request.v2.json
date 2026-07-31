@@ -1,12 +1,12 @@
 {
-  "client_message_id": "message_01",
-  "conversation_id": "conversation_01",
+  "client_message_id": "0f1a2b3c-0007-4a00-8000-000000000001",
+  "conversation_id": "0f1a2b3c-0005-4a00-8000-000000000001",
   "idempotency_key": "idem_01",
   "question": "How is repo_dev_health doing?",
   "question_class_hint": null,
-  "request_id": "request_01",
+  "request_id": "0f1a2b3c-0006-4a00-8000-000000000001",
   "requested_metric_ids": [],
-  "retry_of_run_id": "run_original_01",
+  "retry_of_run_id": "0f1a2b3c-0001-4a00-8000-000000000002",
   "schema_version": "dev_message_request.v2",
   "scope": {
     "comparison_range": null,

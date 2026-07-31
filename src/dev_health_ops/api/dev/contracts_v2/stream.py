@@ -42,7 +42,7 @@ from typing import Annotated, Literal, Self
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from .answer import DevAnswerV2
-from .base import ContractModelV2, OpaqueID, ShortText
+from .base import ContractModelV2, ServerHandle, ShortText
 from .embedded import DevErrorV2
 from .subject import DevResolutionLedger, validate_ledger_extends
 
@@ -78,7 +78,7 @@ class ProgressStateV2(StrEnum):
 
 class DevStreamEventV2(ContractModelV2):
     schema_version: Literal["dev_stream_event.v2"]
-    run_id: OpaqueID
+    run_id: ServerHandle
     sequence: int = Field(ge=0, le=100_000)
     event: StreamEventTypeV2
     occurred_at: AwareDatetime

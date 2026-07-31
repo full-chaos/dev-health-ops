@@ -107,16 +107,23 @@ again — from "any well-shaped token" to "a member of this set":
 * ``schema_version`` and ``public_outcome`` are ``CLOSED_VOCABULARY`` rather
   than ``IDENTIFIER``, which is what they always meant.
 
-That leaves ``frame_id``/``run_id`` (and the answer's ``answer_id``/
-``conversation_id``) as the only ``IDENTIFIER`` cells. They are correlation
-handles: they must exist for the frame/answer/narrative/stream ``run_id``
-closure, they cannot come from a closed set, and they are minted at
-``run.started`` — index 0 of the stream, before subject resolution has run —
-so nothing subject-derived is available to put in them. Making that
-structural rather than circumstantial needs an opaque-handle grammar
-(UUID/ULID) applied uniformly to every outcome, since a run ID is chosen
-before the outcome is known; that is a v2-wide identifier change rather than
-a no-answer projection change, and is left as the one documented residual.
+Round 4 closed the residual round 3 left, and corrected the claim round 3
+made about it. The claim — "only ``frame_id``/``run_id`` remain" — was scoped
+to ``DevAnswerFrame``, and the matching test asserted it against the frame's
+policy table. The answer envelope one level out was never enumerated, so
+``DevAnswerV2.answer_id`` and ``conversation_id`` accepted
+``"private/Nightfall"`` on a denied answer. A partition test certifies
+exactly what it enumerates, and that one enumerated a table rather than the
+object graph the claim was about.
+
+Every correlation handle is now ``base.ServerHandle`` — a canonical
+hyphenated UUID, pinned to what ``models/dev_persistence.py`` already mints
+and what ``orchestrator_persistence`` already parses back — applied
+uniformly across all outcomes, since a run ID is chosen before the outcome is
+known. ``IDENTIFIER`` survives as a policy class, but no field of the
+no-answer envelope uses it: the surviving identifier cells are handles, and
+``test_round4_every_identifier_on_a_denied_envelope_is_an_opaque_handle``
+derives the reachable model set from the policy rather than assuming it.
 
 Narrative fact binding
 ----------------------
@@ -171,6 +178,34 @@ Note what is *not* in the list: ``direct_answer``, ``limitations``,
 round-2 pool, and they are frame-level free text — a number appearing in one
 of them grounds nothing about the sentence citing it. A narrative that wants
 to restate a number must reference the fact carrying it.
+
+Round 4 replaced (b)'s gate. Round 3 decided "does this sentence claim
+completion?" with a five-word regex, and that regex refused truthful
+narration of the frame's own block: "has made 75% progress" and "has passed
+3 of 4 required checks" were both rejected while "finished" passed. An
+over-rejecting guard is a defect, not a safe default — and no fixture caught
+it because every fixture used a word from the list. Lengthening the list is
+the same defect with a longer list, so admission no longer consults
+vocabulary at all. It is decided by **how the sentence writes the number**:
+
+* the completion proportion (rate and its complement) is admitted wherever it
+  carries its unit — ``75%``, ``25%``, or the bare decimals ``0.75``/``0.25``.
+  A proportion with a unit is not a plausible count, so it needs no gate;
+  a bare ``75`` is not admitted by this rule;
+* the counts (numerator, denominator) are admitted only in a sentence that
+  renders the block's own ratio — ``3 of 4``, ``3/4``, ``3 out of 4``. Mere
+  co-occurrence is not enough: "4 open security incidents and 3 unresolved
+  alerts" contains both and grounds neither.
+
+A bare completion count elsewhere stays inadmissible — nothing distinguishes
+"3 required checks passed" from "3 open incidents" — and the escape is the
+same one stated above: reference the fact carrying it.
+
+Vocabulary survives in exactly one place, ``_COMPLETION_CLAIM_STEMS``, used
+only to decide whether a *percentage* must additionally be checked against
+the completion block. That direction is safe: a missing word makes the
+stricter check apply less often, never opens an admission channel — the
+opposite of its round-3 use, where a missing word caused a refusal.
 """
 
 from __future__ import annotations
@@ -794,8 +829,48 @@ _NOT_READY_PHRASE_PATTERN = re.compile(r"\bnot[\s-]+ready\b", re.IGNORECASE)
 _RECOMMENDATION_CLAIM_PATTERN = re.compile(
     r"\brecommend(?:s|ed|ation|ations)?\b", re.IGNORECASE
 )
+#: The **explicit** completion-claim grammar. This is the one place textual
+#: detection survives, and it is used only to decide whether a *percentage* in
+#: a sentence must be checked against the completion block — never to decide
+#: whether a number is admitted (see "Per-sentence numeric admission"). The
+#: asymmetry is what makes a generous list safe here: widening this vocabulary
+#: makes the percentage check apply to *more* sentences, so a missing word can
+#: only ever weaken a check, never open an admission channel.
+_COMPLETION_CLAIM_STEMS = (
+    "complete",
+    "completes",
+    "completed",
+    "completion",
+    "done",
+    "finish",
+    "finishes",
+    "finished",
+    "progress",
+    "progressed",
+    "pass",
+    "passes",
+    "passed",
+    "close",
+    "closes",
+    "closed",
+    "deliver",
+    "delivers",
+    "delivered",
+    "ship",
+    "ships",
+    "shipped",
+    "remaining",
+    "outstanding",
+)
 _COMPLETION_CLAIM_PATTERN = re.compile(
-    r"\b(?:complete|completed|completion|done|finished)\b", re.IGNORECASE
+    r"\b(?:" + "|".join(_COMPLETION_CLAIM_STEMS) + r")\b", re.IGNORECASE
+)
+
+#: The ratio renderings the completion block itself has: ``3 of 4``, ``3/4``,
+#: ``3 out of 4``, ``3 of the 4``. Built per frame from the block's own
+#: numerator and denominator, so it matches only *that* frame's ratio.
+_COMPLETION_RATIO_TEMPLATE = (
+    r"\b{numerator}\s*(?:/|of|out\s+of)\s*(?:the\s+)?{denominator}\b"
 )
 
 
@@ -847,7 +922,34 @@ def _narrative_bound_fact_ids(
     return bound
 
 
-def _completion_value_set(frame: DevAnswerFrame) -> set[float]:
+def _completion_percent_values(frame: DevAnswerFrame) -> set[float]:
+    """The completion proportions, as a sentence would write them with ``%``.
+
+    Both the rate and its complement: "75% complete" and "25% remaining" are
+    equally truthful renderings of the same block.
+    """
+
+    completion = frame.completion
+    if completion is None or completion.rate is None:
+        return set()
+    return {
+        round(completion.rate * 100, 6),
+        round((1 - completion.rate) * 100, 6),
+    }
+
+
+def _completion_decimal_values(frame: DevAnswerFrame) -> set[float]:
+    """The same two proportions written as bare decimals ("0.75", "0.25")."""
+
+    completion = frame.completion
+    if completion is None or completion.rate is None:
+        return set()
+    return {round(completion.rate, 6), round(1 - completion.rate, 6)}
+
+
+def _completion_count_values(frame: DevAnswerFrame) -> set[float]:
+    """The raw numerator and denominator."""
+
     completion = frame.completion
     values: set[float] = set()
     if completion is None:
@@ -856,11 +958,30 @@ def _completion_value_set(frame: DevAnswerFrame) -> set[float]:
         values.add(float(completion.numerator))
     if completion.denominator is not None:
         values.add(float(completion.denominator))
-    if completion.rate is not None:
-        # Both renderings are legitimate: "0.75" and "75%".
-        values.add(round(completion.rate, 6))
-        values.add(round(completion.rate * 100, 6))
     return values
+
+
+def _sentence_cites_completion_ratio(sentence: str, frame: DevAnswerFrame) -> bool:
+    """True when the sentence renders the completion block's own ratio.
+
+    A bare completion count is genuinely ambiguous — nothing distinguishes
+    "3 required checks passed" from "3 open incidents" — so a count is
+    admitted only where the sentence writes the ratio the block actually has
+    ("3 of 4", "3/4", "3 out of 4"). Co-occurrence is deliberately *not*
+    enough: "4 open security incidents and 3 unresolved alerts" contains both
+    integers and grounds neither.
+    """
+
+    completion = frame.completion
+    if completion is None:
+        return False
+    if completion.numerator is None or completion.denominator is None:
+        return False
+    pattern = _COMPLETION_RATIO_TEMPLATE.format(
+        numerator=re.escape(str(completion.numerator)),
+        denominator=re.escape(str(completion.denominator)),
+    )
+    return re.search(pattern, sentence, re.IGNORECASE) is not None
 
 
 def _numeric_values_in(texts: Sequence[str]) -> set[float]:
@@ -921,44 +1042,61 @@ def validate_narrative_numeric_containment(
 ) -> None:
     """(g.1) Bind every narrative numeral to that sentence's own grounding.
 
-    There is no numeric pool shared across the body. Each sentence admits
-    only (a) the numerals of the facts the narrative references, (b) the
-    completion block's values *if that sentence makes a completion claim*,
-    (c) the committed subject's identity numerals, and (d) the values of a
-    comparison whose label that sentence names. See the module docstring's
-    "Per-sentence numeric admission" for why (b) is gated and why the
-    round-2 pool over-accepted and over-rejected simultaneously.
+    There is no numeric pool shared across the body, and — since round 4 — no
+    keyword gate on *admission* either. A number is admitted by how the
+    sentence writes it, not by whether the sentence happens to contain a word
+    from a vocabulary list. Per sentence, a numeral is admitted when it is:
 
-    On top of containment, a sentence using completion vocabulary may only
-    cite a percentage the completion block itself supports, and may not cite
-    one at all when there is no calculable completion block.
+    (a) a numeral in the text of a fact the narrative references;
+    (b) a numeral in the committed subject's canonical identity;
+    (c) a value of a comparison whose label that sentence names;
+    (d) a completion proportion written with its unit — ``75%`` or ``25%``
+        against a 3/4 block — or written as a bare decimal (``0.75``,
+        ``0.25``), which is not a plausible count;
+    (e) the completion numerator or denominator, but *only* in a sentence
+        that renders the block's own ratio (``3 of 4``, ``3/4``).
+
+    A bare completion count in any other position is not admitted: nothing
+    distinguishes "3 required checks passed" from "3 open incidents", so a
+    narrative wanting to cite one must reference the fact that carries it.
+    See the module docstring's "Per-sentence numeric admission".
+
+    On top of containment, a sentence that makes a completion claim (the
+    explicit ``_COMPLETION_CLAIM_STEMS`` grammar) may only cite a percentage
+    the completion block supports or a comparison it names, and may not cite
+    one at all when there is no calculable completion block. That check is the
+    only remaining use of completion vocabulary, and over-inclusion in it is
+    safe by construction — it can only make the check apply more widely.
     """
 
     grounded_values = _referenced_fact_values(narrative, frame) | (
         _subject_identity_values(frame)
     )
-    completion_values = _completion_value_set(frame)
+    percent_values = _completion_percent_values(frame)
+    decimal_values = _completion_decimal_values(frame)
+    count_values = _completion_count_values(frame)
     calculable = frame.completion is not None and frame.completion.calculable
     for sentence in _SENTENCE_SPLIT_PATTERN.split(narrative.body):
         sentence_tokens = _word_tokens(sentence)
-        claims_completion = bool(_COMPLETION_CLAIM_PATTERN.search(sentence))
-        allowed = grounded_values | _sentence_comparison_values(sentence_tokens, frame)
-        if claims_completion:
-            allowed |= completion_values
-        offenders = sorted(
-            {
-                match.group()
-                for match in _NUMERIC_TOKEN_PATTERN.finditer(sentence)
-                if not _value_in(allowed, _numeric_value(match.group()))
-            }
-        )
+        comparison_values = _sentence_comparison_values(sentence_tokens, frame)
+        anywhere = grounded_values | comparison_values
+        if _sentence_cites_completion_ratio(sentence, frame):
+            anywhere = anywhere | count_values
+        offenders: set[str] = set()
+        for match in _NUMERIC_TOKEN_PATTERN.finditer(sentence):
+            raw_token = match.group()
+            value = _numeric_value(raw_token)
+            unit_bound = percent_values if raw_token.endswith("%") else decimal_values
+            if _value_in(anywhere, value) or _value_in(unit_bound, value):
+                continue
+            offenders.add(raw_token)
         if offenders:
             raise ValueError(
-                f"narrative sentence cites number(s) {offenders} that no fact "
-                "it references, no comparison it names, and no completion "
-                "claim it makes supports"
+                f"narrative sentence cites number(s) {sorted(offenders)} that no "
+                "fact it references, no comparison it names, and no completion "
+                "proportion or ratio it renders supports"
             )
-        if not claims_completion:
+        if not _COMPLETION_CLAIM_PATTERN.search(sentence):
             continue
         for match in _PERCENT_TOKEN_PATTERN.finditer(sentence):
             claimed = float(match.group(1))
@@ -967,7 +1105,9 @@ def validate_narrative_numeric_containment(
                     f"narrative claims {claimed}% completion but the frame "
                     "carries no calculable completion block"
                 )
-            if not _value_in(completion_values, claimed):
+            if not _value_in(percent_values, claimed) and not _value_in(
+                comparison_values, claimed
+            ):
                 raise ValueError(
                     f"narrative claims {claimed}% completion, which the frame's "
                     "own completion block does not support"

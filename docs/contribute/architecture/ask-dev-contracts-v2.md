@@ -150,16 +150,34 @@ why the indirection matters for mutation testing:
 
 ## Post-merge hardening (adversarial review, CHAOS-3294)
 
-Three adversarial-review rounds ran against the merged contracts. Round 1
+Four adversarial-review rounds ran against the merged contracts. Round 1
 reproduced six counterexamples the original five validators did not catch.
 Round 2 then bypassed three of those fixes through adjacent variants, and
 found one new gap. Round 3 cleared most of the round-2 closures but narrowed
-three cells that were still open. Because that made repeated rounds on the
-same defect classes, the fixes are deliberately **class closures** rather
-than further patches: each replaces the previous check's polarity or scope,
-and each carries an explicit closure argument -- the partition of the input
-space and why every cell is covered -- recorded in the sections below and
-in the `validators` module docstring.
+three cells that were still open. Round 4 found the last identifier cell one
+level out from where round 3's partition test was looking, and an
+over-rejection introduced by round 3's own fix. Because that made repeated
+rounds on the same defect classes, the fixes are deliberately **class
+closures** rather than further patches: each replaces the previous check's
+polarity or scope, and each carries an explicit closure argument -- the
+partition of the input space and why every cell is covered -- recorded in the
+sections below and in the `validators` module docstring.
+
+Two lessons generalise beyond the individual fixes, and both came from a
+closure being *stated* more broadly than it was *checked*:
+
+* **A partition test certifies exactly what it enumerates.** Round 3's claim
+  ("every field is absent, canonical, closed, or one of two named
+  identifiers") was true of `DevAnswerFrame` and false of the answer envelope
+  that carries it, because the test walked the frame's policy table rather
+  than the object graph. Round 4's version derives the reachable model set and
+  fails if it is not exactly what the claim assumes.
+* **A guard that over-rejects is a defect, not a conservative default.**
+  Round 3 gated completion numbers on a five-word regex; it refused truthful
+  narration of the frame's own completion block. No fixture caught it because
+  every fixture used a word from the list. Tightening is only free when the
+  positive path is tested in the same breath -- hence the paired
+  truthful/false variants in `_COMPLETION_NARRATION_PAIRS`.
 
 The three round-3 cells share one shape, worth naming because it is what the
 earlier closures kept getting wrong: **a constraint on a value's form is not
@@ -282,17 +300,61 @@ covered while doing nothing. Two tests construct objects past validation
 `CLOSED_VOCABULARY` and `IDENTIFIER` layers are each shown to reject on their
 own -- a later widening of an annotation cannot silently reopen the channel.
 
-**Residual.** `frame_id` and `run_id` (and the answer's `answer_id` /
-`conversation_id`) remain `IDENTIFIER`: they are correlation handles, they
-are required for the frame/answer/narrative/stream `run_id` closure, and they
-cannot come from a closed set. Circumstantially they are safe -- a run ID is
-minted at `run.started`, index 0 of the stream, before subject resolution has
-run, so nothing subject-derived exists yet to put in one. Making that
-structural needs an opaque-handle grammar (UUID/ULID) applied **uniformly to
-every outcome**, since the ID is chosen before the outcome is known; a
-no-answer-only grammar would make a legal server behaviour unrepresentable
-depending on how the run ended. That is a v2-wide identifier change rather
-than a no-answer projection change, and is deliberately not made here.
+#### Round 4: the partition was scoped to the frame, and the residual is closed
+
+Round 3 recorded `frame_id` / `run_id` as a residual and asserted its partition
+against `NO_ANSWER_FRAME_FIELD_POLICY`. Review round 4 showed the claim was
+**inaccurate at the envelope level**: `DevAnswerV2.answer_id` and
+`conversation_id` sit one level further out, were never enumerated by the
+partition test, and accepted `"private/Nightfall"` on a denied answer --
+user-visible on the outer envelope, not the frame. A partition test that
+enumerates only part of the object it describes will keep certifying the part
+it looks at.
+
+The residual is now closed rather than re-documented. `base.ServerHandle` is a
+canonical hyphenated UUID, **pinned to what the persistence layer actually
+mints**: every Ask Dev correlation ID in `models/dev_persistence.py` is a
+`GUID` column with `default=uuid.uuid4` (`DevConversation.id` line 45,
+`DevMessage.id`/`client_message_id`/`answer_id` 106-113,
+`DevRun.id`/`request_id`/`retry_of_run_id`/`answer_id` 171-182), the router
+serializes them with `str(...)`, and `orchestrator_persistence.py:149` parses
+`uuid.UUID(answer.answer_id)` on the way back in -- a non-UUID `answer_id` was
+already a runtime failure, so this makes the wire contract state what the
+system already required. Hex digits and hyphens cannot spell a project name.
+
+It is applied **uniformly across every outcome**, deliberately: a run ID is
+minted at `run.started` before the outcome is known, so a grammar that applied
+only to no-answer outcomes would make a legal server behaviour unrepresentable
+depending on how the run ended.
+
+**Scope: which identifiers are handles.** Not every `*_id` is a mint, and
+forcing one grammar on all 66 identifier fields would be wrong -- `entity_id`
+is `repo_dev_health` by design. The families are:
+
+| Family | Grammar | Examples |
+| --- | --- | --- |
+| Server-minted correlation handles | `ServerHandle` (UUID) | `run_id`, `frame_id`, `answer_id`, `conversation_id`, `narrative_id`, `request_id`, `client_message_id`, `retry_of_run_id`, `result_id`, `ledger_id`, `set_id`, `mention_id`, `observation_id` |
+| Provider entity keys | `OpaqueID` -- subject-derived *by design*; `ABSENT` on a no-answer outcome | `entity_id`, `repository_id`, `team_id`, `organization_id` |
+| Intra-document reference keys | `OpaqueID` -- scoped to one document, meaningless outside it; `ABSENT` on a no-answer outcome | `fact_id`, `section_id`, `evidence_ref_id`, `path_id`, `step_id` |
+| Closed vocabularies / registries | enum or token grammar | `intent_id`, `metric_id`, `route_id`, `plan_id`, `rule_id`, `adapter_id` |
+
+**Closure argument (round 4).**
+`test_round4_every_identifier_on_a_denied_envelope_is_an_opaque_handle` walks
+the **answer envelope**, not the frame: it computes which models a no-answer
+outcome can carry by following only fields the policy does not blank (exactly
+`DevAnswerV2`, `DevAnswerFrame`, `DevCoverageV2`), enumerates every identifier
+cell that survives, pins the set to those five, and requires every one to be a
+server handle. There are **no named exceptions left**.
+`test_round4_every_v2_identifier_is_classified` then covers the other 61 cells
+across all outcomes: each must be a handle, a closed vocabulary, a provenance
+token, or named in `_NON_HANDLE_IDENTIFIER_REASONS` with the reason it cannot
+be a mint -- and the reasons table is itself checked against the live models,
+so it cannot name a field that no longer exists.
+
+That enumeration immediately paid for itself: it found
+`DevInvestigationPlan.intent_id` typed as a free `OpaqueID` while
+`DevQuestionIntent.intent_id` was the closed `QuestionIntentID` enum -- the
+same concept with two types, one of them unconstrained. It is now the enum.
 
 ### Immutability is structural, not just `frozen=True`
 
@@ -439,9 +501,12 @@ Each sentence admits exactly:
 | Source | Condition |
 | --- | --- |
 | Numerals in the text of facts the narrative references | always (`referenced_fact_ids`, plus the facts of any `referenced_section_ids`) |
-| The completion block's numerator, denominator and rate | only in a sentence that makes a completion claim |
 | Numerals in the committed subject's canonical identity forms | always -- server-committed, not producer-chosen |
 | A comparison's `current_value` / `comparison_value` | only in a sentence that names that comparison's label |
+| The completion **proportion** -- rate or its complement -- written with its unit (`75%`, `25%`) or as a bare decimal (`0.75`, `0.25`) | always |
+| The completion **counts** -- numerator, denominator | only in a sentence that renders the block's own ratio (`3 of 4`, `3/4`, `3 out of 4`) |
+
+The last two rows are the round-4 revision; see below.
 
 `direct_answer`, `limitations`, `safe_follow_up_questions` and the readiness
 reasons were in the round-2 pool and are **not** in this list: they are
@@ -463,6 +528,62 @@ same completion values, in a completion sentence, still accepted);
 `test_round3_frame_free_text_no_longer_grounds_a_narrative_number`, which
 rejects a number carried only by `limitations` and then accepts the same
 sentence once a fact carrying it is referenced.
+
+#### Round 4: the completion gate was a five-word regex
+
+Round 3 gated admission of completion values on
+`\b(complete|completed|completion|done|finished)\b`. Review round 4 showed
+that gate rejecting truthful narration of the frame's *own* block --
+"Repository dev-health has made 75% progress" and "has passed 3 of 4 required
+checks" were both refused, while "finished" passed. That is over-rejection on
+the positive path, which is worse than the leak it replaced: a validator that
+refuses correct answers makes the feature unusable, and there is no fixture
+that would have caught it, because every fixture used a word from the list.
+
+Lengthening the word list is not a fix -- it is the same defect with a longer
+list, and the next truthful phrasing outside it fails the same way. The gate
+is removed instead. **Admission is now by citation shape, not by vocabulary:**
+
+* the completion **proportion** (the rate and its complement) is admitted
+  wherever it is written *with its unit* -- `75%`, `25%`, or the bare decimals
+  `0.75` / `0.25`. A proportion carrying its unit is not a plausible count, so
+  it needs no gate. A bare `75` is not admitted by this rule.
+* the completion **counts** (numerator, denominator) are admitted only in a
+  sentence that renders the block's own ratio -- `3 of 4`, `3/4`,
+  `3 out of 4`, `3 of the 4`. Mere co-occurrence is deliberately not enough:
+  "4 open security incidents and 3 unresolved alerts" contains both integers
+  and grounds neither, and admitting on co-occurrence would reopen the round-3
+  counterexample.
+
+**Stated limitation, with an escape hatch.** A *bare* completion count in any
+other position is not admitted, because nothing distinguishes "3 required
+checks passed" from "3 open incidents" -- the contract cannot see which one
+the sentence means. A narrative that wants to cite a bare count must reference
+the fact that carries it, which is the same rule already stated for frame free
+text. `test_round4_bare_completion_count_needs_a_referenced_fact` proves both
+halves, so the limitation is not an unqualified refusal.
+
+**Where vocabulary survives, and why that is safe.** One check still needs to
+know whether a sentence makes a completion claim: a percentage that is
+grounded some *other* way (an unrelated fact carrying `100`) must not be
+reusable as a false completion percentage. That check uses an explicit,
+documented grammar (`_COMPLETION_CLAIM_STEMS`: complete/completes/completed/
+completion, done, finish/finishes/finished, progress/progressed, pass/passes/
+passed, close/closes/closed, deliver/delivers/delivered, ship/ships/shipped,
+remaining, outstanding). The asymmetry is the point: this vocabulary only
+decides whether a *stricter* check applies, so a missing word can weaken the
+check but can never open an admission channel -- the opposite of its round-3
+use, where a missing word caused a refusal. A percentage in such a sentence
+must match the completion proportion or a comparison the sentence names.
+
+**Closure argument (round 4).** `_COMPLETION_NARRATION_PAIRS` carries a
+truthful/false pair for each supported verb (progress, passed, closed,
+delivered, remaining) and for the ratio and decimal renderings, asserted in
+both directions against the same 3/4 block, so the fix cannot degenerate into
+"admit any number near a completion word".
+`test_round4_completion_admission_does_not_depend_on_vocabulary` validates a
+sentence containing *no* stem from the grammar and asserts that absence
+explicitly, which is what distinguishes removing the gate from widening it.
 
 **This is not general semantic contradiction detection.** These checks catch
 exactly the pattern-matchable subset of narrative/frame disagreement; an

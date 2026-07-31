@@ -7,7 +7,7 @@
     "occurred_at": "2026-07-28T12:00:00Z",
     "progress": null,
     "resolution_ledger": null,
-    "run_id": "run_01",
+    "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
     "schema_version": "dev_stream_event.v2",
     "sequence": 0,
     "terminal_kind": null,
@@ -21,7 +21,7 @@
       "remediation": [
         "Retry after source health recovers."
       ],
-      "request_id": "request_01",
+      "request_id": "0f1a2b3c-0006-4a00-8000-000000000001",
       "retryable": true,
       "safe_message": "A required source is temporarily unavailable.",
       "schema_version": "dev_error.v1"
@@ -30,7 +30,7 @@
     "occurred_at": "2026-07-28T12:00:00Z",
     "progress": null,
     "resolution_ledger": null,
-    "run_id": "run_01",
+    "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
     "schema_version": "dev_stream_event.v2",
     "sequence": 1,
     "terminal_kind": null,
@@ -44,7 +44,7 @@
       "remediation": [
         "Retry after source health recovers."
       ],
-      "request_id": "request_01",
+      "request_id": "0f1a2b3c-0006-4a00-8000-000000000001",
       "retryable": true,
       "safe_message": "A required source is temporarily unavailable.",
       "schema_version": "dev_error.v1"
@@ -53,7 +53,7 @@
     "occurred_at": "2026-07-28T12:00:00Z",
     "progress": null,
     "resolution_ledger": null,
-    "run_id": "run_01",
+    "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
     "schema_version": "dev_stream_event.v2",
     "sequence": 2,
     "terminal_kind": null,
@@ -67,7 +67,7 @@
     "occurred_at": "2026-07-28T12:00:00Z",
     "progress": null,
     "resolution_ledger": null,
-    "run_id": "run_01",
+    "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
     "schema_version": "dev_stream_event.v2",
     "sequence": 3,
     "terminal_kind": "error",

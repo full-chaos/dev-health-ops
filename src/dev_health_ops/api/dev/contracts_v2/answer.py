@@ -34,7 +34,7 @@ from typing import Literal, Self
 from pydantic import AwareDatetime, model_validator
 
 from . import validators as _validators
-from .base import ContractModelV2, Label, OpaqueID, PublicOutcome
+from .base import ContractModelV2, Label, PublicOutcome, ServerHandle
 from .frame import DevAnswerFrame
 from .narrative import DevNarrative
 
@@ -57,9 +57,9 @@ _OUTCOME_DISPLAY_LABELS: dict[PublicOutcome, str] = {
 
 class DevAnswerV2(ContractModelV2):
     schema_version: Literal["dev_answer.v2"]
-    answer_id: OpaqueID
-    conversation_id: OpaqueID
-    run_id: OpaqueID
+    answer_id: ServerHandle
+    conversation_id: ServerHandle
+    run_id: ServerHandle
     generated_at: AwareDatetime
     public_outcome: PublicOutcome
     outcome_display_label: Label

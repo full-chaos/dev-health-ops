@@ -14,9 +14,9 @@
   "fingerprint": "fp_01",
   "original_mention_count": 2,
   "schema_version": "dev_subject_set.v1",
-  "set_id": "set_01",
+  "set_id": "0f1a2b3c-000a-4a00-8000-000000000001",
   "unresolved_mention_ids": [
-    "mention_02"
+    "0f1a2b3c-0009-4a00-8000-000000000002"
   ],
   "warnings": []
 }

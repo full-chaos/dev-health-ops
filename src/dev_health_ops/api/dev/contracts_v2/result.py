@@ -18,6 +18,7 @@ from .base import (
     ContractModelV2,
     OpaqueID,
     PlatformVersionToken,
+    ServerHandle,
     ShortText,
     SourceClass,
     SourceRequirementState,
@@ -70,7 +71,7 @@ class DevRelationshipPath(ContractModelV2):
 
 class DevSourceObservation(ContractModelV2):
     schema_version: Literal["dev_source_observation.v1"]
-    observation_id: OpaqueID
+    observation_id: ServerHandle
     source_class: SourceClass
     adapter_id: OpaqueID
     requirement_level: RequirementLevel
@@ -120,10 +121,10 @@ class DevSourceObservation(ContractModelV2):
 
 class DevInvestigationResult(ContractModelV2):
     schema_version: Literal["dev_investigation_result.v1"]
-    result_id: OpaqueID
+    result_id: ServerHandle
     plan_id: PlanRegistryID
     plan_version: PlatformVersionToken
-    run_id: OpaqueID
+    run_id: ServerHandle
     subject_set_fingerprint: OpaqueID | None = None
     subject_entity_id: OpaqueID | None = None
     observations: tuple[DevSourceObservation, ...] = Field(min_length=1, max_length=25)

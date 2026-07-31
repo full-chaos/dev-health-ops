@@ -92,7 +92,7 @@ def _relationship_path() -> dict[str, Any]:
 def _mention() -> dict[str, Any]:
     return {
         "schema_version": "dev_subject_mention.v1",
-        "mention_id": "mention_01",
+        "mention_id": "0f1a2b3c-0009-4a00-8000-000000000001",
         "mention_ordinal": 0,
         "original_text_span": "dev-health",
         "requested_entity_kind": "repository",
@@ -103,7 +103,7 @@ def _mention() -> dict[str, Any]:
 def _resolution_entry() -> dict[str, Any]:
     return {
         "entry_ordinal": 0,
-        "mention_id": "mention_01",
+        "mention_id": "0f1a2b3c-0009-4a00-8000-000000000001",
         "outcome": "exact_match",
         "committed_entity_ref": _entity_ref(),
         "candidates": [],
@@ -118,8 +118,8 @@ def _resolution_entry() -> dict[str, Any]:
 def _ledger() -> dict[str, Any]:
     return {
         "schema_version": "dev_resolution_ledger.v1",
-        "ledger_id": "ledger_01",
-        "mention_ids": ["mention_01"],
+        "ledger_id": "0f1a2b3c-0008-4a00-8000-000000000001",
+        "mention_ids": ["0f1a2b3c-0009-4a00-8000-000000000001"],
         "entries": [_resolution_entry()],
         "updated_at": NOW,
     }
@@ -128,7 +128,7 @@ def _ledger() -> dict[str, Any]:
 def _subject_set() -> dict[str, Any]:
     return {
         "schema_version": "dev_subject_set.v1",
-        "set_id": "set_01",
+        "set_id": "0f1a2b3c-000a-4a00-8000-000000000001",
         "entity_kind": "repository",
         "committed_entity_refs": [_entity_ref()],
         "original_mention_count": 1,
@@ -182,7 +182,7 @@ def _plan() -> dict[str, Any]:
 def _source_observation() -> dict[str, Any]:
     return {
         "schema_version": "dev_source_observation.v1",
-        "observation_id": "obs_01",
+        "observation_id": "0f1a2b3c-000c-4a00-8000-000000000001",
         "source_class": "status_change",
         "adapter_id": "status_change_service.v1",
         "requirement_level": "mandatory",
@@ -203,10 +203,10 @@ def _source_observation() -> dict[str, Any]:
 def _investigation_result() -> dict[str, Any]:
     return {
         "schema_version": "dev_investigation_result.v1",
-        "result_id": "result_01",
+        "result_id": "0f1a2b3c-000b-4a00-8000-000000000001",
         "plan_id": "status.entity.v2",
         "plan_version": "status.entity.v2.1",
-        "run_id": "run_01",
+        "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
         "subject_set_fingerprint": None,
         "subject_entity_id": "repo_dev_health",
         "observations": [_source_observation()],
@@ -280,8 +280,8 @@ def _coverage() -> dict[str, Any]:
 def _frame() -> dict[str, Any]:
     return {
         "schema_version": "dev_answer_frame.v1",
-        "frame_id": "frame_01",
-        "run_id": "run_01",
+        "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
+        "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
         "generated_at": NOW,
         "public_outcome": "answered",
         "subject_ref": _entity_ref(),
@@ -312,9 +312,9 @@ def _frame() -> dict[str, Any]:
 def _narrative() -> dict[str, Any]:
     return {
         "schema_version": "dev_narrative.v1",
-        "narrative_id": "narrative_01",
-        "run_id": "run_01",
-        "frame_id": "frame_01",
+        "narrative_id": "0f1a2b3c-0003-4a00-8000-000000000001",
+        "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
+        "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
         "mode": "deterministic_fallback",
         "body": (
             "Repository dev-health is on track, with one required child issue "
@@ -331,9 +331,9 @@ def _narrative() -> dict[str, Any]:
 def _answer() -> dict[str, Any]:
     return {
         "schema_version": "dev_answer.v2",
-        "answer_id": "answer_01",
-        "conversation_id": "conversation_01",
-        "run_id": "run_01",
+        "answer_id": "0f1a2b3c-0004-4a00-8000-000000000001",
+        "conversation_id": "0f1a2b3c-0005-4a00-8000-000000000001",
+        "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
         "generated_at": NOW,
         "public_outcome": "answered",
         "outcome_display_label": "Answered",
@@ -367,11 +367,11 @@ def _intent() -> dict[str, Any]:
 def _message_request() -> dict[str, Any]:
     return {
         "schema_version": "dev_message_request.v2",
-        "request_id": "request_01",
-        "client_message_id": "message_01",
-        "conversation_id": "conversation_01",
+        "request_id": "0f1a2b3c-0006-4a00-8000-000000000001",
+        "client_message_id": "0f1a2b3c-0007-4a00-8000-000000000001",
+        "conversation_id": "0f1a2b3c-0005-4a00-8000-000000000001",
         "idempotency_key": "idem_01",
-        "retry_of_run_id": "run_original_01",
+        "retry_of_run_id": "0f1a2b3c-0001-4a00-8000-000000000002",
         "question": "How is repo_dev_health doing?",
         "scope": _scope(),
         "requested_metric_ids": [],
@@ -616,7 +616,7 @@ def _coverage_source_vocabulary_cases() -> list[tuple[str, dict[str, Any]]]:
 def _stream_started() -> dict[str, Any]:
     return {
         "schema_version": "dev_stream_event.v2",
-        "run_id": "run_01",
+        "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
         "sequence": 0,
         "event": "run.started",
         "occurred_at": NOW,
@@ -633,7 +633,7 @@ def _stream_started() -> dict[str, Any]:
 def _error() -> dict[str, Any]:
     return {
         "schema_version": "dev_error.v1",
-        "request_id": "request_01",
+        "request_id": "0f1a2b3c-0006-4a00-8000-000000000001",
         "code": "source_unavailable",
         "safe_message": "A required source is temporarily unavailable.",
         "retryable": True,
@@ -749,7 +749,9 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     )
     answer_frame_run_id_mismatch = changed(
         "dev_answer.v2",
-        lambda value: value["frame"].__setitem__("run_id", "run_from_a_different_run"),
+        lambda value: value["frame"].__setitem__(
+            "run_id", "0f1a2b3c-0001-4a00-8000-0000000000ff"
+        ),
     )
     answer_narrative_contradicts_number = changed(
         "dev_answer.v2",
@@ -912,7 +914,10 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                 changed(
                     "dev_subject_set.v1",
                     lambda value: (
-                        value.__setitem__("unresolved_mention_ids", ["mention_02"]),
+                        value.__setitem__(
+                            "unresolved_mention_ids",
+                            ["0f1a2b3c-0009-4a00-8000-000000000002"],
+                        ),
                         value.__setitem__("cohort_complete", False),
                         value.__setitem__("original_mention_count", 2),
                     ),
@@ -1109,10 +1114,12 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
     # Codex adversarial review (CHAOS-3294): an `answer.completed` event's
     # embedded answer could carry a different run_id than the event itself.
     mismatched_run_answer = deepcopy(positive_fixtures()["dev_answer.v2"])
-    mismatched_run_answer["run_id"] = "run_from_a_different_run"
-    mismatched_run_answer["frame"]["run_id"] = "run_from_a_different_run"
+    mismatched_run_answer["run_id"] = "0f1a2b3c-0001-4a00-8000-0000000000ff"
+    mismatched_run_answer["frame"]["run_id"] = "0f1a2b3c-0001-4a00-8000-0000000000ff"
     if mismatched_run_answer["narrative"] is not None:
-        mismatched_run_answer["narrative"]["run_id"] = "run_from_a_different_run"
+        mismatched_run_answer["narrative"]["run_id"] = (
+            "0f1a2b3c-0001-4a00-8000-0000000000ff"
+        )
     answer_completed_mismatch = {
         **deepcopy(started),
         "sequence": 1,

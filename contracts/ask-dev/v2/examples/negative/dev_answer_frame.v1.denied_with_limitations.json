@@ -14,7 +14,7 @@
   "evidence": [],
   "facts": [],
   "finding_refs": [],
-  "frame_id": "frame_01",
+  "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
   "generated_at": "2026-07-28T12:00:00Z",
   "health_profile_refs": [],
   "limitations": [
@@ -24,7 +24,7 @@
   "public_outcome": "denied",
   "readiness": null,
   "relationship_paths": [],
-  "run_id": "run_01",
+  "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
   "safe_follow_up_questions": [],
   "schema_version": "dev_answer_frame.v1",
   "sections": [],

@@ -1,6 +1,6 @@
 {
-  "answer_id": "answer_01",
-  "conversation_id": "conversation_01",
+  "answer_id": "0f1a2b3c-0004-4a00-8000-000000000001",
+  "conversation_id": "0f1a2b3c-0005-4a00-8000-000000000001",
   "frame": {
     "comparisons": [],
     "completion": {
@@ -71,7 +71,7 @@
       }
     ],
     "finding_refs": [],
-    "frame_id": "frame_01",
+    "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
     "generated_at": "2026-07-28T12:00:00Z",
     "health_profile_refs": [],
     "limitations": [],
@@ -102,7 +102,7 @@
         "target_entity_id": "status_snapshot_01"
       }
     ],
-    "run_id": "run_01",
+    "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
     "safe_follow_up_questions": [
       "What changed since last week?"
     ],
@@ -124,7 +124,7 @@
           "ev_01"
         ],
         "limitation": null,
-        "observation_id": "obs_01",
+        "observation_id": "0f1a2b3c-000c-4a00-8000-000000000001",
         "observed_at": "2026-07-28T12:00:00Z",
         "observed_state": "available_current",
         "query_version": "status_snapshot.v1",
@@ -173,10 +173,10 @@
   "generated_at": "2026-07-28T12:00:00Z",
   "narrative": {
     "body": "Repository dev-health is on track, with one required child issue still open.",
-    "frame_id": "frame_01",
+    "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
     "generated_at": "2026-07-28T12:00:00Z",
     "mode": "deterministic_fallback",
-    "narrative_id": "narrative_01",
+    "narrative_id": "0f1a2b3c-0003-4a00-8000-000000000001",
     "provider_metadata": null,
     "referenced_fact_ids": [
       "fact_01"
@@ -184,12 +184,12 @@
     "referenced_section_ids": [
       "summary"
     ],
-    "run_id": "run_01",
+    "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
     "schema_version": "dev_narrative.v1",
     "validation_warnings": []
   },
   "outcome_display_label": "Answered",
   "public_outcome": "not_found",
-  "run_id": "run_01",
+  "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
   "schema_version": "dev_answer.v2"
 }

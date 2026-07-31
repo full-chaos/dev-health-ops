@@ -19,6 +19,152 @@
       "title": "AskDevSurfaceRouteID",
       "type": "string"
     },
+    "DevActualCompletion": {
+      "additionalProperties": false,
+      "description": "Server-computed ``actual-completion`` rule result; the LLM explains, never derives, it.",
+      "properties": {
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/DevStatusConflict"
+          },
+          "maxItems": 20,
+          "title": "Conflicts",
+          "type": "array"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "reason_codes": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "required_children": {
+          "items": {
+            "$ref": "#/$defs/DevRequiredChildFact"
+          },
+          "maxItems": 100,
+          "title": "Required Children",
+          "type": "array"
+        },
+        "rule_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "rule_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Rule Version",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "ready",
+            "not_ready",
+            "indeterminate"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "rule_id",
+        "rule_version"
+      ],
+      "title": "DevActualCompletion",
+      "type": "object"
+    },
+    "DevCIFact": {
+      "additionalProperties": false,
+      "properties": {
+        "conclusion": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Conclusion",
+          "type": "string"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required"
+        },
+        "skipped_required_work": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skipped Required Work"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "conclusion",
+        "observed_at"
+      ],
+      "title": "DevCIFact",
+      "type": "object"
+    },
     "DevCitationLink": {
       "additionalProperties": false,
       "properties": {
@@ -108,6 +254,75 @@
         "coverage"
       ],
       "title": "DevDataHealth",
+      "type": "object"
+    },
+    "DevDeploymentFact": {
+      "additionalProperties": false,
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Environment"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "status": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "status",
+        "required",
+        "observed_at"
+      ],
+      "title": "DevDeploymentFact",
       "type": "object"
     },
     "DevDisambiguationCandidate": {
@@ -458,6 +673,12 @@
     "DevGraphEdge": {
       "additionalProperties": false,
       "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
         "evidence_ref_ids": {
           "items": {
             "maxLength": 128,
@@ -468,6 +689,17 @@
           "maxItems": 25,
           "title": "Evidence Ref Ids",
           "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provenance": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
         },
         "relationship": {
           "maxLength": 128,
@@ -494,9 +726,71 @@
       "required": [
         "source_entity_id",
         "relationship",
-        "target_entity_id"
+        "target_entity_id",
+        "provenance",
+        "confidence",
+        "observed_at"
       ],
       "title": "DevGraphEdge",
+      "type": "object"
+    },
+    "DevIncidentFact": {
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "title": "Active",
+          "type": "boolean"
+        },
+        "blocking": {
+          "title": "Blocking",
+          "type": "boolean"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "status": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "status",
+        "active",
+        "blocking",
+        "observed_at"
+      ],
+      "title": "DevIncidentFact",
       "type": "object"
     },
     "DevMetricDefinition": {
@@ -761,6 +1055,130 @@
       "title": "DevMetricRef",
       "type": "object"
     },
+    "DevPullRequestFact": {
+      "additionalProperties": false,
+      "properties": {
+        "changes_requested": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Changes Requested",
+          "type": "integer"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "merged": {
+          "title": "Merged",
+          "type": "boolean"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "review_state": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Review State"
+        },
+        "state": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "state",
+        "changes_requested",
+        "merged",
+        "required",
+        "observed_at"
+      ],
+      "title": "DevPullRequestFact",
+      "type": "object"
+    },
+    "DevRequiredChildFact": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "fact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "status": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Status",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "text",
+        "status"
+      ],
+      "title": "DevRequiredChildFact",
+      "type": "object"
+    },
     "DevScope": {
       "additionalProperties": false,
       "properties": {
@@ -932,6 +1350,92 @@
         "resolved_at"
       ],
       "title": "DevScopeResolution",
+      "type": "object"
+    },
+    "DevSourceHealth": {
+      "additionalProperties": false,
+      "properties": {
+        "freshness": {
+          "$ref": "#/$defs/FreshnessState"
+        },
+        "ref_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Ref Id",
+          "type": "string"
+        },
+        "source_system": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Source System",
+          "type": "string"
+        },
+        "watermark": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Watermark"
+        }
+      },
+      "required": [
+        "ref_id",
+        "source_system",
+        "freshness"
+      ],
+      "title": "DevSourceHealth",
+      "type": "object"
+    },
+    "DevStatusConflict": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Code",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "message": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "warning",
+            "blocking"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "severity"
+      ],
+      "title": "DevStatusConflict",
       "type": "object"
     },
     "DevStatusFact": {
@@ -1115,12 +1619,39 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "actual_completion": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevActualCompletion"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "ci_checks": {
+      "items": {
+        "$ref": "#/$defs/DevCIFact"
+      },
+      "maxItems": 100,
+      "title": "Ci Checks",
+      "type": "array"
+    },
     "data_health": {
       "items": {
         "$ref": "#/$defs/DevDataHealth"
       },
       "maxItems": 25,
       "title": "Data Health",
+      "type": "array"
+    },
+    "deployments": {
+      "items": {
+        "$ref": "#/$defs/DevDeploymentFact"
+      },
+      "maxItems": 100,
+      "title": "Deployments",
       "type": "array"
     },
     "error": {
@@ -1150,6 +1681,14 @@
       "title": "Graph Edges",
       "type": "array"
     },
+    "incidents": {
+      "items": {
+        "$ref": "#/$defs/DevIncidentFact"
+      },
+      "maxItems": 100,
+      "title": "Incidents",
+      "type": "array"
+    },
     "metric_definitions": {
       "items": {
         "$ref": "#/$defs/DevMetricDefinition"
@@ -1164,6 +1703,14 @@
       },
       "maxItems": 12,
       "title": "Metrics",
+      "type": "array"
+    },
+    "pull_requests": {
+      "items": {
+        "$ref": "#/$defs/DevPullRequestFact"
+      },
+      "maxItems": 100,
+      "title": "Pull Requests",
       "type": "array"
     },
     "run_id": {
@@ -1194,6 +1741,14 @@
       "minimum": 0,
       "title": "Serialized Bytes",
       "type": "integer"
+    },
+    "source_health": {
+      "items": {
+        "$ref": "#/$defs/DevSourceHealth"
+      },
+      "maxItems": 25,
+      "title": "Source Health",
+      "type": "array"
     },
     "status": {
       "enum": [

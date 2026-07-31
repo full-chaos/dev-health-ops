@@ -268,7 +268,7 @@
     "metric_definition_version": "ask_dev_metrics.v1",
     "prompt_version": "ask_dev_prompt.v1",
     "query_version": "ask_dev_queries.v1",
-    "tool_contract_version": "ask_dev_tools.v1"
+    "tool_contract_version": "ask_dev_tools.v2"
   },
   "warnings": []
 }

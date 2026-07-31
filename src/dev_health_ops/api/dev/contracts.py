@@ -772,10 +772,90 @@ class DevStatusFact(ContractModel):
     evidence_ref_ids: list[OpaqueID] = Field(min_length=1, max_length=25)
 
 
+class DevPullRequestFact(ContractModel):
+    entity_id: OpaqueID
+    display_label: Label
+    state: OpaqueID
+    review_state: OpaqueID | None = None
+    changes_requested: int = Field(ge=0, le=1_000)
+    merged: bool
+    required: bool
+    observed_at: AwareDatetime
+    evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+
+
+class DevCIFact(ContractModel):
+    entity_id: OpaqueID
+    display_label: Label
+    conclusion: OpaqueID
+    required: bool | None = None
+    skipped_required_work: bool | None = None
+    observed_at: AwareDatetime
+    evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+
+
+class DevDeploymentFact(ContractModel):
+    entity_id: OpaqueID
+    display_label: Label
+    status: OpaqueID
+    environment: OpaqueID | None = None
+    required: bool
+    observed_at: AwareDatetime
+    evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+
+
+class DevIncidentFact(ContractModel):
+    entity_id: OpaqueID
+    display_label: Label
+    status: OpaqueID
+    active: bool
+    blocking: bool
+    observed_at: AwareDatetime
+    evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+
+
+class DevStatusConflict(ContractModel):
+    code: OpaqueID
+    message: ShortText
+    severity: Literal["warning", "blocking"]
+    evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+
+
+class DevRequiredChildFact(ContractModel):
+    fact_id: OpaqueID
+    text: ShortText
+    status: OpaqueID
+    evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+
+
+class DevActualCompletion(ContractModel):
+    """Server-computed ``actual-completion`` rule result; the LLM explains, never derives, it."""
+
+    state: Literal["ready", "not_ready", "indeterminate"]
+    rule_id: OpaqueID
+    rule_version: Version
+    reason_codes: list[OpaqueID] = Field(default_factory=list, max_length=25)
+    required_children: list[DevRequiredChildFact] = Field(
+        default_factory=list, max_length=100
+    )
+    conflicts: list[DevStatusConflict] = Field(default_factory=list, max_length=20)
+    evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+
+
+class DevSourceHealth(ContractModel):
+    ref_id: OpaqueID
+    source_system: OpaqueID
+    freshness: FreshnessState
+    watermark: AwareDatetime | None = None
+
+
 class DevGraphEdge(ContractModel):
     source_entity_id: OpaqueID
     relationship: OpaqueID
     target_entity_id: OpaqueID
+    provenance: ShortText
+    confidence: FiniteFloat = Field(ge=0, le=1)
+    observed_at: AwareDatetime
     evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
 
 
@@ -815,6 +895,14 @@ class DevToolResult(ContractModel):
     metrics: list[DevMetricRef] = Field(default_factory=list, max_length=12)
     evidence: list[DevEvidenceRef] = Field(default_factory=list, max_length=25)
     status_facts: list[DevStatusFact] = Field(default_factory=list, max_length=100)
+    actual_completion: DevActualCompletion | None = None
+    pull_requests: list[DevPullRequestFact] = Field(
+        default_factory=list, max_length=100
+    )
+    ci_checks: list[DevCIFact] = Field(default_factory=list, max_length=100)
+    deployments: list[DevDeploymentFact] = Field(default_factory=list, max_length=100)
+    incidents: list[DevIncidentFact] = Field(default_factory=list, max_length=100)
+    source_health: list[DevSourceHealth] = Field(default_factory=list, max_length=25)
     graph_edges: list[DevGraphEdge] = Field(default_factory=list, max_length=100)
     data_health: list[DevDataHealth] = Field(default_factory=list, max_length=25)
     warnings: list[ShortText] = Field(default_factory=list, max_length=20)
@@ -827,6 +915,41 @@ class DevToolResult(ContractModel):
             raise ValueError("error tool result requires an error envelope")
         if self.status != "error" and self.error is not None:
             raise ValueError("only error tool results may include an error envelope")
+        return self
+
+    @model_validator(mode="after")
+    def validate_evidence_closure(self) -> Self:
+        """Every evidence ID referenced by a fact/edge must be in ``evidence``.
+
+        This is the wire-level guarantee behind CHAOS-3259: a status, change, or
+        graph fact can only cite evidence the model can also expand through
+        ``get_evidence.v1`` in the same tool result.
+        """
+
+        known = {item.evidence_ref_id for item in self.evidence}
+        referenced: set[str] = set()
+        for fact in self.status_facts:
+            referenced.update(fact.evidence_ref_ids)
+        for edge in self.graph_edges:
+            referenced.update(edge.evidence_ref_ids)
+        for pr in self.pull_requests:
+            referenced.update(pr.evidence_ref_ids)
+        for ci in self.ci_checks:
+            referenced.update(ci.evidence_ref_ids)
+        for deployment in self.deployments:
+            referenced.update(deployment.evidence_ref_ids)
+        for incident in self.incidents:
+            referenced.update(incident.evidence_ref_ids)
+        if self.actual_completion is not None:
+            referenced.update(self.actual_completion.evidence_ref_ids)
+            for child in self.actual_completion.required_children:
+                referenced.update(child.evidence_ref_ids)
+            for conflict in self.actual_completion.conflicts:
+                referenced.update(conflict.evidence_ref_ids)
+        if not referenced <= known:
+            raise ValueError(
+                "tool result references evidence IDs missing from its evidence array"
+            )
         return self
 
 

@@ -6,7 +6,7 @@ import hashlib
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -44,13 +44,22 @@ from dev_health_ops.llm.providers.base import DEFAULT_MODEL_BY_PROVIDER
 from dev_health_ops.models.settings import SettingCategory
 
 from .contracts import (
+    DevActualCompletion,
+    DevCIFact,
     DevContractVersions,
     DevDataHealth,
+    DevDeploymentFact,
+    DevEvidenceFlags,
     DevEvidenceRef,
     DevGraphEdge,
+    DevIncidentFact,
     DevMetricDefinition,
+    DevPullRequestFact,
+    DevRequiredChildFact,
     DevScope,
     DevScopeResolution,
+    DevSourceHealth,
+    DevStatusConflict,
     DevStatusFact,
     DevToolRequest,
     DevToolResult,
@@ -68,6 +77,7 @@ from .entitlement import CanonicalAskDevEntitlementAuthorizer
 from .evidence_service import (
     EvidenceAvailability,
     EvidenceExpansionResult,
+    EvidenceRecord,
     EvidenceReferenceSigner,
     EvidenceService,
 )
@@ -91,6 +101,11 @@ from .scope_service import (
 )
 from .status_change_service import (
     ChangeSummaryRequest,
+    CIFact,
+    DeploymentFact,
+    IncidentFact,
+    ObservedChange,
+    PullRequestFact,
     StatusChangeService,
     StatusFact,
     StatusSnapshotRequest,
@@ -100,6 +115,7 @@ from .work_graph_neighbors_service import (
     ALLOWED_RELATIONSHIP_TYPES,
     ClickHouseWorkGraphNeighborSource,
     GraphDirection,
+    WorkGraphNeighborEdge,
     WorkGraphNeighborsRequest,
     WorkGraphNeighborsService,
     WorkGraphRootRef,
@@ -631,6 +647,12 @@ def _tool_result(
     metrics: list[Any] | None = None,
     evidence: list[Any] | None = None,
     status_facts: list[DevStatusFact] | None = None,
+    actual_completion: DevActualCompletion | None = None,
+    pull_requests: list[DevPullRequestFact] | None = None,
+    ci_checks: list[DevCIFact] | None = None,
+    deployments: list[DevDeploymentFact] | None = None,
+    incidents: list[DevIncidentFact] | None = None,
+    source_health: list[DevSourceHealth] | None = None,
     graph_edges: list[DevGraphEdge] | None = None,
     data_health: list[DevDataHealth] | None = None,
     warnings: list[str] | None = None,
@@ -646,6 +668,12 @@ def _tool_result(
         metrics=metrics or [],
         evidence=evidence or [],
         status_facts=status_facts or [],
+        actual_completion=actual_completion,
+        pull_requests=pull_requests or [],
+        ci_checks=ci_checks or [],
+        deployments=deployments or [],
+        incidents=incidents or [],
+        source_health=source_health or [],
         graph_edges=graph_edges or [],
         data_health=data_health or [],
         warnings=(warnings or [])[:20],
@@ -661,14 +689,174 @@ def _status(state: str) -> str:
     return "success"
 
 
-def _fact(value: StatusFact) -> DevStatusFact | None:
-    if not value.evidence_ref_ids:
-        return None
-    return DevStatusFact(
-        fact_id=f"{value.entity_type}:{value.entity_id}",
-        text=f"{value.display_label}: {value.status}",
-        evidence_ref_ids=list(value.evidence_ref_ids)[:25],
+# Every status/change/graph fact is projected as its own addressable evidence
+# unit, minted through the same signer the ``get_evidence.v1`` route verifies
+# against.  This is what makes every evidence ID a status/change/graph fact
+# carries independently expandable, instead of forwarding upstream evidence
+# IDs verbatim (which today are frequently empty — see CHAOS-3259/CHAOS-3261).
+_STATUS_ENTITY_SOURCE_SYSTEM: Mapping[str, str] = {
+    "issue": "work_items",
+    "pull_request": "pull_requests",
+    "work_unit": "work_units",
+    "project": "work_items",
+}
+_CHANGE_CATEGORY_SOURCE_SYSTEM: Mapping[str, str] = {
+    "entity": "work_items",
+    "status": "work_items",
+    # Relationship changes are sourced from work_graph_edges; entity_id for
+    # this category is overridden to the edge_id (see change_summary below)
+    # so the "work_graph" native evidence adapter can actually resolve it.
+    "relationship": "work_graph",
+    "blocker": "work_items",
+    "dependency": "work_items",
+    "pull_request": "pull_requests",
+    "review": "reviews",
+    "ci": "ci_runs",
+    "deployment": "deployments",
+    "incident": "incidents",
+    # No native evidence adapter backs aggregate metric changes; expansion
+    # honestly degrades to "unconfigured" rather than fabricating a match.
+    "metric": "metrics",
+}
+# entity_id is not unique per observed event for these categories (e.g. two
+# status transitions, or two dimension rows of one metric, share one
+# entity_id) -- mint from (entity_id, change_id) instead of entity_id alone
+# so distinct observations never collide onto the same evidence_ref_id.
+_CHANGE_COLLISION_PRONE_CATEGORIES = frozenset({"status", "metric"})
+# ci_acceptance_checks rows carry a "{repo}#ci{run}#check{key}" entity_id;
+# the "ci_runs" adapter only indexes "{repo}#ci{run}". Coarsen to the run so
+# expansion resolves the underlying CI run instead of guaranteed NO_MATCHES.
+_CI_ACCEPTANCE_CHECK_MARKER = "#check"
+# Maps each StatusChangeService blocking-contradiction reason code to the
+# fact category that actually produced it, so a conflict cites only the
+# evidence that contributed to it rather than every category in the result.
+_REASON_CODE_EVIDENCE_CATEGORY: Mapping[str, str] = {
+    "required_child_incomplete": "status_facts",
+    "open_blocker": "status_facts",
+    "required_pull_request_unmerged": "pull_requests",
+    "required_review_unresolved": "pull_requests",
+    "review_changes_requested": "pull_requests",
+    "required_ci_work_skipped": "ci_checks",
+    "required_ci_not_passing": "ci_checks",
+    "required_deployment_not_succeeded": "deployments",
+    "active_blocking_incident": "incidents",
+}
+_STATUS_EVIDENCE_SOURCE_VERSION = "status-snapshot-evidence.v1"
+_CHANGE_EVIDENCE_SOURCE_VERSION = "change-summary-evidence.v1"
+_GRAPH_EVIDENCE_SOURCE_VERSION = "work-graph-evidence.v1"
+# DevToolResult.evidence is capped at 25 entries (contracts.py); status
+# snapshots aggregate six independently-bounded-to-25 categories, so a dense
+# scope can mint far more than 25 unique evidence items. Bound defensively
+# instead of letting pydantic reject the whole result.
+_MAX_RESULT_EVIDENCE = 25
+
+
+def _mint_evidence(
+    signer: EvidenceReferenceSigner,
+    org_id: str,
+    *,
+    source_system: str,
+    source_version: str,
+    entity_type: str,
+    entity_id: str,
+    display_label: str,
+    observed_at: datetime,
+    freshness: FreshnessState,
+    confidence: float = 1.0,
+    valid_entity_ids: Sequence[str] = (),
+    repository_ids: Sequence[str] = (),
+) -> DevEvidenceRef:
+    """Build a signer-issued, ``get_evidence.v1``-expandable evidence reference.
+
+    Unlike ``EvidenceService._to_ref`` (used by search/get_evidence over free
+    text), this mints identity directly from a fact the domain layer already
+    authorized and returned, without a second round trip.
+
+    ``valid_entity_ids``/``repository_ids`` must be bound to the CALLER'S
+    already-authorized request scope (its direct entity ref / repositories),
+    never to the supporting fact's own entity ID: the fact may describe a
+    child, linked PR, CI run, deployment, or incident that was never itself
+    independently scope-resolved, so binding to it would make expansion
+    unauthorized for everything but the direct entity.
+    """
+
+    repository_ids = tuple(repository_ids)
+    record = EvidenceRecord(
+        source_system=source_system,
+        source_version=source_version,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        display_label=display_label,
+        observed_at=observed_at,
+        freshness=freshness,
+        provenance=source_system,
+        confidence=max(0.0, min(1.0, confidence)),
+        repository_ids=repository_ids,
     )
+    return DevEvidenceRef(
+        schema_version="dev_evidence_ref.v1",
+        evidence_ref_id=signer.issue(org_id, record),
+        source_system=source_system,
+        source_version=source_version,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        display_label=(display_label.strip() or "Evidence")[:256],
+        observed_at=observed_at,
+        freshness=freshness,
+        provenance=source_system,
+        confidence=record.confidence,
+        repository_ids=list(repository_ids),
+        valid_entity_ids=list(valid_entity_ids),
+        flags=DevEvidenceFlags(
+            stale=freshness is FreshnessState.STALE,
+            unavailable=freshness is FreshnessState.UNAVAILABLE,
+            untrusted_content=True,
+        ),
+    )
+
+
+def _ci_evidence_identity(entity_id: str) -> str:
+    return entity_id.split(_CI_ACCEPTANCE_CHECK_MARKER, 1)[0]
+
+
+def _scope_evidence_binding(scope: DevScope) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return (valid_entity_ids, repository_ids) bound to the request's own
+    already-authorized direct scope -- never to a supporting fact's ID."""
+
+    valid_entity_ids = tuple(item.entity_id for item in scope.entity_refs)
+    repository_ids = tuple(scope.repositories)
+    return valid_entity_ids, repository_ids
+
+
+def _bounded_result_evidence(
+    minted: Mapping[str, DevEvidenceRef],
+    *,
+    priority_ids: Sequence[str] = (),
+    limit: int = _MAX_RESULT_EVIDENCE,
+) -> tuple[set[str], bool]:
+    """Bound minted evidence to ``limit``, keeping verdict-driving evidence first.
+
+    ``priority_ids`` should cover the declared fact, every required child,
+    and every fact that contributed a blocking reason code -- the evidence
+    the deterministic verdict actually depends on. Only once that is
+    satisfied do arbitrary (alphabetically ordered, for determinism)
+    remaining facts fill the rest of the budget. Without this, a dense scope
+    could truncate away exactly the evidence the model needs to explain
+    *why* the declared/actual states disagree while the verdict itself
+    (computed upstream, before truncation) is left unchanged and unexplained.
+    """
+
+    if len(minted) <= limit:
+        return set(minted), False
+    kept: list[str] = []
+    seen: set[str] = set()
+    for evidence_id in (*priority_ids, *sorted(minted)):
+        if len(kept) >= limit:
+            break
+        if evidence_id in minted and evidence_id not in seen:
+            seen.add(evidence_id)
+            kept.append(evidence_id)
+    return set(kept), True
 
 
 def _work_graph_roots(scope: DevScope) -> tuple[WorkGraphRootRef, ...]:
@@ -726,10 +914,11 @@ async def _assemble_production_runtime(
         raise DevRuntimeUnavailable(
             "provider_not_configured", "Ask Dev evidence signing is unavailable."
         )
+    evidence_signer = EvidenceReferenceSigner(secret)
     evidence_service = EvidenceService(
         entitlement=entitlement,
         authorizer=scope_service,
-        signer=EvidenceReferenceSigner(secret),
+        signer=evidence_signer,
         native_adapters=native_evidence_adapters(clickhouse),
         acr_adapter=None,
     )
@@ -812,19 +1001,374 @@ async def _assemble_production_runtime(
             warnings=list(result.warnings),
         )
 
+    def status_source_system(entity_type: str) -> str:
+        return _STATUS_ENTITY_SOURCE_SYSTEM.get(entity_type, "work_items")
+
+    def mint_status_evidence(
+        fact: StatusFact,
+        freshness_by_ref: Mapping[str, FreshnessState],
+        *,
+        valid_entity_ids: Sequence[str],
+        repository_ids: Sequence[str],
+    ) -> DevEvidenceRef:
+        return _mint_evidence(
+            evidence_signer,
+            org_id,
+            source_system=status_source_system(fact.entity_type),
+            source_version=_STATUS_EVIDENCE_SOURCE_VERSION,
+            entity_type=fact.entity_type,
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            observed_at=fact.observed_at,
+            freshness=freshness_by_ref.get(fact.source_ref_id, FreshnessState.UNKNOWN),
+            valid_entity_ids=valid_entity_ids,
+            repository_ids=repository_ids,
+        )
+
+    def mint_delivery_evidence(
+        *,
+        source_system: str,
+        entity_type: str,
+        entity_id: str,
+        display_label: str,
+        observed_at: datetime,
+        source_ref_id: str,
+        freshness_by_ref: Mapping[str, FreshnessState],
+        valid_entity_ids: Sequence[str],
+        repository_ids: Sequence[str],
+        source_version: str = _STATUS_EVIDENCE_SOURCE_VERSION,
+    ) -> DevEvidenceRef:
+        return _mint_evidence(
+            evidence_signer,
+            org_id,
+            source_system=source_system,
+            source_version=source_version,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            display_label=display_label,
+            observed_at=observed_at,
+            freshness=freshness_by_ref.get(source_ref_id, FreshnessState.UNKNOWN),
+            valid_entity_ids=valid_entity_ids,
+            repository_ids=repository_ids,
+        )
+
     async def status_snapshot(context, request):
         result = await status_service.status_snapshot(
             org_id,
             context.permission_fingerprint,
             StatusSnapshotRequest(scope=request.scope, max_items=request.limit),
         )
-        values = [result.declared, *result.children, *result.blockers]
-        facts = [item for value in values if value and (item := _fact(value))]
+        freshness_by_ref: dict[str, FreshnessState] = {
+            ref.ref_id: ref.freshness for ref in result.source_refs
+        }
+        scope_valid_entity_ids, scope_repository_ids = _scope_evidence_binding(
+            request.scope
+        )
+        minted: dict[str, DevEvidenceRef] = {}
+
+        def wire_status_fact(fact: StatusFact) -> DevStatusFact:
+            ref = mint_status_evidence(
+                fact,
+                freshness_by_ref,
+                valid_entity_ids=scope_valid_entity_ids,
+                repository_ids=scope_repository_ids,
+            )
+            minted[ref.evidence_ref_id] = ref
+            return DevStatusFact(
+                fact_id=f"{fact.entity_type}:{fact.entity_id}",
+                text=f"{fact.display_label}: {fact.status}",
+                evidence_ref_ids=[ref.evidence_ref_id],
+            )
+
+        def wire_required_child(fact: StatusFact) -> DevRequiredChildFact:
+            ref = mint_status_evidence(
+                fact,
+                freshness_by_ref,
+                valid_entity_ids=scope_valid_entity_ids,
+                repository_ids=scope_repository_ids,
+            )
+            minted[ref.evidence_ref_id] = ref
+            return DevRequiredChildFact(
+                fact_id=f"{fact.entity_type}:{fact.entity_id}",
+                text=fact.display_label,
+                status=fact.status,
+                evidence_ref_ids=[ref.evidence_ref_id],
+            )
+
+        def wire_pull_request(fact: PullRequestFact) -> DevPullRequestFact:
+            ref = mint_delivery_evidence(
+                source_system="pull_requests",
+                entity_type="pull_request",
+                entity_id=fact.entity_id,
+                display_label=fact.display_label,
+                observed_at=fact.observed_at,
+                source_ref_id=fact.source_ref_id,
+                freshness_by_ref=freshness_by_ref,
+                valid_entity_ids=scope_valid_entity_ids,
+                repository_ids=scope_repository_ids,
+            )
+            minted[ref.evidence_ref_id] = ref
+            return DevPullRequestFact(
+                entity_id=fact.entity_id,
+                display_label=fact.display_label,
+                state=fact.state,
+                review_state=fact.review_state,
+                changes_requested=fact.changes_requested,
+                merged=fact.merged,
+                required=fact.required,
+                observed_at=fact.observed_at,
+                evidence_ref_ids=[ref.evidence_ref_id],
+            )
+
+        def wire_ci(fact: CIFact) -> DevCIFact:
+            # ci_acceptance_checks IDs carry a "#check{key}" suffix the
+            # ci_runs adapter does not index; coarsen the LOOKUP identity to
+            # the run so expansion resolves real content instead of
+            # NO_MATCHES. Multiple distinct checks on one run would then
+            # mint the same evidence_ref_id -- discriminate the SIGNED
+            # identity via source_version (not entity_id) instead, so each
+            # check still gets its own evidence_ref_id while expansion still
+            # targets the real run.
+            lookup_entity_id = _ci_evidence_identity(fact.entity_id)
+            source_version = (
+                f"{_STATUS_EVIDENCE_SOURCE_VERSION}:{fact.entity_id}"
+                if lookup_entity_id != fact.entity_id
+                else _STATUS_EVIDENCE_SOURCE_VERSION
+            )
+            ref = mint_delivery_evidence(
+                source_system="ci_runs",
+                entity_type="ci_run",
+                entity_id=lookup_entity_id,
+                display_label=fact.display_label,
+                observed_at=fact.observed_at,
+                source_ref_id=fact.source_ref_id,
+                freshness_by_ref=freshness_by_ref,
+                valid_entity_ids=scope_valid_entity_ids,
+                repository_ids=scope_repository_ids,
+                source_version=source_version,
+            )
+            minted[ref.evidence_ref_id] = ref
+            return DevCIFact(
+                entity_id=fact.entity_id,
+                display_label=fact.display_label,
+                conclusion=fact.conclusion,
+                required=fact.required,
+                skipped_required_work=fact.skipped_required_work,
+                observed_at=fact.observed_at,
+                evidence_ref_ids=[ref.evidence_ref_id],
+            )
+
+        def wire_deployment(fact: DeploymentFact) -> DevDeploymentFact:
+            ref = mint_delivery_evidence(
+                source_system="deployments",
+                entity_type="deployment",
+                entity_id=fact.entity_id,
+                display_label=fact.display_label,
+                observed_at=fact.observed_at,
+                source_ref_id=fact.source_ref_id,
+                freshness_by_ref=freshness_by_ref,
+                valid_entity_ids=scope_valid_entity_ids,
+                repository_ids=scope_repository_ids,
+            )
+            minted[ref.evidence_ref_id] = ref
+            return DevDeploymentFact(
+                entity_id=fact.entity_id,
+                display_label=fact.display_label,
+                status=fact.status,
+                environment=fact.environment,
+                required=fact.required,
+                observed_at=fact.observed_at,
+                evidence_ref_ids=[ref.evidence_ref_id],
+            )
+
+        def wire_incident(fact: IncidentFact) -> DevIncidentFact:
+            ref = mint_delivery_evidence(
+                source_system="incidents",
+                entity_type="incident",
+                entity_id=fact.entity_id,
+                display_label=fact.display_label,
+                observed_at=fact.observed_at,
+                source_ref_id=fact.source_ref_id,
+                freshness_by_ref=freshness_by_ref,
+                valid_entity_ids=scope_valid_entity_ids,
+                repository_ids=scope_repository_ids,
+            )
+            minted[ref.evidence_ref_id] = ref
+            return DevIncidentFact(
+                entity_id=fact.entity_id,
+                display_label=fact.display_label,
+                status=fact.status,
+                active=fact.active,
+                blocking=fact.blocking,
+                observed_at=fact.observed_at,
+                evidence_ref_ids=[ref.evidence_ref_id],
+            )
+
+        status_facts = [
+            wire_status_fact(fact)
+            for fact in (
+                ([result.declared] if result.declared else [])
+                + list(result.children)
+                + list(result.blockers)
+            )
+        ]
+        pull_requests = [wire_pull_request(fact) for fact in result.pull_requests]
+        ci_checks = [wire_ci(fact) for fact in result.ci]
+        deployments = [wire_deployment(fact) for fact in result.deployments]
+        incidents = [wire_incident(fact) for fact in result.incidents]
+        required_children = [
+            wire_required_child(fact) for fact in result.actual.required_children
+        ]
+
+        # DevToolResult.evidence caps at 25 entries; a dense scope can mint
+        # far more across six independently-bounded categories. Bound the
+        # evidence set FIRST, prioritizing the declared fact, every required
+        # child, and every fact that produced a blocking reason code -- the
+        # evidence the deterministic verdict actually depends on -- then
+        # drop cut IDs from every fact that referenced one (entire
+        # status_facts if that empties their required evidence, or just the
+        # ID from the optional-evidence categories), so the result stays
+        # internally consistent instead of the whole tool call failing
+        # pydantic's list-length validation, AND so truncation preferentially
+        # sheds incidental facts rather than the ones explaining the verdict.
+        pre_truncation_categories: Mapping[str, Sequence[Any]] = {
+            "status_facts": status_facts,
+            "pull_requests": pull_requests,
+            "ci_checks": ci_checks,
+            "deployments": deployments,
+            "incidents": incidents,
+        }
+        contributing_categories = {
+            _REASON_CODE_EVIDENCE_CATEGORY[code]
+            for code in result.actual.reason_codes
+            if code in _REASON_CODE_EVIDENCE_CATEGORY
+        }
+        priority_ids = [
+            *(status_facts[0].evidence_ref_ids if result.declared else []),
+            *(
+                evidence_id
+                for fact in required_children
+                for evidence_id in fact.evidence_ref_ids
+            ),
+            *(
+                evidence_id
+                for category in contributing_categories
+                for item in pre_truncation_categories[category]
+                for evidence_id in item.evidence_ref_ids
+            ),
+        ]
+        kept_evidence_ids, truncated = _bounded_result_evidence(
+            minted, priority_ids=priority_ids
+        )
+        warnings = list(result.warnings)
+        if truncated:
+            warnings.append("status_snapshot_evidence_result_truncated")
+
+        def _kept(evidence_ref_ids: Sequence[str]) -> list[str]:
+            return [item for item in evidence_ref_ids if item in kept_evidence_ids]
+
+        filtered_status_facts = []
+        for fact in status_facts:
+            kept = _kept(fact.evidence_ref_ids)
+            if kept:
+                filtered_status_facts.append(
+                    fact.model_copy(update={"evidence_ref_ids": kept})
+                )
+        if len(filtered_status_facts) != len(status_facts):
+            warnings.append("status_fact_evidence_truncated")
+        status_facts = filtered_status_facts
+        pull_requests = [
+            fact.model_copy(update={"evidence_ref_ids": _kept(fact.evidence_ref_ids)})
+            for fact in pull_requests
+        ]
+        ci_checks = [
+            fact.model_copy(update={"evidence_ref_ids": _kept(fact.evidence_ref_ids)})
+            for fact in ci_checks
+        ]
+        deployments = [
+            fact.model_copy(update={"evidence_ref_ids": _kept(fact.evidence_ref_ids)})
+            for fact in deployments
+        ]
+        incidents = [
+            fact.model_copy(update={"evidence_ref_ids": _kept(fact.evidence_ref_ids)})
+            for fact in incidents
+        ]
+        required_children = [
+            fact.model_copy(update={"evidence_ref_ids": _kept(fact.evidence_ref_ids)})
+            for fact in required_children
+        ]
+
+        category_facts: Mapping[str, Sequence[Any]] = {
+            "status_facts": status_facts,
+            "pull_requests": pull_requests,
+            "ci_checks": ci_checks,
+            "deployments": deployments,
+            "incidents": incidents,
+        }
+        aggregate_evidence_ids = sorted(
+            {
+                evidence_id
+                for group in category_facts.values()
+                for item in group
+                for evidence_id in item.evidence_ref_ids
+            }
+        )[:25]
+        # ``contributing_categories`` is unchanged by truncation (it only
+        # depends on which reason codes fired); reuse it, but recompute the
+        # evidence from the post-truncation ``category_facts`` so a conflict
+        # never cites evidence that didn't survive the bound. If truncation
+        # cut every fact that actually produced this conflict, leave its
+        # evidence empty (permitted -- DevStatusConflict has no minimum)
+        # rather than falling back to an unrelated aggregate: an honestly
+        # under-evidenced conflict is better than a misleadingly-grounded one.
+        conflict_evidence_ids = sorted(
+            {
+                evidence_id
+                for category in contributing_categories
+                for item in category_facts[category]
+                for evidence_id in item.evidence_ref_ids
+            }
+        )[:25]
+        conflicts = [
+            DevStatusConflict(
+                code=conflict.code,
+                message=conflict.message,
+                severity=conflict.severity.value,
+                evidence_ref_ids=conflict_evidence_ids,
+            )
+            for conflict in result.actual.conflicts
+        ]
+        actual_completion = DevActualCompletion(
+            state=result.actual.state.value,
+            rule_id=result.actual.rule_id,
+            rule_version=result.actual.rule_version,
+            reason_codes=list(result.actual.reason_codes)[:25],
+            required_children=required_children,
+            conflicts=conflicts,
+            evidence_ref_ids=aggregate_evidence_ids,
+        )
+        source_health = [
+            DevSourceHealth(
+                ref_id=ref.ref_id,
+                source_system=ref.source_system,
+                freshness=ref.freshness,
+                watermark=ref.watermark,
+            )
+            for ref in result.source_refs
+        ]
+        evidence_by_id.update({key: minted[key] for key in kept_evidence_ids})
         return _tool_result(
             request,
             status=_status(result.state.value),
-            status_facts=facts,
-            warnings=list(result.warnings),
+            status_facts=status_facts,
+            actual_completion=actual_completion,
+            pull_requests=pull_requests,
+            ci_checks=ci_checks,
+            deployments=deployments,
+            incidents=incidents,
+            source_health=source_health,
+            evidence=[minted[key] for key in sorted(kept_evidence_ids)],
+            warnings=warnings,
         )
 
     async def change_summary(context, request):
@@ -847,22 +1391,97 @@ async def _assemble_production_runtime(
                 max_items=request.limit,
             ),
         )
-        facts = [
-            DevStatusFact(
-                fact_id=item.change_id,
-                text=(
-                    f"{item.display_label}: {item.before or 'unknown'} -> "
-                    f"{item.after or 'unknown'}"
-                ),
-                evidence_ref_ids=list(item.evidence_ref_ids)[:25],
+        freshness_by_ref: dict[str, FreshnessState] = {
+            ref.ref_id: ref.freshness for ref in result.source_refs
+        }
+        scope_valid_entity_ids, scope_repository_ids = _scope_evidence_binding(
+            request.scope
+        )
+
+        def change_freshness(item: ObservedChange) -> FreshnessState:
+            for ref_id in item.source_ref_ids:
+                freshness = freshness_by_ref.get(ref_id)
+                if freshness is not None:
+                    return freshness
+            return FreshnessState.UNKNOWN
+
+        def change_evidence_identity(item: ObservedChange) -> tuple[str, str, str]:
+            """Return (source_system, lookup_entity_id, source_version).
+
+            ``item.entity_id`` is already the adapter-matching locator for
+            most categories (status/pull_request/incident all resolve to a
+            real row) -- it must reach the minted ref UNCHANGED so expansion
+            can still resolve real content. It is NOT event-unique for
+            status transitions or per-dimension metric rows, though: two
+            observations of the same entity would otherwise collide onto one
+            evidence_ref_id. Discriminate those through ``source_version``
+            instead of corrupting the lookup entity_id -- the native
+            adapters never filter on source_version, only on entity_id/
+            scope, so this keeps both collision-freedom AND expandability.
+            Relationship changes are sourced from work_graph_edges;
+            ``change_id`` there *is* the edge_id the "work_graph" adapter
+            indexes, and is already unique per edge.
+            """
+
+            category = item.category.value
+            source_system = _CHANGE_CATEGORY_SOURCE_SYSTEM.get(category, "work_items")
+            if category == "relationship":
+                return source_system, item.change_id, _CHANGE_EVIDENCE_SOURCE_VERSION
+            if category in _CHANGE_COLLISION_PRONE_CATEGORIES:
+                return (
+                    source_system,
+                    item.entity_id,
+                    f"{_CHANGE_EVIDENCE_SOURCE_VERSION}:{item.change_id}",
+                )
+            return source_system, item.entity_id, _CHANGE_EVIDENCE_SOURCE_VERSION
+
+        minted: dict[str, DevEvidenceRef] = {}
+        facts: list[DevStatusFact] = []
+        for item in result.changes:
+            source_system, lookup_entity_id, source_version = change_evidence_identity(
+                item
             )
-            for item in result.changes
-            if item.evidence_ref_ids
+            ref = _mint_evidence(
+                evidence_signer,
+                org_id,
+                source_system=source_system,
+                source_version=source_version,
+                entity_type=item.entity_type,
+                entity_id=lookup_entity_id,
+                display_label=item.display_label,
+                observed_at=item.observed_at,
+                freshness=change_freshness(item),
+                confidence=item.confidence if item.confidence is not None else 1.0,
+                valid_entity_ids=scope_valid_entity_ids,
+                repository_ids=scope_repository_ids,
+            )
+            minted[ref.evidence_ref_id] = ref
+            facts.append(
+                DevStatusFact(
+                    fact_id=item.change_id,
+                    text=(
+                        f"{item.display_label}: {item.before or 'unknown'} -> "
+                        f"{item.after or 'unknown'}"
+                    ),
+                    evidence_ref_ids=[ref.evidence_ref_id],
+                )
+            )
+        source_health = [
+            DevSourceHealth(
+                ref_id=ref.ref_id,
+                source_system=ref.source_system,
+                freshness=ref.freshness,
+                watermark=ref.watermark,
+            )
+            for ref in result.source_refs
         ]
+        evidence_by_id.update(minted)
         return _tool_result(
             request,
             status=_status(result.state.value),
             status_facts=facts,
+            source_health=source_health,
+            evidence=list(minted.values()),
             warnings=list(result.warnings),
         )
 
@@ -883,19 +1502,47 @@ async def _assemble_production_runtime(
                 limit=request.limit,
             ),
         )
-        edges = [
-            DevGraphEdge(
+        scope_valid_entity_ids, scope_repository_ids = _scope_evidence_binding(
+            request.scope
+        )
+        minted: dict[str, DevEvidenceRef] = {}
+
+        def wire_edge(item: WorkGraphNeighborEdge) -> DevGraphEdge:
+            ref = _mint_evidence(
+                evidence_signer,
+                org_id,
+                source_system="work_graph",
+                source_version=_GRAPH_EVIDENCE_SOURCE_VERSION,
+                entity_type="work_graph_edge",
+                entity_id=item.edge_id,
+                display_label=(
+                    f"{item.source_type}:{item.source_id} {item.relationship_type} "
+                    f"{item.target_type}:{item.target_id}"
+                ),
+                observed_at=item.observed_at,
+                freshness=FreshnessState.UNKNOWN,
+                valid_entity_ids=scope_valid_entity_ids,
+                repository_ids=scope_repository_ids,
+                confidence=item.confidence,
+            )
+            minted[ref.evidence_ref_id] = ref
+            return DevGraphEdge(
                 source_entity_id=item.source_id,
                 relationship=item.relationship_type,
                 target_entity_id=item.target_id,
-                evidence_ref_ids=[],
+                provenance=(item.provenance.strip() or "persisted")[:2_048],
+                confidence=max(0.0, min(1.0, item.confidence)),
+                observed_at=item.observed_at,
+                evidence_ref_ids=[ref.evidence_ref_id],
             )
-            for item in result.edges
-        ]
+
+        edges = [wire_edge(item) for item in result.edges]
+        evidence_by_id.update(minted)
         return _tool_result(
             request,
             status=_status(result.state.value),
             graph_edges=edges,
+            evidence=list(minted.values()),
             warnings=list(result.warnings),
         )
 

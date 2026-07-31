@@ -1,72 +1,9 @@
 {
-  "answer_id": "answer_01",
-  "as_of": "2026-07-28T12:00:00Z",
-  "claims": [
-    {
-      "claim_id": "claim_01",
-      "confidence": 1.0,
-      "evidence_ref_ids": [
-        "ev_01"
-      ],
-      "flags": {
-        "conflicting": false,
-        "stale": false,
-        "uncertain": false,
-        "untrusted_source": false
-      },
-      "kind": "observed",
-      "metric_ref_ids": [
-        "metric_01"
-      ],
-      "recommendation_rule_version": null,
-      "schema_version": "dev_claim.v1",
-      "text": "Twelve work items completed in the selected period.",
-      "validity_scope": {
-        "comparison_range": {
-          "end": "2026-06-28T00:00:00Z",
-          "start": "2026-05-29T00:00:00Z",
-          "timezone": "America/Los_Angeles"
-        },
-        "direct_scope": "repository",
-        "entity_refs": [],
-        "organization_id": "org_fullchaos",
-        "repositories": [
-          "repo_dev_health"
-        ],
-        "schema_version": "dev_scope.v1",
-        "surface_context": {
-          "entity_refs": [
-            {
-              "display_label": "Selected repository",
-              "entity_id": "repo_dev_health",
-              "entity_type": "repository",
-              "repository_id": null
-            }
-          ],
-          "filter_fingerprint": "filters_01",
-          "route_id": "diagnose_overview"
-        },
-        "team_ids": [
-          "team_platform"
-        ],
-        "time_range": {
-          "end": "2026-07-28T00:00:00Z",
-          "start": "2026-06-28T00:00:00Z",
-          "timezone": "America/Los_Angeles"
-        }
-      }
-    }
-  ],
-  "conflicts": [],
-  "conversation_id": "conversation_01",
-  "coverage": {
-    "as_of": "2026-07-28T12:00:00Z",
-    "available_source_count": 1,
-    "required_source_count": 1,
-    "stale_required_sources": [],
-    "unavailable_required_sources": []
-  },
-  "direct_summary": "Twelve work items completed in the selected period.",
+  "actual_completion": null,
+  "ci_checks": [],
+  "data_health": [],
+  "deployments": [],
+  "error": null,
   "evidence": [
     {
       "citation_text": "The contract implementation remains in progress.",
@@ -102,7 +39,30 @@
       ]
     }
   ],
-  "generated_at": "2026-07-28T12:00:00Z",
+  "graph_edges": [],
+  "incidents": [],
+  "metric_definitions": [
+    {
+      "definition_version": "items_completed.v1",
+      "description": "Completed work items in the selected window.",
+      "freshness_policy": "work_item_metrics_daily.daily.v1",
+      "label": "Items completed",
+      "metric_id": "items_completed",
+      "supported_dimensions": [
+        "repository"
+      ],
+      "supported_scopes": [
+        "organization",
+        "project",
+        "work_unit"
+      ],
+      "supported_time_grains": [
+        "window",
+        "day"
+      ],
+      "unit": "items"
+    }
+  ],
   "metrics": [
     {
       "aggregation": "count",
@@ -172,12 +132,10 @@
       "value": 12
     }
   ],
-  "model": {
-    "model_fingerprint": "model_certified_01",
-    "provider_family": "openai_compatible",
-    "provider_source": "platform"
-  },
-  "resolved_scope": {
+  "pull_requests": [],
+  "run_id": "run_01",
+  "schema_version": "dev_tool_result.v1",
+  "scope_resolution": {
     "authorized_entity_ids": [],
     "authorized_repository_ids": [
       "repo_dev_health"
@@ -229,7 +187,9 @@
       "direct_scope": "repository",
       "entity_refs": [],
       "organization_id": "org_fullchaos",
-      "repositories": [],
+      "repositories": [
+        "repo_dev_health"
+      ],
       "schema_version": "dev_scope.v1",
       "surface_context": {
         "entity_refs": [
@@ -255,16 +215,19 @@
     "schema_version": "dev_scope_resolution.v1",
     "warnings": []
   },
-  "schema_version": "dev_answer.v1",
-  "status": "complete",
-  "suggested_follow_up_questions": [
-    "What changed from the previous period?"
+  "serialized_bytes": 4096,
+  "source_health": [],
+  "status": "success",
+  "status_facts": [
+    {
+      "evidence_ref_ids": [
+        "ev_not_in_evidence_array"
+      ],
+      "fact_id": "issue:item_02",
+      "text": "Child issue: open"
+    }
   ],
-  "versions": {
-    "metric_definition_version": "ask_dev_metrics.v1",
-    "prompt_version": "ask_dev_prompt.v1",
-    "query_version": "ask_dev_queries.v1",
-    "tool_contract_version": "ask_dev_tools.v2"
-  },
+  "tool_call_id": "tool_call_01",
+  "tool_id": "query_metric.v1",
   "warnings": []
 }

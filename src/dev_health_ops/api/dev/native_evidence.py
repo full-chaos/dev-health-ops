@@ -376,6 +376,47 @@ _SPECS: dict[str, _SourceSpec] = {
         ORDER BY i.last_synced DESC LIMIT 1
         """,
     ),
+    "work_graph": _SourceSpec(
+        "work_graph",
+        _COMMON_KINDS
+        | {
+            EntityKind.PROJECT,
+            EntityKind.WORK_UNIT,
+            EntityKind.ISSUE,
+            EntityKind.PULL_REQUEST,
+        },
+        f"""
+        SELECT edge_id AS entity_id,
+               concat(source_type, ' ', edge_type, ' ', target_type) AS display_label,
+               concat('Edge from ', source_id, ' to ', target_id) AS excerpt,
+               ifNull(provenance, 'persisted') AS provenance,
+               discovered_at AS observed_at, last_synced,
+               ifNull(toString(repo_id), '') AS repository_id,
+               '' AS source_url, 0 AS deleted, ifNull(confidence, 1.0) AS confidence
+        FROM work_graph_edges FINAL
+        WHERE org_id = {{org_id:String}}
+          AND discovered_at >= {{start:DateTime64(3, 'UTC')}}
+          AND discovered_at < {{end:DateTime64(3, 'UTC')}}
+          AND ({_search_predicate(("edge_id", "source_id", "target_id", "edge_type"))})
+          AND (empty({{repository_ids:Array(String)}}) OR toString(repo_id) IN {{repository_ids:Array(String)}})
+          AND ({{entity_id:String}} = '' OR edge_id = {{entity_id:String}})
+        ORDER BY discovered_at DESC, edge_id
+        LIMIT {{limit:UInt32}}
+        """,
+        """
+        SELECT edge_id AS entity_id,
+               concat(source_type, ' ', edge_type, ' ', target_type) AS display_label,
+               concat('Edge from ', source_id, ' to ', target_id) AS excerpt,
+               ifNull(provenance, 'persisted') AS provenance,
+               discovered_at AS observed_at, last_synced,
+               ifNull(toString(repo_id), '') AS repository_id,
+               '' AS source_url, 0 AS deleted, ifNull(confidence, 1.0) AS confidence
+        FROM work_graph_edges FINAL
+        WHERE org_id = {org_id:String} AND edge_id = {entity_id:String}
+          AND (empty({repository_ids:Array(String)}) OR toString(repo_id) IN {repository_ids:Array(String)})
+        ORDER BY last_synced DESC LIMIT 1
+        """,
+    ),
 }
 
 
@@ -566,4 +607,5 @@ def _entity_type(source_system: str) -> str:
         "ci_runs": "ci_run",
         "deployments": "deployment",
         "incidents": "incident",
+        "work_graph": "work_graph_edge",
     }[source_system]

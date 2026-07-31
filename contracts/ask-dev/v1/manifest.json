@@ -60,17 +60,17 @@
         {
           "case": "assistant_contains_user_question",
           "path": "examples/negative/dev_conversation_transcript.v1.assistant_contains_user_question.json",
-          "sha256": "ce14c52a308aa86a2cc9bec8aed7350b86952e443de8de34bcbb8f1f12d29684"
+          "sha256": "d9b3310c03cec9e22176952cae7254b8b90d795912ea501f14c84e01de99cd63"
         },
         {
           "case": "answer_from_another_conversation",
           "path": "examples/negative/dev_conversation_transcript.v1.answer_from_another_conversation.json",
-          "sha256": "b4a879ae52086bae0af69bdca0eae3d04fdf682d4df1112b52217e8ea84696a7"
+          "sha256": "ed0ce846ce393c1dbac33315faef6b85d0b9bfa24cbd7bcf5f2623bcc2e708e3"
         }
       ],
       "positive": {
         "path": "examples/positive/dev_conversation_transcript.v1.json",
-        "sha256": "73b9a33b083b34fd450cd200e44a611d70816baafc9f7b2710f3767a11b6b877"
+        "sha256": "7aa148b2e030d83df425a53144b2a72c1ce12f6a2fd4bf8ffe798a09239db72d"
       },
       "schema": {
         "path": "schemas/dev_conversation_transcript.v1.schema.json",
@@ -116,12 +116,12 @@
         {
           "case": "unknown_evidence_id",
           "path": "examples/negative/dev_answer.v1.unknown_evidence_id.json",
-          "sha256": "3546f034242e02c9a5d9afd19b81426cfacf2a2d9d48d420a13b2d90cca36bec"
+          "sha256": "0c77e93e77d2029f0403e26c5a571191712fe032c584bffebb274613369c2247"
         },
         {
           "case": "unknown_metric_id",
           "path": "examples/negative/dev_answer.v1.unknown_metric_id.json",
-          "sha256": "77450a616cd71501238f3b2944b3276441d8916461fc80bec312d9630ca1a354"
+          "sha256": "5edba7a3cb9853d81b12672acdd7c2465d4cde3ecc95f5c12ce37ca2edcd55d7"
         },
         {
           "case": "missing_required_metadata",
@@ -131,22 +131,22 @@
         {
           "case": "invalid_scope",
           "path": "examples/negative/dev_answer.v1.invalid_scope.json",
-          "sha256": "ff06c0937444d79e83c32460c52569e0e8804cd774f1cfa7557877d7eec72ecb"
+          "sha256": "d61351bdacd0355b1a9f2e5b0e9dff4042da171e6b1e49ebd5fd2da0f1c3faae"
         },
         {
           "case": "oversized_evidence",
           "path": "examples/negative/dev_answer.v1.oversized_evidence.json",
-          "sha256": "08a7fadfe436b9f7645503d1df3acf3706d9bd4d70cb8486594bf576faca64ca"
+          "sha256": "9ff9a4caedd30b7dc15c345a9641da4a70e5a1c84e3bac1576772985a7bdce6d"
         },
         {
           "case": "invalid_complete_state",
           "path": "examples/negative/dev_answer.v1.invalid_complete_state.json",
-          "sha256": "5dd35c270b26c18ee75e28bbdc46e4e5a9417e6aa92dc64461032883b98b5153"
+          "sha256": "304e8da54dbdb878bbbe44101e89fca1c8f8c44a84cf61c5e51e8dda3f25d359"
         }
       ],
       "positive": {
         "path": "examples/positive/dev_answer.v1.json",
-        "sha256": "1ee3230951ae3590fd921c18042b40a98be45452ecacd9d5d6caa90f32927e55"
+        "sha256": "fba7cafc8b232b43e56c8385b2b58439e5a4b0b67cb3eb1da0ffc32f19733c21"
       },
       "schema": {
         "path": "schemas/dev_answer.v1.schema.json",
@@ -285,16 +285,21 @@
         {
           "case": "oversized_result",
           "path": "examples/negative/dev_tool_result.v1.oversized_result.json",
-          "sha256": "94e8ce815d630657daceb37bb3f7ab8647c350d234429cd0ac699702604e2602"
+          "sha256": "a40d6bbd0794c3ba8b2c6fbcd62fc158a4eb65c66e60a16b3d1a75d0416be3a4"
+        },
+        {
+          "case": "status_fact_evidence_not_in_array",
+          "path": "examples/negative/dev_tool_result.v1.status_fact_evidence_not_in_array.json",
+          "sha256": "26afbb73e6e8865f5884ba5af09a86effd6b5b5b63bf9ad4390b4ea8261a72ce"
         }
       ],
       "positive": {
         "path": "examples/positive/dev_tool_result.v1.json",
-        "sha256": "5998122f3d515432423cba1e67e5785983e11f743fa18e0a9bbbd9358ef21549"
+        "sha256": "31a956f4659f29f190346a7b873a219ffc85ccd2dfb9d7032937a4eb9c9ed653"
       },
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "8547fecb7f135fc005f0d06e5ca223272994cb118c365208abf9b3bd54ee26f0"
+        "sha256": "215fcb63d94c629b2002b91c3ab0c81b055bc5aee38b60b71ce81232c9870367"
       },
       "schema_version": "dev_tool_result.v1"
     },

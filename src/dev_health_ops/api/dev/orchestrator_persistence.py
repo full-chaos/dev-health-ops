@@ -92,6 +92,10 @@ class PersistenceRunRecorder:
                 len(execution.result.evidence)
                 + len(execution.result.metrics)
                 + len(execution.result.status_facts)
+                + len(execution.result.pull_requests)
+                + len(execution.result.ci_checks)
+                + len(execution.result.deployments)
+                + len(execution.result.incidents)
                 + len(execution.result.graph_edges)
                 + len(execution.result.data_health)
             ),

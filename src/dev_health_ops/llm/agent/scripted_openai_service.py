@@ -27,6 +27,7 @@ _WIRE_READINESS_ECHO = "readiness_echo_v1"
 _WIRE_QUERY_METRIC = "query_metric_v1"
 _WIRE_SEARCH_EVIDENCE = "search_evidence_v1"
 _WIRE_DATA_HEALTH = "data_health_v1"
+_WIRE_LIST_METRICS = "list_metrics_v1"
 
 # CHAOS-3262: the literal metric-catalog acceptance question. When this exact
 # question is observed, the script deterministically drives a single
@@ -94,7 +95,7 @@ def _list_metrics_script(
                     "id": "scripted-call-list-metrics-v1",
                     "type": "function",
                     "function": {
-                        "name": "list_metrics.v1",
+                        "name": _WIRE_LIST_METRICS,
                         "arguments": json.dumps({"limit": 8}, separators=(",", ":")),
                     },
                 }

@@ -25,7 +25,7 @@ from dev_health_ops.api.dev.orchestrator import (
     RunState,
 )
 from dev_health_ops.api.dev.prompts import PromptConversationTurn
-from dev_health_ops.api.dev.tool_registry import AskDevToolRegistry
+from dev_health_ops.api.dev.tool_registry import AskDevToolRegistry, ToolRequestRejected
 from dev_health_ops.llm.agent.contracts import (
     AgentDisambiguation,
     AgentFinalAnswer,
@@ -205,10 +205,11 @@ async def _run(
     orchestrator: DevOrchestrator,
     cancellation=None,
     *,
+    request: DevMessageRequest | None = None,
     prior_turns: tuple = (),
 ) -> OrchestratorResult:
     return await orchestrator.run(
-        request=_request(),
+        request=request or _request(),
         org_id="org_fullchaos",
         user_id="user_01",
         permission_fingerprint="permissions_01",
@@ -1029,6 +1030,525 @@ async def test_unresolved_named_entity_never_falls_back_to_organization_scope() 
     # the status tool keeps executing against the last committed scope
     # rather than silently regressing to an unauthorized/ambiguous one.
     assert calls[1].scope.direct_scope.value == "organization"
+
+
+# --- CHAOS-3289: questions about nonexistent entities must not be answered
+# --- as if the named entity exists.
+
+
+def _status_request() -> DevMessageRequest:
+    payload = deepcopy(positive_fixtures()["dev_message_request.v1"])
+    payload["question_class"] = "status"
+    return DevMessageRequest.model_validate(payload)
+
+
+def _ambiguous_resolution() -> DevScopeResolution:
+    from dev_health_ops.api.dev.contract_fixtures import NOW
+
+    scope = _scope_dict(direct_scope="organization")
+    candidate_scope = _scope_dict(
+        direct_scope="project",
+        entity_refs=[
+            {
+                "entity_type": "project",
+                "entity_id": "project-a",
+                "display_label": "Ask Dev A",
+                "repository_id": None,
+            }
+        ],
+    )
+    return DevScopeResolution.model_validate(
+        {
+            "schema_version": "dev_scope_resolution.v1",
+            "requested_scope": scope,
+            "resolved_scope": None,
+            "outcome": "ambiguous",
+            "authorized_repository_ids": [],
+            "authorized_entity_ids": [],
+            "candidates": [
+                {
+                    "entity_ref": candidate_scope["entity_refs"][0],
+                    "repository_id": None,
+                    "reason": "Multiple authorized entities match the requested query.",
+                }
+            ],
+            "fallbacks": [],
+            "warnings": [],
+            "resolved_at": NOW,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_answer_after_not_found_resolution_is_insufficient_evidence() -> (
+    None
+):
+    """CHAOS-3289: resolve_scope.v1 correctly reports not-found for a named
+    entity that does not exist, but nothing previously stopped the model
+    from still narrating an organization-wide answer under that entity's
+    name. The run must terminate insufficient_evidence instead."""
+
+    script_id = "status-not-found"
+    calls: list[DevToolRequest] = []
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Ask Dev project", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_02",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_not_found_resolution()
+            ),
+            scope_resolver=resolve,
+        ),
+        request=_status_request(),
+    )
+
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.error is not None
+    assert result.error.code == "scope_not_found"
+    assert result.answer is None
+
+
+@pytest.mark.asyncio
+async def test_status_answer_after_ambiguous_resolution_is_insufficient_evidence() -> (
+    None
+):
+    """Same shape as the not-found case, but the model's last resolve_scope.v1
+    attempt came back ambiguous. Presenting an organization-wide narrative
+    under the (unpicked) entity's name is exactly as unsafe as not-found."""
+
+    script_id = "status-ambiguous"
+    calls: list[DevToolRequest] = []
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Ask Dev", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_02",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_ambiguous_resolution()
+            ),
+            scope_resolver=resolve,
+        ),
+        request=_status_request(),
+    )
+
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.error is not None
+    assert result.error.code == "scope_ambiguous"
+    assert result.answer is None
+
+
+@pytest.mark.asyncio
+async def test_status_answer_skipping_resolve_scope_with_no_claims_is_insufficient_evidence() -> (
+    None
+):
+    """The literal reported defect: from inherited organization scope, the
+    model skips resolve_scope.v1 entirely, calls status_snapshot.v1 directly,
+    and would otherwise narrate a nonexistent named entity's status under an
+    ungrounded (zero-claim) summary. The run must not complete/partial that."""
+
+    script_id = "status-skip-resolve"
+    calls: list[DevToolRequest] = []
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_not_found_resolution()
+            ),
+            scope_resolver=resolve,
+        ),
+        request=_status_request(),
+    )
+
+    assert [request.tool_id.value for request in calls] == ["status_snapshot.v1"]
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.error is not None
+    assert result.error.code == "insufficient_evidence"
+    assert result.answer is None
+
+
+@pytest.mark.asyncio
+async def test_status_answer_after_errored_resolve_scope_attempt_is_insufficient_evidence() -> (
+    None
+):
+    """CHAOS-3289 regression: a resolve_scope.v1 call that is rejected as
+    malformed (or times out) never produces a scope_resolution, so
+    execution.result.scope_resolution is None -- distinct from a resolution
+    that came back and definitively said ambiguous/not-found. Naively
+    flipping resolve_scope_attempted=True for this call (without a real
+    outcome to judge) would leave last_resolve_scope_outcome=None, which
+    matches NEITHER the ambiguous/not-found branch NOR the
+    not-resolve_scope_attempted branch -- silently disarming every guard
+    check and letting a fabricated-name narrative straight through. An
+    errored resolve_scope.v1 attempt must be treated the same as never
+    calling it at all."""
+
+    script_id = "status-resolve-errored"
+    calls: list[DevToolRequest] = []
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    async def execute(_context, request: DevToolRequest) -> DevToolResult:
+        calls.append(request)
+        if request.tool_id is ToolID.RESOLVE_SCOPE:
+            raise ToolRequestRejected("scope resolution fields are invalid")
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: execute for tool_id in ToolID})
+
+    # The rejected resolve_scope.v1 call leaves one required source
+    # unavailable, so dev_answer.v1's own coverage invariant requires a
+    # degraded (not complete) status here -- orthogonal to the CHAOS-3289
+    # guard under test, but required for the candidate to pass schema
+    # validation and actually reach that guard.
+    degraded_answer = _answer_with_no_claims(script_id=script_id)
+    degraded_answer.update({"status": "degraded", "metrics": [], "evidence": []})
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Ask Dev project", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_02",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(degraded_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+            scope_resolver=resolve,
+        ),
+        request=_status_request(),
+    )
+
+    assert [request.tool_id.value for request in calls] == [
+        "resolve_scope.v1",
+        "status_snapshot.v1",
+    ]
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.error is not None
+    assert result.error.code == "insufficient_evidence"
+    assert result.answer is None
+
+
+def _answer_with_organization_scoped_claim(*, script_id: str) -> dict:
+    """The stock claim fixture hardcodes a repository validity_scope; this
+    test commits organization scope instead, so re-point the claim's
+    validity_scope at organization scope while keeping its evidence/metric
+    references, which the default registry's canonical tool result already
+    provides (dev_tool_result.v1 fixture: ev_01 / metric_01)."""
+    payload = _answer(script_id=script_id)
+    payload["claims"][0]["validity_scope"] = _scope_dict(direct_scope="organization")
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_grounded_organization_wide_status_answer_still_completes() -> None:
+    """A genuinely organization-wide status answer with real evidence-backed
+    claims must not be blocked just because resolve_scope.v1 was never
+    called -- CHAOS-3255 made organization scope a fully valid, executable
+    answer target on its own."""
+
+    script_id = "status-grounded-org-wide"
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_organization_scoped_claim(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            scope_resolver=resolve,
+        ),
+        request=_status_request(),
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.claims
+
+
+def _status_request_naming_entity(*, question: str) -> DevMessageRequest:
+    payload = deepcopy(positive_fixtures()["dev_message_request.v1"])
+    payload["question_class"] = "status"
+    payload["question"] = question
+    return DevMessageRequest.model_validate(payload)
+
+
+def _answer_narrating_named_entity(*, script_id: str, direct_summary: str) -> dict:
+    """A genuinely grounded (evidence-backed, non-empty claims) answer whose
+    own text still attributes the finding to a named entity -- the mixed
+    variant of CHAOS-3289: the empty-claims backstop alone cannot catch this,
+    since claims are real; only the narration itself gives it away."""
+    payload = _answer_with_organization_scoped_claim(script_id=script_id)
+    payload["direct_summary"] = direct_summary
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_status_answer_narrating_unresolved_named_entity_with_real_claims_is_blocked() -> (
+    None
+):
+    """CHAOS-3289 mixed variant: the model never calls resolve_scope.v1,
+    produces genuine organization-wide evidence-backed claims (so the
+    empty-claims check does not fire), but still narrates those claims as
+    if they were about the named entity the question asked about. This must
+    be caught by the question-text/answer-text cross-check, not just the
+    claims-emptiness heuristic."""
+
+    script_id = "status-mixed-fabrication"
+    question = "What's the status of the Ask Dev project"
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_narrating_named_entity(
+                            script_id=script_id,
+                            direct_summary=(
+                                "The status of the Ask Dev project is currently "
+                                "partial based on recent deployment activity."
+                            ),
+                        )
+                    )
+                ),
+            ],
+            script_id=script_id,
+            scope_resolver=resolve,
+        ),
+        request=_status_request_naming_entity(question=question),
+    )
+
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.error is not None
+    assert result.error.code == "insufficient_evidence"
+    assert result.answer is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question",
+    [
+        # noun+status trails the name instead of a leading preposition.
+        "What's the Ask Dev project status?",
+        # the noun leads the name instead of trailing a preposition.
+        "Can you check project Ask Dev status?",
+        # a connector phrase the original preposition list did not cover.
+        "What's going on with the Ask Dev project?",
+    ],
+)
+async def test_status_answer_narrating_unresolved_named_entity_other_phrasings_is_blocked(
+    question: str,
+) -> None:
+    """CHAOS-3289 hardening: a Codex adversarial review of this same guard
+    found that the original preposition-led regex (``status of/about/
+    regarding/for the <Name> <noun>``) missed common real-world phrasings
+    where the noun trails the name+status, or leads the name, or uses a
+    connector outside the original preposition list -- letting the mixed
+    fabrication variant through under ordinary rewording. Each of these
+    must still be blocked."""
+
+    script_id = "status-mixed-fabrication-phrasing"
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_narrating_named_entity(
+                            script_id=script_id,
+                            direct_summary=(
+                                "The status of the Ask Dev project is currently "
+                                "partial based on recent deployment activity."
+                            ),
+                        )
+                    )
+                ),
+            ],
+            script_id=script_id,
+            scope_resolver=resolve,
+        ),
+        request=_status_request_naming_entity(question=question),
+    )
+
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.error is not None
+    assert result.error.code == "insufficient_evidence"
+    assert result.answer is None
+
+
+@pytest.mark.asyncio
+async def test_status_answer_about_a_different_topic_with_real_claims_still_completes() -> (
+    None
+):
+    """The narrow name-shape backstop must not fire on a genuinely
+    organization-wide answer just because the question happens to name an
+    entity elsewhere in its phrasing -- only when the answer's own text
+    echoes that name."""
+
+    script_id = "status-mixed-unrelated"
+    question = "What's the status of the Ask Dev project"
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_narrating_named_entity(
+                            script_id=script_id,
+                            direct_summary=(
+                                "Twelve work items completed across the organization "
+                                "in the selected period."
+                            ),
+                        )
+                    )
+                ),
+            ],
+            script_id=script_id,
+            scope_resolver=resolve,
+        ),
+        request=_status_request_naming_entity(question=question),
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
 
 
 def test_hard_defaults_can_only_be_configured_downward() -> None:

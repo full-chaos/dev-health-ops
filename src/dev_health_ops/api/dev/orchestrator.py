@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
@@ -59,8 +60,10 @@ from .contracts import (
     DevScopeResolution,
     DevToolRequest,
     DevToolResult,
+    DirectScope,
     FreshnessState,
     MetricID,
+    QuestionClass,
     ScopeResolutionOutcome,
     ToolID,
     dev_error_remediation,
@@ -91,6 +94,51 @@ def _dev_tool_request_limit_maximum() -> int:
         ):
             return constraint.le
     raise RuntimeError("dev_tool_request.v1 limit field must declare an upper bound")
+
+
+# CHAOS-3289: when resolve_scope.v1 was never attempted, the only remaining
+# signal that the question named a specific entity is the question text
+# itself. This pattern is deliberately narrow (an explicit, capitalized
+# entity name adjacent to one of the entity nouns Ask Dev tools actually
+# support, in one of a handful of common orderings) to keep false positives
+# on ordinary organization-wide prose vanishingly rare -- it is a backstop
+# for the exact fabricated-premise shape this issue reproduces (a genuinely
+# grounded, evidence-backed answer narrated under a name that was never
+# resolved), not a general NLU pass. Known residual gap: lowercase/slug
+# names and paraphrases outside these orderings still bypass it (tracked as
+# follow-up -- see CHAOS-3289's linked extension issue).
+_ENTITY_NAME_PATTERN = r"[A-Z][A-Za-z0-9&/'\-]*(?:\s+[A-Z][A-Za-z0-9&/'\-]*){0,3}"
+_ENTITY_NOUN_PATTERN = (
+    r"project|repository|repo|team|issue|pull request|deployment|incident|work unit"
+)
+
+# "status of/about/regarding/for/with/going on with the <Name> <noun>"
+_NAMED_ENTITY_REFERENCE = re.compile(
+    r"\b(?:status of|about|regarding|for|with|on|going on with|happening with)\s+"
+    r"(?:the\s+)?"
+    rf"({_ENTITY_NAME_PATTERN})"
+    rf"\s+(?:{_ENTITY_NOUN_PATTERN})\b"
+)
+
+# "the <Name> <noun> status" / "the <Name> <noun>'s status" -- the noun and
+# "status" trail the name instead of a leading preposition triggering it
+# (e.g. "What's the Ask Dev project status?").
+_NAMED_ENTITY_NOUN_STATUS = re.compile(
+    rf"\b({_ENTITY_NAME_PATTERN})\s+(?:{_ENTITY_NOUN_PATTERN})'?s?\s+status\b"
+)
+
+# "<noun> <Name>" -- the noun leads the name instead of trailing a
+# preposition (e.g. "Can you check project Ask Dev status?").
+_ENTITY_NOUN_LEADING = re.compile(
+    rf"\b(?:{_ENTITY_NOUN_PATTERN})\s+({_ENTITY_NAME_PATTERN})\b"
+)
+
+
+def _named_entity_phrases(text: str) -> frozenset[str]:
+    phrases = set(_NAMED_ENTITY_REFERENCE.findall(text))
+    phrases.update(_NAMED_ENTITY_NOUN_STATUS.findall(text))
+    phrases.update(_ENTITY_NOUN_LEADING.findall(text))
+    return frozenset(match.casefold() for match in phrases)
 
 
 _HARD_LIMIT_MAXIMA: dict[str, int | float] = {
@@ -428,6 +476,12 @@ class DevOrchestrator:
         terminal_written = False
         repair_count = 0
         retry_count = 0
+        # CHAOS-3289: track whether this run ever attempted resolve_scope.v1
+        # for a named entity, and that attempt's most recent outcome, so a
+        # final answer cannot silently narrate a named entity under
+        # organization scope that was never confirmed to exist.
+        resolve_scope_attempted = False
+        last_resolve_scope_outcome: ScopeResolutionOutcome | None = None
         selected_event_sink = event_sink or self._event_sink
 
         async def transition(state: RunState, safe_code: str | None = None) -> None:
@@ -806,6 +860,30 @@ class DevOrchestrator:
                     )
                     if (
                         tool_request.tool_id is ToolID.RESOLVE_SCOPE
+                        and committed_resolution is not None
+                    ):
+                        # CHAOS-3289: record every resolve_scope.v1 attempt
+                        # that actually produced an outcome (not just
+                        # successful ones -- ambiguous/not-found count too)
+                        # so a final answer can be judged against the run's
+                        # most recent named-entity resolution attempt.
+                        #
+                        # An attempt that produced NO outcome at all (the
+                        # call was rejected as malformed, or timed out --
+                        # execution.result.scope_resolution is None) must
+                        # NOT flip resolve_scope_attempted: doing so would
+                        # silently disarm every check below (neither the
+                        # ambiguous/not-found branch nor the
+                        # never-attempted/no-evidence branch would fire),
+                        # which is a worse outcome than never having called
+                        # the tool at all. Leaving resolve_scope_attempted
+                        # false here makes an errored call fall through to
+                        # the same empty-claims/named-phrase backstop that
+                        # covers "resolve_scope.v1 was never called".
+                        resolve_scope_attempted = True
+                        last_resolve_scope_outcome = committed_resolution.outcome
+                    if (
+                        tool_request.tool_id is ToolID.RESOLVE_SCOPE
                         and execution.result.status == "success"
                         and committed_resolution is not None
                         and committed_scope is not None
@@ -953,6 +1031,20 @@ class DevOrchestrator:
                                 "answer_validation_failed",
                                 "The answer exceeds grounded-result limits.",
                             ),
+                        )
+                    unresolved_entity_error = self._unresolved_named_entity_error(
+                        question=request.question,
+                        question_class=request.question_class,
+                        authorized_scope=authorized_scope,
+                        resolve_scope_attempted=resolve_scope_attempted,
+                        last_resolve_scope_outcome=last_resolve_scope_outcome,
+                        answer=answer,
+                    )
+                    if unresolved_entity_error is not None:
+                        code, message = unresolved_entity_error
+                        return await finish(
+                            RunState.INSUFFICIENT_EVIDENCE,
+                            error=error(code, message),
                         )
                     return await finish(RunState.COMPLETED, answer=answer)
 
@@ -1369,6 +1461,84 @@ class DevOrchestrator:
             stale_required_sources=stale,
             as_of=as_of,
         )
+
+    @staticmethod
+    def _unresolved_named_entity_error(
+        *,
+        question: str,
+        question_class: QuestionClass,
+        authorized_scope: DevScope,
+        resolve_scope_attempted: bool,
+        last_resolve_scope_outcome: ScopeResolutionOutcome | None,
+        answer: DevAnswer,
+    ) -> tuple[str, str] | None:
+        """CHAOS-3289: a status answer must never narrate a named entity that
+        was never confirmed to exist.
+
+        Organization scope is a legitimate, fully executable answer target on
+        its own (CHAOS-3255) -- this only fires for STATUS-class questions
+        still running under organization scope, and only in the cases that
+        actually indicate a fabricated premise:
+
+        * the run's own most recent resolve_scope.v1 attempt for a named
+          entity came back ambiguous or not-found, yet the model still tried
+          to finalize a substantive answer instead of disclosing that; or
+        * resolve_scope.v1 was never attempted at all and the answer carries
+          no evidence-backed claims -- an organization-wide answer with real
+          support has real claims; one with neither a resolution attempt nor
+          any claim is exactly the fabricated-narrative shape reported in
+          CHAOS-3289 (the model skipped resolving "the X project" entirely
+          and narrated organization-wide tool output under that name); or
+        * resolve_scope.v1 was never attempted and the question names a
+          specific entity (``_named_entity_phrases``) that the answer's own
+          text still narrates -- this is the mixed variant of the same
+          defect: the model can hold genuine, evidence-backed organization-
+          wide claims (passing the empty-claims check above) while still
+          attributing them to a name it never resolved. Both are fabricated
+          premises; only the second needs the model's own words as evidence
+          since the run produced no resolve_scope.v1 call to judge instead.
+
+        Returns the ``(code, message)`` for the forced insufficient-evidence
+        termination, or ``None`` when the answer is not this failure shape.
+        """
+        if question_class is not QuestionClass.STATUS:
+            return None
+        if authorized_scope.direct_scope is not DirectScope.ORGANIZATION:
+            return None
+        if answer.status in {
+            AnswerStatus.INSUFFICIENT_EVIDENCE,
+            AnswerStatus.REFUSED,
+            AnswerStatus.ERROR,
+        }:
+            return None
+        if last_resolve_scope_outcome is ScopeResolutionOutcome.AMBIGUOUS:
+            return ("scope_ambiguous", "The requested scope is ambiguous.")
+        if last_resolve_scope_outcome is ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND:
+            return ("scope_not_found", "The requested scope was not found.")
+        if not resolve_scope_attempted:
+            if not answer.claims:
+                return (
+                    "insufficient_evidence",
+                    "The answer does not include evidence-backed claims for "
+                    "the requested entity.",
+                )
+            named_phrases = _named_entity_phrases(question)
+            if named_phrases:
+                narrated_texts = (
+                    answer.direct_summary,
+                    *(claim.text for claim in answer.claims),
+                )
+                if any(
+                    phrase in text.casefold()
+                    for phrase in named_phrases
+                    for text in narrated_texts
+                ):
+                    return (
+                        "insufficient_evidence",
+                        "The answer narrates a status for a named entity "
+                        "that was never resolved.",
+                    )
+        return None
 
     @staticmethod
     def _canonical_tool_request(

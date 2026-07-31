@@ -40,6 +40,14 @@ _FIXED_POLICY_SECTIONS = (
         "Return exactly one normalized decision: registered tool request, dev_answer.v1 final "
         "answer, typed disambiguation, or refusal. Do not reveal private reasoning.",
     ),
+    (
+        "named_entity_resolution",
+        "When the question names a specific project, repository, issue, pull request, or work "
+        "unit, call resolve_scope.v1 with that name before requesting any status, change, "
+        "metric, or evidence tool. Never present an answer that describes a named entity "
+        "resolve_scope.v1 did not confirm exists; if it returns not-found or ambiguous, say so "
+        "instead of answering about the organization under the entity's name.",
+    ),
 )
 
 

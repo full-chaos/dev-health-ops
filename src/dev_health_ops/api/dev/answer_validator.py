@@ -48,17 +48,20 @@ def _bounded_detail(messages: tuple[str, ...], *, limit: int) -> str:
     messages that fit and note how many were dropped instead.
     """
     non_empty = [part for part in messages if part]
+    # Reserve room for the worst-case " (+N more)" suffix up front so
+    # appending it can never itself push the result past `limit`.
+    suffix_reserve = len(f" (+{len(non_empty)} more)")
     kept: list[str] = []
     total = 0
     for index, msg in enumerate(non_empty):
         addition = msg if not kept else f"; {msg}"
-        if total + len(addition) > limit:
+        if total + len(addition) > limit - suffix_reserve:
             if not kept:
                 # Even the first whole message doesn't fit: better a
                 # visibly-truncated fragment than an empty detail string.
                 return msg[:limit]
             omitted = len(non_empty) - index
-            return "; ".join(kept) + f" (+{omitted} more)"
+            return ("; ".join(kept) + f" (+{omitted} more)")[:limit]
         kept.append(msg)
         total += len(addition)
     return "; ".join(kept)

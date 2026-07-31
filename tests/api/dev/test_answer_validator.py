@@ -62,6 +62,54 @@ def test_schema_only_failure_allows_one_bounded_repair() -> None:
     with pytest.raises(AnswerValidationError) as raised:
         validate_answer_candidate(payload, _context())
     assert raised.value.repairable is True
+    # CHAOS-3288: a missing-field detail names the actual field (one of our
+    # own fixed dev_answer.v1 field names, never model-echoed content) so a
+    # bare "Field required" repair prompt is actionable.
+    assert "direct_summary" in raised.value.detail
+    assert "Field required" in raised.value.detail
+
+
+def test_repairability_is_classified_from_safe_messages_not_echoed_input() -> None:
+    """CHAOS-3288 review: repairability must not depend on `str(exc)`, which
+    also renders the model's own (echoed) input value. Two unrelated invalid
+    `status` values that happen to produce the identical safe message must
+    get the identical classification, even when one value's *text* happens
+    to collide with a non-repairable marker like "unknown metric".
+    """
+    baseline = deepcopy(positive_fixtures()["dev_answer.v1"])
+
+    ordinary_payload = deepcopy(baseline)
+    ordinary_payload["status"] = "not-a-status"
+    with pytest.raises(AnswerValidationError) as ordinary:
+        validate_answer_candidate(ordinary_payload, _context())
+
+    colliding_payload = deepcopy(baseline)
+    colliding_payload["status"] = "unknown metric"
+    with pytest.raises(AnswerValidationError) as colliding:
+        validate_answer_candidate(colliding_payload, _context())
+
+    assert ordinary.value.repairable is True
+    assert colliding.value.repairable is True
+    assert "unknown metric" not in colliding.value.detail.casefold()
+
+
+def test_many_validation_errors_produce_a_bounded_detail_without_a_cut_word() -> None:
+    """CHAOS-3288 review: bounding the joined detail must not slice through
+    the middle of a message. A large number of forbidden extra fields
+    produces many identical "Extra inputs are not permitted" errors; the
+    bounded detail must end on a whole message (or an explicit omitted
+    count), never a truncated fragment like "Extra inputs are not".
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload.update({f"unexpected_extra_field_{i}": i for i in range(30)})
+    with pytest.raises(AnswerValidationError) as raised:
+        validate_answer_candidate(payload, _context())
+    detail = raised.value.detail
+    assert len(detail) <= 200
+    assert not detail.rstrip().endswith("Extra inputs are not")
+    assert detail.endswith("more)") or detail.strip().endswith(
+        "Extra inputs are not permitted"
+    )
 
 
 def test_server_identity_scope_and_runtime_metadata_cannot_be_rewritten() -> None:

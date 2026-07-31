@@ -279,6 +279,22 @@ class OpenAICompatibleAgentProvider:
         # which disables enforcement and then rejects every later call
         # without dispatching it (CHAOS-3285).
         agent_usage = self._normalize_usage(response)
+        # A response with no usage object at all normalizes to 0 input / 0
+        # output above; a response that genuinely reports zero of both is
+        # indistinguishable from that and, per the same invariant the
+        # success path already relies on (a valid completion cannot consume
+        # zero input AND zero output tokens), can't be real either. Only
+        # attach usage to the raised error when it's actually informative --
+        # otherwise a failure with unreported usage would reconcile as a
+        # real $0 call (poisoning nothing, but silently making an unknown
+        # cost look free) instead of the pre-existing conservative
+        # "usage unavailable" handling for genuinely unreported usage
+        # (CHAOS-3285).
+        reported_usage = (
+            agent_usage
+            if agent_usage.input_tokens or agent_usage.output_tokens
+            else None
+        )
 
         try:
             # A model that ran out of its output/reasoning token budget
@@ -291,7 +307,7 @@ class OpenAICompatibleAgentProvider:
             # (CHAOS-3285).
             if getattr(response.choices[0], "finish_reason", None) == "length":
                 raise AgentProviderError(
-                    AgentProviderErrorCode.OUTPUT_EXHAUSTED, usage=agent_usage
+                    AgentProviderErrorCode.OUTPUT_EXHAUSTED, usage=reported_usage
                 )
             decision = self._normalize_response(
                 response,
@@ -300,7 +316,8 @@ class OpenAICompatibleAgentProvider:
             )
         except _SequentialToolContractViolation:
             raise AgentProviderError(
-                AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION, usage=agent_usage
+                AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION,
+                usage=reported_usage,
             ) from None
         except (
             AttributeError,
@@ -310,7 +327,7 @@ class OpenAICompatibleAgentProvider:
             json.JSONDecodeError,
         ):
             raise AgentProviderError(
-                AgentProviderErrorCode.INVALID_RESPONSE, usage=agent_usage
+                AgentProviderErrorCode.INVALID_RESPONSE, usage=reported_usage
             ) from None
         return AgentDecisionResult(
             decision=decision,

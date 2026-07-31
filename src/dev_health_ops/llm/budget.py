@@ -792,11 +792,20 @@ def _usage_from_exception(
         # field rather than the raw provider's nested *_tokens_details
         # object; fall back to it when there is no nested detail to read.
         cached_tokens = _usage_value(usage, "cached_input_tokens")
-    return (
-        _usage_value(usage, "prompt_tokens", "input_tokens"),
-        _usage_value(usage, "completion_tokens", "output_tokens"),
-        cached_tokens,
-    )
+    input_tokens = _usage_value(usage, "prompt_tokens", "input_tokens")
+    output_tokens = _usage_value(usage, "completion_tokens", "output_tokens")
+    # Same 0/0-is-unreported guard as _agent_usage()'s success-path
+    # extraction: a valid completion can never consume zero input AND zero
+    # output tokens, so a failure whose usage reports exactly that (or whose
+    # producer defaulted both to 0 because the field was actually absent)
+    # must reconcile as unreported/conservative, never as a real $0 charge
+    # (CHAOS-3285). Defense in depth: the OpenAI-compatible adapter already
+    # withholds usage in this case, but any other exception source
+    # attaching a technically-present, all-zero usage object hits the same
+    # rule here.
+    if input_tokens == 0 and output_tokens == 0:
+        return None, None, None
+    return input_tokens, output_tokens, cached_tokens
 
 
 def _agent_usage(item: Any) -> tuple[int | None, int | None, int | None]:

@@ -897,3 +897,106 @@ async def test_output_exhaustion_reconciles_with_actual_cost_and_leaves_budget_a
         rows = list((await session.execute(select(BYOLLMBudgetReservation))).scalars())
     assert len(rows) == 2
     assert sorted(row.status for row in rows) == ["failed", "succeeded"]
+
+
+@pytest.mark.asyncio
+async def test_zero_token_exhaustion_holds_reservation_instead_of_reconciling_as_free(
+    session_maker, monkeypatch
+):
+    """CHAOS-3285 follow-up integration reproduction.
+
+    A provider can report finish_reason="length" with a usage object whose
+    prompt_tokens/completion_tokens are both exactly 0 (or omit ``usage``
+    entirely, which normalizes to the same shape) -- a valid completion can
+    never actually consume zero of both, so this is unreported usage, not a
+    free call. Before this follow-up fix, the adapter still attached that
+    all-zero usage to the raised error, and guard_byo_call reconciled the
+    reservation as status="failed" with actual_micro_usd=0: a genuinely
+    unknown cost silently became a real $0 charge, dropping it from BYO
+    budget accounting entirely.
+
+    After the fix, usage is withheld from the error in this case, so the
+    reservation reconciles the same conservative way the codebase already
+    handles any other genuinely-unreported-usage failure (pre-existing
+    behavior, unrelated to and not reintroducing the window-poisoning bug
+    the OTHER CHAOS-3285 integration test above guards against for the
+    reported-usage case): held as "usage_unavailable", never as a $0 charge.
+    """
+    org_id = str(uuid.uuid4())
+    await _configure(session_maker, org_id, 1_000_000)
+
+    @asynccontextmanager
+    async def budget_session():
+        async with session_maker() as session:
+            yield session
+
+    monkeypatch.setattr(
+        "dev_health_ops.llm.budget.get_postgres_session", budget_session
+    )
+
+    exhausted_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="length",
+                message=SimpleNamespace(content="", tool_calls=[]),
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=0,
+            completion_tokens=0,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=0),
+        ),
+    )
+
+    class Completions:
+        def __init__(self, responses):
+            self.responses = responses
+            self.calls = 0
+
+        async def create(self, **_kwargs):
+            self.calls += 1
+            return self.responses.pop(0)
+
+    completions = Completions([exhausted_response])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAICompatibleAgentProvider(
+        api_key="unused", model="gpt-5-mini", client=client
+    )
+    async with session_maker() as unused_session:
+        guarded = attach_agent_budget_guard(
+            provider,
+            session=unused_session,
+            org_id=org_id,
+            provider="openai",
+            model="gpt-5-mini",
+            base_url=None,
+        )
+
+    tools = [AgentToolDefinition("lookup", "Lookup", {"type": "object"})]
+
+    with pytest.raises(AgentProviderError) as caught:
+        await guarded.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            tools,
+            {"type": "object"},
+            1,
+            256,
+        )
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+
+    async with session_maker() as session:
+        rows = list((await session.execute(select(BYOLLMBudgetReservation))).scalars())
+    assert len(rows) == 1
+    assert rows[0].status == "usage_unavailable"
+    assert rows[0].actual_micro_usd is None
+
+    async with session_maker() as session:
+        status = await get_budget_status(
+            SettingsService(session, org_id),
+            provider="openai",
+            model="gpt-5-mini",
+            base_url=None,
+        )
+    assert status.reason == "usage_unavailable"
+    assert status.enforcement_available is False

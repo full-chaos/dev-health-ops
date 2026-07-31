@@ -1112,6 +1112,80 @@ async def test_finish_reason_length_attaches_billed_usage_to_the_error() -> None
 
 
 @pytest.mark.asyncio
+async def test_finish_reason_length_with_zero_reported_usage_withholds_usage() -> None:
+    """CHAOS-3285 follow-up: a valid completion can never consume zero input
+    AND zero output tokens (the same invariant budget.py's _agent_usage()
+    already relies on for the success path). A provider that reports
+    exactly that on an exhausted response must not have that zero usage
+    attached to the error -- otherwise guard_byo_call reconciles the
+    reservation as a real $0 charge and silently drops the actual
+    (unreported) cost from BYO budget accounting instead of holding the
+    reservation conservatively.
+    """
+    exhausted = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="length",
+                message=SimpleNamespace(content="", tool_calls=[]),
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=0,
+            completion_tokens=0,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=0),
+        ),
+    )
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-nano", client=Client([exhausted])
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+    assert caught.value.usage is None
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_length_with_no_usage_object_withholds_usage() -> None:
+    """A response that omits ``usage`` entirely normalizes to the same 0/0
+    shape as one that reports literal zeros -- both must be treated as
+    unreported, not as a free call.
+    """
+    exhausted = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="length",
+                message=SimpleNamespace(content="", tool_calls=[]),
+            )
+        ],
+        usage=None,
+    )
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-nano", client=Client([exhausted])
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+    assert caught.value.usage is None
+
+
+@pytest.mark.asyncio
 async def test_contract_violation_and_invalid_response_also_attach_usage() -> None:
     """CHAOS-3285 audit: OUTPUT_EXHAUSTED was the reported finding, but every
     raise path inside the same try block discards response.usage the same

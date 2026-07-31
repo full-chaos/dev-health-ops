@@ -240,6 +240,7 @@ nav:
           - Platform: contribute/architecture/platform.md
           - Data and storage: contribute/architecture/data-and-storage.md
           - Stable contracts: contribute/architecture/contracts.md
+          - Ask Dev v2 contracts: contribute/architecture/ask-dev-contracts-v2.md
       - Develop and test:
           - contribute/development/index.md
           - Commands: contribute/development/commands.md

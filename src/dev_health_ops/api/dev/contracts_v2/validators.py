@@ -24,42 +24,96 @@ The five guardrails named in the acceptance criteria:
 (d) ``validate_narrative_fact_references`` — narrative referencing missing fact IDs
 (e) ``validate_relationship_refs_within_frame`` — relationship refs outside the frame
 
-CHAOS-3294 Codex adversarial-review hardening (post-merge) adds two more
-guardrails that are not part of the original five but close counterexamples
-the review reproduced against them:
+Two more guardrails close counterexamples that adversarial review
+reproduced against those five:
 
-(f) ``validate_no_answer_content_leaks`` — a "no content" outcome (see
-    ``NO_ANSWER_OUTCOMES`` below) must carry *nothing* beyond the bare
-    outcome: no completion, readiness, metrics, comparisons, relationship
-    paths, evidence, source observations, or internal cross-references
-    (``health_profile_refs``/``finding_refs``/``deficiency_refs``), and
-    ``denied`` specifically must not disclose which subject was asked
-    about. ``needs_clarification`` is deliberately **not** in
-    ``NO_ANSWER_OUTCOMES``: unlike the five outcomes that project to a v1
-    ``DevError`` (see ``compat.py``'s ``_ERROR_OUTCOME_CODES``),
-    ``needs_clarification`` projects to a v1 ``DevAnswer`` with
-    ``insufficient_evidence`` status and its frame may legitimately carry a
-    disambiguation-relevant ``subject_ref`` (see
-    ``compat._project_needs_clarification``) — only its answer *content*
-    (sections/facts) is required to stay empty, which the pre-existing
-    ``validate_outcome_consistency`` check already enforces.
-(g) ``validate_narrative_frame_consistency`` — a battery of deterministic,
-    narrow checks (numeral/percentage containment, readiness-word polarity,
-    committed-subject-name presence, recommendation-keyword grounding) that
-    reject a narrative that plainly contradicts its paired frame. This is
-    **not** general semantic contradiction detection — arbitrary claims a
-    narrative could make that aren't reducible to one of these four
-    deterministic signals cannot be verified at the contract level. Full
-    narrative/frame semantic consistency checking is owned by the TRD v2
-    §11 layer-6 narrative-consistency validator, tracked as CHAOS-3297; this
-    module only closes the subset that is mechanically checkable without a
-    model in the loop.
+(f) ``validate_no_answer_projection`` — a "no content" outcome (see
+    ``NO_ANSWER_OUTCOMES``) is projected through a **total field allowlist**
+    rather than scrubbed against a denylist. See "The no-answer allowlist
+    projection" below; this is the round-2 structural replacement for the
+    round-1 denylist (``validate_no_answer_content_leaks``, retained as an
+    alias so the guard keeps its documented name).
+(g) ``validate_narrative_frame_consistency`` — deterministic checks that
+    bind narrative prose to the *specific* frame facts the narrative
+    declares it is narrating. See "Narrative fact binding" below. This is
+    still **not** general semantic contradiction detection: an arbitrary
+    claim that is not reducible to a number, a readiness word, the
+    subject's canonical identity, or a recommendation reference cannot be
+    verified without a model in the loop. That layer is the TRD v2 §11
+    layer-6 narrative-consistency validator, tracked as CHAOS-3297.
+
+The no-answer allowlist projection
+----------------------------------
+
+Round-1 hardening scrubbed a fixed *denylist* of prohibited fields off a
+no-answer frame. Adversarial review round 2 walked straight around it via
+the fields the denylist did not name (``direct_answer``, ``conflicts``,
+``limitations``, ``safe_follow_up_questions``, and a whole ``narrative``),
+each of which is a free-form, producer-authored disclosure channel: a
+``denied`` frame disclosed a private project's existence, its completion
+percentage, and a cross-provider conflict about it, and the v1 projector
+re-emitted that copy verbatim as ``DevError.safe_message``.
+
+The replacement inverts the polarity. Every field of ``DevAnswerFrame`` and
+``DevAnswerV2`` carries an explicit classification in
+``NO_ANSWER_FRAME_FIELD_POLICY`` / ``NO_ANSWER_ANSWER_FIELD_POLICY``:
+
+``ABSENT``
+    Must be ``None`` or empty. Nothing about the subject survives here.
+``CANONICAL``
+    Must equal, exactly, the server-owned constant for this outcome
+    (``CANONICAL_NO_ANSWER_COPY`` / ``CANONICAL_NO_ANSWER_DISPLAY_LABELS``).
+    Producer-authored free text is never *reused*, only *replaced*.
+``IDENTIFIER``
+    Every string this field reaches must be a whitespace-free identifier
+    token (``_IDENTIFIER_TOKEN_PATTERN``, the ``OpaqueID`` shape). This is a
+    **runtime** predicate on the value, not a declaration about the type, so
+    classifying a free-text field as ``IDENTIFIER`` does not create an
+    escape hatch: the moment it carries prose, validation fails.
+``NON_TEXT``
+    Reaches no strings at all (timestamps, numbers, booleans).
+``SELF_VALIDATED``
+    A nested v2 contract that carries its own registered policy, applied
+    recursively.
+
+``assert_no_answer_policy_is_total`` is called at **import time** by
+``frame.py`` and ``answer.py``. A field added to either model without a
+classification raises ``RuntimeError`` on import — the package will not
+load, so the enumeration cannot silently fall behind the models. The
+matching test derives the same enumeration from the model definitions and
+additionally proves every ``ABSENT`` field is individually rejected.
+
+Narrative fact binding
+----------------------
+
+Round-1 narrative checks matched tokens against the frame *globally*, which
+adversarial review round 2 bypassed three ways: an unrelated comparison
+value of ``100`` legitimized "100% complete" against a 75% completion block;
+a substring match let "billing-health" satisfy a frame committed to
+"full-chaos/dev-health"; and recommendation prose was grounded by the mere
+existence of *some* recommendation fact anywhere in the frame. Each check is
+now bound to the specific facts the narrative declares:
+
+* numeric tokens are drawn only from the referenced facts' own text (plus
+  server-owned canonical copy and the completion block), never from the
+  whole frame; comparison values are admitted per sentence, and only in a
+  sentence that names that comparison's label;
+* a sentence that makes a completion claim may only cite a percentage the
+  completion block itself supports;
+* subject mentions are matched as a contiguous canonical token sequence,
+  never as a substring;
+* recommendation prose requires the narrative to reference the specific
+  recommendation fact by ID.
 """
 
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from collections.abc import Iterator, Mapping, Sequence
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from .frame import DevAnswerFrame
@@ -67,8 +121,16 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ANSWERED_CONTENT_OUTCOMES",
+    "CANONICAL_NO_ANSWER_COPY",
+    "CANONICAL_NO_ANSWER_DISPLAY_LABELS",
+    "CANONICAL_NO_ANSWER_REMEDIATION",
+    "NO_ANSWER_ANSWER_FIELD_POLICY",
+    "NO_ANSWER_FRAME_FIELD_POLICY",
     "NO_ANSWER_OUTCOMES",
     "PUBLIC_TEXT_FORBIDDEN_TOKENS",
+    "NoAnswerFieldPolicy",
+    "assert_no_answer_policy_is_total",
+    "register_no_answer_policy",
     "scan_public_text",
     "validate_completion_denominator",
     "validate_narrative_fact_references",
@@ -78,6 +140,7 @@ __all__ = [
     "validate_narrative_recommendation_claim",
     "validate_narrative_subject_claim",
     "validate_no_answer_content_leaks",
+    "validate_no_answer_projection",
     "validate_no_internal_leakage",
     "validate_outcome_consistency",
     "validate_relationship_refs_within_frame",
@@ -140,6 +203,8 @@ def _public_copy_fields(frame: DevAnswerFrame) -> list[str]:
         values.append(section.title)
     for fact in frame.facts:
         values.append(fact.text)
+    for conflict in frame.conflicts:
+        values.append(conflict.summary)
     values.extend(frame.limitations)
     values.extend(frame.safe_follow_up_questions)
     if frame.readiness is not None:
@@ -180,27 +245,16 @@ ANSWERED_CONTENT_OUTCOMES = frozenset({"answered", "answered_with_gaps"})
 
 #: Outcomes for which the server produced *no* answer whatsoever. This is a
 #: strict subset of ``_EMPTY_CONTENT_OUTCOMES`` — it deliberately excludes
-#: ``needs_clarification`` (see module docstring guardrail (f) for why) — and
-#: is exactly the outcome set ``compat.py``'s ``_ERROR_OUTCOME_CODES`` maps to
-#: a v1 ``DevError`` rather than a v1 ``DevAnswer``. Codex adversarial review
-#: (CHAOS-3294): a ``denied`` frame validated with a subject reference, a
-#: 3/4 completion rate, evidence, and source observations all still present
-#: because the old guard only checked ``sections``/``facts``.
+#: ``needs_clarification`` — and is exactly the outcome set ``compat.py``'s
+#: ``_ERROR_OUTCOME_CODES`` maps to a v1 ``DevError`` rather than a v1
+#: ``DevAnswer``. ``needs_clarification`` projects to a v1 ``DevAnswer`` with
+#: ``insufficient_evidence`` status and its frame may legitimately carry a
+#: disambiguation-relevant ``subject_ref`` (see
+#: ``compat._project_needs_clarification``); only its answer *content*
+#: (sections/facts) must stay empty, which ``validate_outcome_consistency``
+#: already enforces.
 NO_ANSWER_OUTCOMES = frozenset(
     {"not_found", "temporarily_unavailable", "unsupported", "denied", "failed"}
-)
-
-#: Frame list/optional fields that must be empty for a ``NO_ANSWER_OUTCOMES``
-#: outcome, beyond ``sections``/``facts`` (already covered above).
-_NO_ANSWER_PROHIBITED_LIST_FIELDS: tuple[str, ...] = (
-    "metrics",
-    "comparisons",
-    "relationship_paths",
-    "evidence",
-    "source_observations",
-    "health_profile_refs",
-    "finding_refs",
-    "deficiency_refs",
 )
 
 
@@ -235,36 +289,262 @@ def validate_outcome_consistency(frame: DevAnswerFrame) -> None:
             )
 
 
-def validate_no_answer_content_leaks(frame: DevAnswerFrame) -> None:
-    """(f) A no-content outcome (``NO_ANSWER_OUTCOMES``) must carry nothing.
+# ---------------------------------------------------------------------------
+# (f) the no-answer allowlist projection — see the module docstring section
+# "The no-answer allowlist projection" for the design and why round-1's
+# denylist was replaced wholesale.
+# ---------------------------------------------------------------------------
 
-    Closes the Codex-review counterexample: the pre-existing outcome-content
-    check only inspected ``sections``/``facts``, so a ``denied`` (or
-    ``not_found``/``unsupported``/``temporarily_unavailable``/``failed``)
-    frame could still validate with a completion rate, readiness, metrics,
-    comparisons, relationship paths, evidence, source observations, or
-    internal cross-references intact — none of which any client should ever
-    see for an outcome that means "the server produced no answer". ``denied``
-    additionally may not disclose *which* subject was asked about (the
-    outcome itself must not confirm or deny the subject's existence).
+#: The single server-owned public sentence each no-answer outcome is allowed
+#: to render. A no-answer frame's ``direct_answer`` must equal this exactly:
+#: producer-authored copy is replaced, never trimmed or re-emitted.
+CANONICAL_NO_ANSWER_COPY: Mapping[str, str] = {
+    "not_found": "No matching subject was found for this question.",
+    "temporarily_unavailable": (
+        "This answer is temporarily unavailable. Please try again shortly."
+    ),
+    "unsupported": "This question is not supported yet.",
+    "denied": "You do not have access to ask about this.",
+    "failed": "Something went wrong while preparing this answer.",
+}
+
+#: Server-owned remediation for each no-answer outcome, used by the v1
+#: projector. Round-1's projector used the frame's own
+#: ``safe_follow_up_questions`` here, which is producer-authored text about
+#: the subject — the same reuse channel as ``direct_answer``.
+CANONICAL_NO_ANSWER_REMEDIATION: Mapping[str, tuple[str, ...]] = {
+    "not_found": ("Check the name and try again.",),
+    "temporarily_unavailable": ("Try the question again in a few minutes.",),
+    "unsupported": ("Try a status, health, or metric question instead.",),
+    "denied": ("Ask an administrator for access to this area.",),
+    "failed": ("Try the question again.",),
+}
+
+#: The matching ``dev_answer.v2`` display labels, kept in step with
+#: ``answer._OUTCOME_DISPLAY_LABELS`` by an import-time assertion there.
+CANONICAL_NO_ANSWER_DISPLAY_LABELS: Mapping[str, str] = {
+    "not_found": "Not found",
+    "temporarily_unavailable": "Temporarily unavailable",
+    "unsupported": "Not supported yet",
+    "denied": "Not permitted",
+    "failed": "Something went wrong",
+}
+
+#: The ``OpaqueID`` shape: a whitespace-free identifier token. A string that
+#: matches this cannot carry a sentence of producer-authored prose.
+_IDENTIFIER_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$")
+
+
+class NoAnswerFieldPolicy(StrEnum):
+    """How one field of a no-answer contract object is projected."""
+
+    ABSENT = "absent"
+    CANONICAL = "canonical"
+    IDENTIFIER = "identifier"
+    NON_TEXT = "non_text"
+    SELF_VALIDATED = "self_validated"
+
+
+#: Every field of ``DevAnswerFrame``, classified. Checked for totality
+#: against the model at import time by ``frame.py``.
+NO_ANSWER_FRAME_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
+    "schema_version": NoAnswerFieldPolicy.IDENTIFIER,
+    "frame_id": NoAnswerFieldPolicy.IDENTIFIER,
+    "run_id": NoAnswerFieldPolicy.IDENTIFIER,
+    "generated_at": NoAnswerFieldPolicy.NON_TEXT,
+    "public_outcome": NoAnswerFieldPolicy.IDENTIFIER,
+    "subject_ref": NoAnswerFieldPolicy.ABSENT,
+    "subject_set_ref": NoAnswerFieldPolicy.ABSENT,
+    "direct_answer": NoAnswerFieldPolicy.CANONICAL,
+    "completion": NoAnswerFieldPolicy.ABSENT,
+    "readiness": NoAnswerFieldPolicy.ABSENT,
+    "sections": NoAnswerFieldPolicy.ABSENT,
+    "facts": NoAnswerFieldPolicy.ABSENT,
+    "metrics": NoAnswerFieldPolicy.ABSENT,
+    "comparisons": NoAnswerFieldPolicy.ABSENT,
+    "relationship_paths": NoAnswerFieldPolicy.ABSENT,
+    "health_profile_refs": NoAnswerFieldPolicy.ABSENT,
+    "finding_refs": NoAnswerFieldPolicy.ABSENT,
+    "deficiency_refs": NoAnswerFieldPolicy.ABSENT,
+    "conflicts": NoAnswerFieldPolicy.ABSENT,
+    "limitations": NoAnswerFieldPolicy.ABSENT,
+    "source_observations": NoAnswerFieldPolicy.ABSENT,
+    # Coverage carries only counts, a timestamp, and source-class
+    # identifiers from a fixed platform vocabulary — never subject-derived
+    # text — so it is admitted as identifiers rather than blanked, which
+    # keeps "how many sources were required" answerable for a denial.
+    "coverage": NoAnswerFieldPolicy.IDENTIFIER,
+    "evidence": NoAnswerFieldPolicy.ABSENT,
+    "safe_follow_up_questions": NoAnswerFieldPolicy.ABSENT,
+    # Plan/rule/query versions are platform provenance tokens, not copy.
+    "versions": NoAnswerFieldPolicy.IDENTIFIER,
+}
+
+#: Every field of ``DevAnswerV2``, classified. ``narrative`` is ``ABSENT``:
+#: an optional provider narrative is exactly the free-form channel a
+#: no-answer outcome must not have.
+NO_ANSWER_ANSWER_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
+    "schema_version": NoAnswerFieldPolicy.IDENTIFIER,
+    "answer_id": NoAnswerFieldPolicy.IDENTIFIER,
+    "conversation_id": NoAnswerFieldPolicy.IDENTIFIER,
+    "run_id": NoAnswerFieldPolicy.IDENTIFIER,
+    "generated_at": NoAnswerFieldPolicy.NON_TEXT,
+    "public_outcome": NoAnswerFieldPolicy.IDENTIFIER,
+    "outcome_display_label": NoAnswerFieldPolicy.CANONICAL,
+    "frame": NoAnswerFieldPolicy.SELF_VALIDATED,
+    "narrative": NoAnswerFieldPolicy.ABSENT,
+}
+
+#: Registered ``(policy, canonical tables)`` per model class, populated at
+#: import time. ``SELF_VALIDATED`` resolves through this registry, so a
+#: nested contract cannot be delegated to unless it is itself classified.
+_POLICY_REGISTRY: dict[
+    type[BaseModel], tuple[Mapping[str, NoAnswerFieldPolicy], Mapping[str, Any]]
+] = {}
+
+
+def _string_leaves(value: object) -> Iterator[str]:
+    """Every string reachable from ``value``, through models and collections."""
+
+    if value is None:
+        return
+    if isinstance(value, str):
+        yield value
+        return
+    if isinstance(value, BaseModel):
+        for name in type(value).model_fields:
+            yield from _string_leaves(getattr(value, name))
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            yield from _string_leaves(key)
+            yield from _string_leaves(item)
+        return
+    if isinstance(value, (tuple, list, set, frozenset)):
+        for item in value:
+            yield from _string_leaves(item)
+
+
+def _is_absent(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (str, bytes)):
+        return False
+    if isinstance(value, (tuple, list, set, frozenset, Mapping)):
+        return not value
+    return False
+
+
+def register_no_answer_policy(
+    model_cls: type[BaseModel],
+    policy: Mapping[str, NoAnswerFieldPolicy],
+    canonical: Mapping[str, Mapping[str, str]],
+) -> None:
+    """Register and immediately total-check one model's no-answer policy."""
+
+    assert_no_answer_policy_is_total(model_cls, policy, canonical)
+    _POLICY_REGISTRY[model_cls] = (policy, canonical)
+
+
+def assert_no_answer_policy_is_total(
+    model_cls: type[BaseModel],
+    policy: Mapping[str, NoAnswerFieldPolicy],
+    canonical: Mapping[str, Mapping[str, str]],
+) -> None:
+    """Raise unless every field of ``model_cls`` carries a classification.
+
+    Called at import time, so adding a field to a no-answer-bearing contract
+    without classifying it breaks the package import rather than silently
+    opening a new disclosure channel.
     """
 
-    outcome = frame.public_outcome.value
+    declared = set(policy)
+    actual = set(model_cls.model_fields)
+    unclassified = sorted(actual - declared)
+    if unclassified:
+        raise RuntimeError(
+            f"{model_cls.__name__} field(s) {unclassified} have no no-answer "
+            "projection policy; classify them in validators.py "
+            "(ABSENT / CANONICAL / IDENTIFIER / NON_TEXT / SELF_VALIDATED)"
+        )
+    stale = sorted(declared - actual)
+    if stale:
+        raise RuntimeError(
+            f"{model_cls.__name__} no-answer policy names removed field(s) {stale}"
+        )
+    for field_name, rule in policy.items():
+        if rule is NoAnswerFieldPolicy.CANONICAL:
+            table = canonical.get(field_name)
+            if table is None or set(table) != set(NO_ANSWER_OUTCOMES):
+                raise RuntimeError(
+                    f"{model_cls.__name__}.{field_name} is CANONICAL but has no "
+                    "canonical value for every no-answer outcome"
+                )
+        elif rule is NoAnswerFieldPolicy.SELF_VALIDATED:
+            nested = model_cls.model_fields[field_name].annotation
+            if not (isinstance(nested, type) and nested in _POLICY_REGISTRY):
+                raise RuntimeError(
+                    f"{model_cls.__name__}.{field_name} delegates to a nested "
+                    "contract that has no registered no-answer policy"
+                )
+
+
+def _enforce_no_answer_projection(obj: BaseModel, outcome: str) -> None:
+    policy, canonical = _POLICY_REGISTRY[type(obj)]
+    label = type(obj).__name__
+    for field_name, rule in policy.items():
+        value = getattr(obj, field_name)
+        if rule is NoAnswerFieldPolicy.ABSENT:
+            if not _is_absent(value):
+                raise ValueError(
+                    f"public outcome {outcome!r} cannot carry {label}.{field_name}"
+                )
+        elif rule is NoAnswerFieldPolicy.CANONICAL:
+            expected = canonical[field_name][outcome]
+            if value != expected:
+                raise ValueError(
+                    f"public outcome {outcome!r} requires the canonical server "
+                    f"copy for {label}.{field_name}; producer-authored text is "
+                    "never reused for a no-answer outcome"
+                )
+        elif rule is NoAnswerFieldPolicy.IDENTIFIER:
+            for leaf in _string_leaves(value):
+                if not _IDENTIFIER_TOKEN_PATTERN.match(leaf):
+                    raise ValueError(
+                        f"public outcome {outcome!r} allows only identifier "
+                        f"tokens in {label}.{field_name}, not free text: {leaf!r}"
+                    )
+        elif rule is NoAnswerFieldPolicy.NON_TEXT:
+            leaked = list(_string_leaves(value))
+            if leaked:
+                raise ValueError(
+                    f"public outcome {outcome!r} allows no text in "
+                    f"{label}.{field_name}: {leaked[0]!r}"
+                )
+        elif value is not None:
+            _enforce_no_answer_projection(value, outcome)
+
+
+def validate_no_answer_projection(obj: BaseModel) -> None:
+    """(f) Project a no-answer contract object through its field allowlist.
+
+    Applies to ``DevAnswerFrame`` and ``DevAnswerV2`` (whichever registered
+    policy matches ``type(obj)``). For an outcome that is not a no-answer
+    outcome this is a no-op — those objects are governed by the ordinary
+    content validators instead.
+    """
+
+    outcome = obj.public_outcome.value  # type: ignore[attr-defined]
     if outcome not in NO_ANSWER_OUTCOMES:
         return
-    if frame.completion is not None:
-        raise ValueError(f"public outcome {outcome!r} cannot carry a completion block")
-    if frame.readiness is not None:
-        raise ValueError(f"public outcome {outcome!r} cannot carry a readiness block")
-    for field_name in _NO_ANSWER_PROHIBITED_LIST_FIELDS:
-        if getattr(frame, field_name):
-            raise ValueError(f"public outcome {outcome!r} cannot carry {field_name}")
-    if outcome == "denied" and (
-        frame.subject_ref is not None or frame.subject_set_ref is not None
-    ):
-        raise ValueError(
-            "'denied' cannot disclose the subject identity that was asked about"
-        )
+    _enforce_no_answer_projection(obj, outcome)
+
+
+#: Retained name for guardrail (f). The round-1 denylist implementation was
+#: replaced by the allowlist projection above; the name is kept because
+#: ``frame.py`` calls guards through the module object and the mutation
+#: tests disable them by name.
+validate_no_answer_content_leaks = validate_no_answer_projection
 
 
 # ---------------------------------------------------------------------------
@@ -338,22 +618,26 @@ def validate_narrative_fact_references(
 
 
 # ---------------------------------------------------------------------------
-# (g) narrative text contradicting its paired frame (Codex adversarial
-# review, CHAOS-3294). See module docstring guardrail (g) for the explicit
-# scope statement: these are four narrow, deterministic checks, not general
-# semantic contradiction detection. Full semantic consistency is the TRD v2
-# §11 layer-6 narrative-consistency validator, CHAOS-3297.
+# (g) narrative prose bound to the specific frame facts it narrates. See the
+# module docstring's "Narrative fact binding" section for the three round-2
+# bypasses this replaced and for what remains out of contract-level reach
+# (CHAOS-3297, the layer-6 narrative-consistency validator).
 # ---------------------------------------------------------------------------
 
-#: Any bare numeral or percentage token in narrative prose, e.g. ``100``,
-#: ``75%``, ``0.75``.
+#: Any bare numeral or percentage token in prose, e.g. ``100``, ``75%``,
+#: ``0.75``.
 _NUMERIC_TOKEN_PATTERN = re.compile(r"\d+(?:\.\d+)?%?")
-
+#: A percentage specifically — the form a completion claim takes.
+_PERCENT_TOKEN_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%")
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
+_WORD_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 _READY_WORD_PATTERN = re.compile(r"\bready\b", re.IGNORECASE)
 _NOT_READY_PHRASE_PATTERN = re.compile(r"\bnot[\s-]+ready\b", re.IGNORECASE)
-_TOKEN_SPLIT_PATTERN = re.compile(r"[^a-z0-9]+")
 _RECOMMENDATION_CLAIM_PATTERN = re.compile(
     r"\brecommend(?:s|ed|ation|ations)?\b", re.IGNORECASE
+)
+_COMPLETION_CLAIM_PATTERN = re.compile(
+    r"\b(?:complete|completed|completion|done|finished)\b", re.IGNORECASE
 )
 
 
@@ -361,77 +645,153 @@ def _numeric_value(raw_token: str) -> float:
     return float(raw_token[:-1]) if raw_token.endswith("%") else float(raw_token)
 
 
-def _frame_numeric_value_set(frame: DevAnswerFrame) -> set[float]:
-    """Every numeral the frame itself renders, in the units it renders them.
+def _value_in(haystack: set[float], value: float, *, tolerance: float = 1e-6) -> bool:
+    return any(abs(value - candidate) <= tolerance for candidate in haystack)
 
-    A completion ``rate`` of ``0.75`` is added both as ``0.75`` (fraction
-    form) and ``75`` (percent form) so a narrative may correctly say either
-    "0.75" or "75%" — the guard only rejects a number the frame never
-    rendered in *any* of its own forms, e.g. "100%" when the frame's own
-    rate is 75%.
+
+def _word_tokens(text: str) -> list[str]:
+    return _WORD_TOKEN_PATTERN.findall(text.lower())
+
+
+def _contains_token_sequence(haystack: Sequence[str], needle: Sequence[str]) -> bool:
+    """True when ``needle`` occurs as a contiguous run of whole tokens.
+
+    Token-sequence containment, never substring containment: "billing-health"
+    tokenizes to ``["billing", "health"]``, which does not contain the
+    contiguous run ``["dev", "health"]``, so it can no longer satisfy a frame
+    committed to "full-chaos/dev-health".
     """
 
-    values: set[float] = set()
-    for match in _NUMERIC_TOKEN_PATTERN.finditer(frame.direct_answer):
-        values.add(_numeric_value(match.group()))
-    for fact in frame.facts:
-        for match in _NUMERIC_TOKEN_PATTERN.finditer(fact.text):
-            values.add(_numeric_value(match.group()))
-    for text in (*frame.limitations, *frame.safe_follow_up_questions):
-        for match in _NUMERIC_TOKEN_PATTERN.finditer(text):
-            values.add(_numeric_value(match.group()))
-    if frame.readiness is not None:
-        for text in frame.readiness.translated_user_reasons:
-            for match in _NUMERIC_TOKEN_PATTERN.finditer(text):
-                values.add(_numeric_value(match.group()))
+    if not needle:
+        return False
+    span = len(needle)
+    return any(
+        list(haystack[index : index + span]) == list(needle)
+        for index in range(len(haystack) - span + 1)
+    )
+
+
+def _narrative_bound_fact_ids(
+    narrative: DevNarrative, frame: DevAnswerFrame
+) -> set[str]:
+    """Fact IDs the narrative declared it is narrating.
+
+    Direct ``referenced_fact_ids`` plus the facts of any section the
+    narrative referenced — a section reference is a declaration that the
+    narrative covers that section's facts.
+    """
+
+    bound = set(narrative.referenced_fact_ids)
+    referenced_sections = set(narrative.referenced_section_ids)
+    for section in frame.sections:
+        if section.section_id in referenced_sections:
+            bound.update(section.fact_ids)
+    return bound
+
+
+def _completion_value_set(frame: DevAnswerFrame) -> set[float]:
     completion = frame.completion
-    if completion is not None:
-        if completion.numerator is not None:
-            values.add(float(completion.numerator))
-        if completion.denominator is not None:
-            values.add(float(completion.denominator))
-        if completion.rate is not None:
-            values.add(round(completion.rate, 6))
-            values.add(round(completion.rate * 100, 6))
-    for point in frame.comparisons:
-        values.add(round(point.current_value, 6))
-        if point.comparison_value is not None:
-            values.add(round(point.comparison_value, 6))
+    values: set[float] = set()
+    if completion is None:
+        return values
+    if completion.numerator is not None:
+        values.add(float(completion.numerator))
+    if completion.denominator is not None:
+        values.add(float(completion.denominator))
+    if completion.rate is not None:
+        # Both renderings are legitimate: "0.75" and "75%".
+        values.add(round(completion.rate, 6))
+        values.add(round(completion.rate * 100, 6))
     return values
 
 
-def _value_in(haystack: set[float], value: float, *, tolerance: float = 1e-6) -> bool:
-    return any(abs(value - candidate) <= tolerance for candidate in haystack)
+def _bound_numeric_values(narrative: DevNarrative, frame: DevAnswerFrame) -> set[float]:
+    """Numbers the narrative is allowed to cite anywhere in its body.
+
+    Deliberately excludes ``comparisons``: an unrelated comparison value is
+    exactly what let "100% complete" pass against a 75% completion block.
+    Comparison values are admitted per sentence instead, and only when that
+    sentence names the comparison's own label.
+    """
+
+    bound_fact_ids = _narrative_bound_fact_ids(narrative, frame)
+    texts: list[str] = [frame.direct_answer]
+    texts.extend(fact.text for fact in frame.facts if fact.fact_id in bound_fact_ids)
+    texts.extend(frame.limitations)
+    texts.extend(frame.safe_follow_up_questions)
+    if frame.readiness is not None:
+        texts.extend(frame.readiness.translated_user_reasons)
+    values = {
+        _numeric_value(match.group())
+        for text in texts
+        for match in _NUMERIC_TOKEN_PATTERN.finditer(text)
+    }
+    return values | _completion_value_set(frame)
+
+
+def _sentence_comparison_values(
+    sentence_tokens: Sequence[str], frame: DevAnswerFrame
+) -> set[float]:
+    values: set[float] = set()
+    for point in frame.comparisons:
+        label_tokens = _word_tokens(point.label)
+        if label_tokens and _contains_token_sequence(sentence_tokens, label_tokens):
+            values.add(round(point.current_value, 6))
+            if point.comparison_value is not None:
+                values.add(round(point.comparison_value, 6))
+    return values
 
 
 def validate_narrative_numeric_containment(
     narrative: DevNarrative, frame: DevAnswerFrame
 ) -> None:
-    """(g.1) Reject a narrative numeral/percentage absent from the frame's own values.
+    """(g.1) Bind every narrative numeral to the facts the narrative references.
 
-    Deterministic: extracts every bare number/percent token from the
-    narrative body and requires each to match (within floating-point
-    tolerance) a number the frame itself renders somewhere — its own
-    ``direct_answer``, fact text, limitations, follow-ups, readiness
-    reasons, completion numerator/denominator/rate, or comparison values.
-    Closes the counterexample where a narrative claimed "100% complete"
-    against a frame whose completion rate was 3/4 (75%).
+    Two independent rules, applied per sentence:
+
+    1. *Containment.* Each numeral must appear in the bound value set — the
+       referenced facts' own text, the frame's canonical copy, and the
+       completion block — or in a comparison whose label that same sentence
+       names.
+    2. *Completion claims.* A sentence using completion vocabulary may only
+       cite a percentage the completion block itself supports, and may not
+       cite one at all when there is no calculable completion block. This
+       holds even if some unrelated frame value happens to equal the cited
+       number, which is what defeated the round-1 global check.
     """
 
-    offenders = sorted(
-        {
-            match.group()
-            for match in _NUMERIC_TOKEN_PATTERN.finditer(narrative.body)
-            if not _value_in(
-                _frame_numeric_value_set(frame), _numeric_value(match.group())
-            )
-        }
-    )
-    if offenders:
-        raise ValueError(
-            f"narrative cites number(s) {offenders} that do not appear in the "
-            "frame's own facts, completion, or comparisons"
+    bound_values = _bound_numeric_values(narrative, frame)
+    completion_values = _completion_value_set(frame)
+    calculable = frame.completion is not None and frame.completion.calculable
+    for sentence in _SENTENCE_SPLIT_PATTERN.split(narrative.body):
+        sentence_tokens = _word_tokens(sentence)
+        allowed = bound_values | _sentence_comparison_values(sentence_tokens, frame)
+        offenders = sorted(
+            {
+                match.group()
+                for match in _NUMERIC_TOKEN_PATTERN.finditer(sentence)
+                if not _value_in(allowed, _numeric_value(match.group()))
+            }
         )
+        if offenders:
+            raise ValueError(
+                f"narrative cites number(s) {offenders} that no fact it "
+                "references, and no comparison it names, supports"
+            )
+        if not _COMPLETION_CLAIM_PATTERN.search(sentence):
+            continue
+        for match in _PERCENT_TOKEN_PATTERN.finditer(sentence):
+            claimed = float(match.group(1))
+            if not calculable:
+                raise ValueError(
+                    f"narrative claims {claimed}% completion but the frame "
+                    "carries no calculable completion block"
+                )
+            if not _value_in(completion_values, claimed):
+                raise ValueError(
+                    f"narrative claims {claimed}% completion, which the frame's "
+                    "own completion block does not support"
+                )
 
 
 def validate_narrative_readiness_claim(
@@ -439,9 +799,8 @@ def validate_narrative_readiness_claim(
 ) -> None:
     """(g.2) Reject a narrative readiness claim that contradicts the frame.
 
-    Closes the counterexample where a narrative said "ready" against a frame
-    whose readiness state was ``not_ready``. Deterministic because
-    ``DevReadinessBlock.state`` is a closed three-value enum.
+    Deterministic because ``DevReadinessBlock.state`` is a closed
+    three-value enum.
     """
 
     if frame.readiness is None:
@@ -460,65 +819,81 @@ def validate_narrative_readiness_claim(
         )
 
 
+def _subject_identity_forms(display_label: str, entity_id: str) -> list[list[str]]:
+    """The canonical token sequences that count as naming this subject.
+
+    The full label, its last path segment (the ordinary shorthand: "dev-health"
+    for "full-chaos/dev-health"), and the entity ID. Each must appear as a
+    *contiguous* token run, so a different subject that merely shares a token
+    ("billing-health") does not satisfy it.
+    """
+
+    forms: list[list[str]] = []
+    for candidate in (
+        _word_tokens(display_label),
+        _word_tokens(display_label.rsplit("/", 1)[-1]),
+        _word_tokens(entity_id),
+    ):
+        if candidate and candidate not in forms:
+            forms.append(candidate)
+    return forms
+
+
 def validate_narrative_subject_claim(
     narrative: DevNarrative, frame: DevAnswerFrame
 ) -> None:
-    """(g.3) Reject a narrative that never names the frame's committed subject.
+    """(g.3) Require the narrative to name the frame's committed subject.
 
-    Deliberately a loose, false-positive-averse presence check (any
-    ``len >= 3`` token split out of ``subject_ref.display_label``, not an
-    exact-string match) rather than a strict containment rule, so ordinary
-    prose that abbreviates or reformats a display label ("dev-health" for
-    "full-chaos/dev-health") still passes. It still catches a narrative that
-    names a wholly different subject.
+    Canonical identity, not substring: at least one of the subject's
+    canonical token sequences must occur contiguously in the narrative body.
+    A narrative that names only some *other* subject sharing a single token
+    is rejected.
     """
 
     subject = frame.subject_ref
     if subject is None:
         return
-    tokens = [
-        token
-        for token in _TOKEN_SPLIT_PATTERN.split(subject.display_label.lower())
-        if len(token) >= 3
-    ]
-    if not tokens:
+    forms = _subject_identity_forms(subject.display_label, subject.entity_id)
+    if not forms:
         return
-    lowered_body = narrative.body.lower()
-    if not any(token in lowered_body for token in tokens):
+    body_tokens = _word_tokens(narrative.body)
+    if not any(_contains_token_sequence(body_tokens, form) for form in forms):
         raise ValueError(
             "narrative body never names the frame's committed subject "
-            f"({subject.display_label!r})"
+            f"({subject.display_label!r}) by its canonical identity"
         )
 
 
 def validate_narrative_recommendation_claim(
     narrative: DevNarrative, frame: DevAnswerFrame
 ) -> None:
-    """(g.4) Reject narrative recommendation language ungrounded in the frame.
+    """(g.4) Bind recommendation prose to a specific referenced recommendation fact.
 
-    If the narrative reads as making a recommendation ("recommend(s|ed)",
-    "recommendation(s)"), the frame must actually carry at least one fact of
-    ``kind == "recommendation"`` to ground it.
+    The existence of *some* recommendation fact somewhere in the frame is
+    not grounding — that is what let a narrative recommend one thing while
+    the frame recommended another. The narrative must name the recommendation
+    fact it is narrating in ``referenced_fact_ids`` directly (a section
+    reference does not stand in for it).
     """
 
     if not _RECOMMENDATION_CLAIM_PATTERN.search(narrative.body):
         return
-    if not any(fact.kind == "recommendation" for fact in frame.facts):
+    referenced = set(narrative.referenced_fact_ids)
+    grounded = any(
+        fact.kind == "recommendation" and fact.fact_id in referenced
+        for fact in frame.facts
+    )
+    if not grounded:
         raise ValueError(
-            "narrative reads as a recommendation but the frame has no "
-            "recommendation fact to ground it"
+            "narrative reads as a recommendation but references no "
+            "recommendation fact of the frame to ground it"
         )
 
 
 def validate_narrative_frame_consistency(
     narrative: DevNarrative, frame: DevAnswerFrame
 ) -> None:
-    """(g) Run all four narrative/frame contradiction checks (g.1-g.4).
-
-    See the module docstring guardrail (g) and each sub-check's own
-    docstring for exactly what is — and is not — covered: this is bounded,
-    deterministic pattern matching, not semantic narrative understanding.
-    """
+    """(g) Run all four narrative/frame binding checks (g.1-g.4)."""
 
     validate_narrative_numeric_containment(narrative, frame)
     validate_narrative_readiness_claim(narrative, frame)

@@ -41,6 +41,10 @@ client can only ever see an approximation of the richer v2 frame):
   frame-level ``versions.rule_version``); when neither is present the
   projector downgrades the mapped v1 claim kind to ``inferred`` rather
   than emit an invalid v1 claim.
+* A no-answer outcome projects to a ``DevError`` built entirely from
+  server-owned tables (``CANONICAL_NO_ANSWER_COPY``, ``dev_error_remediation``
+  and ``CANONICAL_NO_ANSWER_REMEDIATION``). No text is carried across from
+  the frame — see ``_project_error``.
 """
 
 from __future__ import annotations
@@ -68,6 +72,7 @@ from dev_health_ops.api.dev.contracts import (
 
 from .answer import DevAnswerV2
 from .base import EntityKind, OpaqueID, PublicOutcome
+from .validators import CANONICAL_NO_ANSWER_COPY, CANONICAL_NO_ANSWER_REMEDIATION
 
 __all__ = ["project_answer_v2_to_v1"]
 
@@ -321,17 +326,25 @@ def _project_needs_clarification(
 def _project_error(answer: DevAnswerV2) -> DevError:
     # Team-subject answers are intercepted earlier, in
     # `project_answer_v2_to_v1`, before this helper ever runs.
-    frame = answer.frame
+    #
+    # Nothing is read off the frame here. A no-answer frame is already
+    # constrained to canonical server copy by
+    # `validators.validate_no_answer_projection`, but the projector building
+    # its own copy from the same table (rather than copying the frame's
+    # field through) means the v1 boundary cannot become a second reuse
+    # channel if that constraint is ever relaxed: adversarial review's
+    # `denied` counterexample reached a v1 client precisely because
+    # `DevError.safe_message` was `frame.direct_answer` verbatim.
     code, retryable = _ERROR_OUTCOME_CODES[answer.public_outcome]
-    safe_message = frame.direct_answer[:2_048] or answer.outcome_display_label
     return DevError(
         schema_version="dev_error.v1",
         request_id=answer.run_id,
         code=code,
-        safe_message=safe_message,
+        safe_message=CANONICAL_NO_ANSWER_COPY[answer.public_outcome.value],
         retryable=retryable,
         remediation=(
-            list(frame.safe_follow_up_questions[:5]) or dev_error_remediation(code)
+            dev_error_remediation(code)
+            or list(CANONICAL_NO_ANSWER_REMEDIATION[answer.public_outcome.value])
         ),
     )
 

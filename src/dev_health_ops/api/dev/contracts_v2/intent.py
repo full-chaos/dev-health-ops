@@ -54,7 +54,9 @@ class DevMessageRequestV2(ContractModelV2):
     retry_of_run_id: OpaqueID | None = None
     question: _QuestionText = Field(json_schema_extra={"x-max-utf8-bytes": 8_192})
     scope: DevScope
-    requested_metric_ids: list[MetricID] = Field(default_factory=list, max_length=8)
+    requested_metric_ids: tuple[MetricID, ...] = Field(
+        default_factory=tuple, max_length=8
+    )
     question_class_hint: QuestionClass | None = None
 
     @model_validator(mode="after")
@@ -78,16 +80,20 @@ class DevQuestionIntent(ContractModelV2):
     intent_id: QuestionIntentID
     interpreter_version: Annotated[str, StringConstraints(min_length=1, max_length=128)]
     cardinality: Cardinality
-    subject_kinds: list[EntityKind] = Field(default_factory=list, max_length=5)
-    mention_ordinals: list[int] = Field(default_factory=list, max_length=25)
-    requested_dimensions: list[OpaqueID] = Field(default_factory=list, max_length=20)
-    requested_metric_ids: list[MetricID] = Field(default_factory=list, max_length=8)
+    subject_kinds: tuple[EntityKind, ...] = Field(default_factory=tuple, max_length=5)
+    mention_ordinals: tuple[int, ...] = Field(default_factory=tuple, max_length=25)
+    requested_dimensions: tuple[OpaqueID, ...] = Field(
+        default_factory=tuple, max_length=20
+    )
+    requested_metric_ids: tuple[MetricID, ...] = Field(
+        default_factory=tuple, max_length=8
+    )
     comparison_mode: Literal[
         "none", "period_over_period", "cohort_relative", "own_history"
     ] = "none"
     ranking_requested: bool = False
     confidence: FiniteFloat = Field(ge=0, le=1)
-    interpretation_reasons: list[ShortText] = Field(min_length=1, max_length=10)
+    interpretation_reasons: tuple[ShortText, ...] = Field(min_length=1, max_length=10)
     requires_clarification: bool
     clarification_reason: ShortText | None = None
     client_question_class_hint: QuestionClass | None = None

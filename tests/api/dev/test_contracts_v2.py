@@ -16,10 +16,12 @@ fails the contract suite" acceptance clause, made attributable per-guard.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
+from typing import Any, get_args, get_origin
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from dev_health_ops.api.dev import contracts_v2 as v2
 from dev_health_ops.api.dev.contract_fixtures import (
@@ -28,6 +30,7 @@ from dev_health_ops.api.dev.contract_fixtures import (
 from dev_health_ops.api.dev.contract_fixtures_v2 import (
     NOW,
     negative_fixtures,
+    no_answer_answer_fixture,
     positive_fixtures,
     stream_fixtures,
 )
@@ -366,6 +369,10 @@ def test_source_observation_measured_zero_is_distinguishable_from_no_data() -> N
 # ---------------------------------------------------------------------------
 
 
+def no_answer_payload(outcome: str) -> dict[str, Any]:
+    return deepcopy(no_answer_answer_fixture(outcome))
+
+
 def _time_range_for_scope() -> DevTimeRange:
     return DevScope.model_validate(
         positive_fixtures()["dev_message_request.v2"]["scope"]
@@ -439,39 +446,15 @@ def test_compat_projects_needs_clarification_to_insufficient_evidence() -> None:
 def test_compat_projects_empty_content_outcomes_to_v1_error(
     outcome: str, expected_code: str
 ) -> None:
-    answer_payload = deepcopy(positive_fixtures()["dev_answer.v2"])
-    answer_payload["frame"]["public_outcome"] = outcome
-    answer_payload["frame"]["sections"] = []
-    answer_payload["frame"]["facts"] = []
-    answer_payload["frame"]["completion"] = None
-    answer_payload["frame"]["readiness"] = None
-    # A NO_ANSWER_OUTCOMES frame must carry nothing beyond the bare outcome
-    # (validate_no_answer_content_leaks, CHAOS-3294 adversarial-review fix).
-    answer_payload["frame"]["metrics"] = []
-    answer_payload["frame"]["comparisons"] = []
-    answer_payload["frame"]["relationship_paths"] = []
-    answer_payload["frame"]["evidence"] = []
-    answer_payload["frame"]["source_observations"] = []
-    answer_payload["frame"]["health_profile_refs"] = []
-    answer_payload["frame"]["finding_refs"] = []
-    answer_payload["frame"]["deficiency_refs"] = []
-    answer_payload["frame"]["subject_ref"] = None
-    answer_payload["frame"]["subject_set_ref"] = None
-    answer_payload["public_outcome"] = outcome
-    answer_payload["outcome_display_label"] = {
-        "not_found": "Not found",
-        "temporarily_unavailable": "Temporarily unavailable",
-        "unsupported": "Not supported yet",
-        "denied": "Not permitted",
-        "failed": "Something went wrong",
-    }[outcome]
-    answer_payload["narrative"] = None
-    answer = v2.DevAnswerV2.model_validate(answer_payload)
+    answer = v2.DevAnswerV2.model_validate(no_answer_payload(outcome))
     projected = v2.project_answer_v2_to_v1(
         answer, organization_id="org_fullchaos", time_range=_time_range_for_scope()
     )
     assert isinstance(projected, DevErrorV1)
     assert projected.code == expected_code
+    # The v1 boundary emits the same server-owned copy the frame is pinned
+    # to, built from the table rather than carried across from the frame.
+    assert projected.safe_message == v2.CANONICAL_NO_ANSWER_COPY[outcome]
 
 
 def test_compat_never_mislabels_a_team_subject_answer() -> None:
@@ -619,6 +602,496 @@ def test_finding6_stream_rejects_premature_done() -> None:
 
 def test_finding6_stream_rejects_duplicate_done() -> None:
     payloads = stream_fixtures()["invalid_duplicate_done"]
+    with pytest.raises((ValidationError, ValueError)):
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+        )
+
+
+# ---------------------------------------------------------------------------
+# Round-2 adversarial review: three of the round-1 closures were bypassed via
+# adjacent variants, so each fix below is a *class* closure rather than a
+# patch. Every test in this section was first run against the pre-fix source
+# and observed to pass with the adversarial payload accepted; each now
+# observes rejection. The closure argument for each class — the partition of
+# the input space and why every cell is covered — is in
+# ``docs/contribute/architecture/ask-dev-contracts-v2.md`` and the
+# ``validators`` module docstring.
+# ---------------------------------------------------------------------------
+
+
+def _reaches_str(annotation: object, seen: frozenset[object] = frozenset()) -> bool:
+    """True when any type reachable from ``annotation`` is a string."""
+
+    if annotation is None or annotation is type(None) or annotation in seen:
+        return False
+    if isinstance(annotation, type):
+        if issubclass(annotation, str):
+            return True
+        if issubclass(annotation, BaseModel):
+            return any(
+                _reaches_str(field.annotation, seen | {annotation})
+                for field in annotation.model_fields.values()
+            )
+        return False
+    return any(_reaches_str(arg, seen) for arg in get_args(annotation))
+
+
+_NO_ANSWER_POLICIES = (
+    (v2.DevAnswerFrame, v2.NO_ANSWER_FRAME_FIELD_POLICY),
+    (v2.DevAnswerV2, v2.NO_ANSWER_ANSWER_FIELD_POLICY),
+)
+
+
+@pytest.mark.parametrize(
+    ("model", "policy"),
+    _NO_ANSWER_POLICIES,
+    ids=lambda value: getattr(value, "__name__", ""),
+)
+def test_round2_no_answer_policy_classifies_every_field(
+    model: type[v2.ContractModelV2], policy: dict[str, v2.NoAnswerFieldPolicy]
+) -> None:
+    """Finding 1, closure: the enumeration is derived from the model itself.
+
+    The round-1 fix was a denylist of prohibited field names, which review
+    walked around via the fields it did not name. The policy is now total
+    over ``model_fields``: a field added without a classification fails here
+    (and fails the package import, via
+    ``validators.assert_no_answer_policy_is_total``).
+    """
+
+    assert set(policy) == set(model.model_fields)
+    for name, rule in policy.items():
+        annotation = model.model_fields[name].annotation
+        if rule is v2.NoAnswerFieldPolicy.NON_TEXT:
+            # NON_TEXT is not a way to excuse a text field from the policy:
+            # it is only valid when the field reaches no string at all.
+            assert not _reaches_str(annotation), name
+        elif _reaches_str(annotation):
+            assert rule in {
+                v2.NoAnswerFieldPolicy.ABSENT,
+                v2.NoAnswerFieldPolicy.CANONICAL,
+                v2.NoAnswerFieldPolicy.IDENTIFIER,
+                v2.NoAnswerFieldPolicy.SELF_VALIDATED,
+            }, name
+
+
+def _frame_absent_field_samples() -> dict[str, object]:
+    """One populating value per ``ABSENT`` frame field.
+
+    Most are lifted straight out of the exported negative fixtures, so this
+    table and the checked-in artifacts cannot disagree about what a
+    prohibited field looks like.
+    """
+
+    cases = dict(negative_fixtures()["dev_answer_frame.v1"])
+    from_case = {
+        "subject_ref": "denied_with_subject_identity",
+        "completion": "denied_with_completion",
+        "readiness": "denied_with_readiness",
+        "metrics": "denied_with_metrics",
+        "comparisons": "denied_with_comparisons",
+        "relationship_paths": "denied_with_relationship_paths",
+        "health_profile_refs": "denied_with_health_profile_refs",
+        "finding_refs": "denied_with_finding_refs",
+        "deficiency_refs": "denied_with_deficiency_refs",
+        "conflicts": "denied_with_conflicts",
+        "limitations": "denied_with_limitations",
+        "source_observations": "denied_with_source_observations",
+        "evidence": "denied_with_evidence",
+        "safe_follow_up_questions": "denied_with_follow_up_questions",
+    }
+    samples: dict[str, object] = {
+        field: cases[label][field] for field, label in from_case.items()
+    }
+    samples["subject_set_ref"] = "set_restricted_01"
+    samples["sections"] = [
+        {"section_id": "summary", "title": "Restricted summary", "fact_ids": []}
+    ]
+    samples["facts"] = [
+        {
+            "fact_id": "fact_01",
+            "text": "The restricted project has one open issue.",
+            "kind": "observed",
+            "evidence_ref_ids": [],
+            "relationship_path_ids": [],
+            "confidence": 1.0,
+        }
+    ]
+    return samples
+
+
+def test_round2_every_absent_frame_field_is_individually_rejected() -> None:
+    """Finding 1, closure: every ``ABSENT`` cell of the partition is covered.
+
+    The sample table must name exactly the ``ABSENT`` fields — a field newly
+    classified ``ABSENT`` fails here until it has a payload proving it is
+    actually rejected, so classification alone can never stand in for
+    enforcement.
+    """
+
+    absent_fields = {
+        name
+        for name, rule in v2.NO_ANSWER_FRAME_FIELD_POLICY.items()
+        if rule is v2.NoAnswerFieldPolicy.ABSENT
+    }
+    samples = _frame_absent_field_samples()
+    assert set(samples) == absent_fields
+
+    for field, value in samples.items():
+        payload = no_answer_payload("denied")["frame"]
+        payload[field] = value
+        with pytest.raises(ValidationError, match=re.escape(field)):
+            v2.DevAnswerFrame.model_validate(payload)
+
+
+@pytest.mark.parametrize("outcome", sorted(v2.NO_ANSWER_OUTCOMES))
+def test_round2_no_answer_direct_answer_must_be_canonical_copy(outcome: str) -> None:
+    """Finding 1: producer-authored copy is replaced, never re-emitted."""
+
+    payload = no_answer_payload(outcome)
+    v2.DevAnswerV2.model_validate(payload)  # the canonical form validates
+
+    payload["frame"]["direct_answer"] = (
+        "Project Nightfall is 40% complete but you are not on its guild."
+    )
+    with pytest.raises(ValidationError, match="canonical server copy"):
+        v2.DevAnswerV2.model_validate(payload)
+
+
+@pytest.mark.parametrize("outcome", sorted(v2.NO_ANSWER_OUTCOMES))
+def test_round2_no_answer_outcome_cannot_carry_a_narrative(outcome: str) -> None:
+    """Finding 1: the narrative is the free-form channel the scrub missed."""
+
+    payload = no_answer_payload(outcome)
+    payload["narrative"] = {
+        **deepcopy(positive_fixtures()["dev_narrative.v1"]),
+        "referenced_fact_ids": [],
+        "referenced_section_ids": [],
+        "body": ("The project Nightfall exists but is restricted to another guild."),
+    }
+    with pytest.raises(ValidationError, match="narrative"):
+        v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round2_identifier_classified_field_rejects_free_text() -> None:
+    """Finding 1: ``IDENTIFIER`` is a runtime predicate, not a type promise.
+
+    This is what stops the classification from becoming an escape hatch: a
+    field admitted as identifiers cannot smuggle prose, whatever its type.
+    """
+
+    payload = no_answer_payload("denied")["frame"]
+    payload["versions"]["plan_version"] = "the restricted Nightfall status plan"
+    with pytest.raises(ValidationError, match="identifier"):
+        v2.DevAnswerFrame.model_validate(payload)
+
+
+def test_round2_v1_projection_of_a_no_answer_outcome_carries_no_frame_text() -> None:
+    """Finding 1: the v1 boundary was the channel that reached real clients."""
+
+    answer = v2.DevAnswerV2.model_validate(no_answer_payload("denied"))
+    projected = v2.project_answer_v2_to_v1(
+        answer, organization_id="org_fullchaos", time_range=_time_range_for_scope()
+    )
+    assert isinstance(projected, DevErrorV1)
+    assert projected.safe_message == v2.CANONICAL_NO_ANSWER_COPY["denied"]
+    assert projected.remediation  # canonical remediation, not frame follow-ups
+
+
+# --- Finding 2: frozen means immutable, not just non-rebindable -------------
+
+
+def _all_v2_contract_models() -> list[type[v2.ContractModelV2]]:
+    found: set[type[v2.ContractModelV2]] = set()
+    stack: list[type[v2.ContractModelV2]] = [v2.ContractModelV2]
+    while stack:
+        for subclass in stack.pop().__subclasses__():
+            if subclass not in found:
+                found.add(subclass)
+                stack.append(subclass)
+    return sorted(found, key=lambda model: model.__name__)
+
+
+def _has_mutable_collection(annotation: object) -> bool:
+    if get_origin(annotation) in {list, set, dict}:
+        return True
+    return any(_has_mutable_collection(arg) for arg in get_args(annotation))
+
+
+def test_round2_no_v2_model_has_a_mutable_collection_field() -> None:
+    """Finding 2, closure: the whole model space, not the one model reviewed.
+
+    ``ConfigDict(frozen=True)`` only blocks attribute rebinding; a ``list``
+    field's contents stay mutable, which review used to clear a validated
+    ledger and defeat ``validate_ledger_extends``. Every collection field on
+    every v2 contract is a ``tuple``, checked by introspection so a new
+    ``list`` field anywhere in the package fails here.
+    """
+
+    models = _all_v2_contract_models()
+    assert len(models) >= 20  # the walk actually found the model space
+    offenders = [
+        f"{model.__name__}.{name}"
+        for model in models
+        for name, field in model.model_fields.items()
+        if _has_mutable_collection(field.annotation)
+    ]
+    assert offenders == []
+
+
+def test_round2_validated_ledger_cannot_be_emptied_in_place() -> None:
+    """Finding 2, regression: the exact mutation used to defeat the baseline."""
+
+    previous = v2.DevResolutionLedger.model_validate(
+        positive_fixtures()["dev_resolution_ledger.v1"]
+    )
+    rewritten_payload = deepcopy(positive_fixtures()["dev_resolution_ledger.v1"])
+    rewritten_payload["entries"][0]["outcome"] = "no_authorized_match"
+    rewritten_payload["entries"][0]["committed_entity_ref"] = None
+    rewritten_payload["entries"][0]["repository_attribution"] = None
+    rewritten = v2.DevResolutionLedger.model_validate(rewritten_payload)
+
+    with pytest.raises(ValueError, match="cannot rewrite or erase"):
+        v2.validate_ledger_extends(previous, rewritten)
+
+    with pytest.raises(AttributeError):
+        previous.entries.clear()  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        previous.mention_ids[0] = "mention_rewritten"  # type: ignore[index]
+
+    # The baseline is intact, so the rewrite is still rejected.
+    with pytest.raises(ValueError, match="cannot rewrite or erase"):
+        v2.validate_ledger_extends(previous, rewritten)
+
+
+#: v1 contract models embedded in v2 contracts. v1 is frozen for CHAOS-3294
+#: (this issue is additive-only), so their ``list`` fields remain mutable in
+#: place — the acknowledged boundary of the finding-2 closure. Listing them
+#: here means a *new* v1 embedding surfaces as a failure and gets a decision
+#: rather than silently widening the boundary.
+_ACKNOWLEDGED_V1_NESTED_MODELS = {
+    "DevCitationLink",
+    "DevCoverage",
+    "DevEntityRef",
+    "DevError",
+    "DevEvidenceFlags",
+    "DevEvidenceRef",
+    "DevMetricPoint",
+    "DevMetricRef",
+    "DevModelMetadata",
+    "DevScope",
+    "DevSurfaceContext",
+    "DevTimeRange",
+}
+
+
+def test_round2_v1_models_embedded_in_v2_are_an_acknowledged_boundary() -> None:
+    embedded: set[str] = set()
+
+    def collect(annotation: object, seen: frozenset[object] = frozenset()) -> None:
+        if annotation is None or annotation in seen:
+            return
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            if not issubclass(annotation, v2.ContractModelV2):
+                embedded.add(annotation.__name__)
+            for field in annotation.model_fields.values():
+                collect(field.annotation, seen | {annotation})
+            return
+        for arg in get_args(annotation):
+            collect(arg, seen)
+
+    for model in _all_v2_contract_models():
+        for field in model.model_fields.values():
+            collect(field.annotation)
+
+    assert embedded == _ACKNOWLEDGED_V1_NESTED_MODELS
+
+
+# --- Finding 3: narrative claims bound to the facts they narrate ------------
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "narrative_unrelated_comparison_number",
+        "narrative_substring_subject",
+        "narrative_unbound_recommendation",
+    ],
+)
+def test_round2_narrative_binding_rejects_each_bypass(case: str) -> None:
+    """Finding 3: the three variants that walked around the round-1 checks."""
+
+    payload = dict(negative_fixtures()["dev_answer.v2"])[case]
+    with pytest.raises(ValidationError):
+        v2.DevAnswerV2.model_validate(payload)
+
+
+_NARRATIVE_BINDING_CASES: dict[str, str] = {
+    "validate_narrative_numeric_containment": "narrative_unrelated_comparison_number",
+    "validate_narrative_subject_claim": "narrative_substring_subject",
+    "validate_narrative_recommendation_claim": "narrative_unbound_recommendation",
+}
+
+
+@pytest.mark.parametrize("validator_name", sorted(_NARRATIVE_BINDING_CASES))
+def test_round2_each_narrative_binding_rule_is_individually_load_bearing(
+    monkeypatch: pytest.MonkeyPatch, validator_name: str
+) -> None:
+    """Finding 3: each bypass is attributable to exactly one new rule.
+
+    Without this, a single over-broad rule could be rejecting all three
+    payloads and the other two would read as covered while doing nothing.
+    """
+
+    cases = dict(negative_fixtures()["dev_answer.v2"])
+    target_case = _NARRATIVE_BINDING_CASES[validator_name]
+
+    with pytest.raises(ValidationError):
+        v2.DevAnswerV2.model_validate(cases[target_case])
+
+    monkeypatch.setattr(validators_module, validator_name, lambda *_a, **_k: None)
+    v2.DevAnswerV2.model_validate(cases[target_case])  # only this guard rejected it
+
+    for other_case in _NARRATIVE_BINDING_CASES.values():
+        if other_case == target_case:
+            continue
+        with pytest.raises(ValidationError):
+            v2.DevAnswerV2.model_validate(cases[other_case])
+
+
+def test_round2_no_answer_projection_is_what_rejects_the_denied_family(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finding 1: the whole ``denied_*`` family is attributable to guard (f).
+
+    Every one of them passes once the projection is disabled — so none is
+    incidentally rejected by a different validator — while the four
+    named-guardrail fixtures still reject.
+    """
+
+    frame_cases = negative_fixtures()["dev_answer_frame.v1"]
+    denied_cases = [
+        (label, payload)
+        for label, payload in frame_cases
+        if label.startswith("denied_with_")
+    ]
+    assert len(denied_cases) >= 16
+
+    for _label, payload in denied_cases:
+        with pytest.raises(ValidationError):
+            v2.DevAnswerFrame.model_validate(payload)
+
+    monkeypatch.setattr(
+        validators_module, "validate_no_answer_projection", lambda *_a, **_k: None
+    )
+    for _label, payload in denied_cases:
+        v2.DevAnswerFrame.model_validate(payload)
+
+    for label, payload in frame_cases:
+        if label.startswith("denied_with_"):
+            continue
+        with pytest.raises(ValidationError):
+            v2.DevAnswerFrame.model_validate(payload)
+
+
+def test_round2_narrative_may_cite_the_frames_own_completion_percentage() -> None:
+    """Finding 3, non-over-rejection: a true completion claim still validates."""
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["narrative"]["body"] = "Repository dev-health is 75% complete."
+    v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round2_narrative_may_cite_a_comparison_it_names() -> None:
+    """Finding 3, non-over-rejection: comparison values are label-bound, not banned.
+
+    The same value (100) that is rejected in
+    ``narrative_unrelated_comparison_number`` is accepted here, because this
+    sentence names the comparison it comes from. That pair is what makes the
+    numeric rule *binding* rather than merely stricter.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["frame"]["comparisons"] = [
+        {
+            "label": "Review throughput",
+            "current_value": 100.0,
+            "comparison_value": 82.0,
+            "unit": "count",
+        }
+    ]
+    payload["narrative"]["body"] = (
+        "Repository dev-health recorded review throughput of 100 this window."
+    )
+    v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round2_narrative_may_recommend_a_fact_it_references() -> None:
+    """Finding 3, non-over-rejection: grounded recommendation prose validates."""
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["frame"]["facts"].append(
+        {
+            "fact_id": "fact_rec",
+            "text": "Add a second reviewer to the release checklist.",
+            "kind": "recommendation",
+            "evidence_ref_ids": ["ev_01"],
+            "relationship_path_ids": [],
+            "confidence": 0.8,
+        }
+    )
+    payload["frame"]["sections"][0]["fact_ids"].append("fact_rec")
+    payload["narrative"]["referenced_fact_ids"] = ["fact_01", "fact_rec"]
+    payload["narrative"]["body"] = (
+        "Repository dev-health is on track. We recommend adding a second "
+        "reviewer to the release checklist."
+    )
+    v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round2_narrative_may_name_the_subject_by_its_short_form() -> None:
+    """Finding 3, non-over-rejection: canonical identity, not exact string."""
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["narrative"]["body"] = (
+        "dev-health is on track, with one required child issue still open."
+    )
+    v2.DevAnswerV2.model_validate(payload)
+
+
+# --- Finding 4: one lifecycle invariant, stated once ------------------------
+
+
+def test_round2_stream_rejects_duplicate_run_started() -> None:
+    payloads = stream_fixtures()["invalid_duplicate_start"]
+    with pytest.raises(ValueError, match="exactly one run.started"):
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+        )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "invalid_duplicate_start",
+        "invalid_duplicate_done",
+        "invalid_premature_done",
+        "invalid_duplicate_terminal",
+        "invalid_missing_done",
+    ],
+)
+def test_round2_every_lifecycle_marker_misplacement_is_rejected(case: str) -> None:
+    """Finding 4, closure: the partition is (marker) x (wrong count | wrong position).
+
+    Each of the three lifecycle markers — ``run.started``, the terminal
+    result, ``done`` — is required to occur exactly once at exactly one
+    index, so both cells of the partition fail for every marker. The cases
+    here are the reproduced instances; the invariant covers the rest by
+    construction rather than by enumeration.
+    """
+
+    payloads = stream_fixtures()[case]
     with pytest.raises((ValidationError, ValueError)):
         v2.validate_stream_v2(
             [v2.DevStreamEventV2.model_validate(item) for item in payloads]

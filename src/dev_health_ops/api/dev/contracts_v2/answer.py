@@ -16,6 +16,15 @@ can never be paired with a frame or narrative produced by a different run.
 The stream layer (``stream.py``) enforces the matching half of this closure
 at the wire boundary: an ``answer.completed`` event's ``run_id`` must equal
 its embedded answer's ``run_id``.
+
+A no-answer outcome (``validators.NO_ANSWER_OUTCOMES``) additionally carries
+**no narrative at all**: an optional provider narrative is a free-form
+channel with no structured field to check it against, and adversarial review
+used one on a ``denied`` answer to disclose a private project's existence
+while every structured field was correctly empty. That, and the
+classification of every other field of this model, is enforced by
+``validators.validate_no_answer_projection`` through the total field policy
+registered at the bottom of this module.
 """
 
 from __future__ import annotations
@@ -67,6 +76,7 @@ class DevAnswerV2(ContractModelV2):
             raise ValueError(
                 "outcome_display_label does not match the canonical safe label"
             )
+        _validators.validate_no_answer_projection(self)
         if self.frame.run_id != self.run_id:
             # Codex adversarial review (CHAOS-3294): nothing previously
             # required the frame embedded in an answer to have been produced
@@ -86,3 +96,25 @@ class DevAnswerV2(ContractModelV2):
                 )
             _validators.validate_narrative_frame_consistency(self.narrative, self.frame)
         return self
+
+
+# Import-time totality for the no-answer field policy — see frame.py and the
+# validators module docstring. The canonical display labels are the same
+# table the answer already validates against, restricted to the no-answer
+# outcomes; asserting the two agree keeps one source of truth.
+_drifted_labels = sorted(
+    outcome
+    for outcome, label in _validators.CANONICAL_NO_ANSWER_DISPLAY_LABELS.items()
+    if _OUTCOME_DISPLAY_LABELS[PublicOutcome(outcome)] != label
+)
+if _drifted_labels:
+    raise RuntimeError(
+        "canonical no-answer display labels drifted from the outcome label "
+        f"table: {_drifted_labels}"
+    )
+
+_validators.register_no_answer_policy(
+    DevAnswerV2,
+    _validators.NO_ANSWER_ANSWER_FIELD_POLICY,
+    {"outcome_display_label": _validators.CANONICAL_NO_ANSWER_DISPLAY_LABELS},
+)

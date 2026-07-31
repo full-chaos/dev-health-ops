@@ -3,12 +3,18 @@
 A valid answer frame is independent of whether a provider narrative exists
 (CHAOS-3294 guardrail): everything a user needs is representable here
 without ``dev_narrative.v1``. The frame's own ``model_validator`` wires in
-the five acceptance-criteria semantic validators, plus the post-merge
-Codex-review guardrail (f) ``validate_no_answer_content_leaks`` (a
-no-content outcome must carry nothing beyond the bare outcome — see that
-function's docstring), via the ``validators`` *module* (not bound-method
-references) so each can be disabled independently in a mutation test — see
-``validators`` module docstring for why that indirection matters.
+the five acceptance-criteria semantic validators, plus guardrail (f)
+``validate_no_answer_projection`` (a no-content outcome is rebuilt from a
+total field allowlist — see the ``validators`` module docstring), via the
+``validators`` *module* (not bound-method references) so each can be
+disabled independently in a mutation test.
+
+Every collection field is a ``tuple``, not a ``list``. ``frozen=True`` only
+rebinds attributes; it leaves a ``list`` field's contents mutable in place,
+which adversarial review used to clear a validated ledger's entries and
+defeat ``validate_ledger_extends``. Tuples make the whole object immutable
+in fact, not just at the attribute boundary — asserted across every v2
+model by ``test_contracts_v2``.
 """
 
 from __future__ import annotations
@@ -68,10 +74,12 @@ class DevReadinessBlock(ContractModelV2):
     state: Literal["ready", "not_ready", "indeterminate"]
     rule_id: OpaqueID
     rule_version: Version
-    translated_user_reasons: list[ShortText] = Field(
-        default_factory=list, max_length=20
+    translated_user_reasons: tuple[ShortText, ...] = Field(
+        default_factory=tuple, max_length=20
     )
-    blocking_fact_ids: list[OpaqueID] = Field(default_factory=list, max_length=100)
+    blocking_fact_ids: tuple[OpaqueID, ...] = Field(
+        default_factory=tuple, max_length=100
+    )
 
     @model_validator(mode="after")
     def validate_reason_disclosure(self) -> Self:
@@ -86,15 +94,17 @@ class DevAnswerFact(ContractModelV2):
     fact_id: OpaqueID
     text: ShortText
     kind: Literal["observed", "inferred", "recommendation"]
-    evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
-    relationship_path_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=25)
+    relationship_path_ids: tuple[OpaqueID, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
     confidence: FiniteFloat = Field(ge=0, le=1)
 
 
 class DevAnswerSection(ContractModelV2):
     section_id: OpaqueID
     title: Label
-    fact_ids: list[OpaqueID] = Field(default_factory=list, max_length=200)
+    fact_ids: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=200)
 
 
 class DevComparisonPoint(ContractModelV2):
@@ -106,7 +116,7 @@ class DevComparisonPoint(ContractModelV2):
 
 class DevFrameConflict(ContractModelV2):
     summary: ShortText
-    evidence_ref_ids: list[OpaqueID] = Field(min_length=2, max_length=10)
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(min_length=2, max_length=10)
 
 
 class DevFrameVersions(ContractModelV2):
@@ -131,25 +141,31 @@ class DevAnswerFrame(ContractModelV2):
     direct_answer: LongText
     completion: DevCompletionBlock | None = None
     readiness: DevReadinessBlock | None = None
-    sections: list[DevAnswerSection] = Field(default_factory=list, max_length=20)
-    facts: list[DevAnswerFact] = Field(default_factory=list, max_length=200)
-    metrics: list[DevMetricRef] = Field(default_factory=list, max_length=12)
-    comparisons: list[DevComparisonPoint] = Field(default_factory=list, max_length=20)
-    relationship_paths: list[DevRelationshipPath] = Field(
-        default_factory=list, max_length=100
+    sections: tuple[DevAnswerSection, ...] = Field(default_factory=tuple, max_length=20)
+    facts: tuple[DevAnswerFact, ...] = Field(default_factory=tuple, max_length=200)
+    metrics: tuple[DevMetricRef, ...] = Field(default_factory=tuple, max_length=12)
+    comparisons: tuple[DevComparisonPoint, ...] = Field(
+        default_factory=tuple, max_length=20
     )
-    health_profile_refs: list[OpaqueID] = Field(default_factory=list, max_length=25)
-    finding_refs: list[OpaqueID] = Field(default_factory=list, max_length=50)
-    deficiency_refs: list[OpaqueID] = Field(default_factory=list, max_length=50)
-    conflicts: list[DevFrameConflict] = Field(default_factory=list, max_length=20)
-    limitations: list[ShortText] = Field(default_factory=list, max_length=20)
-    source_observations: list[DevSourceObservation] = Field(
-        default_factory=list, max_length=25
+    relationship_paths: tuple[DevRelationshipPath, ...] = Field(
+        default_factory=tuple, max_length=100
+    )
+    health_profile_refs: tuple[OpaqueID, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+    finding_refs: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=50)
+    deficiency_refs: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=50)
+    conflicts: tuple[DevFrameConflict, ...] = Field(
+        default_factory=tuple, max_length=20
+    )
+    limitations: tuple[ShortText, ...] = Field(default_factory=tuple, max_length=20)
+    source_observations: tuple[DevSourceObservation, ...] = Field(
+        default_factory=tuple, max_length=25
     )
     coverage: DevCoverage
-    evidence: list[DevEvidenceRef] = Field(default_factory=list, max_length=25)
-    safe_follow_up_questions: list[ShortText] = Field(
-        default_factory=list, max_length=10
+    evidence: tuple[DevEvidenceRef, ...] = Field(default_factory=tuple, max_length=25)
+    safe_follow_up_questions: tuple[ShortText, ...] = Field(
+        default_factory=tuple, max_length=10
     )
     versions: DevFrameVersions
 
@@ -171,7 +187,17 @@ class DevAnswerFrame(ContractModelV2):
         _validators.validate_structural_closure(self)
         _validators.validate_no_internal_leakage(self)
         _validators.validate_outcome_consistency(self)
-        _validators.validate_no_answer_content_leaks(self)
+        _validators.validate_no_answer_projection(self)
         _validators.validate_completion_denominator(self)
         _validators.validate_relationship_refs_within_frame(self)
         return self
+
+
+# Import-time totality: a field added to DevAnswerFrame without a no-answer
+# classification breaks this import rather than opening a silent disclosure
+# channel. See the validators module docstring.
+_validators.register_no_answer_policy(
+    DevAnswerFrame,
+    _validators.NO_ANSWER_FRAME_FIELD_POLICY,
+    {"direct_answer": _validators.CANONICAL_NO_ANSWER_COPY},
+)

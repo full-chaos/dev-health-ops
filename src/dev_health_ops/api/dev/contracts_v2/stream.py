@@ -23,16 +23,19 @@ counterexamples the review reproduced against this module:
   entries. Enforced by tracking the previous ledger snapshot across the
   event loop and requiring both append-only extension and non-decreasing
   ``updated_at``.
-* The terminal-position check only verified the *last* event was ``done``
-  and that the lone terminal result (``answer.completed``/``error``)
-  immediately preceded it; it never checked that ``done`` occurred *only*
-  there, so a stream like ``run.started, done, error, done`` (a premature
-  ``done`` before the real terminal result) validated. ``validate_stream_v2``
-  now requires ``done`` to appear exactly once, and only as the final event.
+* The lifecycle was checked as a handful of separate positional rules, each
+  added as its own counterexample arrived (last event is ``done``; the
+  terminal result precedes it; ``done`` appears once). Every such rule
+  covered one endpoint and left its neighbour open: a premature ``done``
+  slipped past the "last event" rule, and a second ``run.started`` slipped
+  past all of them. ``_validate_run_lifecycle`` now states the whole
+  lifecycle **once**, as a single positional invariant over the event list —
+  see its docstring.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
@@ -146,15 +149,70 @@ class DevStreamEventV2(ContractModelV2):
         return self
 
 
-def validate_stream_v2(events: list[DevStreamEventV2]) -> None:
-    """Validate one bounded v2 stream: ordered events, one terminal, then done.
+#: The events that open and close a run. Every other event type is an
+#: interior event and may appear any number of times between them.
+_LIFECYCLE_EVENTS: dict[str, frozenset[StreamEventTypeV2]] = {
+    "run.started": frozenset({StreamEventTypeV2.RUN_STARTED}),
+    "terminal result": frozenset(
+        {StreamEventTypeV2.ANSWER_COMPLETED, StreamEventTypeV2.ERROR}
+    ),
+    "done": frozenset({StreamEventTypeV2.DONE}),
+}
 
-    Codex adversarial-review hardening (CHAOS-3294) — see module docstring —
-    added two checks beyond the original ones: ``done`` must appear exactly
-    once, and only as the stream's final event (closes a premature/duplicate
-    ``done`` counterexample); and successive ``resolution.updated`` ledger
-    snapshots must extend, never rewrite, one another via
-    ``validate_ledger_extends`` with non-decreasing ``updated_at``.
+
+def _validate_run_lifecycle(events: Sequence[DevStreamEventV2]) -> None:
+    """The whole run lifecycle, stated once.
+
+    A stream is exactly one ``run.started`` at index 0, then any number of
+    interior events, then exactly one terminal result (``answer.completed``
+    or ``error``), then exactly one ``done`` as the final event, whose
+    ``terminal_kind`` matches that terminal result.
+
+    Stated as one positional invariant rather than as separate rules per
+    event type deliberately: the round-1 and round-2 counterexamples
+    (premature ``done``, duplicate ``done``, duplicate ``run.started``) were
+    all the same defect — a lifecycle marker appearing somewhere other than
+    its one allowed position — and a rule written per marker keeps leaving
+    the next marker open. Here, each of the three markers is required to
+    occur exactly once and at exactly one index, so no marker can repeat or
+    move without failing.
+    """
+
+    expected_indexes = {
+        "run.started": 0,
+        "terminal result": len(events) - 2,
+        "done": len(events) - 1,
+    }
+    for label, event_types in _LIFECYCLE_EVENTS.items():
+        occurrences = [
+            index for index, event in enumerate(events) if event.event in event_types
+        ]
+        if len(occurrences) != 1:
+            raise ValueError(
+                f"stream must contain exactly one {label} event, found "
+                f"{len(occurrences)}"
+            )
+        if occurrences[0] != expected_indexes[label]:
+            raise ValueError(
+                f"the {label} event must be at position "
+                f"{expected_indexes[label]} of the stream, not {occurrences[0]}"
+            )
+    terminal = events[expected_indexes["terminal result"]]
+    terminal_kind = (
+        "answer" if terminal.event is StreamEventTypeV2.ANSWER_COMPLETED else "error"
+    )
+    if events[-1].terminal_kind != terminal_kind:
+        raise ValueError("done terminal_kind must match the terminal result")
+
+
+def validate_stream_v2(events: Sequence[DevStreamEventV2]) -> None:
+    """Validate one bounded v2 stream: ordered events, one lifecycle, one ledger chain.
+
+    Three independent checks: the wire-level ordering bounds below, the
+    single lifecycle invariant (``_validate_run_lifecycle``), and the
+    append-only ledger chain across successive ``resolution.updated``
+    snapshots (``validate_ledger_extends`` with non-decreasing
+    ``updated_at``).
     """
 
     if not events:
@@ -166,40 +224,8 @@ def validate_stream_v2(events: list[DevStreamEventV2]) -> None:
         raise ValueError("stream events must share one run ID")
     if [event.sequence for event in events] != list(range(len(events))):
         raise ValueError("stream sequence must be contiguous and ordered")
-    if events[0].event is not StreamEventTypeV2.RUN_STARTED:
-        raise ValueError("stream must start with run.started")
 
-    done_indexes = [
-        index
-        for index, event in enumerate(events)
-        if event.event is StreamEventTypeV2.DONE
-    ]
-    if len(done_indexes) != 1:
-        raise ValueError("stream must contain exactly one done event")
-    if done_indexes[0] != len(events) - 1:
-        # A `done` at any position other than the very last event is either
-        # a premature terminal marker (something before the real terminal
-        # result claimed the stream was finished) or, combined with the
-        # count check above, a duplicate.
-        raise ValueError("done must be the final event in the stream")
-
-    terminal_indexes = [
-        index
-        for index, event in enumerate(events)
-        if event.event in {StreamEventTypeV2.ANSWER_COMPLETED, StreamEventTypeV2.ERROR}
-    ]
-    if len(terminal_indexes) != 1:
-        raise ValueError("stream must contain exactly one terminal result")
-    terminal_index = terminal_indexes[0]
-    if terminal_index != len(events) - 2:
-        raise ValueError("terminal result must be immediately followed by done")
-    terminal_kind = (
-        "answer"
-        if events[terminal_index].event is StreamEventTypeV2.ANSWER_COMPLETED
-        else "error"
-    )
-    if events[-1].terminal_kind != terminal_kind:
-        raise ValueError("done terminal_kind must match the terminal result")
+    _validate_run_lifecycle(events)
 
     previous_ledger: DevResolutionLedger | None = None
     for event in events:

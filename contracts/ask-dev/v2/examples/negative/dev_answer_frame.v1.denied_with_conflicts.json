@@ -1,7 +1,15 @@
 {
   "comparisons": [],
   "completion": null,
-  "conflicts": [],
+  "conflicts": [
+    {
+      "evidence_ref_ids": [
+        "ev_hidden_a",
+        "ev_hidden_b"
+      ],
+      "summary": "Project Nightfall is marked private in one provider and public in another."
+    }
+  ],
   "coverage": {
     "as_of": "2026-07-28T12:00:00Z",
     "available_source_count": 1,
@@ -9,9 +17,7 @@
     "stale_required_sources": [],
     "unavailable_required_sources": []
   },
-  "deficiency_refs": [
-    "deficiency_01"
-  ],
+  "deficiency_refs": [],
   "direct_answer": "You do not have access to ask about this.",
   "evidence": [],
   "facts": [],

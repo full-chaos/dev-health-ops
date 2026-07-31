@@ -30,9 +30,7 @@
   "readiness": null,
   "relationship_paths": [],
   "run_id": "run_01",
-  "safe_follow_up_questions": [
-    "What changed since last week?"
-  ],
+  "safe_follow_up_questions": [],
   "schema_version": "dev_answer_frame.v1",
   "sections": [],
   "source_observations": [],

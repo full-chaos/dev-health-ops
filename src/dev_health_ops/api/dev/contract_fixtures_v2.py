@@ -11,6 +11,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .contracts_v2.validators import CANONICAL_NO_ANSWER_COPY
+
 NOW = "2026-07-28T12:00:00Z"
 START = "2026-06-28T00:00:00Z"
 END = "2026-07-28T00:00:00Z"
@@ -404,20 +406,26 @@ def _metric_ref() -> dict[str, Any]:
     }
 
 
+#: The canonical server copy a ``denied`` frame is allowed to render, taken
+#: from the contract's own table so the fixtures cannot drift from it.
+DENIED_CANONICAL_COPY = CANONICAL_NO_ANSWER_COPY["denied"]
+
+
 def _denied_frame_base() -> dict[str, Any]:
     """A fully compliant, content-free ``denied`` frame.
 
-    Used only as the base for the ``NO_ANSWER_OUTCOMES`` negative fixtures
-    below — every prohibited field starts empty/``None`` here, and each
-    negative case mutates exactly one of them so the fixture is
-    attributable to the specific field the guard rejects.
+    The base for the ``NO_ANSWER_OUTCOMES`` negative fixtures below: every
+    field the no-answer allowlist classifies ``ABSENT`` starts empty/``None``
+    here and ``direct_answer`` starts at the canonical server copy, so each
+    negative case can populate exactly one field and stay attributable to
+    the classification that rejects it.
     """
 
     frame = deepcopy(_frame())
     frame["public_outcome"] = "denied"
     frame["subject_ref"] = None
     frame["subject_set_ref"] = None
-    frame["direct_answer"] = "You do not have access to ask about this."
+    frame["direct_answer"] = DENIED_CANONICAL_COPY
     frame["completion"] = None
     frame["readiness"] = None
     frame["sections"] = []
@@ -429,9 +437,22 @@ def _denied_frame_base() -> dict[str, Any]:
     frame["finding_refs"] = []
     frame["deficiency_refs"] = []
     frame["conflicts"] = []
+    frame["limitations"] = []
     frame["source_observations"] = []
     frame["evidence"] = []
+    frame["safe_follow_up_questions"] = []
     return frame
+
+
+def _denied_answer_base() -> dict[str, Any]:
+    """A fully compliant, content-free ``denied`` ``dev_answer.v2``."""
+
+    answer = deepcopy(_answer())
+    answer["public_outcome"] = "denied"
+    answer["outcome_display_label"] = "Not permitted"
+    answer["frame"] = _denied_frame_base()
+    answer["narrative"] = None
+    return answer
 
 
 def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any]]]:
@@ -511,6 +532,52 @@ def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any
             "denied_with_subject_identity",
             lambda v: v.__setitem__("subject_ref", _entity_ref()),
         ),
+        # Round-2 adversarial review: the free-form copy channels the
+        # round-1 denylist never named.
+        case(
+            "denied_with_conflicts",
+            lambda v: v.__setitem__(
+                "conflicts",
+                [
+                    {
+                        "summary": (
+                            "Project Nightfall is marked private in one "
+                            "provider and public in another."
+                        ),
+                        "evidence_ref_ids": ["ev_hidden_a", "ev_hidden_b"],
+                    }
+                ],
+            ),
+        ),
+        case(
+            "denied_with_limitations",
+            lambda v: v.__setitem__(
+                "limitations",
+                ["Project Nightfall's deployment source was stale at query time."],
+            ),
+        ),
+        case(
+            "denied_with_follow_up_questions",
+            lambda v: v.__setitem__(
+                "safe_follow_up_questions",
+                ["How is Project Nightfall's security review tracking?"],
+            ),
+        ),
+        case(
+            "denied_with_producer_direct_answer",
+            lambda v: v.__setitem__(
+                "direct_answer",
+                "Project Nightfall is 40% complete but you are not on its guild.",
+            ),
+        ),
+        # An IDENTIFIER-classified field is a runtime predicate on the
+        # value, not a promise about the type: prose in one is rejected.
+        case(
+            "denied_with_free_text_in_versions",
+            lambda v: v["versions"].__setitem__(
+                "plan_version", "the restricted Nightfall status plan"
+            ),
+        ),
     ]
 
 
@@ -540,6 +607,34 @@ def _error() -> dict[str, Any]:
         "retryable": True,
         "remediation": ["Retry after source health recovers."],
     }
+
+
+#: Safe display labels per no-answer outcome, mirroring
+#: ``contracts_v2.answer._OUTCOME_DISPLAY_LABELS`` (kept in step by an
+#: import-time check in that module).
+_NO_ANSWER_DISPLAY_LABELS = {
+    "not_found": "Not found",
+    "temporarily_unavailable": "Temporarily unavailable",
+    "unsupported": "Not supported yet",
+    "denied": "Not permitted",
+    "failed": "Something went wrong",
+}
+
+
+def no_answer_answer_fixture(outcome: str) -> dict[str, Any]:
+    """A valid, fully projected ``dev_answer.v2`` for one no-answer outcome.
+
+    One builder for all five outcomes so a caller cannot accidentally
+    construct a "compliant" no-answer payload that the allowlist projection
+    would actually reject.
+    """
+
+    answer = _denied_answer_base()
+    answer["public_outcome"] = outcome
+    answer["outcome_display_label"] = _NO_ANSWER_DISPLAY_LABELS[outcome]
+    answer["frame"]["public_outcome"] = outcome
+    answer["frame"]["direct_answer"] = CANONICAL_NO_ANSWER_COPY[outcome]
+    return answer
 
 
 def positive_fixtures() -> dict[str, dict[str, Any]]:
@@ -582,11 +677,13 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
 
     def _make_outcome_content_mismatch(value: dict[str, Any]) -> None:
         # Isolated to *only* trip validate_outcome_consistency's has_content
-        # check (sections/facts non-empty for a no-content outcome) — every
-        # other field validate_no_answer_content_leaks would also reject is
-        # cleared here so this fixture stays attributable to exactly one
-        # guardrail (see test_disabling_one_frame_validator_flips_only_its_own_fixture).
-        value["public_outcome"] = "not_found"
+        # check (sections/facts non-empty for a no-content outcome).
+        # `needs_clarification` rather than one of the five NO_ANSWER_OUTCOMES
+        # deliberately: it is an empty-content outcome that the no-answer
+        # allowlist projection does not govern, so this fixture stays
+        # attributable to exactly one guardrail (see
+        # test_disabling_one_frame_validator_flips_only_its_own_fixture).
+        value["public_outcome"] = "needs_clarification"
         value["facts"][0]["evidence_ref_ids"] = []
         value["facts"][0]["relationship_path_ids"] = []
         value["completion"] = None
@@ -645,6 +742,80 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             "Repository dev-health is on track. We recommend closing the "
             "remaining issue soon.",
         ),
+    )
+
+    # --- Round-2 adversarial-review counterexamples ------------------------
+    # A no-answer outcome carries no narrative at all: the narrative is the
+    # free-form channel that survived the round-1 structured-field scrub.
+    denied_answer_with_narrative = _denied_answer_base()
+    denied_answer_with_narrative["narrative"] = {
+        **_narrative(),
+        "referenced_fact_ids": [],
+        "referenced_section_ids": [],
+        "body": (
+            "The project Nightfall exists but is restricted to another guild, "
+            "so its status cannot be shown here."
+        ),
+    }
+
+    # An unrelated comparison value of 100 no longer legitimizes a "100%
+    # complete" claim against a frame whose completion block says 3/4.
+    answer_narrative_unrelated_comparison_number = changed(
+        "dev_answer.v2",
+        lambda value: (
+            value["frame"].__setitem__(
+                "comparisons",
+                [
+                    {
+                        "label": "Review throughput",
+                        "current_value": 100.0,
+                        "comparison_value": 82.0,
+                        "unit": "count",
+                    }
+                ],
+            ),
+            value["narrative"].__setitem__(
+                "body",
+                "Repository dev-health is at 100% completion for the current window.",
+            ),
+        ),
+    )
+
+    # A different subject that merely shares a token with the committed one
+    # ("billing-health" vs. "full-chaos/dev-health") no longer satisfies the
+    # subject check, which used substring containment.
+    answer_narrative_substring_subject = changed(
+        "dev_answer.v2",
+        lambda value: value["narrative"].__setitem__(
+            "body",
+            "Repository billing-health is on track, with one required child "
+            "issue still open.",
+        ),
+    )
+
+    # Recommendation prose must reference the specific recommendation fact;
+    # the mere presence of one somewhere in the frame is not grounding.
+    def _make_unbound_recommendation(value: dict[str, Any]) -> None:
+        value["frame"]["facts"].append(
+            {
+                "fact_id": "fact_rec",
+                "text": "Add a second reviewer to the release checklist.",
+                "kind": "recommendation",
+                "evidence_ref_ids": ["ev_01"],
+                "relationship_path_ids": [],
+                "confidence": 0.8,
+            }
+        )
+        value["frame"]["sections"][0]["fact_ids"].append("fact_rec")
+        value["narrative"]["referenced_fact_ids"] = ["fact_01"]
+        value["narrative"]["referenced_section_ids"] = []
+        value["narrative"]["body"] = (
+            "Repository dev-health is on track. We recommend freezing the "
+            "release branch until the open child issue closes."
+        )
+
+    answer_narrative_unbound_recommendation = changed(
+        "dev_answer.v2", _make_unbound_recommendation
     )
     return {
         "dev_message_request.v2": [
@@ -771,6 +942,16 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                 "narrative_contradicts_recommendation",
                 answer_narrative_contradicts_recommendation,
             ),
+            ("denied_with_narrative", denied_answer_with_narrative),
+            (
+                "narrative_unrelated_comparison_number",
+                answer_narrative_unrelated_comparison_number,
+            ),
+            ("narrative_substring_subject", answer_narrative_substring_subject),
+            (
+                "narrative_unbound_recommendation",
+                answer_narrative_unbound_recommendation,
+            ),
         ],
         "dev_stream_event.v2": [
             (
@@ -817,6 +998,16 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
     premature_done_stream = [
         deepcopy(started),
         premature_done,
+        {**deepcopy(terminal_error), "sequence": 2},
+        {**deepcopy(done), "sequence": 3},
+    ]
+
+    # Round-2 adversarial review: a second `run.started` never tripped any
+    # of the positional rules, which each covered one marker. The single
+    # lifecycle invariant (`stream._validate_run_lifecycle`) rejects it.
+    duplicate_start_stream = [
+        deepcopy(started),
+        {**deepcopy(started), "sequence": 1},
         {**deepcopy(terminal_error), "sequence": 2},
         {**deepcopy(done), "sequence": 3},
     ]
@@ -887,9 +1078,15 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
         ],
         "invalid_premature_done": premature_done_stream,
         "invalid_duplicate_done": duplicate_done_stream,
+        "invalid_duplicate_start": duplicate_start_stream,
         "invalid_ledger_rewrite": ledger_rewrite_stream,
         "invalid_answer_run_id_mismatch": answer_run_id_mismatch_stream,
     }
 
 
-__all__ = ["negative_fixtures", "positive_fixtures", "stream_fixtures"]
+__all__ = [
+    "negative_fixtures",
+    "no_answer_answer_fixture",
+    "positive_fixtures",
+    "stream_fixtures",
+]

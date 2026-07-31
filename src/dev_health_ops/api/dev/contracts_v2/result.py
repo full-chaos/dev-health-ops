@@ -56,7 +56,7 @@ class DevRelationshipPath(ContractModelV2):
     provenance: ShortText
     confidence: FiniteFloat = Field(ge=0, le=1)
     observed_at: AwareDatetime
-    evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=25)
 
 
 class DevSourceObservation(ContractModelV2):
@@ -71,10 +71,10 @@ class DevSourceObservation(ContractModelV2):
     subject_coverage: FiniteFloat = Field(ge=0, le=1)
     usable_fact_count: int = Field(ge=0, le=100_000)
     sample_count: int | None = Field(default=None, ge=0, le=100_000)
-    relationship_paths: list[DevRelationshipPath] = Field(
-        default_factory=list, max_length=25
+    relationship_paths: tuple[DevRelationshipPath, ...] = Field(
+        default_factory=tuple, max_length=25
     )
-    evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=25)
     limitation: ShortText | None = None
     observed_at: AwareDatetime
     query_version: Version
@@ -117,10 +117,10 @@ class DevInvestigationResult(ContractModelV2):
     run_id: OpaqueID
     subject_set_fingerprint: OpaqueID | None = None
     subject_entity_id: OpaqueID | None = None
-    observations: list[DevSourceObservation] = Field(min_length=1, max_length=25)
-    completed_steps: list[ShortText] = Field(default_factory=list, max_length=25)
-    skipped_steps: list[ShortText] = Field(default_factory=list, max_length=25)
-    failed_steps: list[ShortText] = Field(default_factory=list, max_length=25)
+    observations: tuple[DevSourceObservation, ...] = Field(min_length=1, max_length=25)
+    completed_steps: tuple[ShortText, ...] = Field(default_factory=tuple, max_length=25)
+    skipped_steps: tuple[ShortText, ...] = Field(default_factory=tuple, max_length=25)
+    failed_steps: tuple[ShortText, ...] = Field(default_factory=tuple, max_length=25)
     relationship_closure_verified: bool
     completed_at: AwareDatetime
 

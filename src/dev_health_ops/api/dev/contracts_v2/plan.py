@@ -32,8 +32,8 @@ class DevSourceRequirement(ContractModelV2):
     minimum_usable_facts: int = Field(ge=0, le=1_000)
     minimum_sample: int | None = Field(default=None, ge=0, le=100_000)
     minimum_coverage: FiniteFloat | None = Field(default=None, ge=0, le=1)
-    allowed_relationship_paths: list[OpaqueID] = Field(
-        default_factory=list, max_length=10
+    allowed_relationship_paths: tuple[OpaqueID, ...] = Field(
+        default_factory=tuple, max_length=10
     )
 
     @model_validator(mode="after")
@@ -59,7 +59,7 @@ class DevSourceRequirement(ContractModelV2):
 
 class DevPlanStepDependency(ContractModelV2):
     step_id: ShortText
-    depends_on: list[ShortText] = Field(default_factory=list, max_length=10)
+    depends_on: tuple[ShortText, ...] = Field(default_factory=tuple, max_length=10)
 
 
 class DevInvestigationPlan(ContractModelV2):
@@ -67,14 +67,18 @@ class DevInvestigationPlan(ContractModelV2):
     plan_id: OpaqueID
     plan_version: Version
     intent_id: OpaqueID
-    supported_subject_kinds: list[EntityKind] = Field(min_length=1, max_length=6)
-    supported_cardinalities: list[Cardinality] = Field(min_length=1, max_length=3)
-    mandatory_steps: list[ShortText] = Field(min_length=1, max_length=25)
-    conditional_steps: list[ShortText] = Field(default_factory=list, max_length=25)
-    step_dependencies: list[DevPlanStepDependency] = Field(
-        default_factory=list, max_length=50
+    supported_subject_kinds: tuple[EntityKind, ...] = Field(min_length=1, max_length=6)
+    supported_cardinalities: tuple[Cardinality, ...] = Field(min_length=1, max_length=3)
+    mandatory_steps: tuple[ShortText, ...] = Field(min_length=1, max_length=25)
+    conditional_steps: tuple[ShortText, ...] = Field(
+        default_factory=tuple, max_length=25
     )
-    source_requirements: list[DevSourceRequirement] = Field(min_length=1, max_length=25)
+    step_dependencies: tuple[DevPlanStepDependency, ...] = Field(
+        default_factory=tuple, max_length=50
+    )
+    source_requirements: tuple[DevSourceRequirement, ...] = Field(
+        min_length=1, max_length=25
+    )
     batch_strategy: Literal["single", "batched_fan_out"]
     per_step_timeout_seconds: int = Field(ge=1, le=120)
     max_rows_per_step: int = Field(ge=1, le=100_000)

@@ -9,9 +9,7 @@
     "stale_required_sources": [],
     "unavailable_required_sources": []
   },
-  "deficiency_refs": [
-    "deficiency_01"
-  ],
+  "deficiency_refs": [],
   "direct_answer": "You do not have access to ask about this.",
   "evidence": [],
   "facts": [],
@@ -19,7 +17,9 @@
   "frame_id": "frame_01",
   "generated_at": "2026-07-28T12:00:00Z",
   "health_profile_refs": [],
-  "limitations": [],
+  "limitations": [
+    "Project Nightfall's deployment source was stale at query time."
+  ],
   "metrics": [],
   "public_outcome": "denied",
   "readiness": null,

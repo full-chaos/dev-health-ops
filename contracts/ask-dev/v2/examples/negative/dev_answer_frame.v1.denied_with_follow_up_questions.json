@@ -9,9 +9,7 @@
     "stale_required_sources": [],
     "unavailable_required_sources": []
   },
-  "deficiency_refs": [
-    "deficiency_01"
-  ],
+  "deficiency_refs": [],
   "direct_answer": "You do not have access to ask about this.",
   "evidence": [],
   "facts": [],
@@ -25,7 +23,9 @@
   "readiness": null,
   "relationship_paths": [],
   "run_id": "run_01",
-  "safe_follow_up_questions": [],
+  "safe_follow_up_questions": [
+    "How is Project Nightfall's security review tracking?"
+  ],
   "schema_version": "dev_answer_frame.v1",
   "sections": [],
   "source_observations": [],

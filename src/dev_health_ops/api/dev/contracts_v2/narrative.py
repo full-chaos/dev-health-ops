@@ -33,11 +33,17 @@ class DevNarrative(ContractModelV2):
     frame_id: OpaqueID
     mode: Literal["provider", "deterministic_fallback"]
     body: LongText
-    referenced_fact_ids: list[OpaqueID] = Field(default_factory=list, max_length=200)
-    referenced_section_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
+    referenced_fact_ids: tuple[OpaqueID, ...] = Field(
+        default_factory=tuple, max_length=200
+    )
+    referenced_section_ids: tuple[OpaqueID, ...] = Field(
+        default_factory=tuple, max_length=20
+    )
     provider_metadata: DevModelMetadata | None = None
     generated_at: AwareDatetime
-    validation_warnings: list[ShortText] = Field(default_factory=list, max_length=20)
+    validation_warnings: tuple[ShortText, ...] = Field(
+        default_factory=tuple, max_length=20
+    )
 
     @model_validator(mode="after")
     def validate_mode_payload(self) -> Self:

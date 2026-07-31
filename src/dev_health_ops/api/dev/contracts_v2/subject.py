@@ -93,8 +93,8 @@ class DevResolutionEntry(ContractModelV2):
     mention_id: OpaqueID
     outcome: ResolutionOutcome
     committed_entity_ref: DevEntityRefV2 | None = None
-    candidates: list[DevResolutionCandidate] = Field(
-        default_factory=list, max_length=25
+    candidates: tuple[DevResolutionCandidate, ...] = Field(
+        default_factory=tuple, max_length=25
     )
     repository_attribution: OpaqueID | None = None
     team_attribution: OpaqueID | None = None
@@ -125,8 +125,8 @@ class DevResolutionEntry(ContractModelV2):
 class DevResolutionLedger(ContractModelV2):
     schema_version: Literal["dev_resolution_ledger.v1"]
     ledger_id: OpaqueID
-    mention_ids: list[OpaqueID] = Field(min_length=1, max_length=25)
-    entries: list[DevResolutionEntry] = Field(min_length=1, max_length=100)
+    mention_ids: tuple[OpaqueID, ...] = Field(min_length=1, max_length=25)
+    entries: tuple[DevResolutionEntry, ...] = Field(min_length=1, max_length=100)
     updated_at: AwareDatetime
 
     @model_validator(mode="after")
@@ -190,12 +190,18 @@ class DevSubjectSet(ContractModelV2):
     schema_version: Literal["dev_subject_set.v1"]
     set_id: OpaqueID
     entity_kind: EntityKind
-    committed_entity_refs: list[DevEntityRefV2] = Field(min_length=1, max_length=25)
+    committed_entity_refs: tuple[DevEntityRefV2, ...] = Field(
+        min_length=1, max_length=25
+    )
     original_mention_count: int = Field(ge=0, le=100)
-    unresolved_mention_ids: list[OpaqueID] = Field(default_factory=list, max_length=100)
-    ambiguous_mention_ids: list[OpaqueID] = Field(default_factory=list, max_length=100)
+    unresolved_mention_ids: tuple[OpaqueID, ...] = Field(
+        default_factory=tuple, max_length=100
+    )
+    ambiguous_mention_ids: tuple[OpaqueID, ...] = Field(
+        default_factory=tuple, max_length=100
+    )
     cohort_complete: bool
-    warnings: list[ShortText] = Field(default_factory=list, max_length=20)
+    warnings: tuple[ShortText, ...] = Field(default_factory=tuple, max_length=20)
     fingerprint: OpaqueID
 
     @model_validator(mode="after")

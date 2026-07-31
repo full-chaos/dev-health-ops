@@ -56,6 +56,7 @@ from .contracts import (
     DevScopeResolution,
     DevToolRequest,
     DevToolResult,
+    FreshnessState,
     ScopeResolutionOutcome,
     ToolID,
 )
@@ -392,6 +393,7 @@ class DevOrchestrator:
         started = self._monotonic()
         events: list[OrchestratorEvent] = []
         tool_results: list[DevToolResult] = []
+        tool_requests: list[DevToolRequest] = []
         tool_bytes_total = 0
         duplicate_counts: Counter[str] = Counter()
         budget = ProviderBudget(self._limits)
@@ -659,6 +661,7 @@ class DevOrchestrator:
                             ),
                         )
                     tool_results.append(execution.result)
+                    tool_requests.append(tool_request)
                     tool_bytes_total = next_total
                     provider_continuation += (
                         AgentMessage(
@@ -724,7 +727,7 @@ class DevOrchestrator:
                                 for item in canonical_evidence
                             ],
                             "coverage": self._coverage_from_tool_results(
-                                tuple(tool_results), now
+                                tuple(tool_requests), tuple(tool_results), now
                             ).model_dump(mode="json"),
                             "versions": self._versions.model_dump(mode="json"),
                             "model": model.model_dump(mode="json"),
@@ -1060,7 +1063,11 @@ class DevOrchestrator:
         A ``success``/``partial`` status alone is not evidence of coverage: a
         source that returned zero facts because a required upstream source
         (e.g. the authorized repository set) was unavailable must not be
-        reported as an available required source (CHAOS-3257).
+        reported as an available required source (CHAOS-3257). A
+        ``data_health`` list is only usable if at least one entry reports
+        something other than ``unavailable`` -- a partial data-health result
+        that exhaustively lists every source as unavailable is itself the
+        "nothing is available" case, not evidence of availability.
         """
         return bool(
             result.metrics
@@ -1068,38 +1075,82 @@ class DevOrchestrator:
             or result.status_facts
             or result.graph_edges
             or result.metric_definitions
-            or result.data_health
+            or any(
+                item.freshness is not FreshnessState.UNAVAILABLE
+                for item in result.data_health
+            )
+        )
+
+    @staticmethod
+    def _required_source_key(
+        request: DevToolRequest,
+    ) -> tuple[str, str | None, str | None, tuple[str, ...]]:
+        """Identify the distinct required source one tool request represents.
+
+        Two calls to the *same* tool are the same required source only if
+        they ask for the same discriminating data. `query_metric.v1` called
+        for ``items_completed`` and again for ``cycle_time_p50_hours`` are
+        two distinct required sources, not one, even though a retry of the
+        identical ``items_completed`` request is one (CHAOS-3257).
+        """
+        return (
+            request.tool_id.value,
+            request.metric_id.value if request.metric_id is not None else None,
+            request.query,
+            tuple(sorted(request.evidence_ref_ids)),
         )
 
     @classmethod
     def _coverage_from_tool_results(
-        cls, tool_results: tuple[DevToolResult, ...], as_of: datetime
+        cls,
+        tool_requests: tuple[DevToolRequest, ...],
+        tool_results: tuple[DevToolResult, ...],
+        as_of: datetime,
     ) -> DevCoverage:
-        # `required_source_count` counts required *source classes* (the
-        # distinct tools the model decided this answer needed), not raw tool
-        # invocations: a tool retried or called with different arguments
-        # still represents one required source.
-        required_sources = sorted({result.tool_id.value for result in tool_results})
-        usable_by_source: dict[str, bool] = {}
-        for result in tool_results:
+        if len(tool_requests) != len(tool_results):
+            raise ValueError("tool requests and results must be paired one-to-one")
+        # `required_source_count` counts required *source classes* -- the
+        # distinct (tool, discriminating-argument) asks the model made, not
+        # raw tool invocations: a retried, identical request is one required
+        # source; two different requests to the same tool are two.
+        usable_by_source: dict[
+            tuple[str, str | None, str | None, tuple[str, ...]], bool
+        ] = {}
+        label_by_source: dict[
+            tuple[str, str | None, str | None, tuple[str, ...]], str
+        ] = {}
+        for request, result in zip(tool_requests, tool_results, strict=True):
+            key = cls._required_source_key(request)
             usable = result.status == "success" or (
                 result.status == "partial" and cls._tool_result_has_usable_data(result)
             )
-            source = result.tool_id.value
-            usable_by_source[source] = usable_by_source.get(source, False) or usable
+            usable_by_source[key] = usable_by_source.get(key, False) or usable
+            label_by_source.setdefault(key, result.tool_id.value)
+        required_sources = sorted(
+            label_by_source, key=lambda key: (label_by_source[key], key)
+        )
         available = [
-            source for source in required_sources if usable_by_source.get(source, False)
+            label_by_source[key] for key in required_sources if usable_by_source[key]
         ]
         unavailable = [
-            source
-            for source in required_sources
-            if not usable_by_source.get(source, False)
+            label_by_source[key]
+            for key in required_sources
+            if not usable_by_source[key]
         ]
         stale = sorted(
             {
                 result.tool_id.value
                 for result in tool_results
-                if any(item.freshness == "stale" for item in result.data_health)
+                if any(
+                    item.freshness is FreshnessState.STALE
+                    for item in result.data_health
+                )
+                or any(
+                    item.freshness is FreshnessState.STALE for item in result.metrics
+                )
+                or any(
+                    item.freshness is FreshnessState.STALE for item in result.evidence
+                )
             }
         )
         return DevCoverage(

@@ -23,10 +23,17 @@ _NON_REPAIRABLE_VALIDATION_MARKERS = (
     "unknown evidence",
     "unknown metric",
     "observed claims require",
-    "complete answer requires",
     "recommendations require",
     "inferred claims cannot",
 )
+# "complete answer requires all required sources fresh and available"
+# (DevAnswer.validate_answer_invariants) is deliberately repairable, not
+# listed above: server-derived coverage overwrites whatever the model
+# proposed, so the model can genuinely be one bounded correction away from
+# a valid answer -- e.g. it claimed "complete" while a tool's own warning
+# said a required source was unavailable. Giving it one repair attempt
+# (schema_repairs) lets it reissue the same grounded data under an accurate
+# status instead of hard-failing a run that has usable evidence (CHAOS-3257).
 
 
 class AnswerValidationError(ValueError):

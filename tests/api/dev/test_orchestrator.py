@@ -121,6 +121,12 @@ def _tool_result(**overrides: object) -> DevToolResult:
     return DevToolResult.model_validate(payload)
 
 
+def _tool_request(**overrides: object) -> DevToolRequest:
+    payload = deepcopy(positive_fixtures()["dev_tool_request.v1"])
+    payload.update(overrides)
+    return DevToolRequest.model_validate(payload)
+
+
 def _registry(*, calls: list[DevToolRequest] | None = None) -> AskDevToolRegistry:
     async def execute(_context, request: DevToolRequest) -> DevToolResult:
         if calls is not None:
@@ -654,6 +660,7 @@ def test_coverage_excludes_empty_partial_results_from_availability() -> None:
     """Literal CHAOS-3257 repro: a partial status snapshot with zero facts and
     a missing-repository-set warning must read as unavailable, not covered.
     """
+    request = _tool_request(tool_id="status_snapshot.v1", metric_id=None)
     result = _tool_result(
         tool_id="status_snapshot.v1",
         status="partial",
@@ -665,7 +672,9 @@ def test_coverage_excludes_empty_partial_results_from_availability() -> None:
         data_health=[],
         warnings=["authorized_repository_set_unavailable"],
     )
-    coverage = DevOrchestrator._coverage_from_tool_results((result,), datetime.now(UTC))
+    coverage = DevOrchestrator._coverage_from_tool_results(
+        (request,), (result,), datetime.now(UTC)
+    )
     assert coverage.required_source_count == 1
     assert coverage.available_source_count == 0
     assert coverage.unavailable_required_sources == ["status_snapshot.v1"]
@@ -675,6 +684,7 @@ def test_coverage_counts_partial_with_usable_evidence_as_available() -> None:
     """A genuinely partial result that still carries usable facts is coverage,
     unlike an empty partial (contrast with the test above).
     """
+    request = _tool_request(tool_id="status_snapshot.v1", metric_id=None)
     result = _tool_result(
         tool_id="status_snapshot.v1",
         status="partial",
@@ -692,12 +702,17 @@ def test_coverage_counts_partial_with_usable_evidence_as_available() -> None:
         data_health=[],
         warnings=["some_children_unavailable"],
     )
-    coverage = DevOrchestrator._coverage_from_tool_results((result,), datetime.now(UTC))
+    coverage = DevOrchestrator._coverage_from_tool_results(
+        (request,), (result,), datetime.now(UTC)
+    )
     assert coverage.available_source_count == 1
     assert coverage.unavailable_required_sources == []
 
 
 def test_coverage_marks_error_and_unavailable_status_as_unavailable() -> None:
+    error_request = _tool_request(
+        tool_id="search_evidence.v1", metric_id=None, query="meridian/web-app"
+    )
     error_result = _tool_result(
         tool_id="search_evidence.v1",
         status="error",
@@ -712,6 +727,7 @@ def test_coverage_marks_error_and_unavailable_status_as_unavailable() -> None:
             "retryable": True,
         },
     )
+    unavailable_request = _tool_request(tool_id="data_health.v1", metric_id=None)
     unavailable_result = _tool_result(
         tool_id="data_health.v1",
         status="unavailable",
@@ -721,7 +737,9 @@ def test_coverage_marks_error_and_unavailable_status_as_unavailable() -> None:
         warnings=["provider_unreachable"],
     )
     coverage = DevOrchestrator._coverage_from_tool_results(
-        (error_result, unavailable_result), datetime.now(UTC)
+        (error_request, unavailable_request),
+        (error_result, unavailable_result),
+        datetime.now(UTC),
     )
     assert coverage.required_source_count == 2
     assert coverage.available_source_count == 0
@@ -731,7 +749,8 @@ def test_coverage_marks_error_and_unavailable_status_as_unavailable() -> None:
     ]
 
 
-def test_coverage_flags_stale_required_sources_independent_of_availability() -> None:
+def test_coverage_flags_stale_data_health_as_stale() -> None:
+    request = _tool_request(tool_id="data_health.v1", metric_id=None)
     result = _tool_result(
         tool_id="data_health.v1",
         status="success",
@@ -750,22 +769,170 @@ def test_coverage_flags_stale_required_sources_independent_of_availability() -> 
             }
         ],
     )
-    coverage = DevOrchestrator._coverage_from_tool_results((result,), datetime.now(UTC))
+    coverage = DevOrchestrator._coverage_from_tool_results(
+        (request,), (result,), datetime.now(UTC)
+    )
     assert coverage.available_source_count == 1
     assert coverage.stale_required_sources == ["data_health.v1"]
 
 
-def test_coverage_dedupes_required_source_count_by_tool_not_invocation() -> None:
-    """required_source_count counts required source classes, not raw tool
-    invocations: two calls to the same tool are one required source.
+def test_coverage_flags_stale_metric_payload_as_stale() -> None:
+    """Staleness embedded in a returned metric (not just data_health.v1) must
+    also be surfaced -- a stale metric answering a query is not fresh
+    coverage even though the tool call itself succeeded.
     """
-    first = _tool_result(tool_id="query_metric.v1", tool_call_id="tool_call_01")
-    second = _tool_result(tool_id="query_metric.v1", tool_call_id="tool_call_02")
+    request = _tool_request(tool_id="query_metric.v1")
+    stale_metric = deepcopy(positive_fixtures()["dev_metric_ref.v1"])
+    stale_metric["freshness"] = "stale"
+    result = _tool_result(
+        tool_id="query_metric.v1",
+        status="success",
+        evidence=[],
+        metric_definitions=[],
+        metrics=[stale_metric],
+    )
     coverage = DevOrchestrator._coverage_from_tool_results(
-        (first, second), datetime.now(UTC)
+        (request,), (result,), datetime.now(UTC)
+    )
+    assert coverage.available_source_count == 1
+    assert coverage.stale_required_sources == ["query_metric.v1"]
+
+
+def test_coverage_data_health_with_only_unavailable_entries_is_not_usable() -> None:
+    """A partial data_health.v1 result whose every entry reports
+    unavailable is the "nothing is available" case, not evidence that the
+    source responded -- a non-empty list alone must not count as coverage.
+    """
+    request = _tool_request(tool_id="data_health.v1", metric_id=None)
+    result = _tool_result(
+        tool_id="data_health.v1",
+        status="partial",
+        metrics=[],
+        evidence=[],
+        metric_definitions=[],
+        data_health=[
+            {
+                "source_system": "work_items",
+                "freshness": "unavailable",
+                "last_successful_at": None,
+                "coverage": 0.0,
+                "warning": "provider not configured",
+            },
+            {
+                "source_system": "repositories",
+                "freshness": "unavailable",
+                "last_successful_at": None,
+                "coverage": 0.0,
+                "warning": "provider not configured",
+            },
+        ],
+    )
+    coverage = DevOrchestrator._coverage_from_tool_results(
+        (request,), (result,), datetime.now(UTC)
+    )
+    assert coverage.available_source_count == 0
+    assert coverage.unavailable_required_sources == ["data_health.v1"]
+
+
+def test_coverage_data_health_with_one_available_entry_is_usable() -> None:
+    """The mirror of the previous test: if at least one data_health entry is
+    not unavailable, the source did answer with something real.
+    """
+    request = _tool_request(tool_id="data_health.v1", metric_id=None)
+    result = _tool_result(
+        tool_id="data_health.v1",
+        status="partial",
+        metrics=[],
+        evidence=[],
+        metric_definitions=[],
+        data_health=[
+            {
+                "source_system": "work_items",
+                "freshness": "fresh",
+                "last_successful_at": positive_fixtures()["dev_evidence_ref.v1"][
+                    "observed_at"
+                ],
+                "coverage": 1.0,
+                "warning": None,
+            },
+            {
+                "source_system": "repositories",
+                "freshness": "unavailable",
+                "last_successful_at": None,
+                "coverage": 0.0,
+                "warning": "provider not configured",
+            },
+        ],
+    )
+    coverage = DevOrchestrator._coverage_from_tool_results(
+        (request,), (result,), datetime.now(UTC)
+    )
+    assert coverage.available_source_count == 1
+    assert coverage.unavailable_required_sources == []
+
+
+def test_coverage_dedupes_identical_retried_requests() -> None:
+    """required_source_count counts required source *classes*: a retry of
+    the identical request (same tool, same discriminating arguments) is one
+    required source, not two.
+    """
+    first = _tool_request(
+        tool_id="query_metric.v1",
+        metric_id="items_completed",
+        tool_call_id="tool_call_01",
+    )
+    second = _tool_request(
+        tool_id="query_metric.v1",
+        metric_id="items_completed",
+        tool_call_id="tool_call_02",
+    )
+    first_result = _tool_result(tool_id="query_metric.v1", tool_call_id="tool_call_01")
+    second_result = _tool_result(tool_id="query_metric.v1", tool_call_id="tool_call_02")
+    coverage = DevOrchestrator._coverage_from_tool_results(
+        (first, second), (first_result, second_result), datetime.now(UTC)
     )
     assert coverage.required_source_count == 1
     assert coverage.available_source_count == 1
+
+
+def test_coverage_treats_different_arguments_to_the_same_tool_as_distinct_sources() -> (
+    None
+):
+    """A model calling the same tool for two genuinely different asks (e.g.
+    two different metric_ids) must not collapse into one required source:
+    if one succeeds and the other is unavailable, coverage must show a
+    real gap, not a false "1 of 1".
+    """
+    completed = _tool_request(
+        tool_id="query_metric.v1",
+        metric_id="items_completed",
+        tool_call_id="tool_call_01",
+    )
+    completed_result = _tool_result(
+        tool_id="query_metric.v1", tool_call_id="tool_call_01"
+    )
+    cycle_time = _tool_request(
+        tool_id="query_metric.v1",
+        metric_id="cycle_time_p50_hours",
+        tool_call_id="tool_call_02",
+    )
+    cycle_time_result = _tool_result(
+        tool_id="query_metric.v1",
+        tool_call_id="tool_call_02",
+        status="unavailable",
+        metrics=[],
+        evidence=[],
+        metric_definitions=[],
+        warnings=["metric_source_unavailable"],
+    )
+    coverage = DevOrchestrator._coverage_from_tool_results(
+        (completed, cycle_time),
+        (completed_result, cycle_time_result),
+        datetime.now(UTC),
+    )
+    assert coverage.required_source_count == 2
+    assert coverage.available_source_count == 1
+    assert coverage.unavailable_required_sources == ["query_metric.v1"]
 
 
 @pytest.mark.asyncio
@@ -840,3 +1007,140 @@ async def test_status_question_run_never_shows_full_coverage_with_zero_evidence(
     assert result.answer.coverage.required_source_count == 1
     assert result.answer.coverage.available_source_count == 0
     assert result.answer.coverage.unavailable_required_sources == ["status_snapshot.v1"]
+
+
+@pytest.mark.asyncio
+async def test_model_claiming_complete_against_correct_coverage_gets_one_repair() -> (
+    None
+):
+    """If the model claims `status="complete"` while the server-derived
+    coverage (correctly, post-CHAOS-3257) shows a required source was
+    unavailable, DevAnswer's own invariant rejects that combination. This
+    must not hard-fail the whole run: the model gets one bounded repair
+    attempt (same mechanism as a schema-only failure) to reissue an
+    accurately-labeled answer from the same grounded data.
+    """
+    script_id = "repair-false-complete-claim"
+
+    async def empty_partial_status(
+        _context: Any, request: DevToolRequest
+    ) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "status": "partial",
+                "scope_resolution": None,
+                "metric_definitions": [],
+                "metrics": [],
+                "evidence": [],
+                "status_facts": [],
+                "graph_edges": [],
+                "data_health": [],
+                "warnings": ["authorized_repository_set_unavailable"],
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: empty_partial_status for tool_id in ToolID})
+
+    falsely_complete_answer = _answer(script_id=script_id)
+    falsely_complete_answer.update(
+        {"status": "complete", "claims": [], "metrics": [], "evidence": []}
+    )
+    corrected_answer = _answer(script_id=script_id)
+    corrected_answer.update(
+        {
+            "status": "degraded",
+            "direct_summary": "Status could not be established.",
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(falsely_complete_answer)),
+                ScriptedStep(decision=AgentFinalAnswer(corrected_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status == "degraded"
+    assert [event.state for event in result.events].count(
+        RunState.ANSWER_VALIDATION
+    ) == 2
+
+
+@pytest.mark.asyncio
+async def test_second_false_complete_claim_still_fails_closed() -> None:
+    """The repair budget is bounded to one attempt: a model that repeats the
+    same status/coverage contradiction still fails the run rather than
+    looping or silently shipping an ungrounded "complete" answer.
+    """
+    script_id = "repair-exhausted-false-complete"
+
+    async def empty_partial_status(
+        _context: Any, request: DevToolRequest
+    ) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "status": "partial",
+                "scope_resolution": None,
+                "metric_definitions": [],
+                "metrics": [],
+                "evidence": [],
+                "status_facts": [],
+                "graph_edges": [],
+                "data_health": [],
+                "warnings": ["authorized_repository_set_unavailable"],
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: empty_partial_status for tool_id in ToolID})
+    falsely_complete_answer = _answer(script_id=script_id)
+    falsely_complete_answer.update(
+        {"status": "complete", "claims": [], "metrics": [], "evidence": []}
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(falsely_complete_answer)),
+                ScriptedStep(decision=AgentFinalAnswer(falsely_complete_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.FAILED
+    assert result.error is not None
+    assert result.error.code == "answer_validation_failed"

@@ -259,7 +259,12 @@ class AskDevToolRegistry:
             if request.metric_id is None or request.query or request.evidence_ref_ids:
                 raise ToolRequestRejected("metric query fields are invalid")
         elif request.tool_id is ToolID.SEARCH_EVIDENCE:
-            if not request.query or request.metric_id or request.evidence_ref_ids:
+            if (
+                not request.query
+                or request.metric_id
+                or request.evidence_ref_ids
+                or request.include_comparison
+            ):
                 raise ToolRequestRejected("evidence search fields are invalid")
         elif request.tool_id is ToolID.GET_EVIDENCE:
             if (
@@ -267,12 +272,42 @@ class AskDevToolRegistry:
                 or len(request.evidence_ref_ids) > definition.max_items
                 or request.query
                 or request.metric_id
+                or request.include_comparison
             ):
                 raise ToolRequestRejected("evidence expansion fields are invalid")
         elif request.tool_id is ToolID.RESOLVE_SCOPE:
-            if request.metric_id or request.evidence_ref_ids:
+            if (
+                request.metric_id
+                or request.evidence_ref_ids
+                or request.include_comparison
+            ):
                 raise ToolRequestRejected("scope resolution fields are invalid")
-        elif request.query or request.metric_id or request.evidence_ref_ids:
+        elif request.tool_id is ToolID.LIST_METRICS:
+            # TRD 8.2: list_metrics.v1 takes no arguments beyond the bounded
+            # item limit already checked above; it is a pure catalog read.
+            if (
+                request.query
+                or request.metric_id
+                or request.evidence_ref_ids
+                or request.include_comparison
+            ):
+                raise ToolRequestRejected("metric catalog fields are invalid")
+        elif request.tool_id in {ToolID.STATUS_SNAPSHOT, ToolID.CHANGE_SUMMARY}:
+            if request.query or request.metric_id or request.evidence_ref_ids:
+                raise ToolRequestRejected(
+                    "tool request contains fields outside its contract"
+                )
+        elif request.tool_id in {ToolID.WORK_GRAPH_NEIGHBORS, ToolID.DATA_HEALTH}:
+            if (
+                request.query
+                or request.metric_id
+                or request.evidence_ref_ids
+                or request.include_comparison
+            ):
+                raise ToolRequestRejected(
+                    "tool request contains fields outside its contract"
+                )
+        else:  # pragma: no cover - exhaustive over the nine registered ToolID members
             raise ToolRequestRejected(
                 "tool request contains fields outside its contract"
             )

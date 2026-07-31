@@ -28,6 +28,12 @@ _WIRE_QUERY_METRIC = "query_metric_v1"
 _WIRE_SEARCH_EVIDENCE = "search_evidence_v1"
 _WIRE_DATA_HEALTH = "data_health_v1"
 
+# CHAOS-3262: the literal metric-catalog acceptance question. When this exact
+# question is observed, the script deterministically drives a single
+# list_metrics.v1 tool call followed by a final answer, independent of the
+# completed-work acceptance flow below.
+LIST_METRICS_QUESTION = "Which Ask Dev metrics are available?"
+
 
 def _tool_results_from_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
     messages = payload.get("messages") or []
@@ -54,6 +60,93 @@ def _tool_results_from_messages(payload: dict[str, Any]) -> list[dict[str, Any]]
         if isinstance(items, list):
             return [item for item in items if isinstance(item, dict)]
     return []
+
+
+def _question_from_messages(payload: dict[str, Any]) -> str | None:
+    for message in payload.get("messages") or []:
+        if message.get("role") != "user":
+            continue
+        try:
+            user_payload = json.loads(message.get("content") or "")
+            question = user_payload["question"]
+        except (KeyError, TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(question, str):
+            return question
+    return None
+
+
+def _list_metrics_script(
+    tool_results: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str]:
+    """Deterministically drive one list_metrics.v1 call, then answer.
+
+    Only every reached once the literal CHAOS-3262 reproduction question is
+    observed; see ``LIST_METRICS_QUESTION``.
+    """
+    result_tool_ids = {str(result.get("tool_id") or "") for result in tool_results}
+    if "list_metrics.v1" not in result_tool_ids:
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "scripted-call-list-metrics-v1",
+                    "type": "function",
+                    "function": {
+                        "name": "list_metrics.v1",
+                        "arguments": json.dumps({"limit": 8}, separators=(",", ":")),
+                    },
+                }
+            ],
+        }
+        return message, "tool_calls"
+
+    list_metrics_result = next(
+        result for result in tool_results if result.get("tool_id") == "list_metrics.v1"
+    )
+    definitions = list_metrics_result.get("metric_definitions") or []
+    available = str(list_metrics_result.get("status") or "unavailable") in {
+        "success",
+        "partial",
+    } and bool(definitions)
+    now = datetime.now(UTC).isoformat()
+    value = {
+        "schema_version": "dev_answer.v1",
+        "answer_id": "acceptance-list-metrics-answer",
+        "conversation_id": "acceptance-conversation",
+        "generated_at": now,
+        "resolved_scope": {},
+        "as_of": now,
+        "status": "complete" if available else "degraded",
+        "direct_summary": (
+            f"{len(definitions)} Ask Dev metrics are available in this scope."
+            if available
+            else "The Ask Dev metric catalog could not be read."
+        ),
+        "claims": [],
+        "metrics": [],
+        "evidence": [],
+        "conflicts": [],
+        "coverage": {
+            "required_source_count": 1,
+            "available_source_count": 1 if available else 0,
+            "unavailable_required_sources": [] if available else ["list_metrics.v1"],
+            "stale_required_sources": [],
+            "as_of": now,
+        },
+        "warnings": [],
+        "suggested_follow_up_questions": [],
+        "versions": {},
+        "model": {},
+    }
+    message = {
+        "role": "assistant",
+        "content": json.dumps(
+            {"kind": "final_answer", "value": value}, separators=(",", ":")
+        ),
+    }
+    return message, "stop"
 
 
 def _requested_tool_names_from_messages(payload: dict[str, Any]) -> set[str]:
@@ -253,6 +346,14 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
         tool_results = _tool_results_from_messages(payload)
         requested_tool_names = _requested_tool_names_from_messages(payload)
         result_tool_ids = {str(result.get("tool_id") or "") for result in tool_results}
+        if _question_from_messages(payload) == LIST_METRICS_QUESTION:
+            list_metrics_message, list_metrics_finish_reason = _list_metrics_script(
+                tool_results
+            )
+            self._send_completion(
+                payload, list_metrics_message, list_metrics_finish_reason
+            )
+            return
         if not tool_results:
             arguments: dict[str, Any]
             if _WIRE_READINESS_ECHO in tool_names:
@@ -437,6 +538,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "LIST_METRICS_QUESTION",
     "SCRIPTED_OPENAI_MODEL",
     "ScriptedOpenAIHandler",
     "ScriptedOpenAIServer",

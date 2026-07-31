@@ -13,6 +13,7 @@ from dev_health_ops.api.dev.contracts import (
     DevToolResult,
     ToolID,
 )
+from dev_health_ops.api.dev.orchestrator import DevOrchestrator
 from dev_health_ops.api.dev.tool_registry import (
     AskDevToolRegistry,
     ToolExecutionCancelled,
@@ -116,11 +117,86 @@ def test_unknown_and_cross_tenant_tools_are_rejected_before_execution() -> None:
             "evidence_ref_ids": [],
         },
         {"tool_id": "status_snapshot.v1", "metric_id": None, "query": "SQL"},
+        # CHAOS-3262: list_metrics.v1 is a pure catalog read and must reject
+        # every optional argument, including ones the generic five-key
+        # allowlist otherwise lets through for other tools.
+        {
+            "tool_id": "list_metrics.v1",
+            "metric_id": None,
+            "query": "which metrics",
+        },
+        {"tool_id": "list_metrics.v1", "metric_id": "items_completed"},
+        {
+            "tool_id": "list_metrics.v1",
+            "metric_id": None,
+            "evidence_ref_ids": ["evidence_01"],
+        },
+        {"tool_id": "list_metrics.v1", "metric_id": None},  # include_comparison=True
+        {
+            "tool_id": "work_graph_neighbors.v1",
+            "metric_id": None,
+            "query": "meridian/web-app",
+        },
+        {"tool_id": "work_graph_neighbors.v1", "metric_id": None},
+        {
+            "tool_id": "data_health.v1",
+            "metric_id": None,
+            "evidence_ref_ids": ["evidence_01"],
+        },
+        {"tool_id": "resolve_scope.v1", "metric_id": None},  # include_comparison=True
     ],
 )
 def test_tool_specific_fields_fail_closed(updates: dict[str, object]) -> None:
     with pytest.raises(ToolRequestRejected):
         _registry().validate_request(_request(**updates), _context())
+
+
+@pytest.mark.asyncio
+async def test_list_metrics_accepts_a_bare_limit_request() -> None:
+    request = _request(
+        tool_id="list_metrics.v1",
+        metric_id=None,
+        query=None,
+        evidence_ref_ids=[],
+        include_comparison=False,
+        limit=8,
+    )
+    execution = await _registry().execute(request, _context())
+    assert execution.result.tool_id is ToolID.LIST_METRICS
+
+
+def test_every_advertised_tool_accepts_its_own_schema_valid_request() -> None:
+    """CHAOS-3262 drift guard: every advertised tool must have a
+    ``validate_request`` branch that accepts exactly the arguments its own
+    provider-facing schema (``DevOrchestrator._provider_tool_input_schema``)
+    tells the model it may send. If a tool's schema and its server-side
+    validation ever disagree again, this test fails instead of a live model
+    silently hitting ``tool_unavailable`` before any tool executes.
+    """
+    registry = _registry()
+    for tool_id in ToolID:
+        definition = registry.definition(tool_id)
+        schema = DevOrchestrator._provider_tool_input_schema(
+            tool_id, definition.max_items
+        )
+        accepted = set(schema["properties"]) - {"limit"}
+        # The model can only ever choose from the advertised enum, which may
+        # be tighter than the tool's own max_items (e.g. status_snapshot.v1
+        # advertises up to dev_tool_request.v1's wire-level limit ceiling,
+        # not its registered max_items=100).
+        max_advertised_limit = max(schema["properties"]["limit"]["enum"])
+        values: dict[str, object] = {
+            "tool_id": tool_id.value,
+            "limit": max_advertised_limit,
+            "query": "meridian/web-app" if "query" in accepted else None,
+            "metric_id": "items_completed" if "metric_id" in accepted else None,
+            "evidence_ref_ids": (
+                ["evidence_01"] if "evidence_ref_ids" in accepted else []
+            ),
+            "include_comparison": "include_comparison" in accepted,
+        }
+        request = _request(**values)
+        registry.validate_request(request, _context())
 
 
 @pytest.mark.asyncio

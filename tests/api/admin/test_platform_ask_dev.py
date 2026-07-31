@@ -40,6 +40,7 @@ from dev_health_ops.llm.agent.policy import AgentProviderSource
 from dev_health_ops.llm.agent.readiness import (
     PLATFORM_READINESS_SETTING_KEY,
     PLATFORM_SETTINGS_ORG_ID,
+    READINESS_ECHO_TOOL_ID,
     READINESS_SETTING_KEY,
     AgentReadinessOutcome,
     AgentReadinessRecord,
@@ -79,7 +80,7 @@ class FakeReadinessProvider:
         if self.calls == 1:
             return AgentDecisionResult(
                 decision=AgentToolRequest(
-                    "readiness_echo", {"nonce": "ready-v1"}, "call-1"
+                    READINESS_ECHO_TOOL_ID, {"nonce": "ready-v1"}, "call-1"
                 ),
                 usage=AgentUsage(input_tokens=3, output_tokens=2),
                 latency_ms=1,

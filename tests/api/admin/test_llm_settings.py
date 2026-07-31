@@ -37,6 +37,7 @@ from dev_health_ops.llm.agent.contracts import (
 from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErrorCode
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
 from dev_health_ops.llm.agent.policy import AgentProviderSource
+from dev_health_ops.llm.agent.readiness import READINESS_ECHO_TOOL_ID
 from dev_health_ops.llm.credentials import (
     BYO_LLM_BASE_URL_FALLBACK_ALERT_THRESHOLD,
     BYO_LLM_BASE_URL_FALLBACK_ALERT_WINDOW,
@@ -100,7 +101,7 @@ class FakeReadinessProvider:
         if self.calls == 1:
             return AgentDecisionResult(
                 decision=AgentToolRequest(
-                    "readiness_echo", {"nonce": "ready-v1"}, "call-1"
+                    READINESS_ECHO_TOOL_ID, {"nonce": "ready-v1"}, "call-1"
                 ),
                 usage=AgentUsage(input_tokens=3, output_tokens=2),
                 latency_ms=1,

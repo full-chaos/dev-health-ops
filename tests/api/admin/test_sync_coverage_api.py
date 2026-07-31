@@ -467,12 +467,132 @@ async def test_sync_coverage_rejects_history_before_query_budget_is_exceeded(
         if "sync_run_units" in statement.lower() and "select" in statement.lower()
     ]
     assert unit_queries, "overflow path did not execute a measured unit query"
+    assert any("sum(" in statement for statement in unit_queries)
     assert all(" limit " in statement for statement in unit_queries)
     assert any(
         record.message == "sync_coverage_summary_complexity_rejected"
         and getattr(record, "complexity_stage") == "recent_units"
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_selects_largest_safe_history_window(
+    client, session_maker, monkeypatch, caplog
+):
+    """Large recent-unit histories return a truthful reduced window, not a 422."""
+
+    caplog.set_level("WARNING", logger="dev_health_ops.api.services.sync_coverage")
+    monkeypatch.setattr(sync_coverage_module, "MAX_COVERAGE_UNIT_WINDOWS", 2)
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    reference = datetime.now(timezone.utc)
+    for age_days in (120, 60, 10):
+        before = reference - timedelta(days=age_days)
+        await _seed_unit(
+            session_maker,
+            scope,
+            since=before - timedelta(hours=1),
+            before=before,
+            status="failed",
+            updated_at=before,
+        )
+    old_success = reference - timedelta(days=150)
+    await _seed_unit(
+        session_maker,
+        scope,
+        since=old_success - timedelta(hours=1),
+        before=old_success,
+        updated_at=old_success,
+    )
+    backfill_unit = reference - timedelta(days=61)
+    backfill_run_id = await _seed_unit(
+        session_maker,
+        scope,
+        since=backfill_unit - timedelta(hours=1),
+        before=backfill_unit,
+        status="failed",
+        updated_at=backfill_unit,
+    )
+    backfill_created_at = reference - timedelta(days=58)
+    async with session_maker() as session:
+        session.add(
+            BackfillJob(
+                org_id=seeded_state["org_id"],
+                sync_config_id=uuid.UUID(scope["config_id"]),
+                status="failed",
+                since_date=(backfill_unit - timedelta(hours=1)).date(),
+                before_date=backfill_unit.date(),
+                total_chunks=1,
+                failed_chunks=1,
+                celery_task_id=f"sync_run:{backfill_run_id}",
+                created_at=backfill_created_at,
+                updated_at=backfill_created_at,
+            )
+        )
+        await session.commit()
+
+    response = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert 10 < data["history_lookback_days"] <= 58
+    generated_at = datetime.fromisoformat(data["generated_at"])
+    truncated_before = datetime.fromisoformat(data["truncated_before"])
+    assert generated_at - truncated_before == timedelta(
+        days=data["history_lookback_days"]
+    )
+    assert any(
+        record.message == "sync_coverage_history_window_reduced"
+        and getattr(record, "requested_history_lookback_days") == 180
+        and getattr(record, "effective_history_lookback_days")
+        == data["history_lookback_days"]
+        and getattr(record, "complexity_stage") == "expanded_unit_windows"
+        and getattr(record, "complexity_limit") == 2
+        and getattr(record, "complexity_observed") == 3
+        and getattr(record, "effective_unit_window_count") == 2
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_preflight_deduplicates_recent_latest_successes(
+    client, session_maker, monkeypatch
+):
+    monkeypatch.setattr(sync_coverage_module, "MAX_COVERAGE_UNIT_WINDOWS", 2)
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    async with session_maker() as session:
+        extra_source = IntegrationSource(
+            org_id=scope["org_id"],
+            integration_id=uuid.UUID(scope["integration_id"]),
+            provider="github",
+            source_type="repository",
+            external_id="acme/other",
+            name="other",
+            full_name="acme/other",
+            metadata_={"planner_managed_sync_config_id": scope["config_id"]},
+            is_enabled=True,
+        )
+        session.add(extra_source)
+        await session.commit()
+        extra_source_id = str(extra_source.id)
+
+    before = datetime.now(timezone.utc) - timedelta(minutes=30)
+    for source_id in (scope["source_id"], extra_source_id):
+        await _seed_unit(
+            session_maker,
+            scope,
+            since=before - timedelta(hours=1),
+            before=before,
+            updated_at=before,
+            source_id=source_id,
+        )
+
+    response = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["history_lookback_days"] == 180
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,7 @@ from time import monotonic
 from typing import Any, Protocol
 
 from croniter import croniter as Croniter
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
@@ -673,6 +673,245 @@ async def _has_schedule_row(
     return (await session.execute(stmt)).scalar_one_or_none() is not None
 
 
+@dataclass(frozen=True)
+class _CoverageLookbackSelection:
+    effective_days: int
+    requested_unit_window_count: int
+    effective_unit_window_count: int
+    unit_window_limit: int
+
+
+def _terminal_unit_base_filters(
+    org_id: str,
+    scope: EffectiveScope,
+) -> list[Any]:
+    source_ids = [source.id for source in scope.sources]
+    query_dataset_keys = _query_dataset_keys_for_scope(scope.dataset_keys)
+    return [
+        SyncRunUnit.org_id == org_id,
+        SyncRunUnit.integration_id == scope.integration_id,
+        SyncRunUnit.source_id.in_(source_ids),
+        SyncRunUnit.dataset_key.in_(query_dataset_keys),
+        SyncRunUnit.status.in_(REQUESTED_UNIT_STATUSES),
+        SyncRunUnit.since_at.is_not(None),
+        SyncRunUnit.before_at.is_not(None),
+        SyncRun.org_id == org_id,
+    ]
+
+
+def _work_item_window_weight(scope: EffectiveScope) -> int:
+    return max(
+        sum(1 for key in scope.dataset_keys if _is_work_item_family_dataset_key(key)),
+        1,
+    )
+
+
+async def _weighted_unit_window_count(
+    session: AsyncSession,
+    scope: EffectiveScope,
+    unit_rows: Any,
+    *,
+    limit: int,
+) -> int:
+    bounded_units = unit_rows.limit(limit + 1).subquery()
+    stmt = select(
+        func.coalesce(
+            func.sum(
+                case(
+                    (
+                        bounded_units.c.dataset_key
+                        == _WORK_ITEMS_CANONICAL_DATASET_KEY,
+                        _work_item_window_weight(scope),
+                    ),
+                    else_=1,
+                )
+            ),
+            0,
+        )
+    ).select_from(bounded_units)
+    return int((await session.execute(stmt)).scalar_one())
+
+
+def _latest_success_unit_rows(
+    org_id: str,
+    scope: EffectiveScope,
+) -> Any:
+    base_filters = _terminal_unit_base_filters(org_id, scope)
+    latest_success_ranked = (
+        select(
+            SyncRunUnit.id.label("unit_id"),
+            SyncRunUnit.dataset_key.label("dataset_key"),
+            func.row_number()
+            .over(
+                partition_by=(SyncRunUnit.source_id, SyncRunUnit.dataset_key),
+                order_by=(
+                    SyncRunUnit.before_at.desc(),
+                    SyncRunUnit.updated_at.desc(),
+                ),
+            )
+            .label("row_num"),
+        )
+        .select_from(SyncRunUnit)
+        .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
+        .where(*base_filters, SyncRunUnit.status == SyncRunUnitStatus.SUCCESS.value)
+        .subquery()
+    )
+    return select(
+        latest_success_ranked.c.unit_id,
+        latest_success_ranked.c.dataset_key,
+    ).where(latest_success_ranked.c.row_num == 1)
+
+
+async def _recent_backfill_run_ids_for_lookback(
+    session: AsyncSession,
+    org_id: str,
+    config: SyncConfiguration,
+    truncated_before: datetime,
+    *,
+    limit: int,
+) -> set[uuid.UUID] | None:
+    stmt = select(BackfillJob.celery_task_id).where(
+        BackfillJob.org_id == org_id,
+        BackfillJob.sync_config_id == config.id,
+        BackfillJob.created_at >= truncated_before,
+    )
+    rows = list((await session.execute(stmt.limit(limit + 1))).all())
+    if len(rows) > limit:
+        return None
+    run_ids: set[uuid.UUID] = set()
+    for job in rows:
+        run_id_str = _backfill_job_sync_run_id(job)
+        if run_id_str is None:
+            continue
+        try:
+            run_ids.add(uuid.UUID(run_id_str))
+        except ValueError:
+            continue
+    return run_ids
+
+
+async def _coverage_unit_window_count(
+    session: AsyncSession,
+    org_id: str,
+    config: SyncConfiguration,
+    scope: EffectiveScope,
+    truncated_before: datetime,
+    *,
+    limit: int,
+) -> int:
+    if scope.integration_id is None or not scope.sources or not scope.dataset_keys:
+        return 0
+    base_filters = _terminal_unit_base_filters(org_id, scope)
+    recent_units = (
+        select(
+            SyncRunUnit.id.label("unit_id"),
+            SyncRunUnit.dataset_key.label("dataset_key"),
+        )
+        .select_from(SyncRunUnit)
+        .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
+        .where(*base_filters, SyncRunUnit.updated_at >= truncated_before)
+    )
+    recent_backfill_run_ids = await _recent_backfill_run_ids_for_lookback(
+        session,
+        org_id,
+        config,
+        truncated_before,
+        limit=limit,
+    )
+    if recent_backfill_run_ids is None:
+        return limit + 1
+    unit_queries: list[Any] = [
+        recent_units,
+        _latest_success_unit_rows(org_id, scope),
+    ]
+    if recent_backfill_run_ids:
+        backfill_units = (
+            select(
+                SyncRunUnit.id.label("unit_id"),
+                SyncRunUnit.dataset_key.label("dataset_key"),
+            )
+            .select_from(SyncRunUnit)
+            .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
+            .where(
+                *base_filters,
+                SyncRunUnit.sync_run_id.in_(recent_backfill_run_ids),
+            )
+        )
+        unit_queries.append(backfill_units)
+    unit_rows = union(*unit_queries)
+    return await _weighted_unit_window_count(
+        session,
+        scope,
+        unit_rows,
+        limit=limit,
+    )
+
+
+async def _select_coverage_lookback(
+    session: AsyncSession,
+    org_id: str,
+    config: SyncConfiguration,
+    scope: EffectiveScope,
+    *,
+    requested_days: int,
+    generated_at: datetime,
+) -> _CoverageLookbackSelection:
+    """Choose the largest window whose expanded unit set fits the memory cap."""
+
+    unit_window_limit = MAX_COVERAGE_UNIT_WINDOWS
+    counts: dict[int, int] = {}
+
+    async def count_for(days: int) -> int:
+        if days not in counts:
+            counts[days] = await _coverage_unit_window_count(
+                session,
+                org_id,
+                config,
+                scope,
+                generated_at - timedelta(days=days),
+                limit=unit_window_limit,
+            )
+        return counts[days]
+
+    requested_count = await count_for(requested_days)
+    if requested_count <= unit_window_limit:
+        return _CoverageLookbackSelection(
+            effective_days=requested_days,
+            requested_unit_window_count=requested_count,
+            effective_unit_window_count=requested_count,
+            unit_window_limit=unit_window_limit,
+        )
+
+    minimum_count = await count_for(1)
+    if minimum_count > unit_window_limit:
+        raise SyncCoverageComplexityError(
+            stage="expanded_unit_windows",
+            limit=unit_window_limit,
+            observed=minimum_count,
+        )
+
+    low = 1
+    high = requested_days - 1
+    effective_days = 1
+    effective_count = minimum_count
+    while low <= high:
+        candidate_days = (low + high) // 2
+        candidate_count = await count_for(candidate_days)
+        if candidate_count <= unit_window_limit:
+            effective_days = candidate_days
+            effective_count = candidate_count
+            low = candidate_days + 1
+        else:
+            high = candidate_days - 1
+
+    return _CoverageLookbackSelection(
+        effective_days=effective_days,
+        requested_unit_window_count=requested_count,
+        effective_unit_window_count=effective_count,
+        unit_window_limit=unit_window_limit,
+    )
+
+
 async def _terminal_unit_windows(
     session: AsyncSession,
     org_id: str,
@@ -683,18 +922,7 @@ async def _terminal_unit_windows(
 ) -> list[UnitWindow]:
     if scope.integration_id is None or not scope.sources or not scope.dataset_keys:
         return []
-    source_ids = [source.id for source in scope.sources]
-    query_dataset_keys = _query_dataset_keys_for_scope(scope.dataset_keys)
-    base_filters = [
-        SyncRunUnit.org_id == org_id,
-        SyncRunUnit.integration_id == scope.integration_id,
-        SyncRunUnit.source_id.in_(source_ids),
-        SyncRunUnit.dataset_key.in_(query_dataset_keys),
-        SyncRunUnit.status.in_(REQUESTED_UNIT_STATUSES),
-        SyncRunUnit.since_at.is_not(None),
-        SyncRunUnit.before_at.is_not(None),
-        SyncRun.org_id == org_id,
-    ]
+    base_filters = _terminal_unit_base_filters(org_id, scope)
     # Deliberately project only the columns used by interval math. Selecting
     # the ORM entities hydrates SyncRunUnit.result/error and SyncRun.result/error
     # for every unit in the lookback; those JSON/text payloads are unrelated to
@@ -1404,9 +1632,10 @@ async def build_sync_coverage_summary(
     lookback_days: int = HISTORY_LOOKBACK_DAYS,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Query persisted sync state and return a config-scoped coverage summary."""
+    """Return coverage within the largest memory-safe window up to ``lookback_days``."""
 
     started_at = monotonic()
+    requested_lookback_days = lookback_days
     log_context = {
         "org_id": org_id,
         "sync_config_id": str(config.id),
@@ -1425,8 +1654,36 @@ async def build_sync_coverage_summary(
             )
             budget = _CoverageQueryBudget()
             now = ensure_utc(generated_at or datetime.now(timezone.utc))
-            truncated_before = now - timedelta(days=lookback_days)
             scope = await resolve_effective_scope(session, org_id, config, budget)
+            lookback = await _select_coverage_lookback(
+                session,
+                org_id,
+                config,
+                scope,
+                requested_days=requested_lookback_days,
+                generated_at=now,
+            )
+            lookback_days = lookback.effective_days
+            log_context = {
+                **log_context,
+                "history_lookback_days": lookback_days,
+                "requested_history_lookback_days": requested_lookback_days,
+            }
+            if lookback_days != requested_lookback_days:
+                logger.warning(
+                    "sync_coverage_history_window_reduced",
+                    extra={
+                        **log_context,
+                        "effective_history_lookback_days": lookback_days,
+                        "complexity_stage": "expanded_unit_windows",
+                        "complexity_limit": lookback.unit_window_limit,
+                        "complexity_observed": (lookback.requested_unit_window_count),
+                        "effective_unit_window_count": (
+                            lookback.effective_unit_window_count
+                        ),
+                    },
+                )
+            truncated_before = now - timedelta(days=lookback_days)
             schedule = await _active_schedule(session, org_id, config)
             has_schedule = await _has_schedule_row(session, org_id, config)
             windows = await _terminal_unit_windows(

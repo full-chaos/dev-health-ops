@@ -14,7 +14,7 @@ import json
 import re
 from collections import OrderedDict
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from enum import StrEnum
 from typing import Protocol
@@ -526,6 +526,103 @@ class ScopeResolutionService:
         )
         self._cache.put(cache_key, result)
         return result
+
+    async def resolve_query_contract(
+        self,
+        org_id: str,
+        permission_fingerprint: str,
+        request: ScopeSearchRequest,
+        *,
+        base_scope: DevScope,
+        resolved_at: datetime | None = None,
+    ) -> DevScopeResolution:
+        """Resolve a model-owned free-text query into an authorized direct scope.
+
+        This is the canonical seam ``resolve_scope.v1`` uses when the model
+        names an entity: it searches only the authenticated organization's
+        authorized catalog (never free-form SQL/GraphQL, never a
+        model-authored ID) and commits an exact match, returns typed
+        candidates when ambiguous, or reports not-found/forbidden. An
+        unresolved or ambiguous query never silently falls back to
+        organization scope (CHAOS-3256).
+
+        Ambiguity is always probed against the full ``MAX_CANDIDATES`` page,
+        never the model-owned ``request.limit``: truncating the search
+        *before* checking for a second match would let a caller-supplied
+        ``limit=1`` silently pick an arbitrary one of several real matches
+        and report it as an exact commit. ``request.limit`` only bounds how
+        many typed candidates are returned once the outcome is ambiguous.
+        """
+        probe_request = (
+            request
+            if request.limit == MAX_CANDIDATES
+            else replace(request, limit=MAX_CANDIDATES)
+        )
+        result = await self.search(org_id, permission_fingerprint, probe_request)
+        resolved_at = resolved_at or datetime.now(timezone.utc)
+        if not result.candidates:
+            return DevScopeResolution(
+                schema_version="dev_scope_resolution.v1",
+                requested_scope=base_scope,
+                resolved_scope=None,
+                outcome=ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND,
+                authorized_repository_ids=[],
+                authorized_entity_ids=[],
+                candidates=[],
+                fallbacks=[],
+                warnings=["No authorized entity matched the requested query."],
+                resolved_at=resolved_at,
+            )
+        if len(result.candidates) > 1:
+            return DevScopeResolution(
+                schema_version="dev_scope_resolution.v1",
+                requested_scope=base_scope,
+                resolved_scope=None,
+                outcome=ScopeResolutionOutcome.AMBIGUOUS,
+                authorized_repository_ids=[],
+                authorized_entity_ids=[],
+                candidates=[
+                    DevDisambiguationCandidate(
+                        entity_ref=self._contract_entity_ref(candidate),
+                        repository_id=candidate.repository_id,
+                        reason="Multiple authorized entities match the requested query.",
+                    )
+                    for candidate in result.candidates[: request.limit]
+                ],
+                fallbacks=[],
+                warnings=[],
+                resolved_at=resolved_at,
+            )
+        entity = result.candidates[0]
+        is_repository = entity.kind is EntityKind.REPOSITORY
+        resolved_scope = DevScope(
+            schema_version="dev_scope.v1",
+            organization_id=org_id,
+            direct_scope=DirectScope(entity.kind.value),
+            repositories=[entity.canonical_id] if is_repository else [],
+            entity_refs=[] if is_repository else [self._contract_entity_ref(entity)],
+            team_ids=[],
+            time_range=base_scope.time_range,
+            comparison_range=base_scope.comparison_range,
+            surface_context=None,
+        )
+        repository_ids = sorted(
+            ({entity.canonical_id} if is_repository else set())
+            | ({entity.repository_id} if entity.repository_id else set())
+        )
+        entity_ids = [] if is_repository else [entity.canonical_id]
+        return DevScopeResolution(
+            schema_version="dev_scope_resolution.v1",
+            requested_scope=base_scope,
+            resolved_scope=resolved_scope,
+            outcome=ScopeResolutionOutcome.EXACT,
+            authorized_repository_ids=repository_ids,
+            authorized_entity_ids=entity_ids,
+            candidates=[],
+            fallbacks=[],
+            warnings=[],
+            resolved_at=resolved_at,
+        )
 
     async def resolve_contract(
         self,

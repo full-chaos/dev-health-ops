@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from dev_health_ops.api.dev.contracts import DirectScope
+from dev_health_ops.api.dev.contracts import DevScope, DevTimeRange, DirectScope
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
     EntityKind,
@@ -93,6 +93,24 @@ def _entity(
         canonical_id=canonical_id,
         label=label,
         repository_id=repository_id,
+    )
+
+
+def _org_scope() -> DevScope:
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id="org-a",
+        direct_scope=DirectScope.ORGANIZATION,
+        repositories=[],
+        entity_refs=[],
+        team_ids=[],
+        time_range=DevTimeRange(
+            start=datetime(2026, 6, 28, tzinfo=timezone.utc),
+            end=datetime(2026, 7, 28, tzinfo=timezone.utc),
+            timezone="UTC",
+        ),
+        comparison_range=None,
+        surface_context=None,
     )
 
 
@@ -798,3 +816,193 @@ async def test_team_filtered_organization_scope_skips_repository_enumeration() -
     assert result.authorized_repository_ids == []
     assert catalog.organization_repository_ids_calls == 0
     assert not any("organization-natively" in warning for warning in result.warnings)
+
+
+# --- CHAOS-3256: resolve named entities before executing status tools ---
+
+
+@pytest.mark.asyncio
+async def test_resolve_query_contract_commits_exact_named_project_scope() -> None:
+    project = _entity(EntityKind.PROJECT, "project-ask-dev", "Ask Dev")
+    catalog = FakeCatalog([project])
+    service = ScopeResolutionService(catalog)
+    base_scope = _org_scope()
+
+    result = await service.resolve_query_contract(
+        "org-a",
+        "perm-a",
+        ScopeSearchRequest(
+            query="ask dev",
+            kinds=(EntityKind.PROJECT, EntityKind.REPOSITORY),
+            limit=25,
+        ),
+        base_scope=base_scope,
+        resolved_at=datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.EXACT
+    assert result.resolved_scope is not None
+    assert result.resolved_scope.direct_scope is DirectScope.PROJECT
+    assert result.resolved_scope.entity_refs[0].entity_id == "project-ask-dev"
+    assert result.authorized_entity_ids == ["project-ask-dev"]
+    assert result.requested_scope == base_scope
+
+
+@pytest.mark.asyncio
+async def test_resolve_query_contract_commits_exact_named_repository_scope() -> None:
+    repository = _entity(EntityKind.REPOSITORY, "repo-a", "full-chaos/dev-health")
+    catalog = FakeCatalog([repository])
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_query_contract(
+        "org-a",
+        "perm-a",
+        ScopeSearchRequest(
+            query="dev-health", kinds=(EntityKind.REPOSITORY,), limit=25
+        ),
+        base_scope=_org_scope(),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.EXACT
+    assert result.resolved_scope is not None
+    assert result.resolved_scope.direct_scope is DirectScope.REPOSITORY
+    assert result.resolved_scope.repositories == ["repo-a"]
+    assert result.authorized_repository_ids == ["repo-a"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind",
+    [
+        EntityKind.REPOSITORY,
+        EntityKind.PROJECT,
+        EntityKind.WORK_UNIT,
+        EntityKind.ISSUE,
+        EntityKind.PULL_REQUEST,
+    ],
+)
+async def test_resolve_query_contract_covers_every_supported_direct_scope(
+    kind: EntityKind,
+) -> None:
+    entity = _entity(
+        kind,
+        f"{kind.value}:id",
+        f"{kind.value} label",
+        repository_id="repo-a" if kind is not EntityKind.REPOSITORY else None,
+    )
+    catalog = FakeCatalog([entity])
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_query_contract(
+        "org-a",
+        "perm-a",
+        ScopeSearchRequest(query=f"{kind.value} label", kinds=(kind,), limit=25),
+        base_scope=_org_scope(),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.EXACT
+    assert result.resolved_scope is not None
+    assert result.resolved_scope.direct_scope is DirectScope(kind.value)
+    if kind is EntityKind.REPOSITORY:
+        assert result.resolved_scope.repositories == [entity.canonical_id]
+        assert result.authorized_repository_ids == [entity.canonical_id]
+    else:
+        assert result.resolved_scope.entity_refs[0].entity_id == entity.canonical_id
+        assert result.authorized_repository_ids == ["repo-a"]
+        assert result.authorized_entity_ids == [entity.canonical_id]
+
+
+@pytest.mark.asyncio
+async def test_resolve_query_contract_returns_typed_ambiguous_candidates() -> None:
+    catalog = FakeCatalog(
+        [
+            _entity(EntityKind.PROJECT, "project-z", "Platform"),
+            _entity(EntityKind.PROJECT, "project-a", "platform"),
+        ]
+    )
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_query_contract(
+        "org-a",
+        "perm-a",
+        ScopeSearchRequest(query="platform", kinds=(EntityKind.PROJECT,), limit=25),
+        base_scope=_org_scope(),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.AMBIGUOUS
+    assert result.resolved_scope is None
+    assert [candidate.entity_ref.entity_id for candidate in result.candidates] == [
+        "project-a",
+        "project-z",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_query_contract_detects_ambiguity_despite_a_narrow_limit() -> (
+    None
+):
+    """A caller-supplied ``limit=1`` must never truncate the search before
+    ambiguity is checked -- that would let it silently commit an arbitrary
+    one of several real matches as if it were the unique exact answer."""
+    catalog = FakeCatalog(
+        [
+            _entity(EntityKind.PROJECT, "project-z", "Platform"),
+            _entity(EntityKind.PROJECT, "project-a", "platform"),
+        ]
+    )
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_query_contract(
+        "org-a",
+        "perm-a",
+        ScopeSearchRequest(query="platform", kinds=(EntityKind.PROJECT,), limit=1),
+        base_scope=_org_scope(),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.AMBIGUOUS
+    assert result.resolved_scope is None
+    # The typed candidate list itself still honors the caller's requested
+    # limit; only the exact-vs-ambiguous decision must not be truncated.
+    assert len(result.candidates) == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_query_contract_not_found_never_falls_back_to_organization() -> (
+    None
+):
+    catalog = FakeCatalog([])
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_query_contract(
+        "org-a",
+        "perm-a",
+        ScopeSearchRequest(
+            query="does not exist", kinds=(EntityKind.PROJECT,), limit=25
+        ),
+        base_scope=_org_scope(),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND
+    assert result.resolved_scope is None
+    assert result.candidates == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_query_contract_cross_tenant_entity_is_not_found() -> None:
+    # The production catalog is tenant-scoped in every SQL query (org_id is
+    # part of every WHERE clause); a fake catalog that never returns another
+    # tenant's rows for this query models that authorization boundary.
+    catalog = FakeCatalog([])
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_query_contract(
+        "org-a",
+        "perm-a",
+        ScopeSearchRequest(
+            query="other-tenant-project", kinds=(EntityKind.PROJECT,), limit=25
+        ),
+        base_scope=_org_scope(),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND
+    assert result.resolved_scope is None

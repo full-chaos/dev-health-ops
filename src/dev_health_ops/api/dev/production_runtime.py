@@ -76,11 +76,13 @@ from .prompts import PROMPT_VERSION
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .scope_catalog import ClickHouseAuthorizedEntityCatalog
 from .scope_service import (
+    DIRECT_SCOPE_KINDS,
     EntityKind,
     ScopeRef,
     ScopeRequestCache,
     ScopeResolutionService,
     ScopeResolveRequest,
+    ScopeSearchRequest,
     TimeRangeRequest,
 )
 from .status_change_service import (
@@ -106,6 +108,12 @@ ACCEPTANCE_OPENAI_MODEL = SCRIPTED_OPENAI_MODEL
 _ACCEPTANCE_OPENAI_DISCLOSURE_KEY = "ask_dev_scripted_acceptance"
 _ACCEPTANCE_OPENAI_HOSTS = frozenset(
     {"127.0.0.1", "localhost", "ask-dev-scripted-openai"}
+)
+# Named-entity resolution never searches organization scope itself (CHAOS-3256):
+# resolve_scope.v1 only disambiguates the direct scopes an organization search
+# can return an authorized match for.
+_SEARCHABLE_SCOPE_KINDS: tuple[EntityKind, ...] = tuple(
+    sorted(DIRECT_SCOPE_KINDS - {EntityKind.ORGANIZATION}, key=lambda kind: kind.value)
 )
 
 
@@ -599,12 +607,31 @@ async def _assemble_production_runtime(
     )
     evidence_by_id: dict[str, Any] = {}
 
-    async def resolve_scope(_context, request):
-        resolution = await _resolve_exact_contract(
-            scope_service,
-            org_id=org_id,
-            permission_fingerprint=_context.permission_fingerprint,
-            requested_scope=request.scope,
+    async def resolve_scope(context, request):
+        query = (request.query or "").strip()
+        if not query:
+            resolution = await _resolve_exact_contract(
+                scope_service,
+                org_id=org_id,
+                permission_fingerprint=context.permission_fingerprint,
+                requested_scope=request.scope,
+            )
+            return _tool_result(request, scope_resolution=resolution)
+        # A named entity in the model's query is resolved through the same
+        # canonical authorized search service the GraphQL scope search field
+        # uses, never by re-resolving the caller's already-authorized scope
+        # (CHAOS-3256). Exact matches commit a new authorized scope for
+        # subsequent tool calls; ambiguous/not-found results never fall back
+        # to organization scope.
+        resolution = await scope_service.resolve_query_contract(
+            org_id,
+            context.permission_fingerprint,
+            ScopeSearchRequest(
+                query=query,
+                kinds=_SEARCHABLE_SCOPE_KINDS,
+                limit=request.limit,
+            ),
+            base_scope=request.scope,
         )
         return _tool_result(request, scope_resolution=resolution)
 

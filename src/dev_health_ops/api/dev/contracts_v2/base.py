@@ -37,11 +37,13 @@ __all__ = [
     "Label",
     "LongText",
     "OpaqueID",
+    "PlatformVersionToken",
     "PublicOutcome",
     "QuestionIntentID",
     "RelativePath",
     "SchemaVersion",
     "ShortText",
+    "SourceClass",
     "SourceRequirementState",
     "TimezoneName",
     "Version",
@@ -128,6 +130,56 @@ class SourceRequirementState(StrEnum):
     UNAUTHORIZED_OR_NOT_VISIBLE = "unauthorized_or_not_visible"
     NOT_APPLICABLE = "not_applicable"
     TRUNCATED = "truncated"
+
+
+class SourceClass(StrEnum):
+    """The closed platform vocabulary of investigable source classes.
+
+    A *source class* names a kind of platform data an investigation step can
+    draw on. It is deliberately a closed enum rather than an ``OpaqueID``,
+    because the same token is what ``dev_coverage``'s
+    ``unavailable_required_sources``/``stale_required_sources`` disclose on a
+    **denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):
+    adversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle
+    a subject-derived identifier (``"private/Nightfall"``) out through a frame
+    whose every other field was correctly empty. A closed vocabulary means the
+    coverage counts stay answerable for a denial while carrying nothing a
+    producer chose.
+
+    Adding a source class is therefore a deliberate contract change, not an
+    incidental string: a new adapter must add its member here (and regenerate
+    the exported schemas) before it can appear on the wire.
+    """
+
+    STATUS_CHANGE = "status_change"
+    WORK_ITEM = "work_item"
+    WORK_GRAPH = "work_graph"
+    PULL_REQUEST = "pull_request"
+    CODE_CHANGE = "code_change"
+    REVIEW = "review"
+    CI_RUN = "ci_run"
+    TEST_REPORT = "test_report"
+    DEPLOYMENT = "deployment"
+    INCIDENT = "incident"
+    OPERATIONAL_CONTROL = "operational_control"
+    SOURCE_HEALTH = "source_health"
+
+
+#: A platform provenance token: a dotted, lowercase, version-suffixed
+#: identifier such as ``intent_interpreter.v1``, ``status.entity.v2.1`` or
+#: ``ask_dev_queries.v1``. Every string on ``DevFrameVersions`` uses this
+#: rather than the free-form ``Version`` (1-128 arbitrary characters) so a
+#: provenance block cannot carry producer-authored copy at all — the round-3
+#: counterexample put ``"private/Nightfall"`` in ``versions.plan_id``, which
+#: the whitespace-free ``IDENTIFIER`` predicate admitted.
+PlatformVersionToken = Annotated[
+    str,
+    StringConstraints(
+        min_length=3,
+        max_length=128,
+        pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v\d+(?:\.\d+)*$",
+    ),
+]
 
 
 class PublicOutcome(StrEnum):

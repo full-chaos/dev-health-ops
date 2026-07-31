@@ -113,7 +113,7 @@
           "type": "array"
         },
         "coverage": {
-          "$ref": "#/$defs/DevCoverage"
+          "$ref": "#/$defs/DevCoverageV2"
         },
         "deficiency_refs": {
           "items": {
@@ -134,7 +134,7 @@
         },
         "evidence": {
           "items": {
-            "$ref": "#/$defs/DevEvidenceRef"
+            "$ref": "#/$defs/DevEvidenceRefV2"
           },
           "maxItems": 25,
           "title": "Evidence",
@@ -194,7 +194,7 @@
         },
         "metrics": {
           "items": {
-            "$ref": "#/$defs/DevMetricRef"
+            "$ref": "#/$defs/DevMetricRefV2"
           },
           "maxItems": 12,
           "title": "Metrics",
@@ -287,7 +287,15 @@
           "title": "Subject Set Ref"
         },
         "versions": {
-          "$ref": "#/$defs/DevFrameVersions"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevFrameVersions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -297,8 +305,7 @@
         "generated_at",
         "public_outcome",
         "direct_answer",
-        "coverage",
-        "versions"
+        "coverage"
       ],
       "title": "DevAnswerFrame",
       "type": "object"
@@ -484,7 +491,8 @@
           "anyOf": [
             {
               "maxLength": 128,
-              "minLength": 1,
+              "minLength": 3,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
               "type": "string"
             },
             {
@@ -501,8 +509,9 @@
       "title": "DevCompletionBlock",
       "type": "object"
     },
-    "DevCoverage": {
+    "DevCoverageV2": {
       "additionalProperties": false,
+      "description": "``dev_coverage`` with immutable, closed-vocabulary source lists.",
       "properties": {
         "as_of": {
           "format": "date-time",
@@ -523,10 +532,7 @@
         },
         "stale_required_sources": {
           "items": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
-            "type": "string"
+            "$ref": "#/$defs/SourceClass"
           },
           "maxItems": 25,
           "title": "Stale Required Sources",
@@ -534,10 +540,7 @@
         },
         "unavailable_required_sources": {
           "items": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
-            "type": "string"
+            "$ref": "#/$defs/SourceClass"
           },
           "maxItems": 25,
           "title": "Unavailable Required Sources",
@@ -549,7 +552,7 @@
         "available_source_count",
         "as_of"
       ],
-      "title": "DevCoverage",
+      "title": "DevCoverageV2",
       "type": "object"
     },
     "DevEntityRef": {
@@ -696,7 +699,7 @@
       "title": "DevEvidenceFlags",
       "type": "object"
     },
-    "DevEvidenceRef": {
+    "DevEvidenceRefV2": {
       "additionalProperties": false,
       "properties": {
         "citation_text": {
@@ -829,7 +832,7 @@
         "confidence",
         "flags"
       ],
-      "title": "DevEvidenceRef",
+      "title": "DevEvidenceRefV2",
       "type": "object"
     },
     "DevFrameConflict": {
@@ -863,29 +866,33 @@
     },
     "DevFrameVersions": {
       "additionalProperties": false,
+      "description": "Platform provenance for one answer frame.\n\nEvery field is a ``PlatformVersionToken`` (a dotted, lowercase,\nversion-suffixed token) rather than the free-form ``Version``, so the\nblock cannot carry producer-authored copy. A no-answer outcome carries no\nprovenance block at all \u2014 see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``.",
       "properties": {
         "interpreter_version": {
           "maxLength": 128,
-          "minLength": 1,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
           "title": "Interpreter Version",
           "type": "string"
         },
         "metric_definition_version": {
           "maxLength": 128,
-          "minLength": 1,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
           "title": "Metric Definition Version",
           "type": "string"
         },
         "plan_id": {
           "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
           "title": "Plan Id",
           "type": "string"
         },
         "plan_version": {
           "maxLength": 128,
-          "minLength": 1,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
           "title": "Plan Version",
           "type": "string"
         },
@@ -893,7 +900,8 @@
           "anyOf": [
             {
               "maxLength": 128,
-              "minLength": 1,
+              "minLength": 3,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
               "type": "string"
             },
             {
@@ -905,7 +913,8 @@
         },
         "query_version": {
           "maxLength": 128,
-          "minLength": 1,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
           "title": "Query Version",
           "type": "string"
         },
@@ -913,7 +922,8 @@
           "anyOf": [
             {
               "maxLength": 128,
-              "minLength": 1,
+              "minLength": 3,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
               "type": "string"
             },
             {
@@ -925,7 +935,8 @@
         },
         "tool_contract_version": {
           "maxLength": 128,
-          "minLength": 1,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
           "title": "Tool Contract Version",
           "type": "string"
         }
@@ -961,7 +972,7 @@
       "title": "DevMetricPoint",
       "type": "object"
     },
-    "DevMetricRef": {
+    "DevMetricRefV2": {
       "additionalProperties": false,
       "properties": {
         "aggregation": {
@@ -1062,7 +1073,7 @@
           "type": "string"
         },
         "resolved_scope": {
-          "$ref": "#/$defs/DevScope"
+          "$ref": "#/$defs/DevScopeV2"
         },
         "schema_version": {
           "const": "dev_metric_ref.v1",
@@ -1119,7 +1130,7 @@
         "freshness",
         "coverage"
       ],
-      "title": "DevMetricRef",
+      "title": "DevMetricRefV2",
       "type": "object"
     },
     "DevModelMetadata": {
@@ -1284,7 +1295,8 @@
         },
         "rule_version": {
           "maxLength": 128,
-          "minLength": 1,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
           "title": "Rule Version",
           "type": "string"
         },
@@ -1389,7 +1401,7 @@
       "title": "DevRelationshipPath",
       "type": "object"
     },
-    "DevScope": {
+    "DevScopeV2": {
       "additionalProperties": false,
       "properties": {
         "comparison_range": {
@@ -1440,7 +1452,7 @@
         "surface_context": {
           "anyOf": [
             {
-              "$ref": "#/$defs/DevSurfaceContext"
+              "$ref": "#/$defs/DevSurfaceContextV2"
             },
             {
               "type": "null"
@@ -1469,7 +1481,7 @@
         "direct_scope",
         "time_range"
       ],
-      "title": "DevScope",
+      "title": "DevScopeV2",
       "type": "object"
     },
     "DevSourceObservation": {
@@ -1575,11 +1587,7 @@
           "type": "string"
         },
         "source_class": {
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
-          "title": "Source Class",
-          "type": "string"
+          "$ref": "#/$defs/SourceClass"
         },
         "subject_coverage": {
           "maximum": 1,
@@ -1623,7 +1631,7 @@
       "title": "DevSourceObservation",
       "type": "object"
     },
-    "DevSurfaceContext": {
+    "DevSurfaceContextV2": {
       "additionalProperties": false,
       "properties": {
         "entity_refs": {
@@ -1656,7 +1664,7 @@
       "required": [
         "route_id"
       ],
-      "title": "DevSurfaceContext",
+      "title": "DevSurfaceContextV2",
       "type": "object"
     },
     "DevTimeRange": {
@@ -1760,6 +1768,25 @@
         "failed"
       ],
       "title": "PublicOutcome",
+      "type": "string"
+    },
+    "SourceClass": {
+      "description": "The closed platform vocabulary of investigable source classes.\n\nA *source class* names a kind of platform data an investigation step can\ndraw on. It is deliberately a closed enum rather than an ``OpaqueID``,\nbecause the same token is what ``dev_coverage``'s\n``unavailable_required_sources``/``stale_required_sources`` disclose on a\n**denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):\nadversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle\na subject-derived identifier (``\"private/Nightfall\"``) out through a frame\nwhose every other field was correctly empty. A closed vocabulary means the\ncoverage counts stay answerable for a denial while carrying nothing a\nproducer chose.\n\nAdding a source class is therefore a deliberate contract change, not an\nincidental string: a new adapter must add its member here (and regenerate\nthe exported schemas) before it can appear on the wire.",
+      "enum": [
+        "status_change",
+        "work_item",
+        "work_graph",
+        "pull_request",
+        "code_change",
+        "review",
+        "ci_run",
+        "test_report",
+        "deployment",
+        "incident",
+        "operational_control",
+        "source_health"
+      ],
+      "title": "SourceClass",
       "type": "string"
     },
     "SourceRequirementState": {

@@ -41,10 +41,9 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
-from dev_health_ops.api.dev.contracts import DevError
-
 from .answer import DevAnswerV2
 from .base import ContractModelV2, OpaqueID, ShortText
+from .embedded import DevErrorV2
 from .subject import DevResolutionLedger, validate_ledger_extends
 
 __all__ = [
@@ -90,7 +89,7 @@ class DevStreamEventV2(ContractModelV2):
     )
     answer: DevAnswerV2 | None = None
     warning: ShortText | None = None
-    error: DevError | None = None
+    error: DevErrorV2 | None = None
     terminal_kind: Literal["answer", "error"] | None = None
 
     @model_validator(mode="after")

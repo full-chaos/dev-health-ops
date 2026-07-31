@@ -15,6 +15,13 @@ which adversarial review used to clear a validated ledger's entries and
 defeat ``validate_ledger_extends``. Tuples make the whole object immutable
 in fact, not just at the attribute boundary — asserted across every v2
 model by ``test_contracts_v2``.
+
+That held for v2-native fields but not for the v1 objects this frame embeds:
+review round 3 appended to ``frame.coverage.unavailable_required_sources`` on
+a fully validated frame and serialized the result. ``coverage``, ``evidence``
+and ``metrics`` therefore use the deeply immutable mirrors in
+``embedded.py``, and the introspection test now recurses through every
+embedded model type rather than accepting a list of acknowledged exceptions.
 """
 
 from __future__ import annotations
@@ -23,18 +30,18 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, FiniteFloat, model_validator
 
-from dev_health_ops.api.dev.contracts import DevCoverage, DevEvidenceRef, DevMetricRef
-
 from . import validators as _validators
 from .base import (
     ContractModelV2,
     Label,
     LongText,
     OpaqueID,
+    PlatformVersionToken,
     PublicOutcome,
     ShortText,
-    Version,
 )
+from .embedded import DevCoverageV2, DevEvidenceRefV2, DevMetricRefV2
+from .plan import PlanRegistryID
 from .result import DevRelationshipPath, DevSourceObservation
 from .subject import DevEntityRefV2
 
@@ -65,7 +72,7 @@ class DevCompletionBlock(ContractModelV2):
     rate: FiniteFloat | None = Field(default=None, ge=0, le=1)
     calculable: bool
     rule_id: OpaqueID | None = None
-    rule_version: Version | None = None
+    rule_version: PlatformVersionToken | None = None
 
 
 class DevReadinessBlock(ContractModelV2):
@@ -73,7 +80,7 @@ class DevReadinessBlock(ContractModelV2):
 
     state: Literal["ready", "not_ready", "indeterminate"]
     rule_id: OpaqueID
-    rule_version: Version
+    rule_version: PlatformVersionToken
     translated_user_reasons: tuple[ShortText, ...] = Field(
         default_factory=tuple, max_length=20
     )
@@ -120,14 +127,22 @@ class DevFrameConflict(ContractModelV2):
 
 
 class DevFrameVersions(ContractModelV2):
-    interpreter_version: Version
-    plan_id: OpaqueID
-    plan_version: Version
-    tool_contract_version: Version
-    metric_definition_version: Version
-    query_version: Version
-    prompt_version: Version | None = None
-    rule_version: Version | None = None
+    """Platform provenance for one answer frame.
+
+    Every field is a ``PlatformVersionToken`` (a dotted, lowercase,
+    version-suffixed token) rather than the free-form ``Version``, so the
+    block cannot carry producer-authored copy. A no-answer outcome carries no
+    provenance block at all — see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``.
+    """
+
+    interpreter_version: PlatformVersionToken
+    plan_id: PlanRegistryID
+    plan_version: PlatformVersionToken
+    tool_contract_version: PlatformVersionToken
+    metric_definition_version: PlatformVersionToken
+    query_version: PlatformVersionToken
+    prompt_version: PlatformVersionToken | None = None
+    rule_version: PlatformVersionToken | None = None
 
 
 class DevAnswerFrame(ContractModelV2):
@@ -143,7 +158,7 @@ class DevAnswerFrame(ContractModelV2):
     readiness: DevReadinessBlock | None = None
     sections: tuple[DevAnswerSection, ...] = Field(default_factory=tuple, max_length=20)
     facts: tuple[DevAnswerFact, ...] = Field(default_factory=tuple, max_length=200)
-    metrics: tuple[DevMetricRef, ...] = Field(default_factory=tuple, max_length=12)
+    metrics: tuple[DevMetricRefV2, ...] = Field(default_factory=tuple, max_length=12)
     comparisons: tuple[DevComparisonPoint, ...] = Field(
         default_factory=tuple, max_length=20
     )
@@ -162,12 +177,14 @@ class DevAnswerFrame(ContractModelV2):
     source_observations: tuple[DevSourceObservation, ...] = Field(
         default_factory=tuple, max_length=25
     )
-    coverage: DevCoverage
-    evidence: tuple[DevEvidenceRef, ...] = Field(default_factory=tuple, max_length=25)
+    coverage: DevCoverageV2
+    evidence: tuple[DevEvidenceRefV2, ...] = Field(default_factory=tuple, max_length=25)
     safe_follow_up_questions: tuple[ShortText, ...] = Field(
         default_factory=tuple, max_length=10
     )
-    versions: DevFrameVersions
+    # Optional only so a no-answer outcome can omit it entirely; required for
+    # every outcome that carries content — see validate_versions_presence.
+    versions: DevFrameVersions | None = None
 
     @model_validator(mode="after")
     def validate_frame_semantics(self) -> Self:
@@ -187,6 +204,7 @@ class DevAnswerFrame(ContractModelV2):
         _validators.validate_structural_closure(self)
         _validators.validate_no_internal_leakage(self)
         _validators.validate_outcome_consistency(self)
+        _validators.validate_versions_presence(self)
         _validators.validate_no_answer_projection(self)
         _validators.validate_completion_denominator(self)
         _validators.validate_relationship_refs_within_frame(self)
@@ -200,4 +218,10 @@ _validators.register_no_answer_policy(
     DevAnswerFrame,
     _validators.NO_ANSWER_FRAME_FIELD_POLICY,
     {"direct_answer": _validators.CANONICAL_NO_ANSWER_COPY},
+    vocabularies={
+        "schema_version": _validators.literal_vocabulary(
+            DevAnswerFrame, "schema_version"
+        ),
+        "public_outcome": _validators.NO_ANSWER_OUTCOMES,
+    },
 )

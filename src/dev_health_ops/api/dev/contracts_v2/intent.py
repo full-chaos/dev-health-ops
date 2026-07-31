@@ -20,7 +20,7 @@ from pydantic import (
     model_validator,
 )
 
-from dev_health_ops.api.dev.contracts import DevScope, MetricID, QuestionClass
+from dev_health_ops.api.dev.contracts import MetricID, QuestionClass
 
 from .base import (
     Cardinality,
@@ -31,6 +31,7 @@ from .base import (
     QuestionIntentID,
     ShortText,
 )
+from .embedded import DevScopeV2
 
 __all__ = ["DevMessageRequestV2", "DevQuestionIntent"]
 
@@ -53,7 +54,7 @@ class DevMessageRequestV2(ContractModelV2):
     idempotency_key: IdempotencyKey
     retry_of_run_id: OpaqueID | None = None
     question: _QuestionText = Field(json_schema_extra={"x-max-utf8-bytes": 8_192})
-    scope: DevScope
+    scope: DevScopeV2
     requested_metric_ids: tuple[MetricID, ...] = Field(
         default_factory=tuple, max_length=8
     )

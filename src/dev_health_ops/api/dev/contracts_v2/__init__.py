@@ -25,9 +25,18 @@ from .base import (
     EntityKind,
     PublicOutcome,
     QuestionIntentID,
+    SourceClass,
     SourceRequirementState,
 )
 from .compat import project_answer_v2_to_v1
+from .embedded import (
+    DevCoverageV2,
+    DevErrorV2,
+    DevEvidenceRefV2,
+    DevMetricRefV2,
+    DevScopeV2,
+    DevSurfaceContextV2,
+)
 from .frame import (
     DevAnswerFact,
     DevAnswerFrame,
@@ -40,7 +49,12 @@ from .frame import (
 )
 from .intent import DevMessageRequestV2, DevQuestionIntent
 from .narrative import DevNarrative
-from .plan import DevInvestigationPlan, DevPlanStepDependency, DevSourceRequirement
+from .plan import (
+    PLAN_REGISTRY,
+    DevInvestigationPlan,
+    DevPlanStepDependency,
+    DevSourceRequirement,
+)
 from .result import DevInvestigationResult, DevRelationshipPath, DevSourceObservation
 from .stream import (
     DevStreamEventV2,
@@ -63,6 +77,7 @@ from .validators import (
     NO_ANSWER_ANSWER_FIELD_POLICY,
     NO_ANSWER_FRAME_FIELD_POLICY,
     NO_ANSWER_OUTCOMES,
+    SOURCE_CLASS_VOCABULARY,
     NoAnswerFieldPolicy,
     scan_public_text,
     validate_completion_denominator,
@@ -74,6 +89,7 @@ from .validators import (
     validate_outcome_consistency,
     validate_relationship_refs_within_frame,
     validate_structural_closure,
+    validate_versions_presence,
 )
 
 #: Every top-level, independently versioned v2 wire contract, keyed by its
@@ -98,6 +114,8 @@ __all__ = [
     "ANSWERED_OUTCOMES",
     "CANONICAL_NO_ANSWER_COPY",
     "CONTRACT_MODELS_V2",
+    "PLAN_REGISTRY",
+    "SOURCE_CLASS_VOCABULARY",
     "Cardinality",
     "ContractModelV2",
     "DevAnswerFact",
@@ -106,12 +124,16 @@ __all__ = [
     "DevAnswerV2",
     "DevCompletionBlock",
     "DevComparisonPoint",
+    "DevCoverageV2",
     "DevEntityRefV2",
+    "DevErrorV2",
+    "DevEvidenceRefV2",
     "DevFrameConflict",
     "DevFrameVersions",
     "DevInvestigationPlan",
     "DevInvestigationResult",
     "DevMessageRequestV2",
+    "DevMetricRefV2",
     "DevNarrative",
     "DevPlanStepDependency",
     "DevQuestionIntent",
@@ -120,11 +142,13 @@ __all__ = [
     "DevResolutionCandidate",
     "DevResolutionEntry",
     "DevResolutionLedger",
+    "DevScopeV2",
     "DevSourceObservation",
     "DevSourceRequirement",
     "DevStreamEventV2",
     "DevSubjectMention",
     "DevSubjectSet",
+    "DevSurfaceContextV2",
     "EMPTY_CONTENT_OUTCOMES",
     "EntityKind",
     "NO_ANSWER_ANSWER_FIELD_POLICY",
@@ -135,6 +159,7 @@ __all__ = [
     "PublicOutcome",
     "QuestionIntentID",
     "ResolutionOutcome",
+    "SourceClass",
     "SourceRequirementState",
     "StreamEventTypeV2",
     "project_answer_v2_to_v1",
@@ -150,4 +175,5 @@ __all__ = [
     "validate_relationship_refs_within_frame",
     "validate_stream_v2",
     "validate_structural_closure",
+    "validate_versions_presence",
 ]

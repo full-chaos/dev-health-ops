@@ -14,7 +14,16 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, FiniteFloat, model_validator
 
-from .base import ContractModelV2, OpaqueID, ShortText, SourceRequirementState, Version
+from .base import (
+    ContractModelV2,
+    OpaqueID,
+    PlatformVersionToken,
+    ShortText,
+    SourceClass,
+    SourceRequirementState,
+    Version,
+)
+from .plan import PlanRegistryID
 
 __all__ = [
     "DevInvestigationResult",
@@ -62,7 +71,7 @@ class DevRelationshipPath(ContractModelV2):
 class DevSourceObservation(ContractModelV2):
     schema_version: Literal["dev_source_observation.v1"]
     observation_id: OpaqueID
-    source_class: OpaqueID
+    source_class: SourceClass
     adapter_id: OpaqueID
     requirement_level: RequirementLevel
     observed_state: SourceRequirementState
@@ -112,8 +121,8 @@ class DevSourceObservation(ContractModelV2):
 class DevInvestigationResult(ContractModelV2):
     schema_version: Literal["dev_investigation_result.v1"]
     result_id: OpaqueID
-    plan_id: OpaqueID
-    plan_version: Version
+    plan_id: PlanRegistryID
+    plan_version: PlatformVersionToken
     run_id: OpaqueID
     subject_set_fingerprint: OpaqueID | None = None
     subject_entity_id: OpaqueID | None = None

@@ -441,6 +441,7 @@ def _denied_frame_base() -> dict[str, Any]:
     frame["source_observations"] = []
     frame["evidence"] = []
     frame["safe_follow_up_questions"] = []
+    frame["versions"] = None
     return frame
 
 
@@ -570,13 +571,44 @@ def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any
                 "Project Nightfall is 40% complete but you are not on its guild.",
             ),
         ),
-        # An IDENTIFIER-classified field is a runtime predicate on the
-        # value, not a promise about the type: prose in one is rejected.
+        # Round-3 adversarial review: ``versions`` was an IDENTIFIER-shaped
+        # channel that admitted ``plan_id="private/Nightfall"``. A no-answer
+        # outcome now carries no provenance block at all.
         case(
-            "denied_with_free_text_in_versions",
-            lambda v: v["versions"].__setitem__(
-                "plan_version", "the restricted Nightfall status plan"
-            ),
+            "denied_with_versions",
+            lambda v: v.__setitem__("versions", _frame_versions()),
+        ),
+    ]
+
+
+def _coverage_source_vocabulary_cases() -> list[tuple[str, dict[str, Any]]]:
+    """Round-3: a subject-derived name in a coverage source list.
+
+    Not part of the ``denied_with_*`` family, because the closure is at the
+    *type* level and therefore holds for every outcome, not only no-answer
+    ones: ``DevCoverageV2``'s source lists are the closed ``SourceClass``
+    vocabulary. The no-answer projection additionally classifies them
+    ``CLOSED_VOCABULARY`` so a later widening of the type cannot silently
+    reopen the channel on a denial; that independent layer is exercised
+    directly in ``test_contracts_v2`` (the type would otherwise mask it).
+    """
+
+    def case(label: str, field: str, value: str) -> tuple[str, dict[str, Any]]:
+        frame = _frame()
+        frame["coverage"][field] = [value]
+        frame["coverage"]["required_source_count"] = 2
+        return (label, frame)
+
+    return [
+        case(
+            "coverage_unavailable_source_outside_vocabulary",
+            "unavailable_required_sources",
+            "private/Nightfall",
+        ),
+        case(
+            "coverage_stale_source_outside_vocabulary",
+            "stale_required_sources",
+            "Nightfall-deployments",
         ),
     ]
 
@@ -709,6 +741,12 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
         "dev_answer_frame.v1",
         lambda value: value.__setitem__("relationship_paths", []),
     )
+    # ``versions`` is optional on the model only so a no-answer outcome can
+    # omit it; an outcome that carries content must still carry provenance.
+    frame_answered_without_versions = changed(
+        "dev_answer_frame.v1",
+        lambda value: value.__setitem__("versions", None),
+    )
     answer_frame_run_id_mismatch = changed(
         "dev_answer.v2",
         lambda value: value["frame"].__setitem__("run_id", "run_from_a_different_run"),
@@ -817,6 +855,20 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     answer_narrative_unbound_recommendation = changed(
         "dev_answer.v2", _make_unbound_recommendation
     )
+
+    # Round-3 adversarial review: the completion block's numerator and
+    # denominator were unioned into one pool offered to every sentence, so a
+    # 3/4 completion block legitimized "4 open security incidents" — a number
+    # about something else entirely. Completion values are now admitted only
+    # in a sentence that actually makes a completion claim, and this sentence
+    # makes none.
+    answer_narrative_completion_number_out_of_context = changed(
+        "dev_answer.v2",
+        lambda value: value["narrative"].__setitem__(
+            "body",
+            "Repository dev-health has 4 open security incidents.",
+        ),
+    )
     return {
         "dev_message_request.v2": [
             (
@@ -915,7 +967,9 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             ("outcome_content_mismatch", frame_outcome_content_mismatch),
             ("completion_without_denominator", frame_completion_without_denominator),
             ("relationship_outside_frame", frame_relationship_outside_frame),
+            ("answered_without_versions", frame_answered_without_versions),
             *_no_answer_outcome_prohibited_field_cases(),
+            *_coverage_source_vocabulary_cases(),
         ],
         "dev_narrative.v1": [
             (
@@ -951,6 +1005,10 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             (
                 "narrative_unbound_recommendation",
                 answer_narrative_unbound_recommendation,
+            ),
+            (
+                "narrative_completion_number_out_of_context",
+                answer_narrative_completion_number_out_of_context,
             ),
         ],
         "dev_stream_event.v2": [

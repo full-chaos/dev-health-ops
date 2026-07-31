@@ -62,7 +62,7 @@
       "title": "DevEntityRef",
       "type": "object"
     },
-    "DevScope": {
+    "DevScopeV2": {
       "additionalProperties": false,
       "properties": {
         "comparison_range": {
@@ -113,7 +113,7 @@
         "surface_context": {
           "anyOf": [
             {
-              "$ref": "#/$defs/DevSurfaceContext"
+              "$ref": "#/$defs/DevSurfaceContextV2"
             },
             {
               "type": "null"
@@ -142,10 +142,10 @@
         "direct_scope",
         "time_range"
       ],
-      "title": "DevScope",
+      "title": "DevScopeV2",
       "type": "object"
     },
-    "DevSurfaceContext": {
+    "DevSurfaceContextV2": {
       "additionalProperties": false,
       "properties": {
         "entity_refs": {
@@ -178,7 +178,7 @@
       "required": [
         "route_id"
       ],
-      "title": "DevSurfaceContext",
+      "title": "DevSurfaceContextV2",
       "type": "object"
     },
     "DevTimeRange": {
@@ -347,7 +347,7 @@
       "type": "string"
     },
     "scope": {
-      "$ref": "#/$defs/DevScope"
+      "$ref": "#/$defs/DevScopeV2"
     }
   },
   "required": [

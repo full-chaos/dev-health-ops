@@ -36,14 +36,5 @@
   "source_observations": [],
   "subject_ref": null,
   "subject_set_ref": null,
-  "versions": {
-    "interpreter_version": "intent_interpreter.v1",
-    "metric_definition_version": "ask_dev_metrics.v1",
-    "plan_id": "status.entity.v2",
-    "plan_version": "status.entity.v2.1",
-    "prompt_version": null,
-    "query_version": "ask_dev_queries.v1",
-    "rule_version": "actual_completion.v1",
-    "tool_contract_version": "ask_dev_tools.v2"
-  }
+  "versions": null
 }

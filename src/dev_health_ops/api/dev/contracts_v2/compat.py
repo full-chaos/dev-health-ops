@@ -49,6 +49,10 @@ client can only ever see an approximation of the richer v2 frame):
 
 from __future__ import annotations
 
+from typing import TypeVar
+
+from pydantic import BaseModel
+
 from dev_health_ops.api.dev.contracts import (
     AnswerStatus,
     ClaimKind,
@@ -57,9 +61,12 @@ from dev_health_ops.api.dev.contracts import (
     DevClaimFlags,
     DevConflict,
     DevContractVersions,
+    DevCoverage,
     DevDisambiguationCandidate,
     DevEntityRef,
     DevError,
+    DevEvidenceRef,
+    DevMetricRef,
     DevModelMetadata,
     DevScope,
     DevScopeResolution,
@@ -72,9 +79,44 @@ from dev_health_ops.api.dev.contracts import (
 
 from .answer import DevAnswerV2
 from .base import EntityKind, OpaqueID, PublicOutcome
+from .frame import DevFrameVersions
 from .validators import CANONICAL_NO_ANSWER_COPY, CANONICAL_NO_ANSWER_REMEDIATION
 
 __all__ = ["project_answer_v2_to_v1"]
+
+_V1Model = TypeVar("_V1Model", bound=BaseModel)
+
+
+def _as_v1(model_cls: type[_V1Model], value: BaseModel) -> _V1Model:
+    """Rebuild one ``embedded.py`` mirror as its plain v1 original.
+
+    A mirror ``isinstance``-passes as its v1 type, so pydantic would accept it
+    into a v1-typed field untouched — and then ask v1's ``list`` serializer to
+    emit the mirror's ``tuple``. Round-tripping through validation is what
+    keeps the v1 wire output exactly v1-shaped. See ``embedded.py``.
+    """
+
+    return model_cls.model_validate(value.model_dump())
+
+
+def _require_versions(
+    versions: DevFrameVersions | None, outcome: PublicOutcome
+) -> DevFrameVersions:
+    """``versions`` is optional only for no-answer outcomes, which never reach here.
+
+    ``validators.validate_versions_presence`` already rejects a content-bearing
+    frame without provenance, so this is unreachable in a validated frame; it
+    exists so the projector's dependence on that invariant is stated rather
+    than assumed.
+    """
+
+    if versions is None:
+        raise ValueError(
+            f"cannot project a {outcome.value!r} answer whose frame carries no "
+            "versions provenance block"
+        )
+    return versions
+
 
 _DETERMINISTIC_VERSION_PLACEHOLDER = "deterministic_frame.v1"
 
@@ -159,7 +201,8 @@ def _project_answered(
     answer: DevAnswerV2, organization_id: OpaqueID, time_range: DevTimeRange
 ) -> DevAnswer:
     frame = answer.frame
-    rule_version = frame.versions.rule_version
+    versions = _require_versions(frame.versions, answer.public_outcome)
+    rule_version = versions.rule_version
     claims: list[DevClaim] = []
     for fact in frame.facts:
         confidence = fact.confidence
@@ -232,21 +275,21 @@ def _project_answered(
         status=status,
         direct_summary=frame.direct_answer,
         claims=claims,
-        metrics=list(frame.metrics),
-        evidence=list(frame.evidence),
+        metrics=[_as_v1(DevMetricRef, metric) for metric in frame.metrics],
+        evidence=[_as_v1(DevEvidenceRef, item) for item in frame.evidence],
         conflicts=[
             DevConflict(summary=c.summary, evidence_ref_ids=list(c.evidence_ref_ids))
             for c in frame.conflicts
         ],
-        coverage=coverage,
+        coverage=_as_v1(DevCoverage, coverage),
         warnings=list(frame.limitations),
         suggested_follow_up_questions=list(frame.safe_follow_up_questions),
         versions=DevContractVersions(
-            prompt_version=frame.versions.prompt_version
+            prompt_version=versions.prompt_version
             or _DETERMINISTIC_VERSION_PLACEHOLDER,
-            tool_contract_version=frame.versions.tool_contract_version,
-            metric_definition_version=frame.versions.metric_definition_version,
-            query_version=frame.versions.query_version,
+            tool_contract_version=versions.tool_contract_version,
+            metric_definition_version=versions.metric_definition_version,
+            query_version=versions.query_version,
         ),
         model=model_metadata,
     )
@@ -256,6 +299,7 @@ def _project_needs_clarification(
     answer: DevAnswerV2, organization_id: OpaqueID, time_range: DevTimeRange
 ) -> DevAnswer:
     frame = answer.frame
+    versions = _require_versions(frame.versions, answer.public_outcome)
     resolved = _build_resolved_scope(answer, organization_id, time_range)
     resolution = DevScopeResolution(
         schema_version="dev_scope_resolution.v1",
@@ -305,15 +349,15 @@ def _project_needs_clarification(
         metrics=[],
         evidence=[],
         conflicts=[],
-        coverage=frame.coverage,
+        coverage=_as_v1(DevCoverage, frame.coverage),
         warnings=list(frame.limitations),
         suggested_follow_up_questions=list(frame.safe_follow_up_questions),
         versions=DevContractVersions(
-            prompt_version=frame.versions.prompt_version
+            prompt_version=versions.prompt_version
             or _DETERMINISTIC_VERSION_PLACEHOLDER,
-            tool_contract_version=frame.versions.tool_contract_version,
-            metric_definition_version=frame.versions.metric_definition_version,
-            query_version=frame.versions.query_version,
+            tool_contract_version=versions.tool_contract_version,
+            metric_definition_version=versions.metric_definition_version,
+            query_version=versions.query_version,
         ),
         model=DevModelMetadata(
             provider_source="platform",

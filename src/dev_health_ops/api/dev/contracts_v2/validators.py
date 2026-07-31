@@ -64,6 +64,11 @@ The replacement inverts the polarity. Every field of ``DevAnswerFrame`` and
     Must equal, exactly, the server-owned constant for this outcome
     (``CANONICAL_NO_ANSWER_COPY`` / ``CANONICAL_NO_ANSWER_DISPLAY_LABELS``).
     Producer-authored free text is never *reused*, only *replaced*.
+``CLOSED_VOCABULARY``
+    Every string this field reaches must be a member of a server-owned closed
+    set registered alongside the policy (a ``StrEnum``'s values, a ``Literal``'s
+    single value, the plan registry). The producer picks *from* the vocabulary;
+    it cannot contribute *to* it.
 ``IDENTIFIER``
     Every string this field reaches must be a whitespace-free identifier
     token (``_IDENTIFIER_TOKEN_PATTERN``, the ``OpaqueID`` shape). This is a
@@ -73,7 +78,7 @@ The replacement inverts the polarity. Every field of ``DevAnswerFrame`` and
 ``NON_TEXT``
     Reaches no strings at all (timestamps, numbers, booleans).
 ``SELF_VALIDATED``
-    A nested v2 contract that carries its own registered policy, applied
+    A nested contract that carries its own registered policy, applied
     recursively.
 
 ``assert_no_answer_policy_is_total`` is called at **import time** by
@@ -82,6 +87,36 @@ classification raises ``RuntimeError`` on import — the package will not
 load, so the enumeration cannot silently fall behind the models. The
 matching test derives the same enumeration from the model definitions and
 additionally proves every ``ABSENT`` field is individually rejected.
+
+Round 3 replaced the two remaining ``IDENTIFIER`` disclosure channels. The
+``IDENTIFIER`` predicate constrains a token's *shape*, and a subject-derived
+name is a perfectly well-shaped token: review put ``"private/Nightfall"`` in
+``coverage.unavailable_required_sources`` and in ``versions.plan_id`` on a
+``denied`` frame and both validated and serialized. The fix is polarity
+again — from "any well-shaped token" to "a member of this set":
+
+* ``coverage`` is now ``DevCoverageV2`` (``embedded.py``), whose source lists
+  are the closed ``base.SourceClass`` enum, reached through ``SELF_VALIDATED``
+  so its counts and timestamp are separately classified ``NON_TEXT``;
+* ``versions`` is ``ABSENT`` — a no-answer outcome carries no provenance
+  block at all. ``DevFrameVersions`` is seven free version strings plus a plan
+  ID; constraining each one is a weaker statement than not emitting the block,
+  and a denial's provenance is recoverable from ``run_id`` server-side. The
+  frame requires ``versions`` for every outcome that *does* carry content
+  (``validate_versions_presence``), so this is not a hole in the answered path;
+* ``schema_version`` and ``public_outcome`` are ``CLOSED_VOCABULARY`` rather
+  than ``IDENTIFIER``, which is what they always meant.
+
+That leaves ``frame_id``/``run_id`` (and the answer's ``answer_id``/
+``conversation_id``) as the only ``IDENTIFIER`` cells. They are correlation
+handles: they must exist for the frame/answer/narrative/stream ``run_id``
+closure, they cannot come from a closed set, and they are minted at
+``run.started`` — index 0 of the stream, before subject resolution has run —
+so nothing subject-derived is available to put in them. Making that
+structural rather than circumstantial needs an opaque-handle grammar
+(UUID/ULID) applied uniformly to every outcome, since a run ID is chosen
+before the outcome is known; that is a v2-wide identifier change rather than
+a no-answer projection change, and is left as the one documented residual.
 
 Narrative fact binding
 ----------------------
@@ -94,16 +129,48 @@ a substring match let "billing-health" satisfy a frame committed to
 existence of *some* recommendation fact anywhere in the frame. Each check is
 now bound to the specific facts the narrative declares:
 
-* numeric tokens are drawn only from the referenced facts' own text (plus
-  server-owned canonical copy and the completion block), never from the
-  whole frame; comparison values are admitted per sentence, and only in a
-  sentence that names that comparison's label;
+* numeric tokens are admitted **per sentence**, never from a pool shared
+  across the body — see "Per-sentence numeric admission" below;
 * a sentence that makes a completion claim may only cite a percentage the
   completion block itself supports;
 * subject mentions are matched as a contiguous canonical token sequence,
   never as a substring;
 * recommendation prose requires the narrative to reference the specific
   recommendation fact by ID.
+
+Per-sentence numeric admission
+------------------------------
+
+Round 2 narrowed the numeric pool to the referenced facts, the frame's own
+canonical copy, and the completion block — but it was still a *pool*, unioned
+once and offered to every sentence. Round 3 showed that both directions of
+that were wrong at once. It over-accepted: the completion block's numerator
+and denominator legitimized any sentence citing those integers, so a frame
+with a 3/4 completion block accepted the narrative claim "there are 4 open
+security incidents", a number about something else entirely. And it
+over-rejected: a subject genuinely named ``project-42`` could not be named,
+because 42 appeared nowhere in the facts.
+
+Both are the same bug — a number was admitted or refused by *membership in a
+global set* rather than by *the sentence's own grounding*. There is now no
+pool. Each sentence admits exactly:
+
+(a) the numerals in the text of the facts the narrative declares it is
+    narrating (``_narrative_bound_fact_ids``);
+(b) the completion block's values — but only in a sentence that actually
+    makes a completion claim, i.e. one that references the completion
+    section (``_COMPLETION_CLAIM_PATTERN``); elsewhere those integers are
+    ordinary numbers with no standing;
+(c) the numerals in the committed subject's canonical identity forms, which
+    are server-committed, not producer-chosen;
+(d) the values of a comparison whose label that same sentence names
+    (unchanged from round 2, and already per-sentence).
+
+Note what is *not* in the list: ``direct_answer``, ``limitations``,
+``safe_follow_up_questions`` and the readiness reasons. Those were in the
+round-2 pool, and they are frame-level free text — a number appearing in one
+of them grounds nothing about the sentence citing it. A narrative that wants
+to restate a number must reference the fact carrying it.
 """
 
 from __future__ import annotations
@@ -111,9 +178,11 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 from pydantic import BaseModel
+
+from .base import SourceClass
 
 if TYPE_CHECKING:
     from .frame import DevAnswerFrame
@@ -128,8 +197,10 @@ __all__ = [
     "NO_ANSWER_FRAME_FIELD_POLICY",
     "NO_ANSWER_OUTCOMES",
     "PUBLIC_TEXT_FORBIDDEN_TOKENS",
+    "SOURCE_CLASS_VOCABULARY",
     "NoAnswerFieldPolicy",
     "assert_no_answer_policy_is_total",
+    "literal_vocabulary",
     "register_no_answer_policy",
     "scan_public_text",
     "validate_completion_denominator",
@@ -145,6 +216,7 @@ __all__ = [
     "validate_outcome_consistency",
     "validate_relationship_refs_within_frame",
     "validate_structural_closure",
+    "validate_versions_presence",
 ]
 
 # ---------------------------------------------------------------------------
@@ -340,19 +412,48 @@ class NoAnswerFieldPolicy(StrEnum):
 
     ABSENT = "absent"
     CANONICAL = "canonical"
+    CLOSED_VOCABULARY = "closed_vocabulary"
     IDENTIFIER = "identifier"
     NON_TEXT = "non_text"
     SELF_VALIDATED = "self_validated"
 
 
+#: The closed set of source-class tokens a coverage block may disclose. Taken
+#: from the enum itself so the vocabulary cannot drift from the type.
+SOURCE_CLASS_VOCABULARY: frozenset[str] = frozenset(
+    member.value for member in SourceClass
+)
+
+
+def literal_vocabulary(model_cls: type[BaseModel], field_name: str) -> frozenset[str]:
+    """The ``Literal`` values one field admits, read off the model itself.
+
+    Used for ``schema_version``, so the registered closed vocabulary is the
+    annotation rather than a hand-copied string that could drift from it.
+    """
+
+    annotation = model_cls.model_fields[field_name].annotation
+    values = frozenset(
+        argument for argument in get_args(annotation) if isinstance(argument, str)
+    )
+    if not values:
+        raise RuntimeError(
+            f"{model_cls.__name__}.{field_name} is not a Literal of strings, so "
+            "it has no literal vocabulary to register"
+        )
+    return values
+
+
 #: Every field of ``DevAnswerFrame``, classified. Checked for totality
 #: against the model at import time by ``frame.py``.
 NO_ANSWER_FRAME_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
-    "schema_version": NoAnswerFieldPolicy.IDENTIFIER,
+    "schema_version": NoAnswerFieldPolicy.CLOSED_VOCABULARY,
+    # The two correlation handles — the documented residual of the round-3
+    # closure; see the module docstring.
     "frame_id": NoAnswerFieldPolicy.IDENTIFIER,
     "run_id": NoAnswerFieldPolicy.IDENTIFIER,
     "generated_at": NoAnswerFieldPolicy.NON_TEXT,
-    "public_outcome": NoAnswerFieldPolicy.IDENTIFIER,
+    "public_outcome": NoAnswerFieldPolicy.CLOSED_VOCABULARY,
     "subject_ref": NoAnswerFieldPolicy.ABSENT,
     "subject_set_ref": NoAnswerFieldPolicy.ABSENT,
     "direct_answer": NoAnswerFieldPolicy.CANONICAL,
@@ -369,37 +470,45 @@ NO_ANSWER_FRAME_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
     "conflicts": NoAnswerFieldPolicy.ABSENT,
     "limitations": NoAnswerFieldPolicy.ABSENT,
     "source_observations": NoAnswerFieldPolicy.ABSENT,
-    # Coverage carries only counts, a timestamp, and source-class
-    # identifiers from a fixed platform vocabulary — never subject-derived
-    # text — so it is admitted as identifiers rather than blanked, which
-    # keeps "how many sources were required" answerable for a denial.
-    "coverage": NoAnswerFieldPolicy.IDENTIFIER,
+    # Coverage keeps "how many sources were required" answerable for a
+    # denial. Round 2 admitted it as identifier-shaped tokens, which round 3
+    # walked through with a subject-derived source name; it now delegates to
+    # DevCoverageV2's own policy, where the source lists are the closed
+    # SourceClass vocabulary and everything else is NON_TEXT.
+    "coverage": NoAnswerFieldPolicy.SELF_VALIDATED,
     "evidence": NoAnswerFieldPolicy.ABSENT,
     "safe_follow_up_questions": NoAnswerFieldPolicy.ABSENT,
-    # Plan/rule/query versions are platform provenance tokens, not copy.
-    "versions": NoAnswerFieldPolicy.IDENTIFIER,
+    # A no-answer outcome carries no provenance block at all — see the module
+    # docstring for why the block is dropped rather than constrained.
+    "versions": NoAnswerFieldPolicy.ABSENT,
 }
 
 #: Every field of ``DevAnswerV2``, classified. ``narrative`` is ``ABSENT``:
 #: an optional provider narrative is exactly the free-form channel a
 #: no-answer outcome must not have.
 NO_ANSWER_ANSWER_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
-    "schema_version": NoAnswerFieldPolicy.IDENTIFIER,
+    "schema_version": NoAnswerFieldPolicy.CLOSED_VOCABULARY,
     "answer_id": NoAnswerFieldPolicy.IDENTIFIER,
     "conversation_id": NoAnswerFieldPolicy.IDENTIFIER,
     "run_id": NoAnswerFieldPolicy.IDENTIFIER,
     "generated_at": NoAnswerFieldPolicy.NON_TEXT,
-    "public_outcome": NoAnswerFieldPolicy.IDENTIFIER,
+    "public_outcome": NoAnswerFieldPolicy.CLOSED_VOCABULARY,
     "outcome_display_label": NoAnswerFieldPolicy.CANONICAL,
     "frame": NoAnswerFieldPolicy.SELF_VALIDATED,
     "narrative": NoAnswerFieldPolicy.ABSENT,
 }
 
-#: Registered ``(policy, canonical tables)`` per model class, populated at
-#: import time. ``SELF_VALIDATED`` resolves through this registry, so a
-#: nested contract cannot be delegated to unless it is itself classified.
+#: Registered ``(policy, canonical tables, closed vocabularies)`` per model
+#: class, populated at import time. ``SELF_VALIDATED`` resolves through this
+#: registry, so a nested contract cannot be delegated to unless it is itself
+#: classified.
 _POLICY_REGISTRY: dict[
-    type[BaseModel], tuple[Mapping[str, NoAnswerFieldPolicy], Mapping[str, Any]]
+    type[BaseModel],
+    tuple[
+        Mapping[str, NoAnswerFieldPolicy],
+        Mapping[str, Any],
+        Mapping[str, frozenset[str]],
+    ],
 ] = {}
 
 
@@ -439,17 +548,20 @@ def register_no_answer_policy(
     model_cls: type[BaseModel],
     policy: Mapping[str, NoAnswerFieldPolicy],
     canonical: Mapping[str, Mapping[str, str]],
+    vocabularies: Mapping[str, frozenset[str]] | None = None,
 ) -> None:
     """Register and immediately total-check one model's no-answer policy."""
 
-    assert_no_answer_policy_is_total(model_cls, policy, canonical)
-    _POLICY_REGISTRY[model_cls] = (policy, canonical)
+    closed = dict(vocabularies or {})
+    assert_no_answer_policy_is_total(model_cls, policy, canonical, closed)
+    _POLICY_REGISTRY[model_cls] = (policy, canonical, closed)
 
 
 def assert_no_answer_policy_is_total(
     model_cls: type[BaseModel],
     policy: Mapping[str, NoAnswerFieldPolicy],
     canonical: Mapping[str, Mapping[str, str]],
+    vocabularies: Mapping[str, frozenset[str]] | None = None,
 ) -> None:
     """Raise unless every field of ``model_cls`` carries a classification.
 
@@ -472,6 +584,7 @@ def assert_no_answer_policy_is_total(
         raise RuntimeError(
             f"{model_cls.__name__} no-answer policy names removed field(s) {stale}"
         )
+    closed = dict(vocabularies or {})
     for field_name, rule in policy.items():
         if rule is NoAnswerFieldPolicy.CANONICAL:
             table = canonical.get(field_name)
@@ -480,6 +593,13 @@ def assert_no_answer_policy_is_total(
                     f"{model_cls.__name__}.{field_name} is CANONICAL but has no "
                     "canonical value for every no-answer outcome"
                 )
+        elif rule is NoAnswerFieldPolicy.CLOSED_VOCABULARY:
+            if not closed.get(field_name):
+                raise RuntimeError(
+                    f"{model_cls.__name__}.{field_name} is CLOSED_VOCABULARY but "
+                    "has no registered non-empty vocabulary; a closed set that "
+                    "is not supplied would admit everything"
+                )
         elif rule is NoAnswerFieldPolicy.SELF_VALIDATED:
             nested = model_cls.model_fields[field_name].annotation
             if not (isinstance(nested, type) and nested in _POLICY_REGISTRY):
@@ -487,10 +607,20 @@ def assert_no_answer_policy_is_total(
                     f"{model_cls.__name__}.{field_name} delegates to a nested "
                     "contract that has no registered no-answer policy"
                 )
+    misdeclared = sorted(
+        name
+        for name in closed
+        if policy.get(name) is not NoAnswerFieldPolicy.CLOSED_VOCABULARY
+    )
+    if misdeclared:
+        raise RuntimeError(
+            f"{model_cls.__name__} registers closed vocabularies for field(s) "
+            f"{misdeclared} that are not classified CLOSED_VOCABULARY"
+        )
 
 
 def _enforce_no_answer_projection(obj: BaseModel, outcome: str) -> None:
-    policy, canonical = _POLICY_REGISTRY[type(obj)]
+    policy, canonical, vocabularies = _POLICY_REGISTRY[type(obj)]
     label = type(obj).__name__
     for field_name, rule in policy.items():
         value = getattr(obj, field_name)
@@ -507,6 +637,15 @@ def _enforce_no_answer_projection(obj: BaseModel, outcome: str) -> None:
                     f"copy for {label}.{field_name}; producer-authored text is "
                     "never reused for a no-answer outcome"
                 )
+        elif rule is NoAnswerFieldPolicy.CLOSED_VOCABULARY:
+            allowed = vocabularies[field_name]
+            for leaf in _string_leaves(value):
+                if leaf not in allowed:
+                    raise ValueError(
+                        f"public outcome {outcome!r} allows only the "
+                        f"server-owned vocabulary in {label}.{field_name}; "
+                        f"{leaf!r} is not one of its values"
+                    )
         elif rule is NoAnswerFieldPolicy.IDENTIFIER:
             for leaf in _string_leaves(value):
                 if not _IDENTIFIER_TOKEN_PATTERN.match(leaf):
@@ -538,6 +677,25 @@ def validate_no_answer_projection(obj: BaseModel) -> None:
     if outcome not in NO_ANSWER_OUTCOMES:
         return
     _enforce_no_answer_projection(obj, outcome)
+
+
+def validate_versions_presence(frame: DevAnswerFrame) -> None:
+    """Provenance is optional only for the outcomes that carry no content.
+
+    ``DevAnswerFrame.versions`` is ``ABSENT`` under the no-answer projection
+    (see the module docstring), which requires the field to be optional on
+    the model. This is the other half of that: every outcome that is *not* a
+    no-answer outcome must carry the provenance block, so making it optional
+    did not quietly make it droppable from an answered frame.
+    """
+
+    if frame.public_outcome.value in NO_ANSWER_OUTCOMES:
+        return
+    if frame.versions is None:
+        raise ValueError(
+            f"public outcome {frame.public_outcome.value!r} requires a versions "
+            "provenance block; only a no-answer outcome may omit it"
+        )
 
 
 #: Retained name for guardrail (f). The round-1 denylist implementation was
@@ -705,28 +863,44 @@ def _completion_value_set(frame: DevAnswerFrame) -> set[float]:
     return values
 
 
-def _bound_numeric_values(narrative: DevNarrative, frame: DevAnswerFrame) -> set[float]:
-    """Numbers the narrative is allowed to cite anywhere in its body.
-
-    Deliberately excludes ``comparisons``: an unrelated comparison value is
-    exactly what let "100% complete" pass against a 75% completion block.
-    Comparison values are admitted per sentence instead, and only when that
-    sentence names the comparison's own label.
-    """
-
-    bound_fact_ids = _narrative_bound_fact_ids(narrative, frame)
-    texts: list[str] = [frame.direct_answer]
-    texts.extend(fact.text for fact in frame.facts if fact.fact_id in bound_fact_ids)
-    texts.extend(frame.limitations)
-    texts.extend(frame.safe_follow_up_questions)
-    if frame.readiness is not None:
-        texts.extend(frame.readiness.translated_user_reasons)
-    values = {
+def _numeric_values_in(texts: Sequence[str]) -> set[float]:
+    return {
         _numeric_value(match.group())
         for text in texts
         for match in _NUMERIC_TOKEN_PATTERN.finditer(text)
     }
-    return values | _completion_value_set(frame)
+
+
+def _referenced_fact_values(
+    narrative: DevNarrative, frame: DevAnswerFrame
+) -> set[float]:
+    """(a) Numerals in the text of the facts the narrative declares it narrates.
+
+    Only the referenced facts — not ``direct_answer``, ``limitations``,
+    ``safe_follow_up_questions`` or the readiness reasons, which are
+    frame-level free text that grounds nothing about the citing sentence. See
+    the module docstring's "Per-sentence numeric admission".
+    """
+
+    bound_fact_ids = _narrative_bound_fact_ids(narrative, frame)
+    return _numeric_values_in(
+        [fact.text for fact in frame.facts if fact.fact_id in bound_fact_ids]
+    )
+
+
+def _subject_identity_values(frame: DevAnswerFrame) -> set[float]:
+    """(c) Numerals belonging to the committed subject's own identity.
+
+    A subject legitimately named ``project-42`` must be nameable. These are
+    server-committed identity tokens, not producer-chosen figures, so they
+    carry no numeric claim — admitting them removes the round-3
+    over-rejection without widening what counts as a grounded number.
+    """
+
+    subject = frame.subject_ref
+    if subject is None:
+        return set()
+    return _numeric_values_in([subject.display_label, subject.entity_id])
 
 
 def _sentence_comparison_values(
@@ -745,27 +919,32 @@ def _sentence_comparison_values(
 def validate_narrative_numeric_containment(
     narrative: DevNarrative, frame: DevAnswerFrame
 ) -> None:
-    """(g.1) Bind every narrative numeral to the facts the narrative references.
+    """(g.1) Bind every narrative numeral to that sentence's own grounding.
 
-    Two independent rules, applied per sentence:
+    There is no numeric pool shared across the body. Each sentence admits
+    only (a) the numerals of the facts the narrative references, (b) the
+    completion block's values *if that sentence makes a completion claim*,
+    (c) the committed subject's identity numerals, and (d) the values of a
+    comparison whose label that sentence names. See the module docstring's
+    "Per-sentence numeric admission" for why (b) is gated and why the
+    round-2 pool over-accepted and over-rejected simultaneously.
 
-    1. *Containment.* Each numeral must appear in the bound value set — the
-       referenced facts' own text, the frame's canonical copy, and the
-       completion block — or in a comparison whose label that same sentence
-       names.
-    2. *Completion claims.* A sentence using completion vocabulary may only
-       cite a percentage the completion block itself supports, and may not
-       cite one at all when there is no calculable completion block. This
-       holds even if some unrelated frame value happens to equal the cited
-       number, which is what defeated the round-1 global check.
+    On top of containment, a sentence using completion vocabulary may only
+    cite a percentage the completion block itself supports, and may not cite
+    one at all when there is no calculable completion block.
     """
 
-    bound_values = _bound_numeric_values(narrative, frame)
+    grounded_values = _referenced_fact_values(narrative, frame) | (
+        _subject_identity_values(frame)
+    )
     completion_values = _completion_value_set(frame)
     calculable = frame.completion is not None and frame.completion.calculable
     for sentence in _SENTENCE_SPLIT_PATTERN.split(narrative.body):
         sentence_tokens = _word_tokens(sentence)
-        allowed = bound_values | _sentence_comparison_values(sentence_tokens, frame)
+        claims_completion = bool(_COMPLETION_CLAIM_PATTERN.search(sentence))
+        allowed = grounded_values | _sentence_comparison_values(sentence_tokens, frame)
+        if claims_completion:
+            allowed |= completion_values
         offenders = sorted(
             {
                 match.group()
@@ -775,10 +954,11 @@ def validate_narrative_numeric_containment(
         )
         if offenders:
             raise ValueError(
-                f"narrative cites number(s) {offenders} that no fact it "
-                "references, and no comparison it names, supports"
+                f"narrative sentence cites number(s) {offenders} that no fact "
+                "it references, no comparison it names, and no completion "
+                "claim it makes supports"
             )
-        if not _COMPLETION_CLAIM_PATTERN.search(sentence):
+        if not claims_completion:
             continue
         for match in _PERCENT_TOKEN_PATTERN.finditer(sentence):
             claimed = float(match.group(1))

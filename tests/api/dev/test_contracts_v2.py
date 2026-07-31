@@ -37,6 +37,8 @@ from dev_health_ops.api.dev.contract_fixtures_v2 import (
 from dev_health_ops.api.dev.contracts import (
     CONTRACT_MODELS,
     AnswerStatus,
+    DevCoverage,
+    DevEvidenceRef,
     DevScope,
     DevTimeRange,
 )
@@ -250,6 +252,12 @@ _FRAME_VALIDATOR_CASES: dict[str, tuple[str, str]] = {
         "dev_answer_frame.v1",
         "relationship_outside_frame",
     ),
+    # Round 3: making ``versions`` optional (so a no-answer outcome can omit
+    # it) must not have made it droppable from a frame that carries content.
+    "validate_versions_presence": (
+        "dev_answer_frame.v1",
+        "answered_without_versions",
+    ),
 }
 
 
@@ -397,7 +405,7 @@ def test_compat_downgrades_to_partial_when_coverage_is_incomplete() -> None:
     answer_payload["frame"]["coverage"] = {
         "required_source_count": 2,
         "available_source_count": 1,
-        "unavailable_required_sources": ["deployment_health"],
+        "unavailable_required_sources": [v2.SourceClass.DEPLOYMENT.value],
         "stale_required_sources": [],
         "as_of": NOW,
     }
@@ -671,9 +679,116 @@ def test_round2_no_answer_policy_classifies_every_field(
             assert rule in {
                 v2.NoAnswerFieldPolicy.ABSENT,
                 v2.NoAnswerFieldPolicy.CANONICAL,
+                v2.NoAnswerFieldPolicy.CLOSED_VOCABULARY,
                 v2.NoAnswerFieldPolicy.IDENTIFIER,
                 v2.NoAnswerFieldPolicy.SELF_VALIDATED,
             }, name
+
+
+def _no_answer_frame_policy_cells() -> dict[v2.NoAnswerFieldPolicy, set[str]]:
+    cells: dict[v2.NoAnswerFieldPolicy, set[str]] = {}
+    for name, rule in v2.NO_ANSWER_FRAME_FIELD_POLICY.items():
+        cells.setdefault(rule, set()).add(name)
+    return cells
+
+
+def test_round3_denied_projection_admits_no_producer_chosen_string() -> None:
+    """Finding 1, closure: the partition of a denied frame's fields, stated.
+
+    Round 2 left two ``IDENTIFIER`` cells that constrained a token's *shape*
+    while admitting any well-shaped value, and review round 3 put
+    ``"private/Nightfall"`` through both. The partition is now: every field is
+    ``ABSENT``, ``CANONICAL`` server copy, ``NON_TEXT``, a ``CLOSED_VOCABULARY``
+    the server owns, or delegated to a nested contract with its own policy —
+    with exactly two ``IDENTIFIER`` cells left, the correlation handles, which
+    are named here so a *third* one cannot be added without this failing.
+    """
+
+    cells = _no_answer_frame_policy_cells()
+    assert cells.get(v2.NoAnswerFieldPolicy.IDENTIFIER) == {"frame_id", "run_id"}
+    assert cells.get(v2.NoAnswerFieldPolicy.CLOSED_VOCABULARY) == {
+        "schema_version",
+        "public_outcome",
+    }
+    assert cells.get(v2.NoAnswerFieldPolicy.SELF_VALIDATED) == {"coverage"}
+    assert v2.NO_ANSWER_FRAME_FIELD_POLICY["versions"] is v2.NoAnswerFieldPolicy.ABSENT
+
+
+def test_round3_closed_vocabulary_policy_rejects_a_subject_derived_source() -> None:
+    """Finding 1: the projection layer is load-bearing on its own.
+
+    ``DevCoverageV2``'s source lists are the closed ``SourceClass`` enum, so a
+    subject-derived name never survives *type* validation — which would make
+    the ``CLOSED_VOCABULARY`` classification look covered while doing nothing.
+    Constructing the object past validation isolates the policy layer, so a
+    later widening of the type (a new adapter, a looser annotation) cannot
+    silently reopen the channel on a denial.
+    """
+
+    payload = no_answer_payload("denied")["frame"]
+    frame = v2.DevAnswerFrame.model_validate(payload)
+    smuggled = frame.coverage.model_construct(
+        **{
+            **dict(frame.coverage),
+            "unavailable_required_sources": ("private/Nightfall",),
+        }
+    )
+    forged = frame.model_construct(**{**dict(frame), "coverage": smuggled})
+
+    with pytest.raises(ValueError, match="server-owned vocabulary"):
+        v2.validate_no_answer_projection(forged)
+
+
+def test_round3_identifier_policy_rejects_free_text_past_the_type() -> None:
+    """Finding 1: ``IDENTIFIER`` is a runtime predicate, not a type promise.
+
+    The remaining ``IDENTIFIER`` cells are ``OpaqueID``-typed, so the type
+    rejects prose first. This isolates the policy the same way the closed
+    vocabulary is isolated above, keeping the documented claim proven rather
+    than merely asserted.
+    """
+
+    frame = v2.DevAnswerFrame.model_validate(no_answer_payload("denied")["frame"])
+    forged = frame.model_construct(
+        **{**dict(frame), "frame_id": "the restricted Nightfall frame"}
+    )
+
+    with pytest.raises(ValueError, match="not free text"):
+        v2.validate_no_answer_projection(forged)
+
+
+def test_round3_no_answer_frame_omits_provenance_but_answered_requires_it() -> None:
+    """Finding 1: ``versions`` is dropped, not merely constrained.
+
+    Both directions matter. A no-answer frame must not carry the block (it was
+    the channel that carried ``plan_id="private/Nightfall"``), and making the
+    field optional must not have made it droppable from a frame that does
+    carry content.
+    """
+
+    denied = v2.DevAnswerFrame.model_validate(no_answer_payload("denied")["frame"])
+    assert denied.versions is None
+
+    answered = deepcopy(positive_fixtures()["dev_answer_frame.v1"])
+    answered["versions"] = None
+    with pytest.raises(ValidationError, match="requires a versions"):
+        v2.DevAnswerFrame.model_validate(answered)
+
+
+def test_round3_plan_id_and_versions_reject_a_subject_derived_token() -> None:
+    """Finding 1: the provenance block's own grammar, on the answered path.
+
+    ``versions`` is absent from a denial, but an answered frame still carries
+    it, and it was free-form ``Version`` strings. Every field is now a dotted,
+    lowercase, version-suffixed platform token, so a subject-derived
+    identifier cannot be spelled in one at all.
+    """
+
+    for field in ("plan_id", "plan_version", "interpreter_version", "query_version"):
+        payload = deepcopy(positive_fixtures()["dev_answer_frame.v1"])
+        payload["versions"][field] = "private/Nightfall"
+        with pytest.raises(ValidationError, match=field):
+            v2.DevAnswerFrame.model_validate(payload)
 
 
 def _frame_absent_field_samples() -> dict[str, object]:
@@ -704,6 +819,7 @@ def _frame_absent_field_samples() -> dict[str, object]:
     samples: dict[str, object] = {
         field: cases[label][field] for field, label in from_case.items()
     }
+    samples["versions"] = cases["denied_with_versions"]["versions"]
     samples["subject_set_ref"] = "set_restricted_01"
     samples["sections"] = [
         {"section_id": "summary", "title": "Restricted summary", "fact_ids": []}
@@ -772,19 +888,6 @@ def test_round2_no_answer_outcome_cannot_carry_a_narrative(outcome: str) -> None
     }
     with pytest.raises(ValidationError, match="narrative"):
         v2.DevAnswerV2.model_validate(payload)
-
-
-def test_round2_identifier_classified_field_rejects_free_text() -> None:
-    """Finding 1: ``IDENTIFIER`` is a runtime predicate, not a type promise.
-
-    This is what stops the classification from becoming an escape hatch: a
-    field admitted as identifiers cannot smuggle prose, whatever its type.
-    """
-
-    payload = no_answer_payload("denied")["frame"]
-    payload["versions"]["plan_version"] = "the restricted Nightfall status plan"
-    with pytest.raises(ValidationError, match="identifier"):
-        v2.DevAnswerFrame.model_validate(payload)
 
 
 def test_round2_v1_projection_of_a_no_answer_outcome_carries_no_frame_text() -> None:
@@ -865,47 +968,105 @@ def test_round2_validated_ledger_cannot_be_emptied_in_place() -> None:
         v2.validate_ledger_extends(previous, rewritten)
 
 
-#: v1 contract models embedded in v2 contracts. v1 is frozen for CHAOS-3294
-#: (this issue is additive-only), so their ``list`` fields remain mutable in
-#: place — the acknowledged boundary of the finding-2 closure. Listing them
-#: here means a *new* v1 embedding surfaces as a failure and gets a decision
-#: rather than silently widening the boundary.
-_ACKNOWLEDGED_V1_NESTED_MODELS = {
-    "DevCitationLink",
-    "DevCoverage",
-    "DevEntityRef",
-    "DevError",
-    "DevEvidenceFlags",
-    "DevEvidenceRef",
-    "DevMetricPoint",
-    "DevMetricRef",
-    "DevModelMetadata",
-    "DevScope",
-    "DevSurfaceContext",
-    "DevTimeRange",
-}
+def _reachable_models(model: type[BaseModel]) -> set[type[BaseModel]]:
+    """Every model type reachable from ``model``'s fields, at any depth."""
 
+    found: set[type[BaseModel]] = set()
 
-def test_round2_v1_models_embedded_in_v2_are_an_acknowledged_boundary() -> None:
-    embedded: set[str] = set()
-
-    def collect(annotation: object, seen: frozenset[object] = frozenset()) -> None:
-        if annotation is None or annotation in seen:
-            return
+    def walk(annotation: object) -> None:
         if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-            if not issubclass(annotation, v2.ContractModelV2):
-                embedded.add(annotation.__name__)
+            if annotation in found:
+                return
+            found.add(annotation)
             for field in annotation.model_fields.values():
-                collect(field.annotation, seen | {annotation})
+                walk(field.annotation)
             return
         for arg in get_args(annotation):
-            collect(arg, seen)
+            walk(arg)
 
+    for field in model.model_fields.values():
+        walk(field.annotation)
+    return found
+
+
+def test_round3_no_mutable_collection_anywhere_in_the_v2_closure() -> None:
+    """Finding 2, closure: the whole reachable object graph, not the v2 layer.
+
+    ``test_round2_no_v2_model_has_a_mutable_collection_field`` checked only
+    models that subclass ``ContractModelV2``, and round 2 recorded the v1
+    models embedded in them as an acknowledged boundary. Review round 3 showed
+    that boundary sat *inside* the graph the v2 validators had just certified::
+
+        frame.coverage.unavailable_required_sources.append("private/Nightfall")
+
+    so it was never a boundary, it was a hole. The predicate is now: no model
+    reachable from any v2 contract, at any depth and whether or not it is a v2
+    model, declares a mutable collection. A newly embedded v1 model with a
+    ``list`` field fails here rather than reopening the seam.
+    """
+
+    reachable: set[type[BaseModel]] = set()
     for model in _all_v2_contract_models():
-        for field in model.model_fields.values():
-            collect(field.annotation)
+        reachable.add(model)
+        reachable |= _reachable_models(model)
 
-    assert embedded == _ACKNOWLEDGED_V1_NESTED_MODELS
+    assert len(reachable) >= 25  # the walk actually found the object graph
+    offenders = sorted(
+        f"{model.__name__}.{name}"
+        for model in reachable
+        for name, field in model.model_fields.items()
+        if _has_mutable_collection(field.annotation)
+    )
+    assert offenders == []
+
+
+def test_round3_validated_frame_cannot_be_mutated_after_the_fact() -> None:
+    """Finding 2, regression: the exact post-validation mutations review used."""
+
+    answer = v2.DevAnswerV2.model_validate(
+        deepcopy(positive_fixtures()["dev_answer.v2"])
+    )
+    frame = answer.frame
+
+    with pytest.raises(AttributeError):
+        frame.coverage.unavailable_required_sources.append(  # type: ignore[attr-defined]
+            "private/Nightfall"
+        )
+    with pytest.raises(AttributeError):
+        frame.evidence[0].repository_ids.append("repo_restricted")  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        frame.evidence[0].valid_entity_ids[0] = "item_rewritten"  # type: ignore[index]
+
+    # ...and the serialized wire output is unchanged by the attempts.
+    assert (
+        answer.model_dump(mode="json")["frame"]["coverage"][
+            "unavailable_required_sources"
+        ]
+        == []
+    )
+
+
+def test_round3_v1_projection_still_emits_plain_v1_collections() -> None:
+    """Finding 2: the mirrors must not leak their tuples into v1 output.
+
+    A mirror ``isinstance``-passes as its v1 original, so pydantic would take
+    one into a v1-typed field untouched and then serialize a ``tuple`` where
+    v1 declares a ``list``. The projector converts explicitly; this is what
+    proves it does.
+    """
+
+    answer = v2.DevAnswerV2.model_validate(
+        deepcopy(positive_fixtures()["dev_answer.v2"])
+    )
+    projected = v2.project_answer_v2_to_v1(
+        answer, organization_id="org_fullchaos", time_range=_time_range_for_scope()
+    )
+    assert isinstance(projected, DevAnswerV1)
+    assert type(projected.coverage) is DevCoverage
+    assert isinstance(projected.coverage.unavailable_required_sources, list)
+    assert all(type(item) is DevEvidenceRef for item in projected.evidence)
+    for item in projected.evidence:
+        assert isinstance(item.repository_ids, list)
 
 
 # --- Finding 3: narrative claims bound to the facts they narrate ------------
@@ -917,10 +1078,11 @@ def test_round2_v1_models_embedded_in_v2_are_an_acknowledged_boundary() -> None:
         "narrative_unrelated_comparison_number",
         "narrative_substring_subject",
         "narrative_unbound_recommendation",
+        "narrative_completion_number_out_of_context",
     ],
 )
 def test_round2_narrative_binding_rejects_each_bypass(case: str) -> None:
-    """Finding 3: the three variants that walked around the round-1 checks."""
+    """Finding 3: the variants that walked around the earlier checks."""
 
     payload = dict(negative_fixtures()["dev_answer.v2"])[case]
     with pytest.raises(ValidationError):
@@ -1047,6 +1209,78 @@ def test_round2_narrative_may_recommend_a_fact_it_references() -> None:
         "Repository dev-health is on track. We recommend adding a second "
         "reviewer to the release checklist."
     )
+    v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round3_completion_numbers_are_not_a_global_narrative_token_pool() -> None:
+    """Finding 3, acceptance counterexample: the pool legitimized any sentence.
+
+    ``4`` is the frame's completion *denominator*. Round 2 unioned it into one
+    pool offered to every sentence, so a claim about open security incidents
+    was grounded by a number that says nothing about incidents. Completion
+    values are now admitted only where a completion claim is actually made —
+    and the pair below is what makes that binding rather than merely stricter:
+    the same number, in a sentence that does make a completion claim, is
+    accepted (``test_round2_narrative_may_cite_the_frames_own_completion_percentage``).
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["narrative"]["body"] = (
+        "Repository dev-health has 4 open security incidents."
+    )
+    with pytest.raises(ValidationError, match="cites number"):
+        v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round3_narrative_may_name_a_subject_whose_identity_contains_a_number() -> None:
+    """Finding 3, over-rejection counterexample: the inverse of the same bug.
+
+    A pool that admits numbers by membership also *refuses* them by
+    membership: a subject genuinely named ``project-42`` could not be named,
+    because 42 appeared in no fact. The subject's canonical identity tokens
+    are server-committed, so they are admitted directly.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["frame"]["subject_ref"]["entity_id"] = "project_42"
+    payload["frame"]["subject_ref"]["display_label"] = "full-chaos/project-42"
+    payload["frame"]["relationship_paths"][0]["source_entity_id"] = "project_42"
+    payload["narrative"]["body"] = (
+        "project-42 is on track, with one required child issue still open."
+    )
+    v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round3_frame_free_text_no_longer_grounds_a_narrative_number() -> None:
+    """Finding 3: ``direct_answer`` and friends are out of the admission set.
+
+    They were in the round-2 pool. A number appearing in the frame's own
+    free text grounds nothing about the sentence citing it — the narrative
+    must reference the fact that carries it. The pair proves the rule is
+    doing the work: the same sentence is accepted once a fact carrying the
+    number is referenced.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["frame"]["limitations"] = ["Only 9 of the required sources responded."]
+    payload["frame"]["public_outcome"] = "answered_with_gaps"
+    payload["public_outcome"] = "answered_with_gaps"
+    payload["outcome_display_label"] = "Answered with some gaps"
+    payload["narrative"]["body"] = "Repository dev-health saw 9 responding sources."
+    with pytest.raises(ValidationError, match="cites number"):
+        v2.DevAnswerV2.model_validate(payload)
+
+    payload["frame"]["facts"].append(
+        {
+            "fact_id": "fact_sources",
+            "text": "9 of the required sources responded.",
+            "kind": "observed",
+            "evidence_ref_ids": ["ev_01"],
+            "relationship_path_ids": [],
+            "confidence": 1.0,
+        }
+    )
+    payload["narrative"]["referenced_fact_ids"] = ["fact_01", "fact_sources"]
     v2.DevAnswerV2.model_validate(payload)
 
 

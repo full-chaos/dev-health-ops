@@ -14,16 +14,63 @@ from typing import Literal, Self
 
 from pydantic import Field, FiniteFloat, model_validator
 
-from .base import Cardinality, ContractModelV2, EntityKind, OpaqueID, ShortText, Version
+from .base import (
+    Cardinality,
+    ContractModelV2,
+    EntityKind,
+    OpaqueID,
+    PlatformVersionToken,
+    ShortText,
+    SourceClass,
+    Version,
+)
 
-__all__ = ["DevInvestigationPlan", "DevPlanStepDependency", "DevSourceRequirement"]
+__all__ = [
+    "PLAN_REGISTRY",
+    "DevInvestigationPlan",
+    "DevPlanStepDependency",
+    "DevSourceRequirement",
+    "PlanRegistryID",
+]
 
 RequirementLevel = Literal["mandatory", "conditional", "optional", "not_applicable"]
+
+#: The Wave 3.1 plan registry: one server-owned plan per launch intent
+#: (``base.QuestionIntentID``). Closed rather than open because a plan ID is
+#: echoed on ``dev_answer_frame.v1.versions`` and therefore reaches the wire
+#: on outcomes that must disclose nothing about the subject; the identifier a
+#: producer *would* choose is exactly the channel round-3 adversarial review
+#: used. A new plan is added by adding a member here.
+#:
+#: The registry is the *vocabulary*; the plan documents themselves (steps,
+#: source requirements, budgets) are still authored by the consuming
+#: orchestrator issues, which validate against ``DevInvestigationPlan``.
+PLAN_REGISTRY: frozenset[str] = frozenset(
+    {
+        "status.entity.v2",
+        "status.portfolio.v1",
+        "work.remaining.v1",
+        "change.observed.v1",
+        "statistics.registered.v1",
+        "metric.comparison.v1",
+        "trust.data.v1",
+        "health.project.v1",
+        "health.team.v1",
+        "balance.team_workload.v1",
+        "deficiency.operational.v1",
+        "investigation.bounded.v1",
+    }
+)
+
+#: The plan-registry token grammar, applied at the type level. Membership of
+#: ``PLAN_REGISTRY`` is the stronger, *closed* check and is applied where a
+#: plan ID reaches a no-answer projection (see ``validators``).
+PlanRegistryID = PlatformVersionToken
 
 
 class DevSourceRequirement(ContractModelV2):
     schema_version: Literal["dev_source_requirement.v1"]
-    source_class: OpaqueID
+    source_class: SourceClass
     adapter_id: OpaqueID
     requirement_level: RequirementLevel
     applicability_rule_id: OpaqueID | None = None
@@ -64,8 +111,8 @@ class DevPlanStepDependency(ContractModelV2):
 
 class DevInvestigationPlan(ContractModelV2):
     schema_version: Literal["dev_investigation_plan.v1"]
-    plan_id: OpaqueID
-    plan_version: Version
+    plan_id: PlanRegistryID
+    plan_version: PlatformVersionToken
     intent_id: OpaqueID
     supported_subject_kinds: tuple[EntityKind, ...] = Field(min_length=1, max_length=6)
     supported_cardinalities: tuple[Cardinality, ...] = Field(min_length=1, max_length=3)

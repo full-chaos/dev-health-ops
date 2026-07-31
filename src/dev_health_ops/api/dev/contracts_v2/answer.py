@@ -117,4 +117,8 @@ _validators.register_no_answer_policy(
     DevAnswerV2,
     _validators.NO_ANSWER_ANSWER_FIELD_POLICY,
     {"outcome_display_label": _validators.CANONICAL_NO_ANSWER_DISPLAY_LABELS},
+    vocabularies={
+        "schema_version": _validators.literal_vocabulary(DevAnswerV2, "schema_version"),
+        "public_outcome": _validators.NO_ANSWER_OUTCOMES,
+    },
 )

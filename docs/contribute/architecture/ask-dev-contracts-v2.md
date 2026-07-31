@@ -150,15 +150,24 @@ why the indirection matters for mutation testing:
 
 ## Post-merge hardening (adversarial review, CHAOS-3294)
 
-Two adversarial-review rounds ran against the merged contracts. Round 1
+Three adversarial-review rounds ran against the merged contracts. Round 1
 reproduced six counterexamples the original five validators did not catch.
 Round 2 then bypassed three of those fixes through adjacent variants, and
-found one new gap. Because that made three rounds on the same defect
-classes, the round-2 fixes are deliberately **class closures** rather than
-further patches: each replaces the round-1 check's polarity or scope, and
-each carries an explicit closure argument -- the partition of the input
+found one new gap. Round 3 cleared most of the round-2 closures but narrowed
+three cells that were still open. Because that made repeated rounds on the
+same defect classes, the fixes are deliberately **class closures** rather
+than further patches: each replaces the previous check's polarity or scope,
+and each carries an explicit closure argument -- the partition of the input
 space and why every cell is covered -- recorded in the sections below and
 in the `validators` module docstring.
+
+The three round-3 cells share one shape, worth naming because it is what the
+earlier closures kept getting wrong: **a constraint on a value's form is not
+a constraint on where the value came from.** An identifier-shaped token can
+be a subject's name; a `frozen=True` object can hold a mutable list; a number
+that appears somewhere in the frame is not thereby a number that grounds the
+sentence citing it. Each fix replaces a predicate over form with membership
+of a server-owned set, or with a structural impossibility.
 
 ### No-content outcomes are rebuilt from an allowlist (`validate_no_answer_projection`)
 
@@ -185,9 +194,10 @@ classification in `NO_ANSWER_FRAME_FIELD_POLICY` /
 | --- | --- |
 | `ABSENT` | `None` or empty. Nothing about the subject survives. |
 | `CANONICAL` | Exactly the server-owned constant for this outcome (`CANONICAL_NO_ANSWER_COPY`, `CANONICAL_NO_ANSWER_DISPLAY_LABELS`). Producer text is replaced, never reused. |
+| `CLOSED_VOCABULARY` | Every string the field reaches must be a member of a server-owned closed set registered with the policy. The producer picks *from* the vocabulary and cannot contribute *to* it. |
 | `IDENTIFIER` | Every string the field reaches must be a whitespace-free identifier token, checked **at runtime on the value**. Classifying a free-text field this way is not an escape hatch: prose in it fails validation. |
 | `NON_TEXT` | Reaches no string at all. |
-| `SELF_VALIDATED` | A nested v2 contract with its own registered policy. |
+| `SELF_VALIDATED` | A nested contract with its own registered policy. |
 
 **Closure argument.** The classification partitions the fields of both
 models, and the partition is total by construction:
@@ -219,6 +229,71 @@ The v1 projector no longer reads any text off a no-answer frame at all:
 reached a client, so it does not depend on an upstream invariant staying
 true.
 
+#### Round 3: identifier *shape* is not identifier *provenance*
+
+The round-2 partition left two `IDENTIFIER` cells, justified on the grounds
+that the fields carried "platform tokens, not copy". `IDENTIFIER` constrains
+a token's shape, and a subject's name is a perfectly well-shaped token:
+review round 3 put `"private/Nightfall"` into
+`coverage.unavailable_required_sources` and into `versions.plan_id` on a
+`denied` frame, and both validated and serialized. Neither is prose, so
+nothing in the projection objected -- the field said "no whitespace", and the
+disclosure had none.
+
+Both cells are replaced by membership rather than by a tighter shape:
+
+* **`coverage`** is now `DevCoverageV2` (`contracts_v2/embedded.py`), whose
+  `unavailable_required_sources` / `stale_required_sources` are the closed
+  `base.SourceClass` enum rather than `OpaqueID`. The field is reached
+  through `SELF_VALIDATED`, so its counts and timestamp are separately
+  classified `NON_TEXT`. A denial can still answer "how many sources were
+  required" while no leaf can carry a producer-chosen string. Because the
+  vocabulary is enforced by the *type*, it holds for every outcome, not only
+  no-answer ones.
+* **`versions`** is `ABSENT`: a no-answer outcome carries no provenance block
+  at all. `DevFrameVersions` is seven version strings plus a plan ID;
+  constraining each is a weaker statement than not emitting the block, and a
+  denial's provenance is recoverable from `run_id` server-side. The field is
+  optional on the model *only* so this is expressible;
+  `validators.validate_versions_presence` requires it for every outcome that
+  carries content, with its own fail-before/pass-after mutation pair
+  (`answered_without_versions`), so optionality did not become droppability.
+  Independently, every `DevFrameVersions` field is now a
+  `base.PlatformVersionToken` (a dotted, lowercase, version-suffixed token)
+  and `plan_id` a `PlanRegistryID`, so a subject-derived identifier is not
+  spellable in the block even on the answered path where it *is* emitted.
+* `schema_version` and `public_outcome` move from `IDENTIFIER` to
+  `CLOSED_VOCABULARY`, which is what they always meant. The
+  `schema_version` vocabulary is read off the model's own `Literal`
+  annotation (`validators.literal_vocabulary`) rather than hand-copied.
+
+**Closure argument (round 3).** For a no-answer projection, every field of
+`DevAnswerFrame` is now `ABSENT`, `CANONICAL` server copy, `NON_TEXT`, a
+`CLOSED_VOCABULARY` the server owns, or `SELF_VALIDATED` into a nested policy
+that is itself only those classes -- with exactly two exceptions, `frame_id`
+and `run_id`. `test_round3_denied_projection_admits_no_producer_chosen_string`
+asserts that partition against the policy table itself, naming those two, so
+a *third* `IDENTIFIER` cell cannot be added without failing.
+
+Because both closed vocabularies are enforced by the type as well as the
+policy, the type would mask the policy and make the classification read as
+covered while doing nothing. Two tests construct objects past validation
+(`model_construct`) and call `validate_no_answer_projection` directly, so the
+`CLOSED_VOCABULARY` and `IDENTIFIER` layers are each shown to reject on their
+own -- a later widening of an annotation cannot silently reopen the channel.
+
+**Residual.** `frame_id` and `run_id` (and the answer's `answer_id` /
+`conversation_id`) remain `IDENTIFIER`: they are correlation handles, they
+are required for the frame/answer/narrative/stream `run_id` closure, and they
+cannot come from a closed set. Circumstantially they are safe -- a run ID is
+minted at `run.started`, index 0 of the stream, before subject resolution has
+run, so nothing subject-derived exists yet to put in one. Making that
+structural needs an opaque-handle grammar (UUID/ULID) applied **uniformly to
+every outcome**, since the ID is chosen before the outcome is known; a
+no-answer-only grammar would make a legal server behaviour unrepresentable
+depending on how the run ended. That is a v2-wide identifier change rather
+than a no-answer projection change, and is deliberately not made here.
+
 ### Immutability is structural, not just `frozen=True`
 
 `ConfigDict(frozen=True)` blocks attribute *rebinding*; it leaves a `list`
@@ -240,12 +315,56 @@ was used to launder is still rejected afterwards. The JSON Schema output is
 unchanged -- a variable-length tuple and a list both render as
 `{"type": "array"}` with the same `minItems`/`maxItems`.
 
-**Boundary.** v1 contract models embedded in v2 frames (`DevCoverage`,
-`DevEvidenceRef`, `DevMetricRef`, ...) still use `list` fields, because
-CHAOS-3294 is additive and does not modify v1.
-`test_round2_v1_models_embedded_in_v2_are_an_acknowledged_boundary` pins the
-exact set of embedded v1 models, so a *new* v1 embedding surfaces as a
-failure and gets a decision instead of quietly widening the gap.
+#### Round 3: the "acknowledged boundary" was inside the closure
+
+Round 2 recorded the v1 models embedded in v2 frames (`DevCoverage`,
+`DevEvidenceRef`, `DevMetricRef`, ...) as an acknowledged boundary, on the
+grounds that CHAOS-3294 is additive and does not modify v1. Review round 3
+showed that was not a boundary but a hole, because it sat *inside* the object
+graph the v2 validators had just certified:
+
+```python
+frame = DevAnswerFrame.model_validate(payload)   # fully validated
+frame.coverage.unavailable_required_sources.append("private/Nightfall")
+frame.model_dump(mode="json")                    # ...and it serializes
+```
+
+Twelve mutable collection fields were reachable from the v2 contracts at that
+point, across `DevCoverage`, `DevError`, `DevEvidenceRef`, `DevMetricRef`,
+`DevScope` and `DevSurfaceContext`.
+
+`contracts_v2/embedded.py` now defines a deeply immutable mirror of each --
+`DevCoverageV2`, `DevErrorV2`, `DevEvidenceRefV2`, `DevMetricRefV2`,
+`DevScopeV2`, `DevSurfaceContextV2` -- and the v2 contracts embed those.
+Each mirror inherits from **both** `ContractModelV2` and its v1 original and
+overrides only the mutable fields, so every v1 field constraint,
+`field_validator` and `model_validator` (`DevScope`'s direct-scope and
+surface-context invariants are substantial) is inherited rather than
+duplicated: the mirror cannot drift from the original the way a
+reimplementation would. v1 itself is untouched, so the issue stays additive.
+
+**Closure argument (round 3).** The predicate is no longer "no v2 model has a
+mutable collection" plus a list of exceptions, but: *no model reachable from
+any v2 contract, at any depth, whether or not it is a v2 model, declares a
+mutable collection.*
+`test_round3_no_mutable_collection_anywhere_in_the_v2_closure` walks that
+whole closure by introspection and asserts it is empty, so a newly embedded
+v1 model with a `list` field fails there instead of being added to an
+exception list. `test_round3_validated_frame_cannot_be_mutated_after_the_fact`
+is the regression form: the exact `append` review used now raises, and the
+serialized output is unchanged by the attempt.
+
+A v1 model with no collection at any depth (`DevEntityRef`, `DevTimeRange`,
+`DevCitationLink`, `DevEvidenceFlags`, `DevMetricPoint`, `DevModelMetadata`)
+is already immutable in fact under `frozen=True` and needs no mirror -- the
+recursive predicate covers them rather than exempting them.
+
+**Boundary (the real one).** A mirror `isinstance`-passes as its v1 original,
+so pydantic would accept it into a v1-typed field untouched and then ask v1's
+`list` serializer to emit a `tuple`. The v2-to-v1 projector therefore converts
+explicitly (`compat._as_v1`), and
+`test_round3_v1_projection_still_emits_plain_v1_collections` asserts the
+projected v1 objects are exactly their v1 types with `list` collections.
 
 ### Narrative/frame consistency is bounded, not general (`validate_narrative_frame_consistency`)
 
@@ -258,18 +377,17 @@ negative fixtures (`dev_answer.v2` cases `narrative_contradicts_number`,
 `_readiness`, `_subject`, `_recommendation`):
 
 1. **Numeric containment** -- every bare numeral/percentage token in the
-   narrative body must match (within floating-point tolerance) a number the
-   frame renders. Round 1 drew that value set from the *whole* frame, which
-   review bypassed: an unrelated comparison value of `100` legitimized a
-   "100% complete" claim against a 3/4 completion block. The value set is
-   now **bound to the facts the narrative declares it is narrating** (its
-   `referenced_fact_ids`, plus the facts of any `referenced_section_ids`),
-   the frame's own canonical copy, and the completion block. Comparison
-   values are no longer in the global pool at all -- a comparison's values
-   are admitted only within a sentence that names that comparison's label.
-   A second, independent rule covers the specific claim: a sentence using
-   completion vocabulary may only cite a percentage the completion block
-   itself supports, and none at all when there is no calculable completion.
+   narrative body must be grounded by that sentence's own references. Round 1
+   drew the value set from the *whole* frame, which review bypassed: an
+   unrelated comparison value of `100` legitimized a "100% complete" claim
+   against a 3/4 completion block. Round 2 narrowed the set to the referenced
+   facts, the frame's canonical copy and the completion block -- but it was
+   still a **pool**, unioned once and offered to every sentence, and round 3
+   showed that pool failing in both directions at once (see below). There is
+   now no pool. See "Per-sentence numeric admission". A second, independent
+   rule covers the specific claim: a sentence using completion vocabulary may
+   only cite a percentage the completion block itself supports, and none at
+   all when there is no calculable completion.
 2. **Readiness polarity** -- a bare "ready" claim is rejected unless
    `frame.readiness.state == "ready"`; a "not ready" claim is rejected if the
    frame's state actually is `"ready"`. Deterministic because `state` is a
@@ -302,6 +420,49 @@ Four paired tests prove the binding did not become a blanket refusal: a
 narrative may still cite the frame's own completion percentage, cite the
 *same* value `100` in a sentence that names the comparison it came from,
 recommend a fact it references, and name the subject by its short form.
+
+#### Per-sentence numeric admission (round 3)
+
+Review round 3 reproduced the round-2 pool failing in both directions from
+the same cause. It **over-accepted**: `_bound_numeric_values` unioned the
+completion numerator, denominator and rate into the set offered to every
+sentence, so a frame with a 3/4 completion block accepted the narrative claim
+"Repository dev-health has 4 open security incidents" -- `4` was in the pool,
+as a denominator, and the sentence was about something else entirely. It also
+**over-rejected**: a subject genuinely named `project-42` could not be named
+in its own narrative, because `42` appeared in no fact.
+
+Both are one bug: a number was admitted or refused by *membership in a global
+set* rather than by *the citing sentence's own grounding*. The pool is gone.
+Each sentence admits exactly:
+
+| Source | Condition |
+| --- | --- |
+| Numerals in the text of facts the narrative references | always (`referenced_fact_ids`, plus the facts of any `referenced_section_ids`) |
+| The completion block's numerator, denominator and rate | only in a sentence that makes a completion claim |
+| Numerals in the committed subject's canonical identity forms | always -- server-committed, not producer-chosen |
+| A comparison's `current_value` / `comparison_value` | only in a sentence that names that comparison's label |
+
+`direct_answer`, `limitations`, `safe_follow_up_questions` and the readiness
+reasons were in the round-2 pool and are **not** in this list: they are
+frame-level free text, and a number appearing in one of them grounds nothing
+about the sentence citing it. A narrative that wants to restate a number must
+reference the fact carrying it.
+
+**Closure argument (round 3).** Each admission rule names both a *source* and
+the *condition* under which that source applies to a given sentence, so there
+is no cell where a value is admitted without a stated reason. The direction
+pairs are what make it binding rather than merely stricter, and each is a
+fail-before/pass-after pair against the pre-fix source:
+`test_round3_completion_numbers_are_not_a_global_narrative_token_pool`
+(the incidents claim, previously accepted, now rejected) against
+`test_round2_narrative_may_cite_the_frames_own_completion_percentage` (the
+same completion values, in a completion sentence, still accepted);
+`test_round3_narrative_may_name_a_subject_whose_identity_contains_a_number`
+(previously rejected, now accepted); and
+`test_round3_frame_free_text_no_longer_grounds_a_narrative_number`, which
+rejects a number carried only by `limitations` and then accepts the same
+sentence once a fact carrying it is referenced.
 
 **This is not general semantic contradiction detection.** These checks catch
 exactly the pattern-matchable subset of narrative/frame disagreement; an

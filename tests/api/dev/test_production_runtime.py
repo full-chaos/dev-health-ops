@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import secrets
 from typing import Any, cast
 
 import pytest
@@ -318,6 +319,148 @@ async def test_production_runtime_wires_exactly_the_nine_registered_tools(
     assert execution.result.metric_definitions
     assert execution.result.metric_definitions[0].description
     assert execution.result.metric_definitions[0].supported_time_grains
+    await runtime.aclose()
+
+
+async def _build_runtime_for_resolve_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Any:
+    async def resolve_provider(_session, *, org_id: str):
+        return ProductionProviderResolution(
+            provider=cast(Any, FakeProvider()),
+            source=AgentProviderSource.PLATFORM,
+            family="openai",
+            model="certified-model",
+            provider_label="OpenAI compatible",
+            model_label="certified-model",
+        )
+
+    monkeypatch.setattr(
+        production_runtime, "resolve_production_provider", resolve_provider
+    )
+    # Constructed at runtime, never a literal secret-shaped string in source.
+    monkeypatch.setenv("JWT_SECRET_KEY", secrets.token_hex(32))
+    return await production_runtime.build_production_runtime(
+        cast(Any, object()),
+        org_id="org_fullchaos",
+        permission_fingerprint="permissions_01",
+        clickhouse=cast(Any, object()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_scope_with_a_query_searches_the_authorized_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3256: a named-entity query must not re-resolve the caller's scope."""
+
+    async def fake_query_dicts(_client, sql, params):
+        if "FROM projects FINAL" in sql:
+            assert params["org_id"] == "org_fullchaos"
+            assert params["query"] == "ask dev"
+            return [
+                {
+                    "canonical_id": "project-ask-dev",
+                    "label": "Ask Dev",
+                    "repository_id": None,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts
+    )
+    runtime = await _build_runtime_for_resolve_scope(monkeypatch)
+    org_scope = DevScope.model_validate(
+        {
+            **positive_fixtures()["dev_scope.v1"],
+            "organization_id": "org_fullchaos",
+            "direct_scope": "organization",
+            "repositories": [],
+            "entity_refs": [],
+            "surface_context": None,
+        }
+    )
+
+    execution = await runtime.registry.execute(
+        DevToolRequest(
+            schema_version="dev_tool_request.v1",
+            run_id="run_01",
+            tool_call_id="tool_call_01",
+            tool_id=ToolID.RESOLVE_SCOPE,
+            scope=org_scope,
+            query="ask dev",
+            limit=25,
+        ),
+        ToolExecutionContext(
+            org_id="org_fullchaos",
+            user_id="user_01",
+            permission_fingerprint="permissions_01",
+            authorized_scope=org_scope,
+            cancellation=asyncio.Event(),
+            remaining_seconds=5,
+        ),
+    )
+
+    resolution = execution.result.scope_resolution
+    assert resolution is not None
+    assert resolution.outcome.value == "exact"
+    assert resolution.resolved_scope is not None
+    assert resolution.resolved_scope.direct_scope.value == "project"
+    assert resolution.resolved_scope.entity_refs[0].entity_id == "project-ask-dev"
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resolve_scope_without_a_query_keeps_resolving_the_current_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty/omitted query keeps the pre-existing re-authorization behavior."""
+
+    async def fake_query_dicts(_client, sql, params):
+        del sql, params
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts
+    )
+    runtime = await _build_runtime_for_resolve_scope(monkeypatch)
+    org_scope = DevScope.model_validate(
+        {
+            **positive_fixtures()["dev_scope.v1"],
+            "organization_id": "org_fullchaos",
+            "direct_scope": "organization",
+            "repositories": [],
+            "entity_refs": [],
+            "surface_context": None,
+        }
+    )
+
+    execution = await runtime.registry.execute(
+        DevToolRequest(
+            schema_version="dev_tool_request.v1",
+            run_id="run_01",
+            tool_call_id="tool_call_01",
+            tool_id=ToolID.RESOLVE_SCOPE,
+            scope=org_scope,
+            limit=25,
+        ),
+        ToolExecutionContext(
+            org_id="org_fullchaos",
+            user_id="user_01",
+            permission_fingerprint="permissions_01",
+            authorized_scope=org_scope,
+            cancellation=asyncio.Event(),
+            remaining_seconds=5,
+        ),
+    )
+
+    resolution = execution.result.scope_resolution
+    assert resolution is not None
+    # No connected repos in this fake catalog -> explicit insufficient
+    # evidence, never a fabricated exact organization scope (CHAOS-3255).
+    assert resolution.outcome.value == "unresolved"
+    assert resolution.resolved_scope is None
     await runtime.aclose()
 
 

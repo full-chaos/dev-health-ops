@@ -664,6 +664,26 @@ class DevOrchestrator:
                     tool_results.append(execution.result)
                     tool_requests.append(tool_request)
                     tool_bytes_total = next_total
+                    committed_resolution = execution.result.scope_resolution
+                    committed_scope = (
+                        committed_resolution.resolved_scope
+                        if committed_resolution is not None
+                        else None
+                    )
+                    if (
+                        tool_request.tool_id is ToolID.RESOLVE_SCOPE
+                        and execution.result.status == "success"
+                        and committed_resolution is not None
+                        and committed_scope is not None
+                        and committed_scope.organization_id == org_id
+                    ):
+                        # A named-entity resolve_scope.v1 match commits a new
+                        # server-authorized scope for every subsequent tool
+                        # call in this run (CHAOS-3256) — the prior immutable
+                        # authorized_scope must not keep being reused once the
+                        # model has resolved a more specific entity.
+                        resolution = committed_resolution
+                        authorized_scope = committed_scope
                     provider_continuation += (
                         AgentMessage(
                             AgentMessageRole.ASSISTANT,

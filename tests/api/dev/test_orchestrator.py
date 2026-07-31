@@ -747,6 +747,246 @@ async def test_noncooperative_provider_is_cancelled_by_the_orchestrator() -> Non
     assert cancelled.is_set()
 
 
+# --- CHAOS-3256: resolve named entities before executing status tools ---
+
+
+def _scope_dict(
+    *,
+    direct_scope: str,
+    repositories: list[str] | None = None,
+    entity_refs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    from dev_health_ops.api.dev.contract_fixtures import END, PREVIOUS_START, START
+
+    return {
+        "schema_version": "dev_scope.v1",
+        "organization_id": "org_fullchaos",
+        "direct_scope": direct_scope,
+        "repositories": repositories or [],
+        "entity_refs": entity_refs or [],
+        "team_ids": [],
+        "time_range": {"start": START, "end": END, "timezone": "America/Los_Angeles"},
+        "comparison_range": {
+            "start": PREVIOUS_START,
+            "end": START,
+            "timezone": "America/Los_Angeles",
+        },
+        "surface_context": None,
+    }
+
+
+def _organization_resolution() -> DevScopeResolution:
+    from dev_health_ops.api.dev.contract_fixtures import NOW
+
+    scope = _scope_dict(direct_scope="organization")
+    return DevScopeResolution.model_validate(
+        {
+            "schema_version": "dev_scope_resolution.v1",
+            "requested_scope": scope,
+            "resolved_scope": scope,
+            "outcome": "inherited",
+            "authorized_repository_ids": [],
+            "authorized_entity_ids": [],
+            "candidates": [],
+            "fallbacks": [],
+            "warnings": [],
+            "resolved_at": NOW,
+        }
+    )
+
+
+def _project_resolution() -> DevScopeResolution:
+    from dev_health_ops.api.dev.contract_fixtures import NOW
+
+    scope = _scope_dict(
+        direct_scope="project",
+        entity_refs=[
+            {
+                "entity_type": "project",
+                "entity_id": "project-ask-dev",
+                "display_label": "Ask Dev",
+                "repository_id": None,
+            }
+        ],
+    )
+    return DevScopeResolution.model_validate(
+        {
+            "schema_version": "dev_scope_resolution.v1",
+            "requested_scope": scope,
+            "resolved_scope": scope,
+            "outcome": "exact",
+            "authorized_repository_ids": [],
+            "authorized_entity_ids": ["project-ask-dev"],
+            "candidates": [],
+            "fallbacks": [],
+            "warnings": [],
+            "resolved_at": NOW,
+        }
+    )
+
+
+def _not_found_resolution() -> DevScopeResolution:
+    from dev_health_ops.api.dev.contract_fixtures import NOW
+
+    scope = _scope_dict(direct_scope="organization")
+    return DevScopeResolution.model_validate(
+        {
+            "schema_version": "dev_scope_resolution.v1",
+            "requested_scope": scope,
+            "resolved_scope": None,
+            "outcome": "forbidden_or_not_found",
+            "authorized_repository_ids": [],
+            "authorized_entity_ids": [],
+            "candidates": [],
+            "fallbacks": [],
+            "warnings": ["No authorized entity matched the requested query."],
+            "resolved_at": NOW,
+        }
+    )
+
+
+def _answer_with_no_claims(*, script_id: str) -> dict:
+    """The stock answer fixture's claim hardcodes a repository validity_scope;
+    these tests commit a different (project/organization) scope mid-run, so
+    drop claims to avoid an unrelated validity_scope mismatch and keep the
+    assertions focused on which scope the status tool received."""
+    payload = _answer(script_id=script_id)
+    payload["claims"] = []
+    return payload
+
+
+def _resolve_scope_registry(
+    *, calls: list[DevToolRequest], resolve_scope_result: DevScopeResolution
+) -> AskDevToolRegistry:
+    async def execute(_context, request: DevToolRequest) -> DevToolResult:
+        calls.append(request)
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+            }
+        )
+        if request.tool_id is ToolID.RESOLVE_SCOPE:
+            payload["scope_resolution"] = resolve_scope_result.model_dump(mode="json")
+        return DevToolResult.model_validate(payload)
+
+    return AskDevToolRegistry({tool_id: execute for tool_id in ToolID})
+
+
+@pytest.mark.asyncio
+async def test_resolved_project_scope_is_committed_for_the_status_tool() -> None:
+    """The literal question "What's the status of the Ask Dev project" asked
+    from inherited organization scope must have status_snapshot.v1 receive
+    project scope, not the stale organization scope the run started with."""
+
+    script_id = "resolve-then-status"
+    calls: list[DevToolRequest] = []
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Ask Dev project", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_02",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_project_resolution()
+            ),
+            scope_resolver=resolve,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert [request.tool_id.value for request in calls] == [
+        "resolve_scope.v1",
+        "status_snapshot.v1",
+    ]
+    assert calls[0].scope.direct_scope.value == "organization"
+    # The status tool must receive the newly-committed project scope, not
+    # the organization scope the run inherited.
+    assert calls[1].scope.direct_scope.value == "project"
+    assert calls[1].scope.entity_refs[0].entity_id == "project-ask-dev"
+    assert result.answer is not None
+    committed_scope = result.answer.resolved_scope.resolved_scope
+    assert committed_scope is not None
+    assert committed_scope.direct_scope.value == "project"
+
+
+@pytest.mark.asyncio
+async def test_unresolved_named_entity_never_falls_back_to_organization_scope() -> None:
+    """An explicit reference that resolves to nothing must never leave the
+    subsequent tool calls silently widened back to organization scope."""
+
+    script_id = "resolve-not-found"
+    calls: list[DevToolRequest] = []
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "some-other-tenant-project", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_02",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_not_found_resolution()
+            ),
+            scope_resolver=resolve,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    # The not-found result must not clobber the previously authorized scope;
+    # the status tool keeps executing against the last committed scope
+    # rather than silently regressing to an unauthorized/ambiguous one.
+    assert calls[1].scope.direct_scope.value == "organization"
+
+
 def test_hard_defaults_can_only_be_configured_downward() -> None:
     assert DevRunLimits().model_rounds == 4
     assert DevRunLimits(model_rounds=2).model_rounds == 2

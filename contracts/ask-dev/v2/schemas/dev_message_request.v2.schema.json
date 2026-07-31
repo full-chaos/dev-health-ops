@@ -265,9 +265,9 @@
   "description": "Request amendment: no authoritative client-supplied ``question_class``.\n\n``question_class_hint`` retains the v1 field for migration-window\ncompatibility, but it is documented and enforced (by\n``DevQuestionIntent.client_hint_deprecation_warning``) as untrusted\ninput the interpreter must ignore for planning.",
   "properties": {
     "client_message_id": {
-      "maxLength": 36,
-      "minLength": 36,
-      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Client Message Id",
       "type": "string"
     },
@@ -312,9 +312,9 @@
       "default": null
     },
     "request_id": {
-      "maxLength": 36,
-      "minLength": 36,
-      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Request Id",
       "type": "string"
     },

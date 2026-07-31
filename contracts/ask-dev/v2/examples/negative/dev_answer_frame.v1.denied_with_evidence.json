@@ -18,7 +18,7 @@
       "display_label": "Status snapshot",
       "entity_id": "item_01",
       "entity_type": "work_item",
-      "evidence_ref_id": "ev_01",
+      "evidence_ref_id": "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b",
       "flags": {
         "conflicting": false,
         "deleted": false,

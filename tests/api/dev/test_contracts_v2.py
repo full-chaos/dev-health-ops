@@ -705,6 +705,29 @@ def _field_pattern(field: Any) -> str | None:
     return None
 
 
+#: Grammars an identifier may carry instead of being a server mint, each
+#: pinned to a real producer: the plan registry token and the evidence
+#: service's HMAC handle (``evidence_service.issue`` -> ``ev1_`` + 40 hex).
+_PINNED_ID_GRAMMARS = frozenset(
+    {
+        get_args(v2.PlanRegistryID)[1].pattern,
+        get_args(v2.EvidenceHandle)[1].pattern,
+        _SERVER_HANDLE_PATTERN,
+    }
+)
+
+
+def _element_pattern(model: type[BaseModel], name: str) -> str | None:
+    """The constraint pattern of a collection field's element type."""
+
+    for arg in get_args(model.model_fields[name].annotation):
+        for meta in get_args(arg)[1:]:
+            pattern = getattr(meta, "pattern", None)
+            if pattern:
+                return pattern
+    return None
+
+
 def _is_server_handle(model: type[BaseModel], name: str) -> bool:
     field = model.model_fields[name]
     if _field_pattern(field) == _SERVER_HANDLE_PATTERN:
@@ -829,17 +852,21 @@ _NON_HANDLE_IDENTIFIER_REASONS: dict[str, str] = {
     "DevAnswerFact.fact_id": "intra-document key",
     "DevAnswerFact.evidence_ref_ids": "intra-document key",
     "DevAnswerFact.relationship_path_ids": "intra-document key",
+    "DevRelationshipPath.path_id": "intra-document key",
+    # Client-supplied at the request boundary. The server folds an arbitrary
+    # string to a UUID5 (`router._storage_uuid`, applied to exactly these two
+    # at router.py:1031/1038), and `DevError.request_id` echoes the same
+    # client value back (`body.request_id or header_request_id`), so pinning
+    # any of the three to a mint would reject input production accepts.
+    "DevMessageRequestV2.request_id": "client-supplied, folded to UUID5",
+    "DevMessageRequestV2.client_message_id": "client-supplied, folded to UUID5",
+    "DevErrorV2.request_id": "echoes the client-supplied request id",
     "DevAnswerSection.section_id": "intra-document key",
     "DevAnswerSection.fact_ids": "intra-document key",
-    "DevEvidenceRefV2.evidence_ref_id": "intra-document key",
-    "DevFrameConflict.evidence_ref_ids": "intra-document key",
-    "DevMetricRefV2.evidence_ref_ids": "intra-document key",
     "DevMetricRefV2.metric_ref_id": "intra-document key",
     "DevNarrative.referenced_fact_ids": "intra-document key",
     "DevNarrative.referenced_section_ids": "intra-document key",
     "DevReadinessBlock.blocking_fact_ids": "intra-document key",
-    "DevRelationshipPath.path_id": "intra-document key",
-    "DevRelationshipPath.evidence_ref_ids": "intra-document key",
     "DevSourceObservation.evidence_ref_ids": "intra-document key",
     "DevPlanStepDependency.step_id": "intra-document key",
     # Server-owned rule/adapter registries, versioned tokens rather than mints.
@@ -870,10 +897,9 @@ def test_round4_every_v2_identifier_is_classified() -> None:
                 continue
             if _reaches_only_closed_values(model, name):
                 continue
-            if (
-                _field_pattern(model.model_fields[name])
-                == get_args(v2.PlanRegistryID)[1].pattern
-            ):
+            if _field_pattern(model.model_fields[name]) in _PINNED_ID_GRAMMARS:
+                continue
+            if _element_pattern(model, name) in _PINNED_ID_GRAMMARS:
                 continue
             if key in _NON_HANDLE_IDENTIFIER_REASONS:
                 continue
@@ -915,6 +941,62 @@ def test_round4_subject_derived_value_rejected_in_each_envelope_id(
             payload["run_id"] = "private/Nightfall"
     with pytest.raises(ValidationError, match=cell):
         v2.DevAnswerV2.model_validate(payload)
+
+
+def test_round4_request_boundary_accepts_client_shaped_identifiers() -> None:
+    """Finding 1, the other direction: do not pin what the client supplies.
+
+    ``request_id`` and ``client_message_id`` are client-supplied and folded to
+    a UUID5 server-side (``router._storage_uuid``, router.py:1031/1038), and
+    ``DevError.request_id`` echoes the same client value back. Requiring the
+    server mint on any of the three would reject input production explicitly
+    accepts — the same over-rejection class as the completion gate, so it gets
+    the same treatment: an assertion that the loose form still validates.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_message_request.v2"])
+    payload["request_id"] = "web-req-2026-07-31-0002"
+    payload["client_message_id"] = "web-msg-2026-07-31-0002"
+    request = v2.DevMessageRequestV2.model_validate(payload)
+    assert request.request_id == "web-req-2026-07-31-0002"
+
+    error = deepcopy(positive_fixtures()["dev_stream_event.v2"])
+    error["event"] = "error"
+    error["error"] = {
+        "schema_version": "dev_error.v1",
+        "request_id": "web-req-2026-07-31-0002",
+        "code": "source_unavailable",
+        "safe_message": "A required source is temporarily unavailable.",
+        "retryable": True,
+        "remediation": ["Retry after source health recovers."],
+    }
+    v2.DevStreamEventV2.model_validate(error)
+
+    # ...while the conversation handle on the same request *is* pinned: the
+    # router parses it as a path `uuid.UUID` and requires the body to match.
+    payload["conversation_id"] = "not-a-conversation-handle"
+    with pytest.raises(ValidationError, match="conversation_id"):
+        v2.DevMessageRequestV2.model_validate(payload)
+
+
+def test_round4_evidence_handles_keep_their_hmac_grammar() -> None:
+    """Finding 1: evidence handles are a keyed HMAC, not a mint.
+
+    ``evidence_service.issue`` returns ``ev1_`` + 40 hex and ``verify``
+    recomputes and ``compare_digest``s it, so the handle is the authorization
+    token for dereferencing evidence. A handle that could never verify — or one
+    carrying a subject name — cannot reach the wire.
+    """
+
+    valid = positive_fixtures()["dev_answer_frame.v1"]["evidence"][0]["evidence_ref_id"]
+    assert re.fullmatch(r"ev1_[0-9a-f]{40}", valid)
+
+    for bad in ("private/Nightfall", "ev1_Nightfall", "ev_01", valid.upper()):
+        payload = deepcopy(positive_fixtures()["dev_answer_frame.v1"])
+        payload["evidence"][0]["evidence_ref_id"] = bad
+        payload["facts"][0]["evidence_ref_ids"] = [bad]
+        with pytest.raises(ValidationError):
+            v2.DevAnswerFrame.model_validate(payload)
 
 
 def test_round3_denied_projection_admits_no_producer_chosen_string() -> None:
@@ -1423,7 +1505,7 @@ def test_round2_narrative_may_recommend_a_fact_it_references() -> None:
             "fact_id": "fact_rec",
             "text": "Add a second reviewer to the release checklist.",
             "kind": "recommendation",
-            "evidence_ref_ids": ["ev_01"],
+            "evidence_ref_ids": ["ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"],
             "relationship_path_ids": [],
             "confidence": 0.8,
         }
@@ -1500,7 +1582,7 @@ def test_round3_frame_free_text_no_longer_grounds_a_narrative_number() -> None:
             "fact_id": "fact_sources",
             "text": "9 of the required sources responded.",
             "kind": "observed",
-            "evidence_ref_ids": ["ev_01"],
+            "evidence_ref_ids": ["ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"],
             "relationship_path_ids": [],
             "confidence": 1.0,
         }
@@ -1604,7 +1686,7 @@ def test_round4_bare_completion_count_needs_a_referenced_fact() -> None:
             "fact_id": "fact_checks",
             "text": "3 required checks are outstanding.",
             "kind": "observed",
-            "evidence_ref_ids": ["ev_01"],
+            "evidence_ref_ids": ["ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"],
             "relationship_path_ids": [],
             "confidence": 1.0,
         }

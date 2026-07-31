@@ -68,7 +68,14 @@ from dev_health_ops.api.dev.contracts import (
 )
 
 from . import validators as _validators
-from .base import ContractModelV2, Label, OpaqueID, ServerHandle, ShortText, SourceClass
+from .base import (
+    ContractModelV2,
+    EvidenceHandle,
+    Label,
+    OpaqueID,
+    ShortText,
+    SourceClass,
+)
 
 __all__ = [
     "DevCoverageV2",
@@ -121,6 +128,7 @@ class DevScopeV2(ContractModelV2, DevScope):
 
 
 class DevEvidenceRefV2(ContractModelV2, DevEvidenceRef):
+    evidence_ref_id: EvidenceHandle
     repository_ids: tuple[OpaqueID, ...] = Field(  # type: ignore[assignment]
         default_factory=tuple, max_length=20
     )
@@ -137,13 +145,15 @@ class DevMetricRefV2(ContractModelV2, DevMetricRef):
     series: tuple[DevMetricPoint, ...] = Field(  # type: ignore[assignment]
         default_factory=tuple, max_length=366
     )
-    evidence_ref_ids: tuple[OpaqueID, ...] = Field(  # type: ignore[assignment]
+    evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(  # type: ignore[assignment]
         default_factory=tuple, max_length=25
     )
 
 
 class DevErrorV2(ContractModelV2, DevError):
-    request_id: ServerHandle
+    # request_id is inherited as the loose v1 OpaqueID on purpose: the
+    # router populates it from `body.request_id or header_request_id`,
+    # i.e. a client-supplied value.
     remediation: tuple[ShortText, ...] = Field(  # type: ignore[assignment]
         default_factory=tuple, max_length=5
     )

@@ -16,6 +16,7 @@ from pydantic import AwareDatetime, Field, FiniteFloat, model_validator
 
 from .base import (
     ContractModelV2,
+    EvidenceHandle,
     OpaqueID,
     PlatformVersionToken,
     ServerHandle,
@@ -66,7 +67,9 @@ class DevRelationshipPath(ContractModelV2):
     provenance: ShortText
     confidence: FiniteFloat = Field(ge=0, le=1)
     observed_at: AwareDatetime
-    evidence_ref_ids: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=25)
+    evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
 
 
 class DevSourceObservation(ContractModelV2):
@@ -84,7 +87,9 @@ class DevSourceObservation(ContractModelV2):
     relationship_paths: tuple[DevRelationshipPath, ...] = Field(
         default_factory=tuple, max_length=25
     )
-    evidence_ref_ids: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=25)
+    evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
     limitation: ShortText | None = None
     observed_at: AwareDatetime
     query_version: Version

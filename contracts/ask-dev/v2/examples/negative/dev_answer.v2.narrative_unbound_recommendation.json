@@ -28,7 +28,7 @@
         "display_label": "Status snapshot",
         "entity_id": "item_01",
         "entity_type": "work_item",
-        "evidence_ref_id": "ev_01",
+        "evidence_ref_id": "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b",
         "flags": {
           "conflicting": false,
           "deleted": false,
@@ -60,7 +60,7 @@
       {
         "confidence": 1.0,
         "evidence_ref_ids": [
-          "ev_01"
+          "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"
         ],
         "fact_id": "fact_01",
         "kind": "observed",
@@ -72,7 +72,7 @@
       {
         "confidence": 0.8,
         "evidence_ref_ids": [
-          "ev_01"
+          "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"
         ],
         "fact_id": "fact_rec",
         "kind": "recommendation",
@@ -102,7 +102,7 @@
       {
         "confidence": 1.0,
         "evidence_ref_ids": [
-          "ev_01"
+          "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"
         ],
         "observed_at": "2026-07-28T12:00:00Z",
         "path_id": "path_01",
@@ -132,7 +132,7 @@
         "adapter_id": "status_change_service.v1",
         "data_semantics": "measured_zero",
         "evidence_ref_ids": [
-          "ev_01"
+          "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"
         ],
         "limitation": null,
         "observation_id": "0f1a2b3c-000c-4a00-8000-000000000001",
@@ -143,7 +143,7 @@
           {
             "confidence": 1.0,
             "evidence_ref_ids": [
-              "ev_01"
+              "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"
             ],
             "observed_at": "2026-07-28T12:00:00Z",
             "path_id": "path_01",

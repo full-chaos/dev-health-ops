@@ -49,8 +49,12 @@ class DevMessageRequestV2(ContractModelV2):
     """
 
     schema_version: Literal["dev_message_request.v2"]
-    request_id: ServerHandle
-    client_message_id: ServerHandle
+    # Client-supplied and deliberately loose: the server folds arbitrary
+    # strings to a UUID5 at the storage boundary (router._storage_uuid,
+    # applied to exactly these two at router.py:1031/1038), so requiring a
+    # UUID here would reject input production explicitly accepts.
+    request_id: OpaqueID
+    client_message_id: OpaqueID
     conversation_id: ServerHandle | None = None
     idempotency_key: IdempotencyKey
     retry_of_run_id: ServerHandle | None = None

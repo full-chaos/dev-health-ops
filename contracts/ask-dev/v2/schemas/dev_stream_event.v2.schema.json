@@ -30,9 +30,9 @@
         },
         "evidence_ref_ids": {
           "items": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
             "type": "string"
           },
           "maxItems": 25,
@@ -785,9 +785,9 @@
           "type": "array"
         },
         "request_id": {
-          "maxLength": 36,
-          "minLength": 36,
-          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Request Id",
           "type": "string"
         },
@@ -903,9 +903,9 @@
           "type": "string"
         },
         "evidence_ref_id": {
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "maxLength": 44,
+          "minLength": 44,
+          "pattern": "^ev1_[0-9a-f]{40}$",
           "title": "Evidence Ref Id",
           "type": "string"
         },
@@ -1000,9 +1000,9 @@
       "properties": {
         "evidence_ref_ids": {
           "items": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
             "type": "string"
           },
           "maxItems": 10,
@@ -1198,9 +1198,9 @@
         },
         "evidence_ref_ids": {
           "items": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
             "type": "string"
           },
           "maxItems": 25,
@@ -1500,9 +1500,9 @@
         },
         "evidence_ref_ids": {
           "items": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
             "type": "string"
           },
           "maxItems": 25,
@@ -1835,9 +1835,9 @@
         },
         "evidence_ref_ids": {
           "items": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
             "type": "string"
           },
           "maxItems": 25,

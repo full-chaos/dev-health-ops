@@ -33,6 +33,7 @@ from pydantic import AwareDatetime, Field, FiniteFloat, model_validator
 from . import validators as _validators
 from .base import (
     ContractModelV2,
+    EvidenceHandle,
     Label,
     LongText,
     OpaqueID,
@@ -102,7 +103,9 @@ class DevAnswerFact(ContractModelV2):
     fact_id: OpaqueID
     text: ShortText
     kind: Literal["observed", "inferred", "recommendation"]
-    evidence_ref_ids: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=25)
+    evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
     relationship_path_ids: tuple[OpaqueID, ...] = Field(
         default_factory=tuple, max_length=25
     )
@@ -124,7 +127,7 @@ class DevComparisonPoint(ContractModelV2):
 
 class DevFrameConflict(ContractModelV2):
     summary: ShortText
-    evidence_ref_ids: tuple[OpaqueID, ...] = Field(min_length=2, max_length=10)
+    evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(min_length=2, max_length=10)
 
 
 class DevFrameVersions(ContractModelV2):

@@ -35,7 +35,7 @@
       "remediation": [
         "Retry after source health recovers."
       ],
-      "request_id": "0f1a2b3c-0006-4a00-8000-000000000001",
+      "request_id": "web-req-2026-07-31-0001",
       "retryable": true,
       "safe_message": "A required source is temporarily unavailable.",
       "schema_version": "dev_error.v1"

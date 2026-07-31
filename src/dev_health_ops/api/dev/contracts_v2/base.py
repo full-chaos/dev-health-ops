@@ -34,6 +34,7 @@ __all__ = [
     "Cardinality",
     "ContractModelV2",
     "EntityKind",
+    "EvidenceHandle",
     "Label",
     "LongText",
     "OpaqueID",
@@ -203,6 +204,20 @@ ServerHandle = Annotated[
             r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
         ),
     ),
+]
+
+#: An **evidence handle**: ``ev1_`` followed by 40 lowercase hex characters.
+#:
+#: Not a UUID, and deliberately so — this one is a keyed HMAC, not a mint.
+#: ``evidence_service.EvidenceHandleService.issue`` returns
+#: ``f"ev1_{digest.hexdigest()[:40]}"`` over an org-scoped payload, and
+#: ``verify`` recomputes it and ``hmac.compare_digest``s the result, so the
+#: handle is the authorization token for dereferencing evidence. Pinning the
+#: exact shape here means a handle that could never verify cannot reach the
+#: wire, and — like ``ServerHandle`` — hex digits cannot spell a subject name.
+EvidenceHandle = Annotated[
+    str,
+    StringConstraints(min_length=44, max_length=44, pattern=r"^ev1_[0-9a-f]{40}$"),
 ]
 
 #: A platform provenance token: a dotted, lowercase, version-suffixed

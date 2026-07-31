@@ -333,10 +333,38 @@ is `repo_dev_health` by design. The families are:
 
 | Family | Grammar | Examples |
 | --- | --- | --- |
-| Server-minted correlation handles | `ServerHandle` (UUID) | `run_id`, `frame_id`, `answer_id`, `conversation_id`, `narrative_id`, `request_id`, `client_message_id`, `retry_of_run_id`, `result_id`, `ledger_id`, `set_id`, `mention_id`, `observation_id` |
+| Server-minted correlation handles | `ServerHandle` (canonical UUID) | `run_id`, `frame_id`, `answer_id`, `conversation_id`, `narrative_id`, `retry_of_run_id`, `result_id`, `ledger_id`, `set_id`, `mention_id`, `observation_id` |
+| Evidence handles | `EvidenceHandle` -- `^ev1_[0-9a-f]{40}$` | `evidence_ref_id`, every `evidence_ref_ids` |
+| **Client-supplied** request identifiers | `OpaqueID` -- deliberately loose | `DevMessageRequestV2.request_id` / `client_message_id`, `DevErrorV2.request_id` |
 | Provider entity keys | `OpaqueID` -- subject-derived *by design*; `ABSENT` on a no-answer outcome | `entity_id`, `repository_id`, `team_id`, `organization_id` |
-| Intra-document reference keys | `OpaqueID` -- scoped to one document, meaningless outside it; `ABSENT` on a no-answer outcome | `fact_id`, `section_id`, `evidence_ref_id`, `path_id`, `step_id` |
+| Intra-document reference keys | `OpaqueID` -- scoped to one document, meaningless outside it; `ABSENT` on a no-answer outcome | `fact_id`, `section_id`, `path_id`, `step_id` |
 | Closed vocabularies / registries | enum or token grammar | `intent_id`, `metric_id`, `route_id`, `plan_id`, `rule_id`, `adapter_id` |
+
+Two of those rows are corrections to a first attempt that pinned too much, and
+they are the same defect as the completion gate in the other direction:
+
+* **Evidence handles are an HMAC, not a mint.**
+  `evidence_service.EvidenceHandleService.issue` returns
+  `f"ev1_{digest.hexdigest()[:40]}"` and `verify` recomputes it and
+  `hmac.compare_digest`s the result, so the handle is the *authorization token*
+  for dereferencing evidence. Forcing it to a UUID would have made every
+  evidence reference unverifiable. It gets its own exact grammar instead, which
+  keeps the "cannot spell a subject name" property while staying dereferenceable.
+* **Client-supplied identifiers must stay loose.**
+  `DevMessageRequestV2.request_id` and `client_message_id` are whatever the
+  client sent; the server folds an arbitrary string to a UUID5
+  (`router._storage_uuid`, applied to exactly those two at router.py:1031/1038),
+  and `DevError.request_id` echoes the same client value back
+  (`body.request_id or header_request_id`). Pinning any of the three to the
+  server mint would have rejected input production explicitly accepts.
+  `test_round4_request_boundary_accepts_client_shaped_identifiers` asserts the
+  loose form validates -- and that the *conversation* handle on the same
+  request is still pinned, because the router parses it as a path `uuid.UUID`
+  and requires the body to match.
+
+The distinction that matters is **who mints the value**, not whether the field
+name ends in `_id`. A grammar is only safe to pin where the producer is the
+server.
 
 **Closure argument (round 4).**
 `test_round4_every_identifier_on_a_denied_envelope_is_an_opaque_handle` walks

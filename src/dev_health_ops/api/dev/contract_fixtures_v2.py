@@ -50,7 +50,7 @@ def _entity_ref() -> dict[str, Any]:
 def _evidence() -> dict[str, Any]:
     return {
         "schema_version": "dev_evidence_ref.v1",
-        "evidence_ref_id": "ev_01",
+        "evidence_ref_id": "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b",
         "source_system": "work_graph",
         "source_version": "work_graph.v1",
         "entity_type": "work_item",
@@ -85,7 +85,7 @@ def _relationship_path() -> dict[str, Any]:
         "provenance": "Canonical status snapshot",
         "confidence": 1.0,
         "observed_at": NOW,
-        "evidence_ref_ids": ["ev_01"],
+        "evidence_ref_ids": ["ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"],
     }
 
 
@@ -193,7 +193,7 @@ def _source_observation() -> dict[str, Any]:
         "usable_fact_count": 0,
         "sample_count": None,
         "relationship_paths": [_relationship_path()],
-        "evidence_ref_ids": ["ev_01"],
+        "evidence_ref_ids": ["ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"],
         "limitation": None,
         "observed_at": NOW,
         "query_version": "status_snapshot.v1",
@@ -223,7 +223,7 @@ def _fact() -> dict[str, Any]:
         "fact_id": "fact_01",
         "text": "Repository dev-health has one required child issue still open.",
         "kind": "observed",
-        "evidence_ref_ids": ["ev_01"],
+        "evidence_ref_ids": ["ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"],
         "relationship_path_ids": ["path_01"],
         "confidence": 1.0,
     }
@@ -367,8 +367,8 @@ def _intent() -> dict[str, Any]:
 def _message_request() -> dict[str, Any]:
     return {
         "schema_version": "dev_message_request.v2",
-        "request_id": "0f1a2b3c-0006-4a00-8000-000000000001",
-        "client_message_id": "0f1a2b3c-0007-4a00-8000-000000000001",
+        "request_id": "web-req-2026-07-31-0001",
+        "client_message_id": "web-msg-2026-07-31-0001",
         "conversation_id": "0f1a2b3c-0005-4a00-8000-000000000001",
         "idempotency_key": "idem_01",
         "retry_of_run_id": "0f1a2b3c-0001-4a00-8000-000000000002",
@@ -545,7 +545,10 @@ def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any
                             "Project Nightfall is marked private in one "
                             "provider and public in another."
                         ),
-                        "evidence_ref_ids": ["ev_hidden_a", "ev_hidden_b"],
+                        "evidence_ref_ids": [
+                            "ev1_5e6770d32646fba023ff686db7decc73d792e808",
+                            "ev1_65678803ca13ee1c70bd07e33adbb03fcc9144dc",
+                        ],
                     }
                 ],
             ),
@@ -633,7 +636,7 @@ def _stream_started() -> dict[str, Any]:
 def _error() -> dict[str, Any]:
     return {
         "schema_version": "dev_error.v1",
-        "request_id": "0f1a2b3c-0006-4a00-8000-000000000001",
+        "request_id": "web-req-2026-07-31-0001",
         "code": "source_unavailable",
         "safe_message": "A required source is temporarily unavailable.",
         "retryable": True,
@@ -841,7 +844,7 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                 "fact_id": "fact_rec",
                 "text": "Add a second reviewer to the release checklist.",
                 "kind": "recommendation",
-                "evidence_ref_ids": ["ev_01"],
+                "evidence_ref_ids": ["ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"],
                 "relationship_path_ids": [],
                 "confidence": 0.8,
             }

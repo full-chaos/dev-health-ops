@@ -4,8 +4,8 @@
   "conflicts": [
     {
       "evidence_ref_ids": [
-        "ev_hidden_a",
-        "ev_hidden_b"
+        "ev1_5e6770d32646fba023ff686db7decc73d792e808",
+        "ev1_65678803ca13ee1c70bd07e33adbb03fcc9144dc"
       ],
       "summary": "Project Nightfall is marked private in one provider and public in another."
     }

@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "candidates": [],
+      "committed_entity_ref": {
+        "display_label": "full-chaos/dev-health",
+        "entity_id": "repo_dev_health",
+        "entity_kind": "repository",
+        "repository_id": null,
+        "team_id": null
+      },
+      "entry_ordinal": 1,
+      "mention_id": "mention_01",
+      "outcome": "exact_match",
+      "query_version": "resolve_scope.v1",
+      "repository_attribution": "repo_dev_health",
+      "resolved_at": "2026-07-28T12:00:00Z",
+      "resolver_version": "resolver.v1",
+      "team_attribution": null
+    }
+  ],
+  "ledger_id": "ledger_01",
+  "mention_ids": [
+    "mention_01"
+  ],
+  "schema_version": "dev_resolution_ledger.v1",
+  "updated_at": "2026-07-28T12:00:00Z"
+}

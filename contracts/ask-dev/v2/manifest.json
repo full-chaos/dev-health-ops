@@ -1,0 +1,273 @@
+{
+  "compatibility": "additive-v2-alongside-v1",
+  "contracts": [
+    {
+      "negative": [
+        {
+          "case": "oversized_question",
+          "path": "examples/negative/dev_message_request.v2.oversized_question.json",
+          "sha256": "7797fa044d308d874afb4cd6f56d3cff5b25f310d8a0d77c36572eb648b6fc26"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_message_request.v2.json",
+        "sha256": "51b9cdb8bdc213dfe5f1f476f4c764965e4b8fa9745b372612744f7e49d80912"
+      },
+      "schema": {
+        "path": "schemas/dev_message_request.v2.schema.json",
+        "sha256": "cf0c38e8d4146bd5f5cbc57bb5618df8befd07c0427ab4f7a641dd2e917fe773"
+      },
+      "schema_version": "dev_message_request.v2"
+    },
+    {
+      "negative": [
+        {
+          "case": "clarification_without_reason",
+          "path": "examples/negative/dev_question_intent.v1.clarification_without_reason.json",
+          "sha256": "647687109c9ac4b368c3907a7791061305e4d0e93aa26a307f42d8d10f0dba3f"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_question_intent.v1.json",
+        "sha256": "ce47eebe099ff275e2bba158c26d3a127baa0b855de81c68d4eaf09b498e9599"
+      },
+      "schema": {
+        "path": "schemas/dev_question_intent.v1.schema.json",
+        "sha256": "ab9aba605adc6d28366087aa1d543453e5fac7eae09b25adee806b63f62e492e"
+      },
+      "schema_version": "dev_question_intent.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "ordinal_out_of_range",
+          "path": "examples/negative/dev_subject_mention.v1.ordinal_out_of_range.json",
+          "sha256": "6629eea9b44f26b480013082ea21b69438dc9784ffe7473ecbc3183295f070e7"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_subject_mention.v1.json",
+        "sha256": "e30becea26dd9e61a1eee87842f4334fec84c36fa1a88fa51368f4c46be07b80"
+      },
+      "schema": {
+        "path": "schemas/dev_subject_mention.v1.schema.json",
+        "sha256": "ab05fbb0a1af1b4ef242ed71ffd019800eb3abb90a18bd497576c582645d698b"
+      },
+      "schema_version": "dev_subject_mention.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "erased_entry",
+          "path": "examples/negative/dev_resolution_ledger.v1.erased_entry.json",
+          "sha256": "a47df67ec68a4dd9844c0f7646a73b92221791a488f4819d3b1f23980169a834"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_resolution_ledger.v1.json",
+        "sha256": "2316d49193573ad5af4486dce96480848e2fc9f6e6d6a13b07642ac76e655a27"
+      },
+      "schema": {
+        "path": "schemas/dev_resolution_ledger.v1.schema.json",
+        "sha256": "7b6ab1d3f590adf575ae18d913b384134f4e511565ff20d041deb0baec0a9fca"
+      },
+      "schema_version": "dev_resolution_ledger.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "omitted_without_warning",
+          "path": "examples/negative/dev_subject_set.v1.omitted_without_warning.json",
+          "sha256": "9d4be718f2d88db7d883c24c4274158efe8831bd4cccb9f0b4ec3a4096acb7ed"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_subject_set.v1.json",
+        "sha256": "cd32f303a30011e166c88819d343c641fce93cee8ca04981aa208b14a3118535"
+      },
+      "schema": {
+        "path": "schemas/dev_subject_set.v1.schema.json",
+        "sha256": "141f316c24dfd209ad3dd25e435e619dc9ffdb94e775f7079579596f1e433cbd"
+      },
+      "schema_version": "dev_subject_set.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "conditional_without_rule",
+          "path": "examples/negative/dev_source_requirement.v1.conditional_without_rule.json",
+          "sha256": "a142365d8eef7c26219e4f6150af1b37e795cc052d5892a4ddd55b178f5d6aa8"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_source_requirement.v1.json",
+        "sha256": "2264235568e65602bc36315d5470fdb1d88177088274f666b3e15acac974a78d"
+      },
+      "schema": {
+        "path": "schemas/dev_source_requirement.v1.schema.json",
+        "sha256": "cd09ecc563aed6ff6a81296144d65405cb00ee8b2b85cadd0d0c2b2514d8d71a"
+      },
+      "schema_version": "dev_source_requirement.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "step_in_both_buckets",
+          "path": "examples/negative/dev_investigation_plan.v1.step_in_both_buckets.json",
+          "sha256": "b001bd27e6cbf22f964500759a4f5bdbda71e62cb8358962fcdc5549c6ae1a9b"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_investigation_plan.v1.json",
+        "sha256": "be5f6716a303ed6b92a5e6af553f885e16178d270224f9b61792c476fef0f3bb"
+      },
+      "schema": {
+        "path": "schemas/dev_investigation_plan.v1.schema.json",
+        "sha256": "0a5be2d83eb9f176454ef3290df1945af30e2d06c5cc76cd75945dc33f228475"
+      },
+      "schema_version": "dev_investigation_plan.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "measured_zero_on_unconfigured",
+          "path": "examples/negative/dev_source_observation.v1.measured_zero_on_unconfigured.json",
+          "sha256": "66adafec39cb85c10d8cda7da7fb9a48a0fdc11a74a74d62d4a82ffd97331c42"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_source_observation.v1.json",
+        "sha256": "9c619cb4a5074249a90edb00b22977b4a17b20029fb8998f621b72fae5a70bc9"
+      },
+      "schema": {
+        "path": "schemas/dev_source_observation.v1.schema.json",
+        "sha256": "19801eef613ec8d420d937b0d5ba30064cc2a4b8f3c2bc522ad4c7271dc8e1fc"
+      },
+      "schema_version": "dev_source_observation.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "step_in_two_buckets",
+          "path": "examples/negative/dev_investigation_result.v1.step_in_two_buckets.json",
+          "sha256": "5bfcd4b6625de31fc7590f18147230c0ca29017d15ed772f8fdaad1f4bf90876"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_investigation_result.v1.json",
+        "sha256": "bb30d5989eb73667f2eb38a55116d6ecbb9ac6a62f79402eaacdb56a73039a67"
+      },
+      "schema": {
+        "path": "schemas/dev_investigation_result.v1.schema.json",
+        "sha256": "46474e64957f1e9113f96fc3dad5088e2c991223260f13bd8e68c84de5cc64a9"
+      },
+      "schema_version": "dev_investigation_result.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "internal_leakage",
+          "path": "examples/negative/dev_answer_frame.v1.internal_leakage.json",
+          "sha256": "3fcbf1606623e50177674239cb0f73bbfcf72d93beaf7352685a8ff5a45fd493"
+        },
+        {
+          "case": "outcome_content_mismatch",
+          "path": "examples/negative/dev_answer_frame.v1.outcome_content_mismatch.json",
+          "sha256": "4519cf45a2831d3cff9d1438d5346c904f57a101fce21a131c322ecbdd6b9379"
+        },
+        {
+          "case": "completion_without_denominator",
+          "path": "examples/negative/dev_answer_frame.v1.completion_without_denominator.json",
+          "sha256": "0c4b4818b9117c4f7aab30493f4ea1db459b9bc50b64ad7b74711381fb22f38b"
+        },
+        {
+          "case": "relationship_outside_frame",
+          "path": "examples/negative/dev_answer_frame.v1.relationship_outside_frame.json",
+          "sha256": "c7fe1ddab86713742349d4d54547e36711fab706089bf7fae5a457faef657301"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_answer_frame.v1.json",
+        "sha256": "79de19cbfa4dc035a4ea5cce4cdc55c7a20efed72b4b36219839418d0bc00546"
+      },
+      "schema": {
+        "path": "schemas/dev_answer_frame.v1.schema.json",
+        "sha256": "61e0d48acfd70774770fbfa36315a3d2926e127d59c3d6db7c094fcd515d9116"
+      },
+      "schema_version": "dev_answer_frame.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "provider_mode_without_metadata",
+          "path": "examples/negative/dev_narrative.v1.provider_mode_without_metadata.json",
+          "sha256": "f853e3b3c73b9388755587140a386a32ee92fa1e0ad680a7f8865c90039fe654"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_narrative.v1.json",
+        "sha256": "407f5525bf92cd0f466c57e76e2fca8f949cc1f3ff1f885608153214760db2c8"
+      },
+      "schema": {
+        "path": "schemas/dev_narrative.v1.schema.json",
+        "sha256": "9f8d40bd6c0f9a14f2087abfdd590c72d5d0d7379775c149ac8ede6ee57a39b8"
+      },
+      "schema_version": "dev_narrative.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "outcome_mismatch_with_frame",
+          "path": "examples/negative/dev_answer.v2.outcome_mismatch_with_frame.json",
+          "sha256": "d8545eff2482c6ef2a8e23ae6a0ddfb4c6e7efbdf45b8802578f981d45f257e7"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_answer.v2.json",
+        "sha256": "df03ed2a00d28fd3b50eeb728cfb0ed195f4afab80cca80001bd26aefba56210"
+      },
+      "schema": {
+        "path": "schemas/dev_answer.v2.schema.json",
+        "sha256": "82ac88314ead4d93bf57dc6206c02b987b2675205f33f416f2431381b094248a"
+      },
+      "schema_version": "dev_answer.v2"
+    },
+    {
+      "negative": [
+        {
+          "case": "answer_completed_without_payload",
+          "path": "examples/negative/dev_stream_event.v2.answer_completed_without_payload.json",
+          "sha256": "54356d6c59e91ee07f55ed2a9398d9f20fb9b4701c408acc33869125c87feb65"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_stream_event.v2.json",
+        "sha256": "60657176b28b5eeeeaa9f5de853033d75493e6ca5c395f52d5b71d6802a08f3e"
+      },
+      "schema": {
+        "path": "schemas/dev_stream_event.v2.schema.json",
+        "sha256": "80a87a2bce473081ee27ca0f74e1327988b75c93d949597b520c1c971793e71f"
+      },
+      "schema_version": "dev_stream_event.v2"
+    }
+  ],
+  "schema_version": "ask_dev_contract_manifest.v2",
+  "stream_sequences": [
+    {
+      "case": "valid",
+      "path": "examples/streams/valid.json"
+    },
+    {
+      "case": "invalid_duplicate_terminal",
+      "path": "examples/streams/invalid_duplicate_terminal.json"
+    },
+    {
+      "case": "invalid_missing_done",
+      "path": "examples/streams/invalid_missing_done.json"
+    },
+    {
+      "case": "invalid_out_of_order",
+      "path": "examples/streams/invalid_out_of_order.json"
+    }
+  ]
+}

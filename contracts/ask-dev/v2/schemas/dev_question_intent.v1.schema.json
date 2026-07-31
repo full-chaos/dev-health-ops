@@ -1,0 +1,222 @@
+{
+  "$defs": {
+    "Cardinality": {
+      "enum": [
+        "singular",
+        "plural_cohort",
+        "organization_wide"
+      ],
+      "title": "Cardinality",
+      "type": "string"
+    },
+    "EntityKind": {
+      "description": "Wave 3.1 subject-kind registry.\n\nSupersets v1's ``EntityType`` with ``TEAM`` as a first-class kind, per\nAmendment TRD v2 \u00a74.1 (\"Add TEAM to EntityType and DirectScope\").\nDefined here rather than by mutating the frozen v1 ``EntityType`` enum,\nbecause giving ``TEAM`` real v1 ``DevScope``/``DirectScope`` semantics\n(a matching entity_scope branch, a required team ref, orchestrator/\nscope_service wiring) is v1 *runtime* behavior, which CHAOS-3294 is\nexplicitly scoped to leave untouched. v2 subject/resolution/plan\ncontracts use this enum instead of the v1 ``EntityType``.",
+      "enum": [
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "team"
+      ],
+      "title": "EntityKind",
+      "type": "string"
+    },
+    "MetricID": {
+      "enum": [
+        "items_completed",
+        "cycle_time_p50_hours",
+        "avg_wip",
+        "deployments_count",
+        "change_failure_rate",
+        "investment_allocation_pct",
+        "cyclomatic_per_kloc",
+        "compounding_risk_score"
+      ],
+      "title": "MetricID",
+      "type": "string"
+    },
+    "QuestionClass": {
+      "enum": [
+        "status",
+        "remaining_work",
+        "observed_change",
+        "registered_statistics",
+        "data_trust",
+        "investigation"
+      ],
+      "title": "QuestionClass",
+      "type": "string"
+    },
+    "QuestionIntentID": {
+      "description": "The twelve Wave 3.1 launch intents (Amendment TRD v2 \u00a74.1).",
+      "enum": [
+        "entity_status",
+        "portfolio_status",
+        "remaining_work",
+        "observed_change",
+        "registered_statistics",
+        "metric_comparison",
+        "data_trust",
+        "project_health",
+        "team_health",
+        "team_workload_balance",
+        "operational_deficiency_inventory",
+        "bounded_investigation"
+      ],
+      "title": "QuestionIntentID",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v2/dev_question_intent.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Server-owned, authoritative interpretation of one request.\n\nEvery field here is produced by the deterministic interpreter (with\noptional model-assisted extraction behind post-validation); none of it\nis copied verbatim from client input except the client's own\n(non-authoritative) hint, which is preserved only for audit/diagnostic\npurposes.",
+  "properties": {
+    "cardinality": {
+      "$ref": "#/$defs/Cardinality"
+    },
+    "clarification_reason": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Clarification Reason"
+    },
+    "client_hint_deprecation_warning": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Client Hint Deprecation Warning"
+    },
+    "client_question_class_hint": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/QuestionClass"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "comparison_mode": {
+      "default": "none",
+      "enum": [
+        "none",
+        "period_over_period",
+        "cohort_relative",
+        "own_history"
+      ],
+      "title": "Comparison Mode",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "intent_id": {
+      "$ref": "#/$defs/QuestionIntentID"
+    },
+    "interpretation_reasons": {
+      "items": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "title": "Interpretation Reasons",
+      "type": "array"
+    },
+    "interpreter_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Interpreter Version",
+      "type": "string"
+    },
+    "mention_ordinals": {
+      "items": {
+        "type": "integer"
+      },
+      "maxItems": 25,
+      "title": "Mention Ordinals",
+      "type": "array"
+    },
+    "ranking_requested": {
+      "default": false,
+      "title": "Ranking Requested",
+      "type": "boolean"
+    },
+    "requested_dimensions": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Requested Dimensions",
+      "type": "array"
+    },
+    "requested_metric_ids": {
+      "items": {
+        "$ref": "#/$defs/MetricID"
+      },
+      "maxItems": 8,
+      "title": "Requested Metric Ids",
+      "type": "array"
+    },
+    "requires_clarification": {
+      "title": "Requires Clarification",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "dev_question_intent.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "subject_kinds": {
+      "items": {
+        "$ref": "#/$defs/EntityKind"
+      },
+      "maxItems": 5,
+      "title": "Subject Kinds",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "intent_id",
+    "interpreter_version",
+    "cardinality",
+    "confidence",
+    "interpretation_reasons",
+    "requires_clarification",
+    "generated_at"
+  ],
+  "title": "DevQuestionIntent",
+  "type": "object"
+}

@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "DevModelMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "model_fingerprint": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Model Fingerprint",
+          "type": "string"
+        },
+        "provider_family": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Provider Family",
+          "type": "string"
+        },
+        "provider_source": {
+          "enum": [
+            "platform",
+            "byo"
+          ],
+          "title": "Provider Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider_source",
+        "provider_family",
+        "model_fingerprint"
+      ],
+      "title": "DevModelMetadata",
+      "type": "object"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v2/dev_narrative.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "body": {
+      "maxLength": 16384,
+      "minLength": 1,
+      "title": "Body",
+      "type": "string"
+    },
+    "frame_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Frame Id",
+      "type": "string"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "mode": {
+      "enum": [
+        "provider",
+        "deterministic_fallback"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "narrative_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Narrative Id",
+      "type": "string"
+    },
+    "provider_metadata": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevModelMetadata"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "referenced_fact_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 200,
+      "title": "Referenced Fact Ids",
+      "type": "array"
+    },
+    "referenced_section_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Referenced Section Ids",
+      "type": "array"
+    },
+    "run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "dev_narrative.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "validation_warnings": {
+      "items": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Validation Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "narrative_id",
+    "run_id",
+    "frame_id",
+    "mode",
+    "body",
+    "generated_at"
+  ],
+  "title": "DevNarrative",
+  "type": "object"
+}

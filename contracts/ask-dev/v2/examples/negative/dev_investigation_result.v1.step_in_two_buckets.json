@@ -1,0 +1,53 @@
+{
+  "completed_at": "2026-07-28T12:00:00Z",
+  "completed_steps": [
+    "status_snapshot"
+  ],
+  "failed_steps": [
+    "status_snapshot"
+  ],
+  "observations": [
+    {
+      "adapter_id": "status_change_service.v1",
+      "data_semantics": "measured_zero",
+      "evidence_ref_ids": [
+        "ev_01"
+      ],
+      "limitation": null,
+      "observation_id": "obs_01",
+      "observed_at": "2026-07-28T12:00:00Z",
+      "observed_state": "available_current",
+      "query_version": "status_snapshot.v1",
+      "relationship_paths": [
+        {
+          "confidence": 1.0,
+          "evidence_ref_ids": [
+            "ev_01"
+          ],
+          "observed_at": "2026-07-28T12:00:00Z",
+          "path_id": "path_01",
+          "provenance": "Canonical status snapshot",
+          "relationship": "has_status",
+          "source_entity_id": "repo_dev_health",
+          "target_entity_id": "status_snapshot_01"
+        }
+      ],
+      "requirement_level": "mandatory",
+      "sample_count": null,
+      "schema_version": "dev_source_observation.v1",
+      "source_class": "status_change",
+      "subject_coverage": 1.0,
+      "usable_fact_count": 0,
+      "watermark": "2026-07-28T12:00:00Z"
+    }
+  ],
+  "plan_id": "status.entity.v2",
+  "plan_version": "status.entity.v2.1",
+  "relationship_closure_verified": true,
+  "result_id": "result_01",
+  "run_id": "run_01",
+  "schema_version": "dev_investigation_result.v1",
+  "skipped_steps": [],
+  "subject_entity_id": "repo_dev_health",
+  "subject_set_fingerprint": null
+}

@@ -1,0 +1,257 @@
+{
+  "$defs": {
+    "DevEntityRefV2": {
+      "additionalProperties": false,
+      "description": "Embedded-only entity reference (no standalone schema_version, matching\nv1's ``DevEntityRef`` convention \u2014 this is a nested block, not one of the\ntop-level manifest contracts).",
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_kind": {
+          "$ref": "#/$defs/EntityKind"
+        },
+        "repository_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Id"
+        },
+        "team_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Team Id"
+        }
+      },
+      "required": [
+        "entity_kind",
+        "entity_id",
+        "display_label"
+      ],
+      "title": "DevEntityRefV2",
+      "type": "object"
+    },
+    "DevResolutionCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_ref": {
+          "$ref": "#/$defs/DevEntityRefV2"
+        },
+        "reason": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_ref",
+        "reason"
+      ],
+      "title": "DevResolutionCandidate",
+      "type": "object"
+    },
+    "DevResolutionEntry": {
+      "additionalProperties": false,
+      "description": "One immutable ledger entry: the resolver's outcome for one mention.\n\nNever edited after being appended to a ledger \u2014 see module docstring.",
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/DevResolutionCandidate"
+          },
+          "maxItems": 25,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "committed_entity_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevEntityRefV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "entry_ordinal": {
+          "maximum": 99,
+          "minimum": 0,
+          "title": "Entry Ordinal",
+          "type": "integer"
+        },
+        "mention_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Mention Id",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ResolutionOutcome"
+        },
+        "query_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Query Version",
+          "type": "string"
+        },
+        "repository_attribution": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Attribution"
+        },
+        "resolved_at": {
+          "format": "date-time",
+          "title": "Resolved At",
+          "type": "string"
+        },
+        "resolver_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Resolver Version",
+          "type": "string"
+        },
+        "team_attribution": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Team Attribution"
+        }
+      },
+      "required": [
+        "entry_ordinal",
+        "mention_id",
+        "outcome",
+        "resolver_version",
+        "query_version",
+        "resolved_at"
+      ],
+      "title": "DevResolutionEntry",
+      "type": "object"
+    },
+    "EntityKind": {
+      "description": "Wave 3.1 subject-kind registry.\n\nSupersets v1's ``EntityType`` with ``TEAM`` as a first-class kind, per\nAmendment TRD v2 \u00a74.1 (\"Add TEAM to EntityType and DirectScope\").\nDefined here rather than by mutating the frozen v1 ``EntityType`` enum,\nbecause giving ``TEAM`` real v1 ``DevScope``/``DirectScope`` semantics\n(a matching entity_scope branch, a required team ref, orchestrator/\nscope_service wiring) is v1 *runtime* behavior, which CHAOS-3294 is\nexplicitly scoped to leave untouched. v2 subject/resolution/plan\ncontracts use this enum instead of the v1 ``EntityType``.",
+      "enum": [
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "team"
+      ],
+      "title": "EntityKind",
+      "type": "string"
+    },
+    "ResolutionOutcome": {
+      "enum": [
+        "exact_match",
+        "ambiguous_candidates",
+        "no_authorized_match",
+        "catalog_unavailable",
+        "unsupported_kind"
+      ],
+      "title": "ResolutionOutcome",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v2/dev_resolution_ledger.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/DevResolutionEntry"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "title": "Entries",
+      "type": "array"
+    },
+    "ledger_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Ledger Id",
+      "type": "string"
+    },
+    "mention_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 25,
+      "minItems": 1,
+      "title": "Mention Ids",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "dev_resolution_ledger.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "ledger_id",
+    "mention_ids",
+    "entries",
+    "updated_at"
+  ],
+  "title": "DevResolutionLedger",
+  "type": "object"
+}

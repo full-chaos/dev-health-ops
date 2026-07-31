@@ -1,0 +1,126 @@
+{
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v2/dev_source_requirement.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "adapter_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Adapter Id",
+      "type": "string"
+    },
+    "allowed_relationship_paths": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 10,
+      "title": "Allowed Relationship Paths",
+      "type": "array"
+    },
+    "applicability_rule_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Applicability Rule Id"
+    },
+    "applicability_rule_version": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Applicability Rule Version"
+    },
+    "freshness_policy": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "title": "Freshness Policy",
+      "type": "string"
+    },
+    "minimum_coverage": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Minimum Coverage"
+    },
+    "minimum_sample": {
+      "anyOf": [
+        {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Minimum Sample"
+    },
+    "minimum_usable_facts": {
+      "maximum": 1000,
+      "minimum": 0,
+      "title": "Minimum Usable Facts",
+      "type": "integer"
+    },
+    "requirement_level": {
+      "enum": [
+        "mandatory",
+        "conditional",
+        "optional",
+        "not_applicable"
+      ],
+      "title": "Requirement Level",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "dev_source_requirement.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_class": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Source Class",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "source_class",
+    "adapter_id",
+    "requirement_level",
+    "freshness_policy",
+    "minimum_usable_facts"
+  ],
+  "title": "DevSourceRequirement",
+  "type": "object"
+}

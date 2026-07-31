@@ -1,0 +1,22 @@
+{
+  "ambiguous_mention_ids": [],
+  "cohort_complete": false,
+  "committed_entity_refs": [
+    {
+      "display_label": "full-chaos/dev-health",
+      "entity_id": "repo_dev_health",
+      "entity_kind": "repository",
+      "repository_id": null,
+      "team_id": null
+    }
+  ],
+  "entity_kind": "repository",
+  "fingerprint": "fp_01",
+  "original_mention_count": 2,
+  "schema_version": "dev_subject_set.v1",
+  "set_id": "set_01",
+  "unresolved_mention_ids": [
+    "mention_02"
+  ],
+  "warnings": []
+}

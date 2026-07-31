@@ -40,6 +40,7 @@ class Recorder:
     def __init__(self, *, fail_answer_write: bool = False) -> None:
         self.transitions: list[RunState] = []
         self.tools: list[DevToolRequest] = []
+        self.executions: list[Any] = []
         self.answers: list[DevAnswer] = []
         self.terminals: list[RunState] = []
         self.fail_answer_write = fail_answer_write
@@ -49,6 +50,7 @@ class Recorder:
 
     async def record_tool(self, **values) -> None:
         self.tools.append(values["request"])
+        self.executions.append(values["execution"])
 
     async def record_answer(self, answer: DevAnswer) -> None:
         if self.fail_answer_write:
@@ -1036,6 +1038,51 @@ def test_coverage_treats_different_arguments_to_the_same_tool_as_distinct_source
     assert coverage.unavailable_required_sources == ["query_metric.v1"]
 
 
+def test_coverage_sorts_sources_when_one_discriminator_is_unset_and_one_is_not() -> (
+    None
+):
+    """Regression: sorting required-source keys directly raised
+    ``TypeError: '<' not supported between instances of 'NoneType' and
+    'str'`` as soon as two sources shared a tool_id label but differed in
+    which discriminating field (query/metric_id) was set vs. None -- e.g.
+    list_metrics.v1 called once with a (rejected) query and once bare. This
+    crashed the whole run as an uncaught internal_error rather than
+    producing any answer, discovered rebasing CHAOS-3262 against the
+    CHAOS-3257 coverage fix.
+    """
+    with_query = _tool_request(
+        tool_id="list_metrics.v1",
+        metric_id=None,
+        query="which metrics",
+        tool_call_id="tool_call_01",
+    )
+    with_query_result = _tool_result(
+        tool_id="list_metrics.v1",
+        tool_call_id="tool_call_01",
+        status="error",
+        metrics=[],
+        evidence=[],
+        metric_definitions=[],
+        error={
+            "schema_version": "dev_error.v1",
+            "request_id": "run_01",
+            "code": "invalid_request",
+            "safe_message": "The tool request did not match the tool's contract.",
+            "retryable": True,
+        },
+    )
+    bare = _tool_request(
+        tool_id="list_metrics.v1", metric_id=None, tool_call_id="tool_call_02"
+    )
+    bare_result = _tool_result(tool_id="list_metrics.v1", tool_call_id="tool_call_02")
+    coverage = DevOrchestrator._coverage_from_tool_results(
+        (with_query, bare), (with_query_result, bare_result), datetime.now(UTC)
+    )
+    assert coverage.required_source_count == 2
+    assert coverage.available_source_count == 1
+    assert coverage.unavailable_required_sources == ["list_metrics.v1"]
+
+
 @pytest.mark.asyncio
 async def test_status_question_run_never_shows_full_coverage_with_zero_evidence() -> (
     None
@@ -1245,3 +1292,221 @@ async def test_second_false_complete_claim_still_fails_closed() -> None:
     assert result.state is RunState.FAILED
     assert result.error is not None
     assert result.error.code == "answer_validation_failed"
+
+
+# --- CHAOS-3262: an invalid model tool request degrades, it does not kill the run ---
+
+
+@pytest.mark.asyncio
+async def test_invalid_tool_request_degrades_instead_of_failing_the_run() -> None:
+    """A tool call whose arguments violate the tool's own contract (here,
+    list_metrics.v1 receiving a "query" it does not accept) must not fail the
+    whole run as tool_unavailable. It becomes one failed tool result and the
+    model recovers within the same run.
+    """
+    script_id = "degrade-invalid-list-metrics"
+    calls: list[DevToolRequest] = []
+    recorder = Recorder()
+    # Two calls land against the same tool_id (one rejected, one corrected).
+    # CHAOS-3257 (coverage-from-usable-evidence) is a separate, independently
+    # shipped fix; this test only asserts CHAOS-3262's degrade behavior, so it
+    # does not rely on that fix's required-source-class deduplication here —
+    # it answers "degraded" rather than claiming full "complete" coverage.
+    degraded_answer = _answer(script_id=script_id)
+    degraded_answer["status"] = "degraded"
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="list_metrics.v1",
+                        arguments={"query": "which metrics", "limit": 8},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="list_metrics.v1",
+                        arguments={"limit": 8},
+                        call_id="tool_call_02",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(degraded_answer)),
+            ],
+            script_id=script_id,
+            registry=_registry(calls=calls),
+            recorder=recorder,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.error is None
+    assert result.tool_call_count == 2
+    # The rejected first call never reached the tool executor.
+    assert len(calls) == 1
+    assert [execution.result.status for execution in recorder.executions] == [
+        "error",
+        "success",
+    ]
+    rejected = recorder.executions[0].result
+    assert rejected.tool_id is ToolID.LIST_METRICS
+    assert rejected.error is not None
+    assert rejected.error.code == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_repeated_invalid_tool_requests_still_hit_the_tool_call_limit() -> None:
+    """Degrading rejected calls must not create an unbounded retry loop: the
+    existing tool-call budget still terminates a model that never corrects.
+    """
+    script_id = "degrade-loop-guard"
+    steps = [
+        ScriptedStep(
+            decision=AgentToolRequest(
+                tool_id="list_metrics.v1",
+                arguments={"query": f"attempt-{index}", "limit": 8},
+                call_id=f"tool_call_{index:02d}",
+            )
+        )
+        for index in range(8)
+    ]
+
+    result = await _run(_orchestrator(steps, script_id=script_id, registry=_registry()))
+
+    assert result.state is RunState.FAILED
+    assert result.error is not None
+    assert result.error.code == "tool_limit_reached"
+
+
+@pytest.mark.asyncio
+async def test_advertised_but_out_of_enum_metric_id_degrades_instead_of_failing() -> (
+    None
+):
+    """The provider-facing schema advertises query_metric.v1's metric_id as
+    an open string (src/dev_health_ops/api/dev/orchestrator.py's
+    _provider_tool_input_schema), but dev_tool_request.v1 constrains it to
+    the closed MetricID enum. A schema-compliant-looking model request for a
+    metric that does not exist must degrade to a failed tool result, not
+    kill the run as tool_unavailable with zero recorded tool calls -- this
+    rejection happens during request construction, before
+    AskDevToolRegistry.execute() is ever reached.
+    """
+    script_id = "degrade-unregistered-metric-id"
+    recorder = Recorder()
+    # Two calls land against the same tool_id (one rejected, one corrected).
+    # CHAOS-3257 (coverage-from-usable-evidence, incl. required-source-class
+    # dedup) is a separately shipped fix; this test only asserts CHAOS-3262's
+    # degrade behavior, so it answers "degraded" rather than "complete".
+    degraded_answer = _answer(script_id=script_id)
+    degraded_answer["status"] = "degraded"
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={
+                            "metric_id": "lead_time",  # not a registered MetricID
+                            "include_comparison": False,
+                            "limit": 12,
+                        },
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={
+                            "metric_id": "items_completed",
+                            "include_comparison": False,
+                            "limit": 12,
+                        },
+                        call_id="tool_call_02",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(degraded_answer)),
+            ],
+            script_id=script_id,
+            registry=_registry(),
+            recorder=recorder,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.error is None
+    assert result.tool_call_count == 2
+    assert [execution.result.status for execution in recorder.executions] == [
+        "error",
+        "success",
+    ]
+    rejected = recorder.executions[0].result
+    assert rejected.tool_id is ToolID.QUERY_METRIC
+    assert rejected.error is not None
+    assert rejected.error.code == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_timeout_degrades_instead_of_failing_the_run() -> None:
+    """A registered tool with a valid request that simply does not answer in
+    time is a per-call source-availability failure, not a registry defect:
+    it must degrade to a failed tool result too, preserving any results
+    already recorded, instead of failing the whole run.
+    """
+    script_id = "degrade-tool-timeout"
+
+    async def stalls_forever(_context, _request):
+        await asyncio.Event().wait()
+
+    async def succeeds(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry(
+        {
+            tool_id: (stalls_forever if tool_id is ToolID.STATUS_SNAPSHOT else succeeds)
+            for tool_id in ToolID
+        }
+    )
+    recorder = Recorder()
+    # The only tool result is the degraded timeout; a real model would
+    # ground its answer in that absence rather than claim completeness.
+    degraded_answer = _answer(script_id=script_id)
+    degraded_answer.update(
+        {"status": "degraded", "claims": [], "metrics": [], "evidence": []}
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(degraded_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+            recorder=recorder,
+            limits=DevRunLimits(tool_seconds=0.05, wall_seconds=5),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.error is None
+    assert result.tool_call_count == 1
+    rejected = recorder.executions[0].result
+    assert rejected.tool_id is ToolID.STATUS_SNAPSHOT
+    assert rejected.error is not None
+    assert rejected.error.code == "source_unavailable"

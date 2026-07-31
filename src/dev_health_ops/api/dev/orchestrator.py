@@ -18,6 +18,9 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
+import annotated_types
+from pydantic import ValidationError
+
 from dev_health_ops.llm.agent.contracts import (
     AgentDecisionResult,
     AgentDisambiguation,
@@ -57,6 +60,7 @@ from .contracts import (
     DevToolRequest,
     DevToolResult,
     FreshnessState,
+    MetricID,
     ScopeResolutionOutcome,
     ToolID,
     dev_error_remediation,
@@ -68,8 +72,26 @@ from .tool_registry import (
     ToolExecution,
     ToolExecutionCancelled,
     ToolExecutionContext,
+    ToolExecutionTimedOut,
     ToolRegistryError,
+    ToolRequestRejected,
 )
+
+
+def _dev_tool_request_limit_maximum() -> int:
+    """The wire-level ceiling on ``dev_tool_request.v1``'s ``limit`` field.
+
+    Derived from the contract itself (not duplicated as a constant) so the
+    provider-facing tool schema can never advertise a ``limit`` value the
+    server-side ``DevToolRequest`` would reject (CHAOS-3262).
+    """
+    for constraint in DevToolRequest.model_fields["limit"].metadata:
+        if isinstance(constraint, annotated_types.Le) and isinstance(
+            constraint.le, int
+        ):
+            return constraint.le
+    raise RuntimeError("dev_tool_request.v1 limit field must declare an upper bound")
+
 
 _HARD_LIMIT_MAXIMA: dict[str, int | float] = {
     "model_rounds": 4,
@@ -608,11 +630,59 @@ class DevOrchestrator:
                             ),
                         )
                     await transition(RunState.TOOL_VALIDATION)
-                    tool_request, canonical_hash = self._canonical_tool_request(
-                        decision=decision,
-                        run_id=run_id,
-                        authorized_scope=authorized_scope,
-                    )
+                    try:
+                        tool_id_for_call = ToolID(decision.tool_id)
+                    except ValueError:
+                        # The model named a tool that is not registered at
+                        # all -- distinct from a registered tool receiving
+                        # invalid arguments. Not degradable: there is no
+                        # tool contract to report a bounded per-call error
+                        # against.
+                        return await finish(
+                            RunState.FAILED,
+                            error=error(
+                                "tool_unavailable",
+                                "The requested tool was not available.",
+                            ),
+                        )
+                    try:
+                        tool_request, canonical_hash = self._canonical_tool_request(
+                            decision=decision,
+                            run_id=run_id,
+                            authorized_scope=authorized_scope,
+                        )
+                        construction_rejection: ToolRequestRejected | None = None
+                    except ToolRequestRejected as exc:
+                        # The model's arguments did not conform to the tool's
+                        # own contract even though the *tool* is registered
+                        # (e.g. an advertised-as-open-string field, such as
+                        # query_metric.v1's metric_id, that DevToolRequest
+                        # itself constrains to a closed enum). Build a safe
+                        # placeholder request so this degrades to one failed
+                        # tool result below instead of killing the run
+                        # (CHAOS-3262).
+                        construction_rejection = exc
+                        tool_request = DevToolRequest(
+                            schema_version="dev_tool_request.v1",
+                            run_id=run_id,
+                            tool_call_id=decision.call_id,
+                            tool_id=tool_id_for_call,
+                            scope=authorized_scope,
+                        )
+                        canonical_hash = (
+                            "sha256:"
+                            + hashlib.sha256(
+                                json.dumps(
+                                    {
+                                        "tool_id": tool_id_for_call.value,
+                                        "arguments": decision.arguments,
+                                    },
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                    default=str,
+                                ).encode()
+                            ).hexdigest()
+                        )
                     duplicate_counts[canonical_hash] += 1
                     if (
                         duplicate_counts[canonical_hash]
@@ -625,25 +695,65 @@ class DevOrchestrator:
                                 "A repeated tool-call loop was stopped.",
                             ),
                         )
-                    await transition(RunState.TOOL_EXECUTION)
-                    tool_remaining = min(remaining(), self._limits.tool_seconds)
-                    if tool_remaining <= 0:
-                        return await finish(
-                            RunState.FAILED,
-                            error=error(
-                                "tool_limit_reached",
-                                "The request time limit was reached.",
+                    if construction_rejection is not None:
+                        execution = self._rejected_tool_execution(
+                            tool_request=tool_request,
+                            code="invalid_request",
+                            message=(
+                                "The tool request did not match the tool's "
+                                f"contract: {construction_rejection}"
                             ),
                         )
-                    context = ToolExecutionContext(
-                        org_id=org_id,
-                        user_id=user_id,
-                        permission_fingerprint=permission_fingerprint,
-                        authorized_scope=authorized_scope,
-                        cancellation=cancellation,
-                        remaining_seconds=tool_remaining,
-                    )
-                    execution = await self._registry.execute(tool_request, context)
+                    else:
+                        await transition(RunState.TOOL_EXECUTION)
+                        tool_remaining = min(remaining(), self._limits.tool_seconds)
+                        if tool_remaining <= 0:
+                            return await finish(
+                                RunState.FAILED,
+                                error=error(
+                                    "tool_limit_reached",
+                                    "The request time limit was reached.",
+                                ),
+                            )
+                        context = ToolExecutionContext(
+                            org_id=org_id,
+                            user_id=user_id,
+                            permission_fingerprint=permission_fingerprint,
+                            authorized_scope=authorized_scope,
+                            cancellation=cancellation,
+                            remaining_seconds=tool_remaining,
+                        )
+                        try:
+                            execution = await self._registry.execute(
+                                tool_request, context
+                            )
+                        except ToolRequestRejected as exc:
+                            # The model's arguments passed construction but
+                            # violated the tool's own scope/shape contract
+                            # (validate_request). Degrade this one call
+                            # instead of failing the whole run (CHAOS-3262).
+                            execution = self._rejected_tool_execution(
+                                tool_request=tool_request,
+                                code="invalid_request",
+                                message=(
+                                    "The tool request did not match the "
+                                    f"tool's contract: {exc}"
+                                ),
+                            )
+                        except ToolExecutionTimedOut:
+                            # A registered tool with a valid request simply
+                            # did not answer in time. This is a per-call
+                            # source-availability failure, not a registry
+                            # defect: degrade it too, so prior successful
+                            # results are not discarded (CHAOS-3262).
+                            execution = self._rejected_tool_execution(
+                                tool_request=tool_request,
+                                code="source_unavailable",
+                                message=(
+                                    "The tool did not respond within its "
+                                    "execution deadline."
+                                ),
+                            )
                     if execution.serialized_bytes > self._limits.per_tool_bytes:
                         return await finish(
                             RunState.FAILED,
@@ -941,14 +1051,32 @@ class DevOrchestrator:
 
     @staticmethod
     def _provider_tool_input_schema(tool_id: ToolID, max_items: int) -> dict[str, Any]:
-        """Expose only model-owned arguments accepted by the exact tool contract."""
+        """Expose only model-owned arguments accepted by the exact tool contract.
 
+        The advertised ``limit`` enum must never exceed what ``DevToolRequest``
+        itself accepts on the wire (``dev_tool_request.v1.limit`` caps at 25
+        regardless of a tool's own registered ``max_items``, e.g.
+        status_snapshot.v1's 100). Advertising an unreachable upper bound is
+        the same class of provider/server schema drift as CHAOS-3262.
+        """
+
+        request_limit_ceiling = _dev_tool_request_limit_maximum()
         properties: dict[str, Any] = {
-            "limit": {"type": "integer", "enum": list(range(1, max_items + 1))}
+            "limit": {
+                "type": "integer",
+                "enum": list(range(1, min(max_items, request_limit_ceiling) + 1)),
+            }
         }
         if tool_id is ToolID.QUERY_METRIC:
             properties = {
-                "metric_id": {"type": "string"},
+                # dev_tool_request.v1's metric_id is the closed MetricID
+                # enum, not an open string: advertise exactly that enum so a
+                # schema-compliant model can never request an unregistered
+                # metric (CHAOS-3262).
+                "metric_id": {
+                    "type": "string",
+                    "enum": [item.value for item in MetricID],
+                },
                 "include_comparison": {"type": "boolean"},
                 **properties,
             }
@@ -1127,8 +1255,13 @@ class DevOrchestrator:
             )
             usable_by_source[key] = usable_by_source.get(key, False) or usable
             label_by_source.setdefault(key, result.tool_id.value)
+        # Sort by (label, stringified key): the key tuple mixes `str | None`
+        # components (e.g. metric_id is None for tools that don't take one),
+        # and `None` is not orderable against `str` in Python -- comparing
+        # two raw keys directly raises TypeError as soon as two sources
+        # share a label but differ in which discriminating field is unset.
         required_sources = sorted(
-            label_by_source, key=lambda key: (label_by_source[key], key)
+            label_by_source, key=lambda key: (label_by_source[key], repr(key))
         )
         available = [
             label_by_source[key] for key in required_sources if usable_by_source[key]
@@ -1180,7 +1313,10 @@ class DevOrchestrator:
         server_owned = {"schema_version", "run_id", "tool_call_id", "tool_id", "scope"}
         unknown = set(decision.arguments) - allowed - server_owned
         if unknown:
-            raise ToolRegistryError("tool request contains unsupported arguments")
+            # An invalid model-generated argument shape, not a registry defect;
+            # classify it with the same degradable error as validate_request
+            # rejections (CHAOS-3262) instead of the generic registry error.
+            raise ToolRequestRejected("tool request contains unsupported arguments")
         arguments = {
             key: value for key, value in decision.arguments.items() if key in allowed
         }
@@ -1192,7 +1328,16 @@ class DevOrchestrator:
             "scope": authorized_scope.model_dump(mode="json"),
             **arguments,
         }
-        request = DevToolRequest.model_validate(payload)
+        try:
+            request = DevToolRequest.model_validate(payload)
+        except ValidationError as exc:
+            # The model produced schema-valid-looking but semantically invalid
+            # arguments (e.g. an empty-string query). Classify uniformly with
+            # ToolRequestRejected so the run loop can degrade this single
+            # tool call instead of treating it as an internal error.
+            raise ToolRequestRejected(
+                "tool request does not conform to the tool contract"
+            ) from exc
         canonical = json.dumps(
             {"tool_id": tool_id.value, "arguments": arguments},
             sort_keys=True,
@@ -1200,6 +1345,42 @@ class DevOrchestrator:
         )
         digest = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
         return request, digest
+
+    @staticmethod
+    def _rejected_tool_execution(
+        *, tool_request: DevToolRequest, code: str, message: str
+    ) -> ToolExecution:
+        """Degrade one failed per-call tool attempt instead of failing the run.
+
+        CHAOS-3262: an advertised tool that the model called with arguments
+        outside its contract, or that timed out, must not terminate the
+        whole run as ``tool_unavailable``. The model is told, via a normal
+        failed tool result, what happened, so it can correct course (or the
+        answer can proceed degraded) within the existing tool-call and
+        wall-clock budgets. Run-level registry failures (unknown tools,
+        malformed executor output, cancellation) remain fatal.
+        """
+        result = DevToolResult(
+            schema_version="dev_tool_result.v1",
+            run_id=tool_request.run_id,
+            tool_call_id=tool_request.tool_call_id,
+            tool_id=tool_request.tool_id,
+            status="error",
+            error=DevError(
+                schema_version="dev_error.v1",
+                request_id=tool_request.run_id,
+                code=code,
+                safe_message=message,
+                retryable=True,
+            ),
+            serialized_bytes=0,
+        )
+        serialized = json.dumps(
+            result.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return ToolExecution(
+            result=result, serialized_bytes=len(serialized), latency_ms=0
+        )
 
     @staticmethod
     def _provider_error(request_id: str, exc: AgentProviderError) -> DevError:

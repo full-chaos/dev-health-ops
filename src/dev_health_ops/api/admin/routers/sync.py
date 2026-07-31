@@ -1961,6 +1961,10 @@ async def get_sync_config_coverage(
         default=HISTORY_LOOKBACK_DAYS,
         ge=1,
         le=3650,
+        description=(
+            "Maximum history window. The response may use a smaller effective "
+            "window when the requested sync-unit history exceeds safety limits."
+        ),
     ),
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),

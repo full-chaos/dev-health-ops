@@ -350,8 +350,15 @@ class SyncCoverageSummaryResponse(BaseModel):
     provider: str
     generated_at: datetime
     data_basis: Literal["planner", "legacy"]
-    history_lookback_days: int
-    truncated_before: datetime
+    history_lookback_days: int = Field(
+        description=(
+            "Effective history window used for this response. May be smaller than "
+            "the requested upper bound when the recent sync-unit history is too large."
+        )
+    )
+    truncated_before: datetime = Field(
+        description="Oldest timestamp included by the effective history window."
+    )
     overall: SyncCoverageOverall
     datasets: list[SyncCoverageDataset]
     sources: list[SyncCoverageSource]

@@ -53,15 +53,20 @@ _MAX_REPAIR_DETAIL_CHARS = 200
 # all (DevMetricDefinition has no value to ground a DevMetricRef with, and
 # mints no DevEvidenceRef), so a genuinely thorough catalog answer is
 # legitimately empty across all three arrays -- the only signal left is
-# whether the free-text summary actually reflects retrieved data or is a
-# generic stub. Length alone is not that signal: a deterministic catalog
-# summary can legitimately be short ("8 Ask Dev metrics are available in
-# this scope."), while the real CHAOS-3290 stub ("Available Ask Dev metrics
-# and their definitions.") is a *similar* length but names no concrete
-# retrieved fact. Requiring at least one number (a count, an id suffix like
-# ".v1", anything reflecting the catalog actually being read) plus a small
-# absolute floor catches the stub without penalizing a terse-but-real one.
-_MIN_CATALOG_SUMMARY_CHARS = 20
+# whether the free-text summary actually reflects the retrieved catalog or
+# is a generic stub. Neither length nor "contains a number" is that signal
+# (live-reproduced CHAOS-3290 follow-up): a platform run that called only
+# list_metrics.v1 for a metric-comparison question produced "cycle time p50
+# and Average WIP are defined metrics over a 30-day window with daily
+# granularity. The metric definitions indicate:" -- long, and "30" makes it
+# match a bare digit check, but it never actually read the returned catalog;
+# it echoed the metric names *from the user's own question* and the literal
+# admission "I don't have the actual numeric data" was the real tell. The
+# machine identifiers a model can only plausibly produce by having actually
+# read the tool result (a snake_case metric_id or its "<id>.v<n>"
+# definition_version, e.g. "cycle_time_p50_hours.v1") are not something a
+# paraphrase of the question coincidentally reproduces, unlike the
+# human-readable label ("Cycle time p50") or an incidental day-count.
 _MIN_UNGROUNDED_SUMMARY_CHARS = 150
 _GROUNDABLE_TOOL_RESULT_FIELDS = (
     "metrics",
@@ -89,6 +94,36 @@ def _tool_results_offer_groundable_material(
         for result in tool_results
         for field in _GROUNDABLE_TOOL_RESULT_FIELDS
     )
+
+
+def _summary_reflects_retrieved_catalog(
+    summary: str, tool_results: tuple[DevToolResult, ...]
+) -> bool:
+    """Whether `summary` reflects a retrieved metric catalog instead of just
+    restating the question -- the one signal a model cannot produce without
+    having actually read the tool result it was given (see the module-level
+    comment above). Either it names a machine identifier (a snake_case
+    metric_id or its "<id>.v<n>" definition_version), or it states the exact
+    count of definitions actually retrieved -- both require having read the
+    result; neither is something a paraphrase of the question coincidentally
+    reproduces.
+    """
+    folded = summary.casefold()
+    definitions = [
+        definition
+        for result in tool_results
+        for definition in result.metric_definitions
+    ]
+    identifiers = (
+        identifier
+        for definition in definitions
+        for identifier in (definition.metric_id, definition.definition_version)
+    )
+    if any(
+        identifier and identifier.casefold() in folded for identifier in identifiers
+    ):
+        return True
+    return bool(definitions) and str(len(definitions)) in summary
 
 
 def _bounded_detail(messages: tuple[str, ...], *, limit: int) -> str:
@@ -306,11 +341,12 @@ def validate_answer_candidate(
                     code="answer_grounding_floor_not_met",
                     repairable=False,
                 )
-            if len(summary) < _MIN_CATALOG_SUMMARY_CHARS or not _NUMBER.search(summary):
+            if not _summary_reflects_retrieved_catalog(summary, context.tool_results):
                 # No groundable material was available at all (e.g. a
                 # metric-catalog question) -- the only remaining honest
-                # signal is whether the summary reflects real retrieved
-                # content instead of restating the question.
+                # signal is whether the summary names a machine identifier
+                # from the retrieved catalog instead of just restating the
+                # question in its own words.
                 raise AnswerValidationError(
                     "complete answer has no structured grounding and its "
                     "summary does not reflect retrieved data",

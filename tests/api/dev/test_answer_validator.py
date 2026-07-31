@@ -241,14 +241,58 @@ def test_complete_catalog_answer_with_a_real_listing_is_not_a_stub() -> None:
         direct_summary=(
             "The available Ask Dev metrics are as follows: "
             "1. Items completed -- Completed work items in the selected "
-            "window. 2. Cycle time p50 -- Median work-item cycle time in "
-            "hours. 3. Average WIP -- Average work-in-progress across "
-            "daily snapshots. 4. Deployments -- Deployments recorded in "
-            "the selected window."
+            "window. Definition version: items_completed.v1. "
+            "2. Cycle time p50 -- Median work-item cycle time in hours."
         ),
     )
     answer = validate_answer_candidate(payload, _context_without_groundable_material())
     assert answer.status == "complete"
+
+
+def test_complete_catalog_answer_stating_the_exact_retrieved_count_is_not_a_stub() -> (
+    None
+):
+    """The scripted deterministic acceptance path's list_metrics.v1 answer
+    ("N Ask Dev metrics are available in this scope.") never names a
+    machine identifier -- it states only the exact count of definitions
+    actually retrieved. That still requires having read the tool result
+    (an incidental number like a window's day count cannot coincidentally
+    equal it) and must not be rejected as a stub.
+    """
+    context = _context_without_groundable_material()
+    retrieved_count = len(context.tool_results[0].metric_definitions)
+    payload = _empty_payload(
+        status="complete",
+        direct_summary=f"{retrieved_count} Ask Dev metrics are available in this scope.",
+    )
+    answer = validate_answer_candidate(payload, context)
+    assert answer.status == "complete"
+
+
+def test_complete_catalog_answer_naming_the_metrics_but_not_the_catalog_is_a_stub() -> (
+    None
+):
+    """Live-reproduced follow-up: a platform run for a metric-comparison
+    question called only list_metrics.v1, then answered status=complete
+    with a summary that names the metrics *from the user's own question*
+    ("cycle time p50 and Average WIP are defined metrics over a 30-day
+    window...") without ever citing anything from the catalog it actually
+    retrieved, and admitted "I don't have the actual numeric data in this
+    thread." Long, and "30" satisfies a bare digit check, but it never
+    reflects the retrieved catalog -- this must still be rejected.
+    """
+    payload = _empty_payload(
+        status="complete",
+        direct_summary=(
+            "I don’t have the actual numeric data in this thread. Based on "
+            "the available tool results, cycle time p50 and Items Completed "
+            "are defined metrics over a 30-day window with daily "
+            "granularity. The metric definitions indicate:"
+        ),
+    )
+    with pytest.raises(AnswerValidationError) as raised:
+        validate_answer_candidate(payload, _context_without_groundable_material())
+    assert raised.value.code == "answer_grounding_floor_not_met"
 
 
 def test_substantive_partial_narrative_cannot_be_ungrounded() -> None:

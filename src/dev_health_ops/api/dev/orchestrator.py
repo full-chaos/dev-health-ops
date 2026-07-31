@@ -609,12 +609,36 @@ class DevOrchestrator:
                     )
 
                 await transition(RunState.MODEL_DECISION)
-                composed = self._composer.compose(
-                    question=request.question,
-                    scope=resolution,
-                    prior_turns=prior_turns,
-                    tool_results=tuple(tool_results),
-                )
+                try:
+                    composed = self._composer.compose(
+                        question=request.question,
+                        scope=resolution,
+                        prior_turns=prior_turns,
+                        tool_results=tuple(tool_results),
+                    )
+                except ValueError as exc:
+                    # A synthetic repair turn (CHAOS-3288) added on top of an
+                    # already-large caller-supplied conversation history can
+                    # push PromptComposer over its byte budget. That is a
+                    # bounded-budget condition, not an unexpected server
+                    # error: classify it the same way as the other prompt/
+                    # tool budget limits in this run loop instead of falling
+                    # through to the generic internal_error handler below,
+                    # which would misrepresent a repairable rejection as an
+                    # opaque failure. Only this specific, known budget
+                    # message is reclassified; any other ValueError from the
+                    # composer (e.g. a malformed prior-turn role) still
+                    # surfaces as internal_error so it gets investigated
+                    # rather than silently mislabeled as a budget limit.
+                    if "exceeds prompt budget" not in str(exc):
+                        raise
+                    return await finish(
+                        RunState.FAILED,
+                        error=error(
+                            "tool_limit_reached",
+                            "The conversation history budget was reached.",
+                        ),
+                    )
                 prompt_checksum = composed.checksum
                 prompt_bytes = len(composed.system_text.encode()) + len(
                     composed.user_text.encode()
@@ -952,13 +976,44 @@ class DevOrchestrator:
                             and repair_count < self._limits.schema_repairs
                         ):
                             repair_count += 1
+                            # Tell the model exactly what was wrong instead of
+                            # a generic "fix your JSON" instruction it cannot
+                            # act on -- e.g. it claimed status=complete while
+                            # a queried metric was stale, and a bare "schema
+                            # validation failed" note gives it nothing to
+                            # change (CHAOS-3288). `exc.detail` is bounded and
+                            # never contains echoed tool/evidence content.
                             prior_turns = prior_turns + (
                                 PromptConversationTurn(
                                     role="assistant",
-                                    content="The previous response failed schema validation. Return one corrected dev_answer.v1 object.",
+                                    content=(
+                                        "The previous response failed validation: "
+                                        f"{exc.detail}. Return one corrected "
+                                        "dev_answer.v1 object that fixes exactly "
+                                        "that issue and keeps everything else "
+                                        "grounded in the same tool results."
+                                    ),
                                 ),
                             )
                             continue
+                        if exc.code == "answer_grounding_floor_not_met":
+                            # CHAOS-3290: a complete/substantive answer with
+                            # no claim, metric, or evidence grounding at all
+                            # is a silent non-answer, not a malformed one --
+                            # surface it as the same honest "nothing usable
+                            # was found" outcome the run already uses
+                            # elsewhere (AgentDisambiguation/AgentRefusal
+                            # below), not the scarier "validation failed"
+                            # error a real grounding violation gets.
+                            return await finish(
+                                RunState.INSUFFICIENT_EVIDENCE,
+                                error=error(
+                                    "insufficient_evidence",
+                                    "The answer did not include enough "
+                                    "grounded detail to present as a "
+                                    "result.",
+                                ),
+                            )
                         return await finish(
                             RunState.FAILED,
                             error=error(

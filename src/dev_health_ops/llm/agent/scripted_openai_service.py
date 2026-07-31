@@ -121,7 +121,17 @@ def _list_metrics_script(
         "as_of": now,
         "status": "complete" if available else "degraded",
         "direct_summary": (
-            f"{len(definitions)} Ask Dev metrics are available in this scope."
+            (
+                f"{len(definitions)} Ask Dev metrics are available in this scope: "
+                + ", ".join(
+                    str(
+                        definition.get("definition_version")
+                        or definition.get("metric_id")
+                    )
+                    for definition in definitions
+                )
+                + "."
+            )
             if available
             else "The Ask Dev metric catalog could not be read."
         ),

@@ -267,6 +267,16 @@ class OpenAICompatibleAgentProvider:
                 await asyncio.gather(cancel_task, return_exceptions=True)
 
         try:
+            # A model that ran out of its output/reasoning token budget
+            # reports finish_reason="length" -- checked, and raised, before
+            # any attempt to parse message content as JSON (below, inside
+            # _normalize_response), so exhaustion never masquerades as
+            # malformed output (INVALID_RESPONSE). This covers both an empty
+            # ``content`` and a truncated-but-technically-parseable partial
+            # JSON payload alike: the finish_reason alone is dispositive
+            # (CHAOS-3285).
+            if getattr(response.choices[0], "finish_reason", None) == "length":
+                raise AgentProviderError(AgentProviderErrorCode.OUTPUT_EXHAUSTED)
             decision = self._normalize_response(
                 response,
                 allowed_tool_ids=frozenset(item.tool_id for item in tools),
@@ -289,6 +299,8 @@ class OpenAICompatibleAgentProvider:
         output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
         prompt_details = getattr(usage, "prompt_tokens_details", None)
         cached_tokens = getattr(prompt_details, "cached_tokens", None)
+        completion_details = getattr(usage, "completion_tokens_details", None)
+        reasoning_tokens = getattr(completion_details, "reasoning_tokens", None)
         return AgentDecisionResult(
             decision=decision,
             usage=AgentUsage(
@@ -296,6 +308,9 @@ class OpenAICompatibleAgentProvider:
                 output_tokens=output_tokens,
                 cached_input_tokens=(
                     int(cached_tokens) if cached_tokens is not None else None
+                ),
+                reasoning_tokens=(
+                    int(reasoning_tokens) if reasoning_tokens is not None else None
                 ),
                 estimated_cost_microusd=_estimated_cost_microusd(
                     model=self.model,

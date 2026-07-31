@@ -29,6 +29,7 @@ class AgentProviderErrorCode(str, Enum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     BUDGET_UNAVAILABLE = "budget_unavailable"
     PROVIDER_CONTRACT_VIOLATION = "provider_contract_violation"
+    OUTPUT_EXHAUSTED = "output_exhausted"
 
 
 _SAFE_MESSAGES = {
@@ -46,6 +47,10 @@ _SAFE_MESSAGES = {
     AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION: (
         "The model provider returned more than one tool decision in a single "
         "turn, violating the sequential decision contract."
+    ),
+    AgentProviderErrorCode.OUTPUT_EXHAUSTED: (
+        "The model provider exhausted its output/reasoning token budget "
+        "before completing a response."
     ),
 }
 

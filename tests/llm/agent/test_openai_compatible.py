@@ -48,10 +48,13 @@ def response(
     content: str | None = None,
     tool_call: Any = None,
     tool_calls: list[Any] | None = None,
+    finish_reason: str = "stop",
+    reasoning_tokens: int | None = None,
 ) -> Any:
     return SimpleNamespace(
         choices=[
             SimpleNamespace(
+                finish_reason=finish_reason,
                 message=SimpleNamespace(
                     content=content,
                     tool_calls=(
@@ -61,13 +64,16 @@ def response(
                         if tool_call
                         else []
                     ),
-                )
+                ),
             )
         ],
         usage=SimpleNamespace(
             prompt_tokens=11,
             completion_tokens=7,
             prompt_tokens_details=SimpleNamespace(cached_tokens=3),
+            completion_tokens_details=SimpleNamespace(
+                reasoning_tokens=reasoning_tokens
+            ),
         ),
     )
 
@@ -929,6 +935,138 @@ async def test_tool_result_continuation_allows_tools_and_strict_final_answer() -
     ]
     assert schema["properties"]["value"]["anyOf"][0]["required"] == ["ok"]
     assert client.chat.completions.calls[0]["tool_choice"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_length_with_empty_content_raises_output_exhausted() -> (
+    None
+):
+    """CHAOS-3285: before this fix, a reasoning model that ran out of its
+    output budget mid-decision returned finish_reason="length" with empty
+    content, which json.loads() turned into a JSONDecodeError, classified as
+    INVALID_RESPONSE -> internal_error (an opaque application failure for
+    what is actually a structural model-capability mismatch). finish_reason
+    is now read and dispositive before any JSON parsing is attempted.
+    """
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="gpt-5-nano",
+        client=Client([response(content="", finish_reason="length")]),
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+    assert caught.value.code is not AgentProviderErrorCode.INVALID_RESPONSE
+    assert caught.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_length_with_truncated_partial_content_still_exhausted() -> (
+    None
+):
+    """Belt-and-braces (plan §3.3): a truncated-but-technically-parseable
+    partial JSON payload is the *worse* case, because it can validate and
+    silently pass through as a malformed-but-plausible decision. finish_reason
+    alone must be dispositive regardless of whether content happens to parse.
+    """
+    truncated = '{"kind": "final_answer", "value": {"ok"'
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="gpt-5-nano",
+        client=Client([response(content=truncated, finish_reason="length")]),
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_stop_does_not_raise_output_exhausted() -> None:
+    """The fail-before/pass-after control: an ordinary, non-exhausted
+    malformed response (finish_reason="stop") must still classify as
+    INVALID_RESPONSE, exactly as before this change -- proving the new
+    finish_reason check is additive, not a wholesale reclassification of
+    every malformed response as exhaustion.
+    """
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="agent-model",
+        client=Client([response(content="not-json", finish_reason="stop")]),
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.INVALID_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_reasoning_tokens_surfaced_on_agent_usage() -> None:
+    call = SimpleNamespace(
+        id="call-1", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    client = Client([response(tool_call=call, reasoning_tokens=192)])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-nano", client=client
+    )
+
+    result = await provider.decide(
+        [AgentMessage(AgentMessageRole.USER, "question")],
+        [AgentToolDefinition("lookup", "Lookup", {"type": "object"})],
+        {"type": "object"},
+        1,
+        256,
+    )
+
+    assert result.usage.reasoning_tokens == 192
+
+
+@pytest.mark.asyncio
+async def test_missing_reasoning_tokens_detail_surfaces_as_none_not_zero() -> None:
+    """None (field absent/unreported) must stay distinguishable from an
+    explicit 0 -- collapsing them would make a provider that never reports
+    reasoning usage indistinguishable from one that reported zero reasoning
+    tokens, corrupting the accounting CHAOS-3285's later commits build on.
+    """
+    call = SimpleNamespace(
+        id="call-1", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    client = Client([response(tool_call=call, reasoning_tokens=None)])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="agent-model", client=client
+    )
+
+    result = await provider.decide(
+        [AgentMessage(AgentMessageRole.USER, "question")],
+        [AgentToolDefinition("lookup", "Lookup", {"type": "object"})],
+        {"type": "object"},
+        1,
+        256,
+    )
+
+    assert result.usage.reasoning_tokens is None
 
 
 @pytest.mark.asyncio

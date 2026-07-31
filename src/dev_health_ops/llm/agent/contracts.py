@@ -65,6 +65,12 @@ class AgentUsage:
     output_tokens: int = 0
     estimated_cost_microusd: int | None = None
     cached_input_tokens: int | None = None
+    # Hidden reasoning tokens billed as part of output_tokens on
+    # reasoning-tier models (gpt-5*, o-series). None when the provider
+    # response carries no completion_tokens_details.reasoning_tokens field --
+    # distinct from 0, which means the provider reported the field as zero
+    # (CHAOS-3285).
+    reasoning_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

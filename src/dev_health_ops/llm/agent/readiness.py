@@ -303,6 +303,12 @@ def readiness_failure_state(safe_error_code: str | None) -> tuple[ReadinessState
             "The configured model returned multiple tool decisions in one turn, "
             "violating Ask Dev's required sequential tool-call contract.",
         )
+    if safe_error_code == "output_exhausted":
+        return (
+            "unsupported_model",
+            "The configured Ask Dev model exhausted its output/reasoning "
+            "token budget before completing a valid response.",
+        )
     if safe_error_code == "provider_unavailable":
         return "degraded", "The configured Ask Dev model endpoint is unavailable."
     return "degraded", "The configured Ask Dev model failed readiness."
@@ -317,8 +323,12 @@ def _add_usage(left: AgentUsage, right: AgentUsage) -> AgentUsage:
         cost = (left.estimated_cost_microusd or 0) + (
             right.estimated_cost_microusd or 0
         )
+    reasoning_tokens = None
+    if left.reasoning_tokens is not None or right.reasoning_tokens is not None:
+        reasoning_tokens = (left.reasoning_tokens or 0) + (right.reasoning_tokens or 0)
     return AgentUsage(
         input_tokens=left.input_tokens + right.input_tokens,
         output_tokens=left.output_tokens + right.output_tokens,
         estimated_cost_microusd=cost,
+        reasoning_tokens=reasoning_tokens,
     )

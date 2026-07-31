@@ -603,6 +603,35 @@ async def test_provider_contract_violation_is_a_safe_error_not_internal_error() 
 
 
 @pytest.mark.asyncio
+async def test_output_exhausted_is_a_safe_error_not_internal_error() -> None:
+    """CHAOS-3285: before this fix, output-budget exhaustion surfaced from
+    the adapter as INVALID_RESPONSE, which this orchestrator maps to the
+    opaque "internal_error" public code -- exactly the live symptom the
+    ticket describes ("readiness green, first real question fails, provider
+    error presented"). OUTPUT_EXHAUSTED must map to a stable, non-internal
+    public code (reusing "model_not_supported") and stay non-retryable.
+    """
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    error=AgentProviderError(
+                        AgentProviderErrorCode.OUTPUT_EXHAUSTED,
+                        retryable=False,
+                    )
+                )
+            ],
+            script_id="output-exhausted",
+        )
+    )
+    assert result.state is RunState.FAILED
+    assert result.error is not None
+    assert result.error.code == "model_not_supported"
+    assert result.error.code != "internal_error"
+    assert result.error.retryable is False
+
+
+@pytest.mark.asyncio
 async def test_multi_metric_question_completes_through_sequential_tool_rounds() -> None:
     """CHAOS-3254 acceptance: a naturally multi-metric question completes
     through one tool request per round -- through a final answer -- and

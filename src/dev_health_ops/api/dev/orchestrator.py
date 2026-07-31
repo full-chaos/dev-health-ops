@@ -1644,6 +1644,14 @@ class DevOrchestrator:
             AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION: (
                 "provider_contract_violation"
             ),
+            # CHAOS-3285: output/reasoning-budget exhaustion is a structural,
+            # non-retryable model-capability mismatch, not an opaque
+            # application failure -- reuse the existing "model_not_supported"
+            # public code rather than the internal_error bucket
+            # INVALID_RESPONSE previously fell into for this exact symptom.
+            # A dedicated dev_error.v1 code is CHAOS-3294's v2 vocabulary to
+            # own, not invented here.
+            AgentProviderErrorCode.OUTPUT_EXHAUSTED: "model_not_supported",
         }
         code = code_map[exc.code]
         return DevError(

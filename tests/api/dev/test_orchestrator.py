@@ -1033,7 +1033,15 @@ def test_coverage_counts_partial_with_usable_evidence_as_available() -> None:
         status="partial",
         metric_definitions=[],
         metrics=[],
-        evidence=[],
+        # Every evidence ID a status fact cites must exist in this same
+        # result's evidence array (DevToolResult.validate_evidence_closure,
+        # CHAOS-3259) -- the fact below cites "evidence_01".
+        evidence=[
+            {
+                **positive_fixtures()["dev_evidence_ref.v1"],
+                "evidence_ref_id": "evidence_01",
+            }
+        ],
         status_facts=[
             {
                 "fact_id": "fact_01",

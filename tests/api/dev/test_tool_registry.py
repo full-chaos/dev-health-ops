@@ -61,7 +61,7 @@ def _registry(executor=None) -> AskDevToolRegistry:
 def test_manifest_is_the_exact_nine_tool_server_allowlist() -> None:
     manifest = _registry().manifest()
     tools = cast(list[dict[str, object]], manifest["tools"])
-    assert manifest["version"] == "ask_dev_tools.v1"
+    assert manifest["version"] == "ask_dev_tools.v2"
     assert [item["tool_id"] for item in tools] == sorted(item.value for item in ToolID)
     assert len(tools) == 9
     assert all(item["required_permission"] == "ask_dev:read" for item in tools)

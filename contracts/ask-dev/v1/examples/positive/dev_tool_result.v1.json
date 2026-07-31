@@ -1,5 +1,8 @@
 {
+  "actual_completion": null,
+  "ci_checks": [],
   "data_health": [],
+  "deployments": [],
   "error": null,
   "evidence": [
     {
@@ -37,6 +40,7 @@
     }
   ],
   "graph_edges": [],
+  "incidents": [],
   "metric_definitions": [
     {
       "definition_version": "items_completed.v1",
@@ -128,6 +132,7 @@
       "value": 12
     }
   ],
+  "pull_requests": [],
   "run_id": "run_01",
   "schema_version": "dev_tool_result.v1",
   "scope_resolution": {
@@ -211,6 +216,7 @@
     "warnings": []
   },
   "serialized_bytes": 4096,
+  "source_health": [],
   "status": "success",
   "status_facts": [],
   "tool_call_id": "tool_call_01",

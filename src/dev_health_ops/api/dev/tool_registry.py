@@ -13,7 +13,7 @@ from dev_health_ops.llm.providers.openai_capabilities import build_wire_tool_nam
 
 from .contracts import DevScope, DevToolRequest, DevToolResult, ToolID
 
-TOOL_CONTRACT_VERSION = "ask_dev_tools.v1"
+TOOL_CONTRACT_VERSION = "ask_dev_tools.v2"
 DEFAULT_TOOL_TIMEOUT_SECONDS = 15.0
 MAX_TOOL_RESULT_BYTES = 65_536
 

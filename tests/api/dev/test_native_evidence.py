@@ -74,6 +74,7 @@ def test_launch_native_evidence_class_registry_is_explicit() -> None:
         "ci_runs",
         "deployments",
         "incidents",
+        "work_graph",
     }
 
 

@@ -166,7 +166,7 @@ def _answer() -> dict[str, Any]:
         "suggested_follow_up_questions": ["What changed from the previous period?"],
         "versions": {
             "prompt_version": "ask_dev_prompt.v1",
-            "tool_contract_version": "ask_dev_tools.v1",
+            "tool_contract_version": "ask_dev_tools.v2",
             "metric_definition_version": "ask_dev_metrics.v1",
             "query_version": "ask_dev_queries.v1",
         },
@@ -305,6 +305,12 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
             "metrics": [_metric()],
             "evidence": [_evidence()],
             "status_facts": [],
+            "actual_completion": None,
+            "pull_requests": [],
+            "ci_checks": [],
+            "deployments": [],
+            "incidents": [],
+            "source_health": [],
             "graph_edges": [],
             "data_health": [],
             "warnings": [],
@@ -565,7 +571,23 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                     "dev_tool_result.v1",
                     lambda value: value.__setitem__("serialized_bytes", 65_537),
                 ),
-            )
+            ),
+            (
+                "status_fact_evidence_not_in_array",
+                changed(
+                    "dev_tool_result.v1",
+                    lambda value: value.__setitem__(
+                        "status_facts",
+                        [
+                            {
+                                "fact_id": "issue:item_02",
+                                "text": "Child issue: open",
+                                "evidence_ref_ids": ["ev_not_in_evidence_array"],
+                            }
+                        ],
+                    ),
+                ),
+            ),
         ],
         "dev_feedback.v1": [
             (

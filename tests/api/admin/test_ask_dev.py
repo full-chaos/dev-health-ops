@@ -73,7 +73,7 @@ class FakeReadinessProvider:
         if self.calls == 1:
             return AgentDecisionResult(
                 decision=AgentToolRequest(
-                    "readiness_echo", {"nonce": "ready-v1"}, "call-1"
+                    "readiness_echo.v1", {"nonce": "ready-v1"}, "call-1"
                 ),
                 usage=AgentUsage(input_tokens=3, output_tokens=2),
                 latency_ms=1,

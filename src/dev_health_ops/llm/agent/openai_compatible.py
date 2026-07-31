@@ -11,7 +11,9 @@ from typing import Any, cast
 
 from dev_health_ops.llm.providers._http import make_hardened_async_httpx_client
 from dev_health_ops.llm.providers.openai_capabilities import (
+    build_wire_tool_name_map,
     chat_completion_reasoning_effort,
+    sanitize_tool_name,
     supports_parallel_tool_calls,
     supports_temperature,
 )
@@ -191,6 +193,13 @@ class OpenAICompatibleAgentProvider:
                 AgentProviderErrorCode.CANCELLED,
                 provider_dispatched=False,
             )
+        # Built before any request is dispatched: a mapping collision is a
+        # registry-construction bug (two distinct tool_ids sanitizing to the
+        # same wire name), never a provider-caused failure, so it must
+        # surface as a plain, uncaught error rather than an AgentProviderError
+        # (CHAOS-3286). Callers that own a fixed registry (AskDevToolRegistry)
+        # additionally assert this can't happen at registry build time.
+        wire_tool_ids = build_wire_tool_name_map(item.tool_id for item in tools)
         started = time.monotonic()
         create_completion = cast(Any, self._client.chat.completions.create)
         allow_final_answer = not tools or any(
@@ -259,7 +268,9 @@ class OpenAICompatibleAgentProvider:
 
         try:
             decision = self._normalize_response(
-                response, allowed_tool_ids=frozenset(item.tool_id for item in tools)
+                response,
+                allowed_tool_ids=frozenset(item.tool_id for item in tools),
+                wire_tool_ids=wire_tool_ids,
             )
         except _SequentialToolContractViolation:
             raise AgentProviderError(
@@ -315,7 +326,10 @@ class OpenAICompatibleAgentProvider:
                     "id": message.tool_request.call_id,
                     "type": "function",
                     "function": {
-                        "name": message.tool_request.tool_id,
+                        # Replaying prior-round history: sanitize here too so
+                        # every outbound function name is wire-legal,
+                        # consistent with _tool_payload (CHAOS-3286).
+                        "name": sanitize_tool_name(message.tool_request.tool_id),
                         "arguments": json.dumps(
                             dict(message.tool_request.arguments),
                             separators=(",", ":"),
@@ -331,7 +345,13 @@ class OpenAICompatibleAgentProvider:
         return {
             "type": "function",
             "function": {
-                "name": tool.tool_id,
+                # OpenAI's native tools[].function.name must match
+                # ^[a-zA-Z0-9_-]+$; the canonical registry tool_id (e.g.
+                # "query_metric.v1") is dotted and illegal on the wire.
+                # Sanitized here at the boundary only -- reverse-mapped back
+                # to the canonical tool_id in _normalize_response
+                # (CHAOS-3286).
+                "name": sanitize_tool_name(tool.tool_id),
                 "description": tool.description,
                 "parameters": OpenAICompatibleAgentProvider._structural_schema(
                     tool.input_schema
@@ -506,15 +526,27 @@ class OpenAICompatibleAgentProvider:
             target[str(name)] = definition
 
     @staticmethod
-    def _normalize_response(response: Any, *, allowed_tool_ids: frozenset[str]) -> Any:
+    def _normalize_response(
+        response: Any,
+        *,
+        allowed_tool_ids: frozenset[str],
+        wire_tool_ids: Mapping[str, str],
+    ) -> Any:
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []
         if len(tool_calls) > 1:
             raise _SequentialToolContractViolation("only one tool decision is allowed")
         if tool_calls:
             call = tool_calls[0]
-            tool_id = str(call.function.name)
-            if tool_id not in allowed_tool_ids:
+            # Native tool_calls[].function.name is the wire-sanitized name
+            # (CHAOS-3286); reverse-map back to the canonical tool_id before
+            # any further validation or persistence. The JSON decision-
+            # envelope fallback path below is unaffected -- it's Ask Dev's
+            # own structured-output schema, not a native tool definition, so
+            # it is never subject to OpenAI's function-name wire constraint
+            # and continues to use the canonical dotted tool_id directly.
+            tool_id = wire_tool_ids.get(str(call.function.name))
+            if tool_id is None:
                 raise ValueError("tool decision is not registered")
             arguments = json.loads(call.function.arguments)
             if not isinstance(arguments, dict):

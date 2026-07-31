@@ -89,7 +89,9 @@ def _tool_call(call_id: str) -> dict[str, Any]:
         "id": call_id,
         "type": "function",
         "function": {
-            "name": "query_metric.v1",
+            # A real model can only echo back the wire-legal name it was
+            # offered, never the canonical dotted tool_id (CHAOS-3286).
+            "name": "query_metric_v1",
             "arguments": json.dumps({"metric_id": "items_completed"}),
         },
     }

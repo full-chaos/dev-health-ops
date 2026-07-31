@@ -109,6 +109,107 @@ async def test_normalizes_native_tool_decision_and_usage() -> None:
 
 
 @pytest.mark.asyncio
+async def test_native_tool_request_sanitizes_dotted_tool_name() -> None:
+    """CHAOS-3286: OpenAI rejects dotted tools[].function.name outright.
+
+    Every real OpenAI-backed request using a canonical registry tool_id
+    (e.g. "query_metric.v1") 400s with "Invalid 'tools[0].function.name'"
+    because OpenAI requires ^[a-zA-Z0-9_-]+$. The adapter must sanitize the
+    outbound name and reverse-map a model's wire-legal response back to the
+    canonical tool_id -- which is what the rest of Ask Dev (contracts,
+    persistence, telemetry) expects to see.
+    """
+    call = SimpleNamespace(
+        id="call-1",
+        # A real model can only echo back the wire-legal name it was
+        # offered -- never the canonical dotted tool_id.
+        function=SimpleNamespace(
+            name="query_metric_v1", arguments='{"metric_id":"items_completed"}'
+        ),
+    )
+    client = Client([response(tool_call=call)])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="agent-model", client=client
+    )
+
+    result = await provider.decide(
+        [AgentMessage(AgentMessageRole.USER, "question")],
+        [
+            AgentToolDefinition(
+                "query_metric.v1",
+                "Query a bounded metric.",
+                {"type": "object", "properties": {"metric_id": {"type": "string"}}},
+            )
+        ],
+        {"type": "object"},
+        1,
+        256,
+    )
+
+    sent = client.chat.completions.calls[0]
+    assert sent["tools"][0]["function"]["name"] == "query_metric_v1"
+    # The canonical dotted tool_id survives the round trip -- everything
+    # downstream of the adapter (ToolID enum, persistence, telemetry)
+    # continues to see the identifier it already expects.
+    assert result.decision == AgentToolRequest(
+        "query_metric.v1", {"metric_id": "items_completed"}, "call-1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_tool_call_with_unregistered_wire_name_fails_closed() -> None:
+    call = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(name="not_a_real_tool", arguments="{}"),
+    )
+    client = Client([response(tool_call=call)])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="agent-model", client=client
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [
+                AgentToolDefinition(
+                    "query_metric.v1", "Query a metric.", {"type": "object"}
+                )
+            ],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.INVALID_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_tool_name_mapping_collision_fails_loudly_not_silently() -> None:
+    """A registry bug (two tool_ids sanitizing to the same wire name) must
+    surface as a plain, uncaught error -- never silently misroute a tool
+    decision to the wrong canonical tool_id, and never be misclassified as
+    an ordinary provider failure (CHAOS-3286).
+    """
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="agent-model",
+        client=Client([response(content="{}")]),
+    )
+
+    with pytest.raises(ValueError, match="tool name mapping collision"):
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [
+                AgentToolDefinition("query.metric", "d", {"type": "object"}),
+                AgentToolDefinition("query_metric", "d", {"type": "object"}),
+            ],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+
+@pytest.mark.asyncio
 async def test_native_tool_request_disables_parallel_tool_calls() -> None:
     """CHAOS-3254: the wire request must enforce the sequential contract.
 
@@ -577,7 +678,10 @@ async def test_literal_reproduction_question_completes_through_sequential_rounds
         return SimpleNamespace(
             id=call_id,
             function=SimpleNamespace(
-                name="query_metric.v1",
+                # A real model can only echo back the wire-sanitized name it
+                # was offered (CHAOS-3286), never the canonical dotted
+                # tool_id -- see test_native_tool_request_sanitizes_dotted_name.
+                name="query_metric_v1",
                 arguments=json.dumps(
                     {"metric_id": metric_id, "include_comparison": True}
                 ),

@@ -13,7 +13,20 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from dev_health_ops.llm.providers.openai_capabilities import is_wire_legal_tool_name
+
 SCRIPTED_OPENAI_MODEL = "ask-dev-scripted-v1"
+# Sanitized (wire-legal) counterparts of the canonical dotted registry tool
+# ids this scripted server simulates a model choosing among. Must track
+# whatever OpenAICompatibleAgentProvider.sanitize_tool_name actually
+# produces -- kept as simple literals here (not by importing the sanitize
+# function) so this scripted acceptance surface independently reflects what
+# a real model would be offered and could choose, rather than silently
+# following any future change to the sanitize implementation (CHAOS-3286).
+_WIRE_READINESS_ECHO = "readiness_echo_v1"
+_WIRE_QUERY_METRIC = "query_metric_v1"
+_WIRE_SEARCH_EVIDENCE = "search_evidence_v1"
+_WIRE_DATA_HEALTH = "data_health_v1"
 
 
 def _tool_results_from_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -219,23 +232,41 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
             return
         self.server.requests.append(payload)
         tool_names = [item["function"]["name"] for item in payload.get("tools") or []]
+        # Enforce OpenAI's real function-name wire constraint (CHAOS-3286): a
+        # regression that reintroduces a dotted (or otherwise illegal) tool
+        # name must fail scripted deterministic acceptance exactly as it
+        # would fail against the real API, not pass silently.
+        illegal = [name for name in tool_names if not is_wire_legal_tool_name(name)]
+        if illegal:
+            self._write_json(
+                400,
+                {
+                    "error": {
+                        "message": f"Invalid 'tools[].function.name': {illegal[0]!r}",
+                        "type": "invalid_request_error",
+                        "param": "tools[].function.name",
+                        "code": "invalid_value",
+                    }
+                },
+            )
+            return
         tool_results = _tool_results_from_messages(payload)
         requested_tool_names = _requested_tool_names_from_messages(payload)
         result_tool_ids = {str(result.get("tool_id") or "") for result in tool_results}
         if not tool_results:
             arguments: dict[str, Any]
-            if "readiness_echo" in tool_names:
-                tool_name = "readiness_echo"
+            if _WIRE_READINESS_ECHO in tool_names:
+                tool_name = _WIRE_READINESS_ECHO
                 arguments = {"nonce": "ready-v1"}
-            elif "query_metric.v1" in tool_names:
-                tool_name = "query_metric.v1"
+            elif _WIRE_QUERY_METRIC in tool_names:
+                tool_name = _WIRE_QUERY_METRIC
                 arguments = {
                     "metric_id": "items_completed",
                     "include_comparison": True,
                     "limit": 12,
                 }
             else:
-                tool_name = "status_snapshot.v1"
+                tool_name = "status_snapshot_v1"
                 arguments = {}
             message: dict[str, Any] = {
                 "role": "assistant",
@@ -253,10 +284,10 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
             }
             finish_reason = "tool_calls"
         elif (
-            "readiness_echo" not in tool_names
+            _WIRE_READINESS_ECHO not in tool_names
             and "query_metric.v1" in result_tool_ids
             and "search_evidence.v1" not in result_tool_ids
-            and "search_evidence.v1" in tool_names
+            and _WIRE_SEARCH_EVIDENCE in tool_names
         ):
             message = {
                 "role": "assistant",
@@ -266,7 +297,7 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
                         "id": "scripted-call-search-evidence-v1",
                         "type": "function",
                         "function": {
-                            "name": "search_evidence.v1",
+                            "name": _WIRE_SEARCH_EVIDENCE,
                             "arguments": json.dumps(
                                 {
                                     # The acceptance corpus guarantees this repository
@@ -285,11 +316,11 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
             }
             finish_reason = "tool_calls"
         elif (
-            "readiness_echo" not in tool_names
+            _WIRE_READINESS_ECHO not in tool_names
             and "query_metric.v1" in result_tool_ids
             and "search_evidence.v1" in result_tool_ids
             and "data_health.v1" not in result_tool_ids
-            and "data_health.v1" in tool_names
+            and _WIRE_DATA_HEALTH in tool_names
         ):
             message = {
                 "role": "assistant",
@@ -299,7 +330,7 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
                         "id": "scripted-call-data-health-v1",
                         "type": "function",
                         "function": {
-                            "name": "data_health.v1",
+                            "name": _WIRE_DATA_HEALTH,
                             "arguments": "{}",
                         },
                     }
@@ -309,7 +340,7 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
         else:
             value = (
                 {"nonce": "ready-v1"}
-                if "readiness_echo" in requested_tool_names
+                if _WIRE_READINESS_ECHO in requested_tool_names
                 else _acceptance_answer(tool_results)
             )
             message = {
@@ -321,6 +352,14 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
             }
             finish_reason = "stop"
         self._send_completion(payload, message, finish_reason)
+
+    def _write_json(self, status: int, payload: dict[str, Any]) -> None:
+        encoded = json.dumps(payload, separators=(",", ":")).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
 
     def _send_completion(
         self,
@@ -346,12 +385,7 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
                 "total_tokens": 12,
             },
         }
-        encoded = json.dumps(response, separators=(",", ":")).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
+        self._write_json(200, response)
 
     def log_message(self, _format: str, *_args: object) -> None:
         return

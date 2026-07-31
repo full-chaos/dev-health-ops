@@ -32,6 +32,12 @@ from .errors import (
 
 READINESS_SETTING_KEY = "ask_dev_agent_readiness"
 READINESS_MAX_OUTPUT_TOKENS = 512
+# Dotted, matching the shape of every real registry tool_id (e.g.
+# "query_metric.v1"), so certification genuinely exercises the
+# OpenAI-compatible adapter's wire-name sanitize/reverse-map round trip for a
+# name-illegal tool_id -- a registry regression fails preflight here, not the
+# first real user question (CHAOS-3286).
+READINESS_ECHO_TOOL_ID = "readiness_echo.v1"
 
 
 class AgentReadinessOutcome(str, Enum):
@@ -123,7 +129,7 @@ class AgentReadinessService:
         usage = AgentUsage()
         try:
             tool = AgentToolDefinition(
-                tool_id="readiness_echo",
+                tool_id=READINESS_ECHO_TOOL_ID,
                 description="Return the supplied nonce.",
                 input_schema={
                     "type": "object",

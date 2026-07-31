@@ -9,6 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -456,3 +457,40 @@ async def test_partial_acceptance_gate_never_falls_back_to_live_platform(
     with pytest.raises(DevRuntimeUnavailable) as exc_info:
         await resolve_certification_provider(settings_session, org_id=_ORG_ID)
     assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_scripted_server_enforces_the_openai_tool_name_regex(
+    scripted_openai_server: ScriptedOpenAIServer,
+) -> None:
+    """CHAOS-3286: this scripted acceptance surface must not silently accept
+    a dotted (or otherwise wire-illegal) tools[].function.name. Without this
+    enforcement, a regression that reintroduces a canonical dotted tool_id
+    on the wire would pass scripted deterministic acceptance while every
+    real OpenAI-backed request 400s -- exactly how this bug went undetected.
+    """
+    host, port = cast(tuple[str, int], scripted_openai_server.server_address)
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"http://{host}:{port}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {_ACCEPTANCE_KEY}"},
+            json={
+                "model": "ask-dev-scripted-v1",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "query_metric.v1",
+                            "description": "d",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+                "tool_choice": "auto",
+            },
+        )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["type"] == "invalid_request_error"
+    assert "tools" in body["error"]["param"]

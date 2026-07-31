@@ -2,6 +2,63 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
+
+# OpenAI's Chat Completions API requires tools[].function.name (and the
+# native tool_calls[].function.name a model echoes back) to match this
+# pattern. Ask Dev's canonical registry tool identifiers are dotted
+# (e.g. "query_metric.v1"), which is illegal on the wire -- every real
+# OpenAI-backed request using one 400s (CHAOS-3286).
+_WIRE_LEGAL_TOOL_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
+_WIRE_ILLEGAL_CHARACTER = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def sanitize_tool_name(tool_id: str) -> str:
+    """Map a canonical tool_id to an OpenAI wire-legal ``function.name``.
+
+    Deterministic and applied only at the adapter's outbound wire boundary:
+    every character outside ``[a-zA-Z0-9_-]`` (in practice just ``.``) is
+    replaced with ``_``. The canonical dotted ``tool_id`` remains the
+    identifier used everywhere else -- contracts, persistence, telemetry,
+    and Ask Dev's own JSON decision-envelope fallback schema (which is not
+    subject to this wire constraint at all, since it's a JSON Schema string
+    enum inside ``response_format``, not a native ``tools[]`` definition).
+    """
+
+    return _WIRE_ILLEGAL_CHARACTER.sub("_", tool_id)
+
+
+def is_wire_legal_tool_name(name: str) -> bool:
+    """Return whether ``name`` already satisfies OpenAI's function-name pattern."""
+
+    return bool(_WIRE_LEGAL_TOOL_NAME.match(name))
+
+
+def build_wire_tool_name_map(tool_ids: Iterable[str]) -> dict[str, str]:
+    """Build the wire-name -> canonical-tool_id reverse map for one request.
+
+    Raises ``ValueError`` if two distinct tool_ids would sanitize to the same
+    wire name -- a mapping collision must never silently misroute a tool
+    decision. Callers that own a fixed, closed tool registry (e.g.
+    ``AskDevToolRegistry``) should additionally assert collision-freedom at
+    registry build time so this can never happen at request time in
+    production; this function is the shared, generic enforcement any caller
+    (including a synthetic readiness probe) gets for free.
+    """
+
+    reverse: dict[str, str] = {}
+    for tool_id in tool_ids:
+        wire_name = sanitize_tool_name(tool_id)
+        existing = reverse.get(wire_name)
+        if existing is not None and existing != tool_id:
+            raise ValueError(
+                f"tool name mapping collision: {existing!r} and {tool_id!r} "
+                f"both sanitize to {wire_name!r}"
+            )
+        reverse[wire_name] = tool_id
+    return reverse
+
 
 def supports_temperature(model: str) -> bool:
     """Return whether the model accepts a caller-selected temperature.

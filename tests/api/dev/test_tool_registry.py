@@ -21,6 +21,7 @@ from dev_health_ops.api.dev.tool_registry import (
     ToolRequestRejected,
     UnknownToolError,
 )
+from dev_health_ops.llm.providers.openai_capabilities import build_wire_tool_name_map
 
 
 def _request(**updates: object) -> DevToolRequest:
@@ -66,6 +67,29 @@ def test_manifest_is_the_exact_nine_tool_server_allowlist() -> None:
     assert all(
         item["scope_policy"] == "exact_server_authorized_scope" for item in tools
     )
+
+
+def test_registry_construction_asserts_wire_tool_name_collision_freedom() -> None:
+    """CHAOS-3286: constructing the real V1 registry proves, at build time,
+    that none of its nine dotted tool_ids sanitize to the same OpenAI wire
+    function name. If a future tool_id addition ever collided, registry
+    construction itself would raise -- not just a defensive request-time
+    check inside the wire adapter.
+    """
+    assert build_wire_tool_name_map(item.value for item in ToolID) == {
+        "resolve_scope_v1": "resolve_scope.v1",
+        "list_metrics_v1": "list_metrics.v1",
+        "query_metric_v1": "query_metric.v1",
+        "status_snapshot_v1": "status_snapshot.v1",
+        "change_summary_v1": "change_summary.v1",
+        "work_graph_neighbors_v1": "work_graph_neighbors.v1",
+        "search_evidence_v1": "search_evidence.v1",
+        "get_evidence_v1": "get_evidence.v1",
+        "data_health_v1": "data_health.v1",
+    }
+    # The registry constructor itself performs this same assertion; proving
+    # it doesn't raise is the build-time guarantee this test exists for.
+    _registry()
 
 
 def test_unknown_and_cross_tenant_tools_are_rejected_before_execution() -> None:

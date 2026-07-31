@@ -377,6 +377,143 @@ def _message_request() -> dict[str, Any]:
     }
 
 
+def _metric_ref() -> dict[str, Any]:
+    """A valid, standalone ``dev_metric_ref.v1`` (v1 type, reused by v2 frames)."""
+
+    return {
+        "schema_version": "dev_metric_ref.v1",
+        "metric_ref_id": "metric_01",
+        "metric_id": "cycle_time_p50_hours",
+        "label": "Cycle time (p50)",
+        "definition_version": "ask_dev_metrics.v1",
+        "unit": "hours",
+        "aggregation": "p50",
+        "display_precision": 1,
+        "resolved_scope": _scope(),
+        "dimensions": [],
+        "current_window": _time_range(),
+        "comparison_window": None,
+        "value": 12.5,
+        "comparison_value": None,
+        "series": [],
+        "query_version": "ask_dev_queries.v1",
+        "source_version": "work_graph.v1",
+        "freshness": "fresh",
+        "coverage": 1.0,
+        "evidence_ref_ids": [],
+    }
+
+
+def _denied_frame_base() -> dict[str, Any]:
+    """A fully compliant, content-free ``denied`` frame.
+
+    Used only as the base for the ``NO_ANSWER_OUTCOMES`` negative fixtures
+    below — every prohibited field starts empty/``None`` here, and each
+    negative case mutates exactly one of them so the fixture is
+    attributable to the specific field the guard rejects.
+    """
+
+    frame = deepcopy(_frame())
+    frame["public_outcome"] = "denied"
+    frame["subject_ref"] = None
+    frame["subject_set_ref"] = None
+    frame["direct_answer"] = "You do not have access to ask about this."
+    frame["completion"] = None
+    frame["readiness"] = None
+    frame["sections"] = []
+    frame["facts"] = []
+    frame["metrics"] = []
+    frame["comparisons"] = []
+    frame["relationship_paths"] = []
+    frame["health_profile_refs"] = []
+    frame["finding_refs"] = []
+    frame["deficiency_refs"] = []
+    frame["conflicts"] = []
+    frame["source_observations"] = []
+    frame["evidence"] = []
+    return frame
+
+
+def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any]]]:
+    """One negative fixture per field ``validate_no_answer_content_leaks`` forbids.
+
+    Each case starts from ``_denied_frame_base()`` (fully compliant) and
+    populates exactly one prohibited field, so the rejection is
+    attributable to that one field, not to some other guard.
+    """
+
+    def case(label: str, mutator: Any) -> tuple[str, dict[str, Any]]:
+        value = _denied_frame_base()
+        mutator(value)
+        return (label, value)
+
+    return [
+        case(
+            "denied_with_completion",
+            lambda v: v.__setitem__("completion", _completion()),
+        ),
+        case(
+            "denied_with_readiness",
+            lambda v: v.__setitem__(
+                "readiness",
+                {
+                    "state": "ready",
+                    "rule_id": "actual_completion",
+                    "rule_version": "actual_completion.v1",
+                    "translated_user_reasons": [],
+                    "blocking_fact_ids": [],
+                },
+            ),
+        ),
+        case(
+            "denied_with_metrics",
+            lambda v: v.__setitem__("metrics", [_metric_ref()]),
+        ),
+        case(
+            "denied_with_comparisons",
+            lambda v: v.__setitem__(
+                "comparisons",
+                [
+                    {
+                        "label": "Cycle time",
+                        "current_value": 12.0,
+                        "comparison_value": 9.0,
+                        "unit": "hours",
+                    }
+                ],
+            ),
+        ),
+        case(
+            "denied_with_relationship_paths",
+            lambda v: v.__setitem__("relationship_paths", [_relationship_path()]),
+        ),
+        case(
+            "denied_with_evidence",
+            lambda v: v.__setitem__("evidence", [_evidence()]),
+        ),
+        case(
+            "denied_with_source_observations",
+            lambda v: v.__setitem__("source_observations", [_source_observation()]),
+        ),
+        case(
+            "denied_with_health_profile_refs",
+            lambda v: v.__setitem__("health_profile_refs", ["health_profile_01"]),
+        ),
+        case(
+            "denied_with_finding_refs",
+            lambda v: v.__setitem__("finding_refs", ["finding_01"]),
+        ),
+        case(
+            "denied_with_deficiency_refs",
+            lambda v: v.__setitem__("deficiency_refs", ["deficiency_01"]),
+        ),
+        case(
+            "denied_with_subject_identity",
+            lambda v: v.__setitem__("subject_ref", _entity_ref()),
+        ),
+    ]
+
+
 def _stream_started() -> dict[str, Any]:
     return {
         "schema_version": "dev_stream_event.v2",
@@ -442,9 +579,30 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             "Scope resolution failed with scope_forbidden for this repository.",
         ),
     )
+
+    def _make_outcome_content_mismatch(value: dict[str, Any]) -> None:
+        # Isolated to *only* trip validate_outcome_consistency's has_content
+        # check (sections/facts non-empty for a no-content outcome) — every
+        # other field validate_no_answer_content_leaks would also reject is
+        # cleared here so this fixture stays attributable to exactly one
+        # guardrail (see test_disabling_one_frame_validator_flips_only_its_own_fixture).
+        value["public_outcome"] = "not_found"
+        value["facts"][0]["evidence_ref_ids"] = []
+        value["facts"][0]["relationship_path_ids"] = []
+        value["completion"] = None
+        value["readiness"] = None
+        value["metrics"] = []
+        value["comparisons"] = []
+        value["relationship_paths"] = []
+        value["evidence"] = []
+        value["source_observations"] = []
+        value["health_profile_refs"] = []
+        value["finding_refs"] = []
+        value["deficiency_refs"] = []
+        value["subject_ref"] = None
+
     frame_outcome_content_mismatch = changed(
-        "dev_answer_frame.v1",
-        lambda value: value.__setitem__("public_outcome", "not_found"),
+        "dev_answer_frame.v1", _make_outcome_content_mismatch
     )
     frame_completion_without_denominator = changed(
         "dev_answer_frame.v1",
@@ -453,6 +611,40 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     frame_relationship_outside_frame = changed(
         "dev_answer_frame.v1",
         lambda value: value.__setitem__("relationship_paths", []),
+    )
+    answer_frame_run_id_mismatch = changed(
+        "dev_answer.v2",
+        lambda value: value["frame"].__setitem__("run_id", "run_from_a_different_run"),
+    )
+    answer_narrative_contradicts_number = changed(
+        "dev_answer.v2",
+        lambda value: value["narrative"].__setitem__(
+            "body",
+            "Repository dev-health is on track; the completion rate is 100%.",
+        ),
+    )
+    answer_narrative_contradicts_readiness = changed(
+        "dev_answer.v2",
+        lambda value: value["narrative"].__setitem__(
+            "body",
+            "Repository dev-health is ready, with no open work remaining.",
+        ),
+    )
+    answer_narrative_contradicts_subject = changed(
+        "dev_answer.v2",
+        lambda value: value["narrative"].__setitem__(
+            "body",
+            "Repository billing-service is on track, with one required child "
+            "issue still open.",
+        ),
+    )
+    answer_narrative_contradicts_recommendation = changed(
+        "dev_answer.v2",
+        lambda value: value["narrative"].__setitem__(
+            "body",
+            "Repository dev-health is on track. We recommend closing the "
+            "remaining issue soon.",
+        ),
     )
     return {
         "dev_message_request.v2": [
@@ -552,6 +744,7 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             ("outcome_content_mismatch", frame_outcome_content_mismatch),
             ("completion_without_denominator", frame_completion_without_denominator),
             ("relationship_outside_frame", frame_relationship_outside_frame),
+            *_no_answer_outcome_prohibited_field_cases(),
         ],
         "dev_narrative.v1": [
             (
@@ -569,7 +762,15 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                     "dev_answer.v2",
                     lambda value: value.__setitem__("public_outcome", "not_found"),
                 ),
-            )
+            ),
+            ("frame_run_id_mismatch", answer_frame_run_id_mismatch),
+            ("narrative_contradicts_number", answer_narrative_contradicts_number),
+            ("narrative_contradicts_readiness", answer_narrative_contradicts_readiness),
+            ("narrative_contradicts_subject", answer_narrative_contradicts_subject),
+            (
+                "narrative_contradicts_recommendation",
+                answer_narrative_contradicts_recommendation,
+            ),
         ],
         "dev_stream_event.v2": [
             (
@@ -603,6 +804,78 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
         {**deepcopy(terminal_error), "sequence": 2},
         {**deepcopy(done), "sequence": 3},
     ]
+
+    # Codex adversarial review (CHAOS-3294): "run.started, done, error, done"
+    # previously validated — a `done` before the real terminal result never
+    # tripped the old check, which only looked at the *last* event.
+    premature_done = {
+        **deepcopy(started),
+        "sequence": 1,
+        "event": "done",
+        "terminal_kind": "error",
+    }
+    premature_done_stream = [
+        deepcopy(started),
+        premature_done,
+        {**deepcopy(terminal_error), "sequence": 2},
+        {**deepcopy(done), "sequence": 3},
+    ]
+
+    duplicate_done_stream = [
+        deepcopy(started),
+        {**deepcopy(terminal_error), "sequence": 1},
+        {**deepcopy(done), "sequence": 2},
+        {**deepcopy(done), "sequence": 3},
+    ]
+
+    # Codex adversarial review (CHAOS-3294): two `resolution.updated` events
+    # were validated independently; `validate_ledger_extends` was never
+    # applied between them, so a later ledger could rewrite an earlier
+    # entry's outcome/committed reference instead of only appending.
+    ledger_v1 = _ledger()
+    ledger_v2_rewritten = deepcopy(ledger_v1)
+    ledger_v2_rewritten["entries"][0]["outcome"] = "no_authorized_match"
+    ledger_v2_rewritten["entries"][0]["committed_entity_ref"] = None
+    ledger_v2_rewritten["entries"][0]["repository_attribution"] = None
+    resolution_v1 = {
+        **deepcopy(started),
+        "sequence": 1,
+        "event": "resolution.updated",
+        "resolution_ledger": ledger_v1,
+    }
+    resolution_v2_rewrite = {
+        **deepcopy(started),
+        "sequence": 2,
+        "event": "resolution.updated",
+        "resolution_ledger": ledger_v2_rewritten,
+    }
+    ledger_rewrite_stream = [
+        deepcopy(started),
+        resolution_v1,
+        resolution_v2_rewrite,
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
+    ]
+
+    # Codex adversarial review (CHAOS-3294): an `answer.completed` event's
+    # embedded answer could carry a different run_id than the event itself.
+    mismatched_run_answer = deepcopy(positive_fixtures()["dev_answer.v2"])
+    mismatched_run_answer["run_id"] = "run_from_a_different_run"
+    mismatched_run_answer["frame"]["run_id"] = "run_from_a_different_run"
+    if mismatched_run_answer["narrative"] is not None:
+        mismatched_run_answer["narrative"]["run_id"] = "run_from_a_different_run"
+    answer_completed_mismatch = {
+        **deepcopy(started),
+        "sequence": 1,
+        "event": "answer.completed",
+        "answer": mismatched_run_answer,
+    }
+    answer_run_id_mismatch_stream = [
+        deepcopy(started),
+        answer_completed_mismatch,
+        {**deepcopy(done), "sequence": 2, "terminal_kind": "answer"},
+    ]
+
     return {
         "valid": [started, terminal_error, done],
         "invalid_duplicate_terminal": duplicate_terminal,
@@ -612,6 +885,10 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
             {**deepcopy(terminal_error), "sequence": 0},
             deepcopy(done),
         ],
+        "invalid_premature_done": premature_done_stream,
+        "invalid_duplicate_done": duplicate_done_stream,
+        "invalid_ledger_rewrite": ledger_rewrite_stream,
+        "invalid_answer_run_id_mismatch": answer_run_id_mismatch_stream,
     }
 
 

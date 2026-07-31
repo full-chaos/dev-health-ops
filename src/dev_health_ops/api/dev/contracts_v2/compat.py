@@ -19,6 +19,19 @@ client can only ever see an approximation of the richer v2 frame):
   mislabeling a team answer as organization- or repository-scoped, which
   would violate the "no team attribution without disclosed scope"
   guardrail (Amendment PRD v2 §10) at the compatibility boundary.
+* Symmetrically (Codex adversarial-review hardening, CHAOS-3294): a
+  ``subject_set_ref`` answer (a cohort/plural-subject frame) also has no
+  faithful v1 representation. ``dev_answer_frame.v1.subject_set_ref`` is
+  only an *opaque pointer* to a ``dev_subject_set.v1`` — the frame does not
+  embed the committed entity list itself — so there is no way to build a v1
+  ``DevScope`` that actually names the committed cohort. The old code fell
+  through ``_build_resolved_scope``'s "no ``subject_ref``" branch and
+  silently widened every cohort answer to organization-wide scope
+  (``DirectScope.ORGANIZATION`` / ``ScopeResolutionOutcome.ORGANIZATION_FALLBACK``),
+  misrepresenting cohort-specific facts as org-wide. The projector now
+  intercepts ``subject_set_ref`` before scope-building, exactly like the
+  team-subject case, and returns the same safe ``feature_not_enabled``
+  ``DevError`` rather than a mislabeled answer.
 * v1's ``DevAnswer.status == COMPLETE`` requires full source coverage
   (``validate_answer_invariants``). The projector never claims ``COMPLETE``
   unless the frame's own coverage actually satisfies that invariant, even
@@ -355,6 +368,19 @@ def project_answer_v2_to_v1(
             safe_message="Team-scoped Ask Dev answers require a newer client.",
             retryable=False,
             remediation=["Upgrade to a client that supports team-scoped answers."],
+        )
+    if frame.subject_set_ref is not None:
+        # A subject-set (cohort) frame has no faithful v1 representation
+        # either — see module docstring's Fidelity notes. Never fall through
+        # to `_build_resolved_scope`'s "no subject_ref" branch, which would
+        # silently widen the cohort to organization-wide scope.
+        return DevError(
+            schema_version="dev_error.v1",
+            request_id=answer.run_id,
+            code="feature_not_enabled",
+            safe_message="Cohort-scoped Ask Dev answers require a newer client.",
+            retryable=False,
+            remediation=["Upgrade to a client that supports cohort-scoped answers."],
         )
     if answer.public_outcome in (
         PublicOutcome.ANSWERED,

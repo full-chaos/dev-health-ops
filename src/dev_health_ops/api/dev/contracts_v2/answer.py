@@ -8,6 +8,14 @@ authorization enums are absent by schema." Because ``DevAnswerFrame`` and
 tokens (``validators.validate_no_internal_leakage``), embedding them here
 (rather than re-deriving a looser projection) is what makes "absent by
 schema" true rather than aspirational.
+
+``run_id`` closure (Codex adversarial-review hardening, CHAOS-3294): an
+answer's ``run_id`` must equal both its embedded frame's ``run_id`` and (when
+present) its narrative's ``run_id``, so an answer/metadata shell from one run
+can never be paired with a frame or narrative produced by a different run.
+The stream layer (``stream.py``) enforces the matching half of this closure
+at the wire boundary: an ``answer.completed`` event's ``run_id`` must equal
+its embedded answer's ``run_id``.
 """
 
 from __future__ import annotations
@@ -59,6 +67,14 @@ class DevAnswerV2(ContractModelV2):
             raise ValueError(
                 "outcome_display_label does not match the canonical safe label"
             )
+        if self.frame.run_id != self.run_id:
+            # Codex adversarial review (CHAOS-3294): nothing previously
+            # required the frame embedded in an answer to have been produced
+            # by the *same* run as the answer itself, so an answer could
+            # splice a frame from run A into an answer/metadata shell for
+            # run B. Closing this is what makes ``run_id`` an actual
+            # provenance closure key rather than a decorative field.
+            raise ValueError("answer run_id must match its frame's run_id")
         if self.narrative is not None:
             if self.narrative.run_id != self.run_id:
                 raise ValueError("narrative run_id must match the answer's run_id")
@@ -68,4 +84,5 @@ class DevAnswerV2(ContractModelV2):
                 raise ValueError(
                     f"narrative body leaks internal token(s) {sorted(hits)}"
                 )
+            _validators.validate_narrative_frame_consistency(self.narrative, self.frame)
         return self

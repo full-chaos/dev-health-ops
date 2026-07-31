@@ -10,25 +10,50 @@
     "unavailable_required_sources": []
   },
   "deficiency_refs": [],
-  "direct_answer": "Repository dev-health is on track; one required child issue remains open.",
-  "evidence": [],
-  "facts": [
+  "direct_answer": "You do not have access to ask about this.",
+  "evidence": [
     {
+      "citation_text": "Repository status observed directly.",
       "confidence": 1.0,
-      "evidence_ref_ids": [],
-      "fact_id": "fact_01",
-      "kind": "observed",
-      "relationship_path_ids": [],
-      "text": "Repository dev-health has one required child issue still open."
+      "display_label": "Status snapshot",
+      "entity_id": "item_01",
+      "entity_type": "work_item",
+      "evidence_ref_id": "ev_01",
+      "flags": {
+        "conflicting": false,
+        "deleted": false,
+        "redacted": false,
+        "stale": false,
+        "unavailable": false,
+        "uncertain": false,
+        "untrusted_content": true
+      },
+      "freshness": "fresh",
+      "link": {
+        "internal_path": "/work/items/item_01",
+        "source_url": null
+      },
+      "observed_at": "2026-07-28T12:00:00Z",
+      "provenance": "Canonical work graph projection",
+      "repository_ids": [
+        "repo_dev_health"
+      ],
+      "schema_version": "dev_evidence_ref.v1",
+      "source_system": "work_graph",
+      "source_version": "work_graph.v1",
+      "valid_entity_ids": [
+        "item_01"
+      ]
     }
   ],
+  "facts": [],
   "finding_refs": [],
   "frame_id": "frame_01",
   "generated_at": "2026-07-28T12:00:00Z",
   "health_profile_refs": [],
   "limitations": [],
   "metrics": [],
-  "public_outcome": "not_found",
+  "public_outcome": "denied",
   "readiness": null,
   "relationship_paths": [],
   "run_id": "run_01",
@@ -36,15 +61,7 @@
     "What changed since last week?"
   ],
   "schema_version": "dev_answer_frame.v1",
-  "sections": [
-    {
-      "fact_ids": [
-        "fact_01"
-      ],
-      "section_id": "summary",
-      "title": "Summary"
-    }
-  ],
+  "sections": [],
   "source_observations": [],
   "subject_ref": null,
   "subject_set_ref": null,

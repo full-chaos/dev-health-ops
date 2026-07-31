@@ -145,6 +145,122 @@ why the indirection matters for mutation testing:
   references must exist in the frame, and every relationship path must chain
   back to the frame's committed subject.
 
+## Post-merge hardening (Codex adversarial review, CHAOS-3294)
+
+A Codex adversarial-review pass against the merged contracts reproduced six
+counterexamples the original five validators did not catch. All six are
+fixed at the contract level; this section documents the resulting semantics.
+
+### No-content outcomes must carry nothing (`validate_no_answer_content_leaks`)
+
+`validate_outcome_consistency`'s original "no content" check only inspected
+`sections`/`facts` -- a `denied` frame validated with a subject reference, a
+3/4 completion rate, evidence, and source observations all still present.
+`NO_ANSWER_OUTCOMES` (`not_found`, `temporarily_unavailable`, `unsupported`,
+`denied`, `failed`) is the exact outcome set that projects to a v1 `DevError`
+rather than a v1 `DevAnswer` (see `compat.py`'s `_ERROR_OUTCOME_CODES`
+below). For these five outcomes, `validate_no_answer_content_leaks` requires
+`completion`, `readiness`, `metrics`, `comparisons`, `relationship_paths`,
+`evidence`, `source_observations`, `health_profile_refs`, `finding_refs`,
+and `deficiency_refs` to all be empty, in addition to `sections`/`facts`;
+`denied` additionally may not carry `subject_ref`/`subject_set_ref` -- the
+outcome itself must not confirm or deny which subject was asked about.
+
+`needs_clarification` is **deliberately excluded** from `NO_ANSWER_OUTCOMES`:
+unlike the five error outcomes above, it projects to a v1 `DevAnswer` with
+`insufficient_evidence` status (`compat.py::_project_needs_clarification`),
+and its frame may legitimately carry a disambiguation-relevant `subject_ref`
+(used to build a v1 `DevDisambiguationCandidate`). Only its answer
+*content* -- `sections`/`facts` -- is required to stay empty, which the
+original `validate_outcome_consistency` check already enforced.
+
+### Narrative/frame consistency is bounded, not general (`validate_narrative_frame_consistency`)
+
+A narrative claiming "100% complete, ready, no open work" previously
+validated against a frame declaring a 75% completion rate, `not_ready`
+readiness, and an open blocking issue -- narrative text was never checked
+against the frame it is paired with. `validate_narrative_frame_consistency`
+adds four narrow, deterministic checks, each independently a source of
+negative fixtures (`dev_answer.v2` cases `narrative_contradicts_number`,
+`_readiness`, `_subject`, `_recommendation`):
+
+1. **Numeric containment** -- every bare numeral/percentage token in the
+   narrative body must match (within floating-point tolerance) a number the
+   frame itself renders somewhere: `direct_answer`, fact text, limitations,
+   follow-ups, readiness reasons, completion numerator/denominator/rate (in
+   both fraction and percent form), or comparison values.
+2. **Readiness polarity** -- a bare "ready" claim is rejected unless
+   `frame.readiness.state == "ready"`; a "not ready" claim is rejected if the
+   frame's state actually is `"ready"`. Deterministic because `state` is a
+   closed three-value enum.
+3. **Subject presence** -- if the frame commits to a single subject, the
+   narrative body must name it (a loose per-token presence check against
+   `subject_ref.display_label`, not exact-string containment, so an
+   abbreviated or reformatted mention still passes).
+4. **Recommendation grounding** -- if the narrative reads as making a
+   recommendation ("recommend(s/ed)", "recommendation(s)"), the frame must
+   carry at least one fact of `kind == "recommendation"`.
+
+**This is not general semantic contradiction detection.** These four checks
+catch exactly the pattern-matchable subset of narrative/frame disagreement;
+an arbitrary false claim that isn't reducible to a numeral, a readiness
+word, the subject's own name, or a recommendation keyword cannot be verified
+without a model in the loop. Full narrative/frame semantic consistency
+checking is owned by the TRD v2 §11 layer-6 narrative-consistency
+validator, tracked as **CHAOS-3297** -- this contract-level guard only
+closes the mechanically-checkable subset.
+
+### `subject_set_ref` never widens to organization scope
+
+`compat.py::_build_resolved_scope`'s "no `subject_ref`" fallback branch
+previously fired for *any* frame without a `subject_ref` -- including a
+cohort (`subject_set_ref`) frame -- silently projecting cohort-specific
+facts as `DirectScope.ORGANIZATION` / `ScopeResolutionOutcome.ORGANIZATION_FALLBACK`.
+`dev_answer_frame.v1.subject_set_ref` is only an *opaque pointer* to a
+`dev_subject_set.v1`; the frame does not embed the committed entity list, so
+there is no way to build a v1 `DevScope` that faithfully names the cohort.
+`project_answer_v2_to_v1` now intercepts `subject_set_ref` before
+scope-building, exactly like the existing team-subject case, and returns the
+same safe `feature_not_enabled` `DevError` instead of a mislabeled answer.
+
+### `run_id` closure across frame, answer, and stream boundary
+
+Nothing previously required the frame embedded in a `dev_answer.v2` to have
+been produced by the *same* run as the answer itself. `run_id` closure is
+now enforced end to end:
+
+- `DevAnswerV2.validate_answer_invariants` requires `frame.run_id ==
+  self.run_id` (in addition to the pre-existing `narrative.run_id ==
+  self.run_id` check).
+- `DevStreamEventV2.validate_event_payload` requires an `answer.completed`
+  event's embedded `DevAnswerV2.run_id` to equal the event's own `run_id`.
+
+(`DevError.request_id` is deliberately **not** included in this closure --
+it identifies the original client request, a distinct concept from the
+execution `run_id`, and the two are expected to differ.)
+
+### Stream terminal rules: exactly one `done`, only at the end
+
+`validate_stream_v2`'s terminal-position check only verified that the
+*last* event was `done` and that the lone terminal result
+(`answer.completed`/`error`) immediately preceded it -- it never checked
+that `done` occurred *only* there. A stream like `run.started, done, error,
+done` (a premature `done` before the real terminal result) validated.
+`validate_stream_v2` now requires `done` to appear exactly once, and only as
+the final event, closing both a premature-`done` and a duplicate-`done`
+counterexample.
+
+### Resolution ledger snapshots must extend across stream updates
+
+`validate_stream_v2` validated each `resolution.updated` event's ledger
+independently; `validate_ledger_extends` (see above) was defined but never
+actually applied *between* successive ledger snapshots in the same stream,
+so a later `resolution.updated` event could rewrite an earlier one's entry
+instead of only appending. `validate_stream_v2` now tracks the previous
+ledger snapshot across the event loop and, for every `resolution.updated`
+event after the first, requires both a non-decreasing `updated_at` and a
+passing `validate_ledger_extends(previous, candidate)` call.
+
 ## Compatibility: one backend projector
 
 `contracts_v2/compat.py::project_answer_v2_to_v1` is the single backend
@@ -153,12 +269,15 @@ projection from `dev_answer.v2` to the retained v1 vocabulary (`DevAnswer` /
 `answered_with_gaps` project to a v1 `DevAnswer` (never claiming `COMPLETE`
 unless the frame's own coverage satisfies v1's completeness invariant);
 `needs_clarification` projects to `DevAnswer` with status
-`insufficient_evidence`; every "no content" outcome projects to a v1
-`DevError` with a safe code (`not_found` &rarr; `scope_not_found`,
-`temporarily_unavailable` &rarr; `source_unavailable`, `unsupported` &rarr;
-`feature_not_enabled`, `denied` &rarr; `forbidden`, `failed` &rarr;
-`internal_error`). Existing retained v1 transcripts are read by the
-unmodified v1 module and are never reinterpreted as v2 evidence.
+`insufficient_evidence`; every "no content" outcome (`NO_ANSWER_OUTCOMES`,
+above) projects to a v1 `DevError` with a safe code (`not_found` &rarr;
+`scope_not_found`, `temporarily_unavailable` &rarr; `source_unavailable`,
+`unsupported` &rarr; `feature_not_enabled`, `denied` &rarr; `forbidden`,
+`failed` &rarr; `internal_error`); a team-subject or subject-set-cohort
+frame projects to a `feature_not_enabled` `DevError` regardless of outcome
+(v1 cannot faithfully represent either). Existing retained v1 transcripts
+are read by the unmodified v1 module and are never reinterpreted as v2
+evidence.
 
 ## TRD ambiguities resolved for this issue
 

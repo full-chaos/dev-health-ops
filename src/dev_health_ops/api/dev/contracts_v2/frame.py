@@ -3,10 +3,12 @@
 A valid answer frame is independent of whether a provider narrative exists
 (CHAOS-3294 guardrail): everything a user needs is representable here
 without ``dev_narrative.v1``. The frame's own ``model_validator`` wires in
-the five acceptance-criteria semantic validators via the ``validators``
-*module* (not bound-method references) so each can be disabled
-independently in a mutation test — see ``validators`` module docstring for
-why that indirection matters.
+the five acceptance-criteria semantic validators, plus the post-merge
+Codex-review guardrail (f) ``validate_no_answer_content_leaks`` (a
+no-content outcome must carry nothing beyond the bare outcome — see that
+function's docstring), via the ``validators`` *module* (not bound-method
+references) so each can be disabled independently in a mutation test — see
+``validators`` module docstring for why that indirection matters.
 """
 
 from __future__ import annotations
@@ -169,6 +171,7 @@ class DevAnswerFrame(ContractModelV2):
         _validators.validate_structural_closure(self)
         _validators.validate_no_internal_leakage(self)
         _validators.validate_outcome_consistency(self)
+        _validators.validate_no_answer_content_leaks(self)
         _validators.validate_completion_denominator(self)
         _validators.validate_relationship_refs_within_frame(self)
         return self

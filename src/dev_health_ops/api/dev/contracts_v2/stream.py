@@ -8,6 +8,27 @@ captures that), progress states cover the new investigation stages, and
 the terminal answer payload is ``DevAnswerV2``. No prompts, chain-of-thought,
 raw tool payloads, internal authorization states, or rule internals are
 streamed (Amendment TRD v2 §12).
+
+Codex adversarial-review hardening (post-merge, CHAOS-3294) closed three
+counterexamples the review reproduced against this module:
+
+* An ``answer.completed`` event's embedded ``DevAnswerV2.run_id`` was never
+  checked against the event's own ``run_id`` — the stream-boundary half of
+  the answer/frame ``run_id`` closure (see ``answer.py`` module docstring).
+  Enforced in ``DevStreamEventV2.validate_event_payload`` below.
+* ``validate_stream_v2`` validated each ``resolution.updated`` event's
+  ledger independently and never called ``validate_ledger_extends`` between
+  successive ledger snapshots in the same stream, so a later
+  ``resolution.updated`` event could silently rewrite an earlier one's
+  entries. Enforced by tracking the previous ledger snapshot across the
+  event loop and requiring both append-only extension and non-decreasing
+  ``updated_at``.
+* The terminal-position check only verified the *last* event was ``done``
+  and that the lone terminal result (``answer.completed``/``error``)
+  immediately preceded it; it never checked that ``done`` occurred *only*
+  there, so a stream like ``run.started, done, error, done`` (a premature
+  ``done`` before the real terminal result) validated. ``validate_stream_v2``
+  now requires ``done`` to appear exactly once, and only as the final event.
 """
 
 from __future__ import annotations
@@ -21,7 +42,7 @@ from dev_health_ops.api.dev.contracts import DevError
 
 from .answer import DevAnswerV2
 from .base import ContractModelV2, OpaqueID, ShortText
-from .subject import DevResolutionLedger
+from .subject import DevResolutionLedger, validate_ledger_extends
 
 __all__ = [
     "DevStreamEventV2",
@@ -112,11 +133,29 @@ class DevStreamEventV2(ContractModelV2):
             raise ValueError(
                 f"unexpected payloads for {self.event}: {sorted(unexpected)}"
             )
+        if (
+            self.event is StreamEventTypeV2.ANSWER_COMPLETED
+            and self.answer is not None
+            and self.answer.run_id != self.run_id
+        ):
+            # Codex adversarial review (CHAOS-3294): the stream-boundary half
+            # of the run_id closure — see module docstring and answer.py.
+            raise ValueError(
+                "answer.completed event run_id must match its embedded answer's run_id"
+            )
         return self
 
 
 def validate_stream_v2(events: list[DevStreamEventV2]) -> None:
-    """Validate one bounded v2 stream: ordered events, one terminal, then done."""
+    """Validate one bounded v2 stream: ordered events, one terminal, then done.
+
+    Codex adversarial-review hardening (CHAOS-3294) — see module docstring —
+    added two checks beyond the original ones: ``done`` must appear exactly
+    once, and only as the stream's final event (closes a premature/duplicate
+    ``done`` counterexample); and successive ``resolution.updated`` ledger
+    snapshots must extend, never rewrite, one another via
+    ``validate_ledger_extends`` with non-decreasing ``updated_at``.
+    """
 
     if not events:
         raise ValueError("stream must not be empty")
@@ -129,6 +168,21 @@ def validate_stream_v2(events: list[DevStreamEventV2]) -> None:
         raise ValueError("stream sequence must be contiguous and ordered")
     if events[0].event is not StreamEventTypeV2.RUN_STARTED:
         raise ValueError("stream must start with run.started")
+
+    done_indexes = [
+        index
+        for index, event in enumerate(events)
+        if event.event is StreamEventTypeV2.DONE
+    ]
+    if len(done_indexes) != 1:
+        raise ValueError("stream must contain exactly one done event")
+    if done_indexes[0] != len(events) - 1:
+        # A `done` at any position other than the very last event is either
+        # a premature terminal marker (something before the real terminal
+        # result claimed the stream was finished) or, combined with the
+        # count check above, a duplicate.
+        raise ValueError("done must be the final event in the stream")
+
     terminal_indexes = [
         index
         for index, event in enumerate(events)
@@ -137,10 +191,7 @@ def validate_stream_v2(events: list[DevStreamEventV2]) -> None:
     if len(terminal_indexes) != 1:
         raise ValueError("stream must contain exactly one terminal result")
     terminal_index = terminal_indexes[0]
-    if (
-        terminal_index != len(events) - 2
-        or events[-1].event is not StreamEventTypeV2.DONE
-    ):
+    if terminal_index != len(events) - 2:
         raise ValueError("terminal result must be immediately followed by done")
     terminal_kind = (
         "answer"
@@ -149,3 +200,19 @@ def validate_stream_v2(events: list[DevStreamEventV2]) -> None:
     )
     if events[-1].terminal_kind != terminal_kind:
         raise ValueError("done terminal_kind must match the terminal result")
+
+    previous_ledger: DevResolutionLedger | None = None
+    for event in events:
+        if event.event is not StreamEventTypeV2.RESOLUTION_UPDATED:
+            continue
+        ledger = event.resolution_ledger
+        if ledger is None:
+            continue  # unreachable in practice: the per-event validator requires it
+        if previous_ledger is not None:
+            if ledger.updated_at < previous_ledger.updated_at:
+                raise ValueError(
+                    "resolution ledger updated_at must be monotonically "
+                    "non-decreasing across resolution.updated events"
+                )
+            validate_ledger_extends(previous_ledger, ledger)
+        previous_ledger = ledger

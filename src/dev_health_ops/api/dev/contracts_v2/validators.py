@@ -23,6 +23,37 @@ The five guardrails named in the acceptance criteria:
 (c) ``validate_completion_denominator``    — completion rate without a full numerator/denominator
 (d) ``validate_narrative_fact_references`` — narrative referencing missing fact IDs
 (e) ``validate_relationship_refs_within_frame`` — relationship refs outside the frame
+
+CHAOS-3294 Codex adversarial-review hardening (post-merge) adds two more
+guardrails that are not part of the original five but close counterexamples
+the review reproduced against them:
+
+(f) ``validate_no_answer_content_leaks`` — a "no content" outcome (see
+    ``NO_ANSWER_OUTCOMES`` below) must carry *nothing* beyond the bare
+    outcome: no completion, readiness, metrics, comparisons, relationship
+    paths, evidence, source observations, or internal cross-references
+    (``health_profile_refs``/``finding_refs``/``deficiency_refs``), and
+    ``denied`` specifically must not disclose which subject was asked
+    about. ``needs_clarification`` is deliberately **not** in
+    ``NO_ANSWER_OUTCOMES``: unlike the five outcomes that project to a v1
+    ``DevError`` (see ``compat.py``'s ``_ERROR_OUTCOME_CODES``),
+    ``needs_clarification`` projects to a v1 ``DevAnswer`` with
+    ``insufficient_evidence`` status and its frame may legitimately carry a
+    disambiguation-relevant ``subject_ref`` (see
+    ``compat._project_needs_clarification``) — only its answer *content*
+    (sections/facts) is required to stay empty, which the pre-existing
+    ``validate_outcome_consistency`` check already enforces.
+(g) ``validate_narrative_frame_consistency`` — a battery of deterministic,
+    narrow checks (numeral/percentage containment, readiness-word polarity,
+    committed-subject-name presence, recommendation-keyword grounding) that
+    reject a narrative that plainly contradicts its paired frame. This is
+    **not** general semantic contradiction detection — arbitrary claims a
+    narrative could make that aren't reducible to one of these four
+    deterministic signals cannot be verified at the contract level. Full
+    narrative/frame semantic consistency checking is owned by the TRD v2
+    §11 layer-6 narrative-consistency validator, tracked as CHAOS-3297; this
+    module only closes the subset that is mechanically checkable without a
+    model in the loop.
 """
 
 from __future__ import annotations
@@ -36,10 +67,17 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ANSWERED_CONTENT_OUTCOMES",
+    "NO_ANSWER_OUTCOMES",
     "PUBLIC_TEXT_FORBIDDEN_TOKENS",
     "scan_public_text",
     "validate_completion_denominator",
     "validate_narrative_fact_references",
+    "validate_narrative_frame_consistency",
+    "validate_narrative_numeric_containment",
+    "validate_narrative_readiness_claim",
+    "validate_narrative_recommendation_claim",
+    "validate_narrative_subject_claim",
+    "validate_no_answer_content_leaks",
     "validate_no_internal_leakage",
     "validate_outcome_consistency",
     "validate_relationship_refs_within_frame",
@@ -140,6 +178,31 @@ _EMPTY_CONTENT_OUTCOMES = frozenset(
 #: Outcomes representing a genuine, server-owned answer.
 ANSWERED_CONTENT_OUTCOMES = frozenset({"answered", "answered_with_gaps"})
 
+#: Outcomes for which the server produced *no* answer whatsoever. This is a
+#: strict subset of ``_EMPTY_CONTENT_OUTCOMES`` — it deliberately excludes
+#: ``needs_clarification`` (see module docstring guardrail (f) for why) — and
+#: is exactly the outcome set ``compat.py``'s ``_ERROR_OUTCOME_CODES`` maps to
+#: a v1 ``DevError`` rather than a v1 ``DevAnswer``. Codex adversarial review
+#: (CHAOS-3294): a ``denied`` frame validated with a subject reference, a
+#: 3/4 completion rate, evidence, and source observations all still present
+#: because the old guard only checked ``sections``/``facts``.
+NO_ANSWER_OUTCOMES = frozenset(
+    {"not_found", "temporarily_unavailable", "unsupported", "denied", "failed"}
+)
+
+#: Frame list/optional fields that must be empty for a ``NO_ANSWER_OUTCOMES``
+#: outcome, beyond ``sections``/``facts`` (already covered above).
+_NO_ANSWER_PROHIBITED_LIST_FIELDS: tuple[str, ...] = (
+    "metrics",
+    "comparisons",
+    "relationship_paths",
+    "evidence",
+    "source_observations",
+    "health_profile_refs",
+    "finding_refs",
+    "deficiency_refs",
+)
+
 
 def validate_outcome_consistency(frame: DevAnswerFrame) -> None:
     """(b) Reject a public outcome that contradicts the frame's own content."""
@@ -170,6 +233,38 @@ def validate_outcome_consistency(frame: DevAnswerFrame) -> None:
                 "'answered_with_gaps' requires disclosed limitations or a "
                 "non-calculable completion block"
             )
+
+
+def validate_no_answer_content_leaks(frame: DevAnswerFrame) -> None:
+    """(f) A no-content outcome (``NO_ANSWER_OUTCOMES``) must carry nothing.
+
+    Closes the Codex-review counterexample: the pre-existing outcome-content
+    check only inspected ``sections``/``facts``, so a ``denied`` (or
+    ``not_found``/``unsupported``/``temporarily_unavailable``/``failed``)
+    frame could still validate with a completion rate, readiness, metrics,
+    comparisons, relationship paths, evidence, source observations, or
+    internal cross-references intact — none of which any client should ever
+    see for an outcome that means "the server produced no answer". ``denied``
+    additionally may not disclose *which* subject was asked about (the
+    outcome itself must not confirm or deny the subject's existence).
+    """
+
+    outcome = frame.public_outcome.value
+    if outcome not in NO_ANSWER_OUTCOMES:
+        return
+    if frame.completion is not None:
+        raise ValueError(f"public outcome {outcome!r} cannot carry a completion block")
+    if frame.readiness is not None:
+        raise ValueError(f"public outcome {outcome!r} cannot carry a readiness block")
+    for field_name in _NO_ANSWER_PROHIBITED_LIST_FIELDS:
+        if getattr(frame, field_name):
+            raise ValueError(f"public outcome {outcome!r} cannot carry {field_name}")
+    if outcome == "denied" and (
+        frame.subject_ref is not None or frame.subject_set_ref is not None
+    ):
+        raise ValueError(
+            "'denied' cannot disclose the subject identity that was asked about"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +335,195 @@ def validate_narrative_fact_references(
         raise ValueError(
             f"narrative references unknown section IDs: {sorted(unknown_sections)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# (g) narrative text contradicting its paired frame (Codex adversarial
+# review, CHAOS-3294). See module docstring guardrail (g) for the explicit
+# scope statement: these are four narrow, deterministic checks, not general
+# semantic contradiction detection. Full semantic consistency is the TRD v2
+# §11 layer-6 narrative-consistency validator, CHAOS-3297.
+# ---------------------------------------------------------------------------
+
+#: Any bare numeral or percentage token in narrative prose, e.g. ``100``,
+#: ``75%``, ``0.75``.
+_NUMERIC_TOKEN_PATTERN = re.compile(r"\d+(?:\.\d+)?%?")
+
+_READY_WORD_PATTERN = re.compile(r"\bready\b", re.IGNORECASE)
+_NOT_READY_PHRASE_PATTERN = re.compile(r"\bnot[\s-]+ready\b", re.IGNORECASE)
+_TOKEN_SPLIT_PATTERN = re.compile(r"[^a-z0-9]+")
+_RECOMMENDATION_CLAIM_PATTERN = re.compile(
+    r"\brecommend(?:s|ed|ation|ations)?\b", re.IGNORECASE
+)
+
+
+def _numeric_value(raw_token: str) -> float:
+    return float(raw_token[:-1]) if raw_token.endswith("%") else float(raw_token)
+
+
+def _frame_numeric_value_set(frame: DevAnswerFrame) -> set[float]:
+    """Every numeral the frame itself renders, in the units it renders them.
+
+    A completion ``rate`` of ``0.75`` is added both as ``0.75`` (fraction
+    form) and ``75`` (percent form) so a narrative may correctly say either
+    "0.75" or "75%" — the guard only rejects a number the frame never
+    rendered in *any* of its own forms, e.g. "100%" when the frame's own
+    rate is 75%.
+    """
+
+    values: set[float] = set()
+    for match in _NUMERIC_TOKEN_PATTERN.finditer(frame.direct_answer):
+        values.add(_numeric_value(match.group()))
+    for fact in frame.facts:
+        for match in _NUMERIC_TOKEN_PATTERN.finditer(fact.text):
+            values.add(_numeric_value(match.group()))
+    for text in (*frame.limitations, *frame.safe_follow_up_questions):
+        for match in _NUMERIC_TOKEN_PATTERN.finditer(text):
+            values.add(_numeric_value(match.group()))
+    if frame.readiness is not None:
+        for text in frame.readiness.translated_user_reasons:
+            for match in _NUMERIC_TOKEN_PATTERN.finditer(text):
+                values.add(_numeric_value(match.group()))
+    completion = frame.completion
+    if completion is not None:
+        if completion.numerator is not None:
+            values.add(float(completion.numerator))
+        if completion.denominator is not None:
+            values.add(float(completion.denominator))
+        if completion.rate is not None:
+            values.add(round(completion.rate, 6))
+            values.add(round(completion.rate * 100, 6))
+    for point in frame.comparisons:
+        values.add(round(point.current_value, 6))
+        if point.comparison_value is not None:
+            values.add(round(point.comparison_value, 6))
+    return values
+
+
+def _value_in(haystack: set[float], value: float, *, tolerance: float = 1e-6) -> bool:
+    return any(abs(value - candidate) <= tolerance for candidate in haystack)
+
+
+def validate_narrative_numeric_containment(
+    narrative: DevNarrative, frame: DevAnswerFrame
+) -> None:
+    """(g.1) Reject a narrative numeral/percentage absent from the frame's own values.
+
+    Deterministic: extracts every bare number/percent token from the
+    narrative body and requires each to match (within floating-point
+    tolerance) a number the frame itself renders somewhere — its own
+    ``direct_answer``, fact text, limitations, follow-ups, readiness
+    reasons, completion numerator/denominator/rate, or comparison values.
+    Closes the counterexample where a narrative claimed "100% complete"
+    against a frame whose completion rate was 3/4 (75%).
+    """
+
+    offenders = sorted(
+        {
+            match.group()
+            for match in _NUMERIC_TOKEN_PATTERN.finditer(narrative.body)
+            if not _value_in(
+                _frame_numeric_value_set(frame), _numeric_value(match.group())
+            )
+        }
+    )
+    if offenders:
+        raise ValueError(
+            f"narrative cites number(s) {offenders} that do not appear in the "
+            "frame's own facts, completion, or comparisons"
+        )
+
+
+def validate_narrative_readiness_claim(
+    narrative: DevNarrative, frame: DevAnswerFrame
+) -> None:
+    """(g.2) Reject a narrative readiness claim that contradicts the frame.
+
+    Closes the counterexample where a narrative said "ready" against a frame
+    whose readiness state was ``not_ready``. Deterministic because
+    ``DevReadinessBlock.state`` is a closed three-value enum.
+    """
+
+    if frame.readiness is None:
+        return
+    state = frame.readiness.state
+    body_without_not_ready = _NOT_READY_PHRASE_PATTERN.sub("", narrative.body)
+    claims_ready = bool(_READY_WORD_PATTERN.search(body_without_not_ready))
+    claims_not_ready = bool(_NOT_READY_PHRASE_PATTERN.search(narrative.body))
+    if state == "ready" and claims_not_ready:
+        raise ValueError(
+            "narrative claims not-ready but the frame's readiness is 'ready'"
+        )
+    if state != "ready" and claims_ready:
+        raise ValueError(
+            f"narrative claims ready but the frame's readiness is {state!r}"
+        )
+
+
+def validate_narrative_subject_claim(
+    narrative: DevNarrative, frame: DevAnswerFrame
+) -> None:
+    """(g.3) Reject a narrative that never names the frame's committed subject.
+
+    Deliberately a loose, false-positive-averse presence check (any
+    ``len >= 3`` token split out of ``subject_ref.display_label``, not an
+    exact-string match) rather than a strict containment rule, so ordinary
+    prose that abbreviates or reformats a display label ("dev-health" for
+    "full-chaos/dev-health") still passes. It still catches a narrative that
+    names a wholly different subject.
+    """
+
+    subject = frame.subject_ref
+    if subject is None:
+        return
+    tokens = [
+        token
+        for token in _TOKEN_SPLIT_PATTERN.split(subject.display_label.lower())
+        if len(token) >= 3
+    ]
+    if not tokens:
+        return
+    lowered_body = narrative.body.lower()
+    if not any(token in lowered_body for token in tokens):
+        raise ValueError(
+            "narrative body never names the frame's committed subject "
+            f"({subject.display_label!r})"
+        )
+
+
+def validate_narrative_recommendation_claim(
+    narrative: DevNarrative, frame: DevAnswerFrame
+) -> None:
+    """(g.4) Reject narrative recommendation language ungrounded in the frame.
+
+    If the narrative reads as making a recommendation ("recommend(s|ed)",
+    "recommendation(s)"), the frame must actually carry at least one fact of
+    ``kind == "recommendation"`` to ground it.
+    """
+
+    if not _RECOMMENDATION_CLAIM_PATTERN.search(narrative.body):
+        return
+    if not any(fact.kind == "recommendation" for fact in frame.facts):
+        raise ValueError(
+            "narrative reads as a recommendation but the frame has no "
+            "recommendation fact to ground it"
+        )
+
+
+def validate_narrative_frame_consistency(
+    narrative: DevNarrative, frame: DevAnswerFrame
+) -> None:
+    """(g) Run all four narrative/frame contradiction checks (g.1-g.4).
+
+    See the module docstring guardrail (g) and each sub-check's own
+    docstring for exactly what is — and is not — covered: this is bounded,
+    deterministic pattern matching, not semantic narrative understanding.
+    """
+
+    validate_narrative_numeric_containment(narrative, frame)
+    validate_narrative_readiness_claim(narrative, frame)
+    validate_narrative_subject_claim(narrative, frame)
+    validate_narrative_recommendation_claim(narrative, frame)
 
 
 # ---------------------------------------------------------------------------

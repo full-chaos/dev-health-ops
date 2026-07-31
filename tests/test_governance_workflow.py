@@ -50,10 +50,18 @@ def test_governance_workflow_resolves_all_merge_group_pr_bodies(
     fake_gh = tmp_path / "gh"
     gh_args = tmp_path / "gh-args.txt"
     github_output = tmp_path / "github-output.txt"
+    slurped_pages = (
+        '[{"data":{"repository":{"pullRequest":{"mergeQueueEntry":{"position":2,'
+        '"mergeQueue":{"entries":{"nodes":['
+        '{"position":1,"pullRequest":{"body":"first PR evidence"}},'
+        '{"position":2,"pullRequest":{"body":"second PR evidence"}},'
+        '{"position":3,"pullRequest":{"body":"queued-behind evidence"}}'
+        '],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}}}]'
+    )
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
         'printf \'%s\\n\' "$@" > "$GH_ARGS_FILE"\n'
-        "printf 'first PR evidence\\nsecond PR evidence\\n'\n",
+        f"printf '%s\\n' '{slurped_pages}'\n",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -89,4 +97,10 @@ def test_governance_workflow_resolves_all_merge_group_pr_bodies(
     assert "--slurp" in invocation
     assert "entries(first:100,after:$endCursor)" in invocation
     assert "pageInfo{hasNextPage endCursor}" in invocation
-    assert "position <= $current.position" in invocation
+    # gh rejects --slurp combined with --jq, so the filter must run as a
+    # standalone jq stage rather than ride along on the gh invocation.
+    assert "--jq" not in invocation
+    script = _governance_context_script()
+    assert "position <= $current.position" in script
+    # The queued-behind entry (position 3 > current position 2) must be excluded.
+    assert "queued-behind evidence" not in github_output.read_text(encoding="utf-8")

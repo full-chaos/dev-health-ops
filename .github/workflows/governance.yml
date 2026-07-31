@@ -49,7 +49,7 @@ jobs:
                 -f owner="$GITHUB_REPOSITORY_OWNER" \
                 -f name="$REPOSITORY_NAME" \
                 -F number="$pr_number" \
-                --jq '.[0].data.repository.pullRequest.mergeQueueEntry as $current | [.[].data.repository.pullRequest.mergeQueueEntry.mergeQueue.entries.nodes[] | select(.position <= $current.position) | (.pullRequest.body // "")] | join("\n")'
+                | jq -r '.[0].data.repository.pullRequest.mergeQueueEntry as $current | [.[].data.repository.pullRequest.mergeQueueEntry.mergeQueue.entries.nodes[] | select(.position <= $current.position) | (.pullRequest.body // "")] | join("\n")'
             )"
           fi
           delimiter="pr_body_$(uuidgen)"

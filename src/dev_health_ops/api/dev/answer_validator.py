@@ -36,7 +36,32 @@ _NON_REPAIRABLE_VALIDATION_MARKERS = (
 # status instead of hard-failing a run that has usable evidence (CHAOS-3257).
 
 
-_MAX_REPAIR_DETAIL_CHARS = 500
+_MAX_REPAIR_DETAIL_CHARS = 200
+
+
+def _bounded_detail(messages: tuple[str, ...], *, limit: int) -> str:
+    """Join messages up to `limit` chars without cutting one mid-sentence.
+
+    A naive join-then-slice can end on a fragment like "Extra inputs are
+    not" (from a 30-forbidden-field answer), which the repair prompt would
+    then present as if it were the complete reason. Keep only whole
+    messages that fit and note how many were dropped instead.
+    """
+    non_empty = [part for part in messages if part]
+    kept: list[str] = []
+    total = 0
+    for index, msg in enumerate(non_empty):
+        addition = msg if not kept else f"; {msg}"
+        if total + len(addition) > limit:
+            if not kept:
+                # Even the first whole message doesn't fit: better a
+                # visibly-truncated fragment than an empty detail string.
+                return msg[:limit]
+            omitted = len(non_empty) - index
+            return "; ".join(kept) + f" (+{omitted} more)"
+        kept.append(msg)
+        total += len(addition)
+    return "; ".join(kept)
 
 
 class AnswerValidationError(ValueError):
@@ -57,9 +82,13 @@ class AnswerValidationError(ValueError):
         # act on. Bounded and built only from our own raised messages / the
         # `msg` field of pydantic error dicts -- never raw echoed input
         # values, which pydantic keeps in a separate `input`/`ctx` field we
-        # do not touch.
-        joined = "; ".join(part for part in detail if part) or message
-        self.detail = joined[:_MAX_REPAIR_DETAIL_CHARS]
+        # do not touch. (One documented exception: pydantic's
+        # `iteration_error` embeds the underlying iterator exception's own
+        # text in `msg`; DevAnswer has no field whose validation iterates a
+        # caller-supplied generator today, so this is not currently
+        # reachable, but `msg` is not categorically safe for every possible
+        # future field type -- see CHAOS-3288 review notes.)
+        self.detail = _bounded_detail(detail, limit=_MAX_REPAIR_DETAIL_CHARS) or message
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,19 +140,35 @@ def validate_answer_candidate(
             else DevAnswer.model_validate(payload)
         )
     except ValidationError as exc:
-        details = str(exc).casefold()
-        repairable = not any(
-            marker in details for marker in _NON_REPAIRABLE_VALIDATION_MARKERS
-        )
         # `error["msg"]` is the clean "Value error, <our message>" or
         # "Field required" text; pydantic keeps the echoed input value in a
         # separate `input`/`ctx` key we deliberately never read here, so
         # this cannot leak tool/evidence payload content into the prompt.
+        # For a missing required field, `loc` is one of our own fixed
+        # dev_answer.v1 field names (never model-echoed content), so naming
+        # it makes an otherwise-generic "Field required" actionable; for
+        # every other error type we keep `msg` alone rather than risk
+        # echoing a model-controlled key (e.g. an unexpected extra field).
+        messages = tuple(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error.get('msg', '')}"
+            if error.get("type") == "missing" and error.get("loc")
+            else str(error.get("msg", ""))
+            for error in exc.errors()
+        )
+        # Classify repairability from the same safe messages, never from
+        # `str(exc)` -- pydantic's rendered exception text also includes
+        # `input_value=...`, so a coincidental echoed input (e.g. the model
+        # sending status="unknown metric") could otherwise match one of the
+        # markers below and wrongly mark an unrelated error non-repairable.
+        details = " ".join(messages).casefold()
+        repairable = not any(
+            marker in details for marker in _NON_REPAIRABLE_VALIDATION_MARKERS
+        )
         raise AnswerValidationError(
             "answer does not conform to dev_answer.v1",
             code="answer_validation_failed",
             repairable=repairable,
-            detail=tuple(str(error.get("msg", "")) for error in exc.errors()),
+            detail=messages,
         ) from exc
 
     if (

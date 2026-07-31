@@ -17,6 +17,7 @@ from dev_health_ops.llm.errors import (
     is_retryable,
     retry_delay,
 )
+from dev_health_ops.logging_config import pin_content_carrying_client_loggers
 
 from ._http import make_hardened_async_httpx_client
 from .base import (
@@ -150,6 +151,11 @@ class LocalProvider(LLMProviderBase):
         if self._client is None:
             try:
                 from openai import AsyncOpenAI
+
+                # See CHAOS-3258: the SDK's own import-time logging setup
+                # can reset content-carrying client loggers to DEBUG when
+                # the operator OPENAI_LOG env var is set; reassert the pin.
+                pin_content_carrying_client_loggers()
 
                 self._client = AsyncOpenAI(
                     api_key=self.api_key,

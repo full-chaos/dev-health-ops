@@ -150,15 +150,18 @@ def prepare(
                 f"failed to enable {key}",
             )
 
-    readiness = api.request("POST", "/api/v1/admin/ask-dev/readiness", {})
+    # CHAOS-3265: platform certification moved off the org-scoped
+    # /admin/ask-dev/readiness route (now a static 410 -- org admins can no
+    # longer trigger or observe platform certification) onto its own
+    # superuser-only Platform Admin surface. The acceptance scripted-OpenAI
+    # candidate is always PLATFORM-sourced (see production_runtime's
+    # acceptance gate), so bootstrap must certify it there.
+    readiness = api.request("POST", "/api/v1/admin/platform/ask-dev/readiness", {})
     _require(isinstance(readiness, dict), "readiness response was not an object")
     expected_readiness = {
-        "ask_dev_enabled": True,
-        "chat_window_available": True,
-        "full_page_available": True,
-        "provider_source": "platform",
+        "configured": True,
         "readiness": "ready",
-        "effective_model_label": expected_model,
+        "model_label": expected_model,
     }
     for field, expected in expected_readiness.items():
         _require(

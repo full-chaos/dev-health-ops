@@ -44,9 +44,16 @@ persistent app-shell chat window and `/dev` workspace available when the base
 
 Administrative reads and usage summaries are content-free. Settings changes
 and readiness tests are unavailable while impersonating. The supported API is
-`GET /api/v1/admin/ask-dev`, `PATCH /api/v1/admin/ask-dev/settings`,
-`POST /api/v1/admin/ask-dev/readiness`, and
+`GET /api/v1/admin/ask-dev`, `PATCH /api/v1/admin/ask-dev/settings`, and
 `GET /api/v1/admin/ask-dev/usage`.
+
+An organization administrator tests their own BYO LLM credentials with
+`POST /api/v1/admin/llm-settings/readiness`. This checks the organization's
+saved BYO configuration only; it never certifies or exposes information about
+the platform-owned (operator-configured) provider. Certifying the
+platform-owned provider is a platform-administrator action, not an
+organization-administrator one — see
+[Configure the platform](../../operate/configure/index.md).
 
 Context Fabric Validation is a platform-administrator diagnostic surface. It is
 not granted by `ask_dev`, `byo_llm`, or organization-administrator status.

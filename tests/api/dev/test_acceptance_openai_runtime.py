@@ -43,6 +43,8 @@ from dev_health_ops.llm.agent.contracts import (
 from dev_health_ops.llm.agent.openai_compatible import OpenAICompatibleAgentProvider
 from dev_health_ops.llm.agent.policy import AgentProviderSource
 from dev_health_ops.llm.agent.readiness import (
+    PLATFORM_READINESS_SETTING_KEY,
+    PLATFORM_SETTINGS_ORG_ID,
     AgentReadinessOutcome,
     AgentReadinessService,
     SettingsAgentReadinessStore,
@@ -141,9 +143,15 @@ async def test_acceptance_openai_runs_real_readiness_grounding_and_capabilities(
     fingerprint = certification.readiness_fingerprint
     provider_fingerprint = certification.provider.provider_fingerprint
 
+    # This candidate's source is PLATFORM (the acceptance-gated scripted
+    # OpenAI endpoint), so its certification is written to the
+    # platform-global sentinel scope -- the same place the real Platform
+    # Admin route writes to (CHAOS-3265) -- not to this org's own settings.
     readiness = await AgentReadinessService(
-        SettingsAgentReadinessStore(SettingsService(settings_session, _ORG_ID)),
-        org_id=_ORG_ID,
+        SettingsAgentReadinessStore(
+            SettingsService(settings_session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_READINESS_SETTING_KEY,
+        ),
     ).certify(
         certification.provider,
         provider_name=certification.family,

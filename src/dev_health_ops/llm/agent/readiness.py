@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Protocol
+from typing import Literal, Protocol
 
 from dev_health_ops.api.services.configuration.generic import SettingsService
 from dev_health_ops.metrics.llm_token_usage import write_llm_token_usage
@@ -32,6 +32,37 @@ from .errors import (
 
 READINESS_SETTING_KEY = "ask_dev_agent_readiness"
 READINESS_MAX_OUTPUT_TOKENS = 512
+
+# Sentinel scope for the platform-owned (operator env-configured) provider's
+# readiness record. Every real org's org_id is a non-empty UUID string
+# (enforced at the admin-auth boundary by ``get_admin_org_id``), so "" can
+# never collide with a real org's settings rows (CHAOS-3265). This store
+# always explicitly writes/reads org_id="" -- it never relies on whatever the
+# `settings` table's column default happens to resolve to. (Note: the
+# SQLAlchemy model in models/settings.py declares
+# ``server_default=""``, but the deployed migration
+# (0001_initial_schema.py) actually creates the column with
+# ``server_default="default"`` -- a pre-existing, unrelated drift between the
+# ORM model and the live schema. Irrelevant here since org_id is always
+# supplied explicitly, never omitted at insert time.)
+#
+# Belt-and-suspenders: the platform record ALSO uses a setting key distinct
+# from the ordinary per-org ``READINESS_SETTING_KEY``. That way, even if some
+# unrelated bug elsewhere ever wrote a stray row with an empty org_id under
+# the *ordinary* key (a known failure mode in this codebase family), it would
+# still be invisible here -- only the dedicated Platform Admin route ever
+# reads or writes ``PLATFORM_READINESS_SETTING_KEY``.
+PLATFORM_SETTINGS_ORG_ID = ""
+PLATFORM_READINESS_SETTING_KEY = "platform_ask_dev_agent_readiness"
+
+ReadinessState = Literal[
+    "ready",
+    "unsupported_model",
+    "missing_credentials",
+    "disabled",
+    "degraded",
+    "stale_readiness",
+]
 
 
 class AgentReadinessOutcome(str, Enum):
@@ -62,13 +93,12 @@ class AgentReadinessStore(Protocol):
 
 
 class SettingsAgentReadinessStore:
-    def __init__(self, settings: SettingsService):
+    def __init__(self, settings: SettingsService, *, key: str = READINESS_SETTING_KEY):
         self._settings = settings
+        self._key = key
 
     async def load(self) -> AgentReadinessRecord | None:
-        raw = await self._settings.get(
-            READINESS_SETTING_KEY, category=SettingCategory.LLM.value
-        )
+        raw = await self._settings.get(self._key, category=SettingCategory.LLM.value)
         if not raw:
             return None
         try:
@@ -91,7 +121,7 @@ class SettingsAgentReadinessStore:
         payload = asdict(record)
         payload["outcome"] = record.outcome.value
         await self._settings.set(
-            READINESS_SETTING_KEY,
+            self._key,
             json.dumps(payload, separators=(",", ":"), sort_keys=True),
             category=SettingCategory.LLM.value,
             description="Safe Ask Dev provider certification result",
@@ -227,6 +257,49 @@ class AgentReadinessService:
                 calls=2,
             )
         return record
+
+
+def readiness_failure_state(safe_error_code: str | None) -> tuple[ReadinessState, str]:
+    """Map a safe provider error code to an admin-facing readiness state.
+
+    Shared by the org-admin Ask Dev router and the Platform Admin router so
+    both project the exact same safe, non-identifying remediation text for a
+    failed certification (CHAOS-3265).
+    """
+
+    if safe_error_code == "provider_not_configured":
+        return (
+            "missing_credentials",
+            "Ask Dev could not authenticate with the configured model endpoint.",
+        )
+    if safe_error_code == "timeout":
+        return "degraded", "The configured Ask Dev model timed out during readiness."
+    if safe_error_code == "rate_limited":
+        return "degraded", "The configured Ask Dev model rate limit was reached."
+    if safe_error_code == "model_not_supported":
+        return (
+            "unsupported_model",
+            "The configured Ask Dev model is unavailable to this provider account.",
+        )
+    if safe_error_code == "invalid_request":
+        return (
+            "unsupported_model",
+            "The configured Ask Dev model rejected a required agent request capability.",
+        )
+    if safe_error_code == "invalid_response":
+        return (
+            "unsupported_model",
+            "The configured model did not satisfy the Ask Dev agent capability contract.",
+        )
+    if safe_error_code == "provider_contract_violation":
+        return (
+            "unsupported_model",
+            "The configured model returned multiple tool decisions in one turn, "
+            "violating Ask Dev's required sequential tool-call contract.",
+        )
+    if safe_error_code == "provider_unavailable":
+        return "degraded", "The configured Ask Dev model endpoint is unavailable."
+    return "degraded", "The configured Ask Dev model failed readiness."
 
 
 def _add_usage(left: AgentUsage, right: AgentUsage) -> AgentUsage:

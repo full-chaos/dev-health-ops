@@ -785,10 +785,17 @@ def _usage_from_exception(
         else getattr(usage, "prompt_tokens_details", None)
         or getattr(usage, "input_tokens_details", None)
     )
+    cached_tokens = _usage_value(details, "cached_tokens")
+    if cached_tokens is None:
+        # Ask Dev's provider-neutral AgentUsage contract (attached to
+        # AgentProviderError -- CHAOS-3285) reports cached tokens as a flat
+        # field rather than the raw provider's nested *_tokens_details
+        # object; fall back to it when there is no nested detail to read.
+        cached_tokens = _usage_value(usage, "cached_input_tokens")
     return (
         _usage_value(usage, "prompt_tokens", "input_tokens"),
         _usage_value(usage, "completion_tokens", "output_tokens"),
-        _usage_value(details, "cached_tokens"),
+        cached_tokens,
     )
 
 

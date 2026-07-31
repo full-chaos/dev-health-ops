@@ -270,6 +270,16 @@ class OpenAICompatibleAgentProvider:
                 cancel_task.cancel()
                 await asyncio.gather(cancel_task, return_exceptions=True)
 
+        # Normalized once the response is in hand, so it is available to
+        # attach to every raise path below -- not only the success path. A
+        # provider that reported output/reasoning exhaustion, a sequential-
+        # tool-contract violation, or an otherwise malformed decision still
+        # returned (and billed) a real response; discarding it before it is
+        # read poisons BYO budget reconciliation into "usage_unavailable",
+        # which disables enforcement and then rejects every later call
+        # without dispatching it (CHAOS-3285).
+        agent_usage = self._normalize_usage(response)
+
         try:
             # A model that ran out of its output/reasoning token budget
             # reports finish_reason="length" -- checked, and raised, before
@@ -280,7 +290,9 @@ class OpenAICompatibleAgentProvider:
             # JSON payload alike: the finish_reason alone is dispositive
             # (CHAOS-3285).
             if getattr(response.choices[0], "finish_reason", None) == "length":
-                raise AgentProviderError(AgentProviderErrorCode.OUTPUT_EXHAUSTED)
+                raise AgentProviderError(
+                    AgentProviderErrorCode.OUTPUT_EXHAUSTED, usage=agent_usage
+                )
             decision = self._normalize_response(
                 response,
                 allowed_tool_ids=frozenset(item.tool_id for item in tools),
@@ -288,7 +300,7 @@ class OpenAICompatibleAgentProvider:
             )
         except _SequentialToolContractViolation:
             raise AgentProviderError(
-                AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION
+                AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION, usage=agent_usage
             ) from None
         except (
             AttributeError,
@@ -297,7 +309,18 @@ class OpenAICompatibleAgentProvider:
             ValueError,
             json.JSONDecodeError,
         ):
-            raise AgentProviderError(AgentProviderErrorCode.INVALID_RESPONSE) from None
+            raise AgentProviderError(
+                AgentProviderErrorCode.INVALID_RESPONSE, usage=agent_usage
+            ) from None
+        return AgentDecisionResult(
+            decision=decision,
+            usage=agent_usage,
+            latency_ms=max(0, round((time.monotonic() - started) * 1000)),
+            provider_fingerprint=self.provider_fingerprint,
+            model_fingerprint=self.model_fingerprint,
+        )
+
+    def _normalize_usage(self, response: Any) -> AgentUsage:
         usage = getattr(response, "usage", None)
         input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
@@ -305,26 +328,20 @@ class OpenAICompatibleAgentProvider:
         cached_tokens = getattr(prompt_details, "cached_tokens", None)
         completion_details = getattr(usage, "completion_tokens_details", None)
         reasoning_tokens = getattr(completion_details, "reasoning_tokens", None)
-        return AgentDecisionResult(
-            decision=decision,
-            usage=AgentUsage(
+        return AgentUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=(
+                int(cached_tokens) if cached_tokens is not None else None
+            ),
+            reasoning_tokens=(
+                int(reasoning_tokens) if reasoning_tokens is not None else None
+            ),
+            estimated_cost_microusd=_estimated_cost_microusd(
+                model=self.model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                cached_input_tokens=(
-                    int(cached_tokens) if cached_tokens is not None else None
-                ),
-                reasoning_tokens=(
-                    int(reasoning_tokens) if reasoning_tokens is not None else None
-                ),
-                estimated_cost_microusd=_estimated_cost_microusd(
-                    model=self.model,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                ),
             ),
-            latency_ms=max(0, round((time.monotonic() - started) * 1000)),
-            provider_fingerprint=self.provider_fingerprint,
-            model_fingerprint=self.model_fingerprint,
         )
 
     @staticmethod

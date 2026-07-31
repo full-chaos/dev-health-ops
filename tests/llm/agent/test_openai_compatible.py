@@ -1064,6 +1064,105 @@ async def test_finish_reason_length_with_truncated_partial_content_still_exhaust
 
 
 @pytest.mark.asyncio
+async def test_finish_reason_length_attaches_billed_usage_to_the_error() -> None:
+    """CHAOS-3285: before this fix, OUTPUT_EXHAUSTED was raised before
+    response.usage was ever read, so the error carried no usage data at
+    all -- downstream, guard_byo_call's exception handler
+    (dev_health_ops.llm.budget) treats a usage-less failure as
+    "usage_unavailable", which poisons the whole BYO budget window and
+    rejects every later call without dispatching it. Reviewer's exact
+    reproduction: a parseable finish_reason="length" response reporting 40
+    input / 256 output / 240 reasoning tokens must still surface those
+    numbers on the raised error.
+    """
+    exhausted = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="length",
+                message=SimpleNamespace(content="", tool_calls=[]),
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=40,
+            completion_tokens=256,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=240),
+        ),
+    )
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-nano", client=Client([exhausted])
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+    usage = caught.value.usage
+    assert usage is not None
+    assert usage.input_tokens == 40
+    assert usage.output_tokens == 256
+    assert usage.reasoning_tokens == 240
+    assert usage.cached_input_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_contract_violation_and_invalid_response_also_attach_usage() -> None:
+    """CHAOS-3285 audit: OUTPUT_EXHAUSTED was the reported finding, but every
+    raise path inside the same try block discards response.usage the same
+    way once a response has been received -- a sequential-tool-contract
+    violation and a malformed-but-received decision both still billed real
+    tokens and must not be reconciled as usage_unavailable either.
+    """
+    first = SimpleNamespace(
+        id="call-1", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    second = SimpleNamespace(
+        id="call-2", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="agent-model",
+        client=Client([response(tool_calls=[first, second])]),
+    )
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [AgentToolDefinition("lookup", "Lookup", {"type": "object"})],
+            {"type": "object"},
+            1,
+            256,
+        )
+    assert caught.value.code is AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION
+    assert caught.value.usage is not None
+    assert caught.value.usage.input_tokens == 11
+    assert caught.value.usage.output_tokens == 7
+
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="agent-model",
+        client=Client([response(content="not-json", finish_reason="stop")]),
+    )
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+    assert caught.value.code is AgentProviderErrorCode.INVALID_RESPONSE
+    assert caught.value.usage is not None
+    assert caught.value.usage.input_tokens == 11
+    assert caught.value.usage.output_tokens == 7
+
+
+@pytest.mark.asyncio
 async def test_finish_reason_stop_does_not_raise_output_exhausted() -> None:
     """The fail-before/pass-after control: an ordinary, non-exhausted
     malformed response (finish_reason="stop") must still classify as

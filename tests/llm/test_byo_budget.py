@@ -13,10 +13,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.configuration import SettingsService
+from dev_health_ops.llm.agent.contracts import (
+    AgentMessage,
+    AgentMessageRole,
+    AgentToolDefinition,
+)
 from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErrorCode
+from dev_health_ops.llm.agent.openai_compatible import OpenAICompatibleAgentProvider
 from dev_health_ops.llm.budget import (
     BYOBudgetAccountingError,
     BYOBudgetExceeded,
+    attach_agent_budget_guard,
     attach_llm_budget_guard,
     cost_micro_usd,
     get_budget_status,
@@ -742,3 +749,151 @@ async def test_openai_retry_is_rejected_before_second_network_attempt(
         await guarded.complete("test")
 
     assert client.responses.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_output_exhaustion_reconciles_with_actual_cost_and_leaves_budget_admissible(
+    session_maker, monkeypatch
+):
+    """CHAOS-3285 integration reproduction through attach_agent_budget_guard.
+
+    Before the fix: OUTPUT_EXHAUSTED was raised by the adapter before
+    response.usage was ever read, so the exception reaching guard_byo_call's
+    exception handler carried no usage. _reconcile_reservation then marked
+    the reservation "usage_unavailable" (not "failed" with a real cost) --
+    and any reservation in that state poisons the whole calendar-month
+    window (get_budget_status short-circuits to enforcement_available=False
+    for every subsequent call), so the very next request is rejected with
+    BUDGET_UNAVAILABLE *without ever dispatching to the provider*.
+
+    After the fix: the adapter attaches the real billed usage to the raised
+    AgentProviderError, so the reservation reconciles as an ordinary FAILED
+    call with its actual token cost, and the budget window stays admissible
+    -- the next request still dispatches.
+    """
+    org_id = str(uuid.uuid4())
+    await _configure(session_maker, org_id, 1_000_000)
+
+    @asynccontextmanager
+    async def budget_session():
+        async with session_maker() as session:
+            yield session
+
+    monkeypatch.setattr(
+        "dev_health_ops.llm.budget.get_postgres_session", budget_session
+    )
+
+    # Reviewer's exact reproduction: a parseable finish_reason="length"
+    # response reporting 40 input / 256 output / 240 reasoning tokens.
+    exhausted_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="length",
+                message=SimpleNamespace(content="", tool_calls=[]),
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=40,
+            completion_tokens=256,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=240),
+        ),
+    )
+    ok_call = SimpleNamespace(
+        id="call-1", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    ok_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="stop",
+                message=SimpleNamespace(content=None, tool_calls=[ok_call]),
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=5,
+            completion_tokens=5,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=None),
+        ),
+    )
+
+    class Completions:
+        def __init__(self, responses):
+            self.responses = responses
+            self.calls = 0
+
+        async def create(self, **_kwargs):
+            self.calls += 1
+            return self.responses.pop(0)
+
+    completions = Completions([exhausted_response, ok_response])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAICompatibleAgentProvider(
+        api_key="unused", model="gpt-5-mini", client=client
+    )
+    async with session_maker() as unused_session:
+        guarded = attach_agent_budget_guard(
+            provider,
+            session=unused_session,
+            org_id=org_id,
+            provider="openai",
+            model="gpt-5-mini",
+            base_url=None,
+        )
+
+    tools = [AgentToolDefinition("lookup", "Lookup", {"type": "object"})]
+
+    with pytest.raises(AgentProviderError) as caught:
+        await guarded.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            tools,
+            {"type": "object"},
+            1,
+            256,
+        )
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+
+    expected_cost = cost_micro_usd(
+        provider="openai",
+        model="gpt-5-mini",
+        base_url=None,
+        input_tokens=40,
+        output_tokens=256,
+        cached_input_tokens=0,
+    )
+    assert expected_cost is not None
+
+    async with session_maker() as session:
+        rows = list((await session.execute(select(BYOLLMBudgetReservation))).scalars())
+    assert len(rows) == 1
+    assert rows[0].status == "failed"
+    assert rows[0].actual_micro_usd == expected_cost
+    assert (rows[0].input_tokens, rows[0].output_tokens) == (40, 256)
+
+    async with session_maker() as session:
+        status = await get_budget_status(
+            SettingsService(session, org_id),
+            provider="openai",
+            model="gpt-5-mini",
+            base_url=None,
+        )
+    assert status.reason != "usage_unavailable"
+    assert status.enforcement_available is True
+    assert status.used_micro_usd == expected_cost
+
+    # The window must remain admissible: the next request still dispatches
+    # to the provider rather than being rejected pre-dispatch.
+    result = await guarded.decide(
+        [AgentMessage(AgentMessageRole.USER, "question")],
+        tools,
+        {"type": "object"},
+        1,
+        256,
+    )
+    assert completions.calls == 2
+    assert result.decision.tool_id == "lookup"
+
+    async with session_maker() as session:
+        rows = list((await session.execute(select(BYOLLMBudgetReservation))).scalars())
+    assert len(rows) == 2
+    assert sorted(row.status for row in rows) == ["failed", "succeeded"]

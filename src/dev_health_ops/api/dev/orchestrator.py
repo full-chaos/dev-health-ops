@@ -687,6 +687,15 @@ class DevOrchestrator:
                             or cancellation.is_set()
                             else RunState.FAILED
                         )
+                        # A non-retryable failure that still returned a
+                        # response (e.g. OUTPUT_EXHAUSTED) billed real
+                        # tokens for it; the guarded provider already
+                        # reconciled that cost against the BYO budget
+                        # reservation (CHAOS-3285), so the run's own terminal
+                        # usage total must include it too rather than
+                        # silently reporting the exhausted call as free.
+                        if provider_error.usage is not None:
+                            budget.add(provider_error.usage)
                         return await finish(
                             state,
                             error=self._provider_error(

@@ -15,6 +15,8 @@ from dev_health_ops.llm.errors import (
     classify_provider_error,
 )
 
+from .contracts import AgentUsage
+
 
 class AgentProviderErrorCode(str, Enum):
     DISABLED = "disabled"
@@ -62,10 +64,19 @@ class AgentProviderError(RuntimeError):
         *,
         retryable: bool = False,
         provider_dispatched: bool = True,
+        usage: AgentUsage | None = None,
     ):
         self.code = code
         self.retryable = retryable
         self.provider_dispatched = provider_dispatched
+        # Populated whenever the provider actually returned a response before
+        # this error was raised (e.g. OUTPUT_EXHAUSTED, a malformed decision,
+        # or a sequential-tool-contract violation): the caller still billed
+        # real tokens for that response. Both the BYO budget reservation
+        # reconciliation (guard_byo_call's exception path) and the
+        # orchestrator's terminal run accounting (ProviderBudget.add) read
+        # this so a failed call is never silently free (CHAOS-3285).
+        self.usage = usage
         super().__init__(_SAFE_MESSAGES[code])
 
 

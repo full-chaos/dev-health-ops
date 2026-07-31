@@ -18,13 +18,21 @@ from dev_health_ops.api.dev.scope_service import (
 
 
 class FakeCatalog:
-    def __init__(self, entities: list[AuthorizedEntity]) -> None:
+    def __init__(
+        self,
+        entities: list[AuthorizedEntity],
+        *,
+        organization_repositories: list[str] | None = None,
+    ) -> None:
         self.entities = entities
+        self.organization_repositories = organization_repositories or []
         self.exact_calls = 0
         self.search_calls = 0
         self.watermark_calls = 0
+        self.organization_repository_ids_calls = 0
         self.fail_exact = False
         self.fail_watermark = False
+        self.fail_organization_repository_ids = False
 
     async def watermark(self, org_id: str, kinds: tuple[EntityKind, ...]) -> str:
         self.watermark_calls += 1
@@ -62,6 +70,15 @@ class FakeCatalog:
             for entity in self.entities
             if entity.kind in kinds and query.casefold() in entity.label.casefold()
         ][:limit]
+
+    async def organization_repository_ids(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[str], int]:
+        self.organization_repository_ids_calls += 1
+        if self.fail_organization_repository_ids:
+            raise RuntimeError("organization repository catalog unavailable")
+        ids = sorted(self.organization_repositories)
+        return ids[:limit], len(ids)
 
 
 def _entity(
@@ -628,3 +645,156 @@ def test_repository_set_cannot_mix_direct_scope_kinds() -> None:
                 ScopeRef(EntityKind.ISSUE, "jira:A-1"),
             )
         )
+
+
+# --- CHAOS-3255: organization scope must be executable for status/change reads ---
+
+
+@pytest.mark.asyncio
+async def test_organization_scope_enumerates_complete_authorized_repository_set() -> (
+    None
+):
+    catalog = FakeCatalog([], organization_repositories=["repo-b", "repo-a", "repo-c"])
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        ScopeResolveRequest(
+            explicit_refs=(ScopeRef(EntityKind.ORGANIZATION, "org-a"),)
+        ),
+        resolved_at=datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.EXACT
+    assert result.resolved_scope is not None
+    assert result.resolved_scope.direct_scope is DirectScope.ORGANIZATION
+    assert result.authorized_repository_ids == ["repo-a", "repo-b", "repo-c"]
+    assert catalog.organization_repository_ids_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_organization_scope_with_zero_repositories_is_insufficient_evidence() -> (
+    None
+):
+    catalog = FakeCatalog([], organization_repositories=[])
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        ScopeResolveRequest(
+            explicit_refs=(ScopeRef(EntityKind.ORGANIZATION, "org-a"),)
+        ),
+        resolved_at=datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.UNRESOLVED
+    assert result.resolved_scope is None
+    assert result.authorized_repository_ids == []
+    assert "organization_has_no_authorized_repositories" in result.warnings
+
+
+@pytest.mark.asyncio
+async def test_organization_scope_above_contract_limit_is_not_truncated() -> None:
+    repositories = [f"repo-{index:02}" for index in range(25)]
+    catalog = FakeCatalog([], organization_repositories=repositories)
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        ScopeResolveRequest(
+            explicit_refs=(ScopeRef(EntityKind.ORGANIZATION, "org-a"),)
+        ),
+        resolved_at=datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.EXACT
+    assert result.resolved_scope is not None
+    assert result.resolved_scope.direct_scope is DirectScope.ORGANIZATION
+    # Never serialize a truncated, misleadingly "complete" 20-entry list.
+    assert result.authorized_repository_ids == []
+    assert any("exceeds" in warning for warning in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_organization_scope_repository_catalog_failure_is_unresolved() -> None:
+    catalog = FakeCatalog([], organization_repositories=["repo-a"])
+    catalog.fail_organization_repository_ids = True
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        ScopeResolveRequest(
+            explicit_refs=(ScopeRef(EntityKind.ORGANIZATION, "org-a"),)
+        ),
+        resolved_at=datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.UNRESOLVED
+    assert result.resolved_scope is None
+    assert "catalog_unavailable" in result.warnings
+
+
+@pytest.mark.asyncio
+async def test_organization_scope_repository_enumeration_is_request_cached() -> None:
+    catalog = FakeCatalog([], organization_repositories=["repo-a", "repo-b"])
+    service = ScopeResolutionService(catalog)
+    request = ScopeResolveRequest(
+        explicit_refs=(ScopeRef(EntityKind.ORGANIZATION, "org-a"),)
+    )
+
+    first = await service.resolve_contract("org-a", "perm-a", request)
+    second = await service.resolve_contract("org-a", "perm-a", request)
+
+    assert first.authorized_repository_ids == second.authorized_repository_ids
+    assert catalog.organization_repository_ids_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_non_organization_scope_never_queries_organization_repositories() -> None:
+    repository = _entity(EntityKind.REPOSITORY, "repo-a", "full-chaos/dev-health")
+    catalog = FakeCatalog([repository], organization_repositories=["repo-a"])
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        ScopeResolveRequest(
+            explicit_refs=(ScopeRef(EntityKind.REPOSITORY, repository.canonical_id),)
+        ),
+    )
+
+    assert result.resolved_scope is not None
+    assert result.resolved_scope.direct_scope is DirectScope.REPOSITORY
+    assert catalog.organization_repository_ids_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_team_filtered_organization_scope_skips_repository_enumeration() -> None:
+    """A team filter narrows organization scope, but no native status/change
+    query applies team filters, so the native execution layer always fails
+    closed for this case regardless of repository count (CHAOS-3255). The
+    contract layer must not report a repository set or a warning describing
+    organization-native execution that will not actually happen."""
+    team = _entity(EntityKind.TEAM, "team-a", "Platform")
+    catalog = FakeCatalog([team], organization_repositories=["repo-a", "repo-b"])
+    service = ScopeResolutionService(catalog)
+
+    result = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        ScopeResolveRequest(
+            team_filter_refs=(ScopeRef(EntityKind.TEAM, team.canonical_id),),
+            allow_organization_fallback=True,
+        ),
+    )
+
+    assert result.outcome is ScopeResolutionOutcome.FILTERED
+    assert result.resolved_scope is not None
+    assert result.resolved_scope.direct_scope is DirectScope.ORGANIZATION
+    assert result.authorized_repository_ids == []
+    assert catalog.organization_repository_ids_calls == 0
+    assert not any("organization-natively" in warning for warning in result.warnings)

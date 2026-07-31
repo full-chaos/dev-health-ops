@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -33,6 +33,14 @@ from dev_health_ops.llm.agent.contracts import (
 )
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
 from dev_health_ops.llm.agent.policy import AgentProviderSource
+from dev_health_ops.llm.agent.readiness import (
+    PLATFORM_READINESS_SETTING_KEY,
+    PLATFORM_SETTINGS_ORG_ID,
+    AgentReadinessOutcome,
+    AgentReadinessRecord,
+    SettingsAgentReadinessStore,
+    readiness_failure_state,
+)
 from dev_health_ops.models.dev_persistence import DevConversation, DevRun
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import Setting
@@ -181,13 +189,24 @@ async def admin_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_admin_projection_and_readiness_are_safe_and_shared(admin_context):
+async def test_admin_projection_nulls_platform_identity_until_platform_admin_certifies(
+    admin_context,
+):
+    """CHAOS-3265: the org-admin surface never learns the platform provider's
+    identity, and Platform Admin -- not this org -- is what makes it ready."""
+
     response = await admin_context.client.get("/api/v1/admin/ask-dev")
     assert response.status_code == 200
     body = response.json()
     assert body["readiness"] == "stale_readiness"
     assert body["chat_window_available"] is False
     assert body["full_page_available"] is False
+    assert body["effective_provider_label"] is None
+    assert body["effective_model_label"] is None
+    assert body["provider_source"] is None
+    assert body["administrator_safe_failure_reason"] == (
+        "Ask Dev is temporarily unavailable. Contact your platform operator."
+    )
     assert body["retention_options"] == [0, 30]
     assert body["fallback_options"] == ["fail_closed", "platform"]
     assert body["platform_allowance_bounds"] == {
@@ -198,12 +217,34 @@ async def test_admin_projection_and_readiness_are_safe_and_shared(admin_context)
     }
     assert body["no_training_by_default"] is True
 
-    certified = await admin_context.client.post("/api/v1/admin/ask-dev/readiness")
+    # This org has no route left that can certify the platform provider.
+    # Simulate Platform Admin's route certifying it in the platform-global
+    # sentinel scope (org_id="", distinct key) -- the only place that
+    # certification can be written now.
+    async with admin_context.maker() as session:
+        await SettingsAgentReadinessStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_READINESS_SETTING_KEY,
+        ).save(
+            AgentReadinessRecord(
+                fingerprint="readiness-fingerprint",
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        await session.commit()
+
+    certified = await admin_context.client.get("/api/v1/admin/ask-dev")
     assert certified.status_code == 200
     certified_body = certified.json()
     assert certified_body["readiness"] == "ready"
     assert certified_body["chat_window_available"] is True
     assert certified_body["full_page_available"] is True
+    assert certified_body["effective_provider_label"] is None
+    assert certified_body["effective_model_label"] is None
+    assert certified_body["provider_source"] is None
+    assert certified_body["administrator_safe_failure_reason"] is None
     serialized = certified.text.lower()
     for forbidden in (
         "api_key",
@@ -212,8 +253,113 @@ async def test_admin_projection_and_readiness_are_safe_and_shared(admin_context)
         "evidence",
         "packet",
         "conversation",
+        "openai compatible",
+        "safe-model",
     ):
         assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_byo_source_keeps_its_own_identity_and_failure_reason(
+    admin_context, monkeypatch: pytest.MonkeyPatch
+):
+    """The null-out is source-scoped: a BYO-sourced org still sees its own
+    identity and failure reason (it's the org's own data, not platform's)."""
+
+    async def byo_resolution(_session, *, org_id: str):
+        return ProductionProviderResolution(
+            provider=FakeReadinessProvider(),
+            source=AgentProviderSource.BYO,
+            family="openai",
+            model="org-model",
+            provider_label="OpenAI compatible",
+            model_label="org-model",
+            readiness_fingerprint="byo-readiness-fingerprint",
+        )
+
+    monkeypatch.setattr(ask_dev_admin, "resolve_certification_provider", byo_resolution)
+
+    response = await admin_context.client.get("/api/v1/admin/ask-dev")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["readiness"] == "stale_readiness"
+    assert body["effective_provider_label"] == "OpenAI compatible"
+    assert body["effective_model_label"] == "org-model"
+    assert body["provider_source"] == "byo"
+    assert body["administrator_safe_failure_reason"] == (
+        "The configured Ask Dev model has not been certified."
+    )
+
+    async with admin_context.maker() as session:
+        await SettingsAgentReadinessStore(
+            SettingsService(session, str(admin_context.org_id))
+        ).save(
+            AgentReadinessRecord(
+                fingerprint="byo-readiness-fingerprint",
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        await session.commit()
+
+    certified = await admin_context.client.get("/api/v1/admin/ask-dev")
+    assert certified.status_code == 200
+    certified_body = certified.json()
+    assert certified_body["readiness"] == "ready"
+    assert certified_body["effective_provider_label"] == "OpenAI compatible"
+    assert certified_body["effective_model_label"] == "org-model"
+    assert certified_body["provider_source"] == "byo"
+    assert certified_body["administrator_safe_failure_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_deprecated_post_readiness_route_is_410_and_touches_nothing(
+    admin_context, monkeypatch: pytest.MonkeyPatch
+):
+    """CHAOS-3265: the deprecated org-scoped POST route runs NO certification
+    logic at all (kept only for rolling-deploy safety against an
+    already-deployed older web frontend)."""
+
+    def _must_not_resolve(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError(
+            "the deprecated /ask-dev/readiness route must never resolve a "
+            "certification provider"
+        )
+
+    monkeypatch.setattr(
+        ask_dev_admin, "resolve_certification_provider", _must_not_resolve
+    )
+
+    async def _setting_rows() -> list[tuple[str, str, str, str | None]]:
+        async with admin_context.maker() as session:
+            rows = (await session.execute(select(Setting))).scalars().all()
+            return [(s.org_id, s.category, s.key, s.value) for s in rows]
+
+    before = await _setting_rows()
+
+    # Even an impersonated, otherwise-emergency-disabled org admin still just
+    # gets the static 410 -- there is no code path left that runs anything.
+    admin_context.user.impersonated_by = str(uuid.uuid4())
+    response = await admin_context.client.post("/api/v1/admin/ask-dev/readiness")
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": (
+            "Platform preflight has moved to Platform Admin. "
+            "Use BYO LLM settings for BYO preflight."
+        )
+    }
+    serialized = response.text.lower()
+    for forbidden in (
+        "openai",
+        "provider_source",
+        "effective_provider_label",
+        "readiness",
+    ):
+        assert forbidden not in serialized
+
+    after = await _setting_rows()
+    assert before == after
 
 
 @pytest.mark.parametrize(
@@ -240,7 +386,7 @@ async def test_admin_projection_and_readiness_are_safe_and_shared(admin_context)
 def test_failed_readiness_exposes_only_specific_safe_remediation(
     safe_error_code: str, state: str, message: str
 ) -> None:
-    readiness, reason = ask_dev_admin._failed_readiness_state(safe_error_code)
+    readiness, reason = readiness_failure_state(safe_error_code)
 
     assert readiness == state
     assert message in reason
@@ -312,11 +458,10 @@ async def test_settings_are_bounded_preserve_byo_and_disable_both_surfaces(
     assert body["chat_window_available"] is False
     assert body["full_page_available"] is False
 
+    # The deprecated route no longer inspects entitlement/policy at all -- it
+    # is a static 410 regardless of the emergency-disable state.
     readiness = await admin_context.client.post("/api/v1/admin/ask-dev/readiness")
-    assert readiness.status_code == 403
-    assert readiness.json()["detail"] == (
-        "Ask Dev readiness cannot run while the organization emergency disable is active"
-    )
+    assert readiness.status_code == 410
 
     async with admin_context.maker() as session:
         stored = await session.scalar(
@@ -331,14 +476,14 @@ async def test_settings_are_bounded_preserve_byo_and_disable_both_surfaces(
 
 
 @pytest.mark.asyncio
-async def test_impersonation_blocks_settings_and_readiness(admin_context):
+async def test_impersonation_blocks_settings(admin_context):
     admin_context.user.impersonated_by = str(uuid.uuid4())
     settings = await admin_context.client.patch(
         "/api/v1/admin/ask-dev/settings", json={"retention_days": 0}
     )
-    readiness = await admin_context.client.post("/api/v1/admin/ask-dev/readiness")
     assert settings.status_code == 403
-    assert readiness.status_code == 403
+    # The deprecated readiness route has no logic left to block -- see
+    # test_deprecated_post_readiness_route_is_410_and_touches_nothing.
 
 
 @pytest.mark.asyncio

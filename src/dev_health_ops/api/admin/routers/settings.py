@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterator
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +20,11 @@ from dev_health_ops.api.admin.llm_settings import (
 from dev_health_ops.api.admin.llm_settings import (
     upsert_llm_settings as upsert_llm_settings_values,
 )
-from dev_health_ops.api.admin.middleware import get_admin_org_id, get_admin_user
+from dev_health_ops.api.admin.middleware import (
+    block_impersonated_write,
+    get_admin_org_id,
+    get_admin_user,
+)
 from dev_health_ops.api.admin.schemas import (
     LLMBudgetResponse,
     LLMSettingsResponse,
@@ -30,9 +36,22 @@ from dev_health_ops.api.admin.schemas import (
     SettingsListResponse,
     SettingUpdate,
 )
+from dev_health_ops.api.dev.production_runtime import (
+    _byo_candidate,
+    _readiness_fingerprint,
+    resolve_byo_certification_provider,
+)
+from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.db import require_clickhouse_uri
+from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
+from dev_health_ops.llm.agent.readiness import (
+    AgentReadinessOutcome,
+    AgentReadinessService,
+    SettingsAgentReadinessStore,
+    readiness_failure_state,
+)
 from dev_health_ops.llm.budget import BUDGET_CATEGORY, get_budget_status
 from dev_health_ops.llm.credentials import (
     evaluate_org_llm_status,
@@ -43,9 +62,11 @@ from dev_health_ops.metrics.schemas import LLMTokenSpendSummaryRecord
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.models.settings import SettingCategory
 
+from .ask_dev import _checked_at
 from .common import get_session
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 LLMSpendReader = Callable[..., LLMTokenSpendSummaryRecord | None]
 
@@ -140,6 +161,71 @@ async def get_llm_settings(
     return await get_llm_settings_response(svc)
 
 
+async def _llm_settings_status_response(
+    session: AsyncSession, org_id: str
+) -> LLMSettingsStatusResponse:
+    svc = SettingsService(session, org_id)
+    evaluation = await evaluate_org_llm_status(org_id, svc)
+    last_fallback_at = await latest_recent_org_byo_base_url_fallback_at(
+        session, org_id, evaluation
+    )
+    # This org-scoped "ask_dev_agent_readiness" slot is BYO's alone in
+    # practice going forward: the platform-owned provider's own readiness now
+    # lives in the org_id="" sentinel scope (see
+    # dev_health_ops.llm.agent.readiness), reachable only from the Platform
+    # Admin router. Any record found here can only have been written by this
+    # org's own BYO preflight (POST /llm-settings/readiness) -- fingerprints
+    # differ by candidate/source so a stray platform certification could
+    # never collide with it even before this migration.
+    #
+    # A record's outcome is only trusted as "ready"/"failed" when its
+    # fingerprint AND readiness_version still match the org's CURRENT BYO
+    # candidate -- exactly the same currency check ask_dev.py's
+    # _admin_response uses (record.is_current(...)). A stale record (the org
+    # edited its BYO config since the last check, OR a READINESS_VERSION bump
+    # invalidated every stored certification platform-wide, e.g. CHAOS-3254)
+    # reports "stale" with a safe, accurate remediation -- never silently
+    # reused as "ready", and never reported as if something is broken.
+    readiness_record = await SettingsAgentReadinessStore(svc).load()
+    readiness: Literal["ready", "failed", "stale", "never_checked"] = "never_checked"
+    readiness_checked_at: datetime | None = None
+    readiness_safe_failure_reason: str | None = None
+    if readiness_record is not None:
+        readiness_checked_at = _checked_at(readiness_record.checked_at)
+        current_byo = await _byo_candidate(svc, readiness=None, certification=True)
+        current_fingerprint = (
+            _readiness_fingerprint(current_byo) if current_byo is not None else None
+        )
+        is_current = (
+            current_fingerprint is not None
+            and readiness_record.fingerprint == current_fingerprint
+            and readiness_record.readiness_version == READINESS_VERSION
+        )
+        if not is_current:
+            readiness = "stale"
+            readiness_safe_failure_reason = (
+                "This configuration has not been certified under the current "
+                "readiness requirements. Run preflight again."
+            )
+        elif readiness_record.outcome is AgentReadinessOutcome.READY:
+            readiness = "ready"
+        else:
+            readiness = "failed"
+            _, readiness_safe_failure_reason = readiness_failure_state(
+                readiness_record.safe_error_code
+            )
+    return LLMSettingsStatusResponse(
+        configured=evaluation.configured,
+        active=evaluation.active,
+        degraded=evaluation.reason_code == "invalid_base_url",
+        reason_code=evaluation.reason_code,
+        last_fallback_at=last_fallback_at,
+        readiness=readiness,
+        readiness_checked_at=readiness_checked_at,
+        readiness_safe_failure_reason=readiness_safe_failure_reason,
+    )
+
+
 @router.get(
     "/llm-settings/status",
     response_model=LLMSettingsStatusResponse,
@@ -149,18 +235,92 @@ async def get_llm_settings_status(
     org_id: str = Depends(get_admin_org_id),
 ) -> LLMSettingsStatusResponse:
     await _require_byo_llm_tier(session, org_id)
-    svc = SettingsService(session, org_id)
-    evaluation = await evaluate_org_llm_status(org_id, svc)
-    last_fallback_at = await latest_recent_org_byo_base_url_fallback_at(
-        session, org_id, evaluation
+    return await _llm_settings_status_response(session, org_id)
+
+
+@router.post(
+    "/llm-settings/readiness",
+    response_model=LLMSettingsStatusResponse,
+)
+async def run_llm_settings_readiness(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+    current_user: AuthenticatedUser = Depends(get_admin_user),
+) -> LLMSettingsStatusResponse:
+    """Certify the org's OWN saved BYO LLM configuration.
+
+    TRIGGERING this check is independent of Ask Dev's provider-selection
+    arbitration: it runs based on BYO configuration being saved, regardless
+    of whether BYO currently wins Ask Dev's fallback arbitration, whether it
+    has ever been certified before, or whether Ask Dev itself is
+    enabled/entitled. It never touches DevRun, Ask Dev's platform-allowance
+    tables, or Ask Dev's entitlement/emergency-disabled checks, and it never
+    reads or writes Ask Dev's fallback POLICY (fail_closed vs platform).
+
+    It DOES write to the same per-org readiness slot
+    (``SettingsAgentReadinessStore``, category=llm, key=ask_dev_agent_readiness)
+    that ``resolve_production_provider`` reads to decide whether the BYO
+    candidate is "current" (see production_runtime._provider_candidates). That
+    is intentional, not a side channel: marking BYO's own credentials as
+    certified is precisely what makes BYO usable/selectable for subsequent
+    LIVE Ask Dev runs (real chat execution, and the ordinary end-user
+    `/dev/capabilities` projection) -- that's the entire point of a preflight
+    check. A SUCCESSFUL run here can therefore change which provider a later
+    live run resolves to (e.g. flip it from platform-fallback to BYO), exactly
+    as running the org's old, now-removed certify flow always did.
+
+    NOTE this does NOT affect the org-admin `GET /ask-dev` projection's
+    `provider_source`/`readiness` fields: that route resolves via
+    ``resolve_certification_provider`` (certification bypass, see
+    production_runtime.py), which already prefers a validly-shaped BYO
+    candidate over platform as soon as BYO settings are saved and complete --
+    independent of whether it has ever been certified. Only the LIVE
+    selection path (`resolve_production_provider`) is gated on certification
+    currency, and that is the path this endpoint's write affects.
+
+    What changed under CHAOS-3265 is only WHO can reach platform's own
+    certification (Platform Admin only) and WHERE that lives -- not this
+    BYO-certifies-BYO mechanic, which is unchanged and working as designed
+    (CHAOS-3265; see test_llm_settings_readiness_can_flip_ask_dev_selection_to_byo
+    for a test that proves this honestly against the real, unmocked live
+    resolver instead of masking it).
+    """
+
+    await _require_byo_llm_tier(session, org_id)
+    block_impersonated_write(
+        current_user,
+        detail={
+            "error": "impersonated_write_forbidden",
+            "message": "BYO LLM readiness checks are unavailable while impersonating",
+        },
     )
-    return LLMSettingsStatusResponse(
-        configured=evaluation.configured,
-        active=evaluation.active,
-        degraded=evaluation.reason_code == "invalid_base_url",
-        reason_code=evaluation.reason_code,
-        last_fallback_at=last_fallback_at,
-    )
+    try:
+        resolution = await resolve_byo_certification_provider(session, org_id=org_id)
+    except DevRuntimeUnavailable as exc:
+        raise HTTPException(status_code=404, detail=exc.safe_message) from exc
+    try:
+        await AgentReadinessService(
+            SettingsAgentReadinessStore(SettingsService(session, org_id))
+        ).certify(
+            resolution.provider,
+            provider_name=resolution.family,
+            model=resolution.model,
+            fingerprint=resolution.readiness_fingerprint,
+        )
+    finally:
+        try:
+            await resolution.provider.aclose()
+        except Exception:
+            # Best-effort cleanup only: the certify() call above has already
+            # persisted the readiness result (or its own failure state), so a
+            # transport-close error here must never mask that outcome or fail
+            # this request. Still worth knowing about (a leaked connection is
+            # an operational signal), so log it rather than swallow it.
+            logger.warning(
+                "Failed to close BYO Ask Dev provider connection after preflight",
+                exc_info=True,
+            )
+    return await _llm_settings_status_response(session, org_id)
 
 
 @router.get(

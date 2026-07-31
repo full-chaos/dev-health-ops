@@ -27,7 +27,11 @@ from dev_health_ops.llm.agent.policy import (
     AgentProviderSource,
     resolve_agent_provider_selection,
 )
-from dev_health_ops.llm.agent.readiness import SettingsAgentReadinessStore
+from dev_health_ops.llm.agent.readiness import (
+    PLATFORM_READINESS_SETTING_KEY,
+    PLATFORM_SETTINGS_ORG_ID,
+    SettingsAgentReadinessStore,
+)
 from dev_health_ops.llm.agent.scripted_openai_service import SCRIPTED_OPENAI_MODEL
 from dev_health_ops.llm.budget import attach_agent_budget_guard
 from dev_health_ops.llm.credentials import LLMCredentials, resolve_llm_credentials
@@ -195,13 +199,35 @@ def _acceptance_openai_configuration() -> _AcceptanceOpenAIConfiguration | None:
     return _AcceptanceOpenAIConfiguration(api_key=api_key, base_url=base_url)
 
 
+def _platform_readiness_store(session: AsyncSession) -> SettingsAgentReadinessStore:
+    """Readiness store for the platform-owned (operator env-configured) provider.
+
+    Deliberately scoped by the ``org_id=""`` sentinel and a setting key
+    distinct from the ordinary per-org ``ask_dev_agent_readiness`` slot (see
+    ``dev_health_ops.llm.agent.readiness`` for the full rationale). Only the
+    Platform Admin router ever writes here; every organization's production
+    selection just reads it to learn whether the platform candidate is
+    currently certified (CHAOS-3265).
+    """
+
+    return SettingsAgentReadinessStore(
+        SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+        key=PLATFORM_READINESS_SETTING_KEY,
+    )
+
+
 async def resolve_production_provider(
     session: AsyncSession, *, org_id: str
 ) -> ProductionProviderResolution:
     settings = SettingsService(session, org_id)
-    readiness = await SettingsAgentReadinessStore(settings).load()
+    byo_readiness = await SettingsAgentReadinessStore(settings).load()
+    platform_readiness = await _platform_readiness_store(session).load()
 
-    byo, platform, policy = await _provider_candidates(settings, readiness=readiness)
+    byo, platform, policy = await _provider_candidates(
+        settings,
+        byo_readiness=byo_readiness,
+        platform_readiness=platform_readiness,
+    )
     return _resolve_provider_selection(
         byo=byo,
         platform=platform,
@@ -218,7 +244,7 @@ async def resolve_certification_provider(
 
     settings = SettingsService(session, org_id)
     byo, platform, policy = await _provider_candidates(
-        settings, readiness=None, certification=True
+        settings, byo_readiness=None, platform_readiness=None, certification=True
     )
     return _resolve_provider_selection(
         byo=byo,
@@ -229,17 +255,94 @@ async def resolve_certification_provider(
     )
 
 
-async def _provider_candidates(
+async def resolve_platform_certification_provider() -> ProductionProviderResolution:
+    """Resolve ONLY the platform-owned candidate, with no BYO arbitration.
+
+    Used exclusively by the Platform Admin readiness route. This never reads
+    any organization's settings -- the platform candidate is built purely
+    from operator environment variables -- so there is nothing to arbitrate
+    against a BYO candidate (CHAOS-3265).
+    """
+
+    platform, platform_provider_name = _platform_candidate(
+        readiness=None, certification=True
+    )
+    if platform is None or platform_provider_name == "none":
+        raise DevRuntimeUnavailable(
+            "provider_not_configured", "No certified Ask Dev model is ready."
+        )
+    if platform.usable:
+        provider = _provider(platform)
+        return ProductionProviderResolution(
+            provider=provider,
+            source=AgentProviderSource.PLATFORM,
+            family=platform.provider,
+            model=platform.model,
+            provider_label="OpenAI compatible",
+            model_label=platform.model.replace("\r", "").replace("\n", "")[:256],
+            readiness_fingerprint=_readiness_fingerprint(platform),
+        )
+    if not platform.certified:
+        raise DevRuntimeUnavailable(
+            "model_not_supported", "The configured Ask Dev model is not supported."
+        )
+    raise DevRuntimeUnavailable(
+        "provider_not_configured", "No certified Ask Dev model is ready."
+    )
+
+
+async def resolve_byo_certification_provider(
+    session: AsyncSession, *, org_id: str
+) -> ProductionProviderResolution:
+    """Resolve ONLY the org's own BYO candidate, with no platform fallback.
+
+    This tests the organization's saved LLM credentials specifically,
+    independent of whether BYO currently wins Ask Dev's provider-selection
+    arbitration (CHAOS-3265).
+    """
+
+    settings = SettingsService(session, org_id)
+    byo = await _byo_candidate(settings, readiness=None, certification=True)
+    if byo is None:
+        raise DevRuntimeUnavailable(
+            "provider_not_configured",
+            "No BYO LLM configuration is saved for this organization.",
+        )
+    if byo.usable:
+        provider = _provider(byo)
+        provider = attach_agent_budget_guard(
+            provider,
+            session=session,
+            org_id=org_id,
+            provider=byo.provider,
+            model=byo.model,
+            base_url=byo.credentials.base_url or None,
+        )
+        return ProductionProviderResolution(
+            provider=provider,
+            source=AgentProviderSource.BYO,
+            family=byo.provider,
+            model=byo.model,
+            provider_label="OpenAI compatible",
+            model_label=byo.model.replace("\r", "").replace("\n", "")[:256],
+            readiness_fingerprint=_readiness_fingerprint(byo),
+        )
+    if not byo.certified:
+        raise DevRuntimeUnavailable(
+            "model_not_supported", "The configured Ask Dev model is not supported."
+        )
+    raise DevRuntimeUnavailable(
+        "provider_not_configured",
+        "No BYO LLM configuration is saved for this organization.",
+    )
+
+
+async def _byo_candidate(
     settings: SettingsService,
     *,
     readiness: Any,
     certification: bool = False,
-) -> tuple[
-    AgentProviderCandidate | None,
-    AgentProviderCandidate | None,
-    AgentProviderPolicy,
-]:
-
+) -> AgentProviderCandidate | None:
     byo_provider_name = (await settings.get("provider", _LLM_CATEGORY) or "").strip()
     byo_model = (await settings.get("model", _LLM_CATEGORY) or "").strip()
     if byo_provider_name == "openai" and not byo_model:
@@ -248,7 +351,7 @@ async def _provider_candidates(
         api_key=await settings.get("api_key", _LLM_CATEGORY) or "",
         base_url=await settings.get("base_url", _LLM_CATEGORY) or "",
     )
-    byo = _candidate(
+    return _candidate(
         provider_name=byo_provider_name,
         model=byo_model,
         credentials=byo_credentials,
@@ -256,6 +359,19 @@ async def _provider_candidates(
         readiness=readiness,
         certification=certification,
     )
+
+
+def _platform_candidate(
+    *,
+    readiness: Any,
+    certification: bool = False,
+) -> tuple[AgentProviderCandidate | None, str]:
+    """Build the platform candidate purely from operator environment state.
+
+    Returns the candidate together with the raw resolved provider name (the
+    caller needs the raw name to detect an explicit operator "none" and to
+    build ``AgentProviderPolicy.llm_globally_disabled``).
+    """
 
     acceptance = _acceptance_openai_configuration()
     try:
@@ -289,6 +405,26 @@ async def _provider_candidates(
         readiness=readiness,
         certification=certification,
         acceptance=acceptance is not None,
+    )
+    return platform, platform_provider_name
+
+
+async def _provider_candidates(
+    settings: SettingsService,
+    *,
+    byo_readiness: Any,
+    platform_readiness: Any,
+    certification: bool = False,
+) -> tuple[
+    AgentProviderCandidate | None,
+    AgentProviderCandidate | None,
+    AgentProviderPolicy,
+]:
+    byo = await _byo_candidate(
+        settings, readiness=byo_readiness, certification=certification
+    )
+    platform, platform_provider_name = _platform_candidate(
+        readiness=platform_readiness, certification=certification
     )
     org_policy = await load_ask_dev_org_policy(settings)
     policy = AgentProviderPolicy(
@@ -926,5 +1062,8 @@ __all__ = [
     "ProductionProviderResolution",
     "build_production_runtime",
     "expand_production_evidence",
+    "resolve_byo_certification_provider",
+    "resolve_certification_provider",
+    "resolve_platform_certification_provider",
     "resolve_production_provider",
 ]

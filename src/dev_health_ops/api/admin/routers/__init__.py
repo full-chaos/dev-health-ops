@@ -20,6 +20,7 @@ from .pagerduty import router as pagerduty_router
 from .pagerduty_bindings import router as pagerduty_bindings_router
 from .pagerduty_services import router as pagerduty_services_router
 from .platform import router as platform_router
+from .platform_ask_dev import router as platform_ask_dev_router
 from .settings import router as settings_router
 from .setup import router as setup_router
 from .sync import router as sync_router
@@ -42,6 +43,7 @@ __all__ = [
     "pagerduty_router",
     "pagerduty_bindings_router",
     "pagerduty_services_router",
+    "platform_ask_dev_router",
     "platform_router",
     "settings_router",
     "setup_router",

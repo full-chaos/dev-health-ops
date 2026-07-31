@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -12,7 +13,11 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dev_health_ops.api.admin.middleware import get_admin_org_id, get_admin_user
+from dev_health_ops.api.admin.middleware import (
+    block_impersonated_write,
+    get_admin_org_id,
+    get_admin_user,
+)
 from dev_health_ops.api.dev.org_policy import (
     ASK_DEV_EMERGENCY_DISABLED_KEY,
     ASK_DEV_FALLBACK_KEY,
@@ -37,9 +42,16 @@ from dev_health_ops.licensing import FeatureDecisionReason, evaluate_org_feature
 from dev_health_ops.licensing.registry import ASK_DEV_FEATURE
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
 from dev_health_ops.llm.agent.readiness import (
+    PLATFORM_READINESS_SETTING_KEY as _PLATFORM_READINESS_SETTING_KEY,
+)
+from dev_health_ops.llm.agent.readiness import (
+    PLATFORM_SETTINGS_ORG_ID as _PLATFORM_SETTINGS_ORG_ID,
+)
+from dev_health_ops.llm.agent.readiness import (
     AgentReadinessOutcome,
-    AgentReadinessService,
+    ReadinessState,
     SettingsAgentReadinessStore,
+    readiness_failure_state,
 )
 from dev_health_ops.models.dev_persistence import DevRun
 from dev_health_ops.models.settings import SettingCategory
@@ -47,15 +59,16 @@ from dev_health_ops.models.settings import SettingCategory
 from .common import get_session
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-ReadinessState = Literal[
-    "ready",
-    "unsupported_model",
-    "missing_credentials",
-    "disabled",
-    "degraded",
-    "stale_readiness",
-]
+# A generic, organization-safe unavailability message. When Ask Dev's
+# effective provider resolves to the PLATFORM candidate, the org-admin
+# response must never surface the platform's own safe failure reason (that
+# is Platform Admin's diagnostic, not this organization's) -- CHAOS-3265.
+_PLATFORM_GENERIC_UNAVAILABLE_MESSAGE = (
+    "Ask Dev is temporarily unavailable. Contact your platform operator."
+)
+
 EntitlementState = Literal[
     "enabled", "not_entitled", "globally_disabled", "org_disabled", "unavailable"
 ]
@@ -250,12 +263,13 @@ async def _platform_allowance_usage(
     )
 
 
-def _block_impersonated_write(user: AuthenticatedUser) -> None:
-    if user.impersonated_by:
-        raise HTTPException(
-            status_code=403,
-            detail="Ask Dev administrative actions are unavailable while impersonating",
-        )
+def _platform_readiness_store(session: AsyncSession) -> SettingsAgentReadinessStore:
+    """The platform-owned provider's readiness store (see production_runtime)."""
+
+    return SettingsAgentReadinessStore(
+        SettingsService(session, _PLATFORM_SETTINGS_ORG_ID),
+        key=_PLATFORM_READINESS_SETTING_KEY,
+    )
 
 
 async def _feature_state(
@@ -292,42 +306,6 @@ def _checked_at(value: str | None) -> datetime | None:
     return parsed
 
 
-def _failed_readiness_state(safe_error_code: str | None) -> tuple[ReadinessState, str]:
-    if safe_error_code == "provider_not_configured":
-        return (
-            "missing_credentials",
-            "Ask Dev could not authenticate with the configured model endpoint.",
-        )
-    if safe_error_code == "timeout":
-        return "degraded", "The configured Ask Dev model timed out during readiness."
-    if safe_error_code == "rate_limited":
-        return "degraded", "The configured Ask Dev model rate limit was reached."
-    if safe_error_code == "model_not_supported":
-        return (
-            "unsupported_model",
-            "The configured Ask Dev model is unavailable to this provider account.",
-        )
-    if safe_error_code == "invalid_request":
-        return (
-            "unsupported_model",
-            "The configured Ask Dev model rejected a required agent request capability.",
-        )
-    if safe_error_code == "invalid_response":
-        return (
-            "unsupported_model",
-            "The configured model did not satisfy the Ask Dev agent capability contract.",
-        )
-    if safe_error_code == "provider_contract_violation":
-        return (
-            "unsupported_model",
-            "The configured model returned multiple tool decisions in one turn, "
-            "violating Ask Dev's required sequential tool-call contract.",
-        )
-    if safe_error_code == "provider_unavailable":
-        return "degraded", "The configured Ask Dev model endpoint is unavailable."
-    return "degraded", "The configured Ask Dev model failed readiness."
-
-
 async def _admin_response(
     session: AsyncSession,
     *,
@@ -360,6 +338,14 @@ async def _admin_response(
             provider_label = resolution.provider_label
             model_label = resolution.model_label
             provider_source = resolution.source.value
+            if provider_source == "platform":
+                # Platform's own certification lives in the platform-global
+                # scope -- only Platform Admin can trigger it (CHAOS-3265).
+                # Re-read from there so an org relying on platform fallback
+                # reflects the ACTUAL platform certification state, not a
+                # stale/absent org-scoped record this org can no longer
+                # produce.
+                readiness_record = await _platform_readiness_store(session).load()
             if readiness_record is None:
                 readiness = "stale_readiness"
                 failure_reason = "The configured Ask Dev model has not been certified."
@@ -377,7 +363,7 @@ async def _admin_response(
                 and readiness_record.readiness_version == READINESS_VERSION
                 and readiness_record.outcome is AgentReadinessOutcome.FAILED
             ):
-                readiness, failure_reason = _failed_readiness_state(
+                readiness, failure_reason = readiness_failure_state(
                     readiness_record.safe_error_code
                 )
             else:
@@ -400,7 +386,25 @@ async def _admin_response(
                 try:
                     await resolution.provider.aclose()
                 except Exception:
-                    pass
+                    # Best-effort cleanup only: the readiness state above is
+                    # already finalized, so a transport-close error here must
+                    # never mask that outcome or fail this request. Still
+                    # worth knowing about (a leaked connection is an
+                    # operational signal), so log it rather than swallow it.
+                    logger.warning(
+                        "Failed to close Ask Dev provider connection after readiness check",
+                        exc_info=True,
+                    )
+
+    if provider_source == "platform":
+        # This organization's admin surface must never expose the
+        # platform-owned provider's identity or its platform-specific
+        # failure reason (that belongs to Platform Admin) -- CHAOS-3265.
+        provider_label = None
+        model_label = None
+        provider_source = None
+        if readiness != "ready":
+            failure_reason = _PLATFORM_GENERIC_UNAVAILABLE_MESSAGE
 
     available = entitled and not policy.emergency_disabled and readiness == "ready"
     limits = DevAdmissionLimits()
@@ -461,7 +465,10 @@ async def update_ask_dev_admin_settings(
     org_id: str = Depends(get_admin_org_id),
     user: AuthenticatedUser = Depends(get_admin_user),
 ) -> AskDevAdminResponse:
-    _block_impersonated_write(user)
+    block_impersonated_write(
+        user,
+        detail="Ask Dev administrative actions are unavailable while impersonating",
+    )
     settings = SettingsService(session, org_id)
     category = SettingCategory.ASK_DEV.value
     if payload.retention_days is not None:
@@ -521,50 +528,38 @@ async def update_ask_dev_admin_settings(
     return await _admin_response(session, org_id=org_id)
 
 
-@router.post("/ask-dev/readiness", response_model=AskDevAdminResponse)
+@router.post("/ask-dev/readiness", status_code=410)
 async def run_ask_dev_readiness(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
     user: AuthenticatedUser = Depends(get_admin_user),
-) -> AskDevAdminResponse:
-    _block_impersonated_write(user)
-    policy = await load_ask_dev_org_policy(SettingsService(session, org_id))
-    entitlement_state, entitled, _ = await _feature_state(session, org_id)
-    if not entitled or policy.emergency_disabled:
-        reason = (
-            "the organization emergency disable is active"
-            if policy.emergency_disabled
-            else entitlement_state
+) -> dict[str, str]:
+    """Deprecated: platform certification no longer runs through this route.
+
+    CHAOS-3265 closed the bug where an org admin could trigger and observe
+    certification of the PLATFORM-owned provider through this org-scoped
+    endpoint. Platform certification now lives exclusively behind
+    ``POST /platform/ask-dev/readiness`` (superuser-only, Platform Admin),
+    and BYO's own preflight now lives at ``POST /llm-settings/readiness``.
+
+    The route is kept registered -- rather than deleted outright -- purely
+    for rolling-deploy safety: an already-deployed older web frontend may
+    still call this route before its paired frontend change deploys. It
+    intentionally executes NO certification logic and touches no readiness
+    store at all; it only returns a static, generic 410 response. This is
+    what actually closes the privilege-escalation bug -- there is no code
+    path left under this route that resolves or certifies any provider.
+    Full route deletion can happen in a follow-up ticket once rollout of
+    both the ops and web changes is confirmed complete.
+    """
+
+    del session, org_id, user  # deliberately unused: no logic may run here
+    return {
+        "detail": (
+            "Platform preflight has moved to Platform Admin. "
+            "Use BYO LLM settings for BYO preflight."
         )
-        raise HTTPException(
-            status_code=403,
-            detail=f"Ask Dev readiness cannot run while {reason}",
-        )
-    try:
-        resolution = await resolve_certification_provider(session, org_id=org_id)
-    except DevRuntimeUnavailable:
-        return await _admin_response(session, org_id=org_id)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Ask Dev readiness is temporarily unavailable",
-        ) from exc
-    try:
-        await AgentReadinessService(
-            SettingsAgentReadinessStore(SettingsService(session, org_id)),
-            org_id=org_id,
-        ).certify(
-            resolution.provider,
-            provider_name=resolution.family,
-            model=resolution.model,
-            fingerprint=resolution.readiness_fingerprint,
-        )
-    finally:
-        try:
-            await resolution.provider.aclose()
-        except Exception:
-            pass
-    return await _admin_response(session, org_id=org_id)
+    }
 
 
 @router.get("/ask-dev/usage", response_model=AskDevAdminUsageResponse)

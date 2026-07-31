@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 
 class SettingResponse(BaseModel):
@@ -73,6 +73,9 @@ class LLMSettingsStatusResponse(BaseModel):
         "active",
     ]
     last_fallback_at: datetime | None = None
+    readiness: Literal["ready", "failed", "stale", "never_checked"] = "never_checked"
+    readiness_checked_at: AwareDatetime | None = None
+    readiness_safe_failure_reason: str | None = None
 
 
 class LLMSettingsUpsert(BaseModel):

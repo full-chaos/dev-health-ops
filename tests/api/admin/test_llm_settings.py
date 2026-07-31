@@ -3,19 +3,40 @@ from __future__ import annotations
 import importlib
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.dev import production_runtime
+from dev_health_ops.api.dev.production_runtime import ProductionProviderResolution
+from dev_health_ops.api.services.auth import (
+    AuthenticatedUser,
+    _impersonation_ctx,
+    set_impersonation_context,
+)
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.core.encryption import decrypt_value
 from dev_health_ops.llm import credentials as llm_credentials
+from dev_health_ops.llm.agent.contracts import (
+    AgentDecisionResult,
+    AgentFinalAnswer,
+    AgentProviderCapabilities,
+    AgentToolRequest,
+    AgentUsage,
+    StreamingMode,
+    StructuredOutputMode,
+    ToolDecisionMode,
+)
+from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErrorCode
+from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
+from dev_health_ops.llm.agent.policy import AgentProviderSource
 from dev_health_ops.llm.credentials import (
     BYO_LLM_BASE_URL_FALLBACK_ALERT_THRESHOLD,
     BYO_LLM_BASE_URL_FALLBACK_ALERT_WINDOW,
@@ -24,6 +45,7 @@ from dev_health_ops.llm.credentials import (
     resolve_llm_org_settings_credentials,
 )
 from dev_health_ops.models.audit import AuditLog
+from dev_health_ops.models.dev_persistence import DevConversation, DevRun
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
 from dev_health_ops.models.llm_budget import BYOLLMBudgetReservation
@@ -35,6 +57,9 @@ os.environ.setdefault("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
+settings_router_module = importlib.import_module(
+    "dev_health_ops.api.admin.routers.settings"
+)
 
 _TABLES = tables_of(
     User,
@@ -45,7 +70,89 @@ _TABLES = tables_of(
     Setting,
     AuditLog,
     BYOLLMBudgetReservation,
+    DevConversation,
+    DevRun,
 )
+
+
+class FakeReadinessProvider:
+    """Echoes the readiness nonce successfully -- for the READY path."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.closed = False
+
+    @property
+    def capabilities(self) -> AgentProviderCapabilities:
+        return AgentProviderCapabilities(
+            structured_output=StructuredOutputMode.JSON_SCHEMA,
+            tool_decisions=ToolDecisionMode.NATIVE,
+            streaming=StreamingMode.BUFFERED,
+            supports_cancellation=True,
+            context_window_tokens=16_384,
+            max_output_tokens=1_024,
+            readiness_version=READINESS_VERSION,
+            disclosure_key="openai-compatible",
+        )
+
+    async def decide(self, *_args: Any, **_kwargs: Any) -> AgentDecisionResult:
+        self.calls += 1
+        if self.calls == 1:
+            return AgentDecisionResult(
+                decision=AgentToolRequest(
+                    "readiness_echo", {"nonce": "ready-v1"}, "call-1"
+                ),
+                usage=AgentUsage(input_tokens=3, output_tokens=2),
+                latency_ms=1,
+                provider_fingerprint="provider",
+                model_fingerprint="model",
+            )
+        return AgentDecisionResult(
+            decision=AgentFinalAnswer(value={"nonce": "ready-v1"}),
+            usage=AgentUsage(input_tokens=4, output_tokens=1),
+            latency_ms=1,
+            provider_fingerprint="provider",
+            model_fingerprint="model",
+        )
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class FailingReadinessProvider(FakeReadinessProvider):
+    """Always fails the readiness exchange -- for the FAILED path."""
+
+    async def decide(self, *_args: Any, **_kwargs: Any) -> AgentDecisionResult:
+        raise AgentProviderError(AgentProviderErrorCode.INVALID_RESPONSE)
+
+
+async def _real_byo_fingerprint(session_maker, org_id: str) -> str:
+    """Compute the ACTUAL fingerprint production code would derive for this
+    org's currently-saved BYO settings, so tests that fake the certifying
+    provider still satisfy the currency check in
+    settings_router_module._llm_settings_status_response (readiness=ready/
+    failed requires the stored fingerprint to match the live BYO config)."""
+
+    async with session_maker() as session:
+        svc = SettingsService(session, org_id)
+        candidate = await production_runtime._byo_candidate(
+            svc, readiness=None, certification=True
+        )
+        assert candidate is not None
+        return production_runtime._readiness_fingerprint(candidate)
+
+
+async def _dev_run_count(session_maker, org_id: str) -> int:
+    async with session_maker() as session:
+        return int(
+            (
+                await session.execute(
+                    select(func.count(DevRun.id)).where(
+                        DevRun.org_id == uuid.UUID(org_id)
+                    )
+                )
+            ).scalar_one()
+        )
 
 
 @pytest_asyncio.fixture
@@ -296,6 +403,9 @@ async def test_admin_llm_settings_status_reports_unconfigured_valid_and_invalid_
             "degraded": False,
             "reason_code": "not_configured",
             "last_fallback_at": None,
+            "readiness": "never_checked",
+            "readiness_checked_at": None,
+            "readiness_safe_failure_reason": None,
         }
 
     await _set_llm_settings(session_maker, state["org_id"], base_url=None)
@@ -308,6 +418,9 @@ async def test_admin_llm_settings_status_reports_unconfigured_valid_and_invalid_
             "degraded": False,
             "reason_code": "active",
             "last_fallback_at": None,
+            "readiness": "never_checked",
+            "readiness_checked_at": None,
+            "readiness_safe_failure_reason": None,
         }
 
     await _set_llm_settings(
@@ -404,6 +517,9 @@ async def test_admin_llm_settings_status_ignores_stale_or_cross_org_fallback_row
         "degraded": False,
         "reason_code": "active",
         "last_fallback_at": None,
+        "readiness": "never_checked",
+        "readiness_checked_at": None,
+        "readiness_safe_failure_reason": None,
     }
     assert cross_org.status_code == 200
     assert cross_org.json() == {
@@ -412,6 +528,9 @@ async def test_admin_llm_settings_status_ignores_stale_or_cross_org_fallback_row
         "degraded": True,
         "reason_code": "invalid_base_url",
         "last_fallback_at": None,
+        "readiness": "never_checked",
+        "readiness_checked_at": None,
+        "readiness_safe_failure_reason": None,
     }
 
 
@@ -737,3 +856,452 @@ def test_resolve_provider_name_uses_org_settings_in_auto(monkeypatch):
     # auto without org context (and no env) fails loud rather than guessing
     with pytest.raises(LLMAuthError):
         resolve_provider_name("auto", org_id=None)
+
+
+@pytest.mark.asyncio
+async def test_llm_settings_readiness_requires_byo_configuration(session_maker):
+    state = await _seed_org(session_maker, "team")
+    app = _make_app(session_maker, state)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.post("/api/v1/admin/llm-settings/readiness")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == (
+        "No BYO LLM configuration is saved for this organization."
+    )
+
+
+@pytest.mark.asyncio
+async def test_llm_settings_readiness_succeeds_independent_of_ask_dev_selection(
+    session_maker, monkeypatch: pytest.MonkeyPatch
+):
+    """CHAOS-3265 acceptance criterion: BYO readiness is available based on
+    BYO configuration being set up, not on BYO currently being selected or
+    enabled for Ask Dev. Ask Dev is forced emergency-disabled here (so Ask
+    Dev's own provider_source resolves to None) and the BYO check must still
+    run -- and must not touch DevRun or change Ask Dev's selection."""
+
+    state = await _seed_org(session_maker, "team")
+    await _set_llm_settings(
+        session_maker,
+        state["org_id"],
+        provider="openai",
+        api_key="sk-org",
+        base_url="https://api.openai.com/v1",
+    )
+    async with session_maker() as session:
+        await SettingsService(session, state["org_id"]).set(
+            "ask_dev_emergency_disabled",
+            "true",
+            SettingCategory.ASK_DEV.value,
+        )
+        await session.commit()
+
+    app = _make_app(session_maker, state)
+    provider = FakeReadinessProvider()
+    byo_fingerprint = await _real_byo_fingerprint(session_maker, state["org_id"])
+
+    async def fake_resolve_byo(_session, *, org_id: str):
+        assert org_id == state["org_id"]
+        return ProductionProviderResolution(
+            provider=provider,
+            source=AgentProviderSource.BYO,
+            family="openai",
+            model="gpt-5-mini",
+            provider_label="OpenAI compatible",
+            model_label="gpt-5-mini",
+            readiness_fingerprint=byo_fingerprint,
+        )
+
+    monkeypatch.setattr(
+        settings_router_module, "resolve_byo_certification_provider", fake_resolve_byo
+    )
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-evidence-signing-secret")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        before = await ac.get("/api/v1/admin/ask-dev")
+        assert before.status_code == 200
+        before_source = before.json()["provider_source"]
+        assert before_source is None  # forced emergency-disabled above
+
+        before_dev_run_count = await _dev_run_count(session_maker, state["org_id"])
+
+        response = await ac.post("/api/v1/admin/llm-settings/readiness")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["readiness"] == "ready"
+        assert body["readiness_checked_at"] is not None
+        assert body["readiness_safe_failure_reason"] is None
+        assert provider.closed is True
+
+        after_dev_run_count = await _dev_run_count(session_maker, state["org_id"])
+        assert before_dev_run_count == 0
+        assert after_dev_run_count == 0
+
+        after = await ac.get("/api/v1/admin/ask-dev")
+        assert after.status_code == 200
+        assert after.json()["provider_source"] == before_source
+
+
+@pytest.mark.asyncio
+async def test_llm_settings_readiness_succeeds_and_logs_when_provider_close_fails(
+    session_maker, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    """A transport-close failure after a successful certification must never
+    mask the readiness result the caller already committed (CHAOS-3265 /
+    CodeQL empty-except finding) -- and must be logged, not silently
+    swallowed. Deleting the try/except's log call (or reverting it to a bare
+    `pass`) makes this test fail on the caplog assertion below."""
+
+    state = await _seed_org(session_maker, "team")
+    await _set_llm_settings(
+        session_maker,
+        state["org_id"],
+        provider="openai",
+        api_key="sk-org",
+        base_url="https://api.openai.com/v1",
+    )
+    app = _make_app(session_maker, state)
+    byo_fingerprint = await _real_byo_fingerprint(session_maker, state["org_id"])
+
+    class CloseFailsProvider(FakeReadinessProvider):
+        async def aclose(self) -> None:
+            self.closed = True
+            raise RuntimeError("transport already shut down")
+
+    provider = CloseFailsProvider()
+
+    async def fake_resolve_byo(_session, *, org_id: str):
+        return ProductionProviderResolution(
+            provider=provider,
+            source=AgentProviderSource.BYO,
+            family="openai",
+            model="gpt-5-mini",
+            provider_label="OpenAI compatible",
+            model_label="gpt-5-mini",
+            readiness_fingerprint=byo_fingerprint,
+        )
+
+    monkeypatch.setattr(
+        settings_router_module, "resolve_byo_certification_provider", fake_resolve_byo
+    )
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-evidence-signing-secret")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        with caplog.at_level(
+            "WARNING", logger="dev_health_ops.api.admin.routers.settings"
+        ):
+            response = await ac.post("/api/v1/admin/llm-settings/readiness")
+
+    assert response.status_code == 200
+    assert response.json()["readiness"] == "ready"
+    assert provider.closed is True
+    assert any(
+        "Failed to close BYO Ask Dev provider connection" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_llm_settings_readiness_persists_and_status_reflects_failure(
+    session_maker, monkeypatch: pytest.MonkeyPatch
+):
+    state = await _seed_org(session_maker, "team")
+    await _set_llm_settings(
+        session_maker,
+        state["org_id"],
+        provider="openai",
+        api_key="sk-org",
+        base_url="https://api.openai.com/v1",
+    )
+    app = _make_app(session_maker, state)
+    provider = FailingReadinessProvider()
+    byo_fingerprint = await _real_byo_fingerprint(session_maker, state["org_id"])
+
+    async def fake_resolve_byo(_session, *, org_id: str):
+        return ProductionProviderResolution(
+            provider=provider,
+            source=AgentProviderSource.BYO,
+            family="openai",
+            model="gpt-5-mini",
+            provider_label="OpenAI compatible",
+            model_label="gpt-5-mini",
+            readiness_fingerprint=byo_fingerprint,
+        )
+
+    monkeypatch.setattr(
+        settings_router_module, "resolve_byo_certification_provider", fake_resolve_byo
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.post("/api/v1/admin/llm-settings/readiness")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["readiness"] == "failed"
+        assert body["readiness_safe_failure_reason"] is not None
+
+        status = await ac.get("/api/v1/admin/llm-settings/status")
+        assert status.status_code == 200
+        status_body = status.json()
+        assert status_body["readiness"] == "failed"
+        assert (
+            status_body["readiness_safe_failure_reason"]
+            == (body["readiness_safe_failure_reason"])
+        )
+        assert status_body["readiness_checked_at"] == body["readiness_checked_at"]
+
+
+@pytest.mark.asyncio
+async def test_llm_settings_readiness_blocks_impersonated_admin(session_maker):
+    state = await _seed_org(session_maker, "team")
+    await _set_llm_settings(
+        session_maker,
+        state["org_id"],
+        provider="openai",
+        api_key="sk-org",
+        base_url="https://api.openai.com/v1",
+    )
+    app = _make_app(session_maker, state, impersonated_by=str(uuid.uuid4()))
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.post("/api/v1/admin/llm-settings/readiness")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "impersonated_write_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_llm_settings_readiness_blocks_live_impersonation_without_jwt_claim(
+    session_maker, monkeypatch: pytest.MonkeyPatch
+):
+    """Codex regression test (CHAOS-3265): the guard must also catch the
+    LIVE, per-request impersonation context set by ImpersonationMiddleware
+    from the Valkey-cached session -- not just the static JWT
+    ``impersonated_by`` claim. Proven with that claim left unset."""
+
+    state = await _seed_org(session_maker, "team")
+    await _set_llm_settings(
+        session_maker,
+        state["org_id"],
+        provider="openai",
+        api_key="sk-org",
+        base_url="https://api.openai.com/v1",
+    )
+    app = _make_app(session_maker, state)  # impersonated_by NOT set
+
+    def _must_not_resolve(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError(
+            "must never resolve a certification provider while a live "
+            "impersonation context is active"
+        )
+
+    monkeypatch.setattr(
+        settings_router_module, "resolve_byo_certification_provider", _must_not_resolve
+    )
+
+    token = set_impersonation_context(
+        target_user_id=str(uuid.uuid4()),
+        target_org_id=state["org_id"],
+        target_role="admin",
+        real_user_id=state["user_id"],
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            response = await ac.post("/api/v1/admin/llm-settings/readiness")
+    finally:
+        _impersonation_ctx.reset(token)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_llm_settings_readiness_can_flip_ask_dev_selection_to_byo(
+    session_maker, monkeypatch: pytest.MonkeyPatch
+):
+    """Honest companion to the independence test above (codex review,
+    CHAOS-3265): certifying BYO's OWN credentials here is what makes BYO
+    usable/selectable for subsequent Ask Dev runs -- that is the intended
+    purpose of a preflight check, not a bug. Prove it directly against the
+    REAL (unmocked) production resolver, starting from a state where
+    platform is genuinely winning, rather than asserting "no effect" only in
+    a scenario (emergency-disabled) where nothing could move regardless."""
+
+    from dev_health_ops.api.dev.production_runtime import (
+        _byo_candidate,
+        _readiness_fingerprint,
+        resolve_production_provider,
+    )
+    from dev_health_ops.llm.agent.readiness import (
+        PLATFORM_READINESS_SETTING_KEY,
+        PLATFORM_SETTINGS_ORG_ID,
+        AgentReadinessOutcome,
+        AgentReadinessRecord,
+        SettingsAgentReadinessStore,
+    )
+
+    state = await _seed_org(session_maker, "team")
+    await _set_llm_settings(
+        session_maker,
+        state["org_id"],
+        provider="openai",
+        api_key="sk-org",
+        base_url="https://api.openai.com/v1",
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "platform-key")
+    monkeypatch.setenv("LLM_MODEL", "platform-model")
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    # Certify the PLATFORM candidate (as Platform Admin would) so platform
+    # is genuinely usable and winning before BYO is ever certified.
+    async with session_maker() as session:
+        svc = SettingsService(session, state["org_id"])
+        byo_candidate = await _byo_candidate(svc, readiness=None, certification=True)
+        assert byo_candidate is not None
+        byo_fingerprint = _readiness_fingerprint(byo_candidate)
+
+        platform, _ = production_runtime._platform_candidate(
+            readiness=None, certification=True
+        )
+        assert platform is not None
+        platform_fingerprint = _readiness_fingerprint(platform)
+        await SettingsAgentReadinessStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_READINESS_SETTING_KEY,
+        ).save(
+            AgentReadinessRecord(
+                fingerprint=platform_fingerprint,
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        await session.commit()
+
+    async with session_maker() as session:
+        before = await resolve_production_provider(session, org_id=state["org_id"])
+        try:
+            assert before.source is AgentProviderSource.PLATFORM
+        finally:
+            await before.provider.aclose()
+
+    app = _make_app(session_maker, state)
+    provider = FakeReadinessProvider()
+
+    async def fake_resolve_byo(_session, *, org_id: str):
+        return ProductionProviderResolution(
+            provider=provider,
+            source=AgentProviderSource.BYO,
+            family="openai",
+            model="gpt-5-mini",
+            provider_label="OpenAI compatible",
+            model_label="gpt-5-mini",
+            readiness_fingerprint=byo_fingerprint,
+        )
+
+    monkeypatch.setattr(
+        settings_router_module, "resolve_byo_certification_provider", fake_resolve_byo
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.post("/api/v1/admin/llm-settings/readiness")
+    assert response.status_code == 200
+    assert response.json()["readiness"] == "ready"
+
+    async with session_maker() as session:
+        after = await resolve_production_provider(session, org_id=state["org_id"])
+        try:
+            assert after.source is AgentProviderSource.BYO
+        finally:
+            await after.provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_llm_settings_status_reports_stale_not_ready_on_version_bump(
+    session_maker,
+):
+    """CHAOS-3254 (READINESS_VERSION v2->v3) exposed a gap: a stored record
+    whose fingerprint matches the CURRENT BYO config but whose
+    readiness_version is OUTDATED must never be reported as "ready" (nor
+    "failed" -- it was never actually re-checked under the new
+    requirements). It must report "stale" with a safe, accurate remediation
+    that does not imply anything is broken."""
+
+    from dev_health_ops.llm.agent.readiness import (
+        AgentReadinessOutcome,
+        AgentReadinessRecord,
+        SettingsAgentReadinessStore,
+    )
+
+    state = await _seed_org(session_maker, "team")
+    await _set_llm_settings(
+        session_maker,
+        state["org_id"],
+        provider="openai",
+        api_key="sk-org",
+        base_url="https://api.openai.com/v1",
+    )
+    current_fingerprint = await _real_byo_fingerprint(session_maker, state["org_id"])
+
+    async with session_maker() as session:
+        svc = SettingsService(session, state["org_id"])
+        await SettingsAgentReadinessStore(svc).save(
+            AgentReadinessRecord(
+                fingerprint=current_fingerprint,  # matches live BYO config
+                readiness_version="stale-version-v2",  # does NOT match current
+                checked_at="2026-01-01T00:00:00+00:00",
+                outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        await session.commit()
+
+    app = _make_app(session_maker, state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.get("/api/v1/admin/llm-settings/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["readiness"] == "stale"
+    assert body["readiness"] != "ready"
+    assert body["readiness"] != "failed"
+    assert body["readiness_safe_failure_reason"] is not None
+    lowered = body["readiness_safe_failure_reason"].lower()
+    assert "unavailable" not in lowered
+    assert "endpoint" not in lowered
+    assert "fail" not in lowered
+
+
+@pytest.mark.asyncio
+async def test_llm_settings_readiness_is_tier_and_flag_gated(session_maker):
+    community = await _seed_org(session_maker, "community", flag_enabled=True)
+    app = _make_app(session_maker, community)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.post("/api/v1/admin/llm-settings/readiness")
+    assert response.status_code == 402
+
+    disabled = await _seed_org(session_maker, "team", flag_enabled=False)
+    app = _make_app(session_maker, disabled)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.post("/api/v1/admin/llm-settings/readiness")
+    assert response.status_code == 403

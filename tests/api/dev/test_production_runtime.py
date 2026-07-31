@@ -16,6 +16,7 @@ from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
 from dev_health_ops.api.dev.tool_registry import ToolExecutionContext
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
 from dev_health_ops.llm.agent.policy import AgentProviderCandidate, AgentProviderSource
+from dev_health_ops.llm.agent.readiness import PLATFORM_READINESS_SETTING_KEY
 from dev_health_ops.llm.credentials import LLMCredentials
 
 
@@ -83,7 +84,7 @@ async def test_provider_resolution_requires_current_certification(
     monkeypatch.setenv("LLM_MODEL", "certified-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     FakeSettingsService.values = {
-        "ask_dev_agent_readiness": json.dumps(
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
             {
                 "fingerprint": _fingerprint(),
                 "readiness_version": READINESS_VERSION,
@@ -108,7 +109,7 @@ async def test_provider_resolution_requires_current_certification(
     assert model_change.value.code == "provider_not_configured"
     monkeypatch.setenv("LLM_MODEL", "certified-model")
 
-    FakeSettingsService.values["ask_dev_agent_readiness"] = json.dumps(
+    FakeSettingsService.values[PLATFORM_READINESS_SETTING_KEY] = json.dumps(
         {
             "fingerprint": "stale-fingerprint",
             "readiness_version": READINESS_VERSION,
@@ -148,7 +149,7 @@ async def test_platform_local_provider_uses_only_operator_environment(
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
     FakeSettingsService.values = {
-        "ask_dev_agent_readiness": json.dumps(
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
             {
                 "fingerprint": _fingerprint(
                     provider="local",
@@ -194,7 +195,7 @@ async def test_explicit_fail_closed_prevents_platform_fallback(
     monkeypatch.setenv("LOCAL_LLM_MODEL", "local-agent-model")
     monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://host.docker.internal:1234/v1")
     FakeSettingsService.values = {
-        "ask_dev_agent_readiness": json.dumps(
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
             {
                 "fingerprint": _fingerprint(
                     provider="local",

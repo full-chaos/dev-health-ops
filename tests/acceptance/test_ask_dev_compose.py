@@ -148,7 +148,9 @@ def test_readiness_bootstrap_uses_public_http_contracts() -> None:
     assert "/api/v1/auth/login" in prepare
     assert "/api/v1/admin/feature-flags" in prepare
     assert "/feature-overrides" in prepare
-    assert "/api/v1/admin/ask-dev/readiness" in prepare
+    # CHAOS-3265: platform certification now runs through the Platform Admin
+    # surface, not the org-scoped (now-410) /admin/ask-dev/readiness route.
+    assert "/api/v1/admin/platform/ask-dev/readiness" in prepare
     assert "/api/v1/dev/capabilities" in prepare
     assert "ask-dev-scripted-v1" in prepare
 
@@ -197,15 +199,16 @@ class _FakeAcceptanceApi:
             return []
         if path.endswith("/feature-overrides") and method == "POST":
             return {"is_enabled": True}
-        if path == "/api/v1/admin/ask-dev/readiness":
+        if path == "/api/v1/admin/platform/ask-dev/readiness":
             return {
-                "ask_dev_enabled": True,
-                "chat_window_available": True,
-                "full_page_available": True,
-                "provider_source": "platform",
+                "schema_version": "platform_ask_dev_readiness.v1",
+                "configured": True,
+                "provider_label": "OpenAI compatible",
+                "model_label": self.model,
                 "readiness": "ready",
-                "effective_model_label": self.model,
                 "readiness_checked_at": "2026-07-29T00:00:00+00:00",
+                "readiness_version": "v1",
+                "safe_remediation": None,
             }
         if path == "/api/v1/dev/capabilities":
             return {
@@ -235,7 +238,7 @@ def test_readiness_bootstrap_enables_all_features_and_proves_capabilities() -> N
         "id-ask_dev",
         "id-ask_dev_contextual_entrypoints",
     ]
-    assert api.calls[-2][1] == "/api/v1/admin/ask-dev/readiness"
+    assert api.calls[-2][1] == "/api/v1/admin/platform/ask-dev/readiness"
     assert api.calls[-1][1] == "/api/v1/dev/capabilities"
 
 

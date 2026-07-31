@@ -230,6 +230,11 @@ async def test_admin_projection_and_readiness_are_safe_and_shared(admin_context)
         ("invalid_request", "unsupported_model", "required agent request capability"),
         ("invalid_response", "unsupported_model", "capability contract"),
         ("provider_unavailable", "degraded", "endpoint is unavailable"),
+        (
+            "provider_contract_violation",
+            "unsupported_model",
+            "sequential tool-call contract",
+        ),
     ],
 )
 def test_failed_readiness_exposes_only_specific_safe_remediation(

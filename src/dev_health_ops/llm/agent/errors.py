@@ -28,6 +28,7 @@ class AgentProviderErrorCode(str, Enum):
     CANCELLED = "cancelled"
     BUDGET_EXHAUSTED = "budget_exhausted"
     BUDGET_UNAVAILABLE = "budget_unavailable"
+    PROVIDER_CONTRACT_VIOLATION = "provider_contract_violation"
 
 
 _SAFE_MESSAGES = {
@@ -42,6 +43,10 @@ _SAFE_MESSAGES = {
     AgentProviderErrorCode.CANCELLED: "The model request was cancelled.",
     AgentProviderErrorCode.BUDGET_EXHAUSTED: "The organization BYO LLM budget was reached.",
     AgentProviderErrorCode.BUDGET_UNAVAILABLE: "BYO LLM budget accounting is temporarily unavailable.",
+    AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION: (
+        "The model provider returned more than one tool decision in a single "
+        "turn, violating the sequential decision contract."
+    ),
 }
 
 

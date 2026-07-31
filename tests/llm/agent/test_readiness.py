@@ -7,6 +7,10 @@ from dev_health_ops.llm.agent.contracts import (
     AgentToolRequest,
     AgentUsage,
 )
+from dev_health_ops.llm.agent.openai_compatible import (
+    OpenAICompatibleAgentProvider,
+    _fingerprint,
+)
 from dev_health_ops.llm.agent.readiness import (
     READINESS_MAX_OUTPUT_TOKENS,
     AgentReadinessOutcome,
@@ -132,3 +136,38 @@ async def test_repeated_tool_request_on_final_answer_turn_fails_closed() -> None
 async def test_scripted_provider_supports_shared_lifecycle() -> None:
     provider = ScriptedAgentProvider([])
     await provider.aclose()
+
+
+def test_wire_contract_change_invalidates_a_pre_change_readiness_record() -> None:
+    """CHAOS-3254: bumping READINESS_VERSION must invalidate stale certifications.
+
+    A provider certified under the prior wire contract (before native tool
+    requests started explicitly sending ``parallel_tool_calls``) never
+    demonstrated that its endpoint accepts the new parameter. Simulate
+    exactly that pre-change persisted record and confirm the CURRENT
+    provider no longer treats it as current -- it must be re-certified, not
+    silently trusted to handle a request shape it was never tested against.
+    """
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="agent-model", base_url="http://127.0.0.1:1/v1"
+    )
+    stale_readiness_version = "ask-dev-agent-v2"
+    stale_fingerprint = _fingerprint(
+        "openai-compatible", provider.base_url, stale_readiness_version
+    )
+    pre_change_record = AgentReadinessRecord(
+        fingerprint=stale_fingerprint,
+        readiness_version=stale_readiness_version,
+        checked_at="2026-01-01T00:00:00+00:00",
+        outcome=AgentReadinessOutcome.READY,
+    )
+
+    # The wire contract genuinely changed -- confirm this isn't a vacuous
+    # comparison against itself.
+    assert stale_readiness_version != provider.capabilities.readiness_version
+    assert stale_fingerprint != provider.provider_fingerprint
+
+    assert not pre_change_record.is_current(
+        fingerprint=provider.provider_fingerprint,
+        readiness_version=provider.capabilities.readiness_version,
+    )

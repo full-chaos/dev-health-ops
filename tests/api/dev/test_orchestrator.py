@@ -518,6 +518,107 @@ async def test_provider_timeout_is_caller_enforced_and_terminal_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provider_contract_violation_is_a_safe_error_not_internal_error() -> None:
+    """CHAOS-3254: a defensive multiple-tool-call provider response must not
+    surface as the opaque application ``internal_error`` bucket. It must be a
+    stable, distinguishable safe error with useful operator remediation.
+    """
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    error=AgentProviderError(
+                        AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION,
+                        retryable=False,
+                    )
+                )
+            ],
+            script_id="provider-contract-violation",
+        )
+    )
+    assert result.state is RunState.FAILED
+    assert result.error is not None
+    assert result.error.code == "provider_contract_violation"
+    assert result.error.code != "internal_error"
+    assert result.error.retryable is False
+    assert result.error.remediation
+
+
+@pytest.mark.asyncio
+async def test_multi_metric_question_completes_through_sequential_tool_rounds() -> None:
+    """CHAOS-3254 acceptance: a naturally multi-metric question completes
+    through one tool request per round -- through a final answer -- and
+    stays within the existing tool/round budgets. This is the scripted
+    deterministic acceptance path for the literal reproduction question:
+    "What is the current delivery metric and project timing across the org
+    look like compared the previous period?"
+    """
+    script_id = "multi-metric-sequential"
+    executed: list[DevToolRequest] = []
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={
+                            "metric_id": "items_completed",
+                            "include_comparison": True,
+                            "limit": 12,
+                        },
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={
+                            "metric_id": "cycle_time_p50_hours",
+                            "include_comparison": True,
+                            "limit": 12,
+                        },
+                        call_id="tool_call_02",
+                    )
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={
+                            "metric_id": "avg_wip",
+                            "include_comparison": True,
+                            "limit": 12,
+                        },
+                        call_id="tool_call_03",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(_answer(script_id=script_id))),
+            ],
+            script_id=script_id,
+            registry=_registry(calls=executed),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.error is None
+    assert result.tool_call_count == 3
+    assert [request.metric_id for request in executed] == [
+        "items_completed",
+        "cycle_time_p50_hours",
+        "avg_wip",
+    ]
+    assert all(request.include_comparison is True for request in executed)
+    # One model decision per round, through the final answer: no batching of
+    # multiple tool requests into a single round.
+    model_decision_rounds = [
+        event for event in result.events if event.state is RunState.MODEL_DECISION
+    ]
+    assert len(model_decision_rounds) == 4
+    # Well within the six-call/four-round budgets (TRD 12).
+    assert result.tool_call_count <= DevRunLimits().tool_calls
+    assert len(model_decision_rounds) <= DevRunLimits().model_rounds
+
+
+@pytest.mark.asyncio
 async def test_operator_downward_per_tool_byte_limit_is_enforced() -> None:
     result = await _run(
         _orchestrator(

@@ -72,3 +72,23 @@ reference before reading source content. Rollback removes the additive fields,
 services, and route without a storage rollback. Verify native evidence remains
 available when ACR is absent or unavailable, and keep Ask Dev interaction
 surfaces disabled until the matching web contract artifacts are deployed.
+
+## Ask Dev sequential-tool-call wire contract compatibility
+
+The OpenAI-compatible provider's readiness certification fingerprint folds in
+a `READINESS_VERSION` constant. This deploy bumps it (v2 -> v3) because the
+outbound wire contract changed: native tool requests now send
+`parallel_tool_calls` (gated by model family). A v2 certification never
+demonstrated that its endpoint accepts the new parameter.
+
+**Expected state immediately after deploy**: every previously stored
+readiness certification -- platform and BYO -- reads as not-current. Ask Dev
+capability endpoints report degraded/not-ready readiness until preflight
+re-runs and re-certifies each configured provider connection. This is
+expected, one-time, self-healing behavior, not an incident: no data migration
+or manual database change is required.
+
+**Remediation**: run Ask Dev preflight/readiness certification for the
+platform connection and every configured workspace BYO connection after this
+deploy. Do not treat the transient not-ready state as a provider outage or
+attempt to restore the prior fingerprint.

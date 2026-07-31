@@ -29,6 +29,7 @@ from dev_health_ops.llm.errors import (
     retry_delay,
 )
 from dev_health_ops.llm.json_utils import validate_json_or_empty
+from dev_health_ops.logging_config import pin_content_carrying_client_loggers
 
 from ._http import make_hardened_async_httpx_client, make_hardened_httpx_client
 from .base import (
@@ -552,6 +553,11 @@ class _OpenAIProviderBase(LLMProviderBase):
         if self._client is None:
             from openai import AsyncOpenAI
 
+            # See CHAOS-3258: the SDK's own import-time logging setup can
+            # reset content-carrying client loggers to DEBUG when the
+            # operator OPENAI_LOG env var is set; reassert the pin.
+            pin_content_carrying_client_loggers()
+
             self._client = AsyncOpenAI(
                 api_key=self.cfg.api_key,
                 base_url=self.cfg.base_url,
@@ -562,6 +568,10 @@ class _OpenAIProviderBase(LLMProviderBase):
 
     def _validate_model_on_startup(self) -> None:
         from openai import OpenAI
+
+        # See CHAOS-3258: reassert the content-carrying client logger pin
+        # immediately after this (possibly first-ever) SDK import.
+        pin_content_carrying_client_loggers()
 
         client = OpenAI(
             api_key=self.cfg.api_key,

@@ -14,6 +14,7 @@ from dev_health_ops.llm.providers.openai_capabilities import (
     chat_completion_reasoning_effort,
     supports_temperature,
 )
+from dev_health_ops.logging_config import pin_content_carrying_client_loggers
 
 from .contracts import (
     AgentDecisionResult,
@@ -118,6 +119,13 @@ class OpenAICompatibleAgentProvider:
         self._http_client: Any | None = None
         if client is None:
             from openai import AsyncOpenAI
+
+            # The OpenAI SDK's own import-time logging setup can reset the
+            # content-carrying client loggers back to DEBUG if the operator
+            # OPENAI_LOG env var is set, overriding configure_logging()'s
+            # WARNING pin -- reassert it immediately after this (possibly
+            # first-ever) import (CHAOS-3258).
+            pin_content_carrying_client_loggers()
 
             self._http_client = make_hardened_async_httpx_client()
             client = AsyncOpenAI(

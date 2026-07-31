@@ -42,6 +42,7 @@ op-rb-worker	op-runbooks	/operate/runbooks/worker-or-queue-failure/	Worker or qu
 op-rb-sync	op-runbooks	/operate/runbooks/sync-or-backfill-failure/	Sync coverage or backfill failure	runbook	true	public	planned	false	
 op-rb-db	op-runbooks	/operate/runbooks/database-or-migration-failure/	Database, storage, or migration failure	runbook	true	public	planned	false	
 op-rb-auth	op-runbooks	/operate/runbooks/provider-authentication-failure/	Provider authentication failure	runbook	true	public	planned	false	
+op-rb-ask-dev-proxy	op-runbooks	/operate/runbooks/ask-dev-web-proxy-or-browser-failure/	Ask Dev web proxy or browser failure	runbook	true	public	planned	false	
 op-rb-perf	op-runbooks	/operate/runbooks/performance-or-rate-limit/	Performance, rate limit, or saturation	runbook	true	public	planned	false	
 op-rb-backup	op-runbooks	/operate/runbooks/backup-or-restore-failure/	Backup or restore failure	runbook	true	public	planned	false	
 op-rb-dr	op-runbooks	/operate/runbooks/disaster-recovery/	Disaster recovery	runbook	true	public	planned	false	

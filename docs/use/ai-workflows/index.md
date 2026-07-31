@@ -79,7 +79,7 @@ the scope already committed to an active conversation.
 Choose **Workspace** to expand the same conversation into `/dev` for a longer
 investigation, history, evidence, and metric detail. The window and `/dev` share
 one conversation, scope, streamed run, answer, feedback record, and retention
-choice; expanding or minimizing does not run the question again. **Ask Dev about
+policy; expanding or minimizing does not run the question again. **Ask Dev about
 this** actions use an approved route and entity allowlist and show the inherited
 scope before submission. They never copy arbitrary page content or submit a
 suggested question automatically.
@@ -96,8 +96,9 @@ Ask Dev or organization-administrator entitlement does not grant access to it.
 
 ## Ask Dev conversation history
 
-Ask Dev keeps a conversation only under the retention choice shown when the
-conversation starts:
+Ask Dev keeps a conversation only under your organization's retention policy.
+An organization administrator sets this policy for every conversation in the
+workspace; it is not a choice made when an individual conversation starts:
 
 - **Do not retain** removes the question, validated answer, run, tool audit,
   and feedback after the request reaches a terminal state. A minimal deletion
@@ -108,8 +109,8 @@ conversation starts:
 
 You can delete a saved conversation before it expires. Dev Health does not use
 Ask Dev conversation content to train models. Disabling Ask Dev stops new use;
-it does not silently delete saved history, whose selected retention and delete
-controls continue to apply.
+it does not silently delete saved history, whose organization-set retention
+policy and delete controls continue to apply.
 
 The permanent window and `/dev` load this same saved transcript; opening the
 workspace does not copy or fork it. History contains the question and committed

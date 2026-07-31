@@ -159,6 +159,7 @@ nav:
           - Worker or queue failure: operate/runbooks/worker-or-queue-failure.md
           - Database or migration failure: operate/runbooks/database-or-migration-failure.md
           - Provider authentication failure: operate/runbooks/provider-authentication-failure.md
+          - Ask Dev web proxy or browser failure: operate/runbooks/ask-dev-web-proxy-or-browser-failure.md
           - Performance or rate limit: operate/runbooks/performance-or-rate-limit.md
           - Backup or restore failure: operate/runbooks/backup-or-restore-failure.md
           - Disaster recovery: operate/runbooks/disaster-recovery.md

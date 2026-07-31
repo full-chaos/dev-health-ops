@@ -120,3 +120,36 @@ a separate product change and is not part of this V1 release.
   transcript fields.
 - **Reliability:** closing the browser stream signals cancellation and waits for
   a durable `cancelled` terminal state before the stream task is released.
+
+## Ask Dev Wave 3 full-page workspace and shared UI core release note
+
+- **New:** `dev-health-web` adds the full-page `/dev` investigation workspace
+  and a shared conversational UI core (conversation client, SSE parser/state
+  machine, transcript, structured `dev_answer.v1` renderer, citation/evidence
+  and metric components, history/retention UI) consumed by both `/dev` and the
+  permanent app-shell Ask Dev window through one `AskDevProvider` instance
+  mounted in the authenticated app layout. Same-origin, server-only
+  `/api/v1/dev/**` route handlers proxy every browser call; access tokens,
+  provider credentials, and raw upstream error bodies never reach the browser.
+- **Changed:** none of the existing platform-admin Context Fabric Validation
+  console (`/superadmin/context-fabric/validation`) changes; it remains an
+  independent, LLM-independent diagnostic surface not reachable from `/dev` or
+  the Ask Dev window.
+- **Known limited:** the composer's per-conversation retention selector shown
+  in an earlier build was removed — retention is organization-admin policy
+  only (0-day or 30-day) and was never honored per-conversation server-side.
+  Live verification against a real OpenAI-backed organization surfaced a
+  release-blocking defect in the Ops-side tool-call adapter (dotted
+  `*.v1`-suffixed tool names are rejected by the OpenAI Chat Completions API),
+  tracked separately as CHAOS-3286; it blocks the real-provider answer path
+  for both platform and BYO OpenAI connections until fixed and does not
+  originate in this release's web code.
+- **Reliability/accessibility hardening:** a follow-up hardening pass (tracked
+  under CHAOS-3215) fixes a cross-tenant conversation-state leak on
+  organization switch, a request-race that could route a question to the
+  wrong conversation, screen-reader announcement noise during streaming,
+  reduced-motion support, and several keyboard/focus gaps found during
+  adversarial review; see the linked pull request for the exact fix list.
+- **Rollback:** disable Ask Dev or roll back the `dev-health-web` binary; no
+  database migration is introduced by the web-side workspace or shared UI
+  core.

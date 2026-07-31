@@ -170,22 +170,38 @@ def _context_without_groundable_material() -> AnswerValidationContext:
     )
 
 
-def _empty_payload(*, status: str, direct_summary: str) -> dict:
+def _empty_payload(
+    *,
+    status: str,
+    direct_summary: str,
+    claims: list | None = None,
+    coverage_gap: bool = False,
+) -> dict:
     payload = deepcopy(positive_fixtures()["dev_answer.v1"])
     payload.update(
         {
             "status": status,
             "direct_summary": direct_summary,
-            "claims": [],
+            "claims": claims if claims is not None else [],
             "metrics": [],
             "evidence": [],
-            "coverage": {
-                "required_source_count": 1,
-                "available_source_count": 1,
-                "unavailable_required_sources": [],
-                "stale_required_sources": [],
-                "as_of": payload["as_of"],
-            },
+            "coverage": (
+                {
+                    "required_source_count": 1,
+                    "available_source_count": 0,
+                    "unavailable_required_sources": ["list_metrics.v1"],
+                    "stale_required_sources": [],
+                    "as_of": payload["as_of"],
+                }
+                if coverage_gap
+                else {
+                    "required_source_count": 1,
+                    "available_source_count": 1,
+                    "unavailable_required_sources": [],
+                    "stale_required_sources": [],
+                    "as_of": payload["as_of"],
+                }
+            ),
         }
     )
     return payload
@@ -249,21 +265,74 @@ def test_complete_catalog_answer_with_a_real_listing_is_not_a_stub() -> None:
     assert answer.status == "complete"
 
 
-def test_complete_catalog_answer_stating_the_exact_retrieved_count_is_not_a_stub() -> (
-    None
-):
-    """The scripted deterministic acceptance path's list_metrics.v1 answer
-    ("N Ask Dev metrics are available in this scope.") never names a
-    machine identifier -- it states only the exact count of definitions
-    actually retrieved. That still requires having read the tool result
-    (an incidental number like a window's day count cannot coincidentally
-    equal it) and must not be rejected as a stub.
+def test_complete_catalog_answer_stating_only_the_count_is_still_a_stub() -> None:
+    """Codex adversarial review (CHAOS-3290 follow-up): accepting the bare
+    retrieved *count* as proof of having read the catalog is gameable --
+    "I have 1 unresolved limitation and cannot provide the requested metric
+    catalog." coincidentally contains "1" when exactly one definition was
+    retrieved, with zero relationship to the catalog. Only naming the
+    definitions' own machine identifiers counts; a bare count never does,
+    regardless of how many were retrieved.
     """
     context = _context_without_groundable_material()
     retrieved_count = len(context.tool_results[0].metric_definitions)
     payload = _empty_payload(
         status="complete",
         direct_summary=f"{retrieved_count} Ask Dev metrics are available in this scope.",
+    )
+    with pytest.raises(AnswerValidationError) as raised:
+        validate_answer_candidate(payload, context)
+    assert raised.value.code == "answer_grounding_floor_not_met"
+
+
+def test_complete_catalog_answer_covering_half_the_definitions_is_not_a_stub() -> None:
+    """A real, thorough catalog answer only needs to demonstrably cover at
+    least half of what was actually retrieved (naming every one of a large
+    catalog verbatim is not required for the answer to be genuine).
+    """
+    fixtures = positive_fixtures()
+    tool_result = deepcopy(fixtures["dev_tool_result.v1"])
+    real_metric_ids = [
+        "items_completed",
+        "cycle_time_p50_hours",
+        "avg_wip",
+        "deployments_count",
+    ]
+    definitions = []
+    for metric_id in real_metric_ids:
+        definition = deepcopy(tool_result["metric_definitions"][0])
+        definition["metric_id"] = metric_id
+        definition["definition_version"] = f"{metric_id}.v1"
+        definitions.append(definition)
+    tool_result.update(
+        {
+            "metric_definitions": definitions,
+            "metrics": [],
+            "evidence": [],
+            "status_facts": [],
+            "pull_requests": [],
+            "ci_checks": [],
+            "deployments": [],
+            "incidents": [],
+        }
+    )
+    answer = DevAnswer.model_validate(fixtures["dev_answer.v1"])
+    context = AnswerValidationContext(
+        conversation_id=answer.conversation_id,
+        answer_id=answer.answer_id,
+        scope_resolution=DevScopeResolution.model_validate(
+            fixtures["dev_scope_resolution.v1"]
+        ),
+        versions=DevContractVersions.model_validate(answer.versions),
+        model=DevModelMetadata.model_validate(answer.model),
+        tool_results=(DevToolResult.model_validate(tool_result),),
+    )
+    payload = _empty_payload(
+        status="complete",
+        direct_summary=(
+            "Two of the four registered metrics: items_completed.v1 and "
+            "cycle_time_p50_hours.v1."
+        ),
     )
     answer = validate_answer_candidate(payload, context)
     assert answer.status == "complete"
@@ -316,10 +385,70 @@ def test_substantive_partial_narrative_cannot_be_ungrounded() -> None:
 
 
 def test_honest_short_partial_is_not_penalized() -> None:
-    """An honestly modest partial answer ("no data yet") never claimed to
-    be a substantive result in the first place and must not be gated by
-    the grounding floor.
+    """An honestly modest partial answer ("no data yet") is only honest
+    because the server's own coverage accounting backs it up -- a required
+    source really is reported unavailable here. It must not be gated by the
+    grounding floor.
     """
-    payload = _empty_payload(status="partial", direct_summary="No data available yet.")
+    payload = _empty_payload(
+        status="partial", direct_summary="No data available yet.", coverage_gap=True
+    )
     answer = validate_answer_candidate(payload, _context_without_groundable_material())
     assert answer.status == "partial"
+
+
+def test_short_confident_partial_with_favorable_coverage_is_still_rejected() -> None:
+    """Codex adversarial review (CHAOS-3290 follow-up): prose length is not
+    a safe grounding signal -- a *short*, confident, fabricated-sounding
+    narrative ("Delivery performance improved substantially across every
+    team.") is exactly as untrustworthy as a long one when there is zero
+    structured grounding and the server's own coverage reports nothing
+    missing. Must be rejected regardless of brevity.
+    """
+    payload = _empty_payload(
+        status="partial",
+        direct_summary="Delivery performance improved substantially across every team.",
+    )
+    with pytest.raises(AnswerValidationError) as raised:
+        validate_answer_candidate(payload, _context())
+    assert raised.value.code == "answer_grounding_floor_not_met"
+
+
+def test_unsupported_inferred_claim_does_not_disable_the_grounding_floor() -> None:
+    """Codex adversarial review (CHAOS-3290 follow-up): DevClaim permits an
+    ``inferred`` claim with confidence < 1 and zero metric/evidence refs.
+    Adding exactly one such claim previously made ``answer.claims``
+    non-empty and disabled the entire grounding floor, letting a complete
+    answer with a stub summary and one fabricated, unreferenced claim
+    through. The floor must check whether any claim actually references a
+    metric or evidence ID, not merely whether the claims array is
+    non-empty.
+    """
+    payload = _empty_payload(
+        status="complete",
+        direct_summary="Available Ask Dev metrics and their definitions.",
+        claims=[
+            {
+                "schema_version": "dev_claim.v1",
+                "claim_id": "unsupported_claim_01",
+                "kind": "inferred",
+                "text": "Delivery performance improved substantially across every team.",
+                "confidence": 0.5,
+                "evidence_ref_ids": [],
+                "metric_ref_ids": [],
+                "validity_scope": positive_fixtures()["dev_scope_resolution.v1"][
+                    "resolved_scope"
+                ],
+                "flags": {
+                    "stale": False,
+                    "uncertain": False,
+                    "conflicting": False,
+                    "untrusted_source": False,
+                },
+                "recommendation_rule_version": None,
+            }
+        ],
+    )
+    with pytest.raises(AnswerValidationError) as raised:
+        validate_answer_candidate(payload, _context_without_groundable_material())
+    assert raised.value.code == "answer_grounding_floor_not_met"

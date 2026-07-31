@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -11,7 +12,9 @@ from pydantic import ValidationError
 from .contracts import (
     AnswerStatus,
     DevAnswer,
+    DevClaim,
     DevContractVersions,
+    DevCoverage,
     DevEvidenceRef,
     DevMetricRef,
     DevModelMetadata,
@@ -39,35 +42,53 @@ _NON_REPAIRABLE_VALIDATION_MARKERS = (
 
 _MAX_REPAIR_DETAIL_CHARS = 200
 
-# CHAOS-3290: a complete (or substantively-worded partial) answer must never
-# be an empty shell. A degenerate reasoning-exhausted run can still satisfy
-# every other invariant above (identity, scope, canonical evidence/metric
-# equality all vacuously pass over empty lists) while carrying zero claims,
-# zero metrics, and zero evidence -- a silent non-answer presented as
-# success. PRD §8 forbids a material status claim without evidence; this is
-# the degenerate case where there is no material claim *or* evidence at all.
+# CHAOS-3290: a complete (or substantive-partial) answer must never be an
+# empty shell. A degenerate reasoning-exhausted run can still satisfy every
+# other invariant above (identity, scope, canonical evidence/metric equality
+# all vacuously pass over empty lists) while carrying zero *material*
+# grounding -- a silent non-answer presented as success. PRD §8 forbids a
+# material status claim without evidence; this is the degenerate case where
+# there is no material claim or evidence at all.
 #
-# The floor cannot simply be "claims/metrics/evidence must be non-empty"
-# unconditionally: a metric-catalog question (list_metrics.v1 only) has no
-# tool output that is representable as a claim, metric, or evidence ref at
-# all (DevMetricDefinition has no value to ground a DevMetricRef with, and
-# mints no DevEvidenceRef), so a genuinely thorough catalog answer is
+# "Zero grounding" is NOT "claims/metrics/evidence are all empty" (adversarial
+# review, CHAOS-3290 follow-up): a single unsupported ``inferred`` claim
+# (confidence < 1) needs no metric_ref_ids/evidence_ref_ids at all under
+# DevClaim's own schema, so a model can add one fabricated inferred claim
+# ("Delivery performance improved substantially across every team.") and
+# make ``answer.claims`` non-empty without grounding anything. The floor must
+# check whether *any* claim actually references a metric or evidence ID, not
+# merely whether the claims array is non-empty.
+#
+# The floor also cannot simply require claims/metrics/evidence to be
+# non-empty unconditionally: a metric-catalog question (list_metrics.v1
+# only) has no tool output representable as a claim, metric, or evidence ref
+# at all (DevMetricDefinition has no value to ground a DevMetricRef with,
+# and mints no DevEvidenceRef), so a genuinely thorough catalog answer is
 # legitimately empty across all three arrays -- the only signal left is
-# whether the free-text summary actually reflects the retrieved catalog or
-# is a generic stub. Neither length nor "contains a number" is that signal
-# (live-reproduced CHAOS-3290 follow-up): a platform run that called only
-# list_metrics.v1 for a metric-comparison question produced "cycle time p50
-# and Average WIP are defined metrics over a 30-day window with daily
-# granularity. The metric definitions indicate:" -- long, and "30" makes it
-# match a bare digit check, but it never actually read the returned catalog;
-# it echoed the metric names *from the user's own question* and the literal
-# admission "I don't have the actual numeric data" was the real tell. The
-# machine identifiers a model can only plausibly produce by having actually
-# read the tool result (a snake_case metric_id or its "<id>.v<n>"
-# definition_version, e.g. "cycle_time_p50_hours.v1") are not something a
-# paraphrase of the question coincidentally reproduces, unlike the
-# human-readable label ("Cycle time p50") or an incidental day-count.
-_MIN_UNGROUNDED_SUMMARY_CHARS = 150
+# whether the free-text summary actually reflects the retrieved catalog.
+# Neither "contains a number" nor "the summary states the retrieved count"
+# is safe there (both live-reproduced and adversarially reproduced): "cycle
+# time p50 ... over a 30-day window" matches a bare digit check without
+# ever reading the catalog, and "I have 1 unresolved limitation..." matches
+# a bare count check purely by coincidence when only one definition exists.
+# Require covering at least half of the retrieved definitions' machine
+# identifiers (a snake_case metric_id or its "<id>.v<n>" definition_version)
+# instead -- a paraphrase of the question, an echoed user-supplied
+# identifier, or an incidental number cannot coincidentally satisfy that at
+# scale, and a single coincidental match is never enough once more than one
+# definition exists.
+#
+# For a substantive-but-ungrounded partial, prose length is not a safe
+# distinguishing signal either (adversarial review): a *short*, confident,
+# fabricated narrative ("Delivery performance improved substantially across
+# every team.") is exactly as untrustworthy as a long one. Use
+# ``answer.coverage`` instead -- it is server-computed and fully
+# overwritten by the orchestrator before validation (never model-authored),
+# so a model cannot forge it. A partial with zero grounding is honest only
+# if the server's own coverage accounting shows a real gap (a required
+# source unavailable, stale, or short of the required count); if coverage
+# reports everything available, an ungrounded partial is just as
+# structurally impossible as an ungrounded complete.
 _GROUNDABLE_TOOL_RESULT_FIELDS = (
     "metrics",
     "evidence",
@@ -77,6 +98,24 @@ _GROUNDABLE_TOOL_RESULT_FIELDS = (
     "deployments",
     "incidents",
 )
+
+
+def _claim_has_grounding_reference(claim: DevClaim) -> bool:
+    return bool(claim.metric_ref_ids or claim.evidence_ref_ids)
+
+
+def _answer_has_material_grounding(answer: DevAnswer) -> bool:
+    """Whether the answer carries anything an evidence-linked reader could
+    actually check: a metric, an evidence entry, or a claim that references
+    at least one of either. A claim with no reference at all (an
+    unsupported ``inferred`` assertion) does not count -- see the
+    module-level comment above.
+    """
+    return (
+        bool(answer.metrics)
+        or bool(answer.evidence)
+        or any(_claim_has_grounding_reference(claim) for claim in answer.claims)
+    )
 
 
 def _tool_results_offer_groundable_material(
@@ -96,17 +135,15 @@ def _tool_results_offer_groundable_material(
     )
 
 
-def _summary_reflects_retrieved_catalog(
+def _summary_covers_retrieved_catalog(
     summary: str, tool_results: tuple[DevToolResult, ...]
 ) -> bool:
-    """Whether `summary` reflects a retrieved metric catalog instead of just
-    restating the question -- the one signal a model cannot produce without
-    having actually read the tool result it was given (see the module-level
-    comment above). Either it names a machine identifier (a snake_case
-    metric_id or its "<id>.v<n>" definition_version), or it states the exact
-    count of definitions actually retrieved -- both require having read the
-    result; neither is something a paraphrase of the question coincidentally
-    reproduces.
+    """Whether `summary` demonstrably reflects the retrieved metric catalog
+    -- the one signal a model cannot produce without having actually read
+    the tool result it was given (see the module-level comment above).
+    Requires naming the machine identifier (metric_id or definition_version)
+    of at least half of the definitions actually retrieved; anything looser
+    is gameable (see the review notes above).
     """
     folded = summary.casefold()
     definitions = [
@@ -114,16 +151,28 @@ def _summary_reflects_retrieved_catalog(
         for result in tool_results
         for definition in result.metric_definitions
     ]
-    identifiers = (
-        identifier
-        for definition in definitions
-        for identifier in (definition.metric_id, definition.definition_version)
+    if not definitions:
+        return False
+
+    def _named(definition) -> bool:
+        return any(
+            identifier and identifier.casefold() in folded
+            for identifier in (definition.metric_id, definition.definition_version)
+        )
+
+    covered = sum(1 for definition in definitions if _named(definition))
+    return covered >= math.ceil(len(definitions) / 2)
+
+
+def _coverage_reports_a_gap(coverage: DevCoverage) -> bool:
+    """Whether the server's own (non-model-authored) coverage accounting
+    shows a genuine reason data could be missing.
+    """
+    return bool(
+        coverage.available_source_count < coverage.required_source_count
+        or coverage.unavailable_required_sources
+        or coverage.stale_required_sources
     )
-    if any(
-        identifier and identifier.casefold() in folded for identifier in identifiers
-    ):
-        return True
-    return bool(definitions) and str(len(definitions)) in summary
 
 
 def _bounded_detail(messages: tuple[str, ...], *, limit: int) -> str:
@@ -327,7 +376,7 @@ def validate_answer_candidate(
     # so this never overrides a real rejection; it only catches the shape
     # those checks vacuously allow through: nothing to check because there
     # is nothing there.
-    if not (answer.claims or answer.metrics or answer.evidence):
+    if not _answer_has_material_grounding(answer):
         summary = answer.direct_summary.strip()
         if answer.status is AnswerStatus.COMPLETE:
             if _tool_results_offer_groundable_material(context.tool_results):
@@ -341,31 +390,30 @@ def validate_answer_candidate(
                     code="answer_grounding_floor_not_met",
                     repairable=False,
                 )
-            if not _summary_reflects_retrieved_catalog(summary, context.tool_results):
+            if not _summary_covers_retrieved_catalog(summary, context.tool_results):
                 # No groundable material was available at all (e.g. a
                 # metric-catalog question) -- the only remaining honest
-                # signal is whether the summary names a machine identifier
-                # from the retrieved catalog instead of just restating the
-                # question in its own words.
+                # signal is whether the summary demonstrably covers the
+                # retrieved catalog instead of just restating the question.
                 raise AnswerValidationError(
                     "complete answer has no structured grounding and its "
                     "summary does not reflect retrieved data",
                     code="answer_grounding_floor_not_met",
                     repairable=False,
                 )
-        elif (
-            answer.status is AnswerStatus.PARTIAL
-            and len(summary) >= _MIN_UNGROUNDED_SUMMARY_CHARS
+        elif answer.status is AnswerStatus.PARTIAL and not _coverage_reports_a_gap(
+            answer.coverage
         ):
-            # A partial answer presenting long, confident-sounding prose
-            # with zero structured grounding is exactly as untrustworthy as
-            # a complete one -- "partial" alone does not excuse an
-            # unsupported narrative (CHAOS-3290). An honestly short/modest
-            # partial ("no data available yet") is not gated: it never
-            # claimed to be a substantive answer in the first place.
+            # A partial answer with zero grounding is only honest if the
+            # server's own coverage accounting explains why -- a required
+            # source unavailable, stale, or short of the required count.
+            # If coverage reports everything available, an ungrounded
+            # partial is exactly as untrustworthy as an ungrounded
+            # complete, regardless of how short or modest its prose reads
+            # (CHAOS-3290 review: prose length is not a safe signal here).
             raise AnswerValidationError(
-                "substantive partial answer carries no claim, metric, or "
-                "evidence grounding",
+                "partial answer carries no claim, metric, or evidence "
+                "grounding and reports no coverage gap to explain why",
                 code="answer_grounding_floor_not_met",
                 repairable=False,
             )

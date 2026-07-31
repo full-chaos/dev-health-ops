@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+from dev_health_ops.llm.providers.openai_capabilities import build_wire_tool_name_map
+
 from .contracts import DevScope, DevToolRequest, DevToolResult, ToolID
 
 TOOL_CONTRACT_VERSION = "ask_dev_tools.v1"
@@ -201,6 +203,12 @@ class AskDevToolRegistry:
         expected = set(ToolID)
         if set(definitions) != expected:
             raise RuntimeError("tool metadata must cover the exact V1 registry")
+        # Explicitly rejected at registry build time (CHAOS-3286): the
+        # OpenAI-compatible adapter sanitizes each dotted tool_id into a
+        # wire-legal function name; this asserts the real V1 registry can
+        # never collide under that mapping, rather than only ever being
+        # caught defensively at request time.
+        build_wire_tool_name_map(item.value for item in ToolID)
         if set(executors) != expected:
             missing = sorted(item.value for item in expected - set(executors))
             extra = sorted(str(item) for item in set(executors) - expected)

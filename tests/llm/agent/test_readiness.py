@@ -53,7 +53,7 @@ async def test_certification_proves_tool_continuation_and_final_answer() -> None
     provider = CapturingScriptedProvider(
         [
             ScriptedStep(
-                AgentToolRequest("readiness_echo", {"nonce": "ready-v1"}, "call-1"),
+                AgentToolRequest("readiness_echo.v1", {"nonce": "ready-v1"}, "call-1"),
                 AgentUsage(5, 2),
             ),
             ScriptedStep(AgentFinalAnswer({"nonce": "ready-v1"}), AgentUsage(4, 3)),
@@ -114,10 +114,10 @@ async def test_repeated_tool_request_on_final_answer_turn_fails_closed() -> None
     provider = ScriptedAgentProvider(
         [
             ScriptedStep(
-                AgentToolRequest("readiness_echo", {"nonce": "ready-v1"}, "call-1")
+                AgentToolRequest("readiness_echo.v1", {"nonce": "ready-v1"}, "call-1")
             ),
             ScriptedStep(
-                AgentToolRequest("readiness_echo", {"nonce": "ready-v1"}, "call-2")
+                AgentToolRequest("readiness_echo.v1", {"nonce": "ready-v1"}, "call-2")
             ),
         ]
     )

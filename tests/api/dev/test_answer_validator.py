@@ -133,3 +133,149 @@ def test_numeric_inference_requires_metric_or_source_reference() -> None:
     ]
     with pytest.raises(AnswerValidationError, match="numeric claim"):
         validate_answer_candidate(payload, _context())
+
+
+# --- CHAOS-3290: a complete/substantive answer cannot be an empty shell ---
+
+
+def _context_without_groundable_material() -> AnswerValidationContext:
+    """A run whose only executed tool is a catalog/definitional one
+    (list_metrics.v1 in production): it returns `metric_definitions` but
+    mints no `metrics`/`evidence`/other groundable fact, exactly like the
+    real tool result behind the CHAOS-3290 live reproduction.
+    """
+    fixtures = positive_fixtures()
+    answer = DevAnswer.model_validate(fixtures["dev_answer.v1"])
+    tool_result = deepcopy(fixtures["dev_tool_result.v1"])
+    tool_result.update(
+        {
+            "metrics": [],
+            "evidence": [],
+            "status_facts": [],
+            "pull_requests": [],
+            "ci_checks": [],
+            "deployments": [],
+            "incidents": [],
+        }
+    )
+    return AnswerValidationContext(
+        conversation_id=answer.conversation_id,
+        answer_id=answer.answer_id,
+        scope_resolution=DevScopeResolution.model_validate(
+            fixtures["dev_scope_resolution.v1"]
+        ),
+        versions=DevContractVersions.model_validate(answer.versions),
+        model=DevModelMetadata.model_validate(answer.model),
+        tool_results=(DevToolResult.model_validate(tool_result),),
+    )
+
+
+def _empty_payload(*, status: str, direct_summary: str) -> dict:
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload.update(
+        {
+            "status": status,
+            "direct_summary": direct_summary,
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+            "coverage": {
+                "required_source_count": 1,
+                "available_source_count": 1,
+                "unavailable_required_sources": [],
+                "stale_required_sources": [],
+                "as_of": payload["as_of"],
+            },
+        }
+    )
+    return payload
+
+
+def test_complete_answer_with_available_grounding_cannot_be_empty() -> None:
+    """PRD §8: a complete answer with material tool output (real metrics/
+    evidence existed for this run) but zero claims, metrics, and evidence
+    of its own is structurally impossible, regardless of what its prose
+    says.
+    """
+    payload = _empty_payload(
+        status="complete",
+        direct_summary=(
+            "Everything checked out fine across the board this period, no "
+            "issues to report anywhere in the organization's delivery."
+        ),
+    )
+    with pytest.raises(AnswerValidationError) as raised:
+        validate_answer_candidate(payload, _context())
+    assert raised.value.code == "answer_grounding_floor_not_met"
+    assert raised.value.repairable is False
+
+
+def test_complete_catalog_answer_with_a_stub_summary_is_rejected() -> None:
+    """Literal CHAOS-3290 live reproduction: a platform gpt-5-nano run for
+    the metrics-catalog question (list_metrics.v1 only -- no metric/
+    evidence/claim is representable for that tool) terminated
+    terminal_reason=complete with empty claims/metrics/evidence and the
+    stub summary "Available Ask Dev metrics and their definitions." -- a
+    silent non-answer presented as success with favorable (1-of-1)
+    coverage and no visible error.
+    """
+    payload = _empty_payload(
+        status="complete",
+        direct_summary="Available Ask Dev metrics and their definitions.",
+    )
+    with pytest.raises(AnswerValidationError) as raised:
+        validate_answer_candidate(payload, _context_without_groundable_material())
+    assert raised.value.code == "answer_grounding_floor_not_met"
+    assert raised.value.repairable is False
+
+
+def test_complete_catalog_answer_with_a_real_listing_is_not_a_stub() -> None:
+    """The same list_metrics.v1-only tool shape, but with the prose that a
+    thorough catalog answer actually requires (as the real BYO gpt-4o-mini
+    run for the identical question produced), must not be penalized just
+    because a metric catalog has nothing representable as a claim, metric,
+    or evidence ref -- there is nothing to falsely present as grounded here.
+    """
+    payload = _empty_payload(
+        status="complete",
+        direct_summary=(
+            "The available Ask Dev metrics are as follows: "
+            "1. Items completed -- Completed work items in the selected "
+            "window. 2. Cycle time p50 -- Median work-item cycle time in "
+            "hours. 3. Average WIP -- Average work-in-progress across "
+            "daily snapshots. 4. Deployments -- Deployments recorded in "
+            "the selected window."
+        ),
+    )
+    answer = validate_answer_candidate(payload, _context_without_groundable_material())
+    assert answer.status == "complete"
+
+
+def test_substantive_partial_narrative_cannot_be_ungrounded() -> None:
+    """A partial answer presenting long, confident-sounding prose with zero
+    structured grounding is exactly as untrustworthy as a complete one
+    (CHAOS-3290) -- "partial" alone is not an excuse for an unsupported
+    narrative when real tool material existed to ground it in.
+    """
+    payload = _empty_payload(
+        status="partial",
+        direct_summary=(
+            "Delivery throughput climbed steadily this period while review "
+            "latency held flat, and the organization's overall investment "
+            "mix shifted meaningfully toward new feature work across every "
+            "team without any material regression worth flagging."
+        ),
+    )
+    with pytest.raises(AnswerValidationError) as raised:
+        validate_answer_candidate(payload, _context())
+    assert raised.value.code == "answer_grounding_floor_not_met"
+
+
+def test_honest_short_partial_is_not_penalized() -> None:
+    """An honestly modest partial answer ("no data yet") never claimed to
+    be a substantive result in the first place and must not be gated by
+    the grounding floor.
+    """
+    payload = _empty_payload(status="partial", direct_summary="No data available yet.")
+    answer = validate_answer_candidate(payload, _context_without_groundable_material())
+    assert answer.status == "partial"

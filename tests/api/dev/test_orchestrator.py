@@ -287,6 +287,12 @@ async def test_orchestrator_overwrites_all_server_owned_answer_metadata() -> Non
                 "stale_required_sources": [],
                 "as_of": candidate["as_of"],
             },
+            # Not "complete"/"partial": this test makes zero tool calls and
+            # is about server-owned metadata overwriting, not about whether
+            # an empty answer is trustworthy -- the CHAOS-3290 grounding
+            # floor (which gates complete/substantive-partial answers with
+            # nothing else in the payload) has its own dedicated tests.
+            "status": "degraded",
         }
     )
 

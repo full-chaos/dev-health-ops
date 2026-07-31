@@ -918,6 +918,24 @@ class DevOrchestrator:
                                 ),
                             )
                             continue
+                        if exc.code == "answer_grounding_floor_not_met":
+                            # CHAOS-3290: a complete/substantive answer with
+                            # no claim, metric, or evidence grounding at all
+                            # is a silent non-answer, not a malformed one --
+                            # surface it as the same honest "nothing usable
+                            # was found" outcome the run already uses
+                            # elsewhere (AgentDisambiguation/AgentRefusal
+                            # below), not the scarier "validation failed"
+                            # error a real grounding violation gets.
+                            return await finish(
+                                RunState.INSUFFICIENT_EVIDENCE,
+                                error=error(
+                                    "insufficient_evidence",
+                                    "The answer did not include enough "
+                                    "grounded detail to present as a "
+                                    "result.",
+                                ),
+                            )
                         return await finish(
                             RunState.FAILED,
                             error=error(

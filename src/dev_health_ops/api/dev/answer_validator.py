@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from .contracts import (
+    AnswerStatus,
     DevAnswer,
     DevContractVersions,
     DevEvidenceRef,
@@ -37,6 +38,57 @@ _NON_REPAIRABLE_VALIDATION_MARKERS = (
 
 
 _MAX_REPAIR_DETAIL_CHARS = 200
+
+# CHAOS-3290: a complete (or substantively-worded partial) answer must never
+# be an empty shell. A degenerate reasoning-exhausted run can still satisfy
+# every other invariant above (identity, scope, canonical evidence/metric
+# equality all vacuously pass over empty lists) while carrying zero claims,
+# zero metrics, and zero evidence -- a silent non-answer presented as
+# success. PRD §8 forbids a material status claim without evidence; this is
+# the degenerate case where there is no material claim *or* evidence at all.
+#
+# The floor cannot simply be "claims/metrics/evidence must be non-empty"
+# unconditionally: a metric-catalog question (list_metrics.v1 only) has no
+# tool output that is representable as a claim, metric, or evidence ref at
+# all (DevMetricDefinition has no value to ground a DevMetricRef with, and
+# mints no DevEvidenceRef), so a genuinely thorough catalog answer is
+# legitimately empty across all three arrays -- the only signal left is
+# whether the free-text summary actually reflects retrieved data or is a
+# generic stub. Length alone is not that signal: a deterministic catalog
+# summary can legitimately be short ("8 Ask Dev metrics are available in
+# this scope."), while the real CHAOS-3290 stub ("Available Ask Dev metrics
+# and their definitions.") is a *similar* length but names no concrete
+# retrieved fact. Requiring at least one number (a count, an id suffix like
+# ".v1", anything reflecting the catalog actually being read) plus a small
+# absolute floor catches the stub without penalizing a terse-but-real one.
+_MIN_CATALOG_SUMMARY_CHARS = 20
+_MIN_UNGROUNDED_SUMMARY_CHARS = 150
+_GROUNDABLE_TOOL_RESULT_FIELDS = (
+    "metrics",
+    "evidence",
+    "status_facts",
+    "pull_requests",
+    "ci_checks",
+    "deployments",
+    "incidents",
+)
+
+
+def _tool_results_offer_groundable_material(
+    tool_results: tuple[DevToolResult, ...],
+) -> bool:
+    """Whether any executed tool in this run returned something an answer
+    could have cited as a claim, metric, or evidence reference.
+
+    False only for tool calls whose only possible output is definitional/
+    catalog data (currently: list_metrics.v1's ``metric_definitions``),
+    which has no representation anywhere in ``dev_answer.v1``.
+    """
+    return any(
+        getattr(result, field)
+        for result in tool_results
+        for field in _GROUNDABLE_TOOL_RESULT_FIELDS
+    )
 
 
 def _bounded_detail(messages: tuple[str, ...], *, limit: int) -> str:
@@ -232,6 +284,53 @@ def validate_answer_candidate(
             raise AnswerValidationError(
                 "numeric claim lacks a metric or source reference",
                 code="answer_validation_failed",
+                repairable=False,
+            )
+
+    # CHAOS-3290 grounding floor -- see the constants above for the full
+    # reasoning. Only reachable once every other invariant already passed,
+    # so this never overrides a real rejection; it only catches the shape
+    # those checks vacuously allow through: nothing to check because there
+    # is nothing there.
+    if not (answer.claims or answer.metrics or answer.evidence):
+        summary = answer.direct_summary.strip()
+        if answer.status is AnswerStatus.COMPLETE:
+            if _tool_results_offer_groundable_material(context.tool_results):
+                # Real tool material existed (metrics, evidence, status
+                # facts, ...) and none of it made it into the answer at
+                # all -- structurally impossible under PRD §8 regardless of
+                # what the prose says.
+                raise AnswerValidationError(
+                    "complete answer carries no claim, metric, or evidence "
+                    "grounding despite groundable tool results",
+                    code="answer_grounding_floor_not_met",
+                    repairable=False,
+                )
+            if len(summary) < _MIN_CATALOG_SUMMARY_CHARS or not _NUMBER.search(summary):
+                # No groundable material was available at all (e.g. a
+                # metric-catalog question) -- the only remaining honest
+                # signal is whether the summary reflects real retrieved
+                # content instead of restating the question.
+                raise AnswerValidationError(
+                    "complete answer has no structured grounding and its "
+                    "summary does not reflect retrieved data",
+                    code="answer_grounding_floor_not_met",
+                    repairable=False,
+                )
+        elif (
+            answer.status is AnswerStatus.PARTIAL
+            and len(summary) >= _MIN_UNGROUNDED_SUMMARY_CHARS
+        ):
+            # A partial answer presenting long, confident-sounding prose
+            # with zero structured grounding is exactly as untrustworthy as
+            # a complete one -- "partial" alone does not excuse an
+            # unsupported narrative (CHAOS-3290). An honestly short/modest
+            # partial ("no data available yet") is not gated: it never
+            # claimed to be a substantive answer in the first place.
+            raise AnswerValidationError(
+                "substantive partial answer carries no claim, metric, or "
+                "evidence grounding",
+                code="answer_grounding_floor_not_met",
                 repairable=False,
             )
     return answer

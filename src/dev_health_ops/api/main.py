@@ -300,8 +300,8 @@ async def ready() -> JSONResponse:
     """Readiness probe: fast check that the API process is up.
 
     Unlike /health, this does NOT verify external dependencies.
-    Kubernetes/Docker should use this for readiness probes and /health
-    for liveness probes.
+    Kubernetes/Docker should use this for liveness probes and /health
+    for readiness probes.
     """
     return JSONResponse(status_code=200, content={"status": "ready"})
 

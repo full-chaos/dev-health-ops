@@ -187,6 +187,116 @@ def test_0074_dev_runs_contract_generation_defaults_v1_without_backfill() -> Non
         engine.dispose()
 
 
+def test_0074_downgrade_refuses_with_folded_column_only_data() -> None:
+    """Codex-review finding (CHAOS-3299): the downgrade guard must sweep
+    ``plan_step_partition``/``relationship_closure_verified`` independently
+    of ``contract_generation`` tagging.
+
+    ``DevPersistenceService.record_investigation_result`` can populate these
+    two folded ``dev_runs`` columns before a run ever reaches
+    ``record_frame`` -- the call that tags ``contract_generation = 'v2'`` --
+    e.g. a failure between the investigation and frame-synthesis stages. A
+    run in that state is still tagged 'v1' and would otherwise silently
+    pass the existing ``contract_generation = 'v2'`` guard while carrying
+    real v2 data. Fail-before/pass-after: the guard must raise while the
+    column is populated, and the same downgrade must then succeed once it is
+    cleared.
+    """
+
+    m68 = _load("0068_add_ask_dev_persistence")
+    m69 = _load("0069_add_ask_dev_admission_indexes")
+    m74 = _load("0074_add_ask_dev_v2_persistence")
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.connect() as connection:
+            _parent_and_v1_tables(connection)
+            context = MigrationContext.configure(connection)
+            with Operations.context(context):
+                m68.upgrade()
+                m69.upgrade()
+
+            org_id, user_id, conv_id, run_id = (str(uuid.uuid4()) for _ in range(4))
+            connection.execute(
+                sa.text("INSERT INTO organizations (id, name) VALUES (:id, 'o')"),
+                {"id": org_id},
+            )
+            connection.execute(
+                sa.text("INSERT INTO users (id, email) VALUES (:id, 'u@example.com')"),
+                {"id": user_id},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO dev_conversations "
+                    "(id, org_id, user_id, current_scope, retention_days, "
+                    "created_at, updated_at) VALUES "
+                    "(:id, :org_id, :user_id, '{}', 30, CURRENT_TIMESTAMP, "
+                    "CURRENT_TIMESTAMP)"
+                ),
+                {"id": conv_id, "org_id": org_id, "user_id": user_id},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO dev_runs "
+                    "(id, request_id, conversation_id, org_id, user_id, state, "
+                    "started_at, created_at) VALUES "
+                    "(:id, :req, :conv, :org_id, :user_id, 'accepted', "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {
+                    "id": run_id,
+                    "req": str(uuid.uuid4()),
+                    "conv": conv_id,
+                    "org_id": org_id,
+                    "user_id": user_id,
+                },
+            )
+            connection.commit()
+
+            with Operations.context(context):
+                m74.upgrade()
+
+            # The run is still tagged 'v1' (the default) but carries a
+            # folded-column fact -- exactly the record_investigation_result-
+            # without-record_frame scenario the guard exists to catch.
+            connection.execute(
+                sa.text(
+                    "UPDATE dev_runs SET plan_step_partition = "
+                    '\'{"completed":["step_a"],"skipped":[],"failed":[]}\' '
+                    "WHERE id = :id"
+                ),
+                {"id": run_id},
+            )
+            connection.commit()
+            row = connection.execute(
+                sa.text(
+                    "SELECT contract_generation, plan_step_partition "
+                    "FROM dev_runs WHERE id = :id"
+                ),
+                {"id": run_id},
+            ).one()
+            assert row.contract_generation == "v1"
+            assert row.plan_step_partition is not None
+
+            with Operations.context(context):
+                with pytest.raises(RuntimeError, match="plan_step_partition"):
+                    m74.downgrade()
+
+            connection.execute(
+                sa.text(
+                    "UPDATE dev_runs SET plan_step_partition = NULL WHERE id = :id"
+                ),
+                {"id": run_id},
+            )
+            connection.commit()
+            with Operations.context(context):
+                m74.downgrade()  # now succeeds
+            tables = set(sa.inspect(connection).get_table_names())
+            assert not (_NEW_TABLES & tables)
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.skipif(
     not os.getenv(_POSTGRES_URI_ENV), reason=f"requires {_POSTGRES_URI_ENV}"
 )

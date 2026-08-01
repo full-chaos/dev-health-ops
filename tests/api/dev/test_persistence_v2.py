@@ -549,6 +549,16 @@ async def test_record_frame_every_public_outcome_and_invalid_outcome(persistence
             )
             assert record.public_outcome == outcome
 
+            # Codex-review finding (CHAOS-3299): record_frame must
+            # atomically tag the owned run v2 -- writing a frame without
+            # tagging left contract_generation stuck at 'v1' forever, which
+            # made router._replayed_result's "== 'v2'" replay gate
+            # permanently unreachable for every real v2 run.
+            run = await session.get(DevRun, run_id)
+            assert run is not None
+            assert run.contract_generation == "v2"
+            assert run.public_outcome == outcome
+
         _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
         with pytest.raises(DevPersistenceValidationError):
             await service.record_frame(

@@ -1504,6 +1504,21 @@ class DevPersistenceService:
         ``needs_clarification``/``not_found``/``unsupported``/``denied``,
         confirmed by the landed no-answer field policy (see the frame model
         docstring and ``DevRun.plan_step_partition``).
+
+        Atomically tags the owned run ``contract_generation = 'v2'`` and
+        ``public_outcome`` in the same flush as the frame write. Writing a
+        frame is the definitive, structural signal that a run is v2 --
+        recording it without tagging the run left ``contract_generation``
+        stuck at its 'v1' default forever, which made
+        ``router._replayed_result``'s ``contract_generation == "v2"`` replay
+        gate permanently unreachable for every real v2 run (a Codex review
+        finding on this branch). This closure also structurally narrows the
+        window for CHAOS-3299's downgrade guard (0074) to see folded
+        ``dev_runs`` columns on a run still tagged 'v1' -- the guard still
+        sweeps those columns directly as defense in depth, since a run can
+        carry ``plan_step_partition``/``relationship_closure_verified`` from
+        ``record_investigation_result`` without ever reaching this method
+        (e.g. a failure between investigation and frame synthesis).
         """
 
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
@@ -1523,6 +1538,8 @@ class DevPersistenceService:
             created_at=self._now(),
         )
         self.session.add(record)
+        run.contract_generation = "v2"
+        run.public_outcome = public_outcome
         await self.session.flush()
         return record
 

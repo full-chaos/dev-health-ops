@@ -391,6 +391,29 @@ def downgrade() -> None:
                 f"{v2_rows} row(s) with contract_generation = 'v2'; this "
                 "downgrade is for pre-release rehearsal only"
             )
+        # Independent sweep, not just belt-and-suspenders with the tagging
+        # check above: DevPersistenceService.record_investigation_result
+        # can populate these two folded columns (Codex-review CHAOS-3299
+        # fold) before a run ever reaches record_frame -- the call that
+        # tags contract_generation = 'v2' -- e.g. a failure between the
+        # investigation and frame-synthesis stages. A run in that state is
+        # still tagged 'v1' and would silently pass the check above while
+        # carrying real v2 data.
+        folded_column_rows = bind.execute(
+            sa.text(
+                "SELECT count(*) FROM dev_runs WHERE "
+                "plan_step_partition IS NOT NULL "
+                "OR relationship_closure_verified IS NOT NULL"
+            )
+        ).scalar()
+        if folded_column_rows:
+            raise RuntimeError(
+                "refusing to downgrade 0074: dev_runs has "
+                f"{folded_column_rows} row(s) with plan_step_partition or "
+                "relationship_closure_verified populated (independent of "
+                "contract_generation tagging); this downgrade is for "
+                "pre-release rehearsal only"
+            )
         for table in (
             "dev_run_intents",
             "dev_run_resolutions",

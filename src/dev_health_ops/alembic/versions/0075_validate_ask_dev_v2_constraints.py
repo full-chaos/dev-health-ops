@@ -37,8 +37,13 @@ def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
-    op.execute(f"ALTER TABLE dev_runs VALIDATE CONSTRAINT {_CONTRACT_GENERATION_CK}")
-    op.execute(f"ALTER TABLE dev_runs VALIDATE CONSTRAINT {_PUBLIC_OUTCOME_CK}")
+    # Constraint name is a module-level literal; DDL identifiers cannot be bound parameters.
+    op.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        f"ALTER TABLE dev_runs VALIDATE CONSTRAINT {_CONTRACT_GENERATION_CK}"
+    )
+    op.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        f"ALTER TABLE dev_runs VALIDATE CONSTRAINT {_PUBLIC_OUTCOME_CK}"
+    )
 
 
 def downgrade() -> None:

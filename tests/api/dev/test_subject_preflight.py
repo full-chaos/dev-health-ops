@@ -109,7 +109,12 @@ async def test_a_resolved_cohort_is_unsupported_not_partially_committed() -> Non
     Committing only the first of several named subjects is the fabricated
     premise this issue exists to close; the landed v2-to-v1 projector reaches
     the same conclusion independently for a ``subject_set_ref`` cohort frame.
-    CHAOS-3301 owns subject sets and batch execution.
+
+    CHAOS-3301 (D1): the cohort is now genuinely *committed and persisted* as
+    a ``dev_subject_set.v1`` — diagnostic ``committed_cohort_v1_only``, not
+    ``cohort_unsupported_in_v1`` — but the v1 surface still returns
+    ``unsupported`` and ``committed_resolution`` (the single-scope binding)
+    stays ``None``: rendering a cohort answer is CHAOS-3297/3298's job.
     """
 
     result = await _run(
@@ -119,7 +124,7 @@ async def test_a_resolved_cohort_is_unsupported_not_partially_committed() -> Non
 
     assert result.decision is PreflightDecision.TERMINATE
     assert result.outcome is PublicOutcome.UNSUPPORTED
-    assert result.diagnostic == "cohort_unsupported_in_v1"
+    assert result.diagnostic == "committed_cohort_v1_only"
     assert result.committed_resolution is None
     # Both resolved honestly; nothing was discarded to make one fit.
     assert result.ledger is not None
@@ -127,6 +132,16 @@ async def test_a_resolved_cohort_is_unsupported_not_partially_committed() -> Non
         entry.outcome is ResolutionOutcome.EXACT_MATCH
         for entry in result.ledger.latest_by_mention().values()
     )
+    # The set itself commits every resolved member, not just the first.
+    assert result.subject_set is not None
+    assert result.subject_set.original_mention_count == 2
+    assert result.subject_set.cohort_complete is True
+    assert result.subject_set.unresolved_mention_ids == ()
+    committed_ids = {ref.entity_id for ref in result.subject_set.committed_entity_refs}
+    assert committed_ids == {
+        ASK_DEV_PROJECT.canonical_id,
+        NIGHTFALL_PROJECT.canonical_id,
+    }
 
 
 @pytest.mark.asyncio
@@ -350,14 +365,29 @@ def test_a_real_uuid_run_id_is_preserved_verbatim() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_team_subject_never_reaches_the_v1_scope_constructors() -> None:
+async def test_a_team_subject_commits_a_real_v1_team_scope() -> None:
+    """CHAOS-3301 superseded this test's premise: TEAM now has a real v1
+    ``DirectScope``/``EntityType`` member, so a resolved team *does* reach
+    (and succeeds through) the v1 scope constructors — see
+    ``committed_resolution_for``'s docstring for why that call no longer
+    raises for a team entity.
+    """
+
+    from dev_health_ops.api.dev.contracts import DirectScope
+
     result = await _run(
         _preflight([(ORG_ID, PLATFORM_TEAM)]),
         request_for("How is the Platform team doing?"),
     )
 
-    assert result.outcome is PublicOutcome.UNSUPPORTED
-    assert result.committed_resolution is None
+    assert result.decision is PreflightDecision.PROCEED
+    assert result.outcome is None
+    assert result.diagnostic == "proceeded_committed_subject"
+    assert result.committed_resolution is not None
+    committed_scope = result.committed_resolution.resolved_scope
+    assert committed_scope is not None
+    assert committed_scope.direct_scope is DirectScope.TEAM
+    assert committed_scope.team_ids == [PLATFORM_TEAM.canonical_id]
     assert result.ledger is not None
     entry = next(iter(result.ledger.latest_by_mention().values()))
     assert entry.outcome is ResolutionOutcome.EXACT_MATCH

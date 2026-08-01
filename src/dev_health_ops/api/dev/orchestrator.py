@@ -67,6 +67,7 @@ from .contracts import (
     ToolID,
     dev_error_remediation,
 )
+from .contracts_v2 import DevSubjectSet
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from .preflight_outcomes import TERMINAL_STATE_BY_OUTCOME, project_preflight_error
@@ -305,6 +306,16 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
+        """Persist one committed ``dev_subject_set.v1`` (CHAOS-3301).
+
+        Called whenever the preflight built a subject set — a homogeneous
+        cohort (which then terminates unsupported on the v1 surface, D1) or a
+        singular commit reached via duplicate aliases (N4, which still
+        proceeds). Never called for an ordinary single-mention commit.
+        """
+        ...
+
     async def terminal(
         self,
         *,
@@ -344,6 +355,9 @@ class NullRunRecorder:
         legacy_guard_reason: str | None,
     ) -> None:
         del preflight_outcome, legacy_guard_reason
+
+    async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
+        del subject_set
 
     async def terminal(
         self,
@@ -682,6 +696,13 @@ class DevOrchestrator:
                     preflight_outcome=preflight_result.diagnostic,
                     legacy_guard_reason=None,
                 )
+                if preflight_result.subject_set is not None:
+                    # Persisted regardless of decision: a homogeneous cohort
+                    # (D1) still terminates unsupported below, but the set it
+                    # committed is recorded either way.
+                    await self._recorder.record_subject_set(
+                        preflight_result.subject_set
+                    )
                 if preflight_result.decision is PreflightDecision.TERMINATE:
                     assert preflight_result.answer is not None
                     assert preflight_result.outcome is not None

@@ -36,6 +36,7 @@ from dev_health_ops.api.dev.contracts import (
     QuestionClass,
     ToolID,
 )
+from dev_health_ops.api.dev.contracts_v2 import DevSubjectSet
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator, OrchestratorResult
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
@@ -344,6 +345,10 @@ class Recorder:
         self, *, preflight_outcome: str | None, legacy_guard_reason: str | None
     ) -> None:
         self.preflight_diagnostics.append((preflight_outcome, legacy_guard_reason))
+
+    async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
+        """No-op here; CHAOS-3301's SubjectSetRecorder subclass captures this."""
+        del subject_set
 
     async def terminal(self, **values: Any) -> None:
         self.terminals.append(values["state"])

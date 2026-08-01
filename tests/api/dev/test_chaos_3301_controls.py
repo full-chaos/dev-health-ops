@@ -117,8 +117,7 @@ async def test_p1_team_commits_and_status_executes_team_scope() -> None:
     assert output.result.state is RunState.COMPLETED
     assert [request.tool_id.value for request in output.calls] == ["status_snapshot.v1"]
     status_call = output.calls[0]
-    # RED: DirectScope.TEAM does not exist yet (CHAOS-3301 adds it).
-    assert status_call.scope.direct_scope is DirectScope.TEAM  # type: ignore[attr-defined]
+    assert status_call.scope.direct_scope is DirectScope.TEAM
     assert [ref.entity_id for ref in status_call.scope.entity_refs] == [
         PLATFORM_TEAM.canonical_id
     ]
@@ -166,6 +165,7 @@ async def test_p1w_endpoint_to_executed_tool_scope_is_team(
         RecordingProvider,
         SeededCatalog,
         fixed_now,
+        organization_resolution,
         recording_registry,
         sequential_ids,
         status_then_answer,
@@ -178,13 +178,13 @@ async def test_p1w_endpoint_to_executed_tool_scope_is_team(
     mint = sequential_ids()
     calls: list[DevToolRequest] = []
 
-    async def resolve(**_values: Any):
-        # Mirrors run_preflight_orchestrator's stand-in resolver: the request's
-        # own (organization-wide) scope, unchanged. The preflight is what
-        # narrows this to the team once the question names one.
-        raise AssertionError(
-            "scope_resolver must not be reached once preflight owns the run"
-        )
+    async def resolve(*, requested_scope: Any, **_values: Any) -> Any:
+        # Mirrors run_preflight_orchestrator's stand-in resolver: authorizes
+        # the request's own (organization-wide) scope, unchanged. This is the
+        # orchestrator's *initial* authorization step, which always runs
+        # before the preflight; the preflight is what narrows the run to the
+        # team once the question names one.
+        return organization_resolution(requested_scope)
 
     real_runtime = BoundedDevRuntime(
         provider=cast(
@@ -231,7 +231,7 @@ async def test_p1w_endpoint_to_executed_tool_scope_is_team(
     created = await client.post(
         "/api/v1/dev/conversations", json={"current_scope": scope_payload}
     )
-    assert created.status_code == 200
+    assert created.status_code == 201
     conversation_id = created.json()["conversation_id"]
 
     response = await client.post(
@@ -255,9 +255,13 @@ async def test_p1w_endpoint_to_executed_tool_scope_is_team(
     # Both ends of the join in one run: the tool actually executed against a
     # team scope, and the wire response says so too.
     assert calls, "the recording registry must have recorded a real tool call"
-    # RED: DirectScope.TEAM does not exist yet (CHAOS-3301 adds it).
-    assert calls[0].scope.direct_scope is DirectScope.TEAM  # type: ignore[attr-defined]
-    assert completed[0]["answer"]["resolved_scope"]["direct_scope"] == "team"
+    assert calls[0].scope.direct_scope is DirectScope.TEAM
+    # DevAnswer.resolved_scope is a DevScopeResolution; the actual DevScope
+    # lives one level down, at .resolved_scope.
+    assert (
+        completed[0]["answer"]["resolved_scope"]["resolved_scope"]["direct_scope"]
+        == "team"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -494,15 +498,14 @@ async def test_n0_team_subject_never_returns_a_silently_empty_status() -> None:
     )
     from dev_health_ops.api.dev.native_status_change import ClickHouseStatusChangeSource
 
-    # RED: DirectScope.TEAM / EntityType.TEAM do not exist yet (CHAOS-3301 adds them).
     scope = DevScope(
         schema_version="dev_scope.v1",
         organization_id=ORG_ID,
-        direct_scope=DirectScope.TEAM,  # type: ignore[attr-defined]
+        direct_scope=DirectScope.TEAM,
         repositories=[],
         entity_refs=[
             DevEntityRef(
-                entity_type=EntityType.TEAM,  # type: ignore[attr-defined]
+                entity_type=EntityType.TEAM,
                 entity_id=PLATFORM_TEAM.canonical_id,
                 display_label=PLATFORM_TEAM.label,
             )

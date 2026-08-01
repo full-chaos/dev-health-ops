@@ -45,6 +45,44 @@ NATIVE_STATUS_SOURCE_VERSION = "native-status-change.v1"
 NATIVE_STATUS_QUERY_VERSION = "native-status-change-query.v1"
 QUERY_TIMEOUT_SECONDS = 15
 
+#: CHAOS-3301 addendum (Option B), structural closure. Every SQL constant in
+#: this module that gates on ``{scope_type:String}`` must either carry a
+#: ``'team'`` arm in its disjunction, or be named here — enforced by
+#: ``tests/api/dev/test_chaos_3301_controls.py::
+#: test_native_status_change_scope_type_disjunctions_are_total_over_team``,
+#: which enumerates every ``scope_type``-gated SQL constant in this module by
+#: introspection and fails if a new one is added without updating one of the
+#: two.
+#:
+#: Every source is registered here today: no arm is added to any SQL
+#: constant by this issue (that is CHAOS-3303's, alongside the team-health
+#: service that has to reason about attribution quality anyway). This is
+#: deliberately still safe rather than silently wrong for a committed team
+#: scope — see ``ClickHouseStatusChangeSource._authorized_repository_ids``:
+#: a team direct scope always carries an empty ``repositories`` list (team
+#: attribution is re-derived at query time in CHAOS-3303, never carried on
+#: the wire per the addendum), so ``status_snapshot`` and ``change_summary``
+#: both take the existing "no authorized repositories" fail-closed branch —
+#: an explicit ``FreshnessState.UNAVAILABLE`` observation with a disclosed
+#: warning — before any of these queries ever execute with
+#: ``scope_type='team'``. That branch is what N0
+#: (``test_n0_team_subject_never_returns_a_silently_empty_status``) proves.
+TEAM_NOT_APPLICABLE_SOURCES: frozenset[str] = frozenset(
+    {
+        "_WORK_ITEMS_SQL",
+        "_BLOCKERS_SQL",
+        "_PULL_REQUESTS_SQL",
+        "_DEPLOYMENTS_SQL",
+        "_TRANSITIONS_SQL",
+        "_RELATIONSHIPS_SQL",
+        "_PULL_REQUEST_CHANGES_SQL",
+        "_REVIEW_CHANGES_SQL",
+        "_CI_CHANGES_SQL",
+        "_DEPLOYMENT_CHANGES_SQL",
+        "_INCIDENT_CHANGES_SQL",
+    }
+)
+
 _BLOCKER_PROJECTION_RULE_VERSION = "canonical-blocks.v2"
 
 _WORK_UNIT_MEMBERSHIP_WATERMARK_SQL = """

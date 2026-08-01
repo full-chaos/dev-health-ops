@@ -31,7 +31,8 @@ from .contracts import (
     EntityType,
     ScopeResolutionOutcome,
 )
-from .contracts_v2 import ResolutionOutcome
+from .contracts_v2 import DevEntityRefV2, DevSubjectSet, ResolutionOutcome
+from .contracts_v2 import EntityKind as ContractEntityKind
 
 QUERY_VERSION = "resolve-scope.v1"
 MAX_REPOSITORIES = 20
@@ -54,6 +55,10 @@ class EntityKind(StrEnum):
     TEAM = "team"
 
 
+#: Kinds with a real v1 ``DevScope.direct_scope`` representation. CHAOS-3301
+#: adds ``TEAM`` here: a client (or the subject preflight) can now commit and
+#: re-validate a team-direct ``DevScope`` through ``resolve_contract`` /
+#: ``committed_resolution_for``, exactly like any other direct scope kind.
 DIRECT_SCOPE_KINDS = frozenset(
     {
         EntityKind.ORGANIZATION,
@@ -62,22 +67,61 @@ DIRECT_SCOPE_KINDS = frozenset(
         EntityKind.WORK_UNIT,
         EntityKind.ISSUE,
         EntityKind.PULL_REQUEST,
+        EntityKind.TEAM,
     }
 )
 
-#: The kinds any v1 surface (``resolve_scope.v1``, the GraphQL scope-search
-#: field) may search. Organization is excluded because named-entity resolution
-#: never searches organization scope itself (CHAOS-3256).
-V1_SEARCHABLE_ENTITY_KINDS = frozenset(DIRECT_SCOPE_KINDS - {EntityKind.ORGANIZATION})
+#: CHAOS-3301 structural pattern: explicit, independently-pinned frozensets
+#: per surface, never derived from ``DIRECT_SCOPE_KINDS`` or from each other.
+#: Widening ``DIRECT_SCOPE_KINDS`` (as this issue just did, for ``TEAM``) must
+#: never silently widen what a caller may *search by free-text query* — that
+#: is a deliberate, separate decision per surface, made by editing that
+#: surface's own constant. All three currently name the same five kinds
+#: (organization is excluded because named-entity resolution never searches
+#: organization scope itself, CHAOS-3256; team is excluded because CHAOS-3301
+#: gives team a v1 *subject* — resolved from question text via the preflight
+#: — not a v1 *free-text search* kind on these surfaces).
+#:
+#: The kinds ``resolve_scope.v1``'s query-search path may search.
+V1_SEARCHABLE_ENTITY_KINDS = frozenset(
+    {
+        EntityKind.REPOSITORY,
+        EntityKind.PROJECT,
+        EntityKind.WORK_UNIT,
+        EntityKind.ISSUE,
+        EntityKind.PULL_REQUEST,
+    }
+)
+#: The kinds the model-facing ``resolve_scope.v1`` tool may search.
+MODEL_SEARCHABLE_ENTITY_KINDS = frozenset(
+    {
+        EntityKind.REPOSITORY,
+        EntityKind.PROJECT,
+        EntityKind.WORK_UNIT,
+        EntityKind.ISSUE,
+        EntityKind.PULL_REQUEST,
+    }
+)
+#: The kinds the typed GraphQL scope-search field may search.
+GRAPHQL_SEARCHABLE_ENTITY_KINDS = frozenset(
+    {
+        EntityKind.REPOSITORY,
+        EntityKind.PROJECT,
+        EntityKind.WORK_UNIT,
+        EntityKind.ISSUE,
+        EntityKind.PULL_REQUEST,
+    }
+)
 
 #: The **ceiling** on what any caller may search — not a default. CHAOS-3292
 #: adds ``TEAM`` here so the subject preflight can resolve a named team against
 #: the catalog (which has supported teams since ``scope_catalog``'s team
-#: queries landed) and record an honest ``exact_match`` for it. Giving a team
-#: real v1 ``DirectScope``/``DevScope`` semantics is CHAOS-3301's, so every
-#: pre-existing caller keeps ``V1_SEARCHABLE_ENTITY_KINDS`` and a resolved team
-#: terminates the preflight as ``unsupported`` rather than reaching
-#: ``DirectScope(...)``/``EntityType(...)``, which raise for ``team``.
+#: queries landed) and record an honest ``exact_match`` for it. CHAOS-3301
+#: gives team real v1 ``DirectScope``/``DevScope`` semantics once *committed*
+#: by the preflight, but every pre-existing free-text-search caller keeps
+#: ``V1_SEARCHABLE_ENTITY_KINDS`` (excluding team) — only the preflight's own
+#: typed-mention resolution (``resolve_mention``) is allowed to reach this
+#: wider ceiling.
 SEARCHABLE_ENTITY_KINDS = V1_SEARCHABLE_ENTITY_KINDS | {EntityKind.TEAM}
 
 
@@ -700,23 +744,39 @@ class ScopeResolutionService:
         path) and the subject preflight, so there is one notion of "committed
         scope" rather than two that can drift.
 
-        Raises ``ValueError`` for a kind v1 cannot represent (``team``), rather
-        than letting ``DirectScope(...)``/``EntityType(...)`` raise a bare
-        enum error from deep inside scope construction.
+        Raises ``ValueError`` for a kind with no v1 direct-scope
+        representation at all (currently just ``organization``, which is
+        never a *single-entity* commit), rather than letting
+        ``DirectScope(...)``/``EntityType(...)`` raise a bare enum error from
+        deep inside scope construction.
+
+        CHAOS-3301: team is now a real v1 direct scope. Its repository
+        attribution is deliberately **not** carried here —
+        ``authorized_repository_ids``/``authorized_entity_ids`` stay empty for
+        a team commit, since ``AuthorizedEntity.repository_id`` is always
+        ``None`` for a team (``scope_catalog`` resolves teams
+        organization-scoped with no repository dimension). Team→repository
+        attribution is re-derived at query time by the status/change source,
+        not carried on the wire (Amendment: addendum item 1) — CHAOS-3303's
+        job, not this function's.
         """
 
-        if entity.kind not in V1_SEARCHABLE_ENTITY_KINDS:
+        if (
+            entity.kind is EntityKind.ORGANIZATION
+            or entity.kind not in DIRECT_SCOPE_KINDS
+        ):
             raise ValueError(
                 f"{entity.kind.value} has no v1 direct-scope representation"
             )
         is_repository = entity.kind is EntityKind.REPOSITORY
+        is_team = entity.kind is EntityKind.TEAM
         resolved_scope = DevScope(
             schema_version="dev_scope.v1",
             organization_id=org_id,
             direct_scope=DirectScope(entity.kind.value),
             repositories=[entity.canonical_id] if is_repository else [],
             entity_refs=[] if is_repository else [self._contract_entity_ref(entity)],
-            team_ids=[],
+            team_ids=[entity.canonical_id] if is_team else [],
             time_range=base_scope.time_range,
             comparison_range=base_scope.comparison_range,
             surface_context=None,
@@ -737,6 +797,74 @@ class ScopeResolutionService:
             fallbacks=[],
             warnings=[],
             resolved_at=resolved_at,
+        )
+
+    @staticmethod
+    def _subject_set_fingerprint(kind: EntityKind, canonical_ids: Sequence[str]) -> str:
+        """Mint-derived, opaque set fingerprint (structural pattern 5).
+
+        ``"set1_" + sha256(kind, sorted(canonical_ids)).hexdigest()[:40]``.
+        Hex cannot spell a subject name, and the value is stable across runs
+        for the same (kind, member set), which is what makes it usable as a
+        batch cache key.
+        """
+
+        digest = hashlib.sha256(
+            "\0".join((kind.value, *sorted(canonical_ids))).encode()
+        ).hexdigest()[:40]
+        return f"set1_{digest}"
+
+    def committed_subject_set_for(
+        self,
+        entities: Sequence[AuthorizedEntity],
+        *,
+        set_id: str,
+        original_mention_count: int,
+        unresolved_mention_ids: tuple[str, ...] = (),
+        ambiguous_mention_ids: tuple[str, ...] = (),
+        warnings: tuple[str, ...] = (),
+    ) -> DevSubjectSet:
+        """Build one ``dev_subject_set.v1`` from already-deduplicated entities.
+
+        ``entities`` must already be deduplicated by canonical id and
+        homogeneous in kind — the subject preflight owns those decisions
+        (bounds are rejections, never truncations: a >25-member or
+        heterogeneous set must never reach here at all). This is pure
+        construction plus the fingerprint grammar; the pydantic model's own
+        ``validate_set_invariants`` is the final check on omission/
+        completeness/warning-disclosure consistency.
+        """
+
+        if not entities:
+            raise ValueError("a subject set requires at least one committed entity")
+        kind = entities[0].kind
+        if any(entity.kind is not kind for entity in entities):
+            raise ValueError("a subject set must be homogeneous in entity kind")
+        omitted = len(unresolved_mention_ids) + len(ambiguous_mention_ids)
+        return DevSubjectSet(
+            schema_version="dev_subject_set.v1",
+            set_id=set_id,
+            entity_kind=ContractEntityKind(kind.value),
+            committed_entity_refs=tuple(
+                DevEntityRefV2(
+                    entity_kind=ContractEntityKind(entity.kind.value),
+                    entity_id=entity.canonical_id,
+                    display_label=entity.label,
+                    repository_id=entity.repository_id,
+                    team_id=(
+                        entity.canonical_id if entity.kind is EntityKind.TEAM else None
+                    ),
+                )
+                for entity in entities
+            ),
+            original_mention_count=original_mention_count,
+            unresolved_mention_ids=unresolved_mention_ids,
+            ambiguous_mention_ids=ambiguous_mention_ids,
+            cohort_complete=omitted == 0,
+            warnings=warnings,
+            fingerprint=self._subject_set_fingerprint(
+                kind, [entity.canonical_id for entity in entities]
+            ),
         )
 
     async def resolve_query_contract(

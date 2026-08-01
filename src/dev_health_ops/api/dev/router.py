@@ -26,7 +26,7 @@ from fastapi import (
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api._health import _analytics_db_url
@@ -569,6 +569,40 @@ def _permission_fingerprint(user: AuthenticatedUser) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _replay_fallback_error(run: Any) -> DevError:
+    """The generic "did not complete" shape for a run with nothing to replay.
+
+    Used both when no answer/frame was ever persisted for a terminal run,
+    and (CHAOS-3297 Codex review MEDIUM) when a persisted v2 frame payload
+    fails to validate -- a corrupted or legacy-shaped row must degrade to
+    this safe public shape rather than 500 every future replay of the same
+    idempotency key.
+    """
+
+    code = run.safe_error_code or "internal_error"
+    try:
+        return DevError(
+            schema_version="dev_error.v1",
+            request_id=str(run.request_id),
+            code=code,
+            safe_message=("The prior Ask Dev request did not complete with an answer."),
+            retryable=code in {"provider_unavailable", "source_unavailable"},
+            # A replayed run must carry the same corrective guidance a
+            # live failure with this code would (CHAOS-3254) -- never
+            # silently drop remediation just because the client is
+            # reading back an idempotent replay instead of a fresh run.
+            remediation=dev_error_remediation(code),
+        )
+    except ValueError:
+        return DevError(
+            schema_version="dev_error.v1",
+            request_id=str(run.request_id),
+            code="internal_error",
+            safe_message=("The prior Ask Dev request did not complete with an answer."),
+            retryable=True,
+        )
+
+
 def _replayed_result(
     *,
     run: Any,
@@ -608,50 +642,29 @@ def _replayed_result(
         from .contracts_v2.frame import DevAnswerFrame as _DevAnswerFrameV2
         from .preflight_outcomes import project_preflight_error
 
-        frame_obj = _DevAnswerFrameV2.model_validate(frame_payload)
-        answer_v2 = DevAnswerV2(
-            schema_version="dev_answer.v2",
-            answer_id=str(run.id),
-            conversation_id=str(run.conversation_id),
-            run_id=str(run.id),
-            # SQLite (test fixtures only) does not round-trip tz-aware
-            # datetimes through DateTime(timezone=True); PostgreSQL does, so
-            # this was unobserved until CHAOS-3299 Codex finding 1's fix made
-            # this branch reachable for the first time.
-            generated_at=_aware_required(run.ended_at or run.started_at),
-            public_outcome=frame_obj.public_outcome,
-            outcome_display_label=_OUTCOME_DISPLAY_LABELS[frame_obj.public_outcome],
-            frame=frame_obj,
-            narrative=None,
-        )
-        error = project_preflight_error(answer_v2, request_id=str(run.request_id))
-    else:
-        code = run.safe_error_code or "internal_error"
         try:
-            error = DevError(
-                schema_version="dev_error.v1",
-                request_id=str(run.request_id),
-                code=code,
-                safe_message=(
-                    "The prior Ask Dev request did not complete with an answer."
-                ),
-                retryable=code in {"provider_unavailable", "source_unavailable"},
-                # A replayed run must carry the same corrective guidance a
-                # live failure with this code would (CHAOS-3254) -- never
-                # silently drop remediation just because the client is
-                # reading back an idempotent replay instead of a fresh run.
-                remediation=dev_error_remediation(code),
+            frame_obj = _DevAnswerFrameV2.model_validate(frame_payload)
+            answer_v2 = DevAnswerV2(
+                schema_version="dev_answer.v2",
+                answer_id=str(run.id),
+                conversation_id=str(run.conversation_id),
+                run_id=str(run.id),
+                # SQLite (test fixtures only) does not round-trip tz-aware
+                # datetimes through DateTime(timezone=True); PostgreSQL
+                # does, so this was unobserved until CHAOS-3299 Codex
+                # finding 1's fix made this branch reachable for the first
+                # time.
+                generated_at=_aware_required(run.ended_at or run.started_at),
+                public_outcome=frame_obj.public_outcome,
+                outcome_display_label=_OUTCOME_DISPLAY_LABELS[frame_obj.public_outcome],
+                frame=frame_obj,
+                narrative=None,
             )
-        except ValueError:
-            error = DevError(
-                schema_version="dev_error.v1",
-                request_id=str(run.request_id),
-                code="internal_error",
-                safe_message=(
-                    "The prior Ask Dev request did not complete with an answer."
-                ),
-                retryable=True,
-            )
+            error = project_preflight_error(answer_v2, request_id=str(run.request_id))
+        except ValidationError:
+            error = _replay_fallback_error(run)
+    else:
+        error = _replay_fallback_error(run)
     return OrchestratorResult(
         run_id=str(run.id),
         state=state,

@@ -355,6 +355,10 @@ class Recorder:
         self.frames.append(frame)
 
 
+    async def rollback(self) -> None:
+        pass
+
+
     async def terminal(self, **values: Any) -> None:
         self.terminals.append(values["state"])
 

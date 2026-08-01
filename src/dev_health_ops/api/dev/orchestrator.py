@@ -329,6 +329,22 @@ class RunRecorder(Protocol):
         ...
 
 
+    async def rollback(self) -> None:
+        """Discard pending writes after a failed record_frame flush (CHAOS-3297).
+
+        A database-level failure during ``record_frame``'s flush (a
+        constraint violation, a dropped connection) marks the underlying
+        session rollback-only: the next write on it raises
+        ``PendingRollbackError`` instead of succeeding. A caller that catches
+        a ``record_frame`` failure must call this before any further
+        recorder write (``terminal()`` in particular) on the same run, or a
+        recoverable frame-write failure strands the run as a nonterminal
+        ``accepted``/v1 row that every idempotent retry then 409s against
+        forever.
+        """
+        ...
+
+
     async def terminal(
         self,
         *,
@@ -374,6 +390,10 @@ class NullRunRecorder:
 
     async def record_frame(self, frame: DevAnswerFrame) -> None:
         del frame
+
+
+    async def rollback(self) -> None:
+        return None
 
 
     async def terminal(
@@ -728,7 +748,20 @@ class DevOrchestrator:
                     # state and the frame's contract_generation='v2' tag
                     # land together -- mirrors record_answer's placement
                     # ahead of terminal() on the completed-answer path.
-                    await self._recorder.record_frame(preflight_result.answer.frame)
+                    try:
+                        await self._recorder.record_frame(preflight_result.answer.frame)
+                    except Exception:
+                        # A database-layer failure here (constraint
+                        # violation, dropped connection) marks the
+                        # recorder's session rollback-only; the terminal()
+                        # write below would then raise PendingRollbackError
+                        # and strand this run as a nonterminal accepted/v1
+                        # row that every idempotent retry 409s against
+                        # forever (Codex review finding, CHAOS-3297). Roll
+                        # back and finish as a coherent v1 terminal run
+                        # instead -- a dropped frame is recoverable, a
+                        # stranded run is not.
+                        await self._recorder.rollback()
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=project_preflight_error(

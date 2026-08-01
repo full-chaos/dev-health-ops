@@ -221,6 +221,17 @@ class PersistenceRunRecorder:
             payload=frame.model_dump(mode="json"),
         )
 
+    async def rollback(self) -> None:
+        """Discard pending writes on this request's session (CHAOS-3297).
+
+        Called by the orchestrator after a failed ``record_frame`` flush,
+        before any further write on this same recorder -- a session
+        SQLAlchemy has marked rollback-only raises ``PendingRollbackError``
+        on the next flush otherwise, which is exactly the failure mode this
+        exists to prevent.
+        """
+        await self._service.session.rollback()
+
     async def record_narrative(self, narrative: DevNarrative) -> None:
         provider_fingerprint = None
         if narrative.provider_metadata is not None:

@@ -37,6 +37,7 @@ from dev_health_ops.api.dev.contracts import (
     ScopeResolutionOutcome,
 )
 from dev_health_ops.api.dev.contracts_v2.frame import DevAnswerFrame as FrameContract
+from dev_health_ops.api.dev.orchestrator_persistence import PersistenceRunRecorder
 from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
 from dev_health_ops.api.dev.runtime import BoundedDevRuntime
 from dev_health_ops.api.dev.scope_service import (
@@ -289,3 +290,164 @@ async def test_preflight_termination_persists_frame_and_replays(
         ).all()
         assert len(runs) == 1, "the replay must not have created a second run"
         assert runs[0].contract_generation == "v2"
+
+
+async def test_preflight_frame_flush_failure_reaches_terminal_state_not_stranded(
+    dev_api_context,  # noqa: F811 -- pytest fixture imported from test_router
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex review HIGH: a record_frame flush failure must not strand the run.
+
+    Before the fix, a database-layer failure while flushing the preflight's
+    frame write (a constraint violation, a dropped connection) marks the
+    request's session rollback-only; the terminal() write that follows then
+    raises PendingRollbackError instead of completing, so the run is never
+    written past 'accepted'/'v1'. Every retry with the same
+    client_message_id then hits router.py's not-created branch, sees a
+    non-terminal state, and 409s forever.
+
+    Poisons the session with a genuine CHECK-constraint violation on
+    record_frame -- an ``IntegrityError`` raised by the real flush, not a
+    bare Python raise -- so the session is actually marked rollback-only the
+    way the Codex repro's SQLAlchemy script demonstrated, and asserts the
+    run still reaches a terminal state with a safe error, and that a
+    duplicate POST replays (200) instead of 409ing.
+    """
+
+    org_id = dev_api_context.org_id
+
+    async def poisoned_record_frame(self: PersistenceRunRecorder, frame: Any) -> None:
+        del frame
+        # A real DB-layer failure: violates dev_answer_frames' public_outcome
+        # CHECK constraint at flush time, exactly the failure class the
+        # review confirmed (not a synthetic raise -- the session must
+        # actually become rollback-only).
+        bad = DevAnswerFrame(
+            run_id=self._run_id,
+            org_id=self._org_id,
+            user_id=self._user_id,
+            frame_id=uuid.uuid4(),
+            public_outcome="not_a_real_public_outcome",
+            payload={},
+        )
+        self._service.session.add(bad)
+        await self._service.session.flush()
+
+    monkeypatch.setattr(PersistenceRunRecorder, "record_frame", poisoned_record_frame)
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=_preflight_runtime(org_id=org_id)
+    )
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = _preflight_terminating_payload(conversation_id, org_id)
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200, live.text
+    live_events = dict(_parse_sse_events(live.text))
+    assert "answer.completed" not in live_events
+    assert "error" in live_events, (
+        "a poisoned frame write must still reach a terminal error, not hang or 500"
+    )
+
+    async with dev_api_context.maker() as session:
+        run = await session.scalar(
+            select(DevRun).where(DevRun.conversation_id == uuid.UUID(conversation_id))
+        )
+        assert run is not None
+        assert run.state != "accepted", (
+            "the run must not be stranded nonterminal after the frame flush failed"
+        )
+        assert run.contract_generation == "v1", (
+            "the poisoned frame write must have been rolled back, not left "
+            "half-tagged v2 with no frame to back it"
+        )
+        frame_row = await session.scalar(
+            select(DevAnswerFrame).where(DevAnswerFrame.run_id == run.id)
+        )
+        assert frame_row is None, "the poisoned frame insert must have been rolled back"
+
+    # The duplicate POST must replay, not 409 -- proving the run actually
+    # reached a terminal state the router's not-created branch can see.
+    duplicate = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert duplicate.status_code == 200, duplicate.text
+    duplicate_events = dict(_parse_sse_events(duplicate.text))
+    assert "error" in duplicate_events
+
+
+async def test_replay_with_corrupted_frame_payload_falls_back_safely(
+    dev_api_context,  # noqa: F811 -- pytest fixture imported from test_router
+) -> None:
+    """Codex review MEDIUM: a corrupted v2 frame payload must not 500 every replay.
+
+    Persists a real preflight-terminated frame, then corrupts the stored
+    payload directly (simulating a damaged row or a since-changed schema)
+    and asserts the idempotent replay degrades to the same generic "did not
+    complete" shape used when the frame row is missing outright, instead of
+    a 500 that would repeat on every future replay of the same
+    client_message_id.
+    """
+
+    org_id = dev_api_context.org_id
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=_preflight_runtime(org_id=org_id)
+    )
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = _preflight_terminating_payload(conversation_id, org_id)
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+    live_events = dict(_parse_sse_events(live.text))
+    live_message = live_events["error"]["error"]["safe_message"]
+
+    async with dev_api_context.maker() as session:
+        run = await session.scalar(
+            select(DevRun).where(DevRun.conversation_id == uuid.UUID(conversation_id))
+        )
+        assert run is not None
+        frame_row = await session.scalar(
+            select(DevAnswerFrame).where(DevAnswerFrame.run_id == run.id)
+        )
+        assert frame_row is not None
+        # Missing every field DevAnswerFrame.model_validate requires beyond
+        # schema_version -- a damaged/legacy row, not a well-formed one.
+        frame_row.payload = {"schema_version": "dev_answer_frame.v1"}
+        await session.commit()
+
+    replay = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert replay.status_code == 200, (
+        f"a corrupted frame payload must degrade to a safe error, not 500: "
+        f"{replay.status_code} {replay.text}"
+    )
+    replay_events = dict(_parse_sse_events(replay.text))
+    assert "answer.completed" not in replay_events
+    assert "error" in replay_events
+    fallback_message = "The prior Ask Dev request did not complete with an answer."
+    assert replay_events["error"]["error"]["safe_message"] == fallback_message
+    # The live run's own preflight-specific copy must differ from the
+    # fallback -- otherwise this test could not distinguish "used the real
+    # frame" from "always falls back".
+    assert live_message != fallback_message

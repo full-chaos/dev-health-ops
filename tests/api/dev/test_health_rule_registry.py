@@ -93,6 +93,28 @@ def test_registered_rules_all_match_the_closed_grammar() -> None:
         assert re.match(RULE_ID_PATTERN, rule_id)
 
 
+def test_no_shipped_rule_is_launch_authorized() -> None:
+    """Codex finding (high): a ``product_approved``/``data_derived``/
+
+    ``policy_driven`` calibration_state is a claim that a real review
+    happened. No rule shipped in ``HEALTH_RULE_REGISTRY`` has had one --
+    every rule here is either the real, not-yet-reviewed calibration
+    inventory, or an illustrative same-changeset example -- so every
+    shipped rule must be ``provisional`` (shadow-only), with no
+    exceptions. A rule that has genuinely earned review authority proves
+    that in a test-scoped registry instead (see
+    ``test_chaos_3302_health_rule_e2e_controls.py``'s positive controls),
+    never by shipping fake authority in the production registry.
+    """
+
+    non_provisional = [
+        rule_id
+        for rule_id, rule in HEALTH_RULE_REGISTRY.items()
+        if rule.calibration_state != CalibrationState.PROVISIONAL
+    ]
+    assert non_provisional == []
+
+
 # ---------------------------------------------------------------------------
 # HealthRuleDefinition construction guardrails
 # ---------------------------------------------------------------------------
@@ -325,6 +347,31 @@ def test_no_data_short_circuits_before_cohort_guard() -> None:
         _windows(
             _RULE.sustained_periods_required,
             data_semantics="no_data",
+            observed_states=(SourceRequirementState.UNCONFIGURED,),
+            current_value=None,
+            cohort_size=0,
+        ),
+    )
+    assert finding.state == DimensionState.UNKNOWN
+    assert finding.suppressed_reason is None
+
+
+def test_not_measured_short_circuits_before_cohort_guard() -> None:
+    """Codex finding (medium): ``not_measured`` is a second valid spelling of
+
+    "genuinely never measured" (``DimensionObservation`` accepts either
+    ``no_data`` or ``not_measured`` for an unmeasured ``observed_states``
+    set -- see its ``validate_zero_semantics``). It must short-circuit
+    exactly like ``no_data``, before the cohort/sample/coverage guards,
+    so a source that was never measured is never misreported as
+    ``insufficient_cohort``.
+    """
+
+    finding = evaluate_rule(
+        _RULE,
+        _windows(
+            _RULE.sustained_periods_required,
+            data_semantics="not_measured",
             observed_states=(SourceRequirementState.UNCONFIGURED,),
             current_value=None,
             cohort_size=0,

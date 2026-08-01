@@ -260,8 +260,13 @@ def evaluate_rule(
 
     # Zero versus no-data: a genuinely unmeasured source reports unknown
     # honestly and is never suppressed for insufficient sample/coverage --
-    # there is nothing to have insufficient sample of.
-    if current.data_semantics == "no_data":
+    # there is nothing to have insufficient sample of. "not_measured" is
+    # the other valid spelling of "never measured" (DimensionObservation's
+    # own validate_zero_semantics accepts either for an unmeasured
+    # observed_states set) and must short-circuit identically, or a
+    # never-measured source is misreported as insufficient_cohort/sample/
+    # coverage instead of the honest reason (Codex-confirmed finding).
+    if current.data_semantics in ("no_data", "not_measured"):
         return _finding(DimensionState.UNKNOWN)
 
     needs_cohort = current.subject_kind in (
@@ -473,18 +478,30 @@ def _rule(
 # ---------------------------------------------------------------------------
 # Launch rule set.
 #
-# Three rules are ``product_approved`` -- a synthetic, clearly-labeled
-# example calibration authored in this same changeset (see
-# ``health_rule_calibration_inventory.CALIBRATION_RECORDS``) so the
-# "approved launch finding" and "team qualification" paths have something
-# real to evaluate. This deliberately does NOT retroactively promote any
-# of the thresholds already live in Operating Review/forecast/opportunities
-# to canonical status -- per CHAOS-3302, "Do not activate provisional
-# thresholds as canonical rules without review", and no such review has
-# happened for those. The remaining rules below are exactly that inventory,
-# registered ``provisional`` and therefore always ``shadow_only`` --
-# computed for calibration observation, never surfaced as a launch finding
-# or consulted by ``qualify_team_needs_attention``. See
+# Every rule shipped here is ``provisional`` (shadow-only), with no
+# exceptions -- ``test_no_shipped_rule_is_launch_authorized`` enforces this
+# as a totality check. A non-provisional calibration_state is a claim that
+# a real review (sample sizes, distributions, false-positive/negative
+# analysis, small-cohort behavior, owner sign-off) actually happened; none
+# has, for anything in this file. The first three rules below
+# (completion_stalled/review_latency_sustained/data_trust_broken) were
+# originally shipped ``product_approved`` with a same-changeset
+# illustrative calibration record as their own "evidence" -- a Codex
+# adversarial review (2026-08-01) correctly flagged that as launch-
+# authorizing real findings on authority that never existed: any caller of
+# ``evaluate_registry`` would receive them in ``launch_findings``, not
+# ``shadow_findings``, indistinguishable from a genuinely reviewed rule.
+# They are demoted to provisional here; the "approved launch finding" and
+# "team qualification" paths are now proven by a registry instance defined
+# entirely within the test that needs it
+# (``test_chaos_3302_health_rule_e2e_controls.py``'s positive controls),
+# which is honest about being test-scoped authority rather than shipping
+# fake authority in the production registry. This also, as a consequence,
+# already matches the second half of the original comment here: this file
+# does NOT retroactively promote any of the thresholds already live in
+# Operating Review/forecast/opportunities to canonical status -- per
+# CHAOS-3302, "Do not activate provisional thresholds as canonical rules
+# without review", and no such review has happened for those either. See
 # ``health_rule_calibration_inventory`` for the full citation of where each
 # provisional threshold lives today and why it is not yet approved.
 # ---------------------------------------------------------------------------
@@ -510,8 +527,8 @@ _LAUNCH_RULES: tuple[HealthRuleDefinition, ...] = (
         evidence_source_classes=(SourceClass.STATUS_CHANGE, SourceClass.WORK_ITEM),
         fact_kind="observed",
         remediation_template="Review stalled work items with the team before the next planning cycle.",
-        calibration_state=CalibrationState.PRODUCT_APPROVED,
-        calibration_evidence_ref="health_rule_calibration.completion_stalled.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
     ),
     _rule(
         rule_id="health_rule.review_latency_sustained.v1",
@@ -533,8 +550,8 @@ _LAUNCH_RULES: tuple[HealthRuleDefinition, ...] = (
         evidence_source_classes=(SourceClass.PULL_REQUEST, SourceClass.REVIEW),
         fact_kind="observed",
         remediation_template="Review open pull requests aging past the team's usual review latency.",
-        calibration_state=CalibrationState.PRODUCT_APPROVED,
-        calibration_evidence_ref="health_rule_calibration.review_latency_sustained.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
     ),
     _rule(
         rule_id="health_rule.data_trust_broken.v1",
@@ -564,8 +581,8 @@ _LAUNCH_RULES: tuple[HealthRuleDefinition, ...] = (
         evidence_source_classes=(SourceClass.SOURCE_HEALTH,),
         fact_kind="observed",
         remediation_template="Restore or reconfigure the affected data source before trusting downstream findings.",
-        calibration_state=CalibrationState.PRODUCT_APPROVED,
-        calibration_evidence_ref="health_rule_calibration.data_trust_broken.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
     ),
     # -- Calibration-inventory rules: provisional, shadow-only ------------
     _rule(

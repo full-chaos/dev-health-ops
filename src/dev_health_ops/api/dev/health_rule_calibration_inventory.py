@@ -14,16 +14,19 @@ This module inventories the **ops-side** provisional thresholds only:
 Operating Review's own recommendation logic, and the forecast/opportunity/
 compounding-risk detectors it and other surfaces draw on.
 
-Every record below is ``calibration_state = provisional``: none of these
-thresholds has been through the review this ticket requires (documented
-sample sizes, percentile distributions, false-positive/negative review,
-small-cohort behavior, owner sign-off). Three synthetic example rules in
-``health_rule_registry`` ARE ``product_approved`` -- but those are
-new rules authored for this changeset with a real (if illustrative)
-calibration record attached, not a retroactive promotion of anything
-inventoried here. Promoting any of the entries below to canonical status
-is future work requiring an actual owner review, tracked as a CHAOS-3302
-follow-up.
+Every record below is ``calibration_state = provisional``, with no
+exceptions -- including the three illustrative example rules also shipped
+in ``health_rule_registry`` (``completion_stalled``/
+``review_latency_sustained``/``data_trust_broken``). Those were originally
+recorded ``product_approved`` with only a same-changeset illustrative
+record as "evidence"; a Codex adversarial review (2026-08-01) correctly
+identified that as unreviewed authority reaching real launch findings, so
+they are provisional here like everything else. None of these thresholds
+has been through the review this ticket requires (documented sample
+sizes, percentile distributions, false-positive/negative review,
+small-cohort behavior, owner sign-off). Promoting any entry below to
+canonical status is future work requiring an actual owner review, tracked
+as a CHAOS-3302 follow-up.
 
 Sources inventoried
 --------------------
@@ -206,86 +209,90 @@ CALIBRATION_RECORDS: tuple[CalibrationRecord, ...] = (
         evidence_ref=None,
         notes=_NOT_YET_REVIEWED,
     ),
-    # -- The three product_approved example rules in health_rule_registry.
-    #    These are new, illustrative rules authored for this changeset
-    #    (not a promotion of anything above), so their calibration records
-    #    are complete and self-contained rather than "not yet reviewed".
+    # -- Three illustrative example rules, also shipped in
+    #    health_rule_registry, demoted to provisional/shadow-only
+    #    (2026-08-01 Codex-confirmed correction -- see that module's
+    #    _LAUNCH_RULES docstring). They were originally recorded
+    #    product_approved with only this same-changeset record as
+    #    "evidence" -- a same-changeset illustrative record can never
+    #    itself be the review it claims happened, so that combination is
+    #    exactly the "claims review that never happened" case
+    #    CalibrationRecord/HealthRuleDefinition's own construction-time
+    #    validators exist to reject. These records are provisional and
+    #    evidence-free, like every other entry in this inventory. The
+    #    mechanism they were meant to demonstrate (an approved rule
+    #    reaching a launch finding and a team qualification) is now proven
+    #    against a registry defined entirely inside
+    #    ``test_chaos_3302_health_rule_e2e_controls.py``, never against
+    #    this shipped inventory.
     CalibrationRecord(
         schema_version="health_rule_calibration.v1",
         calibration_id="health_rule_calibration.completion_stalled.v1",
         rule_id="health_rule.completion_stalled.v1",
         rule_version="health_rule.completion_stalled.v1",
-        calibration_state=CalibrationState.PRODUCT_APPROVED,
-        sample_size=1,
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
         distribution_summary=(
-            "Illustrative example calibration authored with this changeset "
-            "(CHAOS-3302), demonstrating the approved-launch path end to "
-            "end. Not derived from a production distribution; a real "
-            "review with a representative sample is required before this "
-            "rule observes live traffic."
+            "Illustrative example rule authored with this changeset "
+            "(CHAOS-3302) to demonstrate the registry/evaluation "
+            "mechanism. Never observed production traffic and has not "
+            "been through review; shipping it as anything other than "
+            "provisional would be an unreviewed rule claiming reviewed "
+            "authority."
         ),
-        false_positive_review=(
-            "Not applicable -- illustrative example, no production traffic "
-            "observed yet."
-        ),
-        false_negative_review=(
-            "Not applicable -- illustrative example, no production traffic "
-            "observed yet."
-        ),
+        false_positive_review=_NOT_YET_FP_FN_REVIEWED,
+        false_negative_review=_NOT_YET_FP_FN_REVIEWED,
         small_cohort_behavior=(
-            "minimum_cohort_size=5 suppresses to unknown below that floor; "
-            "verified by test_negative_cohort_below_minimum_suppresses_finding."
+            "minimum_cohort_size=5 suppresses to unknown below that floor "
+            "(mechanism verified against a test-scoped registry -- see "
+            "test_negative_cohort_below_minimum_suppresses_finding)."
         ),
         owner=_OWNER,
         decided_at=_DECIDED_AT,
-        evidence_ref="health_rule_calibration.completion_stalled.v1",
-        notes="Demo/example rule -- see module docstring.",
+        evidence_ref=None,
+        notes="Illustrative example rule -- see module docstring. Never launch-authorized.",
     ),
     CalibrationRecord(
         schema_version="health_rule_calibration.v1",
         calibration_id="health_rule_calibration.review_latency_sustained.v1",
         rule_id="health_rule.review_latency_sustained.v1",
         rule_version="health_rule.review_latency_sustained.v1",
-        calibration_state=CalibrationState.PRODUCT_APPROVED,
-        sample_size=1,
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
         distribution_summary=(
-            "Illustrative example calibration authored with this changeset "
+            "Illustrative example rule authored with this changeset "
             "(CHAOS-3302); see health_rule_calibration.completion_stalled.v1."
         ),
-        false_positive_review=(
-            "Not applicable -- illustrative example, no production traffic "
-            "observed yet."
-        ),
-        false_negative_review=(
-            "Not applicable -- illustrative example, no production traffic "
-            "observed yet."
-        ),
+        false_positive_review=_NOT_YET_FP_FN_REVIEWED,
+        false_negative_review=_NOT_YET_FP_FN_REVIEWED,
         small_cohort_behavior=(
             "minimum_cohort_size=5 suppresses to unknown below that floor."
         ),
         owner=_OWNER,
         decided_at=_DECIDED_AT,
-        evidence_ref="health_rule_calibration.review_latency_sustained.v1",
-        notes="Demo/example rule -- see module docstring.",
+        evidence_ref=None,
+        notes="Illustrative example rule -- see module docstring. Never launch-authorized.",
     ),
     CalibrationRecord(
         schema_version="health_rule_calibration.v1",
         calibration_id="health_rule_calibration.data_trust_broken.v1",
         rule_id="health_rule.data_trust_broken.v1",
         rule_version="health_rule.data_trust_broken.v1",
-        calibration_state=CalibrationState.PRODUCT_APPROVED,
-        sample_size=1,
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
         distribution_summary=(
-            "Illustrative example calibration authored with this changeset "
-            "(CHAOS-3302); a deterministic condition (source health broken), "
-            "not a statistical threshold, so no distribution applies."
+            "Illustrative example rule authored with this changeset "
+            "(CHAOS-3302); a deterministic condition (source health "
+            "broken), not a statistical threshold, so no distribution "
+            "applies. Never observed production traffic and has not been "
+            "through review."
         ),
         false_positive_review="Deterministic condition; no statistical FP rate applies.",
         false_negative_review="Deterministic condition; no statistical FN rate applies.",
         small_cohort_behavior="minimum_cohort_size=1 (portfolio/team/project all eligible).",
         owner=_OWNER,
         decided_at=_DECIDED_AT,
-        evidence_ref="health_rule_calibration.data_trust_broken.v1",
-        notes="Demo/example rule -- see module docstring.",
+        evidence_ref=None,
+        notes="Illustrative example rule -- see module docstring. Never launch-authorized.",
     ),
 )

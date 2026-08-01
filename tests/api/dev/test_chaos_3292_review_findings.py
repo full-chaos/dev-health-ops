@@ -292,6 +292,25 @@ async def test_the_committed_subject_prompt_is_only_used_when_one_is_committed()
 
 
 @pytest.mark.asyncio
+async def test_an_unresolved_bare_name_run_keeps_the_v1_prompt() -> None:
+    """Widening to organization scope commits a scope, not a subject.
+
+    Claiming "resolution is already complete" there would be the same false
+    statement the v1/v2 prompt split exists to prevent.
+    """
+
+    output = await run_preflight_orchestrator(
+        question="How is Nightfall doing?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script_id="prompt-bare",
+    )
+    assert output.provider is not None
+    system_text = output.provider.system_texts[0]
+    assert '"prompt_version":"' + LEGACY_PROMPT_VERSION in system_text
+    assert "named_entity_resolution" in system_text
+
+
+@pytest.mark.asyncio
 async def test_a_flag_off_run_keeps_the_v1_prompt() -> None:
     output = await run_preflight_orchestrator(
         question="What's the status of the Ask Dev project?",
@@ -373,3 +392,179 @@ async def test_a_whole_word_span_from_the_question_is_still_accepted() -> None:
 
 def _unused(value: Any) -> None:  # pragma: no cover - keeps Any import honest
     del value
+
+
+# ---------------------------------------------------------------------------
+# Restricted verification round: three defects reproduced by execution probes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_unresolved_bare_name_never_executes_under_the_page_subject() -> None:
+    """The first regression asserted the *diagnostic*, which was a false pass.
+
+    Proceeding without a commit left the run holding the page's project scope,
+    so ``status_snapshot.v1`` executed against Ask Dev while the user had asked
+    about Nightfall — the same misattribution, one layer down. This asserts the
+    scope the tool actually received.
+    """
+
+    project_ref = {
+        "entity_type": "project",
+        "entity_id": ASK_DEV_PROJECT.canonical_id,
+        "display_label": ASK_DEV_PROJECT.label,
+        "repository_id": None,
+    }
+    output = await run_preflight_orchestrator(
+        question="How is Nightfall doing?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        scope_overrides={"direct_scope": "project", "entity_refs": [project_ref]},
+        script_id="page-subject",
+    )
+
+    assert output.calls, "the run must reach a tool for this to prove anything"
+    for request in output.calls:
+        assert request.scope.direct_scope is DirectScope.ORGANIZATION
+        assert ASK_DEV_PROJECT.canonical_id not in [
+            ref.entity_id for ref in request.scope.entity_refs
+        ]
+        assert ASK_DEV_PROJECT.canonical_id not in request.scope.repositories
+
+
+@pytest.mark.asyncio
+async def test_a_page_scoped_run_with_a_resolvable_name_still_commits_that_name() -> (
+    None
+):
+    """Anti-vacuity: the page subject is stripped only when nothing resolved."""
+
+    project_ref = {
+        "entity_type": "project",
+        "entity_id": ASK_DEV_PROJECT.canonical_id,
+        "display_label": ASK_DEV_PROJECT.label,
+        "repository_id": None,
+    }
+    output = await run_preflight_orchestrator(
+        question="How is Nightfall doing?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, NIGHTFALL_PROJECT)],
+        scope_overrides={"direct_scope": "project", "entity_refs": [project_ref]},
+        script_id="page-subject-ok",
+    )
+
+    assert [ref.entity_id for ref in output.calls[0].scope.entity_refs] == [
+        NIGHTFALL_PROJECT.canonical_id
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_answer_narrating_an_unresolved_bare_name_is_terminated() -> None:
+    """The re-armed backstop must be able to *see* a bare name.
+
+    ``_named_entity_phrases`` only recognizes a name adjacent to an entity
+    noun, so re-arming it for a bare name was inert: a grounded answer
+    narrating "Nightfall" completed with zero guard reasons.
+    """
+
+    from dev_health_ops.llm.agent.contracts import AgentFinalAnswer
+    from dev_health_ops.llm.agent.scripted import ScriptedStep
+    from tests._chaos_3292_preflight import (
+        grounded_answer_payload,
+        scope_dict,
+        status_then_answer,
+    )
+
+    def narrating(script_id: str) -> list[ScriptedStep]:
+        steps = status_then_answer(script_id)
+        steps[-1] = ScriptedStep(
+            decision=AgentFinalAnswer(
+                grounded_answer_payload(
+                    script_id=script_id,
+                    summary="Nightfall completed twelve work items this period.",
+                    validity_scope=scope_dict(),
+                )
+            )
+        )
+        return steps
+
+    output = await run_preflight_orchestrator(
+        question="How is Nightfall doing?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script=narrating,
+        script_id="narrate-bare",
+    )
+
+    assert output.result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert output.result.error is not None
+    assert output.result.error.code == "insufficient_evidence"
+
+
+@pytest.mark.asyncio
+async def test_an_answer_that_does_not_narrate_the_bare_name_is_kept() -> None:
+    """Anti-vacuity for the clause above: it must not terminate everything."""
+
+    from dev_health_ops.llm.agent.contracts import AgentFinalAnswer
+    from dev_health_ops.llm.agent.scripted import ScriptedStep
+    from tests._chaos_3292_preflight import (
+        grounded_answer_payload,
+        scope_dict,
+        status_then_answer,
+    )
+
+    def quiet(script_id: str) -> list[ScriptedStep]:
+        steps = status_then_answer(script_id)
+        steps[-1] = ScriptedStep(
+            decision=AgentFinalAnswer(
+                grounded_answer_payload(
+                    script_id=script_id,
+                    summary="Twelve work items completed across the organization.",
+                    validity_scope=scope_dict(),
+                )
+            )
+        )
+        return steps
+
+    output = await run_preflight_orchestrator(
+        question="How is Nightfall doing?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script=quiet,
+        script_id="quiet-bare",
+    )
+
+    assert output.result.state is RunState.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_an_exact_label_beyond_the_candidate_page_still_commits() -> None:
+    """A bounded fuzzy search can push the exact target off the page.
+
+    ``scope_catalog`` orders by label and applies ``LIMIT`` in SQL, so with
+    more than ``MAX_CANDIDATES`` substring matches sorted ahead of it, the
+    exactly-named project never reaches the caller — and a legitimate run died
+    ``scope_ambiguous`` having executed nothing.
+    """
+
+    from dev_health_ops.api.dev.scope_service import MAX_CANDIDATES, AuthorizedEntity
+
+    crowd = [
+        (
+            ORG_ID,
+            AuthorizedEntity(
+                EntityKind.PROJECT,
+                f"project-dev-{index:02d}",
+                # Sorts *ahead* of the bare "Dev" label, so the LIMIT
+                # drops the exact target rather than the crowd.
+                f"Adjacent Dev {index:02d}",
+            ),
+        )
+        for index in range(MAX_CANDIDATES + 5)
+    ]
+    exact = AuthorizedEntity(EntityKind.PROJECT, "project-dev-exact", "Dev")
+
+    service = ScopeResolutionService(
+        SeededCatalog([*crowd, (ORG_ID, exact)]), cache=ScopeRequestCache()
+    )
+    resolution = await service.resolve_mention(
+        ORG_ID, "permissions_01", lookup_text="Dev", kinds=(EntityKind.PROJECT,)
+    )
+
+    assert resolution.outcome is ResolutionOutcome.EXACT_MATCH
+    assert resolution.entity == exact

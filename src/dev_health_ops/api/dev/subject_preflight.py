@@ -22,7 +22,12 @@ What this module never does
 ---------------------------
 
 * It never constructs ``FORBIDDEN_OR_NOT_FOUND`` — see ``preflight_outcomes``.
-* It never falls back to organization scope for an unresolved named subject.
+* It never answers about one entity under another's name. A *typed* named
+  subject that does not resolve terminates the run. A **bare** name — one the
+  kind-noun grammar could not type, which may not be a subject at all — widens
+  the run to organization scope instead, precisely so a page-derived subject
+  cannot be narrated as the named one, and re-arms the legacy backstop to catch
+  an answer that narrates the name anyway.
 * It never lets a later resolution erase an earlier unresolved one: every
   update appends to the ledger and is checked with ``validate_ledger_extends``.
 """
@@ -36,7 +41,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from .contracts import DevContractVersions, DevScope, DevScopeResolution, ToolID
+from .contracts import (
+    DevContractVersions,
+    DevScope,
+    DevScopeResolution,
+    DirectScope,
+    ScopeResolutionOutcome,
+    ToolID,
+)
 from .contracts_v2 import (
     DevAnswerV2,
     DevEntityRefV2,
@@ -126,6 +138,22 @@ class SubjectPreflightResult:
     #: re-armed as terminal for it: that check judges the model's own answer
     #: text, so it fires only if the answer actually narrates the name.
     legacy_guard_required: bool = False
+    #: The normalized bare names that went unresolved. The legacy backstop's own
+    #: grammar only recognizes a name adjacent to an entity noun, so without
+    #: these it cannot see the very names re-arming it is meant to guard.
+    unresolved_name_spans: frozenset[str] = frozenset()
+
+    @property
+    def has_committed_subject(self) -> bool:
+        """Whether a *named subject* was committed, not merely a scope.
+
+        The unresolved-bare-name path commits an organization scope to strip a
+        page-derived subject, which is a scope but emphatically not a subject:
+        telling the model "resolution is already complete" there would be the
+        same false claim the v1/v2 prompt split exists to prevent.
+        """
+
+        return self.committed_resolution is not None and not self.legacy_guard_required
 
     @property
     def all_subjects_committed(self) -> bool:
@@ -308,16 +336,35 @@ class SubjectPreflight:
             # — with the legacy backstop re-armed as terminal, which judges the
             # model's own answer text and so fires only if the answer actually
             # narrates the unresolved name.
+            #
+            # It must continue **organization-wide specifically**. Simply not
+            # committing anything leaves the run holding whatever scope it
+            # arrived with, and on a page-scoped request that is a concrete
+            # subject: "How is Nightfall doing?" asked from an Ask Dev page
+            # would execute status against Ask Dev and answer under the name
+            # Nightfall — the same misattribution one layer down. Widening to
+            # the organization is not a privilege change (the org is the
+            # authenticated tenant, and every native query is bound by org_id
+            # anyway); it removes the specific entity that would otherwise be
+            # silently narrated as the named one.
             return SubjectPreflightResult(
                 decision=PreflightDecision.PROCEED,
                 interpretation=interpretation,
                 ledger=ledger,
-                committed_resolution=None,
+                committed_resolution=self._organization_resolution(
+                    authorized_scope, resolved_at=generated_at
+                ),
                 answer=None,
                 outcome=None,
                 allowed_tools=ALL_TOOLS,
                 blocking_mention_ids=blocking_ids,
                 legacy_guard_required=True,
+                unresolved_name_spans=frozenset(
+                    mention.normalized_lookup_text
+                    for mention in mentions
+                    if mention.mention_id in untyped_ids
+                    and latest[mention.mention_id].outcome in UNRESOLVED_OUTCOMES
+                ),
                 diagnostic="proceeded_unresolved_bare_name",
             )
 
@@ -387,6 +434,41 @@ class SubjectPreflight:
         )
 
     # -- construction helpers -------------------------------------------------
+
+    @staticmethod
+    def _organization_resolution(
+        authorized_scope: DevScope, *, resolved_at: datetime
+    ) -> DevScopeResolution:
+        """The run's own organization, with any page-derived subject removed.
+
+        Keeps the request's time window (the question is still about that
+        period) and drops the entity refs, repositories, team filters and
+        surface context that name a specific subject.
+        """
+
+        scope = DevScope(
+            schema_version="dev_scope.v1",
+            organization_id=authorized_scope.organization_id,
+            direct_scope=DirectScope.ORGANIZATION,
+            repositories=[],
+            entity_refs=[],
+            team_ids=[],
+            time_range=authorized_scope.time_range,
+            comparison_range=authorized_scope.comparison_range,
+            surface_context=None,
+        )
+        return DevScopeResolution(
+            schema_version="dev_scope_resolution.v1",
+            requested_scope=authorized_scope,
+            resolved_scope=scope,
+            outcome=ScopeResolutionOutcome.ORGANIZATION_FALLBACK,
+            authorized_repository_ids=[],
+            authorized_entity_ids=[],
+            candidates=[],
+            fallbacks=["organization"],
+            warnings=[],
+            resolved_at=resolved_at,
+        )
 
     @staticmethod
     def _context_ref_ids(request) -> frozenset[str]:

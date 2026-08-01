@@ -129,7 +129,7 @@ class SeededCatalog:
         if self.fail_search:
             raise RuntimeError("catalog unavailable")
         needle = query.casefold()
-        return [
+        matched = [
             entity
             for owner, entity in self.entities
             if owner == org_id
@@ -138,7 +138,12 @@ class SeededCatalog:
                 needle == entity.canonical_id.casefold()
                 or needle in entity.label.casefold()
             )
-        ][:limit]
+        ]
+        # ORDER BY lowerUTF8(label), canonical_id ... LIMIT n — the ordering and
+        # the truncation both happen in SQL, so an exact label sorted past the
+        # page boundary never reaches the caller at all.
+        matched.sort(key=lambda entity: (entity.label.casefold(), entity.canonical_id))
+        return matched[:limit]
 
     async def organization_repository_ids(
         self, org_id: str, *, limit: int
@@ -237,6 +242,31 @@ def answer_payload(*, script_id: str) -> dict[str, Any]:
 
     payload = deepcopy(positive_fixtures()["dev_answer.v1"])
     payload["claims"] = []
+    payload["model"] = {
+        "provider_source": "platform",
+        "provider_family": "scripted",
+        "model_fingerprint": hashlib.sha256(script_id.encode()).hexdigest()[:24],
+    }
+    return payload
+
+
+def grounded_answer_payload(
+    *, script_id: str, summary: str, validity_scope: dict[str, Any]
+) -> dict[str, Any]:
+    """An evidence-backed answer that narrates ``summary``.
+
+    Keeping the fixture's claim (and re-pointing its ``validity_scope`` at the
+    run's own scope) is what makes the CHAOS-3289 narration clause reachable:
+    the claim-count clause short-circuits before it on a claim-free answer, so
+    a claim-free fixture cannot exercise fabricated narration at all.
+    """
+
+    import hashlib
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["direct_summary"] = summary
+    payload["claims"][0]["text"] = summary
+    payload["claims"][0]["validity_scope"] = deepcopy(validity_scope)
     payload["model"] = {
         "provider_source": "platform",
         "provider_family": "scripted",

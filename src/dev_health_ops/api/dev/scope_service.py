@@ -619,26 +619,28 @@ class ScopeResolutionService:
                 allowed_kinds=SEARCHABLE_ENTITY_KINDS,
             )
         )
-        refs = (
-            tuple(ScopeRef(kind, lookup_text[:512]) for kind in ordered_kinds)
-            if exact
-            else ()
-        )
+        refs = tuple(ScopeRef(kind, lookup_text[:512]) for kind in ordered_kinds)
         try:
-            if search_request is not None:
+            watermark = await self._catalog.watermark(org_id, ordered_kinds)
+            # Exact first, always. The catalog's fuzzy query orders by label and
+            # applies its LIMIT in SQL, so with more than MAX_CANDIDATES
+            # substring matches sorted ahead of it the exactly-named entity
+            # never reaches this code at all — and a legitimate question died
+            # ambiguous with the one thing the user actually named missing from
+            # the candidate list. ``exact()`` matches id or label equality and
+            # is not subject to that page boundary.
+            matches: list[AuthorizedEntity] = []
+            for ref in refs:
+                matches.extend(
+                    await self._catalog.exact(org_id, ref, limit=MAX_CANDIDATES)
+                )
+            candidates = _dedupe_entities(matches)[:MAX_CANDIDATES]
+            if not candidates and search_request is not None:
                 result = await self.search(
                     org_id, permission_fingerprint, search_request
                 )
                 candidates = result.candidates
                 watermark = result.catalog_watermark
-            else:
-                watermark = await self._catalog.watermark(org_id, ordered_kinds)
-                matches: list[AuthorizedEntity] = []
-                for ref in refs:
-                    matches.extend(
-                        await self._catalog.exact(org_id, ref, limit=MAX_CANDIDATES)
-                    )
-                candidates = _dedupe_entities(matches)[:MAX_CANDIDATES]
         except Exception:
             return MentionResolution(
                 outcome=ResolutionOutcome.CATALOG_UNAVAILABLE,

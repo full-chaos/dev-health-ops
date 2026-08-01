@@ -58,11 +58,17 @@ A subject is recognized two ways. A name beside a kind noun ("the Ask Dev
 project", "project Ask Dev") is typed directly. A bare name with no such noun
 ("How is Nightfall doing?") is still recognized, and is resolved across every
 searchable kind — but because we cannot be sure a bare capitalized word was a
-subject at all, failing to resolve one does **not** stop the run. It falls back
-to today's behaviour: an organization-wide answer with the previous
-named-entity backstop re-armed, which compares the name against the model's own
-answer text and stops only an answer that actually narrates it. "What is our
-DORA score?" therefore still answers normally.
+subject at all, failing to resolve one does **not** stop the run. Instead the
+run widens to organization scope and the previous named-entity backstop is
+re-armed, comparing the name against the model's own answer text and stopping
+only an answer that actually narrates it. "What is our DORA score?" therefore
+still answers normally.
+
+The widening is the load-bearing part. Asked from a project page, "How is
+Nightfall doing?" would otherwise keep that page's project as its scope and
+report *its* numbers under the name Nightfall — the same misattribution, one
+layer down. Dropping the page subject removes the entity that could be
+mislabelled.
 
 Page context is used as the subject only when the question named nothing at
 all, including nothing we merely failed to type. Substituting the page's
@@ -90,9 +96,12 @@ never falls back to organization scope.
 Each mention resolves to exactly one of five outcomes: an exact match,
 ambiguous candidates, no authorized match, a temporarily unavailable catalog,
 or an unsupported kind. Committing requires the name to **equal** an entity's
-label or identifier: the catalog's text search matches substrings, so a sole
-result for a partial name ("the Dev project") is offered back as a candidate
-rather than committed as though it were what you meant.
+label or identifier, and that equality lookup runs first, before the bounded
+substring search: the substring query orders by label and truncates in SQL, so
+an exactly-named entity can otherwise fall off the end of a crowded result page
+and never be considered. A sole substring result for a partial name ("the Dev
+project") is offered back as a candidate rather than committed as though it
+were what you meant.
 
 Every catalog query is filtered by organization in
 SQL, so an entity belonging to another tenant is simply absent — it reads as

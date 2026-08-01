@@ -736,7 +736,7 @@ class DevOrchestrator:
                         allowed_tools=allowed_tools,
                         subject_committed=(
                             preflight_result is not None
-                            and preflight_result.committed_resolution is not None
+                            and preflight_result.has_committed_subject
                         ),
                     )
                 except ValueError as exc:
@@ -1193,6 +1193,11 @@ class DevOrchestrator:
                         resolve_scope_attempted=resolve_scope_attempted,
                         last_resolve_scope_outcome=last_resolve_scope_outcome,
                         answer=answer,
+                        extra_named_phrases=(
+                            preflight_result.unresolved_name_spans
+                            if preflight_result is not None
+                            else frozenset()
+                        ),
                     )
                     if guard_reason is not None:
                         if preflight_result is not None and not (
@@ -1647,6 +1652,7 @@ class DevOrchestrator:
         resolve_scope_attempted: bool,
         last_resolve_scope_outcome: ScopeResolutionOutcome | None,
         answer: DevAnswer,
+        extra_named_phrases: frozenset[str] = frozenset(),
     ) -> str | None:
         """CHAOS-3289: a status answer must never narrate a named entity that
         was never confirmed to exist.
@@ -1703,7 +1709,14 @@ class DevOrchestrator:
         if not resolve_scope_attempted:
             if not answer.claims:
                 return "no_evidence_backed_claims"
-            named_phrases = _named_entity_phrases(question)
+            # The legacy grammar only recognizes a name adjacent to an entity
+            # noun ("the X project"), so it is blind to a bare "X" — exactly
+            # the shape the preflight re-arms it for. The preflight's own
+            # unresolved spans are supplied here so the narration check can
+            # actually see them (CHAOS-3292).
+            named_phrases = _named_entity_phrases(question) | frozenset(
+                phrase.casefold() for phrase in extra_named_phrases
+            )
             if named_phrases:
                 narrated_texts = (
                     answer.direct_summary,

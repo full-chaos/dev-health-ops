@@ -10,13 +10,15 @@ discipline already used by ``contracts_v2.validators``
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
+from types import MappingProxyType
 
 import pytest
 from pydantic import ValidationError
 
-from dev_health_ops.api.dev.contracts_v2.base import SourceRequirementState
+from dev_health_ops.api.dev.contracts_v2.base import SourceClass, SourceRequirementState
 from dev_health_ops.api.dev.contracts_v2.health_rules import (
+    CalibrationRecord,
     CalibrationState,
     DimensionObservation,
     DimensionState,
@@ -30,7 +32,9 @@ from dev_health_ops.api.dev.health_rule_registry import (
     HEALTH_RULE_REGISTRY,
     DuplicateRuleError,
     HealthRuleRegistry,
+    InvalidCalibrationEvidenceError,
     InvalidRuleIDError,
+    evaluate_registry,
     evaluate_rule,
     qualify_team_needs_attention,
 )
@@ -179,6 +183,110 @@ def test_registry_construction_rejects_model_copy_invalid_rule() -> None:
     assert forged.calibration_evidence_ref is None
     with pytest.raises(ValidationError):
         HealthRuleRegistry((forged,))
+
+
+def test_evaluate_registry_does_not_accept_a_registry_argument() -> None:
+    """Codex finding (high, round 3): ``evaluate_registry`` previously took
+
+    an arbitrary caller-supplied ``HealthRuleRegistry`` -- exactly the
+    authority-forging vector the round-3 repro exploited (a second
+    registry, normally constructed, whose rules assert reviewed authority).
+    The production seam must be hard-bound to ``HEALTH_RULE_REGISTRY`` and
+    therefore must not accept a registry positional argument at all; a
+    caller that passes one gets a ``TypeError`` from Python's own call
+    binding, not a chance to substitute the registry.
+    """
+
+    with pytest.raises(TypeError):
+        evaluate_registry(HEALTH_RULE_REGISTRY, {}, org_id="org-1")  # type: ignore[misc,arg-type]
+
+
+def test_registry_rules_attribute_cannot_be_rebound() -> None:
+    """Codex finding (high, round 3): ``MappingProxyType`` blocks item
+
+    assignment on ``self._rules`` but not *rebinding* the attribute itself
+    to a whole new mapping -- ``HEALTH_RULE_REGISTRY._rules =
+    MappingProxyType({...})`` previously succeeded and replaced a shipped
+    provisional rule with a forged product_approved one. The registry's own
+    ``__setattr__`` must reject any attribute assignment once construction
+    has finished.
+    """
+
+    rule_id = next(iter(HEALTH_RULE_REGISTRY))
+    forged = HEALTH_RULE_REGISTRY.rule(rule_id).model_copy(
+        update={
+            "calibration_state": CalibrationState.PRODUCT_APPROVED,
+            "calibration_evidence_ref": "forged-evidence-ref",
+        }
+    )
+    with pytest.raises(AttributeError):
+        HEALTH_RULE_REGISTRY._rules = MappingProxyType({rule_id: forged})
+    assert (
+        HEALTH_RULE_REGISTRY.rule(rule_id).calibration_state
+        == CalibrationState.PROVISIONAL
+    )
+
+
+def test_registry_construction_rejects_reviewed_rule_without_matching_calibration_record() -> (
+    None
+):
+    """Codex finding (high, round 3): a structurally-valid non-empty
+
+    ``calibration_evidence_ref`` is not the same claim as "this rule was
+    actually reviewed" -- a caller previously could construct a second
+    registry asserting ``product_approved`` with any string as evidence,
+    and it passed construction (``evaluate_registry`` then emitted a
+    launch finding on that authority). When a calibration inventory is
+    supplied, a reviewed rule's evidence must resolve against it, not
+    merely be present.
+    """
+
+    claimed_reviewed = _rebuild(
+        _RULE,
+        calibration_state=CalibrationState.PRODUCT_APPROVED,
+        calibration_evidence_ref="not-a-real-calibration-record",
+    )
+    with pytest.raises(InvalidCalibrationEvidenceError):
+        HealthRuleRegistry((claimed_reviewed,), calibration_records={})
+
+
+def test_registry_construction_accepts_reviewed_rule_with_matching_calibration_record() -> (
+    None
+):
+    """The positive case: a rule whose evidence_ref resolves to a genuinely
+
+    reviewed record (itself non-provisional, with its own evidence_ref) in
+    the supplied inventory constructs cleanly.
+    """
+
+    claimed_reviewed = _rebuild(
+        _RULE,
+        calibration_state=CalibrationState.PRODUCT_APPROVED,
+        calibration_evidence_ref="health_rule_calibration.test_fixture.v1",
+    )
+    record = CalibrationRecord(
+        schema_version="health_rule_calibration.v1",
+        calibration_id="health_rule_calibration.test_fixture.v1",
+        rule_id=claimed_reviewed.rule_id,
+        rule_version=claimed_reviewed.rule_version,
+        calibration_state=CalibrationState.PRODUCT_APPROVED,
+        sample_size=500,
+        distribution_summary="test fixture",
+        false_positive_review="test fixture",
+        false_negative_review="test fixture",
+        small_cohort_behavior="test fixture",
+        owner="test-owner",
+        decided_at=date(2026, 8, 1),
+        evidence_ref="doc:real-review",
+        notes=None,
+    )
+    registry = HealthRuleRegistry(
+        (claimed_reviewed,), calibration_records={record.calibration_id: record}
+    )
+    assert (
+        registry.rule(claimed_reviewed.rule_id).calibration_state
+        == CalibrationState.PRODUCT_APPROVED
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +590,33 @@ def test_finding_id_scoped_to_cohort_size() -> None:
     assert small_cohort.finding_id != large_cohort.finding_id
 
 
+def test_finding_id_deterministic_across_equivalent_utc_offsets() -> None:
+    """Codex finding (medium, round 3): ``AwareDatetime.isoformat()``
+
+    preserves the caller's own offset, so two equal instants expressed
+    with different offsets (UTC vs. -07:00) previously minted two
+    different finding ids -- a genuine identity failure, since the
+    contract promises the same rule/subject/window always mints the same
+    id. Normalizing to UTC before minting fixes this.
+    """
+
+    utc_time = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+    offset_time = datetime(2026, 8, 1, 5, 0, tzinfo=timezone(timedelta(hours=-7)))
+    assert utc_time == offset_time  # same instant, different representation
+
+    finding_utc = evaluate_rule(
+        _RULE,
+        _windows(_RULE.sustained_periods_required, observed_at=utc_time),
+        org_id=_ORG_ID,
+    )
+    finding_offset = evaluate_rule(
+        _RULE,
+        _windows(_RULE.sustained_periods_required, observed_at=offset_time),
+        org_id=_ORG_ID,
+    )
+    assert finding_utc.finding_id == finding_offset.finding_id
+
+
 # ---------------------------------------------------------------------------
 # qualify_team_needs_attention -- clause-level
 # ---------------------------------------------------------------------------
@@ -578,8 +713,6 @@ def test_qualify_team_evaluated_at_excludes_shadow_findings() -> None:
     make stale launch evidence appear current.
     """
 
-    from datetime import timedelta
-
     launch_only_at = _NOW
     later_shadow_at = _NOW + timedelta(days=30)
 
@@ -596,6 +729,62 @@ def test_qualify_team_evaluated_at_excludes_shadow_findings() -> None:
     result = qualify_team_needs_attention((launch_finding, shadow_finding), team_id="t")
     assert result.evaluated_at == launch_only_at
     assert result.evaluated_at != later_shadow_at
+
+
+def test_qualify_team_ignores_forged_shadow_only_via_model_copy() -> None:
+    """Codex finding (high, round 3): starting from a genuine provisional
+
+    shadow finding, ``model_copy(update={"shadow_only": False})`` bypasses
+    every validator and produces a finding reporting
+    ``calibration_state=provisional, shadow_only=False``. Qualification
+    must not be fooled by the forged flag -- it derives launch eligibility
+    from ``calibration_state`` alone.
+    """
+
+    genuine_shadow = _finding(
+        dimension=HealthDimension.EXECUTION_COMPLETION,
+        state=DimensionState.CRITICAL,
+        shadow_only=True,
+        calibration_state=CalibrationState.PROVISIONAL,
+    )
+    forged = genuine_shadow.model_copy(update={"shadow_only": False})
+    assert forged.shadow_only is False
+    assert forged.calibration_state == CalibrationState.PROVISIONAL
+
+    result = qualify_team_needs_attention((forged,), team_id="t")
+    assert result.qualifies is False
+
+
+def test_qualify_team_ignores_forged_shadow_only_via_model_construct() -> None:
+    """Codex finding (high, round 3): ``model_construct`` bypasses every
+
+    validator even more directly than ``model_copy`` (it does not require
+    starting from a valid instance at all) and can produce
+    ``calibration_state=provisional, shadow_only=False`` from scratch.
+    """
+
+    forged = HealthRuleFinding.model_construct(
+        schema_version="health_rule_finding.v1",
+        finding_id="00000000-0000-0000-0000-000000000000",
+        rule_id=_RULE.rule_id,
+        rule_version=_RULE.rule_version,
+        dimension=HealthDimension.EXECUTION_COMPLETION,
+        subject_kind=RuleApplicability.TEAM,
+        subject_id="team-1",
+        state=DimensionState.CRITICAL,
+        fact_kind="observed",
+        shadow_only=False,
+        evidence_source_classes=(SourceClass.WORK_ITEM,),
+        remediation_template="x",
+        calibration_state=CalibrationState.PROVISIONAL,
+        evaluated_at=_NOW,
+        suppressed_reason=None,
+    )
+    assert forged.shadow_only is False
+    assert forged.calibration_state == CalibrationState.PROVISIONAL
+
+    result = qualify_team_needs_attention((forged,), team_id="t")
+    assert result.qualifies is False
 
 
 def test_suppressed_finding_cannot_be_constructed_as_critical() -> None:

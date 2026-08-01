@@ -33,6 +33,7 @@ from types import MappingProxyType
 
 from .contracts_v2.base import SourceClass, SourceRequirementState
 from .contracts_v2.health_rules import (
+    CalibrationRecord,
     CalibrationState,
     DimensionObservation,
     DimensionState,
@@ -44,6 +45,7 @@ from .contracts_v2.health_rules import (
     TeamQualificationBasis,
     TeamQualificationResult,
 )
+from .health_rule_calibration_inventory import CALIBRATION_RECORDS
 
 __all__ = [
     "HEALTH_RULE_REGISTRY",
@@ -52,6 +54,7 @@ __all__ = [
     "HealthRuleEvaluationResult",
     "HealthRuleRegistry",
     "HealthRuleRegistryError",
+    "InvalidCalibrationEvidenceError",
     "InvalidRuleIDError",
     "UnknownRuleError",
     "evaluate_registry",
@@ -83,6 +86,16 @@ class InvalidRuleIDError(HealthRuleRegistryError):
 
 class UnknownRuleError(HealthRuleRegistryError):
     pass
+
+
+class InvalidCalibrationEvidenceError(HealthRuleRegistryError):
+    """A rule claims reviewed authority its evidence does not back.
+
+    Raised when a rule's ``calibration_state`` is a reviewed state (not
+    ``provisional``) but its ``calibration_evidence_ref`` does not resolve
+    to a genuinely reviewed ``CalibrationRecord`` for that same rule --
+    see ``_resolves_against_inventory``.
+    """
 
 
 def rule_version_fingerprint(rule: HealthRuleDefinition) -> str:
@@ -137,8 +150,22 @@ def _mint_finding_id(
     identity: without them, two evaluations of the same subject at the same
     timestamp but over different cohorts (e.g. cohort_size=1 vs. 99) minted
     the identical finding id.
+
+    ``observed_at`` is normalized to UTC with fixed microsecond precision
+    before formatting (Codex-confirmed finding, 2026-08-01, round 3):
+    ``AwareDatetime.isoformat()`` preserves whatever offset the caller's
+    value carried, so ``2026-08-01T12:00:00Z`` and its equal instant
+    ``2026-08-01T05:00:00-07:00`` produced two different UUID5 values --
+    a genuine identity failure, not merely a formatting quirk, since the
+    finding-id contract promises the same rule/subject/window always mints
+    the same id. Converting to UTC (and forcing an explicit microseconds
+    field, present or not) makes two equal instants always render the
+    identical string regardless of the offset a caller happened to supply.
     """
 
+    normalized_observed_at = observation.observed_at.astimezone(UTC).isoformat(
+        timespec="microseconds"
+    )
     payload = "|".join(
         (
             org_id,
@@ -148,16 +175,78 @@ def _mint_finding_id(
             observation.subject_id,
             str(observation.cohort_size),
             str(observation.window_index),
-            observation.observed_at.isoformat(),
+            normalized_observed_at,
         )
     )
     return str(uuid.uuid5(_FINDING_ID_NAMESPACE, payload))
 
 
-class HealthRuleRegistry:
-    """Exact allowlist of code-owned health rules, validated at construction."""
+def _resolves_against_inventory(
+    rule: HealthRuleDefinition, records: Mapping[str, CalibrationRecord]
+) -> bool:
+    """Does this rule's evidence resolve to a genuinely reviewed record?
 
-    def __init__(self, rules: Sequence[HealthRuleDefinition]) -> None:
+    A ``provisional`` rule cites no evidence and trivially resolves (there
+    is nothing to check). A reviewed rule's ``calibration_evidence_ref`` is
+    looked up by exact match against ``CalibrationRecord.calibration_id``
+    in ``records`` -- not merely checked for non-emptiness (Codex-confirmed
+    finding, 2026-08-01, round 3: "a normally valid second registry with
+    caller-asserted calibration evidence passed construction"). The
+    matched record must itself name the same rule and report a genuinely
+    reviewed ``calibration_state`` with its own ``evidence_ref`` present --
+    an unrelated record, or one that is itself still provisional, cannot
+    back a claim of review. Today every record in the shipped
+    ``health_rule_calibration_inventory`` is ``provisional`` with
+    ``evidence_ref=None`` (nothing has actually been reviewed yet), so this
+    makes it structurally impossible to ship a reviewed launch rule until a
+    real calibration decision exists to cite.
+    """
+
+    if rule.calibration_state == CalibrationState.PROVISIONAL:
+        return True
+    ref = rule.calibration_evidence_ref
+    if ref is None:
+        return False
+    record = records.get(ref)
+    if record is None:
+        return False
+    return (
+        record.rule_id == rule.rule_id
+        and record.calibration_state != CalibrationState.PROVISIONAL
+        and record.evidence_ref is not None
+    )
+
+
+class HealthRuleRegistry:
+    """Exact allowlist of code-owned health rules, validated at construction.
+
+    Immutable after construction, not merely "immutable-shaped": every
+    attribute set is routed through ``__setattr__`` below, which raises
+    once construction finishes (Codex-confirmed finding, 2026-08-01, round
+    3 -- ``MappingProxyType`` blocks item assignment on ``self._rules``,
+    but not *rebinding* ``self._rules`` itself to a whole new object;
+    ``HEALTH_RULE_REGISTRY._rules = MappingProxyType({...})`` succeeded
+    against the round-2 fix). This is a same-process guard, not a security
+    boundary: code running in the same interpreter can still reach past it
+    with ``object.__setattr__`` directly -- that residual is accepted and
+    documented (see this module's closure argument), not defended against,
+    because no Python-level guard can stop an attacker who already has
+    arbitrary code execution in-process.
+    """
+
+    #: Bare annotations, not class-level assignments -- both are actually
+    #: set via ``object.__setattr__`` in ``__init__`` (see there). Declared
+    #: here only so static type checking knows these instance attributes
+    #: exist.
+    _rules: Mapping[str, HealthRuleDefinition]
+    _initialized: bool
+
+    def __init__(
+        self,
+        rules: Sequence[HealthRuleDefinition],
+        *,
+        calibration_records: Mapping[str, CalibrationRecord] | None = None,
+    ) -> None:
         ids = [rule.rule_id for rule in rules]
         if len(ids) != len(set(ids)):
             duplicates = sorted({rule_id for rule_id in ids if ids.count(rule_id) > 1})
@@ -181,16 +270,52 @@ class HealthRuleRegistry:
             # ``__init__``. Round-tripping through ``model_validate`` forces
             # every validator to run again; a model-copy-invalid definition
             # is rejected here, not silently admitted.
-            validated[rule.rule_id] = HealthRuleDefinition.model_validate(
+            revalidated = HealthRuleDefinition.model_validate(
                 rule.model_dump(mode="json")
             )
+            # A structurally-valid non-empty evidence_ref is not the same
+            # claim as "this rule was actually reviewed" -- a caller can
+            # construct a whole second HealthRuleRegistry with a rule that
+            # asserts calibration_state=product_approved and any string for
+            # calibration_evidence_ref (round-3 Codex repro). When a
+            # calibration inventory is supplied, cross-check every reviewed
+            # rule's evidence against it instead of trusting the string.
+            # Registries that omit ``calibration_records`` (e.g. a
+            # deliberately test-scoped registry, see
+            # ``test_chaos_3302_health_rule_e2e_controls.py``) skip this
+            # cross-check and keep only the structural guarantee above --
+            # they were never claiming production authority in the first
+            # place.
+            if calibration_records is not None and not _resolves_against_inventory(
+                revalidated, calibration_records
+            ):
+                raise InvalidCalibrationEvidenceError(
+                    f"rule {revalidated.rule_id!r} claims calibration_state="
+                    f"{revalidated.calibration_state.value!r} but its "
+                    f"calibration_evidence_ref={revalidated.calibration_evidence_ref!r} "
+                    "does not resolve to a reviewed calibration record for "
+                    "this rule in the supplied inventory"
+                )
+            validated[revalidated.rule_id] = revalidated
         # An immutable mapping, not a plain dict: the only reference to the
         # underlying mutable dict is local to this constructor, so no
         # caller can reach in and replace a shipped rule post-construction
         # (e.g. ``registry._rules[rule_id] = mutated_rule``) to smuggle a
         # forged rule into the singleton after it has already passed the
-        # checks above.
-        self._rules: Mapping[str, HealthRuleDefinition] = MappingProxyType(validated)
+        # checks above. Set via ``object.__setattr__`` because this class's
+        # own ``__setattr__`` (below) forbids attribute assignment once
+        # ``_initialized`` is set -- this is the last write allowed.
+        object.__setattr__(self, "_rules", MappingProxyType(validated))
+        object.__setattr__(self, "_initialized", True)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if getattr(self, "_initialized", False):
+            raise AttributeError(
+                "HealthRuleRegistry is immutable after construction -- "
+                f"cannot set {name!r}. Construct a new HealthRuleRegistry "
+                "instead of mutating this one."
+            )
+        object.__setattr__(self, name, value)
 
     def rule(self, rule_id: str) -> HealthRuleDefinition:
         try:
@@ -363,12 +488,28 @@ class HealthRuleEvaluationResult:
     suppressed_findings: tuple[HealthRuleFinding, ...]
 
 
-def evaluate_registry(
+def _evaluate_with_registry(
     registry: HealthRuleRegistry,
     observations_by_rule: Mapping[str, Sequence[DimensionObservation]],
     *,
     org_id: str,
 ) -> HealthRuleEvaluationResult:
+    """Evaluate a batch of rules against an explicitly-supplied registry.
+
+    NOT the production evaluation seam -- see ``evaluate_registry`` below,
+    which is the only entry point production code should call. This
+    function accepts an arbitrary ``HealthRuleRegistry`` instance, which is
+    exactly the shape of the round-3 Codex repro: a caller can construct
+    any second registry, including one whose rules assert
+    ``calibration_state=product_approved`` with caller-chosen evidence, and
+    this function will happily treat its rules as launch-eligible. It
+    exists only so tests can prove the evaluation mechanism against a
+    registry defined entirely in test scope (see
+    ``test_chaos_3302_health_rule_e2e_controls.py``'s
+    ``_AUTHORIZED_TEST_REGISTRY``) without that test-only authority ever
+    being reachable from the production seam.
+    """
+
     launch: list[HealthRuleFinding] = []
     shadow: list[HealthRuleFinding] = []
     suppressed: list[HealthRuleFinding] = []
@@ -388,6 +529,27 @@ def evaluate_registry(
     )
 
 
+def evaluate_registry(
+    observations_by_rule: Mapping[str, Sequence[DimensionObservation]],
+    *,
+    org_id: str,
+) -> HealthRuleEvaluationResult:
+    """The production evaluation seam: hard-bound to ``HEALTH_RULE_REGISTRY``.
+
+    Deliberately takes no registry parameter (Codex-confirmed finding,
+    2026-08-01, round 3) -- a caller-supplied registry is exactly the
+    authority-forging vector this function must not offer. Every rule
+    consulted here is a member of the canonical, construction-validated,
+    inventory-cross-checked, rebind-resistant module singleton. A caller
+    that genuinely needs to evaluate against a different registry (tests
+    only) must say so explicitly by calling ``_evaluate_with_registry``.
+    """
+
+    return _evaluate_with_registry(
+        HEALTH_RULE_REGISTRY, observations_by_rule, org_id=org_id
+    )
+
+
 def qualify_team_needs_attention(
     findings: Sequence[HealthRuleFinding], *, team_id: str
 ) -> TeamQualificationResult:
@@ -398,20 +560,35 @@ def qualify_team_needs_attention(
     rule with required evidence and coverage. One metric, one bad week, one
     missing source, or one provisional threshold is insufficient."
 
-    Only non-shadow findings (already-launch findings; shadow/provisional
-    findings must never reach this contract) are considered. A finding
-    reaching this function with ``shadow_only=True`` is a caller defect --
-    ``evaluate_registry`` never places one in ``launch_findings`` -- so it
-    is filtered defensively rather than trusted silently.
+    Only launch-eligible findings (never shadow/provisional) are
+    considered. Launch eligibility is derived from ``calibration_state``,
+    never read off the ``shadow_only`` field (Codex-confirmed finding,
+    2026-08-01, round 3): ``shadow_only`` is a serialization convenience
+    that a normal ``HealthRuleFinding(...)`` construction already keeps
+    consistent with ``calibration_state`` (see
+    ``validate_shadow_only_matches_calibration_state``), but both
+    ``model_copy(update={"shadow_only": False})`` and
+    ``HealthRuleFinding.model_construct(...)`` bypass every validator and
+    can produce a finding reporting ``calibration_state=provisional,
+    shadow_only=False``. Trusting the redundant boolean at this trust
+    boundary let such a finding qualify a team. ``calibration_state`` is
+    the single field this function treats as ground truth; a finding
+    reaching this function with a calibration_state/shadow_only mismatch
+    is a caller defect regardless, but that mismatch no longer matters to
+    the decision made here.
     """
 
     # ``evaluated_at`` must be derived strictly from launch-authorized
-    # evidence -- filter shadow_only findings out FIRST, then aggregate.
+    # evidence -- filter non-launch findings out FIRST, then aggregate.
     # Aggregating over the unfiltered ``findings`` (Codex-confirmed finding,
     # 2026-08-01) let a fresher shadow/provisional finding's timestamp make
     # stale launch evidence look current, even though shadow activity never
     # contributes to the qualification decision itself.
-    launch_only = [finding for finding in findings if not finding.shadow_only]
+    launch_only = [
+        finding
+        for finding in findings
+        if finding.calibration_state != CalibrationState.PROVISIONAL
+    ]
     evaluated_at = max(
         (finding.evaluated_at for finding in launch_only), default=_utc_now()
     )
@@ -780,4 +957,9 @@ _LAUNCH_RULES: tuple[HealthRuleDefinition, ...] = (
     ),
 )
 
-HEALTH_RULE_REGISTRY = HealthRuleRegistry(_LAUNCH_RULES)
+HEALTH_RULE_REGISTRY = HealthRuleRegistry(
+    _LAUNCH_RULES,
+    calibration_records={
+        record.calibration_id: record for record in CALIBRATION_RECORDS
+    },
+)

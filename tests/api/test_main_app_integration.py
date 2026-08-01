@@ -1,8 +1,45 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from dev_health_ops.api import main
+
+
+def test_lifespan_aborts_startup_when_schema_status_is_unsatisfied(monkeypatch):
+    """Companion proof for ``tests/api/conftest.py``'s autouse stub.
+
+    That fixture stubs ``application_schema_status`` satisfied for every
+    test in this package so CI's real-but-deliberately-unmigrated Postgres
+    service doesn't fail tests unrelated to schema-revision checking (see
+    the conftest docstring). This test overrides the stub back to
+    unsatisfied and confirms ``lifespan()`` still aborts startup through
+    the real ``with TestClient(main.app)`` seam -- proving the fixture
+    narrows what's exercised without disabling the guard itself. The
+    live-PostgreSQL-gated ancestor-walk proof lives in
+    ``tests/test_ask_dev_v2_persistence_startup_gate.py``; this is the fast,
+    CI-default companion at the mocked level.
+    """
+
+    async def _unsatisfied(dsn: str | None = None) -> tuple[bool, tuple[str, ...]]:
+        return False, ("0071",)
+
+    monkeypatch.setattr(
+        "dev_health_ops.migrate.application_schema_status", _unsatisfied
+    )
+    # A real (but unreachable) DSN so _lifespan.py's `if postgres_uri:` gate
+    # is entered -- the FeatureBundle validation step that runs first
+    # tolerates the resulting connection failure as "DB not ready" and
+    # continues on to the schema-revision check, which is stubbed above
+    # and needs no real connection of its own.
+    monkeypatch.setenv(
+        "POSTGRES_URI",
+        "postgresql+asyncpg://unreachable:unreachable@localhost:1/unreachable",
+    )
+
+    with pytest.raises(RuntimeError, match="application schema"):
+        with TestClient(main.app):
+            pytest.fail("lifespan must abort before yielding")
 
 
 def test_health_endpoint_returns_ok_when_required_services_ok(monkeypatch):

@@ -648,17 +648,8 @@ async def test_dev_message_stream_is_bounded_persisted_and_idempotent(
         PublicOutcome.NOT_FOUND,
         PublicOutcome.TEMPORARILY_UNAVAILABLE,
         PublicOutcome.UNSUPPORTED,
+        PublicOutcome.DENIED,
         PublicOutcome.FAILED,
-        # PublicOutcome.DENIED intentionally excluded: it is unreachable
-        # from real preflight today (PREFLIGHT_OUTCOME_BY_RESOLUTION has no
-        # entry that maps to it, matching FORBIDDEN_OR_NOT_FOUND's own
-        # documented unreachability), and preflight_outcomes.py's own
-        # _DISPLAY_LABELS table has no "denied" entry -- calling
-        # build_preflight_answer(outcome=DENIED, ...) raises KeyError. A
-        # real but separate, pre-existing completeness gap in CHAOS-3292's
-        # landed preflight_outcomes.py, out of scope for this CHAOS-3299
-        # replay-parity fix; flagged for follow-up rather than silently
-        # dropped from this parametrization.
     ],
 )
 async def test_no_answer_replay_matches_live_terminal_projection(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -225,7 +225,23 @@ class AskDevToolRegistry:
             raise UnknownToolError("tool is not registered") from exc
         return self._definitions[canonical]
 
-    def manifest(self) -> dict[str, object]:
+    def manifest(
+        self, *, allowed_tool_ids: Collection[ToolID] | None = None
+    ) -> dict[str, object]:
+        """The registry manifest, optionally narrowed to a per-run allowlist.
+
+        Until CHAOS-3292 there was no per-run tool-availability seam at all:
+        every registered tool was advertised on every round, to every question.
+        ``allowed_tool_ids`` is that seam. ``None`` means "advertise everything",
+        which is both the default and the behaviour when no preflight ran.
+        """
+
+        allowed = set(ToolID) if allowed_tool_ids is None else set(allowed_tool_ids)
+        unknown = sorted(str(item) for item in allowed - set(ToolID))
+        if unknown:
+            raise ToolRegistryError(
+                f"tool allowlist names unregistered tools {unknown}"
+            )
         return {
             "version": TOOL_CONTRACT_VERSION,
             "schemas": {
@@ -239,6 +255,7 @@ class AskDevToolRegistry:
             "tools": [
                 self._definitions[tool_id].manifest()
                 for tool_id in sorted(ToolID, key=lambda item: item.value)
+                if tool_id in allowed
             ],
         }
 

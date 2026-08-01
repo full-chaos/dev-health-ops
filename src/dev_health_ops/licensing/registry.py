@@ -16,11 +16,16 @@ STANDARD_FEATURE_ROW = tuple[str, str, FeatureCategory, LicenseTier, str]
 CANONICAL_INCIDENT_INGESTION_FEATURE: Final = "canonical_incident_ingestion"
 ASK_DEV_FEATURE: Final = "ask_dev"
 ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE: Final = "ask_dev_contextual_entrypoints"
+#: Wave 3.1 rollout gate (Amendment TRD v2 §15 Phase A). Off means the run
+#: behaves exactly as it does today: no server-owned interpretation, no subject
+#: preflight, every tool advertised, and the CHAOS-3289 backstop terminating.
+ASK_DEV_WAVE_3_1_FEATURE: Final = "ask_dev_wave_3_1"
 EXPLICIT_PURCHASE_FEATURES: frozenset[str] = frozenset(
     {
         "agent_context_runtime",
         ASK_DEV_FEATURE,
         ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE,
+        ASK_DEV_WAVE_3_1_FEATURE,
     }
 )
 ORG_OVERRIDE_ONLY_FEATURES: frozenset[str] = frozenset()
@@ -188,6 +193,13 @@ STANDARD_FEATURES: list[STANDARD_FEATURE_ROW] = [
         FeatureCategory.ANALYTICS,
         LicenseTier.COMMUNITY,
         "Typed Ask Dev handoffs from approved product surfaces",
+    ),
+    (
+        ASK_DEV_WAVE_3_1_FEATURE,
+        "Ask Dev Wave 3.1",
+        FeatureCategory.ANALYTICS,
+        LicenseTier.COMMUNITY,
+        "Server-owned question intent and named-subject preflight",
     ),
     (
         "scheduled_jobs",

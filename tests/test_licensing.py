@@ -1239,10 +1239,13 @@ class TestGetFeaturesForTier:
         enterprise = get_features_for_tier(LicenseTier.ENTERPRISE)
         assert set(community.keys()) == set(team.keys()) == set(enterprise.keys())
 
-    def test_returns_31_features_including_contextual_entrypoints(self):
+    def test_returns_32_features_including_explicit_purchase_ones(self):
         features = get_features_for_tier(LicenseTier.COMMUNITY)
-        assert len(features) == 31
+        assert len(features) == 32
+        # Explicit-purchase features stay denied for every tier until an
+        # organization or license override grants them.
         assert features["ask_dev_contextual_entrypoints"] is False
+        assert features["ask_dev_wave_3_1"] is False
 
     def test_sign_license_uses_canonical_registry(self):
         """sign_license() with no explicit features uses get_features_for_tier."""

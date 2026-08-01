@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Collection
 from dataclasses import dataclass
 
-from ..contracts import DevScopeResolution, DevToolResult
+from ..contracts import DevScopeResolution, DevToolResult, ToolID
 from ..tool_registry import AskDevToolRegistry
 
-PROMPT_VERSION = "ask_dev_prompt.v1"
+#: The prompt a run with a server-committed subject receives.
+PROMPT_VERSION = "ask_dev_prompt.v2"
+#: The prompt a run *without* one receives — the flag-off path, and the
+#: organization-wide path where a name may still need resolving. Telling
+#: either that "subject resolution is already complete" would be false, and on
+#: the flag-off path it would also remove the only instruction that makes
+#: named-entity resolution happen at all.
+LEGACY_PROMPT_VERSION = "ask_dev_prompt.v1"
 MAX_PRIOR_TURNS = 12
 MAX_PRIOR_CONTENT_BYTES = 32_768
 MAX_TOOL_CONTEXT_BYTES = 262_144
@@ -40,14 +48,30 @@ _FIXED_POLICY_SECTIONS = (
         "Return exactly one normalized decision: registered tool request, dev_answer.v1 final "
         "answer, typed disambiguation, or refusal. Do not reveal private reasoning.",
     ),
-    (
-        "named_entity_resolution",
-        "When the question names a specific project, repository, issue, pull request, or work "
-        "unit, call resolve_scope.v1 with that name before requesting any status, change, "
-        "metric, or evidence tool. Never present an answer that describes a named entity "
-        "resolve_scope.v1 did not confirm exists; if it returns not-found or ambiguous, say so "
-        "instead of answering about the organization under the entity's name.",
-    ),
+)
+
+# CHAOS-3292: the subject-resolution section depends on whether the server
+# already committed one. The v1 text makes resolution *order* the enforcement
+# and is still exactly right when it has not; the v2 text states that the
+# subject is settled and must not be widened. Emitting the v2 text on a run
+# with no committed subject would be false, and on the flag-off path it would
+# delete the only instruction that makes named-entity resolution happen.
+_UNCOMMITTED_SUBJECT_SECTION = (
+    "named_entity_resolution",
+    "When the question names a specific project, repository, issue, pull request, or work "
+    "unit, call resolve_scope.v1 with that name before requesting any status, change, "
+    "metric, or evidence tool. Never present an answer that describes a named entity "
+    "resolve_scope.v1 did not confirm exists; if it returns not-found or ambiguous, say so "
+    "instead of answering about the organization under the entity's name.",
+)
+
+_COMMITTED_SUBJECT_SECTION = (
+    "committed_subject",
+    "Scope and subject resolution are server owned and already complete for this request. "
+    "Answer only about the subject in resolved_scope. Never name, describe, or attribute "
+    "findings to any project, repository, team, issue, pull request, or work unit outside "
+    "it. Request only tools this prompt lists; a tool absent from the registry is "
+    "unavailable for this run.",
 )
 
 
@@ -81,6 +105,8 @@ class PromptComposer:
         scope: DevScopeResolution,
         prior_turns: tuple[PromptConversationTurn, ...] = (),
         tool_results: tuple[DevToolResult, ...] = (),
+        allowed_tools: Collection[ToolID] | None = None,
+        subject_committed: bool = False,
     ) -> ComposedPrompt:
         if not question.strip():
             raise ValueError("question is required")
@@ -102,13 +128,22 @@ class PromptComposer:
         if len(serialized_tools) > MAX_TOOL_CONTEXT_BYTES:
             raise ValueError("tool context exceeds prompt budget")
 
+        version = PROMPT_VERSION if subject_committed else LEGACY_PROMPT_VERSION
+        subject_section = (
+            _COMMITTED_SUBJECT_SECTION
+            if subject_committed
+            else _UNCOMMITTED_SUBJECT_SECTION
+        )
         system_payload = {
-            "prompt_version": PROMPT_VERSION,
+            "prompt_version": version,
             "policy_sections": [
                 {"id": section_id, "text": text}
-                for section_id, text in _FIXED_POLICY_SECTIONS
+                for section_id, text in (*_FIXED_POLICY_SECTIONS, subject_section)
             ],
-            "tool_registry": self._registry.manifest(),
+            # The advertised registry is the per-run allowlist, so the system
+            # prompt and the provider tool definitions cannot disagree about
+            # which tools exist for this run.
+            "tool_registry": self._registry.manifest(allowed_tool_ids=allowed_tools),
         }
         system_text = json.dumps(system_payload, sort_keys=True, separators=(",", ":"))
         user_payload = {
@@ -125,7 +160,7 @@ class PromptComposer:
         user_text = json.dumps(user_payload, sort_keys=True, separators=(",", ":"))
         checksum = hashlib.sha256(system_text.encode("utf-8")).hexdigest()
         return ComposedPrompt(
-            version=PROMPT_VERSION,
+            version=version,
             checksum=checksum,
             system_text=system_text,
             user_text=user_text,
@@ -134,6 +169,7 @@ class PromptComposer:
 
 
 __all__ = [
+    "LEGACY_PROMPT_VERSION",
     "PROMPT_VERSION",
     "ComposedPrompt",
     "PromptComposer",

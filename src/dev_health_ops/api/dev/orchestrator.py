@@ -16,7 +16,6 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import StrEnum
 from typing import Any, Literal, Protocol
 
 import annotated_types
@@ -68,8 +67,16 @@ from .contracts import (
     ToolID,
     dev_error_remediation,
 )
+from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
+from .preflight_outcomes import TERMINAL_STATE_BY_OUTCOME, project_preflight_error
 from .prompts import PromptComposer, PromptConversationTurn
+from .subject_preflight import (
+    SUBJECT_BEARING_TOOLS,
+    PreflightDecision,
+    SubjectPreflight,
+    SubjectPreflightResult,
+)
 from .tool_registry import (
     AskDevToolRegistry,
     ToolExecution,
@@ -141,6 +148,40 @@ def _named_entity_phrases(text: str) -> frozenset[str]:
     return frozenset(match.casefold() for match in phrases)
 
 
+#: The server-owned copy for the legacy CHAOS-3289 backstop, reachable only
+#: from the flag-off (no-preflight) path. Split out of the predicate so a
+#: telemetry-only firing on the preflight path cannot produce public copy.
+#: The subset of guard reasons that say something about the *named entity*
+#: rather than about the shape of the answer. Only these keep the backstop
+#: terminal on a preflight run with an unresolved bare name.
+_NAME_SPECIFIC_GUARD_REASONS = frozenset(
+    {
+        "resolve_scope_ambiguous",
+        "resolve_scope_not_found",
+        "narrated_unresolved_entity",
+    }
+)
+
+_LEGACY_GUARD_TERMINALS: dict[str, tuple[str, str]] = {
+    "resolve_scope_ambiguous": (
+        "scope_ambiguous",
+        "The requested scope is ambiguous.",
+    ),
+    "resolve_scope_not_found": (
+        "scope_not_found",
+        "The requested scope was not found.",
+    ),
+    "no_evidence_backed_claims": (
+        "insufficient_evidence",
+        "The answer does not include evidence-backed claims for the requested entity.",
+    ),
+    "narrated_unresolved_entity": (
+        "insufficient_evidence",
+        "The answer narrates a status for a named entity that was never resolved.",
+    ),
+}
+
+
 _HARD_LIMIT_MAXIMA: dict[str, int | float] = {
     "model_rounds": 4,
     "tool_calls": 6,
@@ -160,31 +201,6 @@ _HARD_LIMIT_MAXIMA: dict[str, int | float] = {
     "estimated_cost_per_call_microusd": 1_000_000,
     "max_estimated_cost_microusd": ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
 }
-
-
-class RunState(StrEnum):
-    ACCEPTED = "accepted"
-    RESOLVING_SCOPE = "resolving_scope"
-    MODEL_DECISION = "model_decision"
-    TOOL_VALIDATION = "tool_validation"
-    TOOL_EXECUTION = "tool_execution"
-    ANSWER_VALIDATION = "answer_validation"
-    COMPLETED = "completed"
-    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
-    REFUSED = "refused"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-
-TERMINAL_STATES = frozenset(
-    {
-        RunState.COMPLETED,
-        RunState.INSUFFICIENT_EVIDENCE,
-        RunState.REFUSED,
-        RunState.FAILED,
-        RunState.CANCELLED,
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +288,23 @@ class RunRecorder(Protocol):
 
     async def record_answer(self, answer: DevAnswer) -> None: ...
 
+    async def record_preflight(
+        self,
+        *,
+        preflight_outcome: str | None,
+        legacy_guard_reason: str | None,
+    ) -> None:
+        """Content-free run diagnostics (CHAOS-3292).
+
+        Both values are members of closed server-owned vocabularies — never
+        question text, entity names, or catalog content. There is no metrics,
+        logging, tracing or statsd facility anywhere in ``api/dev`` to publish
+        a divergence counter to (a real observability stack is CHAOS-3218), so
+        these ride on the run row beside the existing ``safe_error_code`` and
+        ``grounding_validation_status`` diagnostics.
+        """
+        ...
+
     async def terminal(
         self,
         *,
@@ -283,6 +316,7 @@ class RunRecorder(Protocol):
         provider_fingerprint: str | None,
         model_fingerprint: str | None,
         prompt_checksum: str | None,
+        prompt_version: str | None,
     ) -> None: ...
 
 
@@ -303,6 +337,14 @@ class NullRunRecorder:
     async def record_answer(self, answer: DevAnswer) -> None:
         del answer
 
+    async def record_preflight(
+        self,
+        *,
+        preflight_outcome: str | None,
+        legacy_guard_reason: str | None,
+    ) -> None:
+        del preflight_outcome, legacy_guard_reason
+
     async def terminal(
         self,
         *,
@@ -314,6 +356,7 @@ class NullRunRecorder:
         provider_fingerprint: str | None,
         model_fingerprint: str | None,
         prompt_checksum: str | None,
+        prompt_version: str | None,
     ) -> None:
         del (
             state,
@@ -324,6 +367,7 @@ class NullRunRecorder:
             provider_fingerprint,
             model_fingerprint,
             prompt_checksum,
+            prompt_version,
         )
 
 
@@ -434,6 +478,7 @@ class DevOrchestrator:
         recorder: RunRecorder | None = None,
         event_sink: EventSink | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        preflight: SubjectPreflight | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -445,6 +490,10 @@ class DevOrchestrator:
         self._recorder = recorder or NullRunRecorder()
         self._event_sink = event_sink
         self._monotonic = monotonic
+        # ``None`` is the flag-off path: no interpretation, no subject
+        # resolution, every tool advertised, and the CHAOS-3289 backstop
+        # terminating exactly as it does today.
+        self._preflight = preflight
         self._composer = PromptComposer(registry)
 
     async def run(
@@ -471,6 +520,7 @@ class DevOrchestrator:
         provider_fingerprint: str | None = None
         model_fingerprint: str | None = None
         prompt_checksum: str | None = None
+        prompt_version: str | None = None
         resolution: DevScopeResolution | None = None
         provider_continuation: tuple[AgentMessage, ...] = ()
         terminal_written = False
@@ -522,6 +572,7 @@ class DevOrchestrator:
                 provider_fingerprint=provider_fingerprint,
                 model_fingerprint=model_fingerprint,
                 prompt_checksum=prompt_checksum,
+                prompt_version=prompt_version,
             )
             terminal_written = True
             event = OrchestratorEvent(
@@ -593,6 +644,73 @@ class DevOrchestrator:
                     ),
                 )
 
+            # CHAOS-3292 preflight: interpret the question and resolve every
+            # named subject against the authorized catalog *before* the first
+            # model round, so no evidence-bearing tool can execute without an
+            # exact committed subject. Zero provider tokens are spent here.
+            preflight_result: SubjectPreflightResult | None = None
+            allowed_tools: frozenset[ToolID] = frozenset(ToolID)
+            if self._preflight is not None:
+                if cancellation.is_set():
+                    return await finish(
+                        RunState.CANCELLED,
+                        error=error("cancelled", "The request was cancelled."),
+                    )
+                try:
+                    preflight_result = await asyncio.wait_for(
+                        self._preflight.run(
+                            request=request,
+                            org_id=org_id,
+                            permission_fingerprint=permission_fingerprint,
+                            authorized_scope=authorized_scope,
+                            run_id=run_id,
+                            answer_id=answer_id,
+                            conversation_id=conversation_id,
+                            on_phase=transition,
+                        ),
+                        timeout=max(0.0, remaining()),
+                    )
+                except (TimeoutError, asyncio.TimeoutError):
+                    return await finish(
+                        RunState.FAILED,
+                        error=error(
+                            "tool_limit_reached", "The request time limit was reached."
+                        ),
+                    )
+                allowed_tools = preflight_result.allowed_tools
+                await self._recorder.record_preflight(
+                    preflight_outcome=preflight_result.diagnostic,
+                    legacy_guard_reason=None,
+                )
+                if preflight_result.decision is PreflightDecision.TERMINATE:
+                    assert preflight_result.answer is not None
+                    assert preflight_result.outcome is not None
+                    return await finish(
+                        TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
+                        error=project_preflight_error(
+                            preflight_result.answer, request_id=request.request_id
+                        ),
+                    )
+                if preflight_result.committed_resolution is not None:
+                    committed = preflight_result.committed_resolution
+                    committed_scope = committed.resolved_scope
+                    if committed_scope is None or (
+                        committed_scope.organization_id != org_id
+                    ):  # pragma: no cover - committed_resolution_for always commits
+                        return await finish(
+                            RunState.FAILED,
+                            error=error(
+                                "scope_forbidden",
+                                "The requested scope is not authorized.",
+                            ),
+                        )
+                    # The model is *given* the subject rather than asked to
+                    # earn it: composer serializes ``resolved_scope`` into the
+                    # prompt, so this is the commit that removes the "narrate
+                    # an unresolved name" opportunity entirely.
+                    resolution = committed
+                    authorized_scope = committed_scope
+
             for round_index in range(self._limits.model_rounds):
                 del round_index
                 if cancellation.is_set():
@@ -615,6 +733,11 @@ class DevOrchestrator:
                         scope=resolution,
                         prior_turns=prior_turns,
                         tool_results=tuple(tool_results),
+                        allowed_tools=allowed_tools,
+                        subject_committed=(
+                            preflight_result is not None
+                            and preflight_result.has_committed_subject
+                        ),
                     )
                 except ValueError as exc:
                     # A synthetic repair turn (CHAOS-3288) added on top of an
@@ -640,6 +763,7 @@ class DevOrchestrator:
                         ),
                     )
                 prompt_checksum = composed.checksum
+                prompt_version = composed.version
                 prompt_bytes = len(composed.system_text.encode()) + len(
                     composed.user_text.encode()
                 )
@@ -648,7 +772,7 @@ class DevOrchestrator:
                     AgentMessage(AgentMessageRole.USER, composed.user_text),
                     *provider_continuation,
                 )
-                tools = self._provider_tools()
+                tools = self._provider_tools(allowed_tools)
                 while True:
                     budget.require(prompt_bytes=prompt_bytes)
                     provider_timeout = min(self._limits.provider_seconds, remaining())
@@ -732,6 +856,17 @@ class DevOrchestrator:
                                 "The requested tool was not available.",
                             ),
                         )
+                    # Second enforcement point, deliberately redundant with the
+                    # pre-loop gate. The pre-loop gate decides whether the run
+                    # proceeds at all; this one decides whether *this call*
+                    # executes, and it is the seam a mutation can defeat — so
+                    # each must independently keep a subject-bearing tool from
+                    # running while any mention lacks a committed exact match.
+                    gate_rejection = self._subject_gate_rejection(
+                        tool_id=tool_id_for_call,
+                        allowed_tools=allowed_tools,
+                        preflight=preflight_result,
+                    )
                     try:
                         tool_request, canonical_hash = self._canonical_tool_request(
                             decision=decision,
@@ -782,7 +917,17 @@ class DevOrchestrator:
                                 "A repeated tool-call loop was stopped.",
                             ),
                         )
-                    if construction_rejection is not None:
+                    if gate_rejection is not None:
+                        # Degraded per-call rather than fatal (CHAOS-3262's
+                        # posture): the model is told the tool is unavailable
+                        # and can still answer from the committed subject. The
+                        # executor is never reached either way.
+                        execution = self._rejected_tool_execution(
+                            tool_request=tool_request,
+                            code="tool_unavailable",
+                            message=gate_rejection,
+                        )
+                    elif construction_rejection is not None:
                         execution = self._rejected_tool_execution(
                             tool_request=tool_request,
                             code="invalid_request",
@@ -1041,20 +1186,45 @@ class DevOrchestrator:
                                 "The answer exceeds grounded-result limits.",
                             ),
                         )
-                    unresolved_entity_error = self._unresolved_named_entity_error(
+                    guard_reason = self._legacy_named_entity_guard_reason(
                         question=request.question,
                         question_class=request.question_class,
                         authorized_scope=authorized_scope,
                         resolve_scope_attempted=resolve_scope_attempted,
                         last_resolve_scope_outcome=last_resolve_scope_outcome,
                         answer=answer,
+                        extra_named_phrases=(
+                            preflight_result.unresolved_name_spans
+                            if preflight_result is not None
+                            else frozenset()
+                        ),
                     )
-                    if unresolved_entity_error is not None:
-                        code, message = unresolved_entity_error
-                        return await finish(
-                            RunState.INSUFFICIENT_EVIDENCE,
-                            error=error(code, message),
-                        )
+                    if guard_reason is not None:
+                        if preflight_result is not None and not (
+                            self._legacy_guard_is_terminal(
+                                preflight_result, guard_reason
+                            )
+                        ):
+                            # TRD §10: kept as defense in depth, but it must
+                            # not create public copy or delete an answer once
+                            # the server owns the subject. A firing here is a
+                            # cutover defect, so it is recorded and alerted on
+                            # rather than acted on. Until CHAOS-3297 lands real
+                            # answer frames, "a valid frame exists" is
+                            # substituted by: the preflight committed an exact
+                            # subject for every mention (or the question named
+                            # none) **and** the answer passed the existing
+                            # grounding validator, both true at this line.
+                            await self._recorder.record_preflight(
+                                preflight_outcome=preflight_result.diagnostic,
+                                legacy_guard_reason=guard_reason,
+                            )
+                        else:
+                            code, message = _LEGACY_GUARD_TERMINALS[guard_reason]
+                            return await finish(
+                                RunState.INSUFFICIENT_EVIDENCE,
+                                error=error(code, message),
+                            )
                     return await finish(RunState.COMPLETED, answer=answer)
 
                 if isinstance(decision, AgentDisambiguation):
@@ -1209,8 +1379,10 @@ class DevOrchestrator:
             cancellation_task.cancel()
             await asyncio.gather(cancellation_task, return_exceptions=True)
 
-    def _provider_tools(self) -> tuple[AgentToolDefinition, ...]:
-        manifest = self._registry.manifest()
+    def _provider_tools(
+        self, allowed_tools: frozenset[ToolID] | None = None
+    ) -> tuple[AgentToolDefinition, ...]:
+        manifest = self._registry.manifest(allowed_tool_ids=allowed_tools)
         tools = manifest["tools"]
         assert isinstance(tools, list)
         return tuple(
@@ -1472,7 +1644,7 @@ class DevOrchestrator:
         )
 
     @staticmethod
-    def _unresolved_named_entity_error(
+    def _legacy_named_entity_guard_reason(
         *,
         question: str,
         question_class: QuestionClass,
@@ -1480,9 +1652,19 @@ class DevOrchestrator:
         resolve_scope_attempted: bool,
         last_resolve_scope_outcome: ScopeResolutionOutcome | None,
         answer: DevAnswer,
-    ) -> tuple[str, str] | None:
+        extra_named_phrases: frozenset[str] = frozenset(),
+    ) -> str | None:
         """CHAOS-3289: a status answer must never narrate a named entity that
         was never confirmed to exist.
+
+        A **pure predicate** returning a closed-vocabulary reason code, never a
+        message: CHAOS-3292 demoted this to telemetry on the preflight path,
+        and telemetry must not be able to become public copy. The four user
+        messages now live in ``_LEGACY_GUARD_TERMINALS`` and are reachable only
+        from the flag-off path, where this remains the terminating
+        defense-in-depth check it is today. Removal is blocked on the cutover
+        issue (TRD §15 Phase D); what ships instead is the proof that disabling
+        it does not reduce the new path's correctness.
 
         Organization scope is a legitimate, fully executable answer target on
         its own (CHAOS-3255) -- this only fires for STATUS-class questions
@@ -1507,8 +1689,8 @@ class DevOrchestrator:
           premises; only the second needs the model's own words as evidence
           since the run produced no resolve_scope.v1 call to judge instead.
 
-        Returns the ``(code, message)`` for the forced insufficient-evidence
-        termination, or ``None`` when the answer is not this failure shape.
+        Returns a reason code from ``_LEGACY_GUARD_TERMINALS``, or ``None``
+        when the answer is not this failure shape.
         """
         if question_class is not QuestionClass.STATUS:
             return None
@@ -1521,17 +1703,20 @@ class DevOrchestrator:
         }:
             return None
         if last_resolve_scope_outcome is ScopeResolutionOutcome.AMBIGUOUS:
-            return ("scope_ambiguous", "The requested scope is ambiguous.")
+            return "resolve_scope_ambiguous"
         if last_resolve_scope_outcome is ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND:
-            return ("scope_not_found", "The requested scope was not found.")
+            return "resolve_scope_not_found"
         if not resolve_scope_attempted:
             if not answer.claims:
-                return (
-                    "insufficient_evidence",
-                    "The answer does not include evidence-backed claims for "
-                    "the requested entity.",
-                )
-            named_phrases = _named_entity_phrases(question)
+                return "no_evidence_backed_claims"
+            # The legacy grammar only recognizes a name adjacent to an entity
+            # noun ("the X project"), so it is blind to a bare "X" — exactly
+            # the shape the preflight re-arms it for. The preflight's own
+            # unresolved spans are supplied here so the narration check can
+            # actually see them (CHAOS-3292).
+            named_phrases = _named_entity_phrases(question) | frozenset(
+                phrase.casefold() for phrase in extra_named_phrases
+            )
             if named_phrases:
                 narrated_texts = (
                     answer.direct_summary,
@@ -1542,11 +1727,59 @@ class DevOrchestrator:
                     for phrase in named_phrases
                     for text in narrated_texts
                 ):
-                    return (
-                        "insufficient_evidence",
-                        "The answer narrates a status for a named entity "
-                        "that was never resolved.",
-                    )
+                    return "narrated_unresolved_entity"
+        return None
+
+    @staticmethod
+    def _legacy_guard_is_terminal(
+        preflight: SubjectPreflightResult | None, reason: str
+    ) -> bool:
+        """Whether a CHAOS-3289 guard firing may still terminate the run.
+
+        A named seam rather than an inline condition so a mutation test can
+        defeat exactly this decision and observe which acceptance case notices
+        (TRD §10: on the preflight path a firing is a cutover defect to record,
+        not an outcome to act on).
+
+        The flag-off path keeps every reason terminal — the backstop is the
+        only check there is. A preflight run that saw a bare name it could not
+        resolve keeps only the reasons that are *evidence about that name*: the
+        answer narrating it, or a resolution attempt that came back ambiguous
+        or not-found. ``no_evidence_backed_claims`` stays telemetry even then,
+        because it is a proxy for the shape of the answer rather than a
+        statement about the unresolved name, and terminating on it would fail
+        an ordinary organization-wide question that merely happens to contain
+        a capitalized acronym.
+        """
+
+        if preflight is None:
+            return True
+        return (
+            preflight.legacy_guard_required and reason in _NAME_SPECIFIC_GUARD_REASONS
+        )
+
+    @staticmethod
+    def _subject_gate_rejection(
+        *,
+        tool_id: ToolID,
+        allowed_tools: frozenset[ToolID],
+        preflight: SubjectPreflightResult | None,
+    ) -> str | None:
+        """Deny-by-default: why this tool call must not execute, or ``None``.
+
+        Two independent clauses, mutated separately in the mutation suite:
+        the per-run availability allowlist, and the "every mention holds an
+        exact match" requirement for a subject-bearing tool.
+        """
+
+        if tool_id not in allowed_tools:
+            return "The requested tool is not available for this run."
+        if preflight is None or preflight.ledger is None:
+            return None
+        if tool_id not in SUBJECT_BEARING_TOOLS:
+            return None
+        if not preflight.all_subjects_committed:
+            return "The requested subject was not resolved."
         return None
 
     @staticmethod

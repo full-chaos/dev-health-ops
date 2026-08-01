@@ -165,7 +165,7 @@ def test_application_migrator_applies_safe_schema_without_0066_opt_in(
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
 
-    assert _revisions(migrated_to_0065.engine) == {"0071"}
+    assert _revisions(migrated_to_0065.engine) == {"0073"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     assert _table_exists(migrated_to_0065.engine, "dev_conversations")
     assert _routes(migrated_to_0065.engine, migration) == before
@@ -189,7 +189,7 @@ def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
     from dev_health_ops.migrate import _run_upgrade
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0071"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0073"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     assert _routes(migrated_to_0065.engine, migration) == [
         (kind, "river", False, 2) for kind in sorted(migration._KINDS)
@@ -214,7 +214,7 @@ def test_application_migrator_opt_in_applies_both_heads(
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
 
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0071"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0073"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     assert _routes(migrated_to_0065.engine, migration) == [
         (kind, "river", False, 2) for kind in sorted(migration._KINDS)
@@ -231,10 +231,22 @@ def test_old_linear_0071_provenance_converges_to_both_heads(
     retargeted the routes. Reapplying the new 0066 sibling is intentionally
     idempotent and restores explicit two-head provenance without another route
     generation change.
+
+    The simulated database is built by upgrading to **0066 and 0071
+    specifically**, not to ``heads``. The stamp below rewinds only the version
+    table, so upgrading to ``heads`` first would leave the schema ahead of the
+    revision it claims to be at — and every application-branch revision after
+    0071 would then be re-applied against objects it had already created
+    (CHAOS-3292's 0072 died with DuplicateColumnError on exactly that). While
+    0071 was the application head the two agreed by coincidence; pinning the
+    upgrade to the revisions this test says it is simulating makes them agree
+    by construction, and makes the assertion below a real proof that a
+    legacy-provenance database migrates forward cleanly.
     """
     migration = _migration()
     monkeypatch.setenv(_CUTOVER_ENV, "1")
-    command.upgrade(_migration_config(), "heads")
+    command.upgrade(_migration_config(), "0066")
+    command.upgrade(_migration_config(), "0071")
     command.stamp(_migration_config(), "0071", purge=True)
     before = _routes(migrated_to_0065.engine, migration)
 
@@ -243,7 +255,7 @@ def test_old_linear_0071_provenance_converges_to_both_heads(
     from dev_health_ops.migrate import _run_upgrade
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0071"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0073"}
     assert _routes(migrated_to_0065.engine, migration) == before
 
 

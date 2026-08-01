@@ -74,7 +74,7 @@
       },
       "schema": {
         "path": "schemas/dev_conversation_transcript.v1.schema.json",
-        "sha256": "1f8bb8b787ebacfb6373053cab676c2e3f15c5c20b59971b178d2895c545e21f"
+        "sha256": "b7c1e321eca3616507d09d47cc6516a9999fcfba2e047b572a6f78f778926639"
       },
       "schema_version": "dev_conversation_transcript.v1"
     },

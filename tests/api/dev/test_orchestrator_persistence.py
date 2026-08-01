@@ -12,6 +12,7 @@ from dev_health_ops.api.dev.contracts import DevError, DevToolRequest, DevToolRe
 from dev_health_ops.api.dev.orchestrator import RunState
 from dev_health_ops.api.dev.orchestrator_persistence import PersistenceRunRecorder
 from dev_health_ops.api.dev.persistence.service import DevPersistenceService
+from dev_health_ops.api.dev.prompts import PROMPT_VERSION
 from dev_health_ops.api.dev.tool_registry import ToolExecution
 from dev_health_ops.llm.agent.contracts import AgentUsage
 
@@ -54,7 +55,7 @@ async def test_recorder_persists_only_safe_versioned_terminal_metadata() -> None
     assert service.update_run.await_count == 2
     terminal = service.update_run.await_args_list[-1].kwargs
     assert terminal["state"] == "failed"
-    assert terminal["prompt_version"] == "ask_dev_prompt.v1:sha256:" + "a" * 64
+    assert terminal["prompt_version"] == f"{PROMPT_VERSION}:sha256:" + "a" * 64
     assert terminal["provider_fingerprint"].startswith("sha256:")
     assert terminal["model_fingerprint"].startswith("sha256:")
     assert terminal["safe_error_code"] == "provider_unavailable"

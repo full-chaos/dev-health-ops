@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -13,6 +14,8 @@ from urllib.parse import urlsplit
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.services.configuration.generic import SettingsService
+from dev_health_ops.licensing import evaluate_org_feature_async
+from dev_health_ops.licensing.registry import ASK_DEV_WAVE_3_1_FEATURE
 from dev_health_ops.llm.agent.contracts import AgentLLMProvider
 from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErrorCode
 from dev_health_ops.llm.agent.openai_compatible import (
@@ -87,6 +90,7 @@ from .native_evidence import native_evidence_adapters
 from .native_status_change import ClickHouseStatusChangeSource
 from .org_policy import load_ask_dev_org_policy
 from .prompts import PROMPT_VERSION
+from .question_interpreter import QuestionInterpreter
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .scope_catalog import ClickHouseAuthorizedEntityCatalog
 from .scope_service import (
@@ -110,6 +114,7 @@ from .status_change_service import (
     StatusFact,
     StatusSnapshotRequest,
 )
+from .subject_preflight import SubjectPreflight
 from .tool_registry import TOOL_CONTRACT_VERSION, AskDevToolRegistry
 from .work_graph_neighbors_service import (
     ALLOWED_RELATIONSHIP_TYPES,
@@ -1657,19 +1662,55 @@ async def _assemble_production_runtime(
             requested_scope=requested_scope,
         )
 
+    versions = DevContractVersions(
+        prompt_version=PROMPT_VERSION,
+        tool_contract_version=TOOL_CONTRACT_VERSION,
+        metric_definition_version=_METRIC_REGISTRY_VERSION,
+        query_version=_QUERY_BUNDLE_VERSION,
+    )
+    preflight = (
+        SubjectPreflight(
+            # No classifier is wired yet: the deterministic recognizers are the
+            # whole interpreter in production for now, and an unrecognized
+            # question degrades to bounded investigation exactly as today. The
+            # constrained-model fallback seam is built and tested, but turning
+            # it on adds a provider call to every low-confidence question and
+            # is a separate rollout decision.
+            interpreter=QuestionInterpreter(),
+            scope_service=scope_service,
+            versions=versions,
+        )
+        if await _wave_3_1_enabled(session, org_id)
+        else None
+    )
+
     return BoundedDevRuntime(
         provider=provider.provider,
         provider_source=provider.source.value,
         provider_family=provider.family,
         registry=registry,
         scope_resolver=scope_resolver,
-        versions=DevContractVersions(
-            prompt_version=PROMPT_VERSION,
-            tool_contract_version=TOOL_CONTRACT_VERSION,
-            metric_definition_version=_METRIC_REGISTRY_VERSION,
-            query_version=_QUERY_BUNDLE_VERSION,
-        ),
+        versions=versions,
+        preflight=preflight,
     )
+
+
+async def _wave_3_1_enabled(session: AsyncSession, org_id: str) -> bool:
+    """Whether this organization gets the CHAOS-3292 preflight.
+
+    Fail-closed **to today's behaviour**: any error evaluating the flag leaves
+    the preflight off, which is the pre-3292 run path with the CHAOS-3289
+    backstop still terminating. A rollout gate that failed *open* would ship an
+    unreviewed path on a storage error.
+    """
+
+    try:
+        decision = await evaluate_org_feature_async(
+            session, uuid.UUID(org_id), ASK_DEV_WAVE_3_1_FEATURE
+        )
+    except Exception:
+        return False
+    return bool(decision.allowed)
 
 
 async def expand_production_evidence(

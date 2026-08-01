@@ -44,6 +44,7 @@ class Recorder:
         self.executions: list[Any] = []
         self.answers: list[DevAnswer] = []
         self.terminals: list[RunState] = []
+        self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
         self.fail_answer_write = fail_answer_write
 
     async def transition(self, state: RunState) -> None:
@@ -57,6 +58,11 @@ class Recorder:
         if self.fail_answer_write:
             raise RuntimeError("storage unavailable")
         self.answers.append(answer)
+
+    async def record_preflight(
+        self, *, preflight_outcome: str | None, legacy_guard_reason: str | None
+    ) -> None:
+        self.preflight_diagnostics.append((preflight_outcome, legacy_guard_reason))
 
     async def terminal(self, **values) -> None:
         self.terminals.append(values["state"])

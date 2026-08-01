@@ -11,6 +11,7 @@ from typing import Literal
 from .contracts import DevAnswer, DevError, DevToolRequest
 from .orchestrator import RunState
 from .persistence.service import DevPersistenceService
+from .prompts import PROMPT_VERSION
 from .tool_registry import TOOL_CONTRACT_VERSION, ToolExecution
 
 
@@ -54,6 +55,22 @@ class PersistenceRunRecorder:
             user_id=self._user_id,
             run_id=self._run_id,
             state=state.value,
+        )
+
+    async def record_preflight(
+        self,
+        *,
+        preflight_outcome: str | None,
+        legacy_guard_reason: str | None,
+    ) -> None:
+        if preflight_outcome is None and legacy_guard_reason is None:
+            return
+        await self._service.record_run_diagnostics(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            preflight_outcome=preflight_outcome,
+            legacy_guard_reason=legacy_guard_reason,
         )
 
     async def record_tool(
@@ -131,7 +148,10 @@ class PersistenceRunRecorder:
         model_fingerprint: str | None,
         prompt_checksum: str | None,
     ) -> None:
-        prompt_version = "ask_dev_prompt.v1"
+        # Read from the composer rather than repeated as a literal: this row is
+        # the run's prompt provenance, and a hardcoded copy silently claims the
+        # previous prompt ran after CHAOS-3292 bumped it to v2.
+        prompt_version = PROMPT_VERSION
         if prompt_checksum is not None:
             prompt_version = f"{prompt_version}:sha256:{prompt_checksum}"
         terminal_reason = (

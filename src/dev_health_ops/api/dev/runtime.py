@@ -17,6 +17,7 @@ from .orchestrator import (
     ScopeResolver,
 )
 from .prompts import PromptConversationTurn
+from .subject_preflight import SubjectPreflight
 from .tool_registry import AskDevToolRegistry
 
 
@@ -35,6 +36,9 @@ class BoundedDevRuntime:
     registry: AskDevToolRegistry
     scope_resolver: ScopeResolver
     versions: DevContractVersions
+    #: ``None`` when ``ask_dev_wave_3_1`` is off for this organization, which
+    #: is the pre-CHAOS-3292 run path.
+    preflight: SubjectPreflight | None = None
 
     async def run(
         self,
@@ -59,6 +63,7 @@ class BoundedDevRuntime:
             scope_resolver=self.scope_resolver,
             versions=self.versions,
             recorder=recorder,
+            preflight=self.preflight,
         )
         return await orchestrator.run(
             request=request,

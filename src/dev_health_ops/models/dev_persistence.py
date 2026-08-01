@@ -212,13 +212,21 @@ class DevRun(Base):
         String(32), nullable=True
     )
     safe_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # CHAOS-3292 content-free run diagnostics. Both are members of closed
+    # server-owned vocabularies (never question or entity text): the subject
+    # preflight's outcome, and the legacy CHAOS-3289 backstop's reason code
+    # when it fires on a run the preflight already governed — which TRD §10
+    # classes as a cutover defect worth alerting on rather than acting on.
+    preflight_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    legacy_guard_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now
     )
 
     __table_args__ = (
         CheckConstraint(
-            "state IN ('accepted', 'resolving_scope', 'model_decision', "
+            "state IN ('accepted', 'resolving_scope', 'interpreting', "
+            "'resolving_subjects', 'model_decision', "
             "'tool_validation', 'tool_execution', 'answer_validation', "
             "'completed', 'insufficient_evidence', 'refused', 'failed', 'cancelled')",
             name="ck_dev_runs_state",

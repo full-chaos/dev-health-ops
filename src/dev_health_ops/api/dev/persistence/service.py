@@ -50,6 +50,11 @@ _RUN_STATES = _TERMINAL_RUN_STATES | frozenset(
     {
         "accepted",
         "resolving_scope",
+        # CHAOS-3292 preflight phases. Non-terminal by construction, so a run
+        # sitting in one correctly yields 409 concurrency_limited on replay
+        # rather than being treated as a finished run.
+        "interpreting",
+        "resolving_subjects",
         "model_decision",
         "tool_validation",
         "tool_execution",
@@ -839,6 +844,42 @@ class DevPersistenceService:
             return existing
         self._touch(conversation)
         return message
+
+    async def record_run_diagnostics(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        preflight_outcome: str | None = None,
+        legacy_guard_reason: str | None = None,
+    ) -> DevRun | None:
+        """Write the CHAOS-3292 content-free diagnostics on one run row.
+
+        Deliberately **not** part of ``update_run``: that method rewrites every
+        field it is given, clearing any it is not, so folding these in would
+        make an ordinary state transition wipe them. Both values are validated
+        as safe identifier tokens, so neither can carry question text, an
+        entity name, or catalog content even if a caller passed one.
+
+        A non-``None`` value never reverts to ``None``: the preflight records
+        its outcome once, and the demoted legacy guard may later add its reason
+        to the same row without erasing it.
+        """
+
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None:
+            raise DevPersistenceNotFound("run not found")
+        if preflight_outcome is not None:
+            run.preflight_outcome = _safe_token(
+                preflight_outcome, field="preflight_outcome", max_bytes=32
+            )
+        if legacy_guard_reason is not None:
+            run.legacy_guard_reason = _safe_token(
+                legacy_guard_reason, field="legacy_guard_reason", max_bytes=64
+            )
+        await self.session.flush()
+        return run
 
     async def update_run(
         self,

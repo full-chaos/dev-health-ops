@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Collection
 from dataclasses import dataclass
 
-from ..contracts import DevScopeResolution, DevToolResult
+from ..contracts import DevScopeResolution, DevToolResult, ToolID
 from ..tool_registry import AskDevToolRegistry
 
-PROMPT_VERSION = "ask_dev_prompt.v1"
+PROMPT_VERSION = "ask_dev_prompt.v2"
 MAX_PRIOR_TURNS = 12
 MAX_PRIOR_CONTENT_BYTES = 32_768
 MAX_TOOL_CONTEXT_BYTES = 262_144
@@ -40,13 +41,20 @@ _FIXED_POLICY_SECTIONS = (
         "Return exactly one normalized decision: registered tool request, dev_answer.v1 final "
         "answer, typed disambiguation, or refusal. Do not reveal private reasoning.",
     ),
+    # CHAOS-3292 replaced the v1 section, which made resolution *order* the
+    # enforcement ("call resolve_scope.v1 with that name before requesting any
+    # status tool"). Subject resolution is now server-owned and happens before
+    # the model is asked anything, so the instruction is no longer about what
+    # to call first — it is about not naming anything outside the subject the
+    # server already committed. Only the tools listed in this prompt's
+    # tool_registry are available for this run.
     (
-        "named_entity_resolution",
-        "When the question names a specific project, repository, issue, pull request, or work "
-        "unit, call resolve_scope.v1 with that name before requesting any status, change, "
-        "metric, or evidence tool. Never present an answer that describes a named entity "
-        "resolve_scope.v1 did not confirm exists; if it returns not-found or ambiguous, say so "
-        "instead of answering about the organization under the entity's name.",
+        "committed_subject",
+        "Scope and subject resolution are server owned and already complete. Answer only about "
+        "the subject in resolved_scope. Never name, describe, or attribute findings to any "
+        "project, repository, team, issue, pull request, or work unit outside it, and never "
+        "infer a subject from the question text. Request only tools this prompt lists; a tool "
+        "absent from the registry is unavailable for this run.",
     ),
 )
 
@@ -81,6 +89,7 @@ class PromptComposer:
         scope: DevScopeResolution,
         prior_turns: tuple[PromptConversationTurn, ...] = (),
         tool_results: tuple[DevToolResult, ...] = (),
+        allowed_tools: Collection[ToolID] | None = None,
     ) -> ComposedPrompt:
         if not question.strip():
             raise ValueError("question is required")
@@ -108,7 +117,10 @@ class PromptComposer:
                 {"id": section_id, "text": text}
                 for section_id, text in _FIXED_POLICY_SECTIONS
             ],
-            "tool_registry": self._registry.manifest(),
+            # The advertised registry is the per-run allowlist, so the system
+            # prompt and the provider tool definitions cannot disagree about
+            # which tools exist for this run.
+            "tool_registry": self._registry.manifest(allowed_tool_ids=allowed_tools),
         }
         system_text = json.dumps(system_payload, sort_keys=True, separators=(",", ":"))
         user_payload = {

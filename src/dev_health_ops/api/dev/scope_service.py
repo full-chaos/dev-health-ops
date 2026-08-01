@@ -31,12 +31,17 @@ from .contracts import (
     EntityType,
     ScopeResolutionOutcome,
 )
+from .contracts_v2 import ResolutionOutcome
 
 QUERY_VERSION = "resolve-scope.v1"
 MAX_REPOSITORIES = 20
 MAX_ENTITY_REFS = 20
 MAX_CANDIDATES = 25
 MAX_REQUEST_CACHE_ENTRIES = 128
+#: ``DevResolutionEntry.query_version`` is a non-empty ``Version``; a failed
+#: catalog read has no watermark to carry, and a content-free placeholder is
+#: honest where an empty string would be unrepresentable.
+_UNAVAILABLE_WATERMARK = "catalog-watermark-unavailable"
 
 
 class EntityKind(StrEnum):
@@ -59,6 +64,21 @@ DIRECT_SCOPE_KINDS = frozenset(
         EntityKind.PULL_REQUEST,
     }
 )
+
+#: The kinds any v1 surface (``resolve_scope.v1``, the GraphQL scope-search
+#: field) may search. Organization is excluded because named-entity resolution
+#: never searches organization scope itself (CHAOS-3256).
+V1_SEARCHABLE_ENTITY_KINDS = frozenset(DIRECT_SCOPE_KINDS - {EntityKind.ORGANIZATION})
+
+#: The **ceiling** on what any caller may search — not a default. CHAOS-3292
+#: adds ``TEAM`` here so the subject preflight can resolve a named team against
+#: the catalog (which has supported teams since ``scope_catalog``'s team
+#: queries landed) and record an honest ``exact_match`` for it. Giving a team
+#: real v1 ``DirectScope``/``DevScope`` semantics is CHAOS-3301's, so every
+#: pre-existing caller keeps ``V1_SEARCHABLE_ENTITY_KINDS`` and a resolved team
+#: terminates the preflight as ``unsupported`` rather than reaching
+#: ``DirectScope(...)``/``EntityType(...)``, which raise for ``team``.
+SEARCHABLE_ENTITY_KINDS = V1_SEARCHABLE_ENTITY_KINDS | {EntityKind.TEAM}
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +198,12 @@ class ScopeSearchRequest:
     query: str
     kinds: tuple[EntityKind, ...]
     limit: int = MAX_CANDIDATES
+    #: Each caller declares the kinds *it* is allowed to search;
+    #: ``SEARCHABLE_ENTITY_KINDS`` is the ceiling, never the default. Widening
+    #: the ceiling for the subject preflight must not implicitly expose team
+    #: search on the GraphQL field or the model-facing ``resolve_scope.v1``
+    #: tool, both of which CHAOS-3301 owns.
+    allowed_kinds: frozenset[EntityKind] = V1_SEARCHABLE_ENTITY_KINDS
 
     def __post_init__(self) -> None:
         query = self.query.strip()
@@ -185,14 +211,32 @@ class ScopeSearchRequest:
             raise ValueError("Search query must contain 1 to 256 characters")
         if not self.kinds:
             raise ValueError("At least one entity kind is required")
-        if any(
-            kind not in DIRECT_SCOPE_KINDS - {EntityKind.ORGANIZATION}
-            for kind in self.kinds
-        ):
+        if not self.allowed_kinds <= SEARCHABLE_ENTITY_KINDS:
+            raise ValueError("Caller allowlist exceeds the searchable entity ceiling")
+        if any(kind not in self.allowed_kinds for kind in self.kinds):
             raise ValueError("Only approved searchable V1 direct scopes are allowed")
         if self.limit < 1 or self.limit > MAX_CANDIDATES:
             raise ValueError(f"Search limit must be between 1 and {MAX_CANDIDATES}")
         object.__setattr__(self, "query", query)
+
+
+@dataclass(frozen=True, slots=True)
+class MentionResolution:
+    """One subject mention's resolution outcome, in the v2 vocabulary.
+
+    Distinct from ``resolve_query_contract``'s ``DevScopeResolution``, whose
+    ``FORBIDDEN_OR_NOT_FOUND`` conflates not-exists, cross-tenant, and (until
+    this module started catching it) a catalog error. Nothing on this path ever
+    constructs that combined outcome — the preflight has no code path that
+    produces it, which is what makes "the internal combined outcome never
+    leaves the server" structural rather than a filter.
+    """
+
+    outcome: ResolutionOutcome
+    entity: AuthorizedEntity | None
+    candidates: tuple[AuthorizedEntity, ...]
+    catalog_watermark: str
+    query_version: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -527,6 +571,160 @@ class ScopeResolutionService:
         self._cache.put(cache_key, result)
         return result
 
+    async def resolve_mention(
+        self,
+        org_id: str,
+        permission_fingerprint: str,
+        *,
+        lookup_text: str,
+        kinds: tuple[EntityKind, ...],
+        exact: bool = False,
+    ) -> MentionResolution:
+        """Resolve one named subject mention to a per-mention typed outcome.
+
+        The existing service cannot express this: ``resolve()`` collapses every
+        ref to one combined outcome and ``resolve_query_contract`` returns the
+        internal ``FORBIDDEN_OR_NOT_FOUND`` code. Ambiguity is probed against
+        the full ``MAX_CANDIDATES`` page for the same reason
+        ``resolve_query_contract`` documents: truncating first would let an
+        arbitrary one of several real matches be reported as exact.
+
+        **The catalog call is wrapped here deliberately.** ``search()`` has no
+        exception handling of its own — unlike ``resolve()``, which types a
+        catalog failure as ``UNRESOLVED``/``catalog_unavailable`` — so without
+        this wrapper a ClickHouse outage would escape as an exception, surface
+        as ``internal_error``, and make ``CATALOG_UNAVAILABLE`` unreachable.
+        """
+
+        if not org_id or not permission_fingerprint:
+            raise ValueError("Tenant and permission fingerprint are required")
+        if any(kind not in SEARCHABLE_ENTITY_KINDS for kind in kinds) or not kinds:
+            return MentionResolution(
+                outcome=ResolutionOutcome.UNSUPPORTED_KIND,
+                entity=None,
+                candidates=(),
+                catalog_watermark=_UNAVAILABLE_WATERMARK,
+                query_version=QUERY_VERSION,
+            )
+        ordered_kinds = tuple(sorted(set(kinds), key=lambda kind: kind.value))
+        # Built outside the try: a malformed request is a caller defect, not a
+        # catalog outage, and must not be mistyped as one.
+        search_request = (
+            None
+            if exact
+            else ScopeSearchRequest(
+                query=lookup_text[:256],
+                kinds=ordered_kinds,
+                limit=MAX_CANDIDATES,
+                allowed_kinds=SEARCHABLE_ENTITY_KINDS,
+            )
+        )
+        refs = (
+            tuple(ScopeRef(kind, lookup_text[:512]) for kind in ordered_kinds)
+            if exact
+            else ()
+        )
+        try:
+            if search_request is not None:
+                result = await self.search(
+                    org_id, permission_fingerprint, search_request
+                )
+                candidates = result.candidates
+                watermark = result.catalog_watermark
+            else:
+                watermark = await self._catalog.watermark(org_id, ordered_kinds)
+                matches: list[AuthorizedEntity] = []
+                for ref in refs:
+                    matches.extend(
+                        await self._catalog.exact(org_id, ref, limit=MAX_CANDIDATES)
+                    )
+                candidates = _dedupe_entities(matches)[:MAX_CANDIDATES]
+        except Exception:
+            return MentionResolution(
+                outcome=ResolutionOutcome.CATALOG_UNAVAILABLE,
+                entity=None,
+                candidates=(),
+                catalog_watermark=_UNAVAILABLE_WATERMARK,
+                query_version=QUERY_VERSION,
+            )
+        watermark = watermark or _UNAVAILABLE_WATERMARK
+        if not candidates:
+            return MentionResolution(
+                outcome=ResolutionOutcome.NO_AUTHORIZED_MATCH,
+                entity=None,
+                candidates=(),
+                catalog_watermark=watermark,
+                query_version=QUERY_VERSION,
+            )
+        if len(candidates) > 1:
+            return MentionResolution(
+                outcome=ResolutionOutcome.AMBIGUOUS_CANDIDATES,
+                entity=None,
+                candidates=candidates,
+                catalog_watermark=watermark,
+                query_version=QUERY_VERSION,
+            )
+        return MentionResolution(
+            outcome=ResolutionOutcome.EXACT_MATCH,
+            entity=candidates[0],
+            candidates=(),
+            catalog_watermark=watermark,
+            query_version=QUERY_VERSION,
+        )
+
+    def committed_resolution_for(
+        self,
+        entity: AuthorizedEntity,
+        *,
+        org_id: str,
+        base_scope: DevScope,
+        resolved_at: datetime,
+    ) -> DevScopeResolution:
+        """The one construction of an exact-match committed scope.
+
+        Shared by ``resolve_query_contract`` (the legacy ``resolve_scope.v1``
+        path) and the subject preflight, so there is one notion of "committed
+        scope" rather than two that can drift.
+
+        Raises ``ValueError`` for a kind v1 cannot represent (``team``), rather
+        than letting ``DirectScope(...)``/``EntityType(...)`` raise a bare
+        enum error from deep inside scope construction.
+        """
+
+        if entity.kind not in V1_SEARCHABLE_ENTITY_KINDS:
+            raise ValueError(
+                f"{entity.kind.value} has no v1 direct-scope representation"
+            )
+        is_repository = entity.kind is EntityKind.REPOSITORY
+        resolved_scope = DevScope(
+            schema_version="dev_scope.v1",
+            organization_id=org_id,
+            direct_scope=DirectScope(entity.kind.value),
+            repositories=[entity.canonical_id] if is_repository else [],
+            entity_refs=[] if is_repository else [self._contract_entity_ref(entity)],
+            team_ids=[],
+            time_range=base_scope.time_range,
+            comparison_range=base_scope.comparison_range,
+            surface_context=None,
+        )
+        repository_ids = sorted(
+            ({entity.canonical_id} if is_repository else set())
+            | ({entity.repository_id} if entity.repository_id else set())
+        )
+        entity_ids = [] if is_repository else [entity.canonical_id]
+        return DevScopeResolution(
+            schema_version="dev_scope_resolution.v1",
+            requested_scope=base_scope,
+            resolved_scope=resolved_scope,
+            outcome=ScopeResolutionOutcome.EXACT,
+            authorized_repository_ids=repository_ids,
+            authorized_entity_ids=entity_ids,
+            candidates=[],
+            fallbacks=[],
+            warnings=[],
+            resolved_at=resolved_at,
+        )
+
     async def resolve_query_contract(
         self,
         org_id: str,
@@ -553,6 +751,21 @@ class ScopeResolutionService:
         and report it as an exact commit. ``request.limit`` only bounds how
         many typed candidates are returned once the outcome is ambiguous.
         """
+        # A typed guard, not an assumption: ``ScopeSearchRequest``'s allowlist
+        # is now per-caller, so a caller that widened its own allowlist must
+        # not be able to reach ``DirectScope(...)``/``EntityType(...)`` below
+        # with a kind v1 cannot represent and produce a bare enum ValueError
+        # from inside scope construction.
+        unrepresentable = sorted(
+            kind.value
+            for kind in request.kinds
+            if kind not in V1_SEARCHABLE_ENTITY_KINDS
+        )
+        if unrepresentable:
+            raise ValueError(
+                "resolve_scope.v1 cannot represent entity kinds "
+                f"{unrepresentable}; use resolve_mention for those"
+            )
         probe_request = (
             request
             if request.limit == MAX_CANDIDATES
@@ -593,34 +806,10 @@ class ScopeResolutionService:
                 warnings=[],
                 resolved_at=resolved_at,
             )
-        entity = result.candidates[0]
-        is_repository = entity.kind is EntityKind.REPOSITORY
-        resolved_scope = DevScope(
-            schema_version="dev_scope.v1",
-            organization_id=org_id,
-            direct_scope=DirectScope(entity.kind.value),
-            repositories=[entity.canonical_id] if is_repository else [],
-            entity_refs=[] if is_repository else [self._contract_entity_ref(entity)],
-            team_ids=[],
-            time_range=base_scope.time_range,
-            comparison_range=base_scope.comparison_range,
-            surface_context=None,
-        )
-        repository_ids = sorted(
-            ({entity.canonical_id} if is_repository else set())
-            | ({entity.repository_id} if entity.repository_id else set())
-        )
-        entity_ids = [] if is_repository else [entity.canonical_id]
-        return DevScopeResolution(
-            schema_version="dev_scope_resolution.v1",
-            requested_scope=base_scope,
-            resolved_scope=resolved_scope,
-            outcome=ScopeResolutionOutcome.EXACT,
-            authorized_repository_ids=repository_ids,
-            authorized_entity_ids=entity_ids,
-            candidates=[],
-            fallbacks=[],
-            warnings=[],
+        return self.committed_resolution_for(
+            result.candidates[0],
+            org_id=org_id,
+            base_scope=base_scope,
             resolved_at=resolved_at,
         )
 

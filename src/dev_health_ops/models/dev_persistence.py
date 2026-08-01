@@ -239,6 +239,20 @@ class DevRun(Base):
     )
     plan_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     plan_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Folded (orchestrator decision, CHAOS-3299): a dedicated
+    # dev_run_investigation_results table would have duplicated what's
+    # already owned elsewhere -- observations are persisted 1:N in
+    # dev_run_source_observations, and dev_answer_frames is the replay
+    # source of truth. The only post-terminal dev_investigation_result.v1
+    # facts nothing else can reconstruct are which plan steps ran (a step
+    # can be skipped without ever producing an observation) and whether
+    # relationship closure was verified, so those two facts are persisted
+    # directly here instead of a ninth table. NULL for v1 runs and for v2
+    # runs before the investigation stage completes.
+    plan_step_partition: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    relationship_closure_verified: Mapped[bool | None] = mapped_column(nullable=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -619,52 +633,6 @@ class DevRunSourceObservation(Base):
     )
 
 
-class DevRunInvestigationResult(Base):
-    """Wave 3.1: the ``dev_investigation_result.v1`` wrapper for one run.
-
-    Reconciliation delta (not in the original pre-implementation plan): the
-    landed CHAOS-3294 contract has ``dev_investigation_result.v1`` as a
-    distinct top-level object wrapping ``observations`` (persisted 1:N in
-    ``dev_run_source_observations``) plus step-completion bookkeeping
-    (``completed_steps``/``skipped_steps``/``failed_steps`` -- which *plan
-    steps* ran, distinct from which *source observations* exist, since a step
-    can be skipped without ever producing an observation) and
-    ``relationship_closure_verified``. One row per run.
-    """
-
-    __tablename__ = "dev_run_investigation_results"
-
-    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
-    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
-    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
-    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
-    result_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
-    relationship_closure_verified: Mapped[bool] = mapped_column(nullable=False)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    completed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=_utc_now
-    )
-
-    __table_args__ = (
-        UniqueConstraint("run_id", name="uq_dev_run_investigation_results_run"),
-        ForeignKeyConstraint(
-            ["run_id", "org_id", "user_id"],
-            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
-            name="fk_dev_run_investigation_results_run_owner",
-            ondelete="CASCADE",
-        ),
-        Index(
-            "ix_dev_run_investigation_results_owner_run",
-            "org_id",
-            "user_id",
-            "run_id",
-        ),
-    )
-
-
 class DevAnswerFrame(Base):
     """Wave 3.1: the canonical, server-owned ``dev_answer_frame.v1``.
 
@@ -673,7 +641,8 @@ class DevAnswerFrame(Base):
     produces a (minimal) frame, confirmed by the landed no-answer field
     policy (``NO_ANSWER_FRAME_FIELD_POLICY`` classifies every frame field,
     including ``frame_id``/``run_id`` as IDENTIFIER-shaped, rather than
-    omitting the frame entirely).
+    omitting the frame entirely). See ``DevRun.plan_step_partition`` for the
+    related investigation-result step-completion bookkeeping.
     """
 
     __tablename__ = "dev_answer_frames"

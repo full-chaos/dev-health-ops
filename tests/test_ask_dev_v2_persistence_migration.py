@@ -26,7 +26,6 @@ _NEW_TABLES = {
     "dev_run_resolutions",
     "dev_run_subject_sets",
     "dev_run_source_observations",
-    "dev_run_investigation_results",
     "dev_answer_frames",
     "dev_run_narratives",
     "dev_run_stage_diagnostics",
@@ -93,6 +92,8 @@ def test_0074_clean_install_upgrade_and_pre_release_downgrade_are_rehearsable() 
                     "compatibility_projection_version",
                     "plan_id",
                     "plan_version",
+                    "plan_step_partition",
+                    "relationship_closure_verified",
                 }.issubset(columns)
 
                 m75.downgrade()
@@ -103,6 +104,8 @@ def test_0074_clean_install_upgrade_and_pre_release_downgrade_are_rehearsable() 
                     c["name"] for c in sa.inspect(connection).get_columns("dev_runs")
                 }
                 assert "contract_generation" not in columns
+                assert "plan_step_partition" not in columns
+                assert "relationship_closure_verified" not in columns
                 assert "dev_runs" in tables  # 0068's tables are untouched
 
                 m74.upgrade()
@@ -170,13 +173,16 @@ def test_0074_dev_runs_contract_generation_defaults_v1_without_backfill() -> Non
                 m74.upgrade()
             row = connection.execute(
                 sa.text(
-                    "SELECT contract_generation, public_outcome FROM dev_runs "
-                    "WHERE id = :id"
+                    "SELECT contract_generation, public_outcome, "
+                    "plan_step_partition, relationship_closure_verified "
+                    "FROM dev_runs WHERE id = :id"
                 ),
                 {"id": run_id},
             ).one()
             assert row.contract_generation == "v1"
             assert row.public_outcome is None
+            assert row.plan_step_partition is None
+            assert row.relationship_closure_verified is None
     finally:
         engine.dispose()
 

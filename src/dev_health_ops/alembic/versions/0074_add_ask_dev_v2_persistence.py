@@ -1,16 +1,25 @@
 """Add Ask Dev Wave 3.1 v2 persistence (intent, resolution, plans, frames, replay).
 
-Revision ID: 0072
-Revises: 0071
+Revision ID: 0074
+Revises: 0073
 Create Date: 2026-07-31 00:00:00
 
-Additive only. Adds five nullable/defaulted columns to the existing, actively
-written ``dev_runs`` table plus eight new tables FK'd to it. The two new
-``dev_runs`` CHECK constraints are installed ``NOT VALID`` on PostgreSQL (a
-metadata-only operation that does not scan the table) and validated in
-0073, so this migration never holds an ``ACCESS EXCLUSIVE`` lock for the
-duration of a full-table scan on a hot table. The new tables are created
-empty, so their own CHECK constraints need no such split.
+Additive only. Adds seven nullable/defaulted columns to the existing,
+actively written ``dev_runs`` table plus seven new tables FK'd to it. The
+two new ``dev_runs`` CHECK constraints are installed ``NOT VALID`` on
+PostgreSQL (a metadata-only operation that does not scan the table) and
+validated in 0075, so this migration never holds an ``ACCESS EXCLUSIVE``
+lock for the duration of a full-table scan on a hot table. The new tables
+are created empty, so their own CHECK constraints need no such split.
+
+``plan_step_partition``/``relationship_closure_verified`` fold what an
+earlier revision of this branch modeled as a dedicated
+``dev_run_investigation_results`` table: observations are already
+persisted 1:N in ``dev_run_source_observations`` and ``dev_answer_frames``
+is the replay source of truth, so the only post-terminal
+``dev_investigation_result.v1`` facts nothing else reconstructs -- which
+plan steps ran, and the closure bit -- are persisted directly on
+``dev_runs`` instead of a ninth table.
 
 Downgrade exists for isolated pre-release rehearsal only, matching 0068's
 posture: it refuses (raises) if any v2 data is present, rather than silently
@@ -97,6 +106,11 @@ def upgrade() -> None:
     )
     op.add_column(
         "dev_runs", sa.Column("plan_version", sa.String(length=128), nullable=True)
+    )
+    op.add_column("dev_runs", sa.Column("plan_step_partition", _JSON, nullable=True))
+    op.add_column(
+        "dev_runs",
+        sa.Column("relationship_closure_verified", sa.Boolean(), nullable=True),
     )
 
     if is_postgres:
@@ -269,25 +283,6 @@ def upgrade() -> None:
         ["org_id", "user_id", "run_id"],
     )
 
-    # -- dev_run_investigation_results (reconciliation delta) -------------
-    op.create_table(
-        "dev_run_investigation_results",
-        *_owner_columns(),
-        sa.Column("result_id", _UUID, nullable=False),
-        sa.Column("relationship_closure_verified", sa.Boolean(), nullable=False),
-        sa.Column("payload", _JSON, nullable=False),
-        sa.Column("completed_at", sa.DateTime(timezone=True), nullable=False),
-        _created_at_column(),
-        _owner_fk("dev_run_investigation_results"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("run_id", name="uq_dev_run_investigation_results_run"),
-    )
-    op.create_index(
-        "ix_dev_run_investigation_results_owner_run",
-        "dev_run_investigation_results",
-        ["org_id", "user_id", "run_id"],
-    )
-
     # -- dev_answer_frames --------------------------------------------------
     op.create_table(
         "dev_answer_frames",
@@ -392,7 +387,7 @@ def downgrade() -> None:
         ).scalar()
         if v2_rows:
             raise RuntimeError(
-                "refusing to downgrade 0072: dev_runs has "
+                "refusing to downgrade 0074: dev_runs has "
                 f"{v2_rows} row(s) with contract_generation = 'v2'; this "
                 "downgrade is for pre-release rehearsal only"
             )
@@ -401,7 +396,6 @@ def downgrade() -> None:
             "dev_run_resolutions",
             "dev_run_subject_sets",
             "dev_run_source_observations",
-            "dev_run_investigation_results",
             "dev_answer_frames",
             "dev_run_narratives",
             "dev_run_stage_diagnostics",
@@ -412,7 +406,7 @@ def downgrade() -> None:
                 ).scalar()
                 if for_v2_rows:
                     raise RuntimeError(
-                        f"refusing to downgrade 0072: {table} has "
+                        f"refusing to downgrade 0074: {table} has "
                         f"{for_v2_rows} row(s); this downgrade is for "
                         "pre-release rehearsal only"
                     )
@@ -420,7 +414,6 @@ def downgrade() -> None:
     op.drop_table("dev_run_stage_diagnostics")
     op.drop_table("dev_run_narratives")
     op.drop_table("dev_answer_frames")
-    op.drop_table("dev_run_investigation_results")
     op.drop_table("dev_run_source_observations")
     op.drop_table("dev_run_subject_sets")
     op.drop_table("dev_run_resolutions")
@@ -429,6 +422,8 @@ def downgrade() -> None:
     if bind.dialect.name == "postgresql":
         op.execute(f"ALTER TABLE dev_runs DROP CONSTRAINT {_PUBLIC_OUTCOME_CK}")
         op.execute(f"ALTER TABLE dev_runs DROP CONSTRAINT {_CONTRACT_GENERATION_CK}")
+        op.drop_column("dev_runs", "relationship_closure_verified")
+        op.drop_column("dev_runs", "plan_step_partition")
         op.drop_column("dev_runs", "plan_version")
         op.drop_column("dev_runs", "plan_id")
         op.drop_column("dev_runs", "compatibility_projection_version")
@@ -438,6 +433,8 @@ def downgrade() -> None:
         with op.batch_alter_table("dev_runs") as batch:
             batch.drop_constraint(_PUBLIC_OUTCOME_CK, type_="check")
             batch.drop_constraint(_CONTRACT_GENERATION_CK, type_="check")
+            batch.drop_column("relationship_closure_verified")
+            batch.drop_column("plan_step_partition")
             batch.drop_column("plan_version")
             batch.drop_column("plan_id")
             batch.drop_column("compatibility_projection_version")

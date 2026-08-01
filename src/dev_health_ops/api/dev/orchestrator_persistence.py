@@ -190,12 +190,13 @@ class PersistenceRunRecorder:
         )
 
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
-        """Persist every observation, then the wrapper's own bookkeeping.
+        """Persist every observation, then the plan-step partition + closure bit.
 
-        Reconciliation delta (see ``DevRunInvestigationResult`` docstring):
-        the landed contract has ``DevInvestigationResult`` as a distinct
-        top-level object wrapping ``observations`` plus step-completion
-        bookkeeping the observations alone cannot reconstruct.
+        Folded (orchestrator decision, CHAOS-3299): see
+        ``DevPersistenceService.record_investigation_result`` -- observations
+        are still recorded 1:N as before; the wrapper's own bookkeeping
+        (which plan steps ran, and relationship-closure verification) is now
+        set directly on ``dev_runs`` instead of a dedicated ninth table.
         """
 
         for ordinal, observation in enumerate(result.observations):
@@ -204,23 +205,10 @@ class PersistenceRunRecorder:
             org_id=self._org_id,
             user_id=self._user_id,
             run_id=self._run_id,
-            result_id=uuid.UUID(result.result_id),
+            completed_steps=list(result.completed_steps),
+            skipped_steps=list(result.skipped_steps),
+            failed_steps=list(result.failed_steps),
             relationship_closure_verified=result.relationship_closure_verified,
-            completed_at=result.completed_at,
-            payload={
-                "schema_version": result.schema_version,
-                "result_id": result.result_id,
-                "plan_id": result.plan_id,
-                "plan_version": result.plan_version,
-                "run_id": result.run_id,
-                "subject_set_fingerprint": result.subject_set_fingerprint,
-                "subject_entity_id": result.subject_entity_id,
-                "completed_steps": list(result.completed_steps),
-                "skipped_steps": list(result.skipped_steps),
-                "failed_steps": list(result.failed_steps),
-                "relationship_closure_verified": result.relationship_closure_verified,
-                "completed_at": result.completed_at.isoformat(),
-            },
         )
 
     async def record_frame(self, frame: DevAnswerFrame) -> None:

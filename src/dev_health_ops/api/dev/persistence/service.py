@@ -31,7 +31,6 @@ from dev_health_ops.models.dev_persistence import (
     DevMessage,
     DevRun,
     DevRunIntent,
-    DevRunInvestigationResult,
     DevRunNarrative,
     DevRunResolution,
     DevRunSourceObservation,
@@ -200,7 +199,8 @@ _INTENT_PAYLOAD_MAX_BYTES = 16 * 1024
 _RESOLUTION_PAYLOAD_MAX_BYTES = 8 * 1024
 _SUBJECT_SET_PAYLOAD_MAX_BYTES = 16 * 1024
 _SOURCE_OBSERVATION_PAYLOAD_MAX_BYTES = 16 * 1024
-_INVESTIGATION_RESULT_PAYLOAD_MAX_BYTES = 8 * 1024
+_PLAN_STEP_PARTITION_MAX_BYTES = 8 * 1024
+_PLAN_STEP_LIST_MAX_ITEMS = 25
 _FRAME_PAYLOAD_MAX_BYTES = 128 * 1024
 _NARRATIVE_TEXT_MAX_BYTES = 8 * 1024
 _NARRATIVE_PAYLOAD_MAX_BYTES = 16 * 1024
@@ -386,6 +386,29 @@ def _bounded_json(
     if len(encoded.encode("utf-8")) > max_bytes:
         raise DevPersistenceValidationError(f"{field} exceeds {max_bytes} bytes")
     return copied
+
+
+def _bounded_step_list(values: Sequence[str], *, field: str) -> list[str]:
+    """Bound one ``plan_step_partition`` list: at most 25 non-empty entries.
+
+    Mirrors the contract's own ``ShortText`` tuple ``max_length=25`` bound
+    (``DevInvestigationResult.completed_steps`` etc.) as a service-layer
+    double-check, the same posture as every other Wave 3.1 closed-vocabulary
+    re-check.
+    """
+
+    if len(values) > _PLAN_STEP_LIST_MAX_ITEMS:
+        raise DevPersistenceValidationError(
+            f"{field} exceeds {_PLAN_STEP_LIST_MAX_ITEMS} entries"
+        )
+    bounded: list[str] = []
+    for item in values:
+        if not isinstance(item, str) or not item:
+            raise DevPersistenceValidationError(
+                f"{field} entries must be non-empty text"
+            )
+        bounded.append(item)
+    return bounded
 
 
 def _safe_count_summary(value: Mapping[str, Any], *, field: str) -> dict[str, Any]:
@@ -1423,40 +1446,47 @@ class DevPersistenceService:
         org_id: uuid.UUID,
         user_id: uuid.UUID,
         run_id: uuid.UUID,
-        result_id: uuid.UUID,
+        completed_steps: Sequence[str],
+        skipped_steps: Sequence[str],
+        failed_steps: Sequence[str],
         relationship_closure_verified: bool,
-        completed_at: datetime,
-        payload: Mapping[str, Any],
-    ) -> DevRunInvestigationResult:
-        """Persist the ``dev_investigation_result.v1`` wrapper for one run.
+    ) -> DevRun:
+        """Persist the ``dev_investigation_result.v1`` step partition + closure bit.
 
-        Reconciliation delta: not one of the 7 tables in the
-        pre-implementation plan, added because the landed contract has this
-        as a distinct top-level object (completed/skipped/failed plan steps
-        plus relationship-closure verification) that the per-observation
-        ``dev_run_source_observations`` rows alone cannot reconstruct.
+        Folded (orchestrator decision, CHAOS-3299): an earlier revision of
+        this branch modeled this as a dedicated
+        ``dev_run_investigation_results`` table wrapping
+        (result_id, relationship_closure_verified, payload, completed_at).
+        Observations are already persisted 1:N via
+        ``append_source_observation``, and ``dev_answer_frames`` is the
+        replay source of truth -- the only post-terminal facts nothing else
+        reconstructs are which plan steps ran (a step can be skipped without
+        ever producing an observation) and the closure bit, so those two
+        facts are set directly on ``dev_runs`` instead of a ninth table.
         """
 
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
         if run is None:
             raise DevPersistenceNotFound("run not found")
-        record = DevRunInvestigationResult(
-            run_id=run.id,
-            org_id=org_id,
-            user_id=user_id,
-            result_id=result_id,
-            relationship_closure_verified=relationship_closure_verified,
-            payload=_bounded_json(
-                payload,
-                field="investigation_result_payload",
-                max_bytes=_INVESTIGATION_RESULT_PAYLOAD_MAX_BYTES,
-            ),
-            completed_at=completed_at,
-            created_at=self._now(),
+        completed = _bounded_step_list(completed_steps, field="completed_steps")
+        skipped = _bounded_step_list(skipped_steps, field="skipped_steps")
+        failed = _bounded_step_list(failed_steps, field="failed_steps")
+        if (
+            (set(completed) & set(skipped))
+            or (set(completed) & set(failed))
+            or (set(skipped) & set(failed))
+        ):
+            raise DevPersistenceValidationError(
+                "a plan step cannot be in more than one of completed/skipped/failed"
+            )
+        run.plan_step_partition = _bounded_json(
+            {"completed": completed, "skipped": skipped, "failed": failed},
+            field="plan_step_partition",
+            max_bytes=_PLAN_STEP_PARTITION_MAX_BYTES,
         )
-        self.session.add(record)
+        run.relationship_closure_verified = relationship_closure_verified
         await self.session.flush()
-        return record
+        return run
 
     async def record_frame(
         self,
@@ -1472,8 +1502,8 @@ class DevPersistenceService:
 
         One row per terminal run regardless of public outcome -- including
         ``needs_clarification``/``not_found``/``unsupported``/``denied``,
-        confirmed by the landed no-answer field policy (see
-        ``DevRunInvestigationResult`` and the frame model docstring).
+        confirmed by the landed no-answer field policy (see the frame model
+        docstring and ``DevRun.plan_step_partition``).
         """
 
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)

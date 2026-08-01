@@ -188,6 +188,95 @@ def test_multi_node_dependency_cycle_is_rejected():
         )
 
 
+def test_declared_requirement_with_no_matching_step_is_rejected():
+    """Codex re-check finding (MEDIUM, 2026-08-01): the requirement-matching
+    checks proved every *registered step* matches a declared requirement,
+    but never the inverse -- a plan can declare a mandatory
+    source_requirement that no step consumes at all. That passed
+    ``validate_registry`` and only surfaced at run time as a silent
+    UNAVAILABLE/"step_unregistered" observation instead of failing at
+    construction.
+
+    Two registered steps ("a", "b"), both correctly matched -- plus a third,
+    unique mandatory requirement ("c") with no step targeting it at all.
+
+    Kill site verified (2026-08-01) by temporarily removing the
+    unmatched-requirements check: with it removed, this test's
+    ``pytest.raises(StepRequirementMismatchError)`` fails with "DID NOT
+    RAISE". Reverted; suite green again.
+    """
+
+    plan = DevInvestigationPlan(
+        schema_version="dev_investigation_plan.v1",
+        plan_id="investigation.bounded.v1",
+        plan_version="investigation.bounded.v1.0",
+        intent_id=QuestionIntentID.BOUNDED_INVESTIGATION,
+        supported_subject_kinds=(EntityKind.PROJECT,),
+        supported_cardinalities=(Cardinality.SINGULAR,),
+        mandatory_steps=("a", "b"),
+        conditional_steps=(),
+        step_dependencies=(),
+        source_requirements=(
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.STATUS_CHANGE,
+                adapter_id="test.a.v1",
+                requirement_level="mandatory",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.WORK_ITEM,
+                adapter_id="test.b.v1",
+                requirement_level="mandatory",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.WORK_GRAPH,
+                adapter_id="test.c.v1",
+                requirement_level="mandatory",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+        ),
+        batch_strategy="single",
+        per_step_timeout_seconds=5,
+        max_rows_per_step=10,
+        max_bytes_per_step=1_000,
+        enrichment_allowed=False,
+        completion_rule_id="test.rule",
+        completion_rule_version="1",
+    )
+    registry = StepRegistry()
+
+    async def run(_ctx):
+        raise AssertionError("never executed by this structural test")
+
+    for step_id, source_class, adapter_id in (
+        ("a", SourceClass.STATUS_CHANGE, "test.a.v1"),
+        ("b", SourceClass.WORK_ITEM, "test.b.v1"),
+    ):
+        registry.register(
+            PlanStepDefinition(
+                step_id=step_id,
+                plan_id=plan.plan_id,
+                source_class=source_class,
+                adapter_id=adapter_id,
+                requirement_level="mandatory",
+                run=run,
+            )
+        )
+    with pytest.raises(StepRequirementMismatchError):
+        validate_registry(
+            plans_by_intent={QuestionIntentID.BOUNDED_INVESTIGATION: plan},
+            steps=registry,
+            core_intents=frozenset({QuestionIntentID.BOUNDED_INVESTIGATION}),
+        )
+
+
 def test_step_registered_against_the_wrong_adapter_is_rejected():
     """Codex finding (MEDIUM, 2026-08-01, repro): registering both step
     definitions of a two-step plan against the *same* (wrong) adapter

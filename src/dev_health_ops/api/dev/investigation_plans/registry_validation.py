@@ -164,6 +164,24 @@ def validate_registry(
                     f"{expected_level!r}"
                 )
 
+        # Codex finding (MEDIUM, 2026-08-01, re-check): the loop above only
+        # verified the forward direction (every registered step matches a
+        # declared requirement) -- never the inverse. A plan can declare a
+        # mandatory source_requirement no registered step consumes; that
+        # passed validate_registry and only surfaced at run time as a
+        # silent UNAVAILABLE/"step_unregistered" observation instead of
+        # failing at construction, where a requirement with no step to
+        # satisfy it belongs.
+        unmatched_requirements = set(declared_requirements) - set(
+            consumed_requirement_keys
+        )
+        if unmatched_requirements:
+            raise StepRequirementMismatchError(
+                f"plan {plan.plan_id!r} declares source_requirement(s) with "
+                f"no registered step to satisfy them: "
+                f"{sorted(unmatched_requirements)}"
+            )
+
         _check_acyclic(plan)
 
 

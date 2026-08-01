@@ -70,6 +70,23 @@ class SyncConfigurationService:
         if is_active is not None:
             config.is_active = is_active
 
+        from dev_health_ops.api.services.sync_coverage import (
+            invalidate_sync_coverage_projection,
+        )
+
+        integration_id = getattr(config, "integration_id", None)
+        if integration_id is not None:
+            await invalidate_sync_coverage_projection(
+                self.session,
+                self.org_id,
+                integration_id=integration_id,
+            )
+        else:
+            await invalidate_sync_coverage_projection(
+                self.session,
+                self.org_id,
+                sync_config_id=getattr(config, "id"),
+            )
         await self.session.flush()
         return config
 

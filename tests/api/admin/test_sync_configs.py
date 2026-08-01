@@ -35,6 +35,7 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
     SyncWatermark,
 )
+from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 from dev_health_ops.models.users import Organization, User
 from dev_health_ops.sync.canonical_incident_gate import CANONICAL_INCIDENT_FEATURE_KEY
 from tests._helpers import tables_of
@@ -62,6 +63,7 @@ _TABLES = tables_of(
     SyncRunReferenceDiscovery,
     SyncRunUnit,
     SyncWatermark,
+    SyncCoverageProjection,
 )
 
 

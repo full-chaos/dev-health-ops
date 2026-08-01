@@ -27,6 +27,7 @@ from dev_health_ops.models import (
     SyncComputeCheckpointStatus,
     SyncComputeType,
     SyncConfiguration,
+    SyncCoverageProjection,
     SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
@@ -1942,6 +1943,16 @@ def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
         integration_id=run.integration_id,
     )
     db_session.add(config)
+    db_session.flush()
+    projection = SyncCoverageProjection(
+        org_id=run.org_id,
+        sync_config_id=config.id,
+        history_lookback_days=3650,
+        projection_version=1,
+        generated_at=datetime.now(timezone.utc),
+        payload={},
+    )
+    db_session.add(projection)
     unit.status = SyncRunUnitStatus.SUCCESS.value
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
@@ -1959,6 +1970,7 @@ def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
 
     db_session.refresh(run)
     db_session.refresh(config)
+    db_session.refresh(projection)
     assert first["status"] == "finalized"
     assert second["status"] == "already_dispatched"
     assert run.status == SyncRunStatus.SUCCESS.value
@@ -1978,6 +1990,7 @@ def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
     assert config.last_sync_success is True
     assert config.last_sync_error is None
     assert config.last_sync_stats == {"completed_units": 1, "failed_units": 0}
+    assert projection.invalidated_at is not None
 
 
 def test_finalize_aggregates_partial_failed(db_session, monkeypatch):

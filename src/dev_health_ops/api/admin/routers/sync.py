@@ -37,11 +37,11 @@ from dev_health_ops.api.services.configuration import (
 from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.api.services.sync_coverage import (
     HISTORY_LOOKBACK_DAYS,
-    SyncCoverageBusyError,
     SyncCoverageComplexityError,
+    SyncCoveragePendingError,
     build_sync_coverage_summary,
     ensure_utc,
-    sync_coverage_admission_slot,
+    invalidate_sync_coverage_projection,
 )
 from dev_health_ops.models import SyncRun
 from dev_health_ops.models.integrations import (
@@ -1195,6 +1195,11 @@ async def _replace_planner_repository_selection(
         existing.is_enabled = True
         existing.last_seen_at = datetime.now(timezone.utc)
 
+    await invalidate_sync_coverage_projection(
+        session,
+        org_id,
+        integration_id=integration_id,
+    )
     await session.flush()
     refreshed_sources = await _planner_sources_for_config(session, org_id, config)
     return _repo_selection_from_sources(config, refreshed_sources)
@@ -1957,50 +1962,28 @@ async def get_sync_config_repositories(
 )
 async def get_sync_config_coverage(
     config_id: str,
-    history_lookback_days: int = Query(
-        default=HISTORY_LOOKBACK_DAYS,
-        ge=1,
-        le=3650,
-        description=(
-            "Maximum history window. The response may use a smaller effective "
-            "window when the requested sync-unit history exceeds safety limits."
-        ),
-    ),
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncCoverageSummaryResponse:
     try:
-        # Admit before the first database query. Saturated coverage traffic
-        # must not consume PgBouncer connections needed by unrelated routes.
-        async with sync_coverage_admission_slot():
-            svc = SyncConfigurationService(session, org_id)
-            config = await svc.get_by_id(config_id)
-            if config is None:
-                raise HTTPException(
-                    status_code=404, detail="Sync configuration not found"
-                )
-            payload = await build_sync_coverage_summary(
-                session,
-                org_id,
-                config,
-                lookback_days=history_lookback_days,
-            )
-    except SyncCoverageBusyError as exc:
-        logger.warning(
-            "sync_coverage_request_rejected_busy",
-            extra={
-                "org_id": org_id,
-                "sync_config_id": config_id,
-                "history_lookback_days": history_lookback_days,
-            },
+        svc = SyncConfigurationService(session, org_id)
+        config = await svc.get_by_id(config_id)
+        if config is None:
+            raise HTTPException(status_code=404, detail="Sync configuration not found")
+        payload = await build_sync_coverage_summary(
+            session,
+            org_id,
+            config,
+            lookback_days=HISTORY_LOOKBACK_DAYS,
         )
+    except SyncCoveragePendingError as exc:
         raise HTTPException(
             status_code=503,
             detail={
-                "code": "sync_coverage_busy",
+                "code": "sync_coverage_projection_pending",
                 "message": str(exc),
             },
-            headers={"Retry-After": "5"},
+            headers={"Retry-After": "30"},
         ) from exc
     except SyncCoverageComplexityError as exc:
         raise HTTPException(
@@ -2009,8 +1992,7 @@ async def get_sync_config_coverage(
                 "code": "sync_coverage_too_large",
                 "message": (
                     "Coverage scope or history is too large to compute safely. "
-                    "Reduce the sync configuration scope or retry with a smaller "
-                    "history_lookback_days value."
+                    "Reduce the sync configuration scope and retry."
                 ),
                 "stage": exc.stage,
                 "limit": exc.limit,
@@ -2211,6 +2193,20 @@ async def update_sync_config(
                 await _upsert_scheduled_job(session, child, org_id)
             await session.flush()
 
+    integration_id = getattr(updated, "integration_id", None)
+    if integration_id is not None:
+        await invalidate_sync_coverage_projection(
+            session,
+            org_id,
+            integration_id=integration_id,
+        )
+    else:
+        await invalidate_sync_coverage_projection(
+            session,
+            org_id,
+            sync_config_id=getattr(updated, "id"),
+        )
+
     credential_id = await _integration_credential_id_for_config(
         session, updated, org_id
     )
@@ -2319,6 +2315,11 @@ async def trigger_sync_config(
             status_code=400,
             detail="Sync configuration has no linked integration",
         )
+    await invalidate_sync_coverage_projection(
+        session,
+        org_id,
+        sync_config_id=getattr(config, "id"),
+    )
     if not trigger.dispatch_required:
         await session.commit()
         return {
@@ -2444,6 +2445,11 @@ async def trigger_sync_config_backfill(
                 status_code=400,
                 detail="Sync configuration has no linked integration",
             )
+        await invalidate_sync_coverage_projection(
+            session,
+            org_id,
+            sync_config_id=getattr(config, "id"),
+        )
         if not trigger.dispatch_required:
             await session.commit()
             return {

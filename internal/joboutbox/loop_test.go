@@ -109,23 +109,21 @@ func TestReconcilerLoopImmediateNoopStepOpensReadiness(t *testing.T) {
 func TestReconcilerLoopAccumulatesResultsAndExportsLowCardinalityMetrics(t *testing.T) {
 	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
 	results := []StepResult{{Claimed: 2, Delivered: 1, Retried: 1}, {Claimed: 3, Dead: 1, LeaseLost: 2}}
-	steps := make(chan struct{}, 2)
 	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
 		result := results[0]
 		results = results[1:]
-		steps <- struct{}{}
 		return result, nil
 	}), clock)
-	if err := loop.Start(context.Background()); err != nil {
+	ctx := context.Background()
+	if err := loop.step(ctx, clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	<-steps
 	clock.mu.Lock()
 	clock.now = clock.now.Add(3 * time.Second)
-	ticker := clock.ticker
 	clock.mu.Unlock()
-	ticker.ticks <- clock.Now()
-	<-steps
+	if err := loop.step(ctx, clock.Now()); err != nil {
+		t.Fatal(err)
+	}
 
 	var metrics bytes.Buffer
 	if err := loop.WritePrometheus(&metrics); err != nil {
@@ -146,9 +144,6 @@ func TestReconcilerLoopAccumulatesResultsAndExportsLowCardinalityMetrics(t *test
 	}
 	if strings.Contains(metrics.String(), "{") {
 		t.Fatalf("reconciler metrics must not expose labels:\n%s", metrics.String())
-	}
-	if err := loop.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
 	}
 }
 

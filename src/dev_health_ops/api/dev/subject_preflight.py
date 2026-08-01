@@ -59,6 +59,7 @@ from .preflight_outcomes import (
 )
 from .question_interpreter import InterpretedQuestion, QuestionInterpreter
 from .scope_service import (
+    SEARCHABLE_ENTITY_KINDS,
     V1_SEARCHABLE_ENTITY_KINDS,
     AuthorizedEntity,
     EntityKind,
@@ -116,16 +117,27 @@ class SubjectPreflightResult:
     allowed_tools: frozenset[ToolID]
     #: Content-free code recorded on the run row. Never question or entity text.
     diagnostic: str
+    #: Mention IDs whose lack of a committed subject must block a
+    #: subject-bearing tool. Excludes unresolved *untyped* mentions, which we
+    #: are not confident were subjects at all.
+    blocking_mention_ids: frozenset[str] = frozenset()
+    #: True when a bare name went unresolved. The run proceeds organization-
+    #: wide exactly as it does today, but the legacy CHAOS-3289 backstop is
+    #: re-armed as terminal for it: that check judges the model's own answer
+    #: text, so it fires only if the answer actually narrates the name.
+    legacy_guard_required: bool = False
 
     @property
     def all_subjects_committed(self) -> bool:
-        """Whether every mention currently holds an ``exact_match``."""
+        """Whether every *blocking* mention currently holds an exact match."""
 
-        if self.ledger is None:
+        if self.ledger is None or not self.blocking_mention_ids:
             return True
+        latest = self.ledger.latest_by_mention()
         return all(
-            entry.outcome is ResolutionOutcome.EXACT_MATCH
-            for entry in self.ledger.latest_by_mention().values()
+            latest[mention_id].outcome is ResolutionOutcome.EXACT_MATCH
+            for mention_id in self.blocking_mention_ids
+            if mention_id in latest
         )
 
 
@@ -219,13 +231,21 @@ class SubjectPreflight:
 
         await phase(RunState.RESOLVING_SUBJECTS)
         context_ref_ids = self._context_ref_ids(request)
+        untyped_ids = interpretation.untyped_mention_ids
+        all_kinds = tuple(sorted(SEARCHABLE_ENTITY_KINDS, key=lambda kind: kind.value))
         resolutions = await asyncio.gather(
             *(
                 self._scope_service.resolve_mention(
                     org_id,
                     permission_fingerprint,
                     lookup_text=mention.normalized_lookup_text,
-                    kinds=(EntityKind(mention.requested_entity_kind.value),),
+                    kinds=(
+                        # A bare name states no kind, so every searchable kind
+                        # is a legitimate reading of it.
+                        all_kinds
+                        if mention.mention_id in untyped_ids
+                        else (EntityKind(mention.requested_entity_kind.value),)
+                    ),
                     exact=mention.normalized_lookup_text in context_ref_ids,
                 )
                 for mention in mentions
@@ -251,11 +271,23 @@ class SubjectPreflight:
         )
 
         latest = ledger.latest_by_mention()
+        blocking_ids = frozenset(
+            mention.mention_id
+            for mention in mentions
+            if mention.mention_id not in untyped_ids
+        )
+        unresolved_untyped = any(
+            latest[mention.mention_id].outcome in UNRESOLVED_OUTCOMES
+            for mention in mentions
+            if mention.mention_id in untyped_ids
+        )
         # Precedence: the lowest-ordinal unresolved mention wins. Stable and
         # explainable ("the first thing you named"), and independent of catalog
         # latency — a severity ordering would let a slow catalog change the
         # reported outcome between runs, which directly breaks determinism.
         for mention in mentions:
+            if mention.mention_id not in blocking_ids:
+                continue
             entry = latest[mention.mention_id]
             if entry.outcome in UNRESOLVED_OUTCOMES:
                 return self._terminate(
@@ -268,6 +300,26 @@ class SubjectPreflight:
                     conversation_id=conversation_id,
                     generated_at=generated_at,
                 )
+
+        if unresolved_untyped:
+            # A bare name we could not resolve is not proof of a subject, so
+            # blocking here would break questions like "what is our DORA
+            # score?". The run continues organization-wide — today's behaviour
+            # — with the legacy backstop re-armed as terminal, which judges the
+            # model's own answer text and so fires only if the answer actually
+            # narrates the unresolved name.
+            return SubjectPreflightResult(
+                decision=PreflightDecision.PROCEED,
+                interpretation=interpretation,
+                ledger=ledger,
+                committed_resolution=None,
+                answer=None,
+                outcome=None,
+                allowed_tools=ALL_TOOLS,
+                blocking_mention_ids=blocking_ids,
+                legacy_guard_required=True,
+                diagnostic="proceeded_unresolved_bare_name",
+            )
 
         committed = [
             latest[mention.mention_id].committed_entity_ref for mention in mentions
@@ -330,6 +382,7 @@ class SubjectPreflight:
             # channel unreachable on this path, without renaming a token that
             # five published v1 schemas carry.
             allowed_tools=ALL_TOOLS - {ToolID.RESOLVE_SCOPE},
+            blocking_mention_ids=frozenset(mention.mention_id for mention in mentions),
             diagnostic="proceeded_committed_subject",
         )
 

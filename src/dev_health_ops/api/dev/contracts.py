@@ -693,6 +693,11 @@ class DevAnswer(ContractModel):
 DevTranscriptRunState = Literal[
     "accepted",
     "resolving_scope",
+    # CHAOS-3292 preflight phases. A transcript can be fetched while a run is
+    # still in flight, so omitting these turned an in-progress run into a
+    # server error at transcript validation rather than a rejected state.
+    "interpreting",
+    "resolving_subjects",
     "model_decision",
     "tool_validation",
     "tool_execution",

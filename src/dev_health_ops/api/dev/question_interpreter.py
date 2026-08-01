@@ -275,6 +275,70 @@ def _candidate_from(match: re.Match[str]) -> _MentionCandidate | None:
     return _MentionCandidate(start=start, span=span, kind=kind)
 
 
+#: A bare capitalized or quoted span, with no kind noun anywhere beside it.
+_BARE_NAME = re.compile(rf"(?:{_QUOTED}|(?P<plain>{_NAME}))")
+
+_WORD_PUNCTUATION = re.compile(r"[^\w]+", re.UNICODE)
+
+
+def _strip_word_punctuation(word: str) -> str:
+    """``what's`` -> ``whats``, so contractions match the stop-word list."""
+
+    return _WORD_PUNCTUATION.sub("", word)
+
+
+def _opens_a_sentence(question: str, start: int) -> bool:
+    prefix = question[:start].rstrip()
+    return not prefix or prefix[-1] in ".!?;:"
+
+
+def untyped_name_candidates(
+    question: str, typed: Sequence[str] = ()
+) -> tuple[str, ...]:
+    """Capitalized or quoted spans the kind-noun grammar did not claim.
+
+    "How is Nightfall doing?" names a subject as plainly as "the Nightfall
+    project" does; only the noun that would let us *type* it is missing. These
+    spans are resolved across every searchable kind, and — crucially — an
+    unresolved one does **not** terminate the run, because we are not confident
+    the span was a subject at all ("What is our DORA score?" would otherwise
+    break). It re-arms the legacy backstop instead, which judges the model's
+    own answer text and is exactly today's behaviour for this shape.
+    """
+
+    claimed = {value.casefold() for value in typed}
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _BARE_NAME.finditer(question):
+        raw = match.group("quoted") or match.group("plain")
+        if raw is None:
+            continue
+        span = raw.strip()
+        if len(span) < 2 or len(span) > 256:
+            continue
+        start = match.start("quoted")
+        if start < 0:
+            start = match.start("plain")
+        normalized = _normalize(span)
+        words = [_strip_word_punctuation(word) for word in normalized.split(" ")]
+        words = [word for word in words if word]
+        if not words or all(word in _NAME_STOP_WORDS for word in words):
+            continue
+        # A single capitalized word that *opens* a sentence is capitalized by
+        # grammar, not by naming: "Anything about X?" must not mint a subject
+        # called "Anything". A multi-word span, or one anywhere else in the
+        # sentence, is still a candidate.
+        if len(words) == 1 and _opens_a_sentence(question, start):
+            continue
+        if normalized in seen or any(normalized in name for name in claimed):
+            continue
+        if any(name in normalized for name in claimed):
+            continue
+        seen.add(normalized)
+        found.append(span)
+    return tuple(found[:MAX_MENTIONS])
+
+
 def extract_mentions(
     question: str,
     *,
@@ -322,7 +386,12 @@ def extract_mentions(
         seen.add(key)
         ordered.append(candidate)
 
-    if not ordered:
+    # A context ref stands in for the subject only when the question named
+    # *nothing at all* — including a name the kind-noun grammar could not type.
+    # Substituting the page's project for a name we merely failed to parse is
+    # the fabricated-premise defect wearing a different costume: the run would
+    # answer about the page's entity under the name the user typed.
+    if not ordered and not untyped_name_candidates(question):
         for ref in context_refs:
             try:
                 kind = EntityKind(ref.entity_type.value)
@@ -698,6 +767,11 @@ class IntentClassifier(Protocol):
 class InterpretedQuestion:
     intent: DevQuestionIntent
     mentions: tuple[DevSubjectMention, ...]
+    #: Mention IDs minted from a bare name the kind-noun grammar could not
+    #: type. They are resolved across every searchable kind, and an unresolved
+    #: one re-arms the legacy backstop rather than terminating the run — see
+    #: ``untyped_name_candidates``.
+    untyped_mention_ids: frozenset[str] = frozenset()
 
     @property
     def mention_by_id(self) -> dict[str, DevSubjectMention]:
@@ -725,6 +799,7 @@ class QuestionInterpreter:
         mentions = extract_mentions(
             request.question, context_refs=context_refs, mint_id=self._mint_id
         )
+        mentions, untyped_ids = self._add_untyped_mentions(request.question, mentions)
         normalized = _normalize(request.question)
         signals = _Signals(
             normalized=normalized,
@@ -787,7 +862,47 @@ class QuestionInterpreter:
             client_hint_deprecation_warning=CLIENT_HINT_DEPRECATION_WARNING,
             generated_at=self._now(),
         )
-        return InterpretedQuestion(intent=intent, mentions=mentions)
+        return InterpretedQuestion(
+            intent=intent,
+            mentions=mentions,
+            untyped_mention_ids=frozenset(untyped_ids)
+            & {mention.mention_id for mention in mentions},
+        )
+
+    def _add_untyped_mentions(
+        self, question: str, mentions: tuple[DevSubjectMention, ...]
+    ) -> tuple[tuple[DevSubjectMention, ...], set[str]]:
+        """Mint a mention for each bare name the kind-noun grammar missed.
+
+        ``requested_entity_kind`` is a **declared default** for these, because
+        the user did not state a kind — the preflight searches every kind, and
+        the ledger's committed reference carries whichever kind actually
+        matched. Recording a default is the honest option: the alternative is
+        no mention at all, which is how an unresolved name reaches an answer.
+        """
+
+        typed = [mention.original_text_span for mention in mentions]
+        candidates = untyped_name_candidates(question, typed)
+        if not candidates:
+            return mentions, set()
+        merged = list(mentions)
+        untyped_ids: set[str] = set()
+        for span in candidates:
+            if len(merged) >= MAX_MENTIONS:
+                break
+            mention_id = self._mint_id()
+            untyped_ids.add(mention_id)
+            merged.append(
+                DevSubjectMention(
+                    schema_version="dev_subject_mention.v1",
+                    mention_id=mention_id,
+                    mention_ordinal=len(merged),
+                    original_text_span=span[:2048],
+                    requested_entity_kind=EntityKind.PROJECT,
+                    normalized_lookup_text=_normalize(span)[:2048],
+                )
+            )
+        return tuple(merged), untyped_ids
 
     async def _apply_fallback(
         self,
@@ -873,6 +988,20 @@ class QuestionInterpreter:
             # author an entity name" structural: a name it invented is not in
             # the user's question, so it cannot survive this check.
             if not raw_span or raw_span not in question:
+                return None
+            # Substring alone is too weak: a single character, or a fragment
+            # cutting across word boundaries, is present in almost any question
+            # and would let the classifier point at an arbitrary catalog entry
+            # while technically quoting the user.
+            if len(raw_span.strip()) < 2 or raw_span != raw_span.strip():
+                return None
+            if not re.search(rf"(?<!\w){re.escape(raw_span)}(?!\w)", question):
+                return None
+            if all(
+                _strip_word_punctuation(word) in _NAME_STOP_WORDS
+                for word in _normalize(raw_span).split(" ")
+                if word
+            ):
                 return None
             try:
                 kind = EntityKind(raw_kind)

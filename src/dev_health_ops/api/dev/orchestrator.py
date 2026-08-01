@@ -151,6 +151,17 @@ def _named_entity_phrases(text: str) -> frozenset[str]:
 #: The server-owned copy for the legacy CHAOS-3289 backstop, reachable only
 #: from the flag-off (no-preflight) path. Split out of the predicate so a
 #: telemetry-only firing on the preflight path cannot produce public copy.
+#: The subset of guard reasons that say something about the *named entity*
+#: rather than about the shape of the answer. Only these keep the backstop
+#: terminal on a preflight run with an unresolved bare name.
+_NAME_SPECIFIC_GUARD_REASONS = frozenset(
+    {
+        "resolve_scope_ambiguous",
+        "resolve_scope_not_found",
+        "narrated_unresolved_entity",
+    }
+)
+
 _LEGACY_GUARD_TERMINALS: dict[str, tuple[str, str]] = {
     "resolve_scope_ambiguous": (
         "scope_ambiguous",
@@ -305,6 +316,7 @@ class RunRecorder(Protocol):
         provider_fingerprint: str | None,
         model_fingerprint: str | None,
         prompt_checksum: str | None,
+        prompt_version: str | None,
     ) -> None: ...
 
 
@@ -344,6 +356,7 @@ class NullRunRecorder:
         provider_fingerprint: str | None,
         model_fingerprint: str | None,
         prompt_checksum: str | None,
+        prompt_version: str | None,
     ) -> None:
         del (
             state,
@@ -354,6 +367,7 @@ class NullRunRecorder:
             provider_fingerprint,
             model_fingerprint,
             prompt_checksum,
+            prompt_version,
         )
 
 
@@ -506,6 +520,7 @@ class DevOrchestrator:
         provider_fingerprint: str | None = None
         model_fingerprint: str | None = None
         prompt_checksum: str | None = None
+        prompt_version: str | None = None
         resolution: DevScopeResolution | None = None
         provider_continuation: tuple[AgentMessage, ...] = ()
         terminal_written = False
@@ -557,6 +572,7 @@ class DevOrchestrator:
                 provider_fingerprint=provider_fingerprint,
                 model_fingerprint=model_fingerprint,
                 prompt_checksum=prompt_checksum,
+                prompt_version=prompt_version,
             )
             terminal_written = True
             event = OrchestratorEvent(
@@ -718,6 +734,10 @@ class DevOrchestrator:
                         prior_turns=prior_turns,
                         tool_results=tuple(tool_results),
                         allowed_tools=allowed_tools,
+                        subject_committed=(
+                            preflight_result is not None
+                            and preflight_result.committed_resolution is not None
+                        ),
                     )
                 except ValueError as exc:
                     # A synthetic repair turn (CHAOS-3288) added on top of an
@@ -743,6 +763,7 @@ class DevOrchestrator:
                         ),
                     )
                 prompt_checksum = composed.checksum
+                prompt_version = composed.version
                 prompt_bytes = len(composed.system_text.encode()) + len(
                     composed.user_text.encode()
                 )
@@ -1175,7 +1196,9 @@ class DevOrchestrator:
                     )
                     if guard_reason is not None:
                         if preflight_result is not None and not (
-                            self._legacy_guard_is_terminal(preflight_result)
+                            self._legacy_guard_is_terminal(
+                                preflight_result, guard_reason
+                            )
                         ):
                             # TRD §10: kept as defense in depth, but it must
                             # not create public copy or delete an answer once
@@ -1695,16 +1718,32 @@ class DevOrchestrator:
         return None
 
     @staticmethod
-    def _legacy_guard_is_terminal(preflight: SubjectPreflightResult | None) -> bool:
+    def _legacy_guard_is_terminal(
+        preflight: SubjectPreflightResult | None, reason: str
+    ) -> bool:
         """Whether a CHAOS-3289 guard firing may still terminate the run.
 
         A named seam rather than an inline condition so a mutation test can
         defeat exactly this decision and observe which acceptance case notices
         (TRD §10: on the preflight path a firing is a cutover defect to record,
         not an outcome to act on).
+
+        The flag-off path keeps every reason terminal — the backstop is the
+        only check there is. A preflight run that saw a bare name it could not
+        resolve keeps only the reasons that are *evidence about that name*: the
+        answer narrating it, or a resolution attempt that came back ambiguous
+        or not-found. ``no_evidence_backed_claims`` stays telemetry even then,
+        because it is a proxy for the shape of the answer rather than a
+        statement about the unresolved name, and terminating on it would fail
+        an ordinary organization-wide question that merely happens to contain
+        a capitalized acronym.
         """
 
-        return preflight is None
+        if preflight is None:
+            return True
+        return (
+            preflight.legacy_guard_required and reason in _NAME_SPECIFIC_GUARD_REASONS
+        )
 
     @staticmethod
     def _subject_gate_rejection(

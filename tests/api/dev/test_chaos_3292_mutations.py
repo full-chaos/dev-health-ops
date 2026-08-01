@@ -104,6 +104,16 @@ def _proceed_anyway(keep_ledger: bool) -> Any:
             answer=None,
             outcome=None,
             allowed_tools=frozenset(ToolID),
+            # Defeating the *pre-loop* gate must not also erase what the
+            # dispatch gate reads, or M1a would be testing two mutations.
+            blocking_mention_ids=(
+                result.blocking_mention_ids
+                or frozenset(
+                    mention.mention_id for mention in result.interpretation.mentions
+                )
+                if keep_ledger
+                else frozenset()
+            ),
             diagnostic="mutated_proceed",
         )
 
@@ -372,7 +382,7 @@ async def test_m5_legacy_guard_must_not_terminate_a_preflight_run(
     monkeypatch.setattr(
         DevOrchestrator,
         "_legacy_guard_is_terminal",
-        staticmethod(lambda _preflight: True),
+        staticmethod(lambda _preflight, _reason: True),
     )
     mutated = await case_a4()
 

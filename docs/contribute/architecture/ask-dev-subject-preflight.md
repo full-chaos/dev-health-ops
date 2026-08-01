@@ -54,6 +54,21 @@ in flight.
 
 ### Interpretation
 
+A subject is recognized two ways. A name beside a kind noun ("the Ask Dev
+project", "project Ask Dev") is typed directly. A bare name with no such noun
+("How is Nightfall doing?") is still recognized, and is resolved across every
+searchable kind — but because we cannot be sure a bare capitalized word was a
+subject at all, failing to resolve one does **not** stop the run. It falls back
+to today's behaviour: an organization-wide answer with the previous
+named-entity backstop re-armed, which compares the name against the model's own
+answer text and stops only an answer that actually narrates it. "What is our
+DORA score?" therefore still answers normally.
+
+Page context is used as the subject only when the question named nothing at
+all, including nothing we merely failed to type. Substituting the page's
+project for a name we could not parse would answer about one entity under
+another's name.
+
 Intent comes from deterministic recognizers over a normalized question, with
 an optional constrained model fallback for low-confidence cases. The
 recognizers do lexical matching, and the important property is not the
@@ -74,7 +89,12 @@ never falls back to organization scope.
 
 Each mention resolves to exactly one of five outcomes: an exact match,
 ambiguous candidates, no authorized match, a temporarily unavailable catalog,
-or an unsupported kind. Every catalog query is filtered by organization in
+or an unsupported kind. Committing requires the name to **equal** an entity's
+label or identifier: the catalog's text search matches substrings, so a sole
+result for a partial name ("the Dev project") is offered back as a candidate
+rather than committed as though it were what you meant.
+
+Every catalog query is filtered by organization in
 SQL, so an entity belonging to another tenant is simply absent — it reads as
 "no authorized match", never as "forbidden", and nothing about it appears in
 any user-visible string.
@@ -102,7 +122,7 @@ advertised exactly as before.
 | Every named subject resolved | The answer, scoped to that subject |
 | The question named nothing | An organization-wide answer, as before |
 | A named subject does not exist here | "No matching subject was found" |
-| A name matches several entities | A request to say which one |
+| A name matches several entities, or only partially | A request to say which one |
 | The catalog is briefly unavailable | "Temporarily unavailable", retryable |
 | A named team, or several named subjects at once | "Not supported yet" |
 
@@ -121,9 +141,12 @@ did before: no interpretation, no preflight, every tool advertised, and the
 previous named-entity backstop still terminating.
 
 With it on, that backstop is kept as defense in depth but is **telemetry
-only** — it records a content-free reason code on the run row and does not
-change the outcome. A firing there means the new path missed something and is
-worth investigating, not worth acting on mid-run.
+only** once a subject is committed — it records a content-free reason code on
+the run row and does not change the outcome. A firing there means the new path
+missed something and is worth investigating, not worth acting on mid-run. The
+one exception is a run that saw a bare name it could not resolve: there the
+server has no committed subject to judge against, so the backstop stays
+terminal for the reasons that are evidence about that name.
 
 ## Diagnostics
 

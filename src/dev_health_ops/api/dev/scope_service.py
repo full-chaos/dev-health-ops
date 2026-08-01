@@ -656,18 +656,30 @@ class ScopeResolutionService:
                 catalog_watermark=watermark,
                 query_version=QUERY_VERSION,
             )
-        if len(candidates) > 1:
+        # The catalog's text search is a ``%query%`` LIKE, so a *sole* result is
+        # not the same thing as an exact match: "the Dev project" returns only
+        # "Ask Dev" and would otherwise commit it, answering about an entity
+        # the user did not name. Committing therefore requires the name to
+        # equal a label or canonical id outright; a partial name that matched
+        # something real is offered back as candidates instead.
+        wanted = lookup_text.strip().casefold()
+        exact_matches = tuple(
+            candidate
+            for candidate in candidates
+            if wanted in {candidate.canonical_id.casefold(), candidate.label.casefold()}
+        )
+        if len(exact_matches) == 1:
             return MentionResolution(
-                outcome=ResolutionOutcome.AMBIGUOUS_CANDIDATES,
-                entity=None,
-                candidates=candidates,
+                outcome=ResolutionOutcome.EXACT_MATCH,
+                entity=exact_matches[0],
+                candidates=(),
                 catalog_watermark=watermark,
                 query_version=QUERY_VERSION,
             )
         return MentionResolution(
-            outcome=ResolutionOutcome.EXACT_MATCH,
-            entity=candidates[0],
-            candidates=(),
+            outcome=ResolutionOutcome.AMBIGUOUS_CANDIDATES,
+            entity=None,
+            candidates=exact_matches or candidates,
             catalog_watermark=watermark,
             query_version=QUERY_VERSION,
         )

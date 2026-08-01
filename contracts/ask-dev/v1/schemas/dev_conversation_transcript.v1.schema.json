@@ -1211,6 +1211,8 @@
           "enum": [
             "accepted",
             "resolving_scope",
+            "interpreting",
+            "resolving_subjects",
             "model_decision",
             "tool_validation",
             "tool_execution",

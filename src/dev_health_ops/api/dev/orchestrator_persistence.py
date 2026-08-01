@@ -147,11 +147,12 @@ class PersistenceRunRecorder:
         provider_fingerprint: str | None,
         model_fingerprint: str | None,
         prompt_checksum: str | None,
+        prompt_version: str | None = None,
     ) -> None:
-        # Read from the composer rather than repeated as a literal: this row is
-        # the run's prompt provenance, and a hardcoded copy silently claims the
-        # previous prompt ran after CHAOS-3292 bumped it to v2.
-        prompt_version = PROMPT_VERSION
+        # Whichever prompt actually composed, not a literal: this row is the
+        # run's prompt provenance, and the composer now emits v1 or v2
+        # depending on whether the server committed a subject.
+        prompt_version = prompt_version or PROMPT_VERSION
         if prompt_checksum is not None:
             prompt_version = f"{prompt_version}:sha256:{prompt_checksum}"
         terminal_reason = (

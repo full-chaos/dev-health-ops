@@ -29,8 +29,9 @@ that step, and each means something different:
   different workspace, deliberately: the reply cannot be used to discover
   whether something exists elsewhere. Check the spelling, or the workspace you
   are signed in to.
-- **"More than one authorized entity matches..."** The name is ambiguous. Ask
-  again naming exactly which one you mean.
+- **"More than one authorized entity matches..."** The name is ambiguous, or
+  it is only part of a name. Ask again with the full name of exactly the one
+  you mean — a partial name is never resolved to a best guess.
 - **"This answer is temporarily unavailable."** The catalog could not be
   reached. This one is worth retrying in a few minutes; the others are not.
 

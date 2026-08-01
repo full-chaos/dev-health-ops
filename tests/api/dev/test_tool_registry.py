@@ -105,6 +105,47 @@ def test_unknown_and_cross_tenant_tools_are_rejected_before_execution() -> None:
         registry.validate_request(request, cross_tenant)
 
 
+def test_only_the_committed_scope_is_authorized_not_an_uncommitted_sibling() -> None:
+    """CHAOS-3301 manifest property: "tool authorization admits only
+    committed member scopes."
+
+    D1 means no cohort ever reaches tool execution in this issue, so there
+    is no e2e multi-scope authorization path to exercise the property
+    against. This is the unit-level form instead: the registry's equality
+    gate (``tool_registry.py:268``) admits exactly the one scope the server
+    actually committed for this run, and rejects a structurally valid
+    sibling scope (e.g. another repository that could equally have been
+    named) that was never committed — never "close enough."
+    """
+    committed = DevScope.model_validate(positive_fixtures()["dev_scope.v1"])
+    sibling = committed.model_copy(
+        update={
+            "repositories": ["repo_sibling_never_committed"],
+            "surface_context": None,
+        }
+    )
+    context = ToolExecutionContext(
+        org_id="org_fullchaos",
+        user_id="user_01",
+        permission_fingerprint="permissions_01",
+        authorized_scope=committed,
+        cancellation=asyncio.Event(),
+        remaining_seconds=1.0,
+    )
+    registry = _registry()
+
+    # The committed scope itself is authorized.
+    registry.validate_request(
+        _request(scope=committed.model_dump(mode="json")), context
+    )
+
+    # A structurally valid, never-committed sibling is rejected.
+    with pytest.raises(ToolRequestRejected, match="server-authorized scope"):
+        registry.validate_request(
+            _request(scope=sibling.model_dump(mode="json")), context
+        )
+
+
 @pytest.mark.parametrize(
     "updates",
     [

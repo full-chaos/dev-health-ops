@@ -68,6 +68,7 @@ from .contracts import (
     dev_error_remediation,
 )
 from .contracts_v2 import DevSubjectSet
+from .contracts_v2.frame import DevAnswerFrame
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from .preflight_outcomes import TERMINAL_STATE_BY_OUTCOME, project_preflight_error
@@ -316,6 +317,18 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_frame(self, frame: DevAnswerFrame) -> None:
+        """Persist one already-built ``dev_answer_frame.v1`` (CHAOS-3297).
+
+        Called from the preflight TERMINATE branch with the frame
+        ``preflight_outcomes.build_preflight_answer`` already validated, so
+        the run tags ``contract_generation = 'v2'`` and the CHAOS-3299 v2
+        replay branch (``router._replayed_result``) becomes reachable for a
+        preflight-terminated run, not just a full model-round completion.
+        """
+        ...
+
+
     async def terminal(
         self,
         *,
@@ -358,6 +371,10 @@ class NullRunRecorder:
 
     async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
         del subject_set
+
+    async def record_frame(self, frame: DevAnswerFrame) -> None:
+        del frame
+
 
     async def terminal(
         self,
@@ -706,6 +723,12 @@ class DevOrchestrator:
                 if preflight_result.decision is PreflightDecision.TERMINATE:
                     assert preflight_result.answer is not None
                     assert preflight_result.outcome is not None
+                    # CHAOS-3297: persist the frame the preflight already
+                    # built *before* finishing the run, so the terminal
+                    # state and the frame's contract_generation='v2' tag
+                    # land together -- mirrors record_answer's placement
+                    # ahead of terminal() on the completed-answer path.
+                    await self._recorder.record_frame(preflight_result.answer.frame)
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=project_preflight_error(

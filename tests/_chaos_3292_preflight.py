@@ -331,6 +331,7 @@ class Recorder:
         self.answers: list[DevAnswer] = []
         self.terminals: list[RunState] = []
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
+        self.frames: list[Any] = []
 
     async def transition(self, state: RunState) -> None:
         self.transitions.append(state)
@@ -349,6 +350,10 @@ class Recorder:
     async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
         """No-op here; CHAOS-3301's SubjectSetRecorder subclass captures this."""
         del subject_set
+
+    async def record_frame(self, frame: Any) -> None:
+        self.frames.append(frame)
+
 
     async def terminal(self, **values: Any) -> None:
         self.terminals.append(values["state"])

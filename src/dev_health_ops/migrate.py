@@ -118,6 +118,35 @@ def _current_postgres_heads(cfg) -> tuple[str, ...]:
     return asyncio.run(_read_current_postgres_heads(cfg))
 
 
+async def application_schema_status(
+    db_url: str | None = None,
+) -> tuple[bool, tuple[str, ...]]:
+    """Return ``(satisfied, current_heads)`` for the required schema revision.
+
+    Async-native (unlike ``_current_postgres_heads``, which wraps
+    ``asyncio.run`` and therefore cannot be called from within an already
+    running event loop, e.g. FastAPI's ``lifespan``). Promoted to a public
+    function — rather than duplicated — so the API process startup gate
+    (``api/_lifespan.py``) and ``/health`` (``api/_health.py``) share the
+    exact fail-closed ancestor-walk semantics as ``dev-hops migrate
+    postgres-status`` / ``_run_upgrade``'s post-upgrade check: "database has
+    at least ``_APPLICATION_SCHEMA_MINIMUM_REVISION``" (ancestor-walk, not
+    exact-head-equality), so a rolling deploy where an old-generation pod is
+    still healthy against an already-migrated database is not treated as a
+    startup failure.
+    """
+    cfg = _make_alembic_config(db_url)
+    current = await _read_current_postgres_heads(cfg)
+    satisfied = _database_has_revision(
+        cfg, current, _APPLICATION_SCHEMA_MINIMUM_REVISION
+    )
+    return satisfied, current
+
+
+def required_application_schema_revision() -> str:
+    return _APPLICATION_SCHEMA_MINIMUM_REVISION
+
+
 def _database_has_revision(
     cfg, current_heads: tuple[str, ...], target_revision: str
 ) -> bool:

@@ -1,19 +1,13 @@
 """Add CHAOS-3302 health rule governance persistence.
 
 Revision ID: 0077
-Revises: 0075
+Revises: 0076
 Create Date: 2026-08-01 00:00:00
 
-!!! TODO (re-parenting, tracked live on CHAOS-3302) !!!
-Renumbered 0076 -> 0077 because PR #1365
-(fix/sync-coverage-exact-history, 0076_add_sync_coverage_projections.py)
-was actively landing first and also claimed revision 0076 on this same
-application_schema branch. ``down_revision`` is temporarily still "0075"
--- it MUST be flipped to "0076" (their revision) in the same commit that
-rebases this branch onto main once #1365 merges, or this migration will
-silently re-fork the branch instead of stacking on top of it. Do not
-merge this migration with down_revision still "0075" if 0076 already
-exists on main.
+Renumbered 0076 -> 0077 (re-parented onto ``0076_add_sync_coverage_
+projections.py``, PR #1365, which landed first on main and also claimed
+revision 0076 on this application_schema branch): stacks on top of it
+rather than re-forking the branch.
 
 Two new, empty tables -- ``health_rule_calibrations`` and
 ``health_rule_version_fingerprints`` -- for the "rule-version telemetry
@@ -39,9 +33,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "0077"
-# !!! TODO: flip to "0076" when PR #1365 (fix/sync-coverage-exact-history)
-# merges and this branch rebases onto main -- see the module docstring.
-down_revision: str | None = "0075"
+down_revision: str | None = "0076"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -34,6 +34,14 @@ async def lifespan(app: FastAPI):
          feature keys when a Postgres URL is configured. Re-raise integrity
          errors so the process refuses to start with a corrupt registry; tolerate
          other failures (e.g. DB not yet ready in tests / containers).
+      3. Verify PostgreSQL satisfies the required application schema revision
+         (CHAOS-3299). Re-raise when the database is reachable but missing the
+         revision, so the process refuses to start against an unmigrated
+         schema (converting the failure mode from a runtime
+         ``UndefinedTable``/``ProgrammingError`` on the first Ask Dev v2
+         request to a controlled startup failure). Tolerate connection
+         failures (DB not yet ready) the same way the FeatureBundle check
+         does.
 
     Shutdown:
       * Close the global ClickHouse client.
@@ -75,6 +83,26 @@ async def lifespan(app: FastAPI):
             logger.warning(
                 "FeatureBundle key validation skipped (DB not ready): %s", _exc
             )
+
+        from dev_health_ops.migrate import (
+            application_schema_status,
+            required_application_schema_revision,
+        )
+
+        try:
+            satisfied, current_heads = await application_schema_status(postgres_uri)
+        except Exception as _exc:
+            logger.warning(
+                "Application schema revision check skipped (DB not ready): %s", _exc
+            )
+        else:
+            if not satisfied:
+                raise RuntimeError(
+                    "PostgreSQL is missing required application schema "
+                    f"revision {required_application_schema_revision()} "
+                    f"(current heads: {', '.join(current_heads) or '(base)'}); "
+                    "run `dev-hops migrate postgres` before starting the API"
+                )
 
     yield
     await close_global_client()

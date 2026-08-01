@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
@@ -19,10 +20,12 @@ from dev_health_ops.api.dev import router as dev_router_module
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import (
     DevAnswer,
+    DevContractVersions,
     DevScope,
     DevScopeResolution,
     ScopeResolutionOutcome,
 )
+from dev_health_ops.api.dev.contracts_v2.base import PublicOutcome, QuestionIntentID
 from dev_health_ops.api.dev.evidence_service import (
     EvidenceAvailability,
     EvidenceExpansion,
@@ -38,12 +41,18 @@ from dev_health_ops.api.dev.org_policy import (
     ASK_DEV_RETENTION_KEY,
 )
 from dev_health_ops.api.dev.persistence import DevPersistenceService
+from dev_health_ops.api.dev.preflight_outcomes import (
+    TERMINAL_STATE_BY_OUTCOME,
+    build_preflight_answer,
+    project_preflight_error,
+)
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.licensing import FeatureDecisionReason
 from dev_health_ops.licensing.registry import ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE
 from dev_health_ops.llm.agent.contracts import AgentUsage
 from dev_health_ops.models.dev_persistence import (
+    DevAnswerFrame,
     DevConversation,
     DevConversationTombstone,
     DevFeedback,
@@ -65,6 +74,7 @@ _TABLES = tables_of(
     DevToolCall,
     DevFeedback,
     DevConversationTombstone,
+    DevAnswerFrame,
     Setting,
 )
 
@@ -184,6 +194,99 @@ class HistoryCapturingRuntime(FakeBoundedRuntime):
     async def run(self, **kwargs) -> OrchestratorResult:
         self.prior_turns.append(tuple(kwargs.get("prior_turns", ())))
         return await super().run(**kwargs)
+
+
+_TEST_VERSIONS = DevContractVersions(
+    prompt_version="ask_dev_prompt.v1",
+    tool_contract_version="ask_dev_tools.v1",
+    metric_definition_version="ask_dev_metrics.v1",
+    query_version="ask_dev_queries.v1",
+)
+
+
+class PreflightNoAnswerRuntime(FakeBoundedRuntime):
+    """A CHAOS-3292 preflight termination for one no-answer public outcome.
+
+    Records the v2 frame the same way real preflight would (tagging the run
+    ``contract_generation = 'v2'``, CHAOS-3299 Codex finding 1) and streams
+    exactly the ``DevError`` ``preflight_outcomes.project_preflight_error``
+    builds live -- the same terminal projection a real orchestrator run
+    would use, so a router-level idempotent replay of this run can be
+    checked against it (CHAOS-3299 Codex finding 2).
+    """
+
+    def __init__(self, outcome: PublicOutcome) -> None:
+        self.outcome = outcome
+
+    async def run(
+        self,
+        *,
+        request,
+        run_id,
+        conversation_id,
+        answer_id,
+        recorder,
+        event_sink,
+        **_kwargs,
+    ) -> OrchestratorResult:
+        await recorder.transition(RunState.RESOLVING_SCOPE)
+        await event_sink(OrchestratorEvent(RunState.RESOLVING_SCOPE))
+
+        answer_v2 = build_preflight_answer(
+            outcome=self.outcome,
+            intent_id=QuestionIntentID.ENTITY_STATUS,
+            versions=_TEST_VERSIONS,
+            run_id=run_id,
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            generated_at=datetime.now(UTC),
+        )
+        await recorder.record_frame(answer_v2.frame)
+        error = project_preflight_error(answer_v2, request_id=request.request_id)
+        terminal_state = TERMINAL_STATE_BY_OUTCOME.get(self.outcome, RunState.FAILED)
+
+        await recorder.terminal(
+            state=terminal_state,
+            answer=None,
+            error=error,
+            usage=AgentUsage(input_tokens=0, output_tokens=0),
+            tool_call_count=0,
+            provider_fingerprint=None,
+            model_fingerprint=None,
+            prompt_checksum=None,
+        )
+        await event_sink(OrchestratorEvent(terminal_state, error.code))
+        return OrchestratorResult(
+            run_id=run_id,
+            state=terminal_state,
+            answer=None,
+            error=error,
+            events=(OrchestratorEvent(terminal_state, error.code),),
+            usage=AgentUsage(input_tokens=0, output_tokens=0),
+            tool_call_count=0,
+            provider_fingerprint=None,
+            model_fingerprint=None,
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _parse_sse_events(text: str) -> list[tuple[str, dict[str, Any]]]:
+    events: list[tuple[str, dict[str, Any]]] = []
+    for block in text.strip().split("\n\n"):
+        if not block:
+            continue
+        event_name = None
+        data: dict[str, Any] | None = None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                event_name = line.removeprefix("event: ")
+            elif line.startswith("data: "):
+                data = json.loads(line.removeprefix("data: "))
+        if event_name is not None and data is not None:
+            events.append((event_name, data))
+    return events
 
 
 @pytest.mark.asyncio
@@ -535,6 +638,110 @@ async def test_dev_message_stream_is_bounded_persisted_and_idempotent(
     async with dev_api_context.maker() as session:
         assert await session.scalar(select(func.count()).select_from(DevRun)) == 2
         assert await session.scalar(select(func.count()).select_from(DevMessage)) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        PublicOutcome.NEEDS_CLARIFICATION,
+        PublicOutcome.NOT_FOUND,
+        PublicOutcome.TEMPORARILY_UNAVAILABLE,
+        PublicOutcome.UNSUPPORTED,
+        PublicOutcome.DENIED,
+        PublicOutcome.FAILED,
+    ],
+)
+async def test_no_answer_replay_matches_live_terminal_projection(
+    dev_api_context, outcome: PublicOutcome
+) -> None:
+    """Endpoint-level idempotent-replay proof for every no-answer outcome
+    (CHAOS-3299 Codex review findings 1+2).
+
+    Before both fixes: ``record_frame`` never tagged the run
+    ``contract_generation = 'v2'`` (finding 1), so
+    ``router._replayed_result``'s ``== "v2"`` gate never took the
+    frame-reconstruction branch at all -- the replay fell through to the
+    generic "did not complete" error, a different shape from what the live
+    run streamed. And even with tagging fixed, the frame-reconstruction
+    branch called the generic v1-compat projector directly instead of
+    ``preflight_outcomes.project_preflight_error`` -- for
+    ``needs_clarification`` specifically that fabricated a disambiguation
+    candidate and returned a v1 ``DevAnswer`` (status
+    ``insufficient_evidence``) where live streams a ``DevError`` with code
+    ``scope_ambiguous`` (finding 2). This test drives the real endpoint
+    twice with the identical ``client_message_id`` -- the first call is
+    live, the second is the idempotent replay -- and asserts they carry the
+    same error code/message/retryable/remediation and, critically, the same
+    *event type*. ``request_id`` is intentionally excluded: live builds it
+    from the raw client-supplied request id (``request.request_id``) while
+    replay reads the persisted, UUID-folded ``dev_runs.request_id`` -- a
+    pre-existing, separate divergence in the "no frame at all" replay
+    branch too, out of scope for this fix.
+    """
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=cast(Any, PreflightNoAnswerRuntime(outcome))
+    )
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": f"request_no_answer_{outcome.value}",
+        "client_message_id": f"client_no_answer_{outcome.value}",
+        "conversation_id": conversation_id,
+        "question": "What is the status of the thing I mean?",
+        "question_class": "status",
+        "scope": _scope_payload(dev_api_context.org_id),
+    }
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+    replay = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert replay.status_code == 200
+
+    live_events = dict(_parse_sse_events(live.text))
+    replay_events = dict(_parse_sse_events(replay.text))
+
+    assert "answer.completed" not in live_events, "live must not fabricate an answer"
+    assert "answer.completed" not in replay_events, (
+        "replay must not fabricate an answer either"
+    )
+    assert "error" in live_events
+    assert "error" in replay_events
+
+    live_error = live_events["error"]["error"]
+    replay_error = replay_events["error"]["error"]
+
+    def _comparable(error: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in error.items() if k != "request_id"}
+
+    assert _comparable(live_error) == _comparable(replay_error)
+    if outcome is PublicOutcome.NEEDS_CLARIFICATION:
+        assert live_error["code"] == "scope_ambiguous"
+
+    async with dev_api_context.maker() as session:
+        runs = (
+            await session.scalars(
+                select(DevRun).where(
+                    DevRun.conversation_id == uuid.UUID(conversation_id)
+                )
+            )
+        ).all()
+        assert len(runs) == 1, "the replay must not have created a second run"
+        assert runs[0].contract_generation == "v2"
+        assert runs[0].public_outcome == outcome.value
 
 
 @pytest.mark.asyncio

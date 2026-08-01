@@ -6,9 +6,15 @@ import hashlib
 import json
 import time
 import uuid
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from .contracts import DevAnswer, DevError, DevToolRequest
+from .contracts_v2.frame import DevAnswerFrame
+from .contracts_v2.intent import DevQuestionIntent
+from .contracts_v2.narrative import DevNarrative
+from .contracts_v2.result import DevInvestigationResult, DevSourceObservation
+from .contracts_v2.subject import DevResolutionEntry, DevSubjectSet
 from .orchestrator import RunState
 from .persistence.service import DevPersistenceService
 from .prompts import PROMPT_VERSION
@@ -117,6 +123,142 @@ class PersistenceRunRecorder:
                 + len(execution.result.data_health)
             ),
             byte_count=execution.serialized_bytes,
+        )
+
+    # -- Wave 3.1 (CHAOS-3299) v2 recorder adapters --------------------------
+    # Thin adapters from a validated contracts_v2 object to the
+    # DevPersistenceService recorder methods. The v2 orchestrator that
+    # produces these objects (TRD v2 Section 10's server-owned stage
+    # machine) is a separate lane's deliverable; these methods are the
+    # interface it calls into, all pre-terminal, mirroring `record_tool`'s
+    # existing placement ahead of `terminal()`.
+
+    async def record_intent(self, intent: DevQuestionIntent) -> None:
+        await self._service.record_intent(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            intent_id=intent.intent_id.value,
+            cardinality=intent.cardinality.value,
+            requires_clarification=intent.requires_clarification,
+            interpreter_version=intent.interpreter_version,
+            payload=intent.model_dump(mode="json"),
+        )
+
+    async def append_resolution(self, entry: DevResolutionEntry) -> None:
+        await self._service.append_resolution(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            entry_ordinal=entry.entry_ordinal,
+            mention_id=uuid.UUID(entry.mention_id),
+            outcome=entry.outcome.value,
+            resolved_at=entry.resolved_at,
+            payload=entry.model_dump(mode="json"),
+        )
+
+    async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
+        await self._service.record_subject_set(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            set_id=uuid.UUID(subject_set.set_id),
+            entity_kind=subject_set.entity_kind.value,
+            cohort_complete=subject_set.cohort_complete,
+            fingerprint=subject_set.fingerprint,
+            payload=subject_set.model_dump(mode="json"),
+        )
+
+    async def append_source_observation(
+        self, ordinal: int, observation: DevSourceObservation
+    ) -> None:
+        await self._service.append_source_observation(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            ordinal=ordinal,
+            observation_id=uuid.UUID(observation.observation_id),
+            source_class=observation.source_class.value,
+            requirement_level=observation.requirement_level,
+            observed_state=observation.observed_state.value,
+            data_semantics=observation.data_semantics,
+            usable_fact_count=observation.usable_fact_count,
+            sample_count=observation.sample_count,
+            subject_coverage=observation.subject_coverage,
+            observed_at=observation.observed_at,
+            payload=observation.model_dump(mode="json"),
+        )
+
+    async def record_investigation_result(self, result: DevInvestigationResult) -> None:
+        """Persist every observation, then the plan-step partition + closure bit.
+
+        Folded (orchestrator decision, CHAOS-3299): see
+        ``DevPersistenceService.record_investigation_result`` -- observations
+        are still recorded 1:N as before; the wrapper's own bookkeeping
+        (which plan steps ran, and relationship-closure verification) is now
+        set directly on ``dev_runs`` instead of a dedicated ninth table.
+        """
+
+        for ordinal, observation in enumerate(result.observations):
+            await self.append_source_observation(ordinal, observation)
+        await self._service.record_investigation_result(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            completed_steps=list(result.completed_steps),
+            skipped_steps=list(result.skipped_steps),
+            failed_steps=list(result.failed_steps),
+            relationship_closure_verified=result.relationship_closure_verified,
+        )
+
+    async def record_frame(self, frame: DevAnswerFrame) -> None:
+        await self._service.record_frame(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            frame_id=uuid.UUID(frame.frame_id),
+            public_outcome=frame.public_outcome.value,
+            payload=frame.model_dump(mode="json"),
+        )
+
+    async def record_narrative(self, narrative: DevNarrative) -> None:
+        provider_fingerprint = None
+        if narrative.provider_metadata is not None:
+            provider_fingerprint = _digest(
+                narrative.provider_metadata.model_fingerprint
+            )
+        await self._service.record_narrative(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            narrative_id=uuid.UUID(narrative.narrative_id),
+            frame_id=uuid.UUID(narrative.frame_id),
+            mode=narrative.mode,
+            provider_fingerprint=provider_fingerprint,
+            narrative_text=narrative.body,
+            # `body` is stored separately as `narrative_text`; excluded here
+            # to avoid duplicating it inside the JSONB payload.
+            payload=narrative.model_dump(mode="json", exclude={"body"}),
+        )
+
+    async def append_stage_diagnostic(
+        self,
+        *,
+        ordinal: int,
+        stage_id: str,
+        status: Literal["started", "completed", "failed", "skipped"],
+        latency_ms: int | None = None,
+        counts: Mapping[str, Any] | None = None,
+    ) -> None:
+        await self._service.append_stage_diagnostic(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            ordinal=ordinal,
+            stage_id=stage_id,
+            status=status,
+            latency_ms=latency_ms,
+            counts=dict(counts or {}),
         )
 
     async def record_answer(self, answer: DevAnswer) -> None:

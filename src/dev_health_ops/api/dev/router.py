@@ -52,6 +52,7 @@ from .contracts import (
     DevFeedback,
     DevMessageRequest,
     DevScope,
+    DevTimeRange,
     DevTranscriptEntry,
     dev_error_remediation,
 )
@@ -569,13 +570,61 @@ def _permission_fingerprint(user: AuthenticatedUser) -> str:
 
 
 def _replayed_result(
-    *, run: Any, answer_payload: dict[str, Any] | None
+    *,
+    run: Any,
+    answer_payload: dict[str, Any] | None,
+    frame_payload: dict[str, Any] | None = None,
+    organization_id: str | None = None,
+    time_range: DevTimeRange | None = None,
 ) -> OrchestratorResult:
     state = RunState(run.state)
     answer = None
     error = None
     if answer_payload is not None:
         answer = DevAnswer.model_validate(answer_payload)
+    elif (
+        frame_payload is not None
+        and organization_id is not None
+        and time_range is not None
+    ):
+        # CHAOS-3299 / TRD v2 Section 12: a v2 run with no answer message
+        # (needs_clarification/not_found/temporarily_unavailable/unsupported/
+        # denied/failed -- no assistant DevMessage is ever recorded for these)
+        # renders from the stored frame rather than degrading to a generic
+        # "did not complete" error. Every outcome reachable in this branch is
+        # a no-answer outcome by construction (an answer_id would have taken
+        # the branch above instead), so the projection is always a DevError
+        # -- and it must be the *same* DevError a live run would have
+        # streamed. ``preflight_outcomes.project_preflight_error`` is that
+        # terminal projection (CHAOS-3292's ratified design): it special-
+        # cases ``needs_clarification`` to the ``scope_ambiguous`` shape the
+        # router and web client already handle, rather than the generic
+        # compat projector's fabricated-candidate ``DevAnswer`` (which is a
+        # different response shape from what the live run actually sent).
+        # For the other four outcomes it delegates to the same one backend
+        # v2-to-v1 projector (CHAOS-3294 guardrail) live preflight uses, so
+        # this is never a second, divergent mapping.
+        from .contracts_v2.answer import _OUTCOME_DISPLAY_LABELS, DevAnswerV2
+        from .contracts_v2.frame import DevAnswerFrame as _DevAnswerFrameV2
+        from .preflight_outcomes import project_preflight_error
+
+        frame_obj = _DevAnswerFrameV2.model_validate(frame_payload)
+        answer_v2 = DevAnswerV2(
+            schema_version="dev_answer.v2",
+            answer_id=str(run.id),
+            conversation_id=str(run.conversation_id),
+            run_id=str(run.id),
+            # SQLite (test fixtures only) does not round-trip tz-aware
+            # datetimes through DateTime(timezone=True); PostgreSQL does, so
+            # this was unobserved until CHAOS-3299 Codex finding 1's fix made
+            # this branch reachable for the first time.
+            generated_at=_aware_required(run.ended_at or run.started_at),
+            public_outcome=frame_obj.public_outcome,
+            outcome_display_label=_OUTCOME_DISPLAY_LABELS[frame_obj.public_outcome],
+            frame=frame_obj,
+            narrative=None,
+        )
+        error = project_preflight_error(answer_v2, request_id=str(run.request_id))
     else:
         code = run.safe_error_code or "internal_error"
         try:
@@ -1109,6 +1158,7 @@ async def create_message(
                 retryable=True,
             )
         answer_payload = None
+        frame_payload = None
         if accepted.run.answer_id is not None:
             try:
                 answer_message = await service.get_answer_message(
@@ -1120,9 +1170,20 @@ async def create_message(
             except Exception as exc:
                 _raise_persistence(exc, request_id)
                 raise AssertionError("unreachable")
+        elif accepted.run.contract_generation == "v2":
+            frame = await service.get_answer_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=accepted.run.id,
+            )
+            if frame is not None:
+                frame_payload = frame.payload
         replayed = _replayed_result(
             run=accepted.run,
             answer_payload=answer_payload,
+            frame_payload=frame_payload,
+            organization_id=str(org_id),
+            time_range=body.scope.time_range,
         )
 
         async def replay(_sink) -> OrchestratorResult:

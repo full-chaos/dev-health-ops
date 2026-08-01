@@ -101,7 +101,16 @@ def _dsn_uses_async_driver(dsn: str) -> bool:
 
 
 async def _check_postgres_health() -> tuple[str, str]:
-    """Check Postgres connectivity. Returns ``("postgres", status)``."""
+    """Check Postgres connectivity and required schema revision.
+
+    Returns ``("postgres", status)``. ``status`` is ``"down"`` both for raw
+    connectivity failure and for a reachable database missing the required
+    application schema revision (CHAOS-3299) -- this closes the window the
+    one-time ``_lifespan`` startup check cannot: multi-replica rollouts where
+    one replica boots successfully before a migration completes elsewhere, or
+    an operator manually rolling the database back without restarting the
+    process. Re-checked on every probe.
+    """
     if not _postgres_url():
         return "postgres", "not_configured"
     uri = get_postgres_uri()
@@ -111,7 +120,15 @@ async def _check_postgres_health() -> tuple[str, str]:
         ok = await _check_sqlalchemy_health_async(uri)
     else:
         ok = await asyncio.to_thread(_check_sqlalchemy_health, uri)
-    return "postgres", "ok" if ok else "down"
+    if not ok:
+        return "postgres", "down"
+    from dev_health_ops.migrate import application_schema_status
+
+    try:
+        satisfied, _current_heads = await application_schema_status(uri)
+    except Exception:
+        return "postgres", "down"
+    return "postgres", "ok" if satisfied else "down"
 
 
 async def _check_clickhouse_health() -> tuple[str, str]:

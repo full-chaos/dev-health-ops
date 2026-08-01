@@ -76,6 +76,8 @@ __all__ = [
     "case_r1_duplicate_alias_with_unresolved_mention",
     "case_r2_twentyfive_typed_plus_resolvable_bare_name",
     "case_r3_ambiguous_mention_in_cohort",
+    "case_r4a_twentyfive_all_untyped_names",
+    "case_r4b_twentysix_all_untyped_names",
     "fixed_now",
     "organization_resolution",
     "recording_registry",
@@ -127,6 +129,33 @@ def _oversized_project_question(count: int) -> str:
 
     names = [f"project Alpha{index:02d}" for index in range(count)]
     return "What is the status of " + " and ".join(names) + "?"
+
+
+def _all_untyped_question(count: int) -> str:
+    """A question naming ``count`` distinct subjects with no kind noun at all.
+
+    Each name is quoted, so it is found only by ``untyped_name_candidates``
+    (the kind-noun grammar never matches it) -- this is the review's
+    all-untyped repro shape, where the uncapped candidate count used to be
+    silently truncated inside ``untyped_name_candidates`` itself (CHAOS-3301
+    review fix), not merely inside the merge step that caps mentions at
+    ``MAX_MENTIONS``.
+    """
+
+    names = [f'"Bravo{index:02d}"' for index in range(count)]
+    return "Compare " + " and ".join(names)
+
+
+def _all_untyped_entities(count: int) -> list[tuple[str, AuthorizedEntity]]:
+    return [
+        (
+            ORG_ID,
+            AuthorizedEntity(
+                EntityKind.PROJECT, f"project-bravo-{index:02d}", f"Bravo{index:02d}"
+            ),
+        )
+        for index in range(count)
+    ]
 
 
 def _oversized_project_entities(
@@ -323,5 +352,42 @@ async def case_r3_ambiguous_mention_in_cohort() -> RunOutput:
             (ORG_ID, ATLAS_PROJECT_TWO),
         ],
         script_id="r3",
+        recorder_factory=SubjectSetRecorder,
+    )
+
+
+async def case_r4a_twentyfive_all_untyped_names() -> RunOutput:
+    """25 subjects, none typed by the kind-noun grammar -- a complete cohort.
+
+    Companion boundary case for R4b: proves the fix does not regress the
+    in-bound side once ``untyped_name_candidates`` stops truncating its own
+    result. All 25 must still commit as a complete cohort.
+    """
+
+    return await run_preflight_orchestrator(
+        question=_all_untyped_question(25),
+        entities=_all_untyped_entities(25),
+        script_id="r4a",
+        recorder_factory=SubjectSetRecorder,
+    )
+
+
+async def case_r4b_twentysix_all_untyped_names() -> RunOutput:
+    """26 subjects, none typed by the kind-noun grammar -- must be rejected.
+
+    Regression for the review verify round's HIGH finding: ``untyped_name_
+    candidates()`` truncated its own return value to ``MAX_MENTIONS`` (25)
+    *before* ``_add_untyped_mentions`` reported ``len(candidates)`` as the
+    "uncapped" total, so an all-untyped 26th subject was invisible to the
+    oversized-rejection guard even after the first fix (which only addressed
+    a *mixed* typed+untyped 26th subject). The guard must see 26, not a
+    pre-truncated 25, and reject the request instead of silently answering
+    about the first 25.
+    """
+
+    return await run_preflight_orchestrator(
+        question=_all_untyped_question(26),
+        entities=_all_untyped_entities(26),
+        script_id="r4b",
         recorder_factory=SubjectSetRecorder,
     )

@@ -7,8 +7,9 @@ objects into these models, but must not redeclare their wire shape.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     AwareDatetime,
@@ -286,6 +287,23 @@ class DevScope(ContractModel):
                 raise ValueError("team direct scope cannot carry a repository list")
         self._validate_surface_context()
         return self
+
+    def model_copy(
+        self, *, update: Mapping[str, Any] | None = None, deep: bool = False
+    ) -> Self:
+        """Revalidating copy (CHAOS-3301 review fix).
+
+        Pydantic's base ``model_copy`` is a raw field copy that never reruns
+        ``validate_direct_scope`` — ``model_copy(update={"repositories": [...]})``
+        on a TEAM scope returned and serialized a scope the invariant exists
+        to forbid, even though ``__init__`` and ``model_validate`` both reject
+        it. Every production caller only patches time fields, so
+        round-tripping the update through ``model_validate`` costs nothing
+        real and closes the construction path.
+        """
+
+        copied = super().model_copy(update=update, deep=deep)
+        return type(self).model_validate(copied.model_dump())
 
     def _validate_surface_context(self) -> None:
         context = self.surface_context

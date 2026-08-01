@@ -305,6 +305,14 @@ def untyped_name_candidates(
     the span was a subject at all ("What is our DORA score?" would otherwise
     break). It re-arms the legacy backstop instead, which judges the model's
     own answer text and is exactly today's behaviour for this shape.
+
+    Deliberately **uncapped** (CHAOS-3301 review fix): this used to truncate
+    to ``MAX_MENTIONS`` internally, so a caller reading ``len(...)`` as an
+    "uncapped" total for the oversized-rejection guard was in fact reading an
+    already-capped number — a 26th all-untyped subject was silently invisible
+    to that guard, not merely dropped from the merged mention list. Capping
+    for the merge bound is the caller's job (``_add_untyped_mentions``
+    already does it); this function only finds candidates.
     """
 
     claimed = {value.casefold() for value in typed}
@@ -337,7 +345,7 @@ def untyped_name_candidates(
             continue
         seen.add(normalized)
         found.append(span)
-    return tuple(found[:MAX_MENTIONS])
+    return tuple(found)
 
 
 def _candidate_mentions(

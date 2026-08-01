@@ -116,9 +116,15 @@ Closing that is CHAOS-3325.
 Resolutions are recorded on an **append-only ledger**. A later success cannot
 erase an earlier unresolved mention: entries carry contiguous ordinals, the
 objects are immutable, and every update is checked against the previous
-snapshot. When a question names several subjects, the outcome is decided by
-the lowest-ordinal unresolved mention — "the first thing you named" — which is
+snapshot. When a question names one subject, the outcome is decided by the
+lowest-ordinal unresolved mention — "the first thing you named" — which is
 stable and independent of how fast the catalog answered.
+
+When a question names **several** subjects and at least two of them resolve
+exactly, an unresolved mention among the rest no longer terminates the run:
+it is recorded as an omission on the eventual subject set instead (see
+"Bounded multi-subject sets" below), so a mostly-resolved cohort is not
+sacrificed for one name the catalog could not find.
 
 ## What the model is offered
 
@@ -133,19 +139,31 @@ advertised exactly as before.
 
 | Situation | What the user sees |
 | --- | --- |
-| Every named subject resolved | The answer, scoped to that subject |
+| Every named subject resolved to one distinct entity (project, repository, issue, PR, work unit, **or team**) | The answer, scoped to that subject |
 | The question named nothing | An organization-wide answer, as before |
 | A named subject does not exist here | "No matching subject was found" |
 | A name matches several entities, or only partially | A request to say which one |
 | The catalog is briefly unavailable | "Temporarily unavailable", retryable |
-| A named team, or several named subjects at once | "Not supported yet" |
+| Several distinct subjects are named (a bounded cohort) | "Not supported yet" |
 
-The last row is a deliberate interim. A resolved team is recorded honestly as
-an exact match — the team demonstrably exists — but the current scope
-vocabulary cannot carry a team subject, and a cohort of several subjects has
-no faithful single-subject representation either. Answering under organization
-scope in either case would reintroduce exactly the defect this work closes.
-Both become real answers when team and multi-subject support land.
+A named **team** is now a first-class direct subject (CHAOS-3301), exactly
+like a project, repository, issue, pull request, or work unit: it commits and
+the run proceeds to answer about it. The remaining "Not supported yet" case is
+a **bounded cohort** — several distinct named subjects at once (e.g. "compare
+project A and project B"). The cohort is still committed honestly: every
+resolvable member is recorded on a `dev_subject_set.v1` and persisted, exactly
+which mentions could not be resolved is disclosed, and nothing is silently
+narrowed or widened to organization scope. What is missing is only the
+*rendering* — a v1 `DevAnswer` names one direct subject, and there is no
+faithful way to project a several-subject answer onto that shape yet. That
+lands with the v2 answer-frame work (CHAOS-3297/3298); until then the
+diagnostic recorded on the run is `committed_cohort_v1_only` — "we committed
+it and cannot render it here" — not a refusal.
+
+A cohort of more than 25 named subjects is rejected outright
+(`oversized_mention_set_in_v1`) rather than silently narrowed to a "complete"
+25-subject cohort — the same "no widening, no silent narrowing" discipline
+applied at the size boundary.
 
 ## Rollout
 

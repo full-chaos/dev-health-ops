@@ -425,7 +425,7 @@ def downgrade() -> None:
         ):
             if bind.dialect.has_table(bind, table):
                 for_v2_rows = bind.execute(
-                    sa.text(f"SELECT count(*) FROM {table}")
+                    sa.select(sa.func.count()).select_from(sa.table(table))
                 ).scalar()
                 if for_v2_rows:
                     raise RuntimeError(
@@ -443,8 +443,13 @@ def downgrade() -> None:
     op.drop_table("dev_run_intents")
 
     if bind.dialect.name == "postgresql":
-        op.execute(f"ALTER TABLE dev_runs DROP CONSTRAINT {_PUBLIC_OUTCOME_CK}")
-        op.execute(f"ALTER TABLE dev_runs DROP CONSTRAINT {_CONTRACT_GENERATION_CK}")
+        # Constraint name is a module-level literal; DDL identifiers cannot be bound parameters.
+        op.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            f"ALTER TABLE dev_runs DROP CONSTRAINT {_PUBLIC_OUTCOME_CK}"
+        )
+        op.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            f"ALTER TABLE dev_runs DROP CONSTRAINT {_CONTRACT_GENERATION_CK}"
+        )
         op.drop_column("dev_runs", "relationship_closure_verified")
         op.drop_column("dev_runs", "plan_step_partition")
         op.drop_column("dev_runs", "plan_version")

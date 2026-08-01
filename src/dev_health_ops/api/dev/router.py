@@ -591,12 +591,22 @@ def _replayed_result(
         # (needs_clarification/not_found/temporarily_unavailable/unsupported/
         # denied/failed -- no assistant DevMessage is ever recorded for these)
         # renders from the stored frame rather than degrading to a generic
-        # "did not complete" error. Reuses the one backend v2-to-v1
-        # projector (CHAOS-3294 guardrail) so this never becomes a second,
-        # divergent mapping.
+        # "did not complete" error. Every outcome reachable in this branch is
+        # a no-answer outcome by construction (an answer_id would have taken
+        # the branch above instead), so the projection is always a DevError
+        # -- and it must be the *same* DevError a live run would have
+        # streamed. ``preflight_outcomes.project_preflight_error`` is that
+        # terminal projection (CHAOS-3292's ratified design): it special-
+        # cases ``needs_clarification`` to the ``scope_ambiguous`` shape the
+        # router and web client already handle, rather than the generic
+        # compat projector's fabricated-candidate ``DevAnswer`` (which is a
+        # different response shape from what the live run actually sent).
+        # For the other four outcomes it delegates to the same one backend
+        # v2-to-v1 projector (CHAOS-3294 guardrail) live preflight uses, so
+        # this is never a second, divergent mapping.
         from .contracts_v2.answer import _OUTCOME_DISPLAY_LABELS, DevAnswerV2
-        from .contracts_v2.compat import project_answer_v2_to_v1
         from .contracts_v2.frame import DevAnswerFrame as _DevAnswerFrameV2
+        from .preflight_outcomes import project_preflight_error
 
         frame_obj = _DevAnswerFrameV2.model_validate(frame_payload)
         answer_v2 = DevAnswerV2(
@@ -604,19 +614,17 @@ def _replayed_result(
             answer_id=str(run.id),
             conversation_id=str(run.conversation_id),
             run_id=str(run.id),
-            generated_at=run.ended_at or run.started_at,
+            # SQLite (test fixtures only) does not round-trip tz-aware
+            # datetimes through DateTime(timezone=True); PostgreSQL does, so
+            # this was unobserved until CHAOS-3299 Codex finding 1's fix made
+            # this branch reachable for the first time.
+            generated_at=_aware_required(run.ended_at or run.started_at),
             public_outcome=frame_obj.public_outcome,
             outcome_display_label=_OUTCOME_DISPLAY_LABELS[frame_obj.public_outcome],
             frame=frame_obj,
             narrative=None,
         )
-        projected = project_answer_v2_to_v1(
-            answer_v2, organization_id=organization_id, time_range=time_range
-        )
-        if isinstance(projected, DevAnswer):
-            answer = projected
-        else:
-            error = projected
+        error = project_preflight_error(answer_v2, request_id=str(run.request_id))
     else:
         code = run.safe_error_code or "internal_error"
         try:

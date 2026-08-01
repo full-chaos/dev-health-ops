@@ -24,11 +24,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from dev_health_ops.models.dev_persistence import (
     DEV_RETENTION_DAYS,
+    DevAnswerFrame,
     DevConversation,
     DevConversationTombstone,
     DevFeedback,
     DevMessage,
     DevRun,
+    DevRunIntent,
+    DevRunInvestigationResult,
+    DevRunNarrative,
+    DevRunResolution,
+    DevRunSourceObservation,
+    DevRunStageDiagnostic,
+    DevRunSubjectSet,
     DevToolCall,
 )
 from dev_health_ops.models.users import Organization, User
@@ -93,6 +101,109 @@ _FORBIDDEN_METADATA_KEYS = frozenset(
     }
 )
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+
+# -- Wave 3.1 (CHAOS-3299) closed vocabularies -------------------------------
+# Mirrors the CHECK constraints on the corresponding tables (defense in
+# depth, matching the existing double-check pattern in append_tool_call /
+# update_run: the DB CHECK is the hard backstop, this is the friendly error).
+_QUESTION_INTENT_IDS = frozenset(
+    {
+        "entity_status",
+        "portfolio_status",
+        "remaining_work",
+        "observed_change",
+        "registered_statistics",
+        "metric_comparison",
+        "data_trust",
+        "project_health",
+        "team_health",
+        "team_workload_balance",
+        "operational_deficiency_inventory",
+        "bounded_investigation",
+    }
+)
+_CARDINALITIES = frozenset({"singular", "plural_cohort", "organization_wide"})
+_RESOLUTION_OUTCOMES = frozenset(
+    {
+        "exact_match",
+        "ambiguous_candidates",
+        "no_authorized_match",
+        "catalog_unavailable",
+        "unsupported_kind",
+    }
+)
+_ENTITY_KINDS = frozenset(
+    {"repository", "project", "work_unit", "issue", "pull_request", "team"}
+)
+_SOURCE_CLASSES = frozenset(
+    {
+        "status_change",
+        "work_item",
+        "work_graph",
+        "pull_request",
+        "code_change",
+        "review",
+        "ci_run",
+        "test_report",
+        "deployment",
+        "incident",
+        "operational_control",
+        "source_health",
+    }
+)
+_REQUIREMENT_LEVELS = frozenset(
+    {"mandatory", "conditional", "optional", "not_applicable"}
+)
+_SOURCE_OBSERVED_STATES = frozenset(
+    {
+        "available_current",
+        "available_stale",
+        "available_unknown",
+        "unconfigured",
+        "unavailable",
+        "unauthorized_or_not_visible",
+        "not_applicable",
+        "truncated",
+    }
+)
+_DATA_SEMANTICS = frozenset({"measured_zero", "no_data", "not_measured"})
+_PUBLIC_OUTCOMES = frozenset(
+    {
+        "answered",
+        "answered_with_gaps",
+        "needs_clarification",
+        "not_found",
+        "temporarily_unavailable",
+        "unsupported",
+        "denied",
+        "failed",
+    }
+)
+_NARRATIVE_MODES = frozenset({"provider", "deterministic_fallback"})
+_STAGE_IDS = frozenset(
+    {
+        "interpreting",
+        "resolving_subjects",
+        "planning",
+        "collecting",
+        "synthesizing_frame",
+        "narrating_optional",
+        "projecting_answer",
+    }
+)
+_STAGE_STATUSES = frozenset({"started", "completed", "failed", "skipped"})
+
+# Bounds on the opaque JSONB payload each Wave 3.1 artifact carries. These are
+# defense-in-depth (SQLite test targets have no DB-level byte-length CHECK);
+# the contract's own bounded collection max_lengths are the primary bound.
+_INTENT_PAYLOAD_MAX_BYTES = 16 * 1024
+_RESOLUTION_PAYLOAD_MAX_BYTES = 8 * 1024
+_SUBJECT_SET_PAYLOAD_MAX_BYTES = 16 * 1024
+_SOURCE_OBSERVATION_PAYLOAD_MAX_BYTES = 16 * 1024
+_INVESTIGATION_RESULT_PAYLOAD_MAX_BYTES = 8 * 1024
+_FRAME_PAYLOAD_MAX_BYTES = 128 * 1024
+_NARRATIVE_TEXT_MAX_BYTES = 8 * 1024
+_NARRATIVE_PAYLOAD_MAX_BYTES = 16 * 1024
 
 
 class DevPersistenceNotFound(LookupError):
@@ -256,6 +367,25 @@ def _safe_token(value: str | None, *, field: str, max_bytes: int) -> str | None:
     if value is not None and _SAFE_TOKEN.fullmatch(value) is None:
         raise DevPersistenceValidationError(f"{field} must be a safe identifier")
     return value
+
+
+def _bounded_json(
+    value: Mapping[str, Any], *, field: str, max_bytes: int
+) -> dict[str, Any]:
+    """A sensitive-key-checked, byte-bounded JSONB payload copy.
+
+    Used for every Wave 3.1 (CHAOS-3299) opaque ``payload`` column: the
+    contract's own pydantic validators already bound each collection's
+    ``max_length``, but persistence re-checks byte size and forbidden keys
+    independently rather than trusting the contract validator alone (the
+    established double-check posture, e.g. ``append_tool_call``).
+    """
+
+    copied = _json_copy(dict(value), field=field)
+    encoded = json.dumps(copied, separators=(",", ":"), sort_keys=True)
+    if len(encoded.encode("utf-8")) > max_bytes:
+        raise DevPersistenceValidationError(f"{field} exceeds {max_bytes} bytes")
+    return copied
 
 
 def _safe_count_summary(value: Mapping[str, Any], *, field: str) -> dict[str, Any]:
@@ -572,6 +702,29 @@ class DevPersistenceService:
             raise DevPersistenceNotFound("message run not found")
         return result
 
+    async def get_answer_frame(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> DevAnswerFrame | None:
+        """Return the tenant-owned answer frame for one run, if any.
+
+        Used by the replay path (``router._replayed_result``) to reconstruct
+        a no-answer-payload outcome (``needs_clarification``/``not_found``/
+        etc.) from the stored frame rather than a generic error, without
+        rerunning any provider or tool (TRD v2 Section 12).
+        """
+
+        return await self.session.scalar(
+            select(DevAnswerFrame).where(
+                DevAnswerFrame.run_id == run_id,
+                DevAnswerFrame.org_id == org_id,
+                DevAnswerFrame.user_id == user_id,
+            )
+        )
+
     async def get_answer_message(
         self,
         *,
@@ -785,9 +938,9 @@ class DevPersistenceService:
             dict(validated),
             field="answer_payload",
         )
-        if payload.get("schema_version") != "dev_answer.v1":
+        if payload.get("schema_version") not in {"dev_answer.v1", "dev_answer.v2"}:
             raise DevPersistenceValidationError(
-                "validated answer payload must use dev_answer.v1"
+                "validated answer payload must use dev_answer.v1 or dev_answer.v2"
             )
         try:
             answer_id = uuid.UUID(str(payload["answer_id"]))
@@ -1068,6 +1221,374 @@ class DevPersistenceService:
         self.session.add(tool_call)
         await self.session.flush()
         return tool_call
+
+    # -- Wave 3.1 (CHAOS-3299) recorder methods ------------------------------
+    # Each of these persists one bounded, validated artifact of the server-
+    # owned intent -> resolution -> plan -> investigation -> frame ->
+    # narrative lifecycle. All are called from PersistenceRunRecorder on the
+    # live (non-replay) run branch only, before the terminal update_run
+    # transition -- the same ordering `append_tool_call` already relies on
+    # for 0-day ephemeral retention to cascade through fully-written rows
+    # rather than orphaning a write after the conversation is already purged.
+
+    async def record_intent(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        intent_id: str,
+        cardinality: str,
+        requires_clarification: bool,
+        interpreter_version: str,
+        payload: Mapping[str, Any],
+    ) -> DevRunIntent:
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None:
+            raise DevPersistenceNotFound("run not found")
+        if intent_id not in _QUESTION_INTENT_IDS:
+            raise DevPersistenceValidationError("invalid intent_id")
+        if cardinality not in _CARDINALITIES:
+            raise DevPersistenceValidationError("invalid cardinality")
+        record = DevRunIntent(
+            run_id=run.id,
+            org_id=org_id,
+            user_id=user_id,
+            intent_id=intent_id,
+            cardinality=cardinality,
+            requires_clarification=requires_clarification,
+            interpreter_version=_safe_token(
+                interpreter_version, field="interpreter_version", max_bytes=128
+            )
+            or "",
+            payload=_bounded_json(
+                payload, field="intent_payload", max_bytes=_INTENT_PAYLOAD_MAX_BYTES
+            ),
+            created_at=self._now(),
+        )
+        self.session.add(record)
+        await self.session.flush()
+        return record
+
+    async def append_resolution(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        entry_ordinal: int,
+        mention_id: uuid.UUID,
+        outcome: str,
+        resolved_at: datetime,
+        payload: Mapping[str, Any],
+    ) -> DevRunResolution:
+        """Append one immutable entity-resolution ledger entry.
+
+        INSERT-only by construction: no update method for an existing
+        ``(run_id, entry_ordinal)`` row is exposed, and a second insert for
+        an already-used ordinal fails via the unique constraint rather than
+        upserting.
+        """
+
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None:
+            raise DevPersistenceNotFound("run not found")
+        if entry_ordinal < 0 or entry_ordinal > 99:
+            raise DevPersistenceValidationError("resolution entry_ordinal out of range")
+        if outcome not in _RESOLUTION_OUTCOMES:
+            raise DevPersistenceValidationError("invalid resolution outcome")
+        record = DevRunResolution(
+            run_id=run.id,
+            org_id=org_id,
+            user_id=user_id,
+            entry_ordinal=entry_ordinal,
+            mention_id=mention_id,
+            outcome=outcome,
+            payload=_bounded_json(
+                payload,
+                field="resolution_payload",
+                max_bytes=_RESOLUTION_PAYLOAD_MAX_BYTES,
+            ),
+            resolved_at=resolved_at,
+            created_at=self._now(),
+        )
+        self.session.add(record)
+        await self.session.flush()
+        return record
+
+    async def record_subject_set(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        set_id: uuid.UUID,
+        entity_kind: str,
+        cohort_complete: bool,
+        fingerprint: str,
+        payload: Mapping[str, Any],
+    ) -> DevRunSubjectSet:
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None:
+            raise DevPersistenceNotFound("run not found")
+        if entity_kind not in _ENTITY_KINDS:
+            raise DevPersistenceValidationError("invalid entity_kind")
+        record = DevRunSubjectSet(
+            run_id=run.id,
+            org_id=org_id,
+            user_id=user_id,
+            set_id=set_id,
+            entity_kind=entity_kind,
+            cohort_complete=cohort_complete,
+            fingerprint=_safe_token(fingerprint, field="fingerprint", max_bytes=128)
+            or "",
+            payload=_bounded_json(
+                payload,
+                field="subject_set_payload",
+                max_bytes=_SUBJECT_SET_PAYLOAD_MAX_BYTES,
+            ),
+            created_at=self._now(),
+        )
+        self.session.add(record)
+        await self.session.flush()
+        return record
+
+    async def append_source_observation(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        ordinal: int,
+        observation_id: uuid.UUID,
+        source_class: str,
+        requirement_level: str,
+        observed_state: str,
+        data_semantics: str,
+        usable_fact_count: int,
+        sample_count: int | None,
+        subject_coverage: float,
+        observed_at: datetime,
+        payload: Mapping[str, Any],
+    ) -> DevRunSourceObservation:
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None:
+            raise DevPersistenceNotFound("run not found")
+        if ordinal < 0 or ordinal > 24:
+            raise DevPersistenceValidationError(
+                "source observation ordinal out of range"
+            )
+        if source_class not in _SOURCE_CLASSES:
+            raise DevPersistenceValidationError("invalid source_class")
+        if requirement_level not in _REQUIREMENT_LEVELS:
+            raise DevPersistenceValidationError("invalid requirement_level")
+        if observed_state not in _SOURCE_OBSERVED_STATES:
+            raise DevPersistenceValidationError("invalid observed_state")
+        if data_semantics not in _DATA_SEMANTICS:
+            raise DevPersistenceValidationError("invalid data_semantics")
+        if usable_fact_count < 0:
+            raise DevPersistenceValidationError("usable_fact_count must be nonnegative")
+        if sample_count is not None and sample_count < 0:
+            raise DevPersistenceValidationError("sample_count must be nonnegative")
+        if not (0.0 <= subject_coverage <= 1.0):
+            raise DevPersistenceValidationError("subject_coverage must be in [0, 1]")
+        record = DevRunSourceObservation(
+            run_id=run.id,
+            org_id=org_id,
+            user_id=user_id,
+            ordinal=ordinal,
+            observation_id=observation_id,
+            source_class=source_class,
+            requirement_level=requirement_level,
+            observed_state=observed_state,
+            data_semantics=data_semantics,
+            usable_fact_count=usable_fact_count,
+            sample_count=sample_count,
+            subject_coverage=subject_coverage,
+            payload=_bounded_json(
+                payload,
+                field="source_observation_payload",
+                max_bytes=_SOURCE_OBSERVATION_PAYLOAD_MAX_BYTES,
+            ),
+            observed_at=observed_at,
+            created_at=self._now(),
+        )
+        self.session.add(record)
+        await self.session.flush()
+        return record
+
+    async def record_investigation_result(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        result_id: uuid.UUID,
+        relationship_closure_verified: bool,
+        completed_at: datetime,
+        payload: Mapping[str, Any],
+    ) -> DevRunInvestigationResult:
+        """Persist the ``dev_investigation_result.v1`` wrapper for one run.
+
+        Reconciliation delta: not one of the 7 tables in the
+        pre-implementation plan, added because the landed contract has this
+        as a distinct top-level object (completed/skipped/failed plan steps
+        plus relationship-closure verification) that the per-observation
+        ``dev_run_source_observations`` rows alone cannot reconstruct.
+        """
+
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None:
+            raise DevPersistenceNotFound("run not found")
+        record = DevRunInvestigationResult(
+            run_id=run.id,
+            org_id=org_id,
+            user_id=user_id,
+            result_id=result_id,
+            relationship_closure_verified=relationship_closure_verified,
+            payload=_bounded_json(
+                payload,
+                field="investigation_result_payload",
+                max_bytes=_INVESTIGATION_RESULT_PAYLOAD_MAX_BYTES,
+            ),
+            completed_at=completed_at,
+            created_at=self._now(),
+        )
+        self.session.add(record)
+        await self.session.flush()
+        return record
+
+    async def record_frame(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        frame_id: uuid.UUID,
+        public_outcome: str,
+        payload: Mapping[str, Any],
+    ) -> DevAnswerFrame:
+        """Persist the canonical ``dev_answer_frame.v1`` for one run.
+
+        One row per terminal run regardless of public outcome -- including
+        ``needs_clarification``/``not_found``/``unsupported``/``denied``,
+        confirmed by the landed no-answer field policy (see
+        ``DevRunInvestigationResult`` and the frame model docstring).
+        """
+
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None:
+            raise DevPersistenceNotFound("run not found")
+        if public_outcome not in _PUBLIC_OUTCOMES:
+            raise DevPersistenceValidationError("invalid public_outcome")
+        record = DevAnswerFrame(
+            run_id=run.id,
+            org_id=org_id,
+            user_id=user_id,
+            frame_id=frame_id,
+            public_outcome=public_outcome,
+            payload=_bounded_json(
+                payload, field="frame_payload", max_bytes=_FRAME_PAYLOAD_MAX_BYTES
+            ),
+            created_at=self._now(),
+        )
+        self.session.add(record)
+        await self.session.flush()
+        return record
+
+    async def record_narrative(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        narrative_id: uuid.UUID,
+        frame_id: uuid.UUID,
+        mode: str,
+        provider_fingerprint: str | None,
+        narrative_text: str,
+        payload: Mapping[str, Any],
+    ) -> DevRunNarrative:
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None:
+            raise DevPersistenceNotFound("run not found")
+        if mode not in _NARRATIVE_MODES:
+            raise DevPersistenceValidationError("invalid narrative mode")
+        frame = await self.session.scalar(
+            select(DevAnswerFrame).where(
+                DevAnswerFrame.run_id == run.id,
+                DevAnswerFrame.org_id == org_id,
+                DevAnswerFrame.user_id == user_id,
+            )
+        )
+        if frame is None or frame.frame_id != frame_id:
+            raise DevPersistenceValidationError(
+                "narrative frame_id must match the run's recorded answer frame"
+            )
+        text = _bounded_text(
+            narrative_text, field="narrative_text", max_bytes=_NARRATIVE_TEXT_MAX_BYTES
+        )
+        if not text:
+            raise DevPersistenceValidationError("narrative_text must not be empty")
+        record = DevRunNarrative(
+            run_id=run.id,
+            org_id=org_id,
+            user_id=user_id,
+            narrative_id=narrative_id,
+            frame_id=frame_id,
+            mode=mode,
+            provider_fingerprint=_digest(
+                provider_fingerprint, field="provider_fingerprint"
+            ),
+            narrative_text=text,
+            payload=_bounded_json(
+                payload,
+                field="narrative_payload",
+                max_bytes=_NARRATIVE_PAYLOAD_MAX_BYTES,
+            ),
+            created_at=self._now(),
+        )
+        self.session.add(record)
+        await self.session.flush()
+        return record
+
+    async def append_stage_diagnostic(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        ordinal: int,
+        stage_id: str,
+        status: str,
+        latency_ms: int | None,
+        counts: Mapping[str, Any],
+    ) -> DevRunStageDiagnostic:
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None:
+            raise DevPersistenceNotFound("run not found")
+        if ordinal < 0 or ordinal > 9:
+            raise DevPersistenceValidationError("stage diagnostic ordinal out of range")
+        if stage_id not in _STAGE_IDS:
+            raise DevPersistenceValidationError("invalid stage_id")
+        if status not in _STAGE_STATUSES:
+            raise DevPersistenceValidationError("invalid stage status")
+        if latency_ms is not None and latency_ms < 0:
+            raise DevPersistenceValidationError("latency_ms must be nonnegative")
+        record = DevRunStageDiagnostic(
+            run_id=run.id,
+            org_id=org_id,
+            user_id=user_id,
+            ordinal=ordinal,
+            stage_id=stage_id,
+            status=status,
+            latency_ms=latency_ms,
+            counts=_safe_count_summary(counts, field="stage_diagnostic_counts"),
+            created_at=self._now(),
+        )
+        self.session.add(record)
+        await self.session.flush()
+        return record
 
     async def record_feedback(
         self,

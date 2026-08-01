@@ -27,6 +27,7 @@ from ..status_change_service import StatusResultState
 from ..work_graph_neighbors_service import WorkGraphResultState
 
 __all__ = [
+    "UNMEASURED_REQUIREMENT_STATES",
     "queried_semantics",
     "unmeasured_limitation",
     "data_health_state_to_requirement_state",
@@ -34,6 +35,28 @@ __all__ = [
     "metric_data_state_to_requirement_state",
     "work_graph_result_state_to_requirement_state",
 ]
+
+#: Mirrors ``contracts_v2.result._UNMEASURED_STATES`` exactly (that set is
+#: module-private, so this is a deliberate duplicate, not an import -- a
+#: mismatch between the two would only ever surface as a
+#: ``DevSourceObservation`` ``ValidationError`` at the executor boundary,
+#: which is precisely the class of bug this constant exists to prevent
+#: callers from re-introducing one mapping function at a time). Any of these
+#: five states requires ``usable_fact_count=0``, ``data_semantics=
+#: "not_measured"``, and a bounded ``limitation`` -- a caller that maps a
+#: canonical result state through one of this module's functions and then
+#: unconditionally reports queried semantics (as opposed to checking
+#: membership here first) will fail contract validation the moment the
+#: canonical service actually returns one of these.
+UNMEASURED_REQUIREMENT_STATES = frozenset(
+    {
+        SourceRequirementState.UNCONFIGURED,
+        SourceRequirementState.UNAVAILABLE,
+        SourceRequirementState.UNAUTHORIZED_OR_NOT_VISIBLE,
+        SourceRequirementState.NOT_APPLICABLE,
+        SourceRequirementState.TRUNCATED,
+    }
+)
 
 
 def queried_semantics(usable_fact_count: int) -> str:

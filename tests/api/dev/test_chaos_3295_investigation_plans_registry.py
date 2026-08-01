@@ -35,6 +35,8 @@ from dev_health_ops.api.dev.investigation_plans.registry_validation import (
     DependencyCycleError,
     MissingCorePlanError,
     MissingStepImplementationError,
+    OrphanStepRegistrationError,
+    StepRequirementMismatchError,
 )
 from dev_health_ops.api.dev.investigation_plans.steps import DuplicateStepError
 from tests._chaos_3295_plan_executor import FakePlanExecutorRuntime
@@ -164,18 +166,171 @@ def test_multi_node_dependency_cycle_is_rejected():
     async def run(_ctx):
         raise AssertionError("never executed by this structural test")
 
-    for step_id, adapter_id in (("a", "test.a.v1"), ("b", "test.b.v1")):
+    for step_id, source_class, adapter_id in (
+        ("a", SourceClass.STATUS_CHANGE, "test.a.v1"),
+        ("b", SourceClass.WORK_ITEM, "test.b.v1"),
+    ):
         registry.register(
             PlanStepDefinition(
                 step_id=step_id,
                 plan_id=plan.plan_id,
-                source_class=SourceClass.STATUS_CHANGE,
+                source_class=source_class,
                 adapter_id=adapter_id,
                 requirement_level="mandatory",
                 run=run,
             )
         )
     with pytest.raises(DependencyCycleError):
+        validate_registry(
+            plans_by_intent={QuestionIntentID.BOUNDED_INVESTIGATION: plan},
+            steps=registry,
+            core_intents=frozenset({QuestionIntentID.BOUNDED_INVESTIGATION}),
+        )
+
+
+def test_step_registered_against_the_wrong_adapter_is_rejected():
+    """Codex finding (MEDIUM, 2026-08-01, repro): registering both step
+    definitions of a two-step plan against the *same* (wrong) adapter
+    previously passed validation (only step names were checked) and then
+    collided at run time, when the executor could not find a requirement
+    matching step "b"'s (source_class, adapter_id) and minted both
+    observation ids from the same "unregistered" fallback seed --
+    "observation ids must be unique".
+
+    Kill site: pre-fix, this test's ``validate_registry`` call raises
+    nothing (registration passes); post-fix it raises
+    ``StepRequirementMismatchError`` because step "b" is registered against
+    (STATUS_CHANGE, "test.a.v1"), which is not a declared requirement.
+    """
+
+    plan = _minimal_plan(step_dependencies=())
+    registry = StepRegistry()
+
+    async def run(_ctx):
+        raise AssertionError("never executed by this structural test")
+
+    for step_id in ("a", "b"):
+        registry.register(
+            PlanStepDefinition(
+                step_id=step_id,
+                plan_id=plan.plan_id,
+                source_class=SourceClass.STATUS_CHANGE,
+                adapter_id="test.a.v1",  # both steps registered to "a"'s adapter
+                requirement_level="mandatory",
+                run=run,
+            )
+        )
+    with pytest.raises(StepRequirementMismatchError):
+        validate_registry(
+            plans_by_intent={QuestionIntentID.BOUNDED_INVESTIGATION: plan},
+            steps=registry,
+            core_intents=frozenset({QuestionIntentID.BOUNDED_INVESTIGATION}),
+        )
+
+
+def test_step_with_mismatched_mandatory_conditional_attribution_is_rejected():
+    """A step declared mandatory in the plan's step lists, but whose matching
+    source_requirement is declared conditional, must be rejected -- this is
+    exactly the mandatory-vs-conditional attribution mutation (b) proved
+    kill-able at the executor level; this is the equivalent registry-level
+    guard that stops the mismatch from being constructible in the first
+    place.
+
+    Kill site verified (2026-08-01) by temporarily reducing
+    ``validate_registry`` to only the step-name/cycle checks (the
+    requirement-matching block folded into finding 4's fix): with that block
+    removed, this test's ``pytest.raises(StepRequirementMismatchError)``
+    fails with "DID NOT RAISE". Reverted; suite green again.
+    """
+
+    plan = DevInvestigationPlan(
+        schema_version="dev_investigation_plan.v1",
+        plan_id="investigation.bounded.v1",
+        plan_version="investigation.bounded.v1.0",
+        intent_id=QuestionIntentID.BOUNDED_INVESTIGATION,
+        supported_subject_kinds=(EntityKind.PROJECT,),
+        supported_cardinalities=(Cardinality.SINGULAR,),
+        mandatory_steps=("a",),
+        conditional_steps=(),
+        step_dependencies=(),
+        source_requirements=(
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.STATUS_CHANGE,
+                adapter_id="test.a.v1",
+                requirement_level="conditional",
+                applicability_rule_id="rule.v1",
+                applicability_rule_version="1",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+        ),
+        batch_strategy="single",
+        per_step_timeout_seconds=5,
+        max_rows_per_step=10,
+        max_bytes_per_step=1_000,
+        enrichment_allowed=False,
+        completion_rule_id="test.rule",
+        completion_rule_version="1",
+    )
+    registry = StepRegistry()
+
+    async def run(_ctx):
+        raise AssertionError("never executed by this structural test")
+
+    registry.register(
+        PlanStepDefinition(
+            step_id="a",
+            plan_id=plan.plan_id,
+            source_class=SourceClass.STATUS_CHANGE,
+            adapter_id="test.a.v1",
+            requirement_level="mandatory",
+            run=run,
+        )
+    )
+    with pytest.raises(StepRequirementMismatchError):
+        validate_registry(
+            plans_by_intent={QuestionIntentID.BOUNDED_INVESTIGATION: plan},
+            steps=registry,
+            core_intents=frozenset({QuestionIntentID.BOUNDED_INVESTIGATION}),
+        )
+
+
+def test_orphan_step_registered_under_the_same_plan_id_is_rejected():
+    """A step registered under this plan_id but never declared in
+    mandatory_steps/conditional_steps is a same-plan extra registration and
+    must be rejected -- distinct from a step registered under a *different*
+    plan_id (legitimate: CHAOS-3303/3304/3305 share this StepRegistry).
+
+    Kill site verified (2026-08-01): with the same requirement-matching
+    block removed as above, this test's
+    ``pytest.raises(OrphanStepRegistrationError)`` fails with "DID NOT
+    RAISE" (the orphan check lives in the same removed block). Reverted;
+    suite green again.
+    """
+
+    plan = _minimal_plan(step_dependencies=())
+    registry = StepRegistry()
+
+    async def run(_ctx):
+        raise AssertionError("never executed by this structural test")
+
+    for step_id, source_class, adapter_id in (
+        ("a", SourceClass.STATUS_CHANGE, "test.a.v1"),
+        ("b", SourceClass.WORK_ITEM, "test.b.v1"),
+        ("c", SourceClass.WORK_GRAPH, "test.c.v1"),  # never declared by the plan
+    ):
+        registry.register(
+            PlanStepDefinition(
+                step_id=step_id,
+                plan_id=plan.plan_id,
+                source_class=source_class,
+                adapter_id=adapter_id,
+                requirement_level="mandatory",
+                run=run,
+            )
+        )
+    with pytest.raises(OrphanStepRegistrationError):
         validate_registry(
             plans_by_intent={QuestionIntentID.BOUNDED_INVESTIGATION: plan},
             steps=registry,

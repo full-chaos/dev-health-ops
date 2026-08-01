@@ -23,6 +23,7 @@ from ..metrics.service import MetricQueryResult
 from ..status_change_service import ChangeSummaryResult, StatusSnapshotResult
 from ..work_graph_neighbors_service import WorkGraphNeighborsResult
 from .state_mapping import (
+    UNMEASURED_REQUIREMENT_STATES,
     data_health_state_to_requirement_state,
     metric_data_state_to_requirement_state,
     queried_semantics,
@@ -151,6 +152,47 @@ def _data_health_outcome(result: DataHealthResult) -> StepOutcome:
     )
 
 
+def _status_mapped_outcome(
+    state: SourceRequirementState,
+    *,
+    usable_fact_count: int,
+    limitation: str,
+    watermark=None,
+    query_version: str = "unversioned",
+) -> StepOutcome:
+    """Build a ``StepOutcome`` from a state already mapped through this
+    module's ``state_mapping`` functions.
+
+    Codex finding (HIGH, 2026-08-01): ``StatusResultState.
+    INSUFFICIENT_EVIDENCE`` maps to ``SourceRequirementState.UNAVAILABLE``, an
+    unmeasured state -- reporting queried semantics for it (a positive
+    ``usable_fact_count``, no ``limitation``) fails ``DevSourceObservation``'s
+    own "a source that was not fully measured requires a bounded limitation"
+    validator, which the orchestrator's outer exception handler then turns
+    into a user-visible ``internal_error`` instead of a typed unavailable
+    observation. Every caller that maps a canonical result state through
+    ``state_mapping`` and then builds a ``StepOutcome`` must route through
+    here rather than assuming the mapped state is always queryable.
+    """
+
+    if state in UNMEASURED_REQUIREMENT_STATES:
+        return StepOutcome(
+            observed_state=state,
+            data_semantics="not_measured",
+            usable_fact_count=0,
+            limitation=limitation,
+            watermark=watermark,
+            query_version=query_version,
+        )
+    return StepOutcome(
+        observed_state=state,
+        data_semantics=queried_semantics(usable_fact_count),
+        usable_fact_count=usable_fact_count,
+        watermark=watermark,
+        query_version=query_version,
+    )
+
+
 def register_builtin_steps(
     registry: StepRegistry, runtime: PlanExecutorRuntime
 ) -> None:
@@ -180,10 +222,10 @@ def register_builtin_steps(
             (1 if result.declared else 0) + len(result.children) + len(result.blockers)
         )
         state = status_result_state_to_requirement_state(result.state)
-        return StepOutcome(
-            observed_state=state,
-            data_semantics=queried_semantics(usable),
+        return _status_mapped_outcome(
+            state,
             usable_fact_count=usable,
+            limitation="status_snapshot_insufficient_evidence",
             watermark=max(
                 (ref.watermark for ref in result.source_refs if ref.watermark),
                 default=None,
@@ -205,10 +247,10 @@ def register_builtin_steps(
             scope=ctx.scope,
         )
         usable = len(result.changes)
-        return StepOutcome(
-            observed_state=status_result_state_to_requirement_state(result.state),
-            data_semantics=queried_semantics(usable),
+        return _status_mapped_outcome(
+            status_result_state_to_requirement_state(result.state),
             usable_fact_count=usable,
+            limitation="change_summary_insufficient_evidence",
             query_version="change-summary.v1",
         )
 
@@ -264,6 +306,19 @@ def register_builtin_steps(
             scope=ctx.scope,
         )
         return _data_health_outcome(result)
+
+    def registered_metrics_present_applicable(ctx: StepContext) -> bool:
+        """Codex finding (MEDIUM, 2026-08-01): the plan declares this step
+        conditional on ``registered_metrics_present.v1``, but registration
+        previously hardcoded ``applicable=True`` -- an empty metric catalog
+        then ran the step anyway and recorded UNAVAILABLE/
+        ``all_requested_metrics_failed``, misreporting an absent optional
+        source as an answer-completeness gap instead of skipping it as
+        NOT_APPLICABLE. Applicability must be derived from the same catalog
+        the step itself would query.
+        """
+
+        return bool(runtime.list_metrics(ctx.scope))
 
     async def registered_metric_deltas_run(ctx: StepContext) -> StepOutcome:
         definitions = list(runtime.list_metrics(ctx.scope))
@@ -393,7 +448,7 @@ def register_builtin_steps(
             adapter_id="metrics.query_metric.v1",
             requirement_level="conditional",
             run=registered_metric_deltas_run,
-            applicable=lambda ctx: True,
+            applicable=registered_metrics_present_applicable,
         )
     )
 

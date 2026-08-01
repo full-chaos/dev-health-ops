@@ -19,6 +19,7 @@ from dev_health_ops.api.dev.data_health_service import DataHealthState
 from dev_health_ops.api.dev.investigation_plans.plan_documents import (
     CORE_PLANS_BY_INTENT,
 )
+from dev_health_ops.api.dev.status_change_service import StatusResultState
 from tests._chaos_3292_preflight import (
     ASK_DEV_PROJECT,
     ORG_ID,
@@ -229,3 +230,111 @@ async def test_assessment_source_limit_reached_maps_to_truncated():
     assert observation.observed_state == SourceRequirementState.TRUNCATED
     assert observation.usable_fact_count == 0
     assert observation.limitation == "assessment_source_limit_reached"
+
+
+@pytest.mark.asyncio
+async def test_insufficient_evidence_status_snapshot_does_not_crash_the_run():
+    """Codex finding (HIGH, 2026-08-01): a legitimate no-evidence status
+    result must never abort the run.
+
+    ``StatusResultState.INSUFFICIENT_EVIDENCE`` maps to
+    ``SourceRequirementState.UNAVAILABLE`` (an unmeasured state). Before the
+    fix, ``status_snapshot_run`` still reported queried semantics for it
+    (usable_fact_count derived from a count, no limitation), which failed
+    ``DevSourceObservation``'s own "a source that was not fully measured
+    requires a bounded limitation" validator -- the orchestrator's outer
+    exception handler then converted that into a user-visible
+    ``internal_error`` and no investigation result was ever recorded.
+
+    Kill site verified (2026-08-01) by temporarily reverting
+    ``status_snapshot_run`` to call ``StepOutcome`` directly with queried
+    semantics regardless of state (bypassing ``_status_mapped_outcome``):
+    with the fix reverted, this test fails at
+    ``assert output.result.error is None or output.result.error.code !=
+    "internal_error"`` -- the run terminates ``RunState.FAILED`` with
+    ``error.code == "internal_error"``, exactly the codex-reported defect
+    (``DevSourceObservation``'s own zero-semantics validator raises inside
+    the executor; the orchestrator's outer exception handler then converts
+    that into the generic internal_error rather than ever calling
+    ``record_investigation_result``). Reverted; suite green again.
+    """
+
+    runtime = FakePlanExecutorRuntime(
+        status_state=StatusResultState.INSUFFICIENT_EVIDENCE
+    )
+    output = await run_preflight_orchestrator(
+        question="What's the status of the Ask Dev project?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script_id="chaos3295-insufficient-evidence",
+        recorder_factory=InvestigationRecorder,
+        plan_registry=CORE_PLANS_BY_INTENT,
+        plan_executor=executor_for(runtime),
+    )
+
+    assert output.result.error is None or output.result.error.code != "internal_error"
+    recorder = output.recorder
+    assert isinstance(recorder, InvestigationRecorder)
+    assert len(recorder.results) == 1
+    result = recorder.results[0]
+    status_observations = [
+        obs
+        for obs in result.observations
+        if obs.adapter_id == "status_change_service.status_snapshot.v1"
+    ]
+    assert len(status_observations) == 1
+    observation = status_observations[0]
+    assert observation.observed_state == SourceRequirementState.UNAVAILABLE
+    assert observation.usable_fact_count == 0
+    assert observation.data_semantics == "not_measured"
+    assert observation.limitation == "status_snapshot_insufficient_evidence"
+
+
+@pytest.mark.asyncio
+async def test_registered_metric_deltas_skips_not_applicable_on_empty_catalog():
+    """Codex finding (MEDIUM, 2026-08-01): an empty metric catalog must skip
+    ``registered_metric_deltas`` as NOT_APPLICABLE, never run it and report
+    UNAVAILABLE/``all_requested_metrics_failed`` (which would misreport an
+    absent optional source as an answer-completeness gap).
+
+    Driven directly against the real ``change.observed.v1`` plan and the
+    real registered builtin steps (not the orchestrator seam -- this is a
+    property of one step's applicability predicate, independent of how the
+    subject was committed).
+
+    Kill site verified by temporarily reverting
+    ``registered_metrics_present_applicable`` to ``lambda ctx: True``: with
+    the fix reverted, this test fails because the step actually runs
+    (``query_metric_calls`` becomes nonzero via the empty-definitions
+    gather, and the observed state is UNAVAILABLE/all_requested_metrics_failed
+    rather than NOT_APPLICABLE/step_not_applicable). Reverted; suite green
+    again.
+    """
+
+    from dev_health_ops.api.dev.investigation_plans import (
+        PlanExecutor,
+        StepRegistry,
+        register_builtin_steps,
+    )
+    from tests._chaos_3295_plan_executor import fixed_now, step_context_for
+
+    runtime = FakePlanExecutorRuntime(metric_definitions=())
+    registry = StepRegistry()
+    register_builtin_steps(registry, runtime)
+    executor = PlanExecutor(registry=registry, now=fixed_now)
+    plan = CORE_PLANS_BY_INTENT[QuestionIntentID.OBSERVED_CHANGE]
+
+    result = await executor.run(
+        plan=plan, context=step_context_for(), run_id="run-empty-catalog"
+    )
+
+    assert "registered_metric_deltas" in result.skipped_steps
+    metric_observations = [
+        obs
+        for obs in result.observations
+        if obs.adapter_id == "metrics.query_metric.v1"
+    ]
+    assert len(metric_observations) == 1
+    observation = metric_observations[0]
+    assert observation.observed_state == SourceRequirementState.NOT_APPLICABLE
+    assert observation.limitation == "step_not_applicable"
+    assert runtime.query_metric_calls == 0

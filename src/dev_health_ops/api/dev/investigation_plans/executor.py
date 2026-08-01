@@ -105,9 +105,17 @@ class PlanExecutor:
         blocked: set[str] = set()
         runnable = set(plan.mandatory_steps) | applicable_conditional
 
+        # Codex finding (MEDIUM, 2026-08-01): dependencies were previously
+        # filtered to `runnable` here, which *deleted* the edge to any
+        # conditional prerequisite whose applicability predicate said "no" --
+        # a mandatory step depending on an inapplicable conditional gate then
+        # saw no dependency at all and ran immediately, instead of being
+        # blocked. Retain every declared edge unfiltered; `not_applicable`
+        # (like `failed`/`blocked`) is already folded into `unresolved` and
+        # `blocked_now` below, so an inapplicable prerequisite still blocks
+        # its dependents correctly -- it is simply never itself scheduled.
         dependencies = {
-            dep.step_id: {d for d in dep.depends_on if d in runnable}
-            for dep in plan.step_dependencies
+            dep.step_id: set(dep.depends_on) for dep in plan.step_dependencies
         }
         remaining = {step_id: dependencies.get(step_id, set()) for step_id in runnable}
         completed: dict[str, _Attempt] = {}
@@ -230,8 +238,18 @@ class PlanExecutor:
         # A deterministic representative step_id for this requirement, used
         # only to seed the observation's minted id -- ``step_ids`` is already
         # sorted by the caller, so this is stable across runs regardless of
-        # dict/registration order.
-        identity_step_id = step_ids[0] if step_ids else "unregistered"
+        # dict/registration order. registry_validation.validate_registry
+        # rejects a declared requirement with no matching registration before
+        # any run reaches this branch; the requirement's own (source_class,
+        # adapter_id) is folded into the fallback seed as defense in depth
+        # (codex finding, MEDIUM, 2026-08-01) so two different unregistered
+        # requirements in the same plan can never mint colliding observation
+        # ids from an identical literal "unregistered" seed.
+        identity_step_id = (
+            step_ids[0]
+            if step_ids
+            else f"unregistered:{requirement.source_class.value}:{requirement.adapter_id}"
+        )
         observation_id = _mint("observation", run_id, plan_id, identity_step_id)
 
         completed_step = next((s for s in step_ids if s in completed), None)

@@ -356,5 +356,115 @@ async def test_identical_inputs_produce_a_byte_identical_result():
     assert result_c.result_id != result_a.result_id
 
 
+@pytest.mark.asyncio
+async def test_a_mandatory_step_depending_on_an_inapplicable_conditional_gate_is_blocked():
+    """Codex finding (MEDIUM, 2026-08-01): an inapplicable prerequisite must
+    still block its dependents, not vanish from the dependency graph.
+
+    Before the fix, ``dependencies`` filtered ``depends_on`` to
+    ``runnable`` (mandatory steps plus *applicable* conditional steps)
+    before blocking was ever computed -- so a mandatory step depending on an
+    inapplicable conditional "gate" saw no dependency at all and ran
+    immediately. Repro (from the codex report): an accepted plan with
+    mandatory ``downstream`` depending on an inapplicable conditional
+    ``gate`` returned ``completed=('downstream',), skipped=('gate',)``.
+
+    Kill site verified (2026-08-01) by temporarily reverting the
+    ``dependencies`` fix (filtering back to ``{d for d in dep.depends_on if
+    d in runnable}``): with the fix reverted, this test fails at
+    ``assert downstream_calls["count"] == 0`` (observed ``1 == 0`` --
+    ``downstream_run`` actually executed, matching the codex repro's
+    ``completed=('downstream',)`` exactly). Reverted; suite green again.
+    """
+
+    plan = DevInvestigationPlan(
+        schema_version="dev_investigation_plan.v1",
+        plan_id="investigation.bounded.v1",
+        plan_version="investigation.bounded.v1.0",
+        intent_id=QuestionIntentID.BOUNDED_INVESTIGATION,
+        supported_subject_kinds=(EntityKind.PROJECT,),
+        supported_cardinalities=(Cardinality.SINGULAR,),
+        mandatory_steps=("downstream",),
+        conditional_steps=("gate",),
+        step_dependencies=(
+            DevPlanStepDependency(step_id="downstream", depends_on=("gate",)),
+        ),
+        source_requirements=(
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.STATUS_CHANGE,
+                adapter_id="test.downstream.v1",
+                requirement_level="mandatory",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.WORK_GRAPH,
+                adapter_id="test.gate.v1",
+                requirement_level="conditional",
+                applicability_rule_id="never.v1",
+                applicability_rule_version="1",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+        ),
+        batch_strategy="single",
+        per_step_timeout_seconds=5,
+        max_rows_per_step=10,
+        max_bytes_per_step=1_000,
+        enrichment_allowed=False,
+        completion_rule_id="test.rule",
+        completion_rule_version="1",
+    )
+    registry = StepRegistry()
+    downstream_calls = {"count": 0}
+
+    async def downstream_run(_ctx: StepContext) -> StepOutcome:
+        downstream_calls["count"] += 1
+        return _ok_outcome()
+
+    registry.register(
+        PlanStepDefinition(
+            step_id="downstream",
+            plan_id=plan.plan_id,
+            source_class=SourceClass.STATUS_CHANGE,
+            adapter_id="test.downstream.v1",
+            requirement_level="mandatory",
+            run=downstream_run,
+        )
+    )
+    registry.register(
+        PlanStepDefinition(
+            step_id="gate",
+            plan_id=plan.plan_id,
+            source_class=SourceClass.WORK_GRAPH,
+            adapter_id="test.gate.v1",
+            requirement_level="conditional",
+            run=lambda _ctx: _async_outcome(_ok_outcome()),
+            applicable=lambda _ctx: False,
+        )
+    )
+
+    executor = PlanExecutor(registry=registry, now=_now)
+    result = await executor.run(plan=plan, context=_context(), run_id="run-1")
+
+    assert downstream_calls["count"] == 0
+    assert result.completed_steps == ()
+    assert "gate" in result.skipped_steps
+    assert "downstream" in result.skipped_steps
+
+    by_adapter = {obs.adapter_id: obs for obs in result.observations}
+    assert (
+        by_adapter["test.gate.v1"].observed_state
+        == SourceRequirementState.NOT_APPLICABLE
+    )
+    assert (
+        by_adapter["test.downstream.v1"].observed_state
+        == SourceRequirementState.UNAVAILABLE
+    )
+    assert by_adapter["test.downstream.v1"].limitation == "step_blocked_by_prerequisite"
+
+
 async def _async_outcome(outcome: StepOutcome) -> StepOutcome:
     return outcome

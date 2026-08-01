@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ..contracts_v2.base import QuestionIntentID
+from ..contracts_v2.base import QuestionIntentID, SourceClass
 from ..contracts_v2.plan import PLAN_REGISTRY, DevInvestigationPlan
 from .steps import PlanRegistryError, StepRegistry
 
@@ -45,6 +45,14 @@ class DependencyCycleError(PlanRegistryError):
 
 
 class MissingCorePlanError(PlanRegistryError):
+    pass
+
+
+class StepRequirementMismatchError(PlanRegistryError):
+    pass
+
+
+class OrphanStepRegistrationError(PlanRegistryError):
     pass
 
 
@@ -76,19 +84,85 @@ def validate_registry(
             )
 
         declared_steps = set(plan.mandatory_steps) | set(plan.conditional_steps)
-        registered_steps = set(steps.for_plan(plan.plan_id))
+        registered_for_plan = steps.for_plan(plan.plan_id)
+        registered_steps = set(registered_for_plan)
         missing_tools = declared_steps - registered_steps
         if missing_tools:
             raise MissingStepImplementationError(
                 f"plan {plan.plan_id!r} declares steps with no registered "
                 f"implementation: {sorted(missing_tools)}"
             )
-        # The inverse -- a registered step the plan never declares -- is not
-        # an error: CHAOS-3303/3304/3305 register their own plans' steps
-        # into the *same* shared StepRegistry instance, so it legitimately
-        # holds entries for plan IDs other than the one being checked here
-        # (``for_plan`` already scopes the comparison, so this is stated for
-        # the reader, not enforced).
+        # A step registered under a *different* plan_id is not an error here:
+        # CHAOS-3303/3304/3305 register their own plans' steps into the same
+        # shared StepRegistry instance, and ``for_plan`` already scopes the
+        # comparison to this plan_id. A step registered under *this* plan_id
+        # but never declared in mandatory_steps/conditional_steps is an
+        # orphan registration and is rejected below (codex finding, MEDIUM,
+        # 2026-08-01 -- "reject same-plan extra registrations").
+        orphan_steps = registered_steps - declared_steps
+        if orphan_steps:
+            raise OrphanStepRegistrationError(
+                f"plan {plan.plan_id!r} has step(s) registered but never "
+                f"declared in mandatory_steps/conditional_steps: "
+                f"{sorted(orphan_steps)}"
+            )
+
+        # Codex finding (MEDIUM, 2026-08-01): the checks above only compared
+        # step *names* -- nothing verified that a registered step's own
+        # (source_class, adapter_id, requirement_level) actually corresponds
+        # to a declared DevSourceRequirement. A step registered against the
+        # wrong adapter previously passed validation and only failed later,
+        # at run time, when the executor could not find *any* requirement
+        # matching its (source_class, adapter_id) and minted two colliding
+        # "unregistered"-seeded observation ids for the same run.
+        declared_requirements = {
+            (req.source_class, req.adapter_id): req.requirement_level
+            for req in plan.source_requirements
+        }
+        # Two different steps registered against the *same* (source_class,
+        # adapter_id) is itself a mismatch, even when that pair is declared:
+        # exactly one step must claim each requirement, or the executor's
+        # per-requirement observation loop cannot tell which step's outcome
+        # is authoritative for it (this is precisely how the codex repro --
+        # two step definitions both registered to the wrong, shared adapter
+        # -- slipped past a membership-only check).
+        consumed_requirement_keys: dict[tuple[SourceClass, str], str] = {}
+        for step_id in sorted(declared_steps):
+            definition = registered_for_plan[step_id]
+            key = (definition.source_class, definition.adapter_id)
+            expected_level = declared_requirements.get(key)
+            if expected_level is None:
+                raise StepRequirementMismatchError(
+                    f"plan {plan.plan_id!r} step {step_id!r} is registered "
+                    f"against (source_class={definition.source_class!r}, "
+                    f"adapter_id={definition.adapter_id!r}), which is not a "
+                    f"declared source_requirement of this plan"
+                )
+            if key in consumed_requirement_keys:
+                raise StepRequirementMismatchError(
+                    f"plan {plan.plan_id!r} steps "
+                    f"{consumed_requirement_keys[key]!r} and {step_id!r} are "
+                    f"both registered against the same source_requirement "
+                    f"{key!r} -- exactly one step must match each declared "
+                    f"requirement"
+                )
+            consumed_requirement_keys[key] = step_id
+            declared_attribution = (
+                "mandatory" if step_id in plan.mandatory_steps else "conditional"
+            )
+            if expected_level != declared_attribution:
+                raise StepRequirementMismatchError(
+                    f"plan {plan.plan_id!r} step {step_id!r} is declared "
+                    f"{declared_attribution!r} in the plan's step lists, but "
+                    f"its source_requirement {key!r} is {expected_level!r}"
+                )
+            if definition.requirement_level != expected_level:
+                raise StepRequirementMismatchError(
+                    f"plan {plan.plan_id!r} step {step_id!r}'s own registered "
+                    f"requirement_level {definition.requirement_level!r} "
+                    f"disagrees with its source_requirement's "
+                    f"{expected_level!r}"
+                )
 
         _check_acyclic(plan)
 

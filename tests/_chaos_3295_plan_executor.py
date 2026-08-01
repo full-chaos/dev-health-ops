@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from dev_health_ops.api.dev.contracts import DevScope, DevTimeRange, DirectScope
 from dev_health_ops.api.dev.contracts_v2 import DevInvestigationResult
 from dev_health_ops.api.dev.data_health_service import (
     DataHealthResult,
@@ -17,10 +18,14 @@ from dev_health_ops.api.dev.data_health_service import (
 )
 from dev_health_ops.api.dev.investigation_plans import (
     PlanExecutor,
+    StepContext,
     StepRegistry,
     register_builtin_steps,
 )
+from dev_health_ops.api.dev.metrics.definitions import MetricDefinition
 from dev_health_ops.api.dev.status_change_service import (
+    ChangeSummaryResult,
+    ChangeWindow,
     StatusResultState,
     StatusSnapshotResult,
 )
@@ -41,7 +46,48 @@ __all__ = [
     "InvestigationRecorder",
     "executor_for",
     "fixed_now",
+    "project_scope",
+    "step_context_for",
 ]
+
+ORG_ID = "org_fullchaos"
+
+
+def project_scope(*, entity_id: str = "project-ask-dev") -> DevScope:
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id=ORG_ID,
+        direct_scope=DirectScope.PROJECT,
+        entity_refs=[
+            {
+                "entity_type": "project",
+                "entity_id": entity_id,
+                "display_label": "Ask Dev",
+                "repository_id": None,
+            }
+        ],
+        time_range=DevTimeRange(
+            start=datetime(2026, 7, 1, tzinfo=UTC),
+            end=datetime(2026, 7, 31, tzinfo=UTC),
+            timezone="UTC",
+        ),
+    )
+
+
+def step_context_for(
+    *,
+    scope: DevScope | None = None,
+    run_id: str = "run-direct",
+    requested_metric_ids: tuple[str, ...] = (),
+) -> StepContext:
+    return StepContext(
+        org_id=ORG_ID,
+        permission_fingerprint="fingerprint",
+        scope=scope or project_scope(),
+        run_id=run_id,
+        now=fixed_now(),
+        requested_metric_ids=requested_metric_ids,
+    )
 
 
 def fixed_now() -> datetime:
@@ -68,6 +114,21 @@ def _status_result(
         incidents=(),
         source_refs=(),
         warnings=warnings,
+    )
+
+
+def _change_summary_result(
+    state: StatusResultState = StatusResultState.COMPLETE,
+) -> ChangeSummaryResult:
+    window = ChangeWindow(fixed_now(), fixed_now())
+    return ChangeSummaryResult(
+        contract_version="change_summary.v1",
+        state=state,
+        current_window=window,
+        comparison_window=window,
+        changes=(),
+        source_refs=(),
+        warnings=(),
     )
 
 
@@ -106,14 +167,20 @@ class FakePlanExecutorRuntime:
         data_health_state: DataHealthState = DataHealthState.COMPLETE,
         status_snapshot_fails: bool = False,
         status_snapshot_warnings: tuple[str, ...] = (),
+        change_summary_state: StatusResultState = StatusResultState.COMPLETE,
+        metric_definitions: tuple[MetricDefinition, ...] = (),
     ) -> None:
         self.status_snapshot_calls = 0
         self.data_health_calls = 0
         self.work_graph_calls = 0
+        self.change_summary_calls = 0
+        self.query_metric_calls = 0
         self._status_state = status_state
         self._data_health_state = data_health_state
         self._status_snapshot_fails = status_snapshot_fails
         self._status_snapshot_warnings = status_snapshot_warnings
+        self._change_summary_state = change_summary_state
+        self._metric_definitions = metric_definitions
 
     async def status_snapshot(self, *, org_id, permission_fingerprint, scope):
         self.status_snapshot_calls += 1
@@ -124,12 +191,14 @@ class FakePlanExecutorRuntime:
         )
 
     async def change_summary(self, *, org_id, permission_fingerprint, scope):
-        raise AssertionError("not exercised by this suite")
+        self.change_summary_calls += 1
+        return _change_summary_result(self._change_summary_state)
 
     def list_metrics(self, scope):
-        return ()
+        return self._metric_definitions
 
     async def query_metric(self, *, org_id, permission_fingerprint, metric_id, scope):
+        self.query_metric_calls += 1
         raise AssertionError("not exercised by this suite")
 
     async def work_graph_neighbors(self, *, org_id, permission_fingerprint, scope):

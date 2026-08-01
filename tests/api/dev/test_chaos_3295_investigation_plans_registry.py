@@ -277,6 +277,161 @@ def test_declared_requirement_with_no_matching_step_is_rejected():
         )
 
 
+def test_declared_requirements_with_no_matching_step_are_aggregated_across_plans():
+    """Codex re-check finding (MEDIUM, 2026-08-01, second pass): the previous
+    fix (``test_declared_requirement_with_no_matching_step_is_rejected``)
+    raised ``StepRequirementMismatchError`` from *inside* the per-plan loop,
+    so with two plans each carrying an unconsumed requirement, only the
+    first plan's mismatch was ever reported -- construction stopped at the
+    first raise, and the second plan's identical defect was silently
+    unreachable.
+
+    Two plans, each independently correct except for one unique unconsumed
+    mandatory requirement. Both must appear in the single raised error's
+    message, proving the check accumulates across the *entire* registry
+    traversal instead of short-circuiting on the first plan.
+
+    Kill site verified (2026-08-01) by reverting the fix to raise
+    immediately inside the per-plan loop: with that reverted, this test's
+    message-content assertions fail because "status.entity.v2" and
+    "test.unconsumed_two.v1" never appear -- validate_registry stops at
+    "investigation.bounded.v1" first. Restored; both-plans assertion passes
+    again.
+    """
+
+    plan_one = DevInvestigationPlan(
+        schema_version="dev_investigation_plan.v1",
+        plan_id="investigation.bounded.v1",
+        plan_version="investigation.bounded.v1.0",
+        intent_id=QuestionIntentID.BOUNDED_INVESTIGATION,
+        supported_subject_kinds=(EntityKind.PROJECT,),
+        supported_cardinalities=(Cardinality.SINGULAR,),
+        mandatory_steps=("a", "b"),
+        conditional_steps=(),
+        step_dependencies=(),
+        source_requirements=(
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.STATUS_CHANGE,
+                adapter_id="test.a.v1",
+                requirement_level="mandatory",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.WORK_ITEM,
+                adapter_id="test.b.v1",
+                requirement_level="mandatory",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.WORK_GRAPH,
+                adapter_id="test.unconsumed_one.v1",
+                requirement_level="mandatory",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+        ),
+        batch_strategy="single",
+        per_step_timeout_seconds=5,
+        max_rows_per_step=10,
+        max_bytes_per_step=1_000,
+        enrichment_allowed=False,
+        completion_rule_id="test.rule",
+        completion_rule_version="1",
+    )
+    plan_two = DevInvestigationPlan(
+        schema_version="dev_investigation_plan.v1",
+        plan_id="status.entity.v2",
+        plan_version="status.entity.v2.0",
+        intent_id=QuestionIntentID.ENTITY_STATUS,
+        supported_subject_kinds=(EntityKind.PROJECT,),
+        supported_cardinalities=(Cardinality.SINGULAR,),
+        mandatory_steps=("x", "y"),
+        conditional_steps=(),
+        step_dependencies=(),
+        source_requirements=(
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.STATUS_CHANGE,
+                adapter_id="test.x.v1",
+                requirement_level="mandatory",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.WORK_ITEM,
+                adapter_id="test.y.v1",
+                requirement_level="mandatory",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+            DevSourceRequirement(
+                schema_version="dev_source_requirement.v1",
+                source_class=SourceClass.WORK_GRAPH,
+                adapter_id="test.unconsumed_two.v1",
+                requirement_level="mandatory",
+                freshness_policy="p.v1",
+                minimum_usable_facts=0,
+            ),
+        ),
+        batch_strategy="single",
+        per_step_timeout_seconds=5,
+        max_rows_per_step=10,
+        max_bytes_per_step=1_000,
+        enrichment_allowed=False,
+        completion_rule_id="test.rule",
+        completion_rule_version="1",
+    )
+
+    registry = StepRegistry()
+
+    async def run(_ctx):
+        raise AssertionError("never executed by this structural test")
+
+    for step_id, plan_id, source_class, adapter_id in (
+        ("a", plan_one.plan_id, SourceClass.STATUS_CHANGE, "test.a.v1"),
+        ("b", plan_one.plan_id, SourceClass.WORK_ITEM, "test.b.v1"),
+        ("x", plan_two.plan_id, SourceClass.STATUS_CHANGE, "test.x.v1"),
+        ("y", plan_two.plan_id, SourceClass.WORK_ITEM, "test.y.v1"),
+    ):
+        registry.register(
+            PlanStepDefinition(
+                step_id=step_id,
+                plan_id=plan_id,
+                source_class=source_class,
+                adapter_id=adapter_id,
+                requirement_level="mandatory",
+                run=run,
+            )
+        )
+
+    with pytest.raises(StepRequirementMismatchError) as excinfo:
+        validate_registry(
+            plans_by_intent={
+                QuestionIntentID.BOUNDED_INVESTIGATION: plan_one,
+                QuestionIntentID.ENTITY_STATUS: plan_two,
+            },
+            steps=registry,
+            core_intents=frozenset(
+                {
+                    QuestionIntentID.BOUNDED_INVESTIGATION,
+                    QuestionIntentID.ENTITY_STATUS,
+                }
+            ),
+        )
+
+    message = str(excinfo.value)
+    assert "investigation.bounded.v1" in message
+    assert "test.unconsumed_one.v1" in message
+    assert "status.entity.v2" in message
+    assert "test.unconsumed_two.v1" in message
+
+
 def test_step_registered_against_the_wrong_adapter_is_rejected():
     """Codex finding (MEDIUM, 2026-08-01, repro): registering both step
     definitions of a two-step plan against the *same* (wrong) adapter

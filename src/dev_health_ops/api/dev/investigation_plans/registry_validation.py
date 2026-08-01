@@ -72,6 +72,16 @@ def validate_registry(
             f"core question class(es) with no registered plan: {sorted(missing_core)}"
         )
 
+    # Codex finding (MEDIUM, 2026-08-01, second re-check): the inverse-totality
+    # check below used to raise as soon as it found one plan with an unmatched
+    # requirement, from *inside* this loop. With two plans each carrying their
+    # own unconsumed requirement, construction stopped at the first plan and
+    # the second plan's identical defect was never reported at all. Every
+    # unmatched requirement, across the *entire* registry traversal, is
+    # collected here and raised once at the end so no plan's defect can hide
+    # behind another plan's earlier one.
+    unmatched_requirements_by_plan: list[tuple[str, tuple[SourceClass, str]]] = []
+
     for intent_id, plan in plans_by_intent.items():
         if plan.intent_id != intent_id:
             raise UnknownPlanIDError(
@@ -175,14 +185,21 @@ def validate_registry(
         unmatched_requirements = set(declared_requirements) - set(
             consumed_requirement_keys
         )
-        if unmatched_requirements:
-            raise StepRequirementMismatchError(
-                f"plan {plan.plan_id!r} declares source_requirement(s) with "
-                f"no registered step to satisfy them: "
-                f"{sorted(unmatched_requirements)}"
-            )
+        unmatched_requirements_by_plan.extend(
+            (plan.plan_id, key) for key in sorted(unmatched_requirements)
+        )
 
         _check_acyclic(plan)
+
+    if unmatched_requirements_by_plan:
+        raise StepRequirementMismatchError(
+            "plan(s) declare source_requirement(s) with no registered step "
+            "to satisfy them: "
+            + ", ".join(
+                f"{plan_id!r}: {key!r}"
+                for plan_id, key in unmatched_requirements_by_plan
+            )
+        )
 
 
 def _check_acyclic(plan: DevInvestigationPlan) -> None:

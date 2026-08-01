@@ -32,7 +32,7 @@ _ALEMBIC_DIR = Path(__file__).resolve().parent / "alembic"
 _CELERY_RIVER_CUTOVER_ENV = "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
 _CELERY_RIVER_CUTOVER_REVISION = "0066"
 _APPLICATION_SCHEMA_BRANCH = "application_schema"
-_APPLICATION_SCHEMA_MINIMUM_REVISION = "0073"
+_APPLICATION_SCHEMA_MINIMUM_REVISION = "0075"
 
 # Revision 0066 changes worker execution ownership and remains an explicit
 # operator action. Application schema migrations branch from 0065 separately,

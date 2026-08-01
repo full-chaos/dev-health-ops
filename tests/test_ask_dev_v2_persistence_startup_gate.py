@@ -100,14 +100,14 @@ async def test_application_schema_status_ancestor_walk(scratch_database) -> None
     satisfied, heads = await application_schema_status(async_url)
     assert satisfied is False, "0071 predates the CHAOS-3299 revisions"
 
-    await asyncio.to_thread(_upgrade_to, sync_url, "0072")
+    await asyncio.to_thread(_upgrade_to, sync_url, "0074")
     satisfied, heads = await application_schema_status(async_url)
-    assert satisfied is False, "0073 (VALIDATE CONSTRAINT) is still missing"
+    assert satisfied is False, "0075 (VALIDATE CONSTRAINT) is still missing"
 
     await asyncio.to_thread(_upgrade_to, sync_url, "application_schema@head")
     satisfied, heads = await application_schema_status(async_url)
     assert satisfied is True
-    assert heads == ("0073",)
+    assert heads == ("0075",)
 
 
 @pytest.mark.asyncio
@@ -167,7 +167,7 @@ async def test_health_postgres_check_reports_down_below_required_revision(
     from dev_health_ops.api._health import _check_postgres_health
 
     sync_url, async_url = scratch_database
-    await asyncio.to_thread(_upgrade_to, sync_url, "0072")  # 0073 still missing
+    await asyncio.to_thread(_upgrade_to, sync_url, "0074")  # 0075 still missing
 
     with patch.dict(os.environ, {"POSTGRES_URI": async_url}):
         name, status_value = await _check_postgres_health()

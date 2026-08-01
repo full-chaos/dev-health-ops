@@ -54,20 +54,22 @@ def _load(revision_module: str):
     return importlib.import_module(f"dev_health_ops.alembic.versions.{revision_module}")
 
 
-def test_0072_and_0073_module_metadata() -> None:
-    m72 = _load("0072_add_ask_dev_v2_persistence")
-    m73 = _load("0073_validate_ask_dev_v2_constraints")
-    assert m72.revision == "0072"
-    assert m72.down_revision == "0071"
-    assert m73.revision == "0073"
-    assert m73.down_revision == "0072"
+def test_0074_and_0075_module_metadata() -> None:
+    m74 = _load("0074_add_ask_dev_v2_persistence")
+    m75 = _load("0075_validate_ask_dev_v2_constraints")
+    assert m74.revision == "0074"
+    # "0073" is CHAOS-3292's flag-seed migration; this branch stacks on
+    # feat/chaos-3292-interpret-preflight, where 0072/0073 exist.
+    assert m74.down_revision == "0073"
+    assert m75.revision == "0075"
+    assert m75.down_revision == "0074"
 
 
-def test_0072_clean_install_upgrade_and_pre_release_downgrade_are_rehearsable() -> None:
+def test_0074_clean_install_upgrade_and_pre_release_downgrade_are_rehearsable() -> None:
     m68 = _load("0068_add_ask_dev_persistence")
     m69 = _load("0069_add_ask_dev_admission_indexes")
-    m72 = _load("0072_add_ask_dev_v2_persistence")
-    m73 = _load("0073_validate_ask_dev_v2_constraints")
+    m74 = _load("0074_add_ask_dev_v2_persistence")
+    m75 = _load("0075_validate_ask_dev_v2_constraints")
 
     engine = sa.create_engine("sqlite:///:memory:")
     try:
@@ -77,8 +79,8 @@ def test_0072_clean_install_upgrade_and_pre_release_downgrade_are_rehearsable() 
             with Operations.context(context):
                 m68.upgrade()
                 m69.upgrade()
-                m72.upgrade()
-                m73.upgrade()
+                m74.upgrade()
+                m75.upgrade()
 
                 tables = set(sa.inspect(connection).get_table_names())
                 assert _NEW_TABLES.issubset(tables)
@@ -93,8 +95,8 @@ def test_0072_clean_install_upgrade_and_pre_release_downgrade_are_rehearsable() 
                     "plan_version",
                 }.issubset(columns)
 
-                m73.downgrade()
-                m72.downgrade()
+                m75.downgrade()
+                m74.downgrade()
                 tables = set(sa.inspect(connection).get_table_names())
                 assert not (_NEW_TABLES & tables)
                 columns = {
@@ -103,20 +105,20 @@ def test_0072_clean_install_upgrade_and_pre_release_downgrade_are_rehearsable() 
                 assert "contract_generation" not in columns
                 assert "dev_runs" in tables  # 0068's tables are untouched
 
-                m72.upgrade()
-                m73.upgrade()
+                m74.upgrade()
+                m75.upgrade()
                 tables = set(sa.inspect(connection).get_table_names())
                 assert _NEW_TABLES.issubset(tables)
     finally:
         engine.dispose()
 
 
-def test_0072_dev_runs_contract_generation_defaults_v1_without_backfill() -> None:
+def test_0074_dev_runs_contract_generation_defaults_v1_without_backfill() -> None:
     """Every pre-existing row is legacy the instant the column exists."""
 
     m68 = _load("0068_add_ask_dev_persistence")
     m69 = _load("0069_add_ask_dev_admission_indexes")
-    m72 = _load("0072_add_ask_dev_v2_persistence")
+    m74 = _load("0074_add_ask_dev_v2_persistence")
 
     engine = sa.create_engine("sqlite:///:memory:")
     try:
@@ -165,7 +167,7 @@ def test_0072_dev_runs_contract_generation_defaults_v1_without_backfill() -> Non
             connection.commit()
 
             with Operations.context(context):
-                m72.upgrade()
+                m74.upgrade()
             row = connection.execute(
                 sa.text(
                     "SELECT contract_generation, public_outcome FROM dev_runs "
@@ -208,8 +210,8 @@ def test_live_postgres_check_constraints_and_not_valid_validate_split() -> None:
         try:
             m68 = _load("0068_add_ask_dev_persistence")
             m69 = _load("0069_add_ask_dev_admission_indexes")
-            m72 = _load("0072_add_ask_dev_v2_persistence")
-            m73 = _load("0073_validate_ask_dev_v2_constraints")
+            m74 = _load("0074_add_ask_dev_v2_persistence")
+            m75 = _load("0075_validate_ask_dev_v2_constraints")
             with engine.connect() as connection:
                 with connection.begin():
                     _parent_and_v1_tables(connection)
@@ -217,10 +219,10 @@ def test_live_postgres_check_constraints_and_not_valid_validate_split() -> None:
                     with Operations.context(context):
                         m68.upgrade()
                         m69.upgrade()
-                        m72.upgrade()
-                        m73.upgrade()
+                        m74.upgrade()
+                        m75.upgrade()
 
-                        # Constraints are marked VALID after 0073.
+                        # Constraints are marked VALID after 0075.
                         validated = connection.execute(
                             sa.text(
                                 "SELECT conname, convalidated FROM pg_constraint "
@@ -324,8 +326,8 @@ def test_live_postgres_check_constraints_and_not_valid_validate_split() -> None:
                                     },
                                 )
 
-                        m73.downgrade()
-                        m72.downgrade()
+                        m75.downgrade()
+                        m74.downgrade()
                     tables = set(sa.inspect(connection).get_table_names(schema=schema))
                     assert not (_NEW_TABLES & tables)
         finally:
@@ -365,7 +367,7 @@ def test_live_postgres_downgrade_refuses_when_v2_data_present() -> None:
         try:
             m68 = _load("0068_add_ask_dev_persistence")
             m69 = _load("0069_add_ask_dev_admission_indexes")
-            m72 = _load("0072_add_ask_dev_v2_persistence")
+            m74 = _load("0074_add_ask_dev_v2_persistence")
             with engine.connect() as connection:
                 with connection.begin():
                     _parent_and_v1_tables(connection)
@@ -373,7 +375,7 @@ def test_live_postgres_downgrade_refuses_when_v2_data_present() -> None:
                     with Operations.context(context):
                         m68.upgrade()
                         m69.upgrade()
-                        m72.upgrade()
+                        m74.upgrade()
                 with connection.begin():
                     org_id = connection.execute(
                         sa.text(
@@ -412,7 +414,7 @@ def test_live_postgres_downgrade_refuses_when_v2_data_present() -> None:
                     context = MigrationContext.configure(connection)
                     with Operations.context(context):
                         with pytest.raises(RuntimeError, match="contract_generation"):
-                            m72.downgrade()
+                            m74.downgrade()
         finally:
             engine.dispose()
     finally:

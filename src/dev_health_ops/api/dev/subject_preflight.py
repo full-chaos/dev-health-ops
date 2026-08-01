@@ -399,23 +399,37 @@ class SubjectPreflight:
             if mention.mention_id in untyped_ids
         )
         # D2 (Amendment TRD v2 line 154, CHAOS-3301): for a plural/cohort
-        # question with at least two exactly-resolved mentions, an unresolved
-        # typed mention no longer terminates the run — it is recorded as
-        # omitted on the eventual subject set instead. Singular behavior (one
-        # named subject) is unchanged: the lowest-ordinal unresolved mention
-        # still terminates immediately, exactly as A6 established. Stable and
-        # explainable ("the first thing you named"), and independent of
-        # catalog latency — a severity ordering would let a slow catalog
-        # change the reported outcome between runs, which directly breaks
-        # determinism.
-        exact_match_count = sum(
-            1
-            for mention in mentions
-            if mention.mention_id in blocking_ids
-            and latest[mention.mention_id].outcome is ResolutionOutcome.EXACT_MATCH
-        )
+        # question with at least two *distinct* exactly-resolved mentions, an
+        # unresolved typed mention no longer terminates the run — it is
+        # recorded as omitted on the eventual subject set instead. Singular
+        # behavior (one named subject) is unchanged: the lowest-ordinal
+        # unresolved mention still terminates immediately, exactly as A6
+        # established. Stable and explainable ("the first thing you named"),
+        # and independent of catalog latency — a severity ordering would let
+        # a slow catalog change the reported outcome between runs, which
+        # directly breaks determinism.
+        #
+        # The threshold counts UNIQUE committed entities, deduped by (kind,
+        # canonical id) here rather than raw exact-match mentions (CHAOS-3301
+        # review fix): two aliases of the same entity plus one unresolved
+        # mention previously satisfied ">= 2 exact matches" and skipped the
+        # termination loop below even though only one distinct subject had
+        # resolved, letting the unresolved mention slip past without being
+        # accounted for anywhere. With one distinct entity, D2 must not
+        # activate — the pre-D2 lowest-ordinal termination applies instead.
+        blocking_committed_entities: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
+        for mention in mentions:
+            if mention.mention_id not in blocking_ids:
+                continue
+            entry = latest[mention.mention_id]
+            if entry.outcome is ResolutionOutcome.EXACT_MATCH:
+                entity = self._authorized_entity_for(entry)
+                blocking_committed_entities.setdefault(
+                    (entity.kind, entity.canonical_id), entity
+                )
         cohort_may_proceed_partial = (
-            intent.cardinality is Cardinality.PLURAL_COHORT and exact_match_count >= 2
+            intent.cardinality is Cardinality.PLURAL_COHORT
+            and len(blocking_committed_entities) >= 2
         )
         if not cohort_may_proceed_partial:
             for mention in mentions:
@@ -540,25 +554,48 @@ class SubjectPreflight:
             # issue's. "committed" (not "cohort_unsupported") is the honest
             # distinction: we did commit every resolvable member, and cannot
             # render it here, rather than refusing outright.
-            unresolved_ids = tuple(
-                mention.mention_id
+            #
+            # Omissions are partitioned by outcome (CHAOS-3301 review fix):
+            # AMBIGUOUS_CANDIDATES is a distinct outcome from no-match/
+            # unavailable/unsupported-kind, and the set contract keeps them
+            # in separate fields (`ambiguous_mention_ids` vs
+            # `unresolved_mention_ids`) so a reader — and any later
+            # ambiguity-disambiguation flow — can tell "we found nothing" from
+            # "we found more than one" without re-deriving it from the ledger.
+            omitted_blocking_entries = [
+                (mention.mention_id, latest[mention.mention_id].outcome)
                 for mention in mentions
                 if mention.mention_id in blocking_ids
                 and latest[mention.mention_id].outcome in UNRESOLVED_OUTCOMES
+            ]
+            unresolved_ids = tuple(
+                mention_id
+                for mention_id, outcome in omitted_blocking_entries
+                if outcome is not ResolutionOutcome.AMBIGUOUS_CANDIDATES
             )
+            ambiguous_ids = tuple(
+                mention_id
+                for mention_id, outcome in omitted_blocking_entries
+                if outcome is ResolutionOutcome.AMBIGUOUS_CANDIDATES
+            )
+            warnings: tuple[str, ...] = ()
+            if unresolved_ids:
+                warnings += (
+                    "one or more named subjects could not be resolved and "
+                    "were omitted from this set",
+                )
+            if ambiguous_ids:
+                warnings += (
+                    "one or more named subjects were ambiguous and were "
+                    "omitted from this set",
+                )
             subject_set = self._scope_service.committed_subject_set_for(
                 unique_entities,
                 set_id=self._mint_id(),
                 original_mention_count=len(mentions),
                 unresolved_mention_ids=unresolved_ids,
-                warnings=(
-                    (
-                        "one or more named subjects could not be resolved and "
-                        "were omitted from this set",
-                    )
-                    if unresolved_ids
-                    else ()
-                ),
+                ambiguous_mention_ids=ambiguous_ids,
+                warnings=warnings,
             )
             return self._terminate(
                 interpretation=interpretation,

@@ -9,6 +9,7 @@ import strawberry
 
 from dev_health_ops.api.dev.scope_catalog import ClickHouseAuthorizedEntityCatalog
 from dev_health_ops.api.dev.scope_service import (
+    GRAPHQL_SEARCHABLE_ENTITY_KINDS,
     EntityKind,
     ScopeRequestCache,
     ScopeResolutionService,
@@ -75,6 +76,11 @@ async def resolve_dev_scope_search(
             query=input.query,
             kinds=tuple(EntityKind(kind.value) for kind in input.kinds),
             limit=input.limit,
+            # Pinned explicitly (CHAOS-3301 review fix) rather than riding
+            # ScopeSearchRequest's V1 default: this is the GraphQL surface's
+            # own policy, and it must stay independently pinned even if the
+            # V1/model/GraphQL searchable sets later diverge.
+            allowed_kinds=GRAPHQL_SEARCHABLE_ENTITY_KINDS,
         ),
     )
     return DevScopeSearchResult(

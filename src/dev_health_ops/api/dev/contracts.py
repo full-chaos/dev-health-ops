@@ -275,6 +275,15 @@ class DevScope(ContractModel):
                 raise ValueError(
                     "team direct scope requires team_ids to name exactly that team"
                 )
+            if self.repositories:
+                # CHAOS-3301 review fix: a team direct scope has no
+                # repository list of its own -- team-to-repository
+                # attribution is re-derived at query time from
+                # ``team_repo_ownership``, never carried on the wire. Without
+                # this, a foreign ``repositories`` list validated as merely
+                # unused and was silently consumed by the status source seam
+                # instead of being rejected here.
+                raise ValueError("team direct scope cannot carry a repository list")
         self._validate_surface_context()
         return self
 

@@ -19,6 +19,8 @@ from dev_health_ops.api.dev.scope_service import AuthorizedEntity, EntityKind
 from tests._chaos_3292_preflight import (
     ANSWER_ID,
     ASK_DEV_PROJECT,
+    ATLAS_PROJECT_ONE,
+    ATLAS_PROJECT_TWO,
     CONVERSATION_ID,
     ORG_ID,
     OTHER_ORG_ID,
@@ -71,6 +73,9 @@ __all__ = [
     "case_p1_known_team_singular",
     "case_p2_two_project_cohort",
     "case_p3_partial_project_cohort",
+    "case_r1_duplicate_alias_with_unresolved_mention",
+    "case_r2_twentyfive_typed_plus_resolvable_bare_name",
+    "case_r3_ambiguous_mention_in_cohort",
     "fixed_now",
     "organization_resolution",
     "recording_registry",
@@ -241,4 +246,82 @@ async def case_n0_team_facts_or_typed_not_applicable() -> RunOutput:
         question="What is the status of the Platform team?",
         entities=[(ORG_ID, PLATFORM_TEAM)],
         script_id="n0",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Codex adversarial-review regression cases (CHAOS-3301 review findings)
+# ---------------------------------------------------------------------------
+
+
+async def case_r1_duplicate_alias_with_unresolved_mention() -> RunOutput:
+    """Two aliases of one entity, plus a third mention that never resolves.
+
+    Regression for the review's HIGH finding: D2's ">=2" threshold counted
+    raw exact-match *mentions*, not distinct committed *entities*, so the two
+    Halo aliases alone satisfied it and let the run skip past the unresolved
+    ``Vesta`` mention instead of terminating on it -- then the post-dedup
+    singular branch (only one distinct entity survives dedup) committed Halo
+    as though nothing had been omitted. With exactly one distinct entity
+    here, D2 must not activate at all; the pre-D2 lowest-ordinal termination
+    rule applies, exactly as it would with no aliasing.
+    """
+
+    return await run_preflight_orchestrator(
+        question=(
+            'Compare project Halo and project "project-halo" and project '
+            f"{VESTA_PROJECT_NAME}"
+        ),
+        entities=[(ORG_ID, HALO_PROJECT)],
+        script_id="r1",
+        recorder_factory=SubjectSetRecorder,
+    )
+
+
+async def case_r2_twentyfive_typed_plus_resolvable_bare_name() -> RunOutput:
+    """25 typed subjects plus one resolvable bare name -- 26 total.
+
+    Regression for the review's HIGH finding: the uncapped mention count only
+    summed the *typed* grammar candidates, so ``_add_untyped_mentions``
+    silently dropping the 26th (bare-name) candidate at the ``MAX_MENTIONS``
+    merge cap left the oversized-rejection check looking at 25, not 26, and
+    the run reported a "complete" 25-subject cohort instead of rejecting an
+    oversized one.
+    """
+
+    entities = _oversized_project_entities(25)
+    entities.append(
+        (ORG_ID, AuthorizedEntity(EntityKind.PROJECT, "project-nightfall", "Nightfall"))
+    )
+    names = [f"project Alpha{index:02d}" for index in range(25)]
+    question = "Compare " + " and ".join(names) + " and Nightfall"
+    return await run_preflight_orchestrator(
+        question=question,
+        entities=entities,
+        script_id="r2",
+        recorder_factory=SubjectSetRecorder,
+    )
+
+
+async def case_r3_ambiguous_mention_in_cohort() -> RunOutput:
+    """A cohort with one committed pair and one ambiguous (not unresolved) mention.
+
+    Regression for the review's MEDIUM finding: every ``UNRESOLVED_OUTCOMES``
+    member (including ``AMBIGUOUS_CANDIDATES``) was copied into the set's
+    ``unresolved_mention_ids`` with the generic "could not be resolved"
+    warning. Ambiguity is a distinct, separately-fielded outcome
+    (``ambiguous_mention_ids`` plus its own warning) that this must not
+    collapse into.
+    """
+
+    return await run_preflight_orchestrator(
+        question="Compare project Halo and project Nova and project Atlas",
+        entities=[
+            (ORG_ID, HALO_PROJECT),
+            (ORG_ID, NOVA_PROJECT),
+            (ORG_ID, ATLAS_PROJECT_ONE),
+            (ORG_ID, ATLAS_PROJECT_TWO),
+        ],
+        script_id="r3",
+        recorder_factory=SubjectSetRecorder,
     )

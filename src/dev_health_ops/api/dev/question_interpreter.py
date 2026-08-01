@@ -843,10 +843,21 @@ class QuestionInterpreter:
         # Computed once, from the raw text, before MAX_MENTIONS capping and
         # before any untyped-name/fallback additions — see
         # InterpretedQuestion.total_named_mention_count.
-        total_named_mention_count = count_mention_candidates(
+        total_typed_mention_count = count_mention_candidates(
             request.question, context_refs=context_refs
         )
-        mentions, untyped_ids = self._add_untyped_mentions(request.question, mentions)
+        mentions, untyped_ids, total_untyped_candidate_count = (
+            self._add_untyped_mentions(request.question, mentions)
+        )
+        # CHAOS-3301 fix: the uncapped total must include untyped bare-name
+        # candidates too, counted before `_add_untyped_mentions` silently
+        # stops merging at MAX_MENTIONS. Counting only the typed grammar
+        # candidates let 25 typed + 1 resolvable bare name report a
+        # "complete" 25-subject total instead of the true 26 -- the oversized
+        # rejection below never saw it.
+        total_named_mention_count = (
+            total_typed_mention_count + total_untyped_candidate_count
+        )
         normalized = _normalize(request.question)
         signals = _Signals(
             normalized=normalized,
@@ -919,7 +930,7 @@ class QuestionInterpreter:
 
     def _add_untyped_mentions(
         self, question: str, mentions: tuple[DevSubjectMention, ...]
-    ) -> tuple[tuple[DevSubjectMention, ...], set[str]]:
+    ) -> tuple[tuple[DevSubjectMention, ...], set[str], int]:
         """Mint a mention for each bare name the kind-noun grammar missed.
 
         ``requested_entity_kind`` is a **declared default** for these, because
@@ -927,12 +938,18 @@ class QuestionInterpreter:
         the ledger's committed reference carries whichever kind actually
         matched. Recording a default is the honest option: the alternative is
         no mention at all, which is how an unresolved name reaches an answer.
+
+        Returns the merged mentions, the minted untyped mention ids, and the
+        *uncapped* number of untyped candidates found (CHAOS-3301) — counted
+        before the ``MAX_MENTIONS`` cap below silently stops merging, so a
+        caller can still see a candidate that got dropped for being past the
+        bound instead of it vanishing into a false "complete" count.
         """
 
         typed = [mention.original_text_span for mention in mentions]
         candidates = untyped_name_candidates(question, typed)
         if not candidates:
-            return mentions, set()
+            return mentions, set(), 0
         merged = list(mentions)
         untyped_ids: set[str] = set()
         for span in candidates:
@@ -950,7 +967,7 @@ class QuestionInterpreter:
                     normalized_lookup_text=_normalize(span)[:2048],
                 )
             )
-        return tuple(merged), untyped_ids
+        return tuple(merged), untyped_ids, len(candidates)
 
     async def _apply_fallback(
         self,

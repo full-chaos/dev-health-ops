@@ -57,13 +57,20 @@ from __future__ import annotations
 from pydantic import Field
 
 from dev_health_ops.api.dev.contracts import (
+    DevCIFact,
     DevCoverage,
+    DevDeploymentFact,
     DevEntityRef,
     DevError,
     DevEvidenceRef,
+    DevGraphEdge,
+    DevIncidentFact,
     DevMetricPoint,
     DevMetricRef,
+    DevPullRequestFact,
+    DevRequiredChildFact,
     DevScope,
+    DevStatusFact,
     DevSurfaceContext,
 )
 
@@ -78,11 +85,18 @@ from .base import (
 )
 
 __all__ = [
+    "DevCIFactV2",
     "DevCoverageV2",
+    "DevDeploymentFactV2",
     "DevErrorV2",
     "DevEvidenceRefV2",
+    "DevGraphEdgeV2",
+    "DevIncidentFactV2",
     "DevMetricRefV2",
+    "DevPullRequestFactV2",
+    "DevRequiredChildFactV2",
     "DevScopeV2",
+    "DevStatusFactV2",
     "DevSurfaceContextV2",
 ]
 
@@ -146,6 +160,50 @@ class DevMetricRefV2(ContractModelV2, DevMetricRef):
         default_factory=tuple, max_length=366
     )
     evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(  # type: ignore[assignment]
+        default_factory=tuple, max_length=25
+    )
+
+
+class DevStatusFactV2(ContractModelV2, DevStatusFact):
+    """Mirrors ``DevStatusFact`` for CHAOS-3295's per-step content payload."""
+
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(  # type: ignore[assignment]
+        min_length=1, max_length=25
+    )
+
+
+class DevRequiredChildFactV2(ContractModelV2, DevRequiredChildFact):
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(  # type: ignore[assignment]
+        default_factory=tuple, max_length=25
+    )
+
+
+class DevPullRequestFactV2(ContractModelV2, DevPullRequestFact):
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(  # type: ignore[assignment]
+        default_factory=tuple, max_length=25
+    )
+
+
+class DevCIFactV2(ContractModelV2, DevCIFact):
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(  # type: ignore[assignment]
+        default_factory=tuple, max_length=25
+    )
+
+
+class DevDeploymentFactV2(ContractModelV2, DevDeploymentFact):
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(  # type: ignore[assignment]
+        default_factory=tuple, max_length=25
+    )
+
+
+class DevIncidentFactV2(ContractModelV2, DevIncidentFact):
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(  # type: ignore[assignment]
+        default_factory=tuple, max_length=25
+    )
+
+
+class DevGraphEdgeV2(ContractModelV2, DevGraphEdge):
+    evidence_ref_ids: tuple[OpaqueID, ...] = Field(  # type: ignore[assignment]
         default_factory=tuple, max_length=25
     )
 

@@ -18,7 +18,7 @@ from dev_health_ops.api.dev.contracts import (
     DevToolResult,
     ToolID,
 )
-from dev_health_ops.api.dev.contracts_v2 import DevSubjectSet
+from dev_health_ops.api.dev.contracts_v2 import DevInvestigationResult, DevSubjectSet
 from dev_health_ops.api.dev.orchestrator import (
     DevOrchestrator,
     DevRunLimits,
@@ -73,6 +73,9 @@ class Recorder:
 
     async def rollback(self) -> None:
         pass
+
+    async def record_investigation_result(self, result: DevInvestigationResult) -> None:
+        del result
 
     async def terminal(self, **values) -> None:
         self.terminals.append(values["state"])

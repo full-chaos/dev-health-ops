@@ -84,6 +84,8 @@ from .evidence_service import (
     EvidenceReferenceSigner,
     EvidenceService,
 )
+from .investigation_plans import PlanExecutor, build_default_registry
+from .investigation_plans.plan_documents import CORE_PLANS_BY_INTENT
 from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
 from .native_evidence import native_evidence_adapters
@@ -122,8 +124,16 @@ from .work_graph_neighbors_service import (
     GraphDirection,
     WorkGraphNeighborEdge,
     WorkGraphNeighborsRequest,
+    WorkGraphNeighborsResult,
     WorkGraphNeighborsService,
+    WorkGraphResultState,
     WorkGraphRootRef,
+)
+from .work_graph_neighbors_service import (
+    QUERY_VERSION as _WORK_GRAPH_QUERY_VERSION,
+)
+from .work_graph_neighbors_service import (
+    SCHEMA_VERSION as _WORK_GRAPH_SCHEMA_VERSION,
 )
 
 _LLM_CATEGORY = SettingCategory.LLM.value
@@ -884,6 +894,89 @@ def _work_graph_roots(scope: DevScope) -> tuple[WorkGraphRootRef, ...]:
         if kind in {"issue", "pr", "commit", "file", "deployment", "incident"}:
             roots.append(WorkGraphRootRef(kind, item.entity_id))
     return tuple(roots)
+
+
+@dataclass(slots=True)
+class _ProductionPlanExecutorRuntime:
+    """CHAOS-3295's ``PlanExecutorRuntime`` over the exact canonical service
+    instances ``_assemble_production_runtime`` already constructs for the
+    provider tool registry -- never a second, parallel set of services.
+    """
+
+    status_service: StatusChangeService
+    metric_service: MetricQueryService
+    work_graph_service: WorkGraphNeighborsService
+    data_health_service: DataHealthService
+
+    async def status_snapshot(self, *, org_id, permission_fingerprint, scope):
+        return await self.status_service.status_snapshot(
+            org_id,
+            permission_fingerprint,
+            StatusSnapshotRequest(scope=scope, max_items=100),
+        )
+
+    async def change_summary(self, *, org_id, permission_fingerprint, scope):
+        comparison = scope.comparison_range
+        assert comparison is not None  # builtin_steps guards this before calling
+        return await self.status_service.change_summary(
+            org_id,
+            permission_fingerprint,
+            ChangeSummaryRequest(
+                scope=scope,
+                current_start=scope.time_range.start,
+                current_end=scope.time_range.end,
+                comparison_start=comparison.start,
+                comparison_end=comparison.end,
+                max_items=100,
+            ),
+        )
+
+    def list_metrics(self, scope):
+        return self.metric_service.list_metrics(scope)
+
+    async def query_metric(self, *, org_id, permission_fingerprint, metric_id, scope):
+        return await self.metric_service.query(
+            org_id,
+            permission_fingerprint,
+            MetricQueryRequest(metric_id=metric_id, scope=scope),
+        )
+
+    async def work_graph_neighbors(self, *, org_id, permission_fingerprint, scope):
+        roots = _work_graph_roots(scope)
+        if not roots:
+            return WorkGraphNeighborsResult(
+                schema_version=_WORK_GRAPH_SCHEMA_VERSION,
+                state=WorkGraphResultState.EMPTY,
+                nodes=(),
+                edges=(),
+                source_refs=(),
+                warnings=(),
+                total_count=0,
+                returned_count=0,
+                truncated=False,
+                depth=1,
+                query_version=_WORK_GRAPH_QUERY_VERSION,
+                watermark=None,
+            )
+        return await self.work_graph_service.neighbors(
+            org_id=org_id,
+            permission_fingerprint=permission_fingerprint,
+            request=WorkGraphNeighborsRequest(
+                scope_request=_scope_request(scope),
+                root_refs=roots,
+                relationship_types=tuple(sorted(ALLOWED_RELATIONSHIP_TYPES)),
+                direction=GraphDirection.BOTH,
+                limit=25,
+            ),
+        )
+
+    async def data_health(self, *, org_id, permission_fingerprint, scope):
+        return await self.data_health_service.inspect(
+            org_id=org_id,
+            permission_fingerprint=permission_fingerprint,
+            scope_request=_scope_request(scope),
+            required_sources=NATIVE_EVIDENCE_SOURCES,
+        )
 
 
 async def build_production_runtime(
@@ -1680,6 +1773,7 @@ async def _assemble_production_runtime(
         metric_definition_version=_METRIC_REGISTRY_VERSION,
         query_version=_QUERY_BUNDLE_VERSION,
     )
+    wave_3_1_enabled = await _wave_3_1_enabled(session, org_id)
     preflight = (
         SubjectPreflight(
             # No classifier is wired yet: the deterministic recognizers are the
@@ -1692,7 +1786,24 @@ async def _assemble_production_runtime(
             scope_service=scope_service,
             versions=versions,
         )
-        if await _wave_3_1_enabled(session, org_id)
+        if wave_3_1_enabled
+        else None
+    )
+    # CHAOS-3295: the plan-governed investigation seam rides the same
+    # organization gate as preflight -- a plan can only run once a subject
+    # is committed, and only the preflight commits one.
+    plan_executor = (
+        PlanExecutor(
+            registry=build_default_registry(
+                _ProductionPlanExecutorRuntime(
+                    status_service=status_service,
+                    metric_service=metric_service,
+                    work_graph_service=work_graph_service,
+                    data_health_service=data_health_service,
+                )
+            )
+        )
+        if wave_3_1_enabled
         else None
     )
 
@@ -1704,6 +1815,8 @@ async def _assemble_production_runtime(
         scope_resolver=scope_resolver,
         versions=versions,
         preflight=preflight,
+        plan_registry=CORE_PLANS_BY_INTENT if wave_3_1_enabled else None,
+        plan_executor=plan_executor,
     )
 
 

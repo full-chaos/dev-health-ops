@@ -17,6 +17,7 @@ from pydantic import AwareDatetime, Field, FiniteFloat, model_validator
 from .base import (
     ContractModelV2,
     EvidenceHandle,
+    Label,
     OpaqueID,
     PlatformVersionToken,
     ServerHandle,
@@ -25,11 +26,23 @@ from .base import (
     SourceRequirementState,
     Version,
 )
+from .embedded import (
+    DevCIFactV2,
+    DevDeploymentFactV2,
+    DevGraphEdgeV2,
+    DevIncidentFactV2,
+    DevMetricRefV2,
+    DevPullRequestFactV2,
+    DevRequiredChildFactV2,
+    DevStatusFactV2,
+)
 from .plan import PlanRegistryID
 
 __all__ = [
     "DevInvestigationResult",
+    "DevObservedChangeV2",
     "DevRelationshipPath",
+    "DevSourceContent",
     "DevSourceObservation",
 ]
 
@@ -72,6 +85,62 @@ class DevRelationshipPath(ContractModelV2):
     )
 
 
+class DevObservedChangeV2(ContractModelV2):
+    """One ``change.observed.v1`` fact -- no v1 wire mirror exists to inherit."""
+
+    change_id: OpaqueID
+    category: OpaqueID
+    entity_type: OpaqueID
+    entity_id: OpaqueID
+    display_label: Label
+    before: ShortText | None = None
+    after: ShortText | None = None
+    observed_at: AwareDatetime
+    evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+
+
+class DevSourceContent(ContractModelV2):
+    """CHAOS-3295: the typed per-step domain content a frame builder consumes.
+
+    Distinct from the observation's own accounting fields
+    (``usable_fact_count`` etc.): a count is not a fact. Only the slot(s)
+    matching the observation's own ``source_class`` are ever populated by the
+    executor -- every other slot stays empty, never omitted, so a builder can
+    always address ``content.status_facts`` etc. without a hasattr check.
+    Never present when ``observed_state`` is unmeasured -- see
+    ``DevSourceObservation.validate_content_semantics``.
+    """
+
+    schema_version: Literal["dev_source_content.v1"]
+    status_facts: tuple[DevStatusFactV2, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+    required_children: tuple[DevRequiredChildFactV2, ...] = Field(
+        default_factory=tuple, max_length=100
+    )
+    pull_requests: tuple[DevPullRequestFactV2, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+    ci_checks: tuple[DevCIFactV2, ...] = Field(default_factory=tuple, max_length=25)
+    deployments: tuple[DevDeploymentFactV2, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+    incidents: tuple[DevIncidentFactV2, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+    graph_edges: tuple[DevGraphEdgeV2, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+    observed_changes: tuple[DevObservedChangeV2, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+    metric_refs: tuple[DevMetricRefV2, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+
+
 class DevSourceObservation(ContractModelV2):
     schema_version: Literal["dev_source_observation.v1"]
     observation_id: ServerHandle
@@ -93,6 +162,12 @@ class DevSourceObservation(ContractModelV2):
     limitation: ShortText | None = None
     observed_at: AwareDatetime
     query_version: Version
+    #: CHAOS-3295: the typed domain content a frame builder needs.
+    #: ``NO_ANSWER_FRAME_FIELD_POLICY`` already sets ``DevAnswerFrame.
+    #: source_observations`` to ``ABSENT`` on every no-answer outcome, so
+    #: this field is structurally unreachable from a no-answer frame with no
+    #: separate policy registration required.
+    content: DevSourceContent | None = None
 
     @model_validator(mode="after")
     def validate_zero_semantics(self) -> Self:
@@ -120,6 +195,14 @@ class DevSourceObservation(ContractModelV2):
         if self.observed_state in _UNMEASURED_STATES and self.limitation is None:
             raise ValueError(
                 "a source that was not fully measured requires a bounded limitation"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_content_semantics(self) -> Self:
+        if self.observed_state in _UNMEASURED_STATES and self.content is not None:
+            raise ValueError(
+                "a source that was never measured cannot carry domain content"
             )
         return self
 

@@ -67,8 +67,15 @@ from .contracts import (
     ToolID,
     dev_error_remediation,
 )
-from .contracts_v2 import DevSubjectSet
+from .contracts_v2 import (
+    Cardinality,
+    DevInvestigationResult,
+    DevSubjectSet,
+    QuestionIntentID,
+)
 from .contracts_v2.frame import DevAnswerFrame
+from .contracts_v2.plan import DevInvestigationPlan
+from .investigation_plans import PlanExecutor, StepContext
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from .preflight_outcomes import TERMINAL_STATE_BY_OUTCOME, project_preflight_error
@@ -343,6 +350,15 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_investigation_result(self, result: DevInvestigationResult) -> None:
+        """Persist one ``dev_investigation_result.v1`` (CHAOS-3295).
+
+        Called at most once per run, only when a core-question-class plan
+        governed this run's investigation — never for a run the model's own
+        tool-choice loop drove end to end.
+        """
+        ...
+
     async def terminal(
         self,
         *,
@@ -391,6 +407,9 @@ class NullRunRecorder:
 
     async def rollback(self) -> None:
         return None
+
+    async def record_investigation_result(self, result: DevInvestigationResult) -> None:
+        del result
 
     async def terminal(
         self,
@@ -526,6 +545,8 @@ class DevOrchestrator:
         event_sink: EventSink | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         preflight: SubjectPreflight | None = None,
+        plan_registry: Mapping[QuestionIntentID, DevInvestigationPlan] | None = None,
+        plan_executor: PlanExecutor | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -541,6 +562,12 @@ class DevOrchestrator:
         # resolution, every tool advertised, and the CHAOS-3289 backstop
         # terminating exactly as it does today.
         self._preflight = preflight
+        # CHAOS-3295: ``None`` is the flag-off path for the plan-governed
+        # investigation seam -- an unset registry/executor leaves every run
+        # on today's model-tool-choice loop exactly as before, whether or
+        # not preflight itself is enabled.
+        self._plan_registry = plan_registry or {}
+        self._plan_executor = plan_executor
         self._composer = PromptComposer(registry)
 
     async def run(
@@ -796,6 +823,54 @@ class DevOrchestrator:
                     # an unresolved name" opportunity entirely.
                     resolution = committed
                     authorized_scope = committed_scope
+
+            # CHAOS-3295: deterministic plan-governed investigation. Placed
+            # strictly after the CHAOS-3292 preflight block above (so a
+            # SINGULAR-cardinality plan can never reach a canonical service
+            # before the named subject is committed — the literal
+            # acceptance criterion) and strictly before the model round
+            # loop below (so mandatory server steps never consume a
+            # provider tool-decision round). Additive by construction: it
+            # calls canonical services directly, never through
+            # ``self._registry``/``tool_results``/``budget``, so it cannot
+            # change what the model loop below observes or how many tool
+            # calls it is charged for.
+            if self._plan_executor is not None and preflight_result is not None:
+                intent = preflight_result.interpretation.intent
+                plan = self._plan_registry.get(intent.intent_id)
+                cardinality = intent.cardinality
+                plan_eligible = (
+                    plan is not None and cardinality in plan.supported_cardinalities
+                )
+                if cardinality is Cardinality.SINGULAR:
+                    plan_eligible = (
+                        plan_eligible and preflight_result.has_committed_subject
+                    )
+                if plan_eligible:
+                    assert plan is not None
+                    await transition(RunState.TOOL_EXECUTION)
+                    subject_entity_id = (
+                        authorized_scope.entity_refs[0].entity_id
+                        if cardinality is Cardinality.SINGULAR
+                        and authorized_scope.entity_refs
+                        else None
+                    )
+                    investigation_result = await self._plan_executor.run(
+                        plan=plan,
+                        context=StepContext(
+                            org_id=org_id,
+                            permission_fingerprint=permission_fingerprint,
+                            scope=authorized_scope,
+                            run_id=run_id,
+                            now=datetime.now(UTC),
+                            requested_metric_ids=tuple(intent.requested_metric_ids),
+                        ),
+                        run_id=run_id,
+                        subject_entity_id=subject_entity_id,
+                    )
+                    await self._recorder.record_investigation_result(
+                        investigation_result
+                    )
 
             for round_index in range(self._limits.model_rounds):
                 del round_index

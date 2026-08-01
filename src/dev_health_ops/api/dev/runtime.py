@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
 from dev_health_ops.llm.agent.contracts import AgentLLMProvider
 
 from .contracts import DevContractVersions, DevMessageRequest
+from .contracts_v2.base import QuestionIntentID
+from .contracts_v2.plan import DevInvestigationPlan
+from .investigation_plans import PlanExecutor
 from .orchestrator import (
     DevOrchestrator,
     EventSink,
@@ -39,6 +43,11 @@ class BoundedDevRuntime:
     #: ``None`` when ``ask_dev_wave_3_1`` is off for this organization, which
     #: is the pre-CHAOS-3292 run path.
     preflight: SubjectPreflight | None = None
+    #: CHAOS-3295. Both ``None`` together is the flag-off path (identical to
+    #: today whether or not ``preflight`` is set); production only sets
+    #: these once ``preflight`` is also set.
+    plan_registry: Mapping[QuestionIntentID, DevInvestigationPlan] | None = None
+    plan_executor: PlanExecutor | None = None
 
     async def run(
         self,
@@ -64,6 +73,8 @@ class BoundedDevRuntime:
             versions=self.versions,
             recorder=recorder,
             preflight=self.preflight,
+            plan_registry=self.plan_registry,
+            plan_executor=self.plan_executor,
         )
         return await orchestrator.run(
             request=request,

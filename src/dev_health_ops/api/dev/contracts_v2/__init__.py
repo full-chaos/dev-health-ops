@@ -49,6 +49,19 @@ from .frame import (
     DevFrameVersions,
     DevReadinessBlock,
 )
+from .health_rules import (
+    CalibrationRecord,
+    CalibrationState,
+    DimensionObservation,
+    DimensionState,
+    HealthDimension,
+    HealthRuleDefinition,
+    HealthRuleFinding,
+    RuleApplicability,
+    RuleDirection,
+    TeamQualificationBasis,
+    TeamQualificationResult,
+)
 from .intent import DevMessageRequestV2, DevQuestionIntent
 from .narrative import DevNarrative
 from .plan import (
@@ -111,6 +124,11 @@ CONTRACT_MODELS_V2: dict[str, type[ContractModelV2]] = {
     "dev_narrative.v1": DevNarrative,
     "dev_answer.v2": DevAnswerV2,
     "dev_stream_event.v2": DevStreamEventV2,
+    "health_rule_definition.v1": HealthRuleDefinition,
+    "dimension_observation.v1": DimensionObservation,
+    "health_rule_finding.v1": HealthRuleFinding,
+    "team_qualification_result.v1": TeamQualificationResult,
+    "health_rule_calibration.v1": CalibrationRecord,
 }
 
 __all__ = [
@@ -119,8 +137,12 @@ __all__ = [
     "CONTRACT_MODELS_V2",
     "PLAN_REGISTRY",
     "SOURCE_CLASS_VOCABULARY",
+    "CalibrationRecord",
+    "CalibrationState",
     "Cardinality",
     "ContractModelV2",
+    "DimensionObservation",
+    "DimensionState",
     "DevAnswerFact",
     "DevAnswerFrame",
     "DevAnswerSection",
@@ -155,6 +177,9 @@ __all__ = [
     "EMPTY_CONTENT_OUTCOMES",
     "EntityKind",
     "EvidenceHandle",
+    "HealthDimension",
+    "HealthRuleDefinition",
+    "HealthRuleFinding",
     "NO_ANSWER_ANSWER_FIELD_POLICY",
     "NO_ANSWER_FRAME_FIELD_POLICY",
     "NO_ANSWER_OUTCOMES",
@@ -164,10 +189,14 @@ __all__ = [
     "PublicOutcome",
     "QuestionIntentID",
     "ResolutionOutcome",
+    "RuleApplicability",
+    "RuleDirection",
     "ServerHandle",
     "SourceClass",
     "SourceRequirementState",
     "StreamEventTypeV2",
+    "TeamQualificationBasis",
+    "TeamQualificationResult",
     "project_answer_v2_to_v1",
     "scan_public_text",
     "validate_completion_denominator",

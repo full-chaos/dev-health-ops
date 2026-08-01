@@ -1,0 +1,701 @@
+"""``HealthRuleRegistry`` -- the code-owned, versioned health-rule registry
+
+and evaluation engine required by CHAOS-3302 before Ask Dev may describe a
+project/team as healthy, at risk, needing attention, overburdened, or
+operationally deficient.
+
+Mirrors ``tool_registry.AskDevToolRegistry``'s construction-time-validated,
+exact-allowlist posture: a registry is built once from a fixed tuple of
+``HealthRuleDefinition`` instances, duplicate/malformed rule IDs are
+rejected at construction (not at lookup time), and lookups are a closed
+dict keyed by the validated ID.
+
+Non-goal (explicit, per the CHAOS-3302 plan): this module does not compute
+dimension values from raw platform data. That stays with Operating
+Review/Diagnose/Bottlenecks/etc., or becomes the job of the Wave 3.1
+issues that call this registry (CHAOS-3303/3304/3305). Callers hand this
+module already-computed ``DimensionObservation`` values; the registry and
+evaluation engine own only the governance layer: which rule fires, under
+what evidentiary guardrails, and whether a team qualifies for a
+"needs-attention" finding.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from .contracts_v2.base import SourceClass, SourceRequirementState
+from .contracts_v2.health_rules import (
+    CalibrationState,
+    DimensionObservation,
+    DimensionState,
+    HealthDimension,
+    HealthRuleDefinition,
+    HealthRuleFinding,
+    RuleApplicability,
+    RuleDirection,
+    TeamQualificationBasis,
+    TeamQualificationResult,
+)
+
+__all__ = [
+    "HEALTH_RULE_REGISTRY",
+    "RULE_ID_PATTERN",
+    "DuplicateRuleError",
+    "HealthRuleEvaluationResult",
+    "HealthRuleRegistry",
+    "HealthRuleRegistryError",
+    "InvalidRuleIDError",
+    "UnknownRuleError",
+    "evaluate_registry",
+    "evaluate_rule",
+    "qualify_team_needs_attention",
+    "rule_version_fingerprint",
+]
+
+#: The closed rule-ID grammar. Prefixed ``health_rule.`` on top of the
+#: generic dotted/versioned token family the platform already uses for
+#: internal identifiers (``validators._VERSIONED_ID_PATTERN``,
+#: ``health_rule.completion.v3`` in that module's own docstring example).
+RULE_ID_PATTERN = re.compile(
+    r"^health_rule\.[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v\d+$"
+)
+
+
+class HealthRuleRegistryError(RuntimeError):
+    """Base class for safe, deterministic registry failures."""
+
+
+class DuplicateRuleError(HealthRuleRegistryError):
+    pass
+
+
+class InvalidRuleIDError(HealthRuleRegistryError):
+    pass
+
+
+class UnknownRuleError(HealthRuleRegistryError):
+    pass
+
+
+def rule_version_fingerprint(rule: HealthRuleDefinition) -> str:
+    """A deterministic, content-addressed fingerprint for one rule version.
+
+    Deliberately a plain SHA-256 digest over the rule's canonical JSON, not
+    an HMAC. ``EvidenceReferenceSigner`` (``evidence_service.py``) is keyed
+    because an evidence handle is an *authorization token*: it must be
+    unforgeable by a party who does not hold the server secret, since
+    possessing a valid handle is what authorizes dereferencing. A rule
+    fingerprint has no such authorization role -- ``HealthRuleDefinition``
+    is code-owned and public (it ships in the checked-in manifest), so
+    there is no secret-holder/verifier distinction to key against. What the
+    fingerprint needs is exactly what a content hash gives for free:
+    two rule definitions with the same fields produce the same fingerprint,
+    and any field change changes it, which is what "persisted rule
+    fingerprints" (CHAOS-3302 deliverable) exists to detect. This is a
+    deliberate, documented deviation from the pre-implementation plan's
+    "reuse the evidence-signer minting pattern" note.
+    """
+
+    payload = rule.model_dump(mode="json")
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    digest = hashlib.sha256(canonical).hexdigest()
+    return f"hrf1_{digest[:40]}"
+
+
+def _mint_finding_id(
+    rule: HealthRuleDefinition, observation: DimensionObservation
+) -> str:
+    payload = "|".join(
+        (
+            rule.rule_id,
+            rule.rule_version,
+            observation.subject_kind.value,
+            observation.subject_id,
+            observation.observed_at.isoformat(),
+        )
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"hrf1_{digest[:40]}"
+
+
+class HealthRuleRegistry:
+    """Exact allowlist of code-owned health rules, validated at construction."""
+
+    def __init__(self, rules: Sequence[HealthRuleDefinition]) -> None:
+        ids = [rule.rule_id for rule in rules]
+        if len(ids) != len(set(ids)):
+            duplicates = sorted({rule_id for rule_id in ids if ids.count(rule_id) > 1})
+            raise DuplicateRuleError(f"duplicate rule id(s): {duplicates}")
+        for rule in rules:
+            if not RULE_ID_PATTERN.match(rule.rule_id):
+                raise InvalidRuleIDError(
+                    f"rule id {rule.rule_id!r} does not match the closed "
+                    "health_rule.<name>.vN grammar"
+                )
+        self._rules: dict[str, HealthRuleDefinition] = {
+            rule.rule_id: rule for rule in rules
+        }
+
+    def rule(self, rule_id: str) -> HealthRuleDefinition:
+        try:
+            return self._rules[rule_id]
+        except KeyError as exc:
+            raise UnknownRuleError(f"unknown rule id: {rule_id!r}") from exc
+
+    def __contains__(self, rule_id: object) -> bool:
+        return rule_id in self._rules
+
+    def __iter__(self):
+        return iter(self._rules)
+
+    def __len__(self) -> int:
+        return len(self._rules)
+
+    def items(self):
+        return self._rules.items()
+
+    def values(self) -> tuple[HealthRuleDefinition, ...]:
+        return tuple(self._rules.values())
+
+    def rules_for_dimension(
+        self, dimension: HealthDimension
+    ) -> tuple[HealthRuleDefinition, ...]:
+        return tuple(
+            rule for rule in self._rules.values() if rule.dimension is dimension
+        )
+
+    def manifest(self) -> dict[str, object]:
+        """The ``health_rule_manifest.v1`` payload -- see ``health_rule_manifest.py``."""
+
+        return {
+            "schema_version": "health_rule_manifest.v1",
+            "rules": [
+                {
+                    "rule_id": rule.rule_id,
+                    "rule_version": rule.rule_version,
+                    "owner": rule.owner,
+                    "applicability": [item.value for item in rule.applicability],
+                    "dimension": rule.dimension.value,
+                    "calibration_state": rule.calibration_state.value,
+                    "minimum_sample": rule.minimum_sample,
+                    "minimum_cohort_size": rule.minimum_cohort_size,
+                    "severity_mapping": rule.triggered_state.value,
+                    "fingerprint": rule_version_fingerprint(rule),
+                }
+                for rule in sorted(self._rules.values(), key=lambda rule: rule.rule_id)
+            ],
+        }
+
+
+def _condition_met(
+    rule: HealthRuleDefinition, observation: DimensionObservation
+) -> bool:
+    if rule.direction is RuleDirection.DETERMINISTIC:
+        return observation.current_value is not None and observation.current_value != 0
+    if observation.current_value is None or rule.threshold is None:
+        return False
+    if rule.direction is RuleDirection.HIGHER_IS_WORSE:
+        return observation.current_value >= rule.threshold
+    return observation.current_value <= rule.threshold
+
+
+def evaluate_rule(
+    rule: HealthRuleDefinition, observations: Sequence[DimensionObservation]
+) -> HealthRuleFinding:
+    """Evaluate one rule against its ordered observation windows.
+
+    ``observations`` must include ``window_index=0`` (the current period);
+    later windows (1, 2, ...) supply the sustained-window history a rule
+    with ``sustained_periods_required > 1`` needs. Guardrails are checked
+    in a fixed order -- no-data, cohort, sample, coverage, denominator,
+    attribution, then the condition itself -- so exactly one governs any
+    given suppressed result.
+    """
+
+    if not observations:
+        raise ValueError("evaluate_rule requires at least one observation")
+    ordered = sorted(observations, key=lambda item: item.window_index)
+    current = ordered[0]
+    if current.window_index != 0:
+        raise ValueError("the current observation (window_index=0) is required")
+
+    def _finding(
+        state: DimensionState, suppressed_reason: str | None = None
+    ) -> HealthRuleFinding:
+        return HealthRuleFinding(
+            schema_version="health_rule_finding.v1",
+            finding_id=_mint_finding_id(rule, current),
+            rule_id=rule.rule_id,
+            rule_version=rule.rule_version,
+            dimension=rule.dimension,
+            subject_kind=current.subject_kind,
+            subject_id=current.subject_id,
+            state=state,
+            fact_kind=rule.fact_kind,
+            shadow_only=rule.calibration_state == CalibrationState.PROVISIONAL,
+            evidence_source_classes=rule.evidence_source_classes,
+            remediation_template=rule.remediation_template,
+            calibration_state=rule.calibration_state,
+            evaluated_at=current.observed_at,
+            suppressed_reason=suppressed_reason,
+        )
+
+    # Zero versus no-data: a genuinely unmeasured source reports unknown
+    # honestly and is never suppressed for insufficient sample/coverage --
+    # there is nothing to have insufficient sample of.
+    if current.data_semantics == "no_data":
+        return _finding(DimensionState.UNKNOWN)
+
+    needs_cohort = current.subject_kind in (
+        RuleApplicability.TEAM,
+        RuleApplicability.PORTFOLIO,
+    )
+    if needs_cohort and rule.minimum_cohort_size is not None:
+        if (current.cohort_size or 0) < rule.minimum_cohort_size:
+            return _finding(DimensionState.UNKNOWN, "insufficient_cohort")
+
+    if current.sample_count is not None and current.sample_count < rule.minimum_sample:
+        return _finding(DimensionState.UNKNOWN, "insufficient_sample")
+
+    if current.coverage < rule.minimum_coverage:
+        return _finding(DimensionState.UNKNOWN, "insufficient_coverage")
+
+    if rule.denominator_required and not current.denominator_present:
+        return _finding(DimensionState.UNKNOWN, "missing_denominator")
+
+    if rule.attribution_required and not current.attribution_present:
+        return _finding(DimensionState.UNKNOWN, "missing_attribution")
+
+    if not _condition_met(rule, current):
+        return _finding(DimensionState.HEALTHY)
+
+    required = rule.sustained_periods_required
+    window = ordered[:required]
+    if len(window) < required or not all(_condition_met(rule, item) for item in window):
+        return _finding(DimensionState.UNKNOWN, "not_sustained")
+
+    return _finding(rule.triggered_state)
+
+
+@dataclass(frozen=True, slots=True)
+class HealthRuleEvaluationResult:
+    """The partitioned output of evaluating a batch of rules.
+
+    ``shadow_findings`` (from a ``provisional`` rule) and
+    ``suppressed_findings`` (guardrail-suppressed) are computed for
+    calibration/observability but are structurally excluded from
+    ``launch_findings`` -- the only set ``qualify_team_needs_attention``
+    (and any downstream launch surface) may read.
+    """
+
+    launch_findings: tuple[HealthRuleFinding, ...]
+    shadow_findings: tuple[HealthRuleFinding, ...]
+    suppressed_findings: tuple[HealthRuleFinding, ...]
+
+
+def evaluate_registry(
+    registry: HealthRuleRegistry,
+    observations_by_rule: Mapping[str, Sequence[DimensionObservation]],
+) -> HealthRuleEvaluationResult:
+    launch: list[HealthRuleFinding] = []
+    shadow: list[HealthRuleFinding] = []
+    suppressed: list[HealthRuleFinding] = []
+    for rule_id, observations in observations_by_rule.items():
+        rule = registry.rule(rule_id)
+        finding = evaluate_rule(rule, observations)
+        if finding.shadow_only:
+            shadow.append(finding)
+        elif finding.suppressed_reason is not None:
+            suppressed.append(finding)
+        else:
+            launch.append(finding)
+    return HealthRuleEvaluationResult(
+        launch_findings=tuple(launch),
+        shadow_findings=tuple(shadow),
+        suppressed_findings=tuple(suppressed),
+    )
+
+
+def qualify_team_needs_attention(
+    findings: Sequence[HealthRuleFinding], *, team_id: str
+) -> TeamQualificationResult:
+    """The team-needs-attention qualification contract (CHAOS-3302):
+
+    "A team-level finding requires either at least two independent
+    applicable dimensions at risk for the sustained window; or one critical
+    rule with required evidence and coverage. One metric, one bad week, one
+    missing source, or one provisional threshold is insufficient."
+
+    Only non-shadow findings (already-launch findings; shadow/provisional
+    findings must never reach this contract) are considered. A finding
+    reaching this function with ``shadow_only=True`` is a caller defect --
+    ``evaluate_registry`` never places one in ``launch_findings`` -- so it
+    is filtered defensively rather than trusted silently.
+    """
+
+    evaluated_at = max(
+        (finding.evaluated_at for finding in findings), default=_utc_now()
+    )
+    launch_only = [finding for finding in findings if not finding.shadow_only]
+
+    critical = [
+        finding
+        for finding in launch_only
+        if finding.state is DimensionState.CRITICAL
+        and finding.suppressed_reason is None
+        and finding.evidence_source_classes
+    ]
+    if critical:
+        chosen = critical[0]
+        return TeamQualificationResult(
+            schema_version="team_qualification_result.v1",
+            team_id=team_id,
+            qualifies=True,
+            basis=TeamQualificationBasis.CRITICAL_RULE,
+            contributing_dimensions=(chosen.dimension,),
+            contributing_finding_ids=(chosen.finding_id,),
+            evaluated_at=evaluated_at,
+        )
+
+    at_risk_by_dimension: dict[HealthDimension, HealthRuleFinding] = {}
+    for finding in launch_only:
+        if (
+            finding.state is DimensionState.AT_RISK
+            and finding.suppressed_reason is None
+        ):
+            at_risk_by_dimension.setdefault(finding.dimension, finding)
+
+    if len(at_risk_by_dimension) >= 2:
+        chosen_dimensions = tuple(
+            sorted(at_risk_by_dimension, key=lambda dimension: dimension.value)
+        )
+        chosen_finding_ids = tuple(
+            at_risk_by_dimension[dimension].finding_id
+            for dimension in chosen_dimensions
+        )
+        return TeamQualificationResult(
+            schema_version="team_qualification_result.v1",
+            team_id=team_id,
+            qualifies=True,
+            basis=TeamQualificationBasis.MULTI_DIMENSION,
+            contributing_dimensions=chosen_dimensions,
+            contributing_finding_ids=chosen_finding_ids,
+            evaluated_at=evaluated_at,
+        )
+
+    return TeamQualificationResult(
+        schema_version="team_qualification_result.v1",
+        team_id=team_id,
+        qualifies=False,
+        basis=None,
+        evaluated_at=evaluated_at,
+    )
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _rule(
+    *,
+    rule_id: str,
+    owner: str,
+    applicability: tuple[RuleApplicability, ...],
+    dimension: HealthDimension,
+    required_source_classes: tuple[SourceClass, ...],
+    required_observed_states: tuple[SourceRequirementState, ...] = (
+        SourceRequirementState.AVAILABLE_CURRENT,
+    ),
+    direction: RuleDirection,
+    threshold: float | None,
+    comparison_unit: str | None,
+    minimum_sample: int,
+    minimum_coverage: float,
+    current_window_days: int,
+    sustained_periods_required: int,
+    denominator_required: bool,
+    attribution_required: bool,
+    minimum_cohort_size: int | None,
+    triggered_state: DimensionState,
+    evidence_source_classes: tuple[SourceClass, ...],
+    fact_kind: str,
+    remediation_template: str,
+    calibration_state: CalibrationState,
+    calibration_evidence_ref: str | None,
+) -> HealthRuleDefinition:
+    return HealthRuleDefinition(
+        schema_version="health_rule_definition.v1",
+        rule_id=rule_id,
+        rule_version=rule_id,
+        owner=owner,
+        applicability=applicability,
+        dimension=dimension,
+        required_source_classes=required_source_classes,
+        required_observed_states=required_observed_states,
+        direction=direction,
+        threshold=threshold,
+        comparison_unit=comparison_unit,
+        minimum_sample=minimum_sample,
+        minimum_coverage=minimum_coverage,
+        current_window_days=current_window_days,
+        comparison_window_days=None,
+        sustained_periods_required=sustained_periods_required,
+        denominator_required=denominator_required,
+        attribution_required=attribution_required,
+        minimum_cohort_size=minimum_cohort_size,
+        triggered_state=triggered_state,
+        evidence_source_classes=evidence_source_classes,
+        fact_kind=fact_kind,
+        remediation_template=remediation_template,
+        calibration_state=calibration_state,
+        calibration_evidence_ref=calibration_evidence_ref,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Launch rule set.
+#
+# Three rules are ``product_approved`` -- a synthetic, clearly-labeled
+# example calibration authored in this same changeset (see
+# ``health_rule_calibration_inventory.CALIBRATION_RECORDS``) so the
+# "approved launch finding" and "team qualification" paths have something
+# real to evaluate. This deliberately does NOT retroactively promote any
+# of the thresholds already live in Operating Review/forecast/opportunities
+# to canonical status -- per CHAOS-3302, "Do not activate provisional
+# thresholds as canonical rules without review", and no such review has
+# happened for those. The remaining rules below are exactly that inventory,
+# registered ``provisional`` and therefore always ``shadow_only`` --
+# computed for calibration observation, never surfaced as a launch finding
+# or consulted by ``qualify_team_needs_attention``. See
+# ``health_rule_calibration_inventory`` for the full citation of where each
+# provisional threshold lives today and why it is not yet approved.
+# ---------------------------------------------------------------------------
+
+_LAUNCH_RULES: tuple[HealthRuleDefinition, ...] = (
+    _rule(
+        rule_id="health_rule.completion_stalled.v1",
+        owner="ask-dev-governance",
+        applicability=(RuleApplicability.PROJECT, RuleApplicability.TEAM),
+        dimension=HealthDimension.EXECUTION_COMPLETION,
+        required_source_classes=(SourceClass.STATUS_CHANGE, SourceClass.WORK_ITEM),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=0.2,
+        comparison_unit="stalled_work_item_ratio",
+        minimum_sample=10,
+        minimum_coverage=0.6,
+        current_window_days=14,
+        sustained_periods_required=2,
+        denominator_required=True,
+        attribution_required=False,
+        minimum_cohort_size=5,
+        triggered_state=DimensionState.AT_RISK,
+        evidence_source_classes=(SourceClass.STATUS_CHANGE, SourceClass.WORK_ITEM),
+        fact_kind="observed",
+        remediation_template="Review stalled work items with the team before the next planning cycle.",
+        calibration_state=CalibrationState.PRODUCT_APPROVED,
+        calibration_evidence_ref="health_rule_calibration.completion_stalled.v1",
+    ),
+    _rule(
+        rule_id="health_rule.review_latency_sustained.v1",
+        owner="ask-dev-governance",
+        applicability=(RuleApplicability.PROJECT, RuleApplicability.TEAM),
+        dimension=HealthDimension.REVIEW_CI_PRESSURE,
+        required_source_classes=(SourceClass.PULL_REQUEST, SourceClass.REVIEW),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=0.5,
+        comparison_unit="p50_review_latency_hours",
+        minimum_sample=10,
+        minimum_coverage=0.6,
+        current_window_days=14,
+        sustained_periods_required=2,
+        denominator_required=False,
+        attribution_required=False,
+        minimum_cohort_size=5,
+        triggered_state=DimensionState.AT_RISK,
+        evidence_source_classes=(SourceClass.PULL_REQUEST, SourceClass.REVIEW),
+        fact_kind="observed",
+        remediation_template="Review open pull requests aging past the team's usual review latency.",
+        calibration_state=CalibrationState.PRODUCT_APPROVED,
+        calibration_evidence_ref="health_rule_calibration.review_latency_sustained.v1",
+    ),
+    _rule(
+        rule_id="health_rule.data_trust_broken.v1",
+        owner="ask-dev-governance",
+        applicability=(
+            RuleApplicability.PROJECT,
+            RuleApplicability.TEAM,
+            RuleApplicability.PORTFOLIO,
+        ),
+        dimension=HealthDimension.DATA_TRUST,
+        required_source_classes=(SourceClass.SOURCE_HEALTH,),
+        required_observed_states=(
+            SourceRequirementState.AVAILABLE_CURRENT,
+            SourceRequirementState.AVAILABLE_STALE,
+        ),
+        direction=RuleDirection.DETERMINISTIC,
+        threshold=None,
+        comparison_unit=None,
+        minimum_sample=1,
+        minimum_coverage=0.0,
+        current_window_days=7,
+        sustained_periods_required=1,
+        denominator_required=False,
+        attribution_required=False,
+        minimum_cohort_size=1,
+        triggered_state=DimensionState.CRITICAL,
+        evidence_source_classes=(SourceClass.SOURCE_HEALTH,),
+        fact_kind="observed",
+        remediation_template="Restore or reconfigure the affected data source before trusting downstream findings.",
+        calibration_state=CalibrationState.PRODUCT_APPROVED,
+        calibration_evidence_ref="health_rule_calibration.data_trust_broken.v1",
+    ),
+    # -- Calibration-inventory rules: provisional, shadow-only ------------
+    _rule(
+        rule_id="health_rule.wip_congestion.v1",
+        owner="calibration-inventory",
+        applicability=(RuleApplicability.PROJECT, RuleApplicability.TEAM),
+        dimension=HealthDimension.DELIVERY_FLOW,
+        required_source_classes=(SourceClass.WORK_ITEM,),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=1.25,
+        comparison_unit="wip_congestion_ratio",
+        minimum_sample=1,
+        minimum_coverage=0.0,
+        current_window_days=7,
+        sustained_periods_required=1,
+        denominator_required=False,
+        attribution_required=False,
+        minimum_cohort_size=1,
+        triggered_state=DimensionState.WATCH,
+        evidence_source_classes=(SourceClass.WORK_ITEM,),
+        fact_kind="observed",
+        remediation_template="Investigate WIP congestion before it affects delivery flow.",
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
+    ),
+    _rule(
+        rule_id="health_rule.review_bottleneck_hours.v1",
+        owner="calibration-inventory",
+        applicability=(RuleApplicability.PROJECT, RuleApplicability.TEAM),
+        dimension=HealthDimension.REVIEW_CI_PRESSURE,
+        required_source_classes=(SourceClass.PULL_REQUEST, SourceClass.REVIEW),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=48.0,
+        comparison_unit="review_latency_hours",
+        minimum_sample=1,
+        minimum_coverage=0.0,
+        current_window_days=7,
+        sustained_periods_required=1,
+        denominator_required=False,
+        attribution_required=False,
+        minimum_cohort_size=1,
+        triggered_state=DimensionState.WATCH,
+        evidence_source_classes=(SourceClass.PULL_REQUEST, SourceClass.REVIEW),
+        fact_kind="observed",
+        remediation_template="Investigate review latency before it affects delivery flow.",
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
+    ),
+    _rule(
+        rule_id="health_rule.incident_load.v1",
+        owner="calibration-inventory",
+        applicability=(RuleApplicability.PROJECT, RuleApplicability.TEAM),
+        dimension=HealthDimension.RELIABILITY_RELEASE,
+        required_source_classes=(SourceClass.INCIDENT,),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=10.0,
+        comparison_unit="incident_count",
+        minimum_sample=1,
+        minimum_coverage=0.0,
+        current_window_days=7,
+        sustained_periods_required=1,
+        denominator_required=False,
+        attribution_required=False,
+        minimum_cohort_size=1,
+        triggered_state=DimensionState.WATCH,
+        evidence_source_classes=(SourceClass.INCIDENT,),
+        fact_kind="observed",
+        remediation_template="Review incident volume before it affects release reliability.",
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
+    ),
+    _rule(
+        rule_id="health_rule.change_failure_rate.v1",
+        owner="calibration-inventory",
+        applicability=(RuleApplicability.PROJECT, RuleApplicability.TEAM),
+        dimension=HealthDimension.RELIABILITY_RELEASE,
+        required_source_classes=(SourceClass.DEPLOYMENT,),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=0.15,
+        comparison_unit="change_failure_rate",
+        minimum_sample=1,
+        minimum_coverage=0.0,
+        current_window_days=30,
+        sustained_periods_required=1,
+        denominator_required=True,
+        attribution_required=False,
+        minimum_cohort_size=1,
+        triggered_state=DimensionState.WATCH,
+        evidence_source_classes=(SourceClass.DEPLOYMENT,),
+        fact_kind="observed",
+        remediation_template="Review recent deployment failures before they affect release reliability.",
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
+    ),
+    _rule(
+        rule_id="health_rule.flaky_test_rate.v1",
+        owner="calibration-inventory",
+        applicability=(RuleApplicability.PROJECT, RuleApplicability.TEAM),
+        dimension=HealthDimension.REVIEW_CI_PRESSURE,
+        required_source_classes=(SourceClass.TEST_REPORT,),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=0.05,
+        comparison_unit="weighted_flake_rate",
+        minimum_sample=1,
+        minimum_coverage=0.0,
+        current_window_days=14,
+        sustained_periods_required=1,
+        denominator_required=False,
+        attribution_required=False,
+        minimum_cohort_size=1,
+        triggered_state=DimensionState.WATCH,
+        evidence_source_classes=(SourceClass.TEST_REPORT,),
+        fact_kind="observed",
+        remediation_template="Review flaky tests before they erode CI trust.",
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
+    ),
+    _rule(
+        rule_id="health_rule.high_churn.v1",
+        owner="calibration-inventory",
+        applicability=(RuleApplicability.PROJECT, RuleApplicability.TEAM),
+        dimension=HealthDimension.CODE_OWNERSHIP_RISK,
+        required_source_classes=(SourceClass.CODE_CHANGE,),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=0.30,
+        comparison_unit="rework_churn_ratio_30d",
+        minimum_sample=1,
+        minimum_coverage=0.0,
+        current_window_days=30,
+        sustained_periods_required=1,
+        denominator_required=False,
+        attribution_required=False,
+        minimum_cohort_size=1,
+        triggered_state=DimensionState.WATCH,
+        evidence_source_classes=(SourceClass.CODE_CHANGE,),
+        fact_kind="observed",
+        remediation_template="Review high-churn areas of the codebase for ownership risk.",
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
+    ),
+)
+
+HEALTH_RULE_REGISTRY = HealthRuleRegistry(_LAUNCH_RULES)

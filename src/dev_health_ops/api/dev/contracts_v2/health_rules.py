@@ -42,6 +42,7 @@ from .base import (
     ContractModelV2,
     OpaqueID,
     PlatformVersionToken,
+    ServerHandle,
     ShortText,
     SourceClass,
     SourceRequirementState,
@@ -165,7 +166,13 @@ class HealthRuleDefinition(ContractModelV2):
     """
 
     schema_version: Literal["health_rule_definition.v1"]
-    rule_id: OpaqueID
+    #: A dotted, versioned platform token (``health_rule.<name>.vN``) --
+    #: not a bare ``OpaqueID``. Code-owned and closed-vocabulary in effect
+    #: (validated further by ``health_rule_registry.RULE_ID_PATTERN`` at
+    #: registry-construction time), never a producer/subject-derived
+    #: string, so it belongs in the same pinned-grammar family as
+    #: ``PlanRegistryID``.
+    rule_id: PlatformVersionToken
     rule_version: PlatformVersionToken
     owner: ShortText
 
@@ -348,11 +355,17 @@ class HealthRuleFinding(ContractModelV2):
     """
 
     schema_version: Literal["health_rule_finding.v1"]
-    finding_id: OpaqueID
-    rule_id: OpaqueID
+    #: A server mint (canonical hyphenated UUID), not a content fingerprint
+    #: -- see ``health_rule_registry._mint_finding_id``.
+    finding_id: ServerHandle
+    rule_id: PlatformVersionToken
     rule_version: PlatformVersionToken
     dimension: HealthDimension
     subject_kind: RuleApplicability
+    #: The evaluated project/team/portfolio's own identifier -- a
+    #: provider-derived entity key (same category as
+    #: ``DevEntityRefV2.entity_id``), not a server mint or closed
+    #: vocabulary. See ``test_contracts_v2._NON_HANDLE_IDENTIFIER_REASONS``.
     subject_id: OpaqueID
     state: DimensionState
     fact_kind: FactKind
@@ -389,13 +402,14 @@ class TeamQualificationResult(ContractModelV2):
     """
 
     schema_version: Literal["team_qualification_result.v1"]
+    #: Provider-derived entity key -- see ``HealthRuleFinding.subject_id``.
     team_id: OpaqueID
     qualifies: bool
     basis: TeamQualificationBasis | None = None
     contributing_dimensions: tuple[HealthDimension, ...] = Field(
         default_factory=tuple, max_length=9
     )
-    contributing_finding_ids: tuple[OpaqueID, ...] = Field(
+    contributing_finding_ids: tuple[ServerHandle, ...] = Field(
         default_factory=tuple, max_length=50
     )
     evaluated_at: AwareDatetime
@@ -433,8 +447,10 @@ class CalibrationRecord(ContractModelV2):
     """
 
     schema_version: Literal["health_rule_calibration.v1"]
-    calibration_id: OpaqueID
-    rule_id: OpaqueID
+    #: Dotted, versioned platform token -- e.g. ``health_rule_calibration.
+    #: <rule-name>.vN``. Same pinned-grammar family as ``rule_id``.
+    calibration_id: PlatformVersionToken
+    rule_id: PlatformVersionToken
     rule_version: PlatformVersionToken
     calibration_state: CalibrationState
     sample_size: int = Field(ge=0, le=10_000_000)

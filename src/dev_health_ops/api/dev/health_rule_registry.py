@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -110,6 +111,16 @@ def rule_version_fingerprint(rule: HealthRuleDefinition) -> str:
     return f"hrf1_{digest[:40]}"
 
 
+#: Namespace for folding a finding's identity into a canonical UUID
+#: (``ServerHandle``), the same "arbitrary string -> UUID5" pattern already
+#: used at the request boundary (``router._storage_uuid``, cited in
+#: ``test_contracts_v2._NON_HANDLE_IDENTIFIER_REASONS``). Deterministic --
+#: the same rule/subject/window always mints the same finding_id -- while
+#: still landing in the platform's one opaque-handle grammar rather than a
+#: bespoke prefixed-hex shape.
+_FINDING_ID_NAMESPACE = uuid.UUID("6f6e6531-6865-616c-7468-72756c657631")
+
+
 def _mint_finding_id(
     rule: HealthRuleDefinition, observation: DimensionObservation
 ) -> str:
@@ -122,8 +133,7 @@ def _mint_finding_id(
             observation.observed_at.isoformat(),
         )
     )
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    return f"hrf1_{digest[:40]}"
+    return str(uuid.uuid5(_FINDING_ID_NAMESPACE, payload))
 
 
 class HealthRuleRegistry:

@@ -1,0 +1,141 @@
+{
+  "rules": [
+    {
+      "applicability": [
+        "project",
+        "team"
+      ],
+      "calibration_state": "provisional",
+      "dimension": "reliability_release",
+      "fingerprint": "hrf1_0507ad60ff00bcdd227261863a5e49deb1faea7e",
+      "minimum_cohort_size": 1,
+      "minimum_sample": 1,
+      "owner": "calibration-inventory",
+      "rule_id": "health_rule.change_failure_rate.v1",
+      "rule_version": "health_rule.change_failure_rate.v1",
+      "severity_mapping": "watch"
+    },
+    {
+      "applicability": [
+        "project",
+        "team"
+      ],
+      "calibration_state": "product_approved",
+      "dimension": "execution_completion",
+      "fingerprint": "hrf1_57a8c629467ab0793f0041c998da84d922fe243a",
+      "minimum_cohort_size": 5,
+      "minimum_sample": 10,
+      "owner": "ask-dev-governance",
+      "rule_id": "health_rule.completion_stalled.v1",
+      "rule_version": "health_rule.completion_stalled.v1",
+      "severity_mapping": "at_risk"
+    },
+    {
+      "applicability": [
+        "project",
+        "team",
+        "portfolio"
+      ],
+      "calibration_state": "product_approved",
+      "dimension": "data_trust",
+      "fingerprint": "hrf1_9dd261aad18825ce77a36808e6dc76f2b64be8bf",
+      "minimum_cohort_size": 1,
+      "minimum_sample": 1,
+      "owner": "ask-dev-governance",
+      "rule_id": "health_rule.data_trust_broken.v1",
+      "rule_version": "health_rule.data_trust_broken.v1",
+      "severity_mapping": "critical"
+    },
+    {
+      "applicability": [
+        "project",
+        "team"
+      ],
+      "calibration_state": "provisional",
+      "dimension": "review_ci_pressure",
+      "fingerprint": "hrf1_3d2f54c137e1720427c097ae27ea2048f8f7fd1b",
+      "minimum_cohort_size": 1,
+      "minimum_sample": 1,
+      "owner": "calibration-inventory",
+      "rule_id": "health_rule.flaky_test_rate.v1",
+      "rule_version": "health_rule.flaky_test_rate.v1",
+      "severity_mapping": "watch"
+    },
+    {
+      "applicability": [
+        "project",
+        "team"
+      ],
+      "calibration_state": "provisional",
+      "dimension": "code_ownership_risk",
+      "fingerprint": "hrf1_61e4834aa53d074cad7c70da967ede49661e4fd1",
+      "minimum_cohort_size": 1,
+      "minimum_sample": 1,
+      "owner": "calibration-inventory",
+      "rule_id": "health_rule.high_churn.v1",
+      "rule_version": "health_rule.high_churn.v1",
+      "severity_mapping": "watch"
+    },
+    {
+      "applicability": [
+        "project",
+        "team"
+      ],
+      "calibration_state": "provisional",
+      "dimension": "reliability_release",
+      "fingerprint": "hrf1_5044fc304fd6b8d94d447ea8240fd1acaade9a1a",
+      "minimum_cohort_size": 1,
+      "minimum_sample": 1,
+      "owner": "calibration-inventory",
+      "rule_id": "health_rule.incident_load.v1",
+      "rule_version": "health_rule.incident_load.v1",
+      "severity_mapping": "watch"
+    },
+    {
+      "applicability": [
+        "project",
+        "team"
+      ],
+      "calibration_state": "provisional",
+      "dimension": "review_ci_pressure",
+      "fingerprint": "hrf1_eeb7e8bdb3f3aef6e56e800372fc0e44e3bec81f",
+      "minimum_cohort_size": 1,
+      "minimum_sample": 1,
+      "owner": "calibration-inventory",
+      "rule_id": "health_rule.review_bottleneck_hours.v1",
+      "rule_version": "health_rule.review_bottleneck_hours.v1",
+      "severity_mapping": "watch"
+    },
+    {
+      "applicability": [
+        "project",
+        "team"
+      ],
+      "calibration_state": "product_approved",
+      "dimension": "review_ci_pressure",
+      "fingerprint": "hrf1_d7cbc24276f67f545d8cc597865d9a0bbcd2fd9f",
+      "minimum_cohort_size": 5,
+      "minimum_sample": 10,
+      "owner": "ask-dev-governance",
+      "rule_id": "health_rule.review_latency_sustained.v1",
+      "rule_version": "health_rule.review_latency_sustained.v1",
+      "severity_mapping": "at_risk"
+    },
+    {
+      "applicability": [
+        "project",
+        "team"
+      ],
+      "calibration_state": "provisional",
+      "dimension": "delivery_flow",
+      "fingerprint": "hrf1_2e14674230e3c0b7afc7d216e8133e386ce3877b",
+      "minimum_cohort_size": 1,
+      "minimum_sample": 1,
+      "owner": "calibration-inventory",
+      "rule_id": "health_rule.wip_congestion.v1",
+      "rule_version": "health_rule.wip_congestion.v1",
+      "severity_mapping": "watch"
+    }
+  ],
+  "schema_version": "health_rule_manifest.v1"
+}

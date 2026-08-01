@@ -876,6 +876,15 @@ _NON_HANDLE_IDENTIFIER_REASONS: dict[str, str] = {
     "DevSourceRequirement.applicability_rule_id": "rule registry token",
     "DevSourceObservation.adapter_id": "adapter registry token",
     "DevSourceRequirement.adapter_id": "adapter registry token",
+    # CHAOS-3302 health-rule governance contracts (contracts_v2.health_rules)
+    # -- not part of the no-answer-projection model space (never registered
+    # in CONTRACT_MODELS_V2 / reachable from a denied DevAnswerV2), but
+    # still subclass ContractModelV2 so this reflection-based sweep reaches
+    # them. Their subject/team identifiers name real project/team/portfolio
+    # entities, the same category as DevEntityRefV2.entity_id above.
+    "DimensionObservation.subject_id": "provider entity key",
+    "HealthRuleFinding.subject_id": "provider entity key",
+    "TeamQualificationResult.team_id": "provider entity key",
 }
 
 

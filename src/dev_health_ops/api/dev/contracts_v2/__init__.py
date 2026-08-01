@@ -110,6 +110,20 @@ from .validators import (
 
 #: Every top-level, independently versioned v2 wire contract, keyed by its
 #: `schema_version` value — mirrors `dev_health_ops.api.dev.contracts.CONTRACT_MODELS`.
+#:
+#: The CHAOS-3302 health-rule governance contracts
+#: (``HealthRuleDefinition``/``DimensionObservation``/``HealthRuleFinding``/
+#: ``TeamQualificationResult``/``CalibrationRecord``) are deliberately NOT
+#: registered here. This registry backs the Ask Dev answer-frame contract
+#: family specifically: ``export_contracts_v2``'s checked-in schema/fixture
+#: export, and the no-answer-projection totality check
+#: (``no_answer_policy.assert_no_answer_policy_is_total`` /
+#: ``test_round4_every_v2_identifier_is_classified``) that walks every
+#: member of this dict looking for the answer frame's own disclosure
+#: surface. Health rules are a separate, code-owned governance contract
+#: family with their own manifest (``health_rule_manifest.v1``, see
+#: ``health_rule_manifest.py``) and are never embedded in, or projected
+#: through, a no-answer outcome -- they do not belong in this dict.
 CONTRACT_MODELS_V2: dict[str, type[ContractModelV2]] = {
     "dev_message_request.v2": DevMessageRequestV2,
     "dev_question_intent.v1": DevQuestionIntent,
@@ -124,11 +138,6 @@ CONTRACT_MODELS_V2: dict[str, type[ContractModelV2]] = {
     "dev_narrative.v1": DevNarrative,
     "dev_answer.v2": DevAnswerV2,
     "dev_stream_event.v2": DevStreamEventV2,
-    "health_rule_definition.v1": HealthRuleDefinition,
-    "dimension_observation.v1": DimensionObservation,
-    "health_rule_finding.v1": HealthRuleFinding,
-    "team_qualification_result.v1": TeamQualificationResult,
-    "health_rule_calibration.v1": CalibrationRecord,
 }
 
 __all__ = [

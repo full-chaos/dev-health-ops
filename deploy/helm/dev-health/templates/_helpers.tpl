@@ -71,14 +71,22 @@ Namespace
 Backend image
 */}}
 {{- define "dev-health.image" -}}
+{{- if contains "@" .Values.image.repository -}}
+{{- .Values.image.repository }}
+{{- else -}}
 {{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) }}
+{{- end -}}
 {{- end }}
 
 {{/*
 Web image
 */}}
 {{- define "dev-health.webImage" -}}
+{{- if contains "@" .Values.webImage.repository -}}
+{{- .Values.webImage.repository }}
+{{- else -}}
 {{- printf "%s:%s" .Values.webImage.repository (default .Chart.AppVersion .Values.webImage.tag) }}
+{{- end -}}
 {{- end }}
 
 {{/*

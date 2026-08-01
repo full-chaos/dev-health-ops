@@ -362,3 +362,43 @@ async def test_a_team_subject_never_reaches_the_v1_scope_constructors() -> None:
     entry = next(iter(result.ledger.latest_by_mention().values()))
     assert entry.outcome is ResolutionOutcome.EXACT_MATCH
     assert entry.team_attribution == PLATFORM_TEAM.canonical_id
+
+
+# ---------------------------------------------------------------------------
+# Vocabulary handlers must be total over their enum
+# ---------------------------------------------------------------------------
+
+
+def test_display_labels_cover_every_public_outcome() -> None:
+    """Derived from the enum, so a new member fails here until it is labelled.
+
+    ``DENIED`` was missing and is unreachable from the preflight today, which
+    is precisely what made it a latent ``KeyError`` rather than a live bug.
+    """
+
+    from dev_health_ops.api.dev.preflight_outcomes import _DISPLAY_LABELS
+
+    assert set(_DISPLAY_LABELS) == set(PublicOutcome)
+
+
+def test_display_labels_match_the_canonical_answer_labels() -> None:
+    """The stronger half: a *wrong* label is as broken as a missing one.
+
+    ``DevAnswerV2`` validates ``outcome_display_label`` against its own
+    canonical table, so a drifted duplicate here would raise on the first
+    answer that used it.
+    """
+
+    from dev_health_ops.api.dev.contracts_v2.answer import _OUTCOME_DISPLAY_LABELS
+    from dev_health_ops.api.dev.preflight_outcomes import _DISPLAY_LABELS
+
+    assert _DISPLAY_LABELS == _OUTCOME_DISPLAY_LABELS
+
+
+@pytest.mark.parametrize("outcome", list(PublicOutcome))
+def test_every_public_outcome_has_a_usable_label(outcome: PublicOutcome) -> None:
+    """Reaching the label must not raise for any member of the vocabulary."""
+
+    from dev_health_ops.api.dev.preflight_outcomes import _DISPLAY_LABELS
+
+    assert _DISPLAY_LABELS[outcome]

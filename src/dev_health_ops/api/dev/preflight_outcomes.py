@@ -186,11 +186,24 @@ def _frame_versions(
     )
 
 
+#: Safe display label per public outcome. **Total over ``PublicOutcome``**, not
+#: over the outcomes this module happens to emit today: a partial vocabulary
+#: handler is a ``KeyError`` waiting for the first caller that reaches the
+#: missing member, and ``DENIED`` — unreachable from the preflight right now —
+#: was exactly that latent crash.
+#:
+#: Every value must equal the canonical label ``dev_answer.v2`` validates
+#: against (``answer._OUTCOME_DISPLAY_LABELS``); the totality test asserts both
+#: halves, so a member added without a label, or with a *wrong* label, fails at
+#: build time rather than on the one request that produces it.
 _DISPLAY_LABELS: Mapping[PublicOutcome, str] = {
+    PublicOutcome.ANSWERED: "Answered",
+    PublicOutcome.ANSWERED_WITH_GAPS: "Answered with some gaps",
     PublicOutcome.NEEDS_CLARIFICATION: "Needs clarification",
     PublicOutcome.NOT_FOUND: "Not found",
     PublicOutcome.TEMPORARILY_UNAVAILABLE: "Temporarily unavailable",
     PublicOutcome.UNSUPPORTED: "Not supported yet",
+    PublicOutcome.DENIED: "Not permitted",
     PublicOutcome.FAILED: "Something went wrong",
 }
 

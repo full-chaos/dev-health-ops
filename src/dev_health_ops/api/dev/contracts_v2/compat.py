@@ -11,14 +11,22 @@ v1 ``DevError``, both already-validated wire objects.
 Fidelity notes (documented rather than silently glossed over, since a v1
 client can only ever see an approximation of the richer v2 frame):
 
-* v1's ``DirectScope``/``EntityType`` have no ``team`` value (Wave 3.1 adds
-  ``TEAM`` only at the v2 contract layer — see ``base.EntityKind``
-  docstring for why it was not retrofitted onto v1). A team-subject v2
-  answer therefore has no valid v1 representation; the projector returns a
-  safe ``DevError`` (``feature_not_enabled``) rather than silently
-  mislabeling a team answer as organization- or repository-scoped, which
-  would violate the "no team attribution without disclosed scope"
-  guardrail (Amendment PRD v2 §10) at the compatibility boundary.
+* CHAOS-3301 gave v1's ``DirectScope``/``EntityType`` a real ``team`` value
+  — but only for the *subject preflight's* own construction
+  (``scope_service.committed_resolution_for``), which never routes through
+  this projector at all: ``build_preflight_answer`` (``preflight_outcomes``)
+  never sets ``frame.subject_ref``, so a preflight-committed team subject
+  cannot reach ``_build_resolved_scope`` here. This projector's team
+  interception is therefore kept deliberately unchanged pending CHAOS-3297
+  (real v2 answer frames, which *would* set ``subject_ref`` and could exercise
+  this path): a team-subject v2 answer still has no *frame-projection* path
+  wired, so the projector still returns a safe ``DevError``
+  (``feature_not_enabled``) rather than silently mislabeling a team answer as
+  organization- or repository-scoped, which would violate the "no team
+  attribution without disclosed scope" guardrail (Amendment PRD v2 §10) at
+  the compatibility boundary. Wiring ``_build_resolved_scope``'s team branch
+  is CHAOS-3297's job, alongside whatever it does for ``subject_set_ref``
+  below.
 * Symmetrically (Codex adversarial-review hardening, CHAOS-3294): a
   ``subject_set_ref`` answer (a cohort/plural-subject frame) also has no
   faithful v1 representation. ``dev_answer_frame.v1.subject_set_ref`` is

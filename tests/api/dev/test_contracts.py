@@ -151,6 +151,82 @@ def test_scope_contract_accepts_canonical_pull_request_ids_and_repository_candid
     DevScopeResolution.model_validate(ambiguous)
 
 
+def test_team_direct_scope_requires_one_matching_team_entity_ref() -> None:
+    """CHAOS-3301: TEAM behaves like every other direct-entity scope kind."""
+
+    team_scope = deepcopy(positive_fixtures()["dev_scope.v1"])
+    team_scope["direct_scope"] = "team"
+    team_scope["repositories"] = []
+    team_scope["entity_refs"] = [
+        {
+            "entity_type": "team",
+            "entity_id": "team_platform",
+            "display_label": "Platform",
+        }
+    ]
+    team_scope["team_ids"] = ["team_platform"]
+    team_scope["surface_context"] = None
+    DevScope.model_validate(team_scope)
+
+    missing_entity_ref = deepcopy(team_scope)
+    missing_entity_ref["entity_refs"] = []
+    with pytest.raises(ValidationError, match="direct entity scope requires"):
+        DevScope.model_validate(missing_entity_ref)
+
+
+def test_team_direct_scope_requires_team_ids_to_name_exactly_that_team() -> None:
+    """CHAOS-3301: a team filter can never be read as a team subject.
+
+    This is the kill site for mutation M5 (removing this invariant): with it
+    deleted, a team-direct ``DevScope`` with empty or mismatched
+    ``team_ids`` would validate cleanly, and the metrics path's
+    ``scope.team_ids``-gated filter (``metrics/clickhouse.py``) would then
+    silently apply no team filter at all for a "committed" team subject.
+    """
+
+    team_scope = deepcopy(positive_fixtures()["dev_scope.v1"])
+    team_scope["direct_scope"] = "team"
+    team_scope["repositories"] = []
+    team_scope["entity_refs"] = [
+        {
+            "entity_type": "team",
+            "entity_id": "team_platform",
+            "display_label": "Platform",
+        }
+    ]
+    team_scope["surface_context"] = None
+
+    empty_team_ids = deepcopy(team_scope)
+    empty_team_ids["team_ids"] = []
+    with pytest.raises(ValidationError, match="team_ids to name exactly that team"):
+        DevScope.model_validate(empty_team_ids)
+
+    mismatched_team_ids = deepcopy(team_scope)
+    mismatched_team_ids["team_ids"] = ["team_other"]
+    with pytest.raises(ValidationError, match="team_ids to name exactly that team"):
+        DevScope.model_validate(mismatched_team_ids)
+
+    extra_team_ids = deepcopy(team_scope)
+    extra_team_ids["team_ids"] = ["team_platform", "team_other"]
+    with pytest.raises(ValidationError, match="team_ids to name exactly that team"):
+        DevScope.model_validate(extra_team_ids)
+
+
+def test_organization_scope_with_a_team_filter_stays_a_filter() -> None:
+    """The converse of the above: team_ids alongside a non-TEAM direct scope
+    is a legitimate filter, structurally distinct from a team subject."""
+
+    org_scope = deepcopy(positive_fixtures()["dev_scope.v1"])
+    org_scope["direct_scope"] = "organization"
+    org_scope["repositories"] = []
+    org_scope["entity_refs"] = []
+    org_scope["team_ids"] = ["team_platform"]
+    org_scope["surface_context"] = None
+    scope = DevScope.model_validate(org_scope)
+
+    assert scope.team_ids == ["team_platform"]
+
+
 def test_checked_in_contract_artifacts_have_no_drift() -> None:
     check_artifacts(expected_artifacts())
 

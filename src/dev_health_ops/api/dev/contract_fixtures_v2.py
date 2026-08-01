@@ -16,7 +16,6 @@ from .contracts_v2.validators import CANONICAL_NO_ANSWER_COPY
 NOW = "2026-07-28T12:00:00Z"
 START = "2026-06-28T00:00:00Z"
 END = "2026-07-28T00:00:00Z"
-PREVIOUS_START = "2026-05-29T00:00:00Z"
 
 
 def _time_range(start: str = START, end: str = END) -> dict[str, Any]:

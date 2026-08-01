@@ -33,6 +33,7 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, model_validator
 
+from . import no_answer_policy as _policy
 from . import validators as _validators
 from .base import ContractModelV2, Label, PublicOutcome, ServerHandle
 from .frame import DevAnswerFrame
@@ -104,7 +105,7 @@ class DevAnswerV2(ContractModelV2):
 # outcomes; asserting the two agree keeps one source of truth.
 _drifted_labels = sorted(
     outcome
-    for outcome, label in _validators.CANONICAL_NO_ANSWER_DISPLAY_LABELS.items()
+    for outcome, label in _policy.CANONICAL_NO_ANSWER_DISPLAY_LABELS.items()
     if _OUTCOME_DISPLAY_LABELS[PublicOutcome(outcome)] != label
 )
 if _drifted_labels:
@@ -113,12 +114,12 @@ if _drifted_labels:
         f"table: {_drifted_labels}"
     )
 
-_validators.register_no_answer_policy(
+_policy.register_no_answer_policy(
     DevAnswerV2,
-    _validators.NO_ANSWER_ANSWER_FIELD_POLICY,
-    {"outcome_display_label": _validators.CANONICAL_NO_ANSWER_DISPLAY_LABELS},
+    _policy.NO_ANSWER_ANSWER_FIELD_POLICY,
+    {"outcome_display_label": _policy.CANONICAL_NO_ANSWER_DISPLAY_LABELS},
     vocabularies={
-        "schema_version": _validators.literal_vocabulary(DevAnswerV2, "schema_version"),
-        "public_outcome": _validators.NO_ANSWER_OUTCOMES,
+        "schema_version": _policy.literal_vocabulary(DevAnswerV2, "schema_version"),
+        "public_outcome": _policy.NO_ANSWER_OUTCOMES,
     },
 )

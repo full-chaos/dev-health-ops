@@ -35,6 +35,7 @@ from .base import (
 )
 
 __all__ = [
+    "UNRESOLVED_OUTCOMES",
     "DevEntityRefV2",
     "DevResolutionCandidate",
     "DevResolutionEntry",
@@ -123,6 +124,15 @@ class DevResolutionEntry(ContractModelV2):
             if not self.candidates:
                 raise ValueError("ambiguous_candidates requires candidates")
         else:
+            # Totality: every remaining outcome must be a classified
+            # unresolved one. A new ResolutionOutcome member would otherwise
+            # fall silently into this branch and inherit "commits nothing"
+            # semantics it may not have.
+            if self.outcome not in UNRESOLVED_OUTCOMES:
+                raise ValueError(
+                    f"resolution outcome {self.outcome} is not classified as "
+                    "committed or unresolved"
+                )
             if self.committed_entity_ref is not None:
                 raise ValueError(f"{self.outcome} cannot commit an entity")
             if self.candidates:

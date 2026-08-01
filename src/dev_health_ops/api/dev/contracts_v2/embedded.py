@@ -67,7 +67,7 @@ from dev_health_ops.api.dev.contracts import (
     DevSurfaceContext,
 )
 
-from . import validators as _validators
+from . import no_answer_policy as _policy
 from .base import (
     ContractModelV2,
     EvidenceHandle,
@@ -165,20 +165,18 @@ class DevErrorV2(ContractModelV2, DevError):
 #: timestamp, or a member of the closed ``SourceClass`` vocabulary — the frame
 #: can still answer "how many sources were required" for a denial without any
 #: field able to carry a producer-chosen string.
-_validators.register_no_answer_policy(
+_policy.register_no_answer_policy(
     DevCoverageV2,
     {
-        "required_source_count": _validators.NoAnswerFieldPolicy.NON_TEXT,
-        "available_source_count": _validators.NoAnswerFieldPolicy.NON_TEXT,
-        "unavailable_required_sources": (
-            _validators.NoAnswerFieldPolicy.CLOSED_VOCABULARY
-        ),
-        "stale_required_sources": _validators.NoAnswerFieldPolicy.CLOSED_VOCABULARY,
-        "as_of": _validators.NoAnswerFieldPolicy.NON_TEXT,
+        "required_source_count": _policy.NoAnswerFieldPolicy.NON_TEXT,
+        "available_source_count": _policy.NoAnswerFieldPolicy.NON_TEXT,
+        "unavailable_required_sources": (_policy.NoAnswerFieldPolicy.CLOSED_VOCABULARY),
+        "stale_required_sources": _policy.NoAnswerFieldPolicy.CLOSED_VOCABULARY,
+        "as_of": _policy.NoAnswerFieldPolicy.NON_TEXT,
     },
     canonical={},
     vocabularies={
-        "unavailable_required_sources": _validators.SOURCE_CLASS_VOCABULARY,
-        "stale_required_sources": _validators.SOURCE_CLASS_VOCABULARY,
+        "unavailable_required_sources": _policy.SOURCE_CLASS_VOCABULARY,
+        "stale_required_sources": _policy.SOURCE_CLASS_VOCABULARY,
     },
 )

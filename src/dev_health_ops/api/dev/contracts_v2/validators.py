@@ -42,6 +42,18 @@ reproduced against those five:
     verified without a model in the loop. That layer is the TRD v2 §11
     layer-6 narrative-consistency validator, tracked as CHAOS-3297.
 
+Where the code lives
+--------------------
+
+The no-answer projection machinery — the policy enum, the per-model registry,
+the canonical copy tables, and ``validate_no_answer_projection`` itself — is
+defined in the leaf module ``no_answer_policy`` and re-exported here, so the
+guard names keep this module as their documented home and the mutation tests
+keep patching one place. That split is structural: ``frame`` and ``embedded``
+both register a policy at import time while this module needs the frame's own
+type to annotate its guards, which made the registration side of the graph a
+genuine import cycle. See that module's docstring.
+
 The no-answer allowlist projection
 ----------------------------------
 
@@ -235,17 +247,28 @@ layer cannot parse — is the CHAOS-3297 layer-6 residual.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Mapping, Sequence
-from enum import StrEnum
-from typing import TYPE_CHECKING, Any, get_args
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
-
-from .base import SourceClass
+from .no_answer_policy import (
+    CANONICAL_NO_ANSWER_COPY,
+    CANONICAL_NO_ANSWER_DISPLAY_LABELS,
+    CANONICAL_NO_ANSWER_REMEDIATION,
+    NO_ANSWER_ANSWER_FIELD_POLICY,
+    NO_ANSWER_FRAME_FIELD_POLICY,
+    NO_ANSWER_OUTCOMES,
+    SOURCE_CLASS_VOCABULARY,
+    NoAnswerFieldPolicy,
+    assert_no_answer_policy_is_total,
+    literal_vocabulary,
+    register_no_answer_policy,
+    validate_no_answer_content_leaks,
+    validate_no_answer_projection,
+)
 
 if TYPE_CHECKING:
-    from .frame import DevAnswerFrame
-    from .narrative import DevNarrative
+    from . import frame as _frame
+    from . import narrative as _narrative
 
 __all__ = [
     "ANSWERED_CONTENT_OUTCOMES",
@@ -328,7 +351,7 @@ def scan_public_text(value: str) -> list[str]:
     return hits
 
 
-def _public_copy_fields(frame: DevAnswerFrame) -> list[str]:
+def _public_copy_fields(frame: _frame.DevAnswerFrame) -> list[str]:
     values: list[str] = [frame.direct_answer]
     for section in frame.sections:
         values.append(section.title)
@@ -343,7 +366,7 @@ def _public_copy_fields(frame: DevAnswerFrame) -> list[str]:
     return values
 
 
-def validate_no_internal_leakage(frame: DevAnswerFrame) -> None:
+def validate_no_internal_leakage(frame: _frame.DevAnswerFrame) -> None:
     """(a) Reject internal outcome/rule/reason tokens in public copy fields."""
 
     for value in _public_copy_fields(frame):
@@ -374,22 +397,8 @@ _EMPTY_CONTENT_OUTCOMES = frozenset(
 #: Outcomes representing a genuine, server-owned answer.
 ANSWERED_CONTENT_OUTCOMES = frozenset({"answered", "answered_with_gaps"})
 
-#: Outcomes for which the server produced *no* answer whatsoever. This is a
-#: strict subset of ``_EMPTY_CONTENT_OUTCOMES`` — it deliberately excludes
-#: ``needs_clarification`` — and is exactly the outcome set ``compat.py``'s
-#: ``_ERROR_OUTCOME_CODES`` maps to a v1 ``DevError`` rather than a v1
-#: ``DevAnswer``. ``needs_clarification`` projects to a v1 ``DevAnswer`` with
-#: ``insufficient_evidence`` status and its frame may legitimately carry a
-#: disambiguation-relevant ``subject_ref`` (see
-#: ``compat._project_needs_clarification``); only its answer *content*
-#: (sections/facts) must stay empty, which ``validate_outcome_consistency``
-#: already enforces.
-NO_ANSWER_OUTCOMES = frozenset(
-    {"not_found", "temporarily_unavailable", "unsupported", "denied", "failed"}
-)
 
-
-def validate_outcome_consistency(frame: DevAnswerFrame) -> None:
+def validate_outcome_consistency(frame: _frame.DevAnswerFrame) -> None:
     """(b) Reject a public outcome that contradicts the frame's own content."""
 
     outcome = frame.public_outcome.value
@@ -420,325 +429,7 @@ def validate_outcome_consistency(frame: DevAnswerFrame) -> None:
             )
 
 
-# ---------------------------------------------------------------------------
-# (f) the no-answer allowlist projection — see the module docstring section
-# "The no-answer allowlist projection" for the design and why round-1's
-# denylist was replaced wholesale.
-# ---------------------------------------------------------------------------
-
-#: The single server-owned public sentence each no-answer outcome is allowed
-#: to render. A no-answer frame's ``direct_answer`` must equal this exactly:
-#: producer-authored copy is replaced, never trimmed or re-emitted.
-CANONICAL_NO_ANSWER_COPY: Mapping[str, str] = {
-    "not_found": "No matching subject was found for this question.",
-    "temporarily_unavailable": (
-        "This answer is temporarily unavailable. Please try again shortly."
-    ),
-    "unsupported": "This question is not supported yet.",
-    "denied": "You do not have access to ask about this.",
-    "failed": "Something went wrong while preparing this answer.",
-}
-
-#: Server-owned remediation for each no-answer outcome, used by the v1
-#: projector. Round-1's projector used the frame's own
-#: ``safe_follow_up_questions`` here, which is producer-authored text about
-#: the subject — the same reuse channel as ``direct_answer``.
-CANONICAL_NO_ANSWER_REMEDIATION: Mapping[str, tuple[str, ...]] = {
-    "not_found": ("Check the name and try again.",),
-    "temporarily_unavailable": ("Try the question again in a few minutes.",),
-    "unsupported": ("Try a status, health, or metric question instead.",),
-    "denied": ("Ask an administrator for access to this area.",),
-    "failed": ("Try the question again.",),
-}
-
-#: The matching ``dev_answer.v2`` display labels, kept in step with
-#: ``answer._OUTCOME_DISPLAY_LABELS`` by an import-time assertion there.
-CANONICAL_NO_ANSWER_DISPLAY_LABELS: Mapping[str, str] = {
-    "not_found": "Not found",
-    "temporarily_unavailable": "Temporarily unavailable",
-    "unsupported": "Not supported yet",
-    "denied": "Not permitted",
-    "failed": "Something went wrong",
-}
-
-#: The ``OpaqueID`` shape: a whitespace-free identifier token. A string that
-#: matches this cannot carry a sentence of producer-authored prose.
-_IDENTIFIER_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$")
-
-
-class NoAnswerFieldPolicy(StrEnum):
-    """How one field of a no-answer contract object is projected."""
-
-    ABSENT = "absent"
-    CANONICAL = "canonical"
-    CLOSED_VOCABULARY = "closed_vocabulary"
-    IDENTIFIER = "identifier"
-    NON_TEXT = "non_text"
-    SELF_VALIDATED = "self_validated"
-
-
-#: The closed set of source-class tokens a coverage block may disclose. Taken
-#: from the enum itself so the vocabulary cannot drift from the type.
-SOURCE_CLASS_VOCABULARY: frozenset[str] = frozenset(
-    member.value for member in SourceClass
-)
-
-
-def literal_vocabulary(model_cls: type[BaseModel], field_name: str) -> frozenset[str]:
-    """The ``Literal`` values one field admits, read off the model itself.
-
-    Used for ``schema_version``, so the registered closed vocabulary is the
-    annotation rather than a hand-copied string that could drift from it.
-    """
-
-    annotation = model_cls.model_fields[field_name].annotation
-    values = frozenset(
-        argument for argument in get_args(annotation) if isinstance(argument, str)
-    )
-    if not values:
-        raise RuntimeError(
-            f"{model_cls.__name__}.{field_name} is not a Literal of strings, so "
-            "it has no literal vocabulary to register"
-        )
-    return values
-
-
-#: Every field of ``DevAnswerFrame``, classified. Checked for totality
-#: against the model at import time by ``frame.py``.
-NO_ANSWER_FRAME_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
-    "schema_version": NoAnswerFieldPolicy.CLOSED_VOCABULARY,
-    # The two correlation handles — the documented residual of the round-3
-    # closure; see the module docstring.
-    "frame_id": NoAnswerFieldPolicy.IDENTIFIER,
-    "run_id": NoAnswerFieldPolicy.IDENTIFIER,
-    "generated_at": NoAnswerFieldPolicy.NON_TEXT,
-    "public_outcome": NoAnswerFieldPolicy.CLOSED_VOCABULARY,
-    "subject_ref": NoAnswerFieldPolicy.ABSENT,
-    "subject_set_ref": NoAnswerFieldPolicy.ABSENT,
-    "direct_answer": NoAnswerFieldPolicy.CANONICAL,
-    "completion": NoAnswerFieldPolicy.ABSENT,
-    "readiness": NoAnswerFieldPolicy.ABSENT,
-    "sections": NoAnswerFieldPolicy.ABSENT,
-    "facts": NoAnswerFieldPolicy.ABSENT,
-    "metrics": NoAnswerFieldPolicy.ABSENT,
-    "comparisons": NoAnswerFieldPolicy.ABSENT,
-    "relationship_paths": NoAnswerFieldPolicy.ABSENT,
-    "health_profile_refs": NoAnswerFieldPolicy.ABSENT,
-    "finding_refs": NoAnswerFieldPolicy.ABSENT,
-    "deficiency_refs": NoAnswerFieldPolicy.ABSENT,
-    "conflicts": NoAnswerFieldPolicy.ABSENT,
-    "limitations": NoAnswerFieldPolicy.ABSENT,
-    "source_observations": NoAnswerFieldPolicy.ABSENT,
-    # Coverage keeps "how many sources were required" answerable for a
-    # denial. Round 2 admitted it as identifier-shaped tokens, which round 3
-    # walked through with a subject-derived source name; it now delegates to
-    # DevCoverageV2's own policy, where the source lists are the closed
-    # SourceClass vocabulary and everything else is NON_TEXT.
-    "coverage": NoAnswerFieldPolicy.SELF_VALIDATED,
-    "evidence": NoAnswerFieldPolicy.ABSENT,
-    "safe_follow_up_questions": NoAnswerFieldPolicy.ABSENT,
-    # A no-answer outcome carries no provenance block at all — see the module
-    # docstring for why the block is dropped rather than constrained.
-    "versions": NoAnswerFieldPolicy.ABSENT,
-}
-
-#: Every field of ``DevAnswerV2``, classified. ``narrative`` is ``ABSENT``:
-#: an optional provider narrative is exactly the free-form channel a
-#: no-answer outcome must not have.
-NO_ANSWER_ANSWER_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
-    "schema_version": NoAnswerFieldPolicy.CLOSED_VOCABULARY,
-    "answer_id": NoAnswerFieldPolicy.IDENTIFIER,
-    "conversation_id": NoAnswerFieldPolicy.IDENTIFIER,
-    "run_id": NoAnswerFieldPolicy.IDENTIFIER,
-    "generated_at": NoAnswerFieldPolicy.NON_TEXT,
-    "public_outcome": NoAnswerFieldPolicy.CLOSED_VOCABULARY,
-    "outcome_display_label": NoAnswerFieldPolicy.CANONICAL,
-    "frame": NoAnswerFieldPolicy.SELF_VALIDATED,
-    "narrative": NoAnswerFieldPolicy.ABSENT,
-}
-
-#: Registered ``(policy, canonical tables, closed vocabularies)`` per model
-#: class, populated at import time. ``SELF_VALIDATED`` resolves through this
-#: registry, so a nested contract cannot be delegated to unless it is itself
-#: classified.
-_POLICY_REGISTRY: dict[
-    type[BaseModel],
-    tuple[
-        Mapping[str, NoAnswerFieldPolicy],
-        Mapping[str, Any],
-        Mapping[str, frozenset[str]],
-    ],
-] = {}
-
-
-def _string_leaves(value: object) -> Iterator[str]:
-    """Every string reachable from ``value``, through models and collections."""
-
-    if value is None:
-        return
-    if isinstance(value, str):
-        yield value
-        return
-    if isinstance(value, BaseModel):
-        for name in type(value).model_fields:
-            yield from _string_leaves(getattr(value, name))
-        return
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            yield from _string_leaves(key)
-            yield from _string_leaves(item)
-        return
-    if isinstance(value, (tuple, list, set, frozenset)):
-        for item in value:
-            yield from _string_leaves(item)
-
-
-def _is_absent(value: object) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, (str, bytes)):
-        return False
-    if isinstance(value, (tuple, list, set, frozenset, Mapping)):
-        return not value
-    return False
-
-
-def register_no_answer_policy(
-    model_cls: type[BaseModel],
-    policy: Mapping[str, NoAnswerFieldPolicy],
-    canonical: Mapping[str, Mapping[str, str]],
-    vocabularies: Mapping[str, frozenset[str]] | None = None,
-) -> None:
-    """Register and immediately total-check one model's no-answer policy."""
-
-    closed = dict(vocabularies or {})
-    assert_no_answer_policy_is_total(model_cls, policy, canonical, closed)
-    _POLICY_REGISTRY[model_cls] = (policy, canonical, closed)
-
-
-def assert_no_answer_policy_is_total(
-    model_cls: type[BaseModel],
-    policy: Mapping[str, NoAnswerFieldPolicy],
-    canonical: Mapping[str, Mapping[str, str]],
-    vocabularies: Mapping[str, frozenset[str]] | None = None,
-) -> None:
-    """Raise unless every field of ``model_cls`` carries a classification.
-
-    Called at import time, so adding a field to a no-answer-bearing contract
-    without classifying it breaks the package import rather than silently
-    opening a new disclosure channel.
-    """
-
-    declared = set(policy)
-    actual = set(model_cls.model_fields)
-    unclassified = sorted(actual - declared)
-    if unclassified:
-        raise RuntimeError(
-            f"{model_cls.__name__} field(s) {unclassified} have no no-answer "
-            "projection policy; classify them in validators.py "
-            "(ABSENT / CANONICAL / IDENTIFIER / NON_TEXT / SELF_VALIDATED)"
-        )
-    stale = sorted(declared - actual)
-    if stale:
-        raise RuntimeError(
-            f"{model_cls.__name__} no-answer policy names removed field(s) {stale}"
-        )
-    closed = dict(vocabularies or {})
-    for field_name, rule in policy.items():
-        if rule is NoAnswerFieldPolicy.CANONICAL:
-            table = canonical.get(field_name)
-            if table is None or set(table) != set(NO_ANSWER_OUTCOMES):
-                raise RuntimeError(
-                    f"{model_cls.__name__}.{field_name} is CANONICAL but has no "
-                    "canonical value for every no-answer outcome"
-                )
-        elif rule is NoAnswerFieldPolicy.CLOSED_VOCABULARY:
-            if not closed.get(field_name):
-                raise RuntimeError(
-                    f"{model_cls.__name__}.{field_name} is CLOSED_VOCABULARY but "
-                    "has no registered non-empty vocabulary; a closed set that "
-                    "is not supplied would admit everything"
-                )
-        elif rule is NoAnswerFieldPolicy.SELF_VALIDATED:
-            nested = model_cls.model_fields[field_name].annotation
-            if not (isinstance(nested, type) and nested in _POLICY_REGISTRY):
-                raise RuntimeError(
-                    f"{model_cls.__name__}.{field_name} delegates to a nested "
-                    "contract that has no registered no-answer policy"
-                )
-    misdeclared = sorted(
-        name
-        for name in closed
-        if policy.get(name) is not NoAnswerFieldPolicy.CLOSED_VOCABULARY
-    )
-    if misdeclared:
-        raise RuntimeError(
-            f"{model_cls.__name__} registers closed vocabularies for field(s) "
-            f"{misdeclared} that are not classified CLOSED_VOCABULARY"
-        )
-
-
-def _enforce_no_answer_projection(obj: BaseModel, outcome: str) -> None:
-    policy, canonical, vocabularies = _POLICY_REGISTRY[type(obj)]
-    label = type(obj).__name__
-    for field_name, rule in policy.items():
-        value = getattr(obj, field_name)
-        if rule is NoAnswerFieldPolicy.ABSENT:
-            if not _is_absent(value):
-                raise ValueError(
-                    f"public outcome {outcome!r} cannot carry {label}.{field_name}"
-                )
-        elif rule is NoAnswerFieldPolicy.CANONICAL:
-            expected = canonical[field_name][outcome]
-            if value != expected:
-                raise ValueError(
-                    f"public outcome {outcome!r} requires the canonical server "
-                    f"copy for {label}.{field_name}; producer-authored text is "
-                    "never reused for a no-answer outcome"
-                )
-        elif rule is NoAnswerFieldPolicy.CLOSED_VOCABULARY:
-            allowed = vocabularies[field_name]
-            for leaf in _string_leaves(value):
-                if leaf not in allowed:
-                    raise ValueError(
-                        f"public outcome {outcome!r} allows only the "
-                        f"server-owned vocabulary in {label}.{field_name}; "
-                        f"{leaf!r} is not one of its values"
-                    )
-        elif rule is NoAnswerFieldPolicy.IDENTIFIER:
-            for leaf in _string_leaves(value):
-                if not _IDENTIFIER_TOKEN_PATTERN.match(leaf):
-                    raise ValueError(
-                        f"public outcome {outcome!r} allows only identifier "
-                        f"tokens in {label}.{field_name}, not free text: {leaf!r}"
-                    )
-        elif rule is NoAnswerFieldPolicy.NON_TEXT:
-            leaked = list(_string_leaves(value))
-            if leaked:
-                raise ValueError(
-                    f"public outcome {outcome!r} allows no text in "
-                    f"{label}.{field_name}: {leaked[0]!r}"
-                )
-        elif value is not None:
-            _enforce_no_answer_projection(value, outcome)
-
-
-def validate_no_answer_projection(obj: BaseModel) -> None:
-    """(f) Project a no-answer contract object through its field allowlist.
-
-    Applies to ``DevAnswerFrame`` and ``DevAnswerV2`` (whichever registered
-    policy matches ``type(obj)``). For an outcome that is not a no-answer
-    outcome this is a no-op — those objects are governed by the ordinary
-    content validators instead.
-    """
-
-    outcome = obj.public_outcome.value  # type: ignore[attr-defined]
-    if outcome not in NO_ANSWER_OUTCOMES:
-        return
-    _enforce_no_answer_projection(obj, outcome)
-
-
-def validate_versions_presence(frame: DevAnswerFrame) -> None:
+def validate_versions_presence(frame: _frame.DevAnswerFrame) -> None:
     """Provenance is optional only for the outcomes that carry no content.
 
     ``DevAnswerFrame.versions`` is ``ABSENT`` under the no-answer projection
@@ -757,19 +448,12 @@ def validate_versions_presence(frame: DevAnswerFrame) -> None:
         )
 
 
-#: Retained name for guardrail (f). The round-1 denylist implementation was
-#: replaced by the allowlist projection above; the name is kept because
-#: ``frame.py`` calls guards through the module object and the mutation
-#: tests disable them by name.
-validate_no_answer_content_leaks = validate_no_answer_projection
-
-
 # ---------------------------------------------------------------------------
 # (c) completion rate without a full numerator/denominator
 # ---------------------------------------------------------------------------
 
 
-def validate_completion_denominator(frame: DevAnswerFrame) -> None:
+def validate_completion_denominator(frame: _frame.DevAnswerFrame) -> None:
     """(c) Completion rate cannot exist without numerator, denominator, rule, calculable=true."""
 
     completion = frame.completion
@@ -814,7 +498,7 @@ def validate_completion_denominator(frame: DevAnswerFrame) -> None:
 
 
 def validate_narrative_fact_references(
-    narrative: DevNarrative, frame: DevAnswerFrame
+    narrative: _narrative.DevNarrative, frame: _frame.DevAnswerFrame
 ) -> None:
     """(d) Reject a narrative that references a fact or section ID absent from the frame."""
 
@@ -976,7 +660,7 @@ def _contains_token_sequence(haystack: Sequence[str], needle: Sequence[str]) -> 
 
 
 def _narrative_bound_fact_ids(
-    narrative: DevNarrative, frame: DevAnswerFrame
+    narrative: _narrative.DevNarrative, frame: _frame.DevAnswerFrame
 ) -> set[str]:
     """Fact IDs the narrative declared it is narrating.
 
@@ -993,7 +677,7 @@ def _narrative_bound_fact_ids(
     return bound
 
 
-def _completion_percent_values(frame: DevAnswerFrame) -> set[float]:
+def _completion_percent_values(frame: _frame.DevAnswerFrame) -> set[float]:
     """The completion proportions, as a sentence would write them with ``%``.
 
     Both the rate and its complement: "75% complete" and "25% remaining" are
@@ -1009,7 +693,7 @@ def _completion_percent_values(frame: DevAnswerFrame) -> set[float]:
     }
 
 
-def _completion_decimal_values(frame: DevAnswerFrame) -> set[float]:
+def _completion_decimal_values(frame: _frame.DevAnswerFrame) -> set[float]:
     """The same two proportions written as bare decimals ("0.75", "0.25")."""
 
     completion = frame.completion
@@ -1018,7 +702,7 @@ def _completion_decimal_values(frame: DevAnswerFrame) -> set[float]:
     return {round(completion.rate, 6), round(1 - completion.rate, 6)}
 
 
-def _completion_count_values(frame: DevAnswerFrame) -> set[float]:
+def _completion_count_values(frame: _frame.DevAnswerFrame) -> set[float]:
     """The raw numerator and denominator."""
 
     completion = frame.completion
@@ -1033,7 +717,7 @@ def _completion_count_values(frame: DevAnswerFrame) -> set[float]:
 
 
 def _completion_polarity_error(
-    sentence: str, raw_token: str, value: float, frame: DevAnswerFrame
+    sentence: str, raw_token: str, value: float, frame: _frame.DevAnswerFrame
 ) -> str | None:
     """Reject a completion proportion cited with the wrong polarity.
 
@@ -1073,7 +757,9 @@ def _completion_polarity_error(
     return None
 
 
-def _sentence_cites_completion_ratio(sentence: str, frame: DevAnswerFrame) -> bool:
+def _sentence_cites_completion_ratio(
+    sentence: str, frame: _frame.DevAnswerFrame
+) -> bool:
     """True when the sentence renders the completion block's own ratio.
 
     A bare completion count is genuinely ambiguous — nothing distinguishes
@@ -1105,7 +791,7 @@ def _numeric_values_in(texts: Sequence[str]) -> set[float]:
 
 
 def _referenced_fact_values(
-    narrative: DevNarrative, frame: DevAnswerFrame
+    narrative: _narrative.DevNarrative, frame: _frame.DevAnswerFrame
 ) -> set[float]:
     """(a) Numerals in the text of the facts the narrative declares it narrates.
 
@@ -1121,7 +807,7 @@ def _referenced_fact_values(
     )
 
 
-def _subject_identity_values(frame: DevAnswerFrame) -> set[float]:
+def _subject_identity_values(frame: _frame.DevAnswerFrame) -> set[float]:
     """(c) Numerals belonging to the committed subject's own identity.
 
     A subject legitimately named ``project-42`` must be nameable. These are
@@ -1137,7 +823,7 @@ def _subject_identity_values(frame: DevAnswerFrame) -> set[float]:
 
 
 def _sentence_comparison_values(
-    sentence_tokens: Sequence[str], frame: DevAnswerFrame
+    sentence_tokens: Sequence[str], frame: _frame.DevAnswerFrame
 ) -> set[float]:
     values: set[float] = set()
     for point in frame.comparisons:
@@ -1150,7 +836,7 @@ def _sentence_comparison_values(
 
 
 def validate_narrative_numeric_containment(
-    narrative: DevNarrative, frame: DevAnswerFrame
+    narrative: _narrative.DevNarrative, frame: _frame.DevAnswerFrame
 ) -> None:
     """(g.1) Bind every narrative numeral to that sentence's own grounding.
 
@@ -1238,7 +924,7 @@ def validate_narrative_numeric_containment(
 
 
 def validate_narrative_readiness_claim(
-    narrative: DevNarrative, frame: DevAnswerFrame
+    narrative: _narrative.DevNarrative, frame: _frame.DevAnswerFrame
 ) -> None:
     """(g.2) Reject a narrative readiness claim that contradicts the frame.
 
@@ -1283,7 +969,7 @@ def _subject_identity_forms(display_label: str, entity_id: str) -> list[list[str
 
 
 def validate_narrative_subject_claim(
-    narrative: DevNarrative, frame: DevAnswerFrame
+    narrative: _narrative.DevNarrative, frame: _frame.DevAnswerFrame
 ) -> None:
     """(g.3) Require the narrative to name the frame's committed subject.
 
@@ -1308,7 +994,7 @@ def validate_narrative_subject_claim(
 
 
 def validate_narrative_recommendation_claim(
-    narrative: DevNarrative, frame: DevAnswerFrame
+    narrative: _narrative.DevNarrative, frame: _frame.DevAnswerFrame
 ) -> None:
     """(g.4) Bind recommendation prose to a specific referenced recommendation fact.
 
@@ -1334,7 +1020,7 @@ def validate_narrative_recommendation_claim(
 
 
 def validate_narrative_frame_consistency(
-    narrative: DevNarrative, frame: DevAnswerFrame
+    narrative: _narrative.DevNarrative, frame: _frame.DevAnswerFrame
 ) -> None:
     """(g) Run all four narrative/frame binding checks (g.1-g.4)."""
 
@@ -1349,7 +1035,7 @@ def validate_narrative_frame_consistency(
 # ---------------------------------------------------------------------------
 
 
-def validate_relationship_refs_within_frame(frame: DevAnswerFrame) -> None:
+def validate_relationship_refs_within_frame(frame: _frame.DevAnswerFrame) -> None:
     """(e) Reject a fact/readiness reference to a relationship or fact outside the frame."""
 
     known_relationship_ids = {path.path_id for path in frame.relationship_paths}
@@ -1393,7 +1079,7 @@ def validate_relationship_refs_within_frame(frame: DevAnswerFrame) -> None:
 # ---------------------------------------------------------------------------
 
 
-def validate_structural_closure(frame: DevAnswerFrame) -> None:
+def validate_structural_closure(frame: _frame.DevAnswerFrame) -> None:
     fact_ids = [fact.fact_id for fact in frame.facts]
     if len(fact_ids) != len(set(fact_ids)):
         raise ValueError("fact IDs must be unique")

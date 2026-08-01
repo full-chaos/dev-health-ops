@@ -30,6 +30,7 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, FiniteFloat, model_validator
 
+from . import no_answer_policy as _policy
 from . import validators as _validators
 from .base import (
     ContractModelV2,
@@ -218,14 +219,12 @@ class DevAnswerFrame(ContractModelV2):
 # Import-time totality: a field added to DevAnswerFrame without a no-answer
 # classification breaks this import rather than opening a silent disclosure
 # channel. See the validators module docstring.
-_validators.register_no_answer_policy(
+_policy.register_no_answer_policy(
     DevAnswerFrame,
-    _validators.NO_ANSWER_FRAME_FIELD_POLICY,
-    {"direct_answer": _validators.CANONICAL_NO_ANSWER_COPY},
+    _policy.NO_ANSWER_FRAME_FIELD_POLICY,
+    {"direct_answer": _policy.CANONICAL_NO_ANSWER_COPY},
     vocabularies={
-        "schema_version": _validators.literal_vocabulary(
-            DevAnswerFrame, "schema_version"
-        ),
-        "public_outcome": _validators.NO_ANSWER_OUTCOMES,
+        "schema_version": _policy.literal_vocabulary(DevAnswerFrame, "schema_version"),
+        "public_outcome": _policy.NO_ANSWER_OUTCOMES,
     },
 )

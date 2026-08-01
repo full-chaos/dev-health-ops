@@ -1,0 +1,35 @@
+{
+  "comparisons": [],
+  "completion": null,
+  "conflicts": [],
+  "coverage": {
+    "as_of": "2026-07-28T12:00:00Z",
+    "available_source_count": 1,
+    "required_source_count": 1,
+    "stale_required_sources": [],
+    "unavailable_required_sources": []
+  },
+  "deficiency_refs": [
+    "deficiency_01"
+  ],
+  "direct_answer": "You do not have access to ask about this.",
+  "evidence": [],
+  "facts": [],
+  "finding_refs": [],
+  "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
+  "generated_at": "2026-07-28T12:00:00Z",
+  "health_profile_refs": [],
+  "limitations": [],
+  "metrics": [],
+  "public_outcome": "denied",
+  "readiness": null,
+  "relationship_paths": [],
+  "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
+  "safe_follow_up_questions": [],
+  "schema_version": "dev_answer_frame.v1",
+  "sections": [],
+  "source_observations": [],
+  "subject_ref": null,
+  "subject_set_ref": null,
+  "versions": null
+}

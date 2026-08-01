@@ -1,0 +1,67 @@
+[
+  {
+    "answer": null,
+    "delta": null,
+    "error": null,
+    "event": "run.started",
+    "occurred_at": "2026-07-28T12:00:00Z",
+    "progress": null,
+    "resolution_ledger": null,
+    "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
+    "schema_version": "dev_stream_event.v2",
+    "sequence": 0,
+    "terminal_kind": null,
+    "warning": null
+  },
+  {
+    "answer": null,
+    "delta": null,
+    "error": {
+      "code": "source_unavailable",
+      "remediation": [
+        "Retry after source health recovers."
+      ],
+      "request_id": "web-req-2026-07-31-0001",
+      "retryable": true,
+      "safe_message": "A required source is temporarily unavailable.",
+      "schema_version": "dev_error.v1"
+    },
+    "event": "error",
+    "occurred_at": "2026-07-28T12:00:00Z",
+    "progress": null,
+    "resolution_ledger": null,
+    "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
+    "schema_version": "dev_stream_event.v2",
+    "sequence": 1,
+    "terminal_kind": null,
+    "warning": null
+  },
+  {
+    "answer": null,
+    "delta": null,
+    "error": null,
+    "event": "done",
+    "occurred_at": "2026-07-28T12:00:00Z",
+    "progress": null,
+    "resolution_ledger": null,
+    "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
+    "schema_version": "dev_stream_event.v2",
+    "sequence": 2,
+    "terminal_kind": "error",
+    "warning": null
+  },
+  {
+    "answer": null,
+    "delta": null,
+    "error": null,
+    "event": "done",
+    "occurred_at": "2026-07-28T12:00:00Z",
+    "progress": null,
+    "resolution_ledger": null,
+    "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
+    "schema_version": "dev_stream_event.v2",
+    "sequence": 3,
+    "terminal_kind": "error",
+    "warning": null
+  }
+]

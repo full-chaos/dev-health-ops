@@ -1,0 +1,15 @@
+{
+  "adapter_id": "status_change_service.v1",
+  "allowed_relationship_paths": [
+    "repository_to_work_unit"
+  ],
+  "applicability_rule_id": null,
+  "applicability_rule_version": null,
+  "freshness_policy": "daily",
+  "minimum_coverage": null,
+  "minimum_sample": null,
+  "minimum_usable_facts": 1,
+  "requirement_level": "mandatory",
+  "schema_version": "dev_source_requirement.v1",
+  "source_class": "status_change"
+}

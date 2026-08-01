@@ -1,0 +1,166 @@
+{
+  "$defs": {
+    "DevEntityRefV2": {
+      "additionalProperties": false,
+      "description": "Embedded-only entity reference (no standalone schema_version, matching\nv1's ``DevEntityRef`` convention \u2014 this is a nested block, not one of the\ntop-level manifest contracts).",
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_kind": {
+          "$ref": "#/$defs/EntityKind"
+        },
+        "repository_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Id"
+        },
+        "team_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Team Id"
+        }
+      },
+      "required": [
+        "entity_kind",
+        "entity_id",
+        "display_label"
+      ],
+      "title": "DevEntityRefV2",
+      "type": "object"
+    },
+    "EntityKind": {
+      "description": "Wave 3.1 subject-kind registry.\n\nSupersets v1's ``EntityType`` with ``TEAM`` as a first-class kind, per\nAmendment TRD v2 \u00a74.1 (\"Add TEAM to EntityType and DirectScope\").\nDefined here rather than by mutating the frozen v1 ``EntityType`` enum,\nbecause giving ``TEAM`` real v1 ``DevScope``/``DirectScope`` semantics\n(a matching entity_scope branch, a required team ref, orchestrator/\nscope_service wiring) is v1 *runtime* behavior, which CHAOS-3294 is\nexplicitly scoped to leave untouched. v2 subject/resolution/plan\ncontracts use this enum instead of the v1 ``EntityType``.",
+      "enum": [
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "team"
+      ],
+      "title": "EntityKind",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v2/dev_subject_set.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A homogeneous, bounded, authorization-safe committed subject cohort.",
+  "properties": {
+    "ambiguous_mention_ids": {
+      "items": {
+        "maxLength": 36,
+        "minLength": 36,
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Ambiguous Mention Ids",
+      "type": "array"
+    },
+    "cohort_complete": {
+      "title": "Cohort Complete",
+      "type": "boolean"
+    },
+    "committed_entity_refs": {
+      "items": {
+        "$ref": "#/$defs/DevEntityRefV2"
+      },
+      "maxItems": 25,
+      "minItems": 1,
+      "title": "Committed Entity Refs",
+      "type": "array"
+    },
+    "entity_kind": {
+      "$ref": "#/$defs/EntityKind"
+    },
+    "fingerprint": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Fingerprint",
+      "type": "string"
+    },
+    "original_mention_count": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Original Mention Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "dev_subject_set.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "set_id": {
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Set Id",
+      "type": "string"
+    },
+    "unresolved_mention_ids": {
+      "items": {
+        "maxLength": 36,
+        "minLength": 36,
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Unresolved Mention Ids",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "set_id",
+    "entity_kind",
+    "committed_entity_refs",
+    "original_mention_count",
+    "cohort_complete",
+    "fingerprint"
+  ],
+  "title": "DevSubjectSet",
+  "type": "object"
+}

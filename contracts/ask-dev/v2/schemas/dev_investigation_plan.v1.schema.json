@@ -1,0 +1,369 @@
+{
+  "$defs": {
+    "Cardinality": {
+      "enum": [
+        "singular",
+        "plural_cohort",
+        "organization_wide"
+      ],
+      "title": "Cardinality",
+      "type": "string"
+    },
+    "DevPlanStepDependency": {
+      "additionalProperties": false,
+      "properties": {
+        "depends_on": {
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Depends On",
+          "type": "array"
+        },
+        "step_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Step Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_id"
+      ],
+      "title": "DevPlanStepDependency",
+      "type": "object"
+    },
+    "DevSourceRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "allowed_relationship_paths": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Allowed Relationship Paths",
+          "type": "array"
+        },
+        "applicability_rule_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Applicability Rule Id"
+        },
+        "applicability_rule_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Applicability Rule Version"
+        },
+        "freshness_policy": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Freshness Policy",
+          "type": "string"
+        },
+        "minimum_coverage": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum Coverage"
+        },
+        "minimum_sample": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum Sample"
+        },
+        "minimum_usable_facts": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Minimum Usable Facts",
+          "type": "integer"
+        },
+        "requirement_level": {
+          "enum": [
+            "mandatory",
+            "conditional",
+            "optional",
+            "not_applicable"
+          ],
+          "title": "Requirement Level",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "dev_source_requirement.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        }
+      },
+      "required": [
+        "schema_version",
+        "source_class",
+        "adapter_id",
+        "requirement_level",
+        "freshness_policy",
+        "minimum_usable_facts"
+      ],
+      "title": "DevSourceRequirement",
+      "type": "object"
+    },
+    "EntityKind": {
+      "description": "Wave 3.1 subject-kind registry.\n\nSupersets v1's ``EntityType`` with ``TEAM`` as a first-class kind, per\nAmendment TRD v2 \u00a74.1 (\"Add TEAM to EntityType and DirectScope\").\nDefined here rather than by mutating the frozen v1 ``EntityType`` enum,\nbecause giving ``TEAM`` real v1 ``DevScope``/``DirectScope`` semantics\n(a matching entity_scope branch, a required team ref, orchestrator/\nscope_service wiring) is v1 *runtime* behavior, which CHAOS-3294 is\nexplicitly scoped to leave untouched. v2 subject/resolution/plan\ncontracts use this enum instead of the v1 ``EntityType``.",
+      "enum": [
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "team"
+      ],
+      "title": "EntityKind",
+      "type": "string"
+    },
+    "QuestionIntentID": {
+      "description": "The twelve Wave 3.1 launch intents (Amendment TRD v2 \u00a74.1).",
+      "enum": [
+        "entity_status",
+        "portfolio_status",
+        "remaining_work",
+        "observed_change",
+        "registered_statistics",
+        "metric_comparison",
+        "data_trust",
+        "project_health",
+        "team_health",
+        "team_workload_balance",
+        "operational_deficiency_inventory",
+        "bounded_investigation"
+      ],
+      "title": "QuestionIntentID",
+      "type": "string"
+    },
+    "SourceClass": {
+      "description": "The closed platform vocabulary of investigable source classes.\n\nA *source class* names a kind of platform data an investigation step can\ndraw on. It is deliberately a closed enum rather than an ``OpaqueID``,\nbecause the same token is what ``dev_coverage``'s\n``unavailable_required_sources``/``stale_required_sources`` disclose on a\n**denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):\nadversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle\na subject-derived identifier (``\"private/Nightfall\"``) out through a frame\nwhose every other field was correctly empty. A closed vocabulary means the\ncoverage counts stay answerable for a denial while carrying nothing a\nproducer chose.\n\nAdding a source class is therefore a deliberate contract change, not an\nincidental string: a new adapter must add its member here (and regenerate\nthe exported schemas) before it can appear on the wire.",
+      "enum": [
+        "status_change",
+        "work_item",
+        "work_graph",
+        "pull_request",
+        "code_change",
+        "review",
+        "ci_run",
+        "test_report",
+        "deployment",
+        "incident",
+        "operational_control",
+        "source_health"
+      ],
+      "title": "SourceClass",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v2/dev_investigation_plan.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "batch_strategy": {
+      "enum": [
+        "single",
+        "batched_fan_out"
+      ],
+      "title": "Batch Strategy",
+      "type": "string"
+    },
+    "completion_rule_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Completion Rule Id",
+      "type": "string"
+    },
+    "completion_rule_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Completion Rule Version",
+      "type": "string"
+    },
+    "conditional_steps": {
+      "items": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 25,
+      "title": "Conditional Steps",
+      "type": "array"
+    },
+    "enrichment_allowed": {
+      "title": "Enrichment Allowed",
+      "type": "boolean"
+    },
+    "intent_id": {
+      "$ref": "#/$defs/QuestionIntentID"
+    },
+    "mandatory_steps": {
+      "items": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 25,
+      "minItems": 1,
+      "title": "Mandatory Steps",
+      "type": "array"
+    },
+    "max_bytes_per_step": {
+      "maximum": 10000000,
+      "minimum": 1,
+      "title": "Max Bytes Per Step",
+      "type": "integer"
+    },
+    "max_rows_per_step": {
+      "maximum": 100000,
+      "minimum": 1,
+      "title": "Max Rows Per Step",
+      "type": "integer"
+    },
+    "max_sample_per_step": {
+      "anyOf": [
+        {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Sample Per Step"
+    },
+    "per_step_timeout_seconds": {
+      "maximum": 120,
+      "minimum": 1,
+      "title": "Per Step Timeout Seconds",
+      "type": "integer"
+    },
+    "plan_id": {
+      "maxLength": 128,
+      "minLength": 3,
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "plan_version": {
+      "maxLength": 128,
+      "minLength": 3,
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+      "title": "Plan Version",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "dev_investigation_plan.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_requirements": {
+      "items": {
+        "$ref": "#/$defs/DevSourceRequirement"
+      },
+      "maxItems": 25,
+      "minItems": 1,
+      "title": "Source Requirements",
+      "type": "array"
+    },
+    "step_dependencies": {
+      "items": {
+        "$ref": "#/$defs/DevPlanStepDependency"
+      },
+      "maxItems": 50,
+      "title": "Step Dependencies",
+      "type": "array"
+    },
+    "supported_cardinalities": {
+      "items": {
+        "$ref": "#/$defs/Cardinality"
+      },
+      "maxItems": 3,
+      "minItems": 1,
+      "title": "Supported Cardinalities",
+      "type": "array"
+    },
+    "supported_subject_kinds": {
+      "items": {
+        "$ref": "#/$defs/EntityKind"
+      },
+      "maxItems": 6,
+      "minItems": 1,
+      "title": "Supported Subject Kinds",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "plan_id",
+    "plan_version",
+    "intent_id",
+    "supported_subject_kinds",
+    "supported_cardinalities",
+    "mandatory_steps",
+    "source_requirements",
+    "batch_strategy",
+    "per_step_timeout_seconds",
+    "max_rows_per_step",
+    "max_bytes_per_step",
+    "enrichment_allowed",
+    "completion_rule_id",
+    "completion_rule_version"
+  ],
+  "title": "DevInvestigationPlan",
+  "type": "object"
+}

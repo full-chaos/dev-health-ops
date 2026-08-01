@@ -1,0 +1,386 @@
+{
+  "$defs": {
+    "DevRelationshipPath": {
+      "additionalProperties": false,
+      "description": "One verifiable hop chain from a committed subject to supporting data.",
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "path_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Path Id",
+          "type": "string"
+        },
+        "provenance": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        },
+        "relationship": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Relationship",
+          "type": "string"
+        },
+        "source_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Source Entity Id",
+          "type": "string"
+        },
+        "target_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Target Entity Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path_id",
+        "source_entity_id",
+        "relationship",
+        "target_entity_id",
+        "provenance",
+        "confidence",
+        "observed_at"
+      ],
+      "title": "DevRelationshipPath",
+      "type": "object"
+    },
+    "DevSourceObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "data_semantics": {
+          "enum": [
+            "measured_zero",
+            "no_data",
+            "not_measured"
+          ],
+          "title": "Data Semantics",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "observation_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observed_state": {
+          "$ref": "#/$defs/SourceRequirementState"
+        },
+        "query_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Query Version",
+          "type": "string"
+        },
+        "relationship_paths": {
+          "items": {
+            "$ref": "#/$defs/DevRelationshipPath"
+          },
+          "maxItems": 25,
+          "title": "Relationship Paths",
+          "type": "array"
+        },
+        "requirement_level": {
+          "enum": [
+            "mandatory",
+            "conditional",
+            "optional",
+            "not_applicable"
+          ],
+          "title": "Requirement Level",
+          "type": "string"
+        },
+        "sample_count": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Count"
+        },
+        "schema_version": {
+          "const": "dev_source_observation.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        },
+        "subject_coverage": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Subject Coverage",
+          "type": "number"
+        },
+        "usable_fact_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Usable Fact Count",
+          "type": "integer"
+        },
+        "watermark": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Watermark"
+        }
+      },
+      "required": [
+        "schema_version",
+        "observation_id",
+        "source_class",
+        "adapter_id",
+        "requirement_level",
+        "observed_state",
+        "data_semantics",
+        "subject_coverage",
+        "usable_fact_count",
+        "observed_at",
+        "query_version"
+      ],
+      "title": "DevSourceObservation",
+      "type": "object"
+    },
+    "SourceClass": {
+      "description": "The closed platform vocabulary of investigable source classes.\n\nA *source class* names a kind of platform data an investigation step can\ndraw on. It is deliberately a closed enum rather than an ``OpaqueID``,\nbecause the same token is what ``dev_coverage``'s\n``unavailable_required_sources``/``stale_required_sources`` disclose on a\n**denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):\nadversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle\na subject-derived identifier (``\"private/Nightfall\"``) out through a frame\nwhose every other field was correctly empty. A closed vocabulary means the\ncoverage counts stay answerable for a denial while carrying nothing a\nproducer chose.\n\nAdding a source class is therefore a deliberate contract change, not an\nincidental string: a new adapter must add its member here (and regenerate\nthe exported schemas) before it can appear on the wire.",
+      "enum": [
+        "status_change",
+        "work_item",
+        "work_graph",
+        "pull_request",
+        "code_change",
+        "review",
+        "ci_run",
+        "test_report",
+        "deployment",
+        "incident",
+        "operational_control",
+        "source_health"
+      ],
+      "title": "SourceClass",
+      "type": "string"
+    },
+    "SourceRequirementState": {
+      "description": "Per-source fulfillment state (CHAOS-3294 deliverable list, verbatim).\n\nDistinct from ``dev_source_requirement.v1.requirement_level`` (the\na-priori ``mandatory | conditional | optional | not_applicable``\ndeclaration): this enum is the *observed*, executed outcome recorded on\n``dev_source_observation.v1.observed_state`` once a plan step actually\nran. Kept in ``base`` because both the plan and result contract modules\nreference it (the plan's applicability rules describe which states are\nacceptable; the result records which state was actually observed).",
+      "enum": [
+        "available_current",
+        "available_stale",
+        "available_unknown",
+        "unconfigured",
+        "unavailable",
+        "unauthorized_or_not_visible",
+        "not_applicable",
+        "truncated"
+      ],
+      "title": "SourceRequirementState",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v2/dev_investigation_result.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "completed_at": {
+      "format": "date-time",
+      "title": "Completed At",
+      "type": "string"
+    },
+    "completed_steps": {
+      "items": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 25,
+      "title": "Completed Steps",
+      "type": "array"
+    },
+    "failed_steps": {
+      "items": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 25,
+      "title": "Failed Steps",
+      "type": "array"
+    },
+    "observations": {
+      "items": {
+        "$ref": "#/$defs/DevSourceObservation"
+      },
+      "maxItems": 25,
+      "minItems": 1,
+      "title": "Observations",
+      "type": "array"
+    },
+    "plan_id": {
+      "maxLength": 128,
+      "minLength": 3,
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "plan_version": {
+      "maxLength": 128,
+      "minLength": 3,
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+      "title": "Plan Version",
+      "type": "string"
+    },
+    "relationship_closure_verified": {
+      "title": "Relationship Closure Verified",
+      "type": "boolean"
+    },
+    "result_id": {
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Result Id",
+      "type": "string"
+    },
+    "run_id": {
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "dev_investigation_result.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "skipped_steps": {
+      "items": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 25,
+      "title": "Skipped Steps",
+      "type": "array"
+    },
+    "subject_entity_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Subject Entity Id"
+    },
+    "subject_set_fingerprint": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Subject Set Fingerprint"
+    }
+  },
+  "required": [
+    "schema_version",
+    "result_id",
+    "plan_id",
+    "plan_version",
+    "run_id",
+    "observations",
+    "relationship_closure_verified",
+    "completed_at"
+  ],
+  "title": "DevInvestigationResult",
+  "type": "object"
+}

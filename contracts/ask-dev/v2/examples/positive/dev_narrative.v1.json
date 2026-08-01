@@ -1,0 +1,17 @@
+{
+  "body": "Repository dev-health is on track, with one required child issue still open.",
+  "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
+  "generated_at": "2026-07-28T12:00:00Z",
+  "mode": "deterministic_fallback",
+  "narrative_id": "0f1a2b3c-0003-4a00-8000-000000000001",
+  "provider_metadata": null,
+  "referenced_fact_ids": [
+    "fact_01"
+  ],
+  "referenced_section_ids": [
+    "summary"
+  ],
+  "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
+  "schema_version": "dev_narrative.v1",
+  "validation_warnings": []
+}

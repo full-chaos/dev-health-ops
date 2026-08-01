@@ -1,0 +1,76 @@
+{
+  "comparisons": [],
+  "completion": null,
+  "conflicts": [],
+  "coverage": {
+    "as_of": "2026-07-28T12:00:00Z",
+    "available_source_count": 1,
+    "required_source_count": 1,
+    "stale_required_sources": [],
+    "unavailable_required_sources": []
+  },
+  "deficiency_refs": [],
+  "direct_answer": "You do not have access to ask about this.",
+  "evidence": [],
+  "facts": [],
+  "finding_refs": [],
+  "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
+  "generated_at": "2026-07-28T12:00:00Z",
+  "health_profile_refs": [],
+  "limitations": [],
+  "metrics": [
+    {
+      "aggregation": "p50",
+      "comparison_value": null,
+      "comparison_window": null,
+      "coverage": 1.0,
+      "current_window": {
+        "end": "2026-07-28T00:00:00Z",
+        "start": "2026-06-28T00:00:00Z",
+        "timezone": "America/Los_Angeles"
+      },
+      "definition_version": "ask_dev_metrics.v1",
+      "dimensions": [],
+      "display_precision": 1,
+      "evidence_ref_ids": [],
+      "freshness": "fresh",
+      "label": "Cycle time (p50)",
+      "metric_id": "cycle_time_p50_hours",
+      "metric_ref_id": "metric_01",
+      "query_version": "ask_dev_queries.v1",
+      "resolved_scope": {
+        "comparison_range": null,
+        "direct_scope": "repository",
+        "entity_refs": [],
+        "organization_id": "org_fullchaos",
+        "repositories": [
+          "repo_dev_health"
+        ],
+        "schema_version": "dev_scope.v1",
+        "surface_context": null,
+        "team_ids": [],
+        "time_range": {
+          "end": "2026-07-28T00:00:00Z",
+          "start": "2026-06-28T00:00:00Z",
+          "timezone": "America/Los_Angeles"
+        }
+      },
+      "schema_version": "dev_metric_ref.v1",
+      "series": [],
+      "source_version": "work_graph.v1",
+      "unit": "hours",
+      "value": 12.5
+    }
+  ],
+  "public_outcome": "denied",
+  "readiness": null,
+  "relationship_paths": [],
+  "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
+  "safe_follow_up_questions": [],
+  "schema_version": "dev_answer_frame.v1",
+  "sections": [],
+  "source_observations": [],
+  "subject_ref": null,
+  "subject_set_ref": null,
+  "versions": null
+}

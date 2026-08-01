@@ -1,0 +1,1879 @@
+{
+  "$defs": {
+    "AskDevSurfaceRouteID": {
+      "enum": [
+        "diagnose_overview",
+        "flow_metrics",
+        "investment",
+        "work_graph",
+        "complexity",
+        "cognitive_load",
+        "bottlenecks",
+        "repository_detail",
+        "project_detail",
+        "work_unit_detail",
+        "issue_detail",
+        "pull_request_detail",
+        "data_health"
+      ],
+      "title": "AskDevSurfaceRouteID",
+      "type": "string"
+    },
+    "DevAnswerFact": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "fact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "observed",
+            "inferred",
+            "recommendation"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "relationship_path_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Relationship Path Ids",
+          "type": "array"
+        },
+        "text": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "text",
+        "kind",
+        "confidence"
+      ],
+      "title": "DevAnswerFact",
+      "type": "object"
+    },
+    "DevAnswerFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "comparisons": {
+          "items": {
+            "$ref": "#/$defs/DevComparisonPoint"
+          },
+          "maxItems": 20,
+          "title": "Comparisons",
+          "type": "array"
+        },
+        "completion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevCompletionBlock"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/DevFrameConflict"
+          },
+          "maxItems": 20,
+          "title": "Conflicts",
+          "type": "array"
+        },
+        "coverage": {
+          "$ref": "#/$defs/DevCoverageV2"
+        },
+        "deficiency_refs": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Deficiency Refs",
+          "type": "array"
+        },
+        "direct_answer": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Direct Answer",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/DevEvidenceRefV2"
+          },
+          "maxItems": 25,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "facts": {
+          "items": {
+            "$ref": "#/$defs/DevAnswerFact"
+          },
+          "maxItems": 200,
+          "title": "Facts",
+          "type": "array"
+        },
+        "finding_refs": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Finding Refs",
+          "type": "array"
+        },
+        "frame_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Frame Id",
+          "type": "string"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "health_profile_refs": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Health Profile Refs",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "metrics": {
+          "items": {
+            "$ref": "#/$defs/DevMetricRefV2"
+          },
+          "maxItems": 12,
+          "title": "Metrics",
+          "type": "array"
+        },
+        "public_outcome": {
+          "$ref": "#/$defs/PublicOutcome"
+        },
+        "readiness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevReadinessBlock"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "relationship_paths": {
+          "items": {
+            "$ref": "#/$defs/DevRelationshipPath"
+          },
+          "maxItems": 100,
+          "title": "Relationship Paths",
+          "type": "array"
+        },
+        "run_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "safe_follow_up_questions": {
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Safe Follow Up Questions",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_answer_frame.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/DevAnswerSection"
+          },
+          "maxItems": 20,
+          "title": "Sections",
+          "type": "array"
+        },
+        "source_observations": {
+          "items": {
+            "$ref": "#/$defs/DevSourceObservation"
+          },
+          "maxItems": 25,
+          "title": "Source Observations",
+          "type": "array"
+        },
+        "subject_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevEntityRefV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "subject_set_ref": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject Set Ref"
+        },
+        "versions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevFrameVersions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "schema_version",
+        "frame_id",
+        "run_id",
+        "generated_at",
+        "public_outcome",
+        "direct_answer",
+        "coverage"
+      ],
+      "title": "DevAnswerFrame",
+      "type": "object"
+    },
+    "DevAnswerSection": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 200,
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "section_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Section Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "section_id",
+        "title"
+      ],
+      "title": "DevAnswerSection",
+      "type": "object"
+    },
+    "DevCitationLink": {
+      "additionalProperties": false,
+      "properties": {
+        "internal_path": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "pattern": "^/[^\\s]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Internal Path"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        }
+      },
+      "title": "DevCitationLink",
+      "type": "object"
+    },
+    "DevComparisonPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "comparison_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comparison Value"
+        },
+        "current_value": {
+          "title": "Current Value",
+          "type": "number"
+        },
+        "label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "current_value",
+        "unit"
+      ],
+      "title": "DevComparisonPoint",
+      "type": "object"
+    },
+    "DevCompletionBlock": {
+      "additionalProperties": false,
+      "description": "Deterministic completion numerator/denominator/rate/calculability.\n\n``calculable`` is never inferred True from a partial numerator or\ndenominator: see ``validators.validate_completion_denominator``, which\nis the sole enforcement point (deliberately not duplicated here \u2014 see\nthat module's docstring on why enforcement lives in one monkeypatchable\nplace).",
+      "properties": {
+        "calculable": {
+          "title": "Calculable",
+          "type": "boolean"
+        },
+        "denominator": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Denominator"
+        },
+        "numerator": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Numerator"
+        },
+        "rate": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rate"
+        },
+        "rule_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Id"
+        },
+        "rule_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 3,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Version"
+        }
+      },
+      "required": [
+        "calculable"
+      ],
+      "title": "DevCompletionBlock",
+      "type": "object"
+    },
+    "DevCoverageV2": {
+      "additionalProperties": false,
+      "description": "``dev_coverage`` with immutable, closed-vocabulary source lists.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "available_source_count": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Available Source Count",
+          "type": "integer"
+        },
+        "required_source_count": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Required Source Count",
+          "type": "integer"
+        },
+        "stale_required_sources": {
+          "items": {
+            "$ref": "#/$defs/SourceClass"
+          },
+          "maxItems": 25,
+          "title": "Stale Required Sources",
+          "type": "array"
+        },
+        "unavailable_required_sources": {
+          "items": {
+            "$ref": "#/$defs/SourceClass"
+          },
+          "maxItems": 25,
+          "title": "Unavailable Required Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "required_source_count",
+        "available_source_count",
+        "as_of"
+      ],
+      "title": "DevCoverageV2",
+      "type": "object"
+    },
+    "DevEntityRef": {
+      "additionalProperties": false,
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_type": {
+          "$ref": "#/$defs/EntityType"
+        },
+        "repository_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Id"
+        }
+      },
+      "required": [
+        "entity_type",
+        "entity_id",
+        "display_label"
+      ],
+      "title": "DevEntityRef",
+      "type": "object"
+    },
+    "DevEntityRefV2": {
+      "additionalProperties": false,
+      "description": "Embedded-only entity reference (no standalone schema_version, matching\nv1's ``DevEntityRef`` convention \u2014 this is a nested block, not one of the\ntop-level manifest contracts).",
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_kind": {
+          "$ref": "#/$defs/EntityKind"
+        },
+        "repository_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Id"
+        },
+        "team_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Team Id"
+        }
+      },
+      "required": [
+        "entity_kind",
+        "entity_id",
+        "display_label"
+      ],
+      "title": "DevEntityRefV2",
+      "type": "object"
+    },
+    "DevEvidenceFlags": {
+      "additionalProperties": false,
+      "properties": {
+        "conflicting": {
+          "default": false,
+          "title": "Conflicting",
+          "type": "boolean"
+        },
+        "deleted": {
+          "default": false,
+          "title": "Deleted",
+          "type": "boolean"
+        },
+        "redacted": {
+          "default": false,
+          "title": "Redacted",
+          "type": "boolean"
+        },
+        "stale": {
+          "default": false,
+          "title": "Stale",
+          "type": "boolean"
+        },
+        "unavailable": {
+          "default": false,
+          "title": "Unavailable",
+          "type": "boolean"
+        },
+        "uncertain": {
+          "default": false,
+          "title": "Uncertain",
+          "type": "boolean"
+        },
+        "untrusted_content": {
+          "default": true,
+          "title": "Untrusted Content",
+          "type": "boolean"
+        }
+      },
+      "title": "DevEvidenceFlags",
+      "type": "object"
+    },
+    "DevEvidenceRefV2": {
+      "additionalProperties": false,
+      "properties": {
+        "citation_text": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citation Text"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Type",
+          "type": "string"
+        },
+        "evidence_ref_id": {
+          "maxLength": 44,
+          "minLength": 44,
+          "pattern": "^ev1_[0-9a-f]{40}$",
+          "title": "Evidence Ref Id",
+          "type": "string"
+        },
+        "flags": {
+          "$ref": "#/$defs/DevEvidenceFlags"
+        },
+        "freshness": {
+          "$ref": "#/$defs/FreshnessState"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevCitationLink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provenance": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        },
+        "repository_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Repository Ids",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_evidence_ref.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_system": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Source System",
+          "type": "string"
+        },
+        "source_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source Version",
+          "type": "string"
+        },
+        "valid_entity_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Valid Entity Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "evidence_ref_id",
+        "source_system",
+        "source_version",
+        "entity_type",
+        "entity_id",
+        "display_label",
+        "observed_at",
+        "freshness",
+        "provenance",
+        "confidence",
+        "flags"
+      ],
+      "title": "DevEvidenceRefV2",
+      "type": "object"
+    },
+    "DevFrameConflict": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 2,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "summary": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "evidence_ref_ids"
+      ],
+      "title": "DevFrameConflict",
+      "type": "object"
+    },
+    "DevFrameVersions": {
+      "additionalProperties": false,
+      "description": "Platform provenance for one answer frame.\n\nEvery field is a ``PlatformVersionToken`` (a dotted, lowercase,\nversion-suffixed token) rather than the free-form ``Version``, so the\nblock cannot carry producer-authored copy. A no-answer outcome carries no\nprovenance block at all \u2014 see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``.",
+      "properties": {
+        "interpreter_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Interpreter Version",
+          "type": "string"
+        },
+        "metric_definition_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Metric Definition Version",
+          "type": "string"
+        },
+        "plan_id": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "plan_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Plan Version",
+          "type": "string"
+        },
+        "prompt_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 3,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Version"
+        },
+        "query_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Query Version",
+          "type": "string"
+        },
+        "rule_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 3,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Version"
+        },
+        "tool_contract_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Tool Contract Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "interpreter_version",
+        "plan_id",
+        "plan_version",
+        "tool_contract_version",
+        "metric_definition_version",
+        "query_version"
+      ],
+      "title": "DevFrameVersions",
+      "type": "object"
+    },
+    "DevMetricPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "timestamp",
+        "value"
+      ],
+      "title": "DevMetricPoint",
+      "type": "object"
+    },
+    "DevMetricRefV2": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregation": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Aggregation",
+          "type": "string"
+        },
+        "comparison_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comparison Value"
+        },
+        "comparison_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevTimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "coverage": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Coverage",
+          "type": "number"
+        },
+        "current_window": {
+          "$ref": "#/$defs/DevTimeRange"
+        },
+        "definition_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Definition Version",
+          "type": "string"
+        },
+        "dimensions": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Dimensions",
+          "type": "array"
+        },
+        "display_precision": {
+          "maximum": 8,
+          "minimum": 0,
+          "title": "Display Precision",
+          "type": "integer"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "freshness": {
+          "$ref": "#/$defs/FreshnessState"
+        },
+        "label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "metric_id": {
+          "$ref": "#/$defs/MetricID"
+        },
+        "metric_ref_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Metric Ref Id",
+          "type": "string"
+        },
+        "query_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Query Version",
+          "type": "string"
+        },
+        "resolved_scope": {
+          "$ref": "#/$defs/DevScopeV2"
+        },
+        "schema_version": {
+          "const": "dev_metric_ref.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "series": {
+          "items": {
+            "$ref": "#/$defs/DevMetricPoint"
+          },
+          "maxItems": 366,
+          "title": "Series",
+          "type": "array"
+        },
+        "source_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source Version",
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Unit",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "schema_version",
+        "metric_ref_id",
+        "metric_id",
+        "label",
+        "definition_version",
+        "unit",
+        "aggregation",
+        "display_precision",
+        "resolved_scope",
+        "current_window",
+        "query_version",
+        "source_version",
+        "freshness",
+        "coverage"
+      ],
+      "title": "DevMetricRefV2",
+      "type": "object"
+    },
+    "DevModelMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "model_fingerprint": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Model Fingerprint",
+          "type": "string"
+        },
+        "provider_family": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Provider Family",
+          "type": "string"
+        },
+        "provider_source": {
+          "enum": [
+            "platform",
+            "byo"
+          ],
+          "title": "Provider Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider_source",
+        "provider_family",
+        "model_fingerprint"
+      ],
+      "title": "DevModelMetadata",
+      "type": "object"
+    },
+    "DevNarrative": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        },
+        "frame_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Frame Id",
+          "type": "string"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "provider",
+            "deterministic_fallback"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "narrative_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Narrative Id",
+          "type": "string"
+        },
+        "provider_metadata": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevModelMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "referenced_fact_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 200,
+          "title": "Referenced Fact Ids",
+          "type": "array"
+        },
+        "referenced_section_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Referenced Section Ids",
+          "type": "array"
+        },
+        "run_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "dev_narrative.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "validation_warnings": {
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Validation Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "narrative_id",
+        "run_id",
+        "frame_id",
+        "mode",
+        "body",
+        "generated_at"
+      ],
+      "title": "DevNarrative",
+      "type": "object"
+    },
+    "DevReadinessBlock": {
+      "additionalProperties": false,
+      "description": "Readiness is a distinct concept from completion (per TRD v2 \u00a74.5).",
+      "properties": {
+        "blocking_fact_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Blocking Fact Ids",
+          "type": "array"
+        },
+        "rule_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "rule_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Rule Version",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "ready",
+            "not_ready",
+            "indeterminate"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "translated_user_reasons": {
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Translated User Reasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "state",
+        "rule_id",
+        "rule_version"
+      ],
+      "title": "DevReadinessBlock",
+      "type": "object"
+    },
+    "DevRelationshipPath": {
+      "additionalProperties": false,
+      "description": "One verifiable hop chain from a committed subject to supporting data.",
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "path_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Path Id",
+          "type": "string"
+        },
+        "provenance": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        },
+        "relationship": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Relationship",
+          "type": "string"
+        },
+        "source_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Source Entity Id",
+          "type": "string"
+        },
+        "target_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Target Entity Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path_id",
+        "source_entity_id",
+        "relationship",
+        "target_entity_id",
+        "provenance",
+        "confidence",
+        "observed_at"
+      ],
+      "title": "DevRelationshipPath",
+      "type": "object"
+    },
+    "DevScopeV2": {
+      "additionalProperties": false,
+      "properties": {
+        "comparison_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevTimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "direct_scope": {
+          "$ref": "#/$defs/DirectScope"
+        },
+        "entity_refs": {
+          "items": {
+            "$ref": "#/$defs/DevEntityRef"
+          },
+          "maxItems": 20,
+          "title": "Entity Refs",
+          "type": "array"
+        },
+        "organization_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "repositories": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Repositories",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_scope.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "surface_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevSurfaceContextV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "team_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Team Ids",
+          "type": "array"
+        },
+        "time_range": {
+          "$ref": "#/$defs/DevTimeRange"
+        }
+      },
+      "required": [
+        "schema_version",
+        "organization_id",
+        "direct_scope",
+        "time_range"
+      ],
+      "title": "DevScopeV2",
+      "type": "object"
+    },
+    "DevSourceObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "data_semantics": {
+          "enum": [
+            "measured_zero",
+            "no_data",
+            "not_measured"
+          ],
+          "title": "Data Semantics",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "observation_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observed_state": {
+          "$ref": "#/$defs/SourceRequirementState"
+        },
+        "query_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Query Version",
+          "type": "string"
+        },
+        "relationship_paths": {
+          "items": {
+            "$ref": "#/$defs/DevRelationshipPath"
+          },
+          "maxItems": 25,
+          "title": "Relationship Paths",
+          "type": "array"
+        },
+        "requirement_level": {
+          "enum": [
+            "mandatory",
+            "conditional",
+            "optional",
+            "not_applicable"
+          ],
+          "title": "Requirement Level",
+          "type": "string"
+        },
+        "sample_count": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Count"
+        },
+        "schema_version": {
+          "const": "dev_source_observation.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        },
+        "subject_coverage": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Subject Coverage",
+          "type": "number"
+        },
+        "usable_fact_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Usable Fact Count",
+          "type": "integer"
+        },
+        "watermark": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Watermark"
+        }
+      },
+      "required": [
+        "schema_version",
+        "observation_id",
+        "source_class",
+        "adapter_id",
+        "requirement_level",
+        "observed_state",
+        "data_semantics",
+        "subject_coverage",
+        "usable_fact_count",
+        "observed_at",
+        "query_version"
+      ],
+      "title": "DevSourceObservation",
+      "type": "object"
+    },
+    "DevSurfaceContextV2": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_refs": {
+          "items": {
+            "$ref": "#/$defs/DevEntityRef"
+          },
+          "maxItems": 20,
+          "title": "Entity Refs",
+          "type": "array"
+        },
+        "filter_fingerprint": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filter Fingerprint"
+        },
+        "route_id": {
+          "$ref": "#/$defs/AskDevSurfaceRouteID"
+        }
+      },
+      "required": [
+        "route_id"
+      ],
+      "title": "DevSurfaceContextV2",
+      "type": "object"
+    },
+    "DevTimeRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "timezone": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "timezone"
+      ],
+      "title": "DevTimeRange",
+      "type": "object"
+    },
+    "DirectScope": {
+      "enum": [
+        "organization",
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request"
+      ],
+      "title": "DirectScope",
+      "type": "string"
+    },
+    "EntityKind": {
+      "description": "Wave 3.1 subject-kind registry.\n\nSupersets v1's ``EntityType`` with ``TEAM`` as a first-class kind, per\nAmendment TRD v2 \u00a74.1 (\"Add TEAM to EntityType and DirectScope\").\nDefined here rather than by mutating the frozen v1 ``EntityType`` enum,\nbecause giving ``TEAM`` real v1 ``DevScope``/``DirectScope`` semantics\n(a matching entity_scope branch, a required team ref, orchestrator/\nscope_service wiring) is v1 *runtime* behavior, which CHAOS-3294 is\nexplicitly scoped to leave untouched. v2 subject/resolution/plan\ncontracts use this enum instead of the v1 ``EntityType``.",
+      "enum": [
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "team"
+      ],
+      "title": "EntityKind",
+      "type": "string"
+    },
+    "EntityType": {
+      "enum": [
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request"
+      ],
+      "title": "EntityType",
+      "type": "string"
+    },
+    "FreshnessState": {
+      "enum": [
+        "fresh",
+        "stale",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "FreshnessState",
+      "type": "string"
+    },
+    "MetricID": {
+      "enum": [
+        "items_completed",
+        "cycle_time_p50_hours",
+        "avg_wip",
+        "deployments_count",
+        "change_failure_rate",
+        "investment_allocation_pct",
+        "cyclomatic_per_kloc",
+        "compounding_risk_score"
+      ],
+      "title": "MetricID",
+      "type": "string"
+    },
+    "PublicOutcome": {
+      "description": "The exact dev_answer.v2 public outcome vocabulary (PRD v2 \u00a78).\n\n``refused`` is deliberately absent: it is reserved for genuinely\nprohibited requests (writes, arbitrary execution, secret extraction,\ncross-tenant access) and is never a Wave 3.1 answer-frame outcome for a\nnormal status/health question that could not be resolved.",
+      "enum": [
+        "answered",
+        "answered_with_gaps",
+        "needs_clarification",
+        "not_found",
+        "temporarily_unavailable",
+        "unsupported",
+        "denied",
+        "failed"
+      ],
+      "title": "PublicOutcome",
+      "type": "string"
+    },
+    "SourceClass": {
+      "description": "The closed platform vocabulary of investigable source classes.\n\nA *source class* names a kind of platform data an investigation step can\ndraw on. It is deliberately a closed enum rather than an ``OpaqueID``,\nbecause the same token is what ``dev_coverage``'s\n``unavailable_required_sources``/``stale_required_sources`` disclose on a\n**denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):\nadversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle\na subject-derived identifier (``\"private/Nightfall\"``) out through a frame\nwhose every other field was correctly empty. A closed vocabulary means the\ncoverage counts stay answerable for a denial while carrying nothing a\nproducer chose.\n\nAdding a source class is therefore a deliberate contract change, not an\nincidental string: a new adapter must add its member here (and regenerate\nthe exported schemas) before it can appear on the wire.",
+      "enum": [
+        "status_change",
+        "work_item",
+        "work_graph",
+        "pull_request",
+        "code_change",
+        "review",
+        "ci_run",
+        "test_report",
+        "deployment",
+        "incident",
+        "operational_control",
+        "source_health"
+      ],
+      "title": "SourceClass",
+      "type": "string"
+    },
+    "SourceRequirementState": {
+      "description": "Per-source fulfillment state (CHAOS-3294 deliverable list, verbatim).\n\nDistinct from ``dev_source_requirement.v1.requirement_level`` (the\na-priori ``mandatory | conditional | optional | not_applicable``\ndeclaration): this enum is the *observed*, executed outcome recorded on\n``dev_source_observation.v1.observed_state`` once a plan step actually\nran. Kept in ``base`` because both the plan and result contract modules\nreference it (the plan's applicability rules describe which states are\nacceptable; the result records which state was actually observed).",
+      "enum": [
+        "available_current",
+        "available_stale",
+        "available_unknown",
+        "unconfigured",
+        "unavailable",
+        "unauthorized_or_not_visible",
+        "not_applicable",
+        "truncated"
+      ],
+      "title": "SourceRequirementState",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v2/dev_answer.v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "answer_id": {
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Answer Id",
+      "type": "string"
+    },
+    "conversation_id": {
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Conversation Id",
+      "type": "string"
+    },
+    "frame": {
+      "$ref": "#/$defs/DevAnswerFrame"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "narrative": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevNarrative"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "outcome_display_label": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Outcome Display Label",
+      "type": "string"
+    },
+    "public_outcome": {
+      "$ref": "#/$defs/PublicOutcome"
+    },
+    "run_id": {
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "dev_answer.v2",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "answer_id",
+    "conversation_id",
+    "run_id",
+    "generated_at",
+    "public_outcome",
+    "outcome_display_label",
+    "frame"
+  ],
+  "title": "DevAnswerV2",
+  "type": "object"
+}

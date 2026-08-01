@@ -1,0 +1,67 @@
+{
+  "comparisons": [],
+  "completion": null,
+  "conflicts": [],
+  "coverage": {
+    "as_of": "2026-07-28T12:00:00Z",
+    "available_source_count": 1,
+    "required_source_count": 1,
+    "stale_required_sources": [],
+    "unavailable_required_sources": []
+  },
+  "deficiency_refs": [],
+  "direct_answer": "You do not have access to ask about this.",
+  "evidence": [],
+  "facts": [],
+  "finding_refs": [],
+  "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
+  "generated_at": "2026-07-28T12:00:00Z",
+  "health_profile_refs": [],
+  "limitations": [],
+  "metrics": [],
+  "public_outcome": "denied",
+  "readiness": null,
+  "relationship_paths": [],
+  "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
+  "safe_follow_up_questions": [],
+  "schema_version": "dev_answer_frame.v1",
+  "sections": [],
+  "source_observations": [
+    {
+      "adapter_id": "status_change_service.v1",
+      "data_semantics": "measured_zero",
+      "evidence_ref_ids": [
+        "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"
+      ],
+      "limitation": null,
+      "observation_id": "0f1a2b3c-000c-4a00-8000-000000000001",
+      "observed_at": "2026-07-28T12:00:00Z",
+      "observed_state": "available_current",
+      "query_version": "status_snapshot.v1",
+      "relationship_paths": [
+        {
+          "confidence": 1.0,
+          "evidence_ref_ids": [
+            "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"
+          ],
+          "observed_at": "2026-07-28T12:00:00Z",
+          "path_id": "path_01",
+          "provenance": "Canonical status snapshot",
+          "relationship": "has_status",
+          "source_entity_id": "repo_dev_health",
+          "target_entity_id": "status_snapshot_01"
+        }
+      ],
+      "requirement_level": "mandatory",
+      "sample_count": null,
+      "schema_version": "dev_source_observation.v1",
+      "source_class": "status_change",
+      "subject_coverage": 1.0,
+      "usable_fact_count": 0,
+      "watermark": "2026-07-28T12:00:00Z"
+    }
+  ],
+  "subject_ref": null,
+  "subject_set_ref": null,
+  "versions": null
+}

@@ -1,0 +1,25 @@
+{
+  "cardinality": "singular",
+  "clarification_reason": null,
+  "client_hint_deprecation_warning": null,
+  "client_question_class_hint": null,
+  "comparison_mode": "none",
+  "confidence": 0.95,
+  "generated_at": "2026-07-28T12:00:00Z",
+  "intent_id": "entity_status",
+  "interpretation_reasons": [
+    "Exact repository name matched."
+  ],
+  "interpreter_version": "intent_interpreter.v1",
+  "mention_ordinals": [
+    0
+  ],
+  "ranking_requested": false,
+  "requested_dimensions": [],
+  "requested_metric_ids": [],
+  "requires_clarification": true,
+  "schema_version": "dev_question_intent.v1",
+  "subject_kinds": [
+    "repository"
+  ]
+}

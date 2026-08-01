@@ -1,0 +1,65 @@
+{
+  "$defs": {
+    "EntityKind": {
+      "description": "Wave 3.1 subject-kind registry.\n\nSupersets v1's ``EntityType`` with ``TEAM`` as a first-class kind, per\nAmendment TRD v2 \u00a74.1 (\"Add TEAM to EntityType and DirectScope\").\nDefined here rather than by mutating the frozen v1 ``EntityType`` enum,\nbecause giving ``TEAM`` real v1 ``DevScope``/``DirectScope`` semantics\n(a matching entity_scope branch, a required team ref, orchestrator/\nscope_service wiring) is v1 *runtime* behavior, which CHAOS-3294 is\nexplicitly scoped to leave untouched. v2 subject/resolution/plan\ncontracts use this enum instead of the v1 ``EntityType``.",
+      "enum": [
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "team"
+      ],
+      "title": "EntityKind",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v2/dev_subject_mention.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "mention_id": {
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Mention Id",
+      "type": "string"
+    },
+    "mention_ordinal": {
+      "maximum": 24,
+      "minimum": 0,
+      "title": "Mention Ordinal",
+      "type": "integer"
+    },
+    "normalized_lookup_text": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "title": "Normalized Lookup Text",
+      "type": "string"
+    },
+    "original_text_span": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "title": "Original Text Span",
+      "type": "string"
+    },
+    "requested_entity_kind": {
+      "$ref": "#/$defs/EntityKind"
+    },
+    "schema_version": {
+      "const": "dev_subject_mention.v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "mention_id",
+    "mention_ordinal",
+    "original_text_span",
+    "requested_entity_kind",
+    "normalized_lookup_text"
+  ],
+  "title": "DevSubjectMention",
+  "type": "object"
+}

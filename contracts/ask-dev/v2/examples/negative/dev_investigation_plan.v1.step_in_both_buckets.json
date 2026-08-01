@@ -1,0 +1,44 @@
+{
+  "batch_strategy": "single",
+  "completion_rule_id": "actual_completion",
+  "completion_rule_version": "actual_completion.v1",
+  "conditional_steps": [
+    "status_snapshot"
+  ],
+  "enrichment_allowed": false,
+  "intent_id": "entity_status",
+  "mandatory_steps": [
+    "status_snapshot"
+  ],
+  "max_bytes_per_step": 65536,
+  "max_rows_per_step": 100,
+  "max_sample_per_step": null,
+  "per_step_timeout_seconds": 30,
+  "plan_id": "status.entity.v2",
+  "plan_version": "status.entity.v2.1",
+  "schema_version": "dev_investigation_plan.v1",
+  "source_requirements": [
+    {
+      "adapter_id": "status_change_service.v1",
+      "allowed_relationship_paths": [
+        "repository_to_work_unit"
+      ],
+      "applicability_rule_id": null,
+      "applicability_rule_version": null,
+      "freshness_policy": "daily",
+      "minimum_coverage": null,
+      "minimum_sample": null,
+      "minimum_usable_facts": 1,
+      "requirement_level": "mandatory",
+      "schema_version": "dev_source_requirement.v1",
+      "source_class": "status_change"
+    }
+  ],
+  "step_dependencies": [],
+  "supported_cardinalities": [
+    "singular"
+  ],
+  "supported_subject_kinds": [
+    "repository"
+  ]
+}

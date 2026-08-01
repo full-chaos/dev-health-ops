@@ -1,0 +1,8 @@
+{
+  "mention_id": "0f1a2b3c-0009-4a00-8000-000000000001",
+  "mention_ordinal": 0,
+  "normalized_lookup_text": "dev-health",
+  "original_text_span": "dev-health",
+  "requested_entity_kind": "repository",
+  "schema_version": "dev_subject_mention.v1"
+}

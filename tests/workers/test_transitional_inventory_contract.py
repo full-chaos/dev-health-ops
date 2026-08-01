@@ -61,7 +61,7 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # fallback missed: billing/router.py's Stripe webhook), + 1 added in
     # round-4 hardening (a separately deployed second FastAPI app,
     # billing_edge.py, forwarding to that same handler cross-file).
-    assert inventory["row_count"] == 154
+    assert inventory["row_count"] == 156
 
 
 def test_discovered_keys_and_row_keys_are_identical_sets():

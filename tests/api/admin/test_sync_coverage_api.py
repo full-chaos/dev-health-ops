@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-import asyncio
 import importlib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event
+from sqlalchemy import event, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.api.services.sync_coverage import build_sync_coverage_summary
+from dev_health_ops.api.services.sync_coverage import (
+    invalidate_sync_coverage_projection,
+    rebuild_sync_coverage_projection,
+)
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.integrations import (
@@ -34,6 +36,7 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
     SyncWatermark,
 )
+from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -59,6 +62,7 @@ _TABLES = tables_of(
     SyncRunUnit,
     SyncWatermark,
     BackfillJob,
+    SyncCoverageProjection,
 )
 
 
@@ -318,12 +322,41 @@ async def _coverage_summary_at(
     async with session_maker() as session:
         config = await session.get(SyncConfiguration, uuid.UUID(scope["config_id"]))
         assert config is not None
-        return await build_sync_coverage_summary(
+        payload = await rebuild_sync_coverage_projection(
             session,
             org_id,
             config,
             generated_at=generated_at,
         )
+        await session.commit()
+        return payload
+
+
+async def _warm_projection(
+    session_maker,
+    scope: dict,
+    *,
+    org_id: str | None = None,
+    generated_at: datetime | None = None,
+    lookback_days: int = sync_coverage_module.HISTORY_LOOKBACK_DAYS,
+) -> dict:
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(scope["config_id"]))
+        assert config is not None
+        payload = await rebuild_sync_coverage_projection(
+            session,
+            org_id or scope["org_id"],
+            config,
+            generated_at=generated_at,
+            lookback_days=lookback_days,
+        )
+        await session.commit()
+        return payload
+
+
+async def _get_warm_coverage(ac, session_maker, scope: dict):
+    await _warm_projection(session_maker, scope)
+    return await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
 
 
 @pytest.mark.asyncio
@@ -338,7 +371,7 @@ async def test_sync_coverage_api_returns_complete_summary(client, session_maker)
         before=before,
     )
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -351,10 +384,8 @@ async def test_sync_coverage_api_returns_complete_summary(client, session_maker)
 
 
 @pytest.mark.asyncio
-async def test_sync_coverage_queries_do_not_hydrate_unit_or_run_payloads(
-    client, session_maker, caplog
-):
-    """Coverage must not load large result/error payloads into API memory."""
+async def test_sync_coverage_api_reads_only_projection(client, session_maker, caplog):
+    """The request path cannot scan or hydrate sync history."""
 
     caplog.set_level("INFO", logger="dev_health_ops.api.services.sync_coverage")
     ac, seeded_state = client
@@ -366,6 +397,7 @@ async def test_sync_coverage_queries_do_not_hydrate_unit_or_run_payloads(
         since=before - timedelta(hours=1),
         before=before,
     )
+    await _warm_projection(session_maker, scope)
 
     statements: list[str] = []
 
@@ -387,34 +419,26 @@ async def test_sync_coverage_queries_do_not_hydrate_unit_or_run_payloads(
         for statement in statements
         if "sync_run_units" in statement.lower() and "select" in statement.lower()
     ]
-    assert unit_queries, "coverage request did not measure any sync-unit query"
-    for statement in unit_queries:
-        assert "sync_run_units.result" not in statement
-        assert "sync_run_units.error" not in statement
-        assert "sync_runs.result" not in statement
-        assert "sync_runs.error" not in statement
+    assert unit_queries == []
+    assert any("sync_coverage_projections" in statement for statement in statements)
 
     coverage_logs = {
         record.message: record
         for record in caplog.records
         if record.name == "dev_health_ops.api.services.sync_coverage"
     }
-    assert "sync_coverage_summary_started" in coverage_logs
     assert (
-        getattr(coverage_logs["sync_coverage_summary_started"], "sync_config_id")
-        == scope["config_id"]
-    )
-    assert (
-        getattr(coverage_logs["sync_coverage_summary_loaded"], "unit_window_count") == 1
+        getattr(coverage_logs["sync_coverage_projection_rebuilt"], "raw_unit_row_count")
+        == 1
     )
     assert "sync_coverage_summary_completed" in coverage_logs
 
 
 @pytest.mark.asyncio
-async def test_sync_coverage_rejects_history_before_query_budget_is_exceeded(
+async def test_sync_coverage_streams_history_outside_request_query_budget(
     client, session_maker, monkeypatch, caplog
 ):
-    """The SQL overflow sentinel must fail closed, never return partial coverage."""
+    """Raw history is streamed exactly; the request row budget cannot truncate it."""
 
     caplog.set_level("WARNING", logger="dev_health_ops.api.services.sync_coverage")
     original_budget = sync_coverage_module._CoverageQueryBudget
@@ -442,48 +466,46 @@ async def test_sync_coverage_rejects_history_before_query_budget_is_exceeded(
     engine = session_maker.kw["bind"]
     event.listen(engine.sync_engine, "before_cursor_execute", capture_statement)
     try:
+        await _warm_projection(session_maker, scope)
         response = await ac.get(
             f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage"
         )
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", capture_statement)
 
-    assert response.status_code == 422, response.text
-    detail = response.json()["detail"]
-    assert detail == {
-        "code": "sync_coverage_too_large",
-        "message": (
-            "Coverage scope or history is too large to compute safely. "
-            "Reduce the sync configuration scope or retry with a smaller "
-            "history_lookback_days value."
-        ),
-        "stage": "recent_units",
-        "limit": 4,
-        "observed": 5,
-    }
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["history_lookback_days"] == 3650
+    assert data["projection_complete"] is True
+    assert data["datasets"][0]["covered_ranges"]
     unit_queries = [
         statement.lower()
         for statement in statements
         if "sync_run_units" in statement.lower() and "select" in statement.lower()
     ]
     assert unit_queries, "overflow path did not execute a measured unit query"
-    assert any("sum(" in statement for statement in unit_queries)
-    assert all(" limit " in statement for statement in unit_queries)
-    assert any(
+    assert not any(
         record.message == "sync_coverage_summary_complexity_rejected"
-        and getattr(record, "complexity_stage") == "recent_units"
         for record in caplog.records
     )
 
 
 @pytest.mark.asyncio
-async def test_sync_coverage_selects_largest_safe_history_window(
+async def test_sync_coverage_never_reduces_requested_history_window(
     client, session_maker, monkeypatch, caplog
 ):
-    """Large recent-unit histories return a truthful reduced window, not a 422."""
+    """Complex raw history cannot silently shrink an exact coverage response."""
 
     caplog.set_level("WARNING", logger="dev_health_ops.api.services.sync_coverage")
-    monkeypatch.setattr(sync_coverage_module, "MAX_COVERAGE_UNIT_WINDOWS", 2)
+
+    async def adaptive_selection_must_not_run(*_args, **_kwargs):
+        raise AssertionError("adaptive lookback selection was called")
+
+    monkeypatch.setattr(
+        sync_coverage_module,
+        "_select_coverage_lookback",
+        adaptive_selection_must_not_run,
+    )
     ac, seeded_state = client
     scope = await _seed_scope(session_maker, seeded_state["org_id"])
     reference = datetime.now(timezone.utc)
@@ -532,34 +554,121 @@ async def test_sync_coverage_selects_largest_safe_history_window(
         )
         await session.commit()
 
-    response = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    response = await _get_warm_coverage(ac, session_maker, scope)
 
     assert response.status_code == 200, response.text
     data = response.json()
-    assert 10 < data["history_lookback_days"] <= 58
+    assert data["history_lookback_days"] == 3650
     generated_at = datetime.fromisoformat(data["generated_at"])
     truncated_before = datetime.fromisoformat(data["truncated_before"])
     assert generated_at - truncated_before == timedelta(
         days=data["history_lookback_days"]
     )
-    assert any(
+    assert not any(
         record.message == "sync_coverage_history_window_reduced"
-        and getattr(record, "requested_history_lookback_days") == 180
-        and getattr(record, "effective_history_lookback_days")
-        == data["history_lookback_days"]
-        and getattr(record, "complexity_stage") == "expanded_unit_windows"
-        and getattr(record, "complexity_limit") == 2
-        and getattr(record, "complexity_observed") == 3
-        and getattr(record, "effective_unit_window_count") == 2
+        for record in caplog.records
+    )
+    assert len(data["datasets"][0]["failed_ranges"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_projects_more_than_40000_raw_units_exactly(
+    client, session_maker, caplog
+):
+    """The production failure threshold is crossed without truncation or a 422."""
+
+    caplog.set_level("INFO", logger="dev_health_ops.api.services.sync_coverage")
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    now = datetime.now(timezone.utc)
+    common_since = now - timedelta(days=2)
+    common_before = common_since + timedelta(hours=1)
+    sentinel_since = now - timedelta(days=1)
+    sentinel_before = sentinel_since + timedelta(hours=2)
+    async with session_maker() as session:
+        run = SyncRun(
+            org_id=scope["org_id"],
+            integration_id=uuid.UUID(scope["integration_id"]),
+            triggered_by="manual",
+            mode="incremental",
+            status="failed",
+            total_units=40_001,
+            completed_units=40_000,
+            failed_units=1,
+            started_at=common_since,
+            completed_at=sentinel_before,
+        )
+        session.add(run)
+        await session.flush()
+        base = {
+            "org_id": scope["org_id"],
+            "sync_run_id": run.id,
+            "integration_id": uuid.UUID(scope["integration_id"]),
+            "source_id": uuid.UUID(scope["source_id"]),
+            "provider": "github",
+            "dataset_key": "commits",
+            "cost_class": "standard",
+            "mode": "incremental",
+            "attempts": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+        for _batch in range(8):
+            rows = [
+                {
+                    **base,
+                    "id": uuid.uuid4(),
+                    "since_at": common_since,
+                    "before_at": common_before,
+                    "status": "success",
+                }
+                for _ in range(5_000)
+            ]
+            await session.execute(insert(SyncRunUnit), rows)
+        await session.execute(
+            insert(SyncRunUnit),
+            [
+                {
+                    **base,
+                    "id": uuid.uuid4(),
+                    "since_at": sentinel_since,
+                    "before_at": sentinel_before,
+                    "status": "failed",
+                }
+            ],
+        )
+        await session.commit()
+
+    response = await _get_warm_coverage(ac, session_maker, scope)
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["history_lookback_days"] == 3650
+    assert data["projection_complete"] is True
+    assert data["datasets"][0]["failed_ranges"] == [
+        {
+            "since": sentinel_since.isoformat().replace("+00:00", "Z"),
+            "before": sentinel_before.isoformat().replace("+00:00", "Z"),
+            "source_ids": [scope["source_id"]],
+            "run_ids": [],
+        }
+    ]
+    rebuilt = next(
+        record
+        for record in caplog.records
+        if record.message == "sync_coverage_projection_rebuilt"
+    )
+    assert getattr(rebuilt, "raw_unit_row_count") == 40_001
+    assert not any(
+        record.message == "sync_coverage_history_window_reduced"
         for record in caplog.records
     )
 
 
 @pytest.mark.asyncio
-async def test_sync_coverage_preflight_deduplicates_recent_latest_successes(
+async def test_sync_coverage_projection_is_reused_when_source_is_unchanged(
     client, session_maker, monkeypatch
 ):
-    monkeypatch.setattr(sync_coverage_module, "MAX_COVERAGE_UNIT_WINDOWS", 2)
     ac, seeded_state = client
     scope = await _seed_scope(session_maker, seeded_state["org_id"])
     async with session_maker() as session:
@@ -589,77 +698,119 @@ async def test_sync_coverage_preflight_deduplicates_recent_latest_successes(
             source_id=source_id,
         )
 
-    response = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    await _warm_projection(session_maker, scope)
+    first = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    second = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
 
-    assert response.status_code == 200, response.text
-    assert response.json()["history_lookback_days"] == 180
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert second.json() == first.json()
+    async with session_maker() as session:
+        rows = list((await session.execute(select(SyncCoverageProjection))).scalars())
+    assert len(rows) == 1
 
 
 @pytest.mark.asyncio
-async def test_sync_coverage_capacity_sheds_only_excess_builds(
-    client, session_maker, monkeypatch, caplog
+async def test_sync_coverage_missing_projection_is_pending_without_building(
+    client, session_maker, monkeypatch
 ):
-    """A fifth-style overlap gets 503 rather than allocating past capacity."""
+    """A cold projection is explicit and cannot start an API-process rebuild."""
 
-    caplog.set_level("WARNING", logger="dev_health_ops.api.admin.routers.sync")
     ac, seeded_state = client
     scope = await _seed_scope(session_maker, seeded_state["org_id"])
-    before = datetime.now(timezone.utc) - timedelta(minutes=30)
-    await _seed_unit(
-        session_maker,
-        scope,
-        since=before - timedelta(hours=1),
-        before=before,
-    )
 
-    controller = sync_coverage_module._CoverageAdmissionController(capacity=1)
-    monkeypatch.setattr(sync_coverage_module, "_coverage_admission", controller)
-    entered = asyncio.Event()
-    release = asyncio.Event()
-    terminal_calls = 0
-    original_terminal_windows = sync_coverage_module._terminal_unit_windows
-
-    async def blocking_terminal_windows(*args, **kwargs):
-        nonlocal terminal_calls
-        terminal_calls += 1
-        entered.set()
-        await release.wait()
-        return await original_terminal_windows(*args, **kwargs)
+    async def request_time_build_must_not_run(*_args, **_kwargs):
+        raise AssertionError("request attempted a raw-history projection rebuild")
 
     monkeypatch.setattr(
         sync_coverage_module,
-        "_terminal_unit_windows",
-        blocking_terminal_windows,
+        "rebuild_sync_coverage_projection",
+        request_time_build_must_not_run,
     )
     url = f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage"
-    admitted_request = asyncio.create_task(ac.get(url))
-    try:
-        await asyncio.wait_for(entered.wait(), timeout=1)
+    response = await ac.get(url)
+    unrelated = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}")
 
-        unrelated = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}")
-        assert unrelated.status_code == 200, unrelated.text
+    assert unrelated.status_code == 200, unrelated.text
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "30"
+    assert response.json()["detail"] == {
+        "code": "sync_coverage_projection_pending",
+        "message": "Coverage is being prepared. Retry shortly.",
+    }
 
-        rejected_responses = await asyncio.gather(*(ac.get(url) for _ in range(25)))
-        assert all(response.status_code == 503 for response in rejected_responses)
-        assert all(
-            response.headers["retry-after"] == "5" for response in rejected_responses
+
+@pytest.mark.asyncio
+async def test_sync_coverage_invalidated_projection_is_pending_until_rebuilt(
+    client, session_maker
+):
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    await _warm_projection(session_maker, scope)
+
+    async with session_maker() as session:
+        await invalidate_sync_coverage_projection(
+            session,
+            scope["org_id"],
+            sync_config_id=uuid.UUID(scope["config_id"]),
         )
-        assert all(
-            response.json()["detail"]["code"] == "sync_coverage_busy"
-            for response in rejected_responses
-        )
-        assert terminal_calls == 1
-        assert controller._active == 1
-        assert any(
-            record.message == "sync_coverage_request_rejected_busy"
-            and getattr(record, "sync_config_id") == scope["config_id"]
-            for record in caplog.records
-        )
-    finally:
-        release.set()
-    admitted = await asyncio.wait_for(admitted_request, timeout=2)
-    assert admitted.status_code == 200, admitted.text
-    assert controller._active == 0
+        await session.commit()
+
+    url = f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage"
+    pending = await ac.get(url)
+    assert pending.status_code == 503
+
+    await _warm_projection(session_maker, scope)
+    rebuilt = await ac.get(url)
+    assert rebuilt.status_code == 200, rebuilt.text
+
+
+@pytest.mark.asyncio
+async def test_sync_config_update_invalidates_coverage_projection(
+    client, session_maker
+):
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    await _warm_projection(session_maker, scope)
+
+    updated = await ac.patch(
+        f"/api/v1/admin/sync-configs/{scope['config_id']}",
+        json={"is_active": False},
+    )
+    assert updated.status_code == 200, updated.text
+
+    coverage = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    assert coverage.status_code == 503
+
+
+def test_canonical_backfill_windows_merge_after_inclusive_date_conversion():
+    dataset = sync_coverage_module._DatasetCoverage(
+        dataset_key="commits",
+        gaps=[
+            sync_coverage_module.CoverageInterval(
+                since=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
+                before=datetime(2026, 1, 2, 11, tzinfo=timezone.utc),
+            )
+        ],
+        failed_ranges=[
+            sync_coverage_module.CoverageInterval(
+                since=datetime(2026, 1, 2, 13, tzinfo=timezone.utc),
+                before=datetime(2026, 1, 2, 14, tzinfo=timezone.utc),
+            ),
+            sync_coverage_module.CoverageInterval(
+                since=datetime(2026, 1, 3, tzinfo=timezone.utc),
+                before=datetime(2026, 1, 4, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+
+    assert sync_coverage_module._canonical_backfill_windows([dataset]) == [
+        {
+            "since": date(2026, 1, 2),
+            "before": date(2026, 1, 3),
+            "reasons": ["failed", "gap"],
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -698,7 +849,7 @@ async def test_sync_coverage_api_includes_backfill_gap(client, session_maker):
         )
         await session.commit()
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -739,7 +890,7 @@ async def test_sync_coverage_api_keeps_source_gaps_separate(client, session_make
         source_id=extra_source_id,
     )
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -764,12 +915,17 @@ async def test_sync_coverage_api_planned_units_create_requested_gap(
         status="planned",
     )
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["datasets"][0]["requested_ranges"]
     assert data["datasets"][0]["covered_ranges"] == []
+    assert data["coverage_since"] is None
+    assert data["coverage_through"] is None
+    assert data["backfill_windows"] == [
+        {"since": "2026-01-01", "before": "2026-01-01", "reasons": ["gap"]}
+    ]
     assert data["overall"]["health"] == "gaps"
 
 
@@ -782,19 +938,19 @@ async def test_sync_coverage_fetches_latest_success_outside_lookback(
     await _seed_unit(
         session_maker,
         scope,
-        since=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        before=datetime(2025, 1, 2, tzinfo=timezone.utc),
-        updated_at=datetime.now(timezone.utc) - timedelta(days=400),
+        since=datetime(2010, 1, 1, tzinfo=timezone.utc),
+        before=datetime(2010, 1, 2, tzinfo=timezone.utc),
+        updated_at=datetime(2010, 1, 2, tzinfo=timezone.utc),
     )
 
-    resp = await ac.get(
-        f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage?history_lookback_days=30"
-    )
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert data["history_lookback_days"] == 30
-    assert data["overall"]["latest_covered_through"] is not None
+    assert data["history_lookback_days"] == 3650
+    assert data["overall"]["latest_covered_through"] is None
+    assert data["datasets"][0]["covered_ranges"] == []
+    assert data["is_truncated"] is True
 
 
 @pytest.mark.asyncio
@@ -804,7 +960,7 @@ async def test_sync_coverage_zero_run_planner_config_reports_planner_basis(
     ac, seeded_state = client
     scope = await _seed_scope(session_maker, seeded_state["org_id"])
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -816,8 +972,9 @@ async def test_sync_coverage_zero_run_planner_config_reports_planner_basis(
 async def test_sync_coverage_legacy_config_reports_legacy_basis(client, session_maker):
     ac, seeded_state = client
     config_id = await _seed_legacy_config(session_maker, seeded_state["org_id"])
+    scope = {"config_id": config_id, "org_id": seeded_state["org_id"]}
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -830,7 +987,7 @@ async def test_sync_coverage_cross_org_config_returns_404(client, session_maker)
     ac, seeded_state = client
     scope = await _seed_scope(session_maker, seeded_state["org_id"], other_org=True)
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 404
 
@@ -896,7 +1053,7 @@ async def test_sync_coverage_api_backfill_pair_scoped_to_planned_run_units(
         )
         await session.commit()
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -955,7 +1112,7 @@ async def test_sync_coverage_api_success_matching_backfill_range_clears_gap(
         )
         await session.commit()
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -1184,7 +1341,7 @@ async def test_sync_coverage_api_unresolvable_backfill_marker_falls_back_to_all_
         )
         await session.commit()
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -1237,7 +1394,7 @@ async def test_sync_coverage_api_backfill_marker_resolved_zero_units_contributes
         )
         await session.commit()
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -1302,7 +1459,7 @@ async def test_sync_coverage_api_backfill_requested_range_expands_by_family_flag
         )
         await session.commit()
 
-    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+    resp = await _get_warm_coverage(ac, session_maker, scope)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()

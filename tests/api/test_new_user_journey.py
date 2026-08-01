@@ -34,6 +34,7 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 from dev_health_ops.models.users import LoginAttempt, Membership, Organization, User
 from tests._clickhouse_team_store import FakeClickHouseTeamStore
 from tests._helpers import tables_of
@@ -63,6 +64,7 @@ _TABLES = tables_of(
     JobRun,
     OrgLicense,
     TierLimit,
+    SyncCoverageProjection,
 )
 
 

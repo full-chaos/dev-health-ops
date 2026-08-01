@@ -36,6 +36,7 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -54,6 +55,7 @@ _TABLES = tables_of(
     Integration,
     IntegrationSource,
     IntegrationDataset,
+    SyncCoverageProjection,
 )
 
 

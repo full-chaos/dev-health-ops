@@ -61,6 +61,7 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -84,6 +85,7 @@ _TABLES = tables_of(
     SyncRunUnit,
     SyncDispatchOutbox,
     BackfillJob,
+    SyncCoverageProjection,
 )
 
 
@@ -302,6 +304,18 @@ async def test_backfill_fanout_creates_job_run_anchor(
     assert create_resp.status_code == 201
     config_id = create_resp.json()["id"]
     await _link_migrated_integration(session_maker, seeded_state["org_id"], config_id)
+    async with session_maker() as session:
+        session.add(
+            SyncCoverageProjection(
+                org_id=seeded_state["org_id"],
+                sync_config_id=uuid.UUID(config_id),
+                history_lookback_days=3650,
+                projection_version=1,
+                generated_at=datetime.now(timezone.utc),
+                payload={},
+            )
+        )
+        await session.commit()
 
     with _patch_dispatch(task_id="bf-fanout-task-id") as mock_dispatch:
         resp = await ac.post(
@@ -332,6 +346,9 @@ async def test_backfill_fanout_creates_job_run_anchor(
             .scalars()
             .all()
         )
+        projection = (
+            await session.execute(select(SyncCoverageProjection))
+        ).scalar_one()
 
     assert len(runs) == 1
     run = runs[0]
@@ -339,6 +356,7 @@ async def test_backfill_fanout_creates_job_run_anchor(
     assert run.triggered_by == "backfill"
     assert run.result["planner_managed"] is True
     assert run.result["sync_run_id"] == sync_run_id
+    assert projection.invalidated_at is not None
 
 
 @pytest.mark.asyncio

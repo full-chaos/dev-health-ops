@@ -12,9 +12,11 @@ from time import monotonic
 from typing import Any, Protocol
 
 from croniter import croniter as Croniter
-from sqlalchemy import case, func, select, union
+from fastapi.encoders import jsonable_encoder
+from sqlalchemy import case, func, select, union, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import load_only
+from sqlalchemy.orm import Session, load_only
+from sqlalchemy.sql.dml import Update
 
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.integrations import (
@@ -26,17 +28,19 @@ from dev_health_ops.models.integrations import (
     SyncRunUnitStatus,
 )
 from dev_health_ops.models.settings import JobStatus, ScheduledJob, SyncConfiguration
+from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 from dev_health_ops.sync.datasets import supported_datasets
 from dev_health_ops.sync.planner import family_dataset_keys_from_flags
 
 logger = logging.getLogger(__name__)
 
-HISTORY_LOOKBACK_DAYS = 180
+HISTORY_LOOKBACK_DAYS = 3650
+SYNC_COVERAGE_PROJECTION_VERSION = 1
 STALE_MINIMUM_GRACE = timedelta(hours=6)
 STALE_FALLBACK_GRACE = timedelta(hours=48)
 INTERVAL_ADJACENCY_TOLERANCE = timedelta(microseconds=1)
 
-# Code-owned safety limits for this request-time analytical endpoint. These are
+# Code-owned safety limits for the background projection builder. These are
 # deliberately not environment overrides: deployment configuration must not be
 # able to silently remove the memory bound. Requests beyond the active-build
 # limit are rejected immediately rather than retained in an unbounded waiter
@@ -49,6 +53,7 @@ MAX_COVERAGE_DATASETS = 100
 MAX_COVERAGE_PAIRS = 20_000
 MAX_COVERAGE_UNIT_WINDOWS = 30_000
 MAX_COVERAGE_BACKFILL_PAIR_INTERVALS = 20_000
+MAX_COVERAGE_PROJECTION_ROWS = 1_000_000
 
 TERMINAL_UNIT_STATUSES = {
     SyncRunUnitStatus.SUCCESS.value,
@@ -69,6 +74,10 @@ ACTIVE_RUN_STATUSES = {
 
 class SyncCoverageBusyError(RuntimeError):
     """Raised when the process-local coverage capacity is saturated."""
+
+
+class SyncCoveragePendingError(RuntimeError):
+    """Raised when the background-built coverage projection is not ready."""
 
 
 class SyncCoverageComplexityError(RuntimeError):
@@ -206,7 +215,7 @@ class _CoverageUnitRow:
     """The narrow persisted projection required by coverage interval math.
 
     SyncRunUnit.result/error and SyncRun.result/error can be large. Hydrating the
-    full ORM entities for every unit in the 180-day lookback made one coverage
+    full ORM entities for every unit in a large lookback made one coverage
     request consume hundreds of MiB and allowed concurrent admin page requests
     to OOM-kill the API container.
     """
@@ -298,6 +307,15 @@ class _PairCoverage:
     failed_ranges: list[CoverageInterval] = field(default_factory=list)
     covered_through: datetime | None = None
     status: str = "insufficient_data"
+
+
+@dataclass
+class _CompactPairState:
+    """Streaming reducer state for one source/dataset pair."""
+
+    requested: list[CoverageInterval] = field(default_factory=list)
+    covered: list[CoverageInterval] = field(default_factory=list)
+    failed: list[CoverageInterval] = field(default_factory=list)
 
 
 def ensure_utc(value: datetime) -> datetime:
@@ -399,7 +417,7 @@ def failed_ranges_not_superseded(
                 since=success.since,
                 before=success.before,
                 source_ids=(success.source_id,),
-                run_ids=(success.run_id,),
+                run_ids=(success.run_id,) if success.run_id else (),
             )
             for success in success_windows
             if success.source_id == failure.source_id
@@ -412,7 +430,7 @@ def failed_ranges_not_superseded(
                     since=failure.since,
                     before=failure.before,
                     source_ids=(failure.source_id,),
-                    run_ids=(failure.run_id,),
+                    run_ids=(failure.run_id,) if failure.run_id else (),
                 )
             ],
             later_cover,
@@ -1046,6 +1064,156 @@ async def _terminal_unit_windows(
     return windows
 
 
+async def _stream_compact_unit_windows(
+    session: AsyncSession,
+    org_id: str,
+    scope: EffectiveScope,
+    truncated_before: datetime,
+    *,
+    generated_at: datetime,
+) -> tuple[list[UnitWindow], datetime | None, int]:
+    """Reduce exact retained history without materializing the raw row set.
+
+    The query streams narrow scalar columns in run-time order. Requested and
+    covered intervals are appended during the scan and coalesced once per pair;
+    unresolved failures retain chronological replay semantics. This keeps the
+    worker linear for the common success-heavy case and out of the API process.
+    """
+
+    if scope.integration_id is None or not scope.sources or not scope.dataset_keys:
+        return [], None, 0
+    source_ids = [source.id for source in scope.sources]
+    query_dataset_keys = _query_dataset_keys_for_scope(scope.dataset_keys)
+    run_time = func.coalesce(
+        SyncRun.completed_at,
+        SyncRun.started_at,
+        SyncRun.created_at,
+    ).label("run_time")
+    stmt = (
+        select(
+            SyncRunUnit.source_id,
+            SyncRunUnit.dataset_key,
+            SyncRunUnit.processor_flags,
+            SyncRunUnit.since_at,
+            SyncRunUnit.before_at,
+            SyncRunUnit.status,
+            run_time,
+            SyncRunUnit.id,
+        )
+        .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
+        .where(
+            SyncRunUnit.org_id == org_id,
+            SyncRunUnit.integration_id == scope.integration_id,
+            SyncRunUnit.source_id.in_(source_ids),
+            SyncRunUnit.dataset_key.in_(query_dataset_keys),
+            SyncRunUnit.status.in_(REQUESTED_UNIT_STATUSES),
+            SyncRunUnit.since_at.is_not(None),
+            SyncRunUnit.before_at.is_not(None),
+            SyncRunUnit.before_at >= truncated_before,
+            SyncRun.org_id == org_id,
+        )
+        .order_by(run_time.asc(), SyncRunUnit.id.asc())
+        .execution_options(yield_per=1_000)
+    )
+    states: dict[tuple[str, str], _CompactPairState] = defaultdict(_CompactPairState)
+    latest_successful_run_at: datetime | None = None
+    row_count = 0
+    stream = await session.stream(stmt)
+    async for row in stream:
+        row_count += 1
+        if row_count > MAX_COVERAGE_PROJECTION_ROWS:
+            raise SyncCoverageComplexityError(
+                stage="projection_rows",
+                limit=MAX_COVERAGE_PROJECTION_ROWS,
+                observed=row_count,
+            )
+        since = max(ensure_utc(row.since_at), truncated_before)
+        before = ensure_utc(row.before_at)
+        if since >= before:
+            continue
+        for effective_key in _effective_dataset_keys(
+            str(row.dataset_key), row.processor_flags
+        ):
+            if effective_key not in scope.dataset_keys:
+                continue
+            pair = (str(row.source_id), effective_key)
+            state = states[pair]
+            interval = CoverageInterval(since=since, before=before)
+            state.requested.append(interval)
+            if str(row.status) == SyncRunUnitStatus.SUCCESS.value:
+                state.covered.append(interval)
+                state.failed = subtract_intervals(state.failed, [interval])
+                successful_at = ensure_utc(row.run_time)
+                latest_successful_run_at = max(
+                    latest_successful_run_at or successful_at, successful_at
+                )
+            elif str(row.status) == SyncRunUnitStatus.FAILED.value:
+                state.failed = merge_intervals([*state.failed, interval])
+
+    # Reuse the established payload builder with a compact semantic equivalent
+    # of the raw windows. Successful intervals precede unresolved failures so
+    # the latter remain visible exactly as they do after chronological replay.
+    success_time = datetime.min.replace(tzinfo=timezone.utc)
+    failure_time = generated_at + timedelta(microseconds=1)
+    windows: list[UnitWindow] = []
+    for (source_id, dataset_key), state in states.items():
+        for interval in merge_intervals(state.requested):
+            if len(windows) >= MAX_COVERAGE_UNIT_WINDOWS:
+                raise SyncCoverageComplexityError(
+                    stage="compact_unit_windows",
+                    limit=MAX_COVERAGE_UNIT_WINDOWS,
+                    observed=len(windows) + 1,
+                )
+            windows.append(
+                UnitWindow(
+                    since=interval.since,
+                    before=interval.before,
+                    source_id=source_id,
+                    dataset_key=dataset_key,
+                    run_id="",
+                    status=SyncRunUnitStatus.PLANNED.value,
+                    run_time=success_time,
+                )
+            )
+        for interval in merge_intervals(state.covered):
+            if len(windows) >= MAX_COVERAGE_UNIT_WINDOWS:
+                raise SyncCoverageComplexityError(
+                    stage="compact_unit_windows",
+                    limit=MAX_COVERAGE_UNIT_WINDOWS,
+                    observed=len(windows) + 1,
+                )
+            windows.append(
+                UnitWindow(
+                    since=interval.since,
+                    before=interval.before,
+                    source_id=source_id,
+                    dataset_key=dataset_key,
+                    run_id="",
+                    status=SyncRunUnitStatus.SUCCESS.value,
+                    run_time=success_time,
+                )
+            )
+        for interval in state.failed:
+            if len(windows) >= MAX_COVERAGE_UNIT_WINDOWS:
+                raise SyncCoverageComplexityError(
+                    stage="compact_unit_windows",
+                    limit=MAX_COVERAGE_UNIT_WINDOWS,
+                    observed=len(windows) + 1,
+                )
+            windows.append(
+                UnitWindow(
+                    since=interval.since,
+                    before=interval.before,
+                    source_id=source_id,
+                    dataset_key=dataset_key,
+                    run_id="",
+                    status=SyncRunUnitStatus.FAILED.value,
+                    run_time=failure_time,
+                )
+            )
+    return windows, latest_successful_run_at, row_count
+
+
 async def _active_run_ids(
     session: AsyncSession,
     org_id: str,
@@ -1243,7 +1411,7 @@ async def _backfill_requested_ranges(
     ).where(
         BackfillJob.org_id == org_id,
         BackfillJob.sync_config_id == config.id,
-        BackfillJob.created_at >= truncated_before,
+        BackfillJob.before_date >= truncated_before.date(),
     )
     scope_source_ids = tuple(str(source.id) for source in scope.sources)
     ranges: list[CoverageInterval] = []
@@ -1254,6 +1422,11 @@ async def _backfill_requested_ranges(
         stage="backfill_jobs",
     ):
         interval = _backfill_interval(job)
+        interval = CoverageInterval(
+            since=max(interval.since, truncated_before),
+            before=interval.before,
+            run_ids=interval.run_ids,
+        )
         pair_windows = await _resolve_backfill_job_pair_windows(
             session,
             org_id,
@@ -1292,7 +1465,7 @@ def _intervals_from_windows(windows: Iterable[UnitWindow]) -> list[CoverageInter
             since=window.since,
             before=window.before,
             source_ids=(window.source_id,),
-            run_ids=(window.run_id,),
+            run_ids=(window.run_id,) if window.run_id else (),
         )
         for window in windows
     ]
@@ -1338,6 +1511,164 @@ def _data_basis_for_config(config: SyncConfiguration, scope: EffectiveScope) -> 
     return "legacy"
 
 
+def _canonical_backfill_windows(
+    datasets: Sequence[_DatasetCoverage],
+) -> list[dict[str, Any]]:
+    """Return inclusive date windows the existing backfill action can submit.
+
+    Coverage intervals are half-open datetimes while the backfill endpoint is
+    inclusive by calendar date. An exclusive midnight boundary therefore maps
+    to the preceding date; any later time maps to its own calendar date.
+    """
+
+    candidates: list[dict[str, Any]] = []
+    for dataset in datasets:
+        for interval, reason in (
+            *((interval, "gap") for interval in dataset.gaps),
+            *((interval, "failed") for interval in dataset.failed_ranges),
+        ):
+            inclusive_before = (
+                interval.before - timedelta(microseconds=1)
+                if interval.before.time() == time.min
+                else interval.before
+            )
+            candidates.append(
+                {
+                    "since": interval.since.date(),
+                    "before": inclusive_before.date(),
+                    "reasons": [reason],
+                }
+            )
+    candidates.sort(key=lambda item: (item["since"], item["before"]))
+    merged: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if merged and candidate["since"] <= merged[-1]["before"] + timedelta(days=1):
+            merged[-1]["before"] = max(merged[-1]["before"], candidate["before"])
+            merged[-1]["reasons"] = sorted(
+                set(merged[-1]["reasons"]).union(candidate["reasons"])
+            )
+            continue
+        merged.append(candidate)
+    return merged
+
+
+def _sync_coverage_lock_name(org_id: str, sync_config_id: uuid.UUID) -> str:
+    return f"sync-coverage:{org_id}:{sync_config_id}"
+
+
+def _sync_coverage_lock_statement(org_id: str, sync_config_id: uuid.UUID) -> Any:
+    return select(
+        func.pg_advisory_xact_lock(
+            func.hashtextextended(_sync_coverage_lock_name(org_id, sync_config_id), 0)
+        )
+    )
+
+
+def _sync_coverage_invalidation_statement(
+    org_id: str,
+    *,
+    sync_config_id: uuid.UUID | None = None,
+    integration_id: uuid.UUID | None = None,
+) -> Update:
+    """Build the transaction-local write that makes a projection unreadable."""
+
+    if (sync_config_id is None) == (integration_id is None):
+        raise ValueError("exactly one coverage invalidation selector is required")
+    statement = update(SyncCoverageProjection).where(
+        SyncCoverageProjection.org_id == org_id
+    )
+    if sync_config_id is not None:
+        statement = statement.where(
+            SyncCoverageProjection.sync_config_id == sync_config_id
+        )
+    else:
+        config_ids = select(SyncConfiguration.id).where(
+            SyncConfiguration.org_id == org_id,
+            SyncConfiguration.integration_id == integration_id,
+        )
+        statement = statement.where(
+            SyncCoverageProjection.sync_config_id.in_(config_ids)
+        )
+    return statement.values(invalidated_at=func.now())
+
+
+async def invalidate_sync_coverage_projection(
+    session: AsyncSession,
+    org_id: str,
+    *,
+    sync_config_id: uuid.UUID | None = None,
+    integration_id: uuid.UUID | None = None,
+) -> None:
+    """Serialize with rebuilds and invalidate in the mutation transaction."""
+
+    if (sync_config_id is None) == (integration_id is None):
+        raise ValueError("exactly one coverage invalidation selector is required")
+    config_ids = (
+        [sync_config_id]
+        if sync_config_id is not None
+        else list(
+            (
+                await session.execute(
+                    select(SyncConfiguration.id)
+                    .where(
+                        SyncConfiguration.org_id == org_id,
+                        SyncConfiguration.integration_id == integration_id,
+                    )
+                    .order_by(SyncConfiguration.id)
+                )
+            ).scalars()
+        )
+    )
+    if session.get_bind().dialect.name == "postgresql":
+        for config_id in config_ids:
+            await session.execute(_sync_coverage_lock_statement(org_id, config_id))
+
+    await session.execute(
+        _sync_coverage_invalidation_statement(
+            org_id,
+            sync_config_id=sync_config_id,
+            integration_id=integration_id,
+        )
+    )
+
+
+def invalidate_sync_coverage_projection_sync(
+    session: Session,
+    org_id: str,
+    *,
+    sync_config_id: uuid.UUID | None = None,
+    integration_id: uuid.UUID | None = None,
+) -> None:
+    """Synchronous invalidation variant for terminal sync transactions."""
+
+    if (sync_config_id is None) == (integration_id is None):
+        raise ValueError("exactly one coverage invalidation selector is required")
+    config_ids = (
+        [sync_config_id]
+        if sync_config_id is not None
+        else list(
+            session.execute(
+                select(SyncConfiguration.id)
+                .where(
+                    SyncConfiguration.org_id == org_id,
+                    SyncConfiguration.integration_id == integration_id,
+                )
+                .order_by(SyncConfiguration.id)
+            ).scalars()
+        )
+    )
+    if session.get_bind().dialect.name == "postgresql":
+        for config_id in config_ids:
+            session.execute(_sync_coverage_lock_statement(org_id, config_id))
+    session.execute(
+        _sync_coverage_invalidation_statement(
+            org_id,
+            sync_config_id=sync_config_id,
+            integration_id=integration_id,
+        )
+    )
+
+
 def build_coverage_summary_payload(
     *,
     config: SyncConfiguration,
@@ -1349,6 +1680,8 @@ def build_coverage_summary_payload(
     has_schedule_row: bool,
     generated_at: datetime | None = None,
     lookback_days: int = HISTORY_LOOKBACK_DAYS,
+    latest_successful_run_at_override: datetime | None = None,
+    is_truncated: bool = False,
 ) -> dict[str, Any]:
     """Build the API coverage payload from persisted unit and backfill windows.
 
@@ -1579,12 +1912,19 @@ def build_coverage_summary_payload(
     latest_successful_run_at = max(
         (window.run_time for window in successful_windows), default=None
     )
+    if latest_successful_run_at_override is not None:
+        latest_successful_run_at = latest_successful_run_at_override
     latest_covered_through = max(
         (dataset.covered_through for dataset in datasets if dataset.covered_through),
         default=None,
     )
     data_basis = _data_basis_for_config(config, scope)
     truncated_before = now - timedelta(days=lookback_days)
+    coverage_ranges = [interval for dataset in datasets for interval in dataset.covered]
+    coverage_since = min((interval.since for interval in coverage_ranges), default=None)
+    coverage_through = max(
+        (interval.before for interval in coverage_ranges), default=None
+    )
     return {
         "config_id": str(config.id),
         "provider": str(config.provider),
@@ -1592,6 +1932,12 @@ def build_coverage_summary_payload(
         "data_basis": data_basis,
         "history_lookback_days": lookback_days,
         "truncated_before": truncated_before,
+        "coverage_since": coverage_since,
+        "coverage_through": coverage_through,
+        "is_truncated": is_truncated,
+        "truncation_reason": "lookback_limit" if is_truncated else None,
+        "projection_version": SYNC_COVERAGE_PROJECTION_VERSION,
+        "projection_complete": True,
         "overall": {
             "health": overall_health,
             "latest_successful_run_at": latest_successful_run_at,
@@ -1621,7 +1967,169 @@ def build_coverage_summary_payload(
             for dataset in datasets
         ],
         "sources": source_payloads,
+        "backfill_windows": _canonical_backfill_windows(datasets),
     }
+
+
+async def _projection_source_updated_at(
+    session: AsyncSession,
+    org_id: str,
+    scope: EffectiveScope,
+    truncated_before: datetime,
+) -> datetime | None:
+    if scope.integration_id is None or not scope.sources or not scope.dataset_keys:
+        return None
+    stmt = select(func.max(SyncRunUnit.updated_at)).where(
+        SyncRunUnit.org_id == org_id,
+        SyncRunUnit.integration_id == scope.integration_id,
+        SyncRunUnit.source_id.in_([source.id for source in scope.sources]),
+        SyncRunUnit.dataset_key.in_(_query_dataset_keys_for_scope(scope.dataset_keys)),
+        SyncRunUnit.before_at >= truncated_before,
+        SyncRunUnit.status.in_(REQUESTED_UNIT_STATUSES),
+    )
+    value = (await session.execute(stmt)).scalar_one_or_none()
+    return ensure_utc(value) if value is not None else None
+
+
+async def _projection_backfill_updated_at(
+    session: AsyncSession,
+    org_id: str,
+    config: SyncConfiguration,
+    truncated_before: datetime,
+) -> datetime | None:
+    stmt = select(func.max(BackfillJob.updated_at)).where(
+        BackfillJob.org_id == org_id,
+        BackfillJob.sync_config_id == config.id,
+        BackfillJob.before_date >= truncated_before.date(),
+    )
+    value = (await session.execute(stmt)).scalar_one_or_none()
+    return ensure_utc(value) if value is not None else None
+
+
+async def _has_coverage_before(
+    session: AsyncSession,
+    org_id: str,
+    scope: EffectiveScope,
+    truncated_before: datetime,
+) -> bool:
+    if scope.integration_id is None or not scope.sources or not scope.dataset_keys:
+        return False
+    stmt = select(SyncRunUnit.id).where(
+        SyncRunUnit.org_id == org_id,
+        SyncRunUnit.integration_id == scope.integration_id,
+        SyncRunUnit.source_id.in_([source.id for source in scope.sources]),
+        SyncRunUnit.dataset_key.in_(_query_dataset_keys_for_scope(scope.dataset_keys)),
+        SyncRunUnit.since_at < truncated_before,
+        SyncRunUnit.status == SyncRunUnitStatus.SUCCESS.value,
+    )
+    return (await session.execute(stmt.limit(1))).scalar_one_or_none() is not None
+
+
+async def rebuild_sync_coverage_projection(
+    session: AsyncSession,
+    org_id: str,
+    config: SyncConfiguration,
+    *,
+    lookback_days: int = HISTORY_LOOKBACK_DAYS,
+    generated_at: datetime | None = None,
+    scope: EffectiveScope | None = None,
+    budget: _CoverageQueryBudget | None = None,
+) -> dict[str, Any]:
+    """Stream raw facts into one exact, atomically replaceable summary row."""
+
+    now = ensure_utc(generated_at or datetime.now(timezone.utc))
+    truncated_before = now - timedelta(days=lookback_days)
+    if session.get_bind().dialect.name == "postgresql":
+        await session.execute(_sync_coverage_lock_statement(org_id, config.id))
+    query_budget = budget or _CoverageQueryBudget()
+    effective_scope = scope or await resolve_effective_scope(
+        session, org_id, config, query_budget
+    )
+    source_updated_at = await _projection_source_updated_at(
+        session, org_id, effective_scope, truncated_before
+    )
+    backfill_updated_at = await _projection_backfill_updated_at(
+        session, org_id, config, truncated_before
+    )
+    schedule = await _active_schedule(session, org_id, config)
+    has_schedule = await _has_schedule_row(session, org_id, config)
+    (
+        windows,
+        latest_successful_run_at,
+        raw_row_count,
+    ) = await _stream_compact_unit_windows(
+        session,
+        org_id,
+        effective_scope,
+        truncated_before,
+        generated_at=now,
+    )
+    active_pairs = await _active_run_ids(session, org_id, effective_scope, query_budget)
+    backfill_requested = await _backfill_requested_ranges(
+        session,
+        org_id,
+        config,
+        effective_scope,
+        truncated_before,
+        query_budget,
+    )
+    payload = build_coverage_summary_payload(
+        config=config,
+        scope=effective_scope,
+        windows=windows,
+        backfill_requested=backfill_requested,
+        active_pairs=active_pairs,
+        active_schedule=schedule,
+        has_schedule_row=has_schedule,
+        generated_at=now,
+        lookback_days=lookback_days,
+        latest_successful_run_at_override=latest_successful_run_at,
+        is_truncated=await _has_coverage_before(
+            session, org_id, effective_scope, truncated_before
+        ),
+    )
+    projection = (
+        await session.execute(
+            select(SyncCoverageProjection).where(
+                SyncCoverageProjection.org_id == org_id,
+                SyncCoverageProjection.sync_config_id == config.id,
+                SyncCoverageProjection.history_lookback_days == lookback_days,
+            )
+        )
+    ).scalar_one_or_none()
+    if projection is None:
+        projection = SyncCoverageProjection(
+            org_id=org_id,
+            sync_config_id=config.id,
+            history_lookback_days=lookback_days,
+            projection_version=SYNC_COVERAGE_PROJECTION_VERSION,
+            generated_at=now,
+            source_updated_at=source_updated_at,
+            backfill_updated_at=backfill_updated_at,
+            invalidated_at=None,
+            payload=jsonable_encoder(payload),
+        )
+        session.add(projection)
+    else:
+        projection.projection_version = SYNC_COVERAGE_PROJECTION_VERSION
+        projection.generated_at = now
+        projection.source_updated_at = source_updated_at
+        projection.backfill_updated_at = backfill_updated_at
+        projection.invalidated_at = None
+        projection.payload = jsonable_encoder(payload)
+    await session.flush()
+    logger.info(
+        "sync_coverage_projection_rebuilt",
+        extra={
+            "org_id": org_id,
+            "sync_config_id": str(config.id),
+            "history_lookback_days": lookback_days,
+            "raw_unit_row_count": raw_row_count,
+            "compact_window_count": len(windows),
+            "projection_version": SYNC_COVERAGE_PROJECTION_VERSION,
+        },
+    )
+    return payload
 
 
 async def build_sync_coverage_summary(
@@ -1632,133 +2140,39 @@ async def build_sync_coverage_summary(
     lookback_days: int = HISTORY_LOOKBACK_DAYS,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Return coverage within the largest memory-safe window up to ``lookback_days``."""
+    """Return an O(1) read of the background-built durable projection."""
 
     started_at = monotonic()
-    requested_lookback_days = lookback_days
     log_context = {
         "org_id": org_id,
         "sync_config_id": str(config.id),
         "history_lookback_days": lookback_days,
     }
     logger.info("sync_coverage_summary_waiting", extra=log_context)
-    try:
-        async with _coverage_admission.slot():
-            logger.info(
-                "sync_coverage_summary_started",
-                extra={
-                    **log_context,
-                    "admission_wait_seconds": round(monotonic() - started_at, 3),
-                    "concurrency_limit": _coverage_admission.capacity,
-                },
+    projection = (
+        await session.execute(
+            select(SyncCoverageProjection).where(
+                SyncCoverageProjection.org_id == org_id,
+                SyncCoverageProjection.sync_config_id == config.id,
+                SyncCoverageProjection.history_lookback_days == lookback_days,
+                SyncCoverageProjection.projection_version
+                == SYNC_COVERAGE_PROJECTION_VERSION,
+                SyncCoverageProjection.invalidated_at.is_(None),
             )
-            budget = _CoverageQueryBudget()
-            now = ensure_utc(generated_at or datetime.now(timezone.utc))
-            scope = await resolve_effective_scope(session, org_id, config, budget)
-            lookback = await _select_coverage_lookback(
-                session,
-                org_id,
-                config,
-                scope,
-                requested_days=requested_lookback_days,
-                generated_at=now,
-            )
-            lookback_days = lookback.effective_days
-            log_context = {
-                **log_context,
-                "history_lookback_days": lookback_days,
-                "requested_history_lookback_days": requested_lookback_days,
-            }
-            if lookback_days != requested_lookback_days:
-                logger.warning(
-                    "sync_coverage_history_window_reduced",
-                    extra={
-                        **log_context,
-                        "effective_history_lookback_days": lookback_days,
-                        "complexity_stage": "expanded_unit_windows",
-                        "complexity_limit": lookback.unit_window_limit,
-                        "complexity_observed": (lookback.requested_unit_window_count),
-                        "effective_unit_window_count": (
-                            lookback.effective_unit_window_count
-                        ),
-                    },
-                )
-            truncated_before = now - timedelta(days=lookback_days)
-            schedule = await _active_schedule(session, org_id, config)
-            has_schedule = await _has_schedule_row(session, org_id, config)
-            windows = await _terminal_unit_windows(
-                session,
-                org_id,
-                config,
-                scope,
-                truncated_before,
-                budget,
-            )
-            active_pairs = await _active_run_ids(session, org_id, scope, budget)
-            backfill_requested = await _backfill_requested_ranges(
-                session,
-                org_id,
-                config,
-                scope,
-                truncated_before,
-                budget,
-            )
-            logger.info(
-                "sync_coverage_summary_loaded",
-                extra={
-                    **log_context,
-                    "source_count": len(scope.sources),
-                    "dataset_count": len(scope.dataset_keys),
-                    "source_dataset_pair_count": len(scope.sources)
-                    * len(scope.dataset_keys),
-                    "query_row_count": budget.consumed,
-                    "query_row_limit": budget.limit,
-                    "unit_window_count": len(windows),
-                    "active_pair_count": len(active_pairs),
-                    "backfill_range_count": len(backfill_requested),
-                    "elapsed_seconds": round(monotonic() - started_at, 3),
-                },
-            )
-            payload = build_coverage_summary_payload(
-                config=config,
-                scope=scope,
-                windows=windows,
-                backfill_requested=backfill_requested,
-                active_pairs=active_pairs,
-                active_schedule=schedule,
-                has_schedule_row=has_schedule,
-                generated_at=now,
-                lookback_days=lookback_days,
-            )
-            logger.info(
-                "sync_coverage_summary_completed",
-                extra={
-                    **log_context,
-                    "query_row_count": budget.consumed,
-                    "elapsed_seconds": round(monotonic() - started_at, 3),
-                    "gap_count": payload["overall"]["gap_count"],
-                    "failed_range_count": payload["overall"]["failed_range_count"],
-                },
-            )
-            return payload
-    except SyncCoverageBusyError:
-        logger.warning(
-            "sync_coverage_summary_busy",
-            extra={
-                **log_context,
-                "concurrency_limit": _coverage_admission.capacity,
-                "admission_policy": "reject_immediately",
-            },
         )
-        raise
-    except SyncCoverageComplexityError as exc:
-        logger.warning(
-            "sync_coverage_summary_complexity_rejected",
-            extra={
-                **log_context,
-                "complexity_stage": exc.stage,
-                "complexity_limit": exc.limit,
-                "complexity_observed": exc.observed,
-            },
-        )
-        raise
+    ).scalar_one_or_none()
+    if projection is None:
+        logger.info("sync_coverage_projection_pending", extra=log_context)
+        raise SyncCoveragePendingError("Coverage is being prepared. Retry shortly.")
+    payload = dict(projection.payload)
+    logger.info(
+        "sync_coverage_summary_completed",
+        extra={
+            **log_context,
+            "elapsed_seconds": round(monotonic() - started_at, 3),
+            "gap_count": payload["overall"]["gap_count"],
+            "failed_range_count": payload["overall"]["failed_range_count"],
+            "projection_version": payload["projection_version"],
+        },
+    )
+    return payload

@@ -112,6 +112,7 @@ from .sso import (
     SSOProviderStatus,
 )
 from .subscriptions import Subscription, SubscriptionEvent
+from .sync_coverage import SyncCoverageProjection
 from .teams import JiraProjectOpsTeamLink, Team
 from .users import (
     AuthProvider,
@@ -221,6 +222,7 @@ __all__ = [
     "SSOProviderStatus",
     "STANDARD_FEATURES",
     "SyncConfiguration",
+    "SyncCoverageProjection",
     "SyncComputeCheckpoint",
     "SyncComputeCheckpointStatus",
     "SyncComputeType",

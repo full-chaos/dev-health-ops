@@ -48,6 +48,12 @@ class _FakeAsyncSession:
     async def run_sync(self, fn, *args, **kwargs):
         return fn(self._s, *args, **kwargs)
 
+    async def execute(self, statement):
+        return self._s.execute(statement)
+
+    def get_bind(self):
+        return self._s.get_bind()
+
     async def commit(self) -> None:
         commit = getattr(self._s, "commit", None)
         if commit is not None:

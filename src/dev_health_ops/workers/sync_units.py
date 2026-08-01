@@ -55,6 +55,9 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, SessionTransactionOrigin
 
+from dev_health_ops.api.services.sync_coverage import (
+    invalidate_sync_coverage_projection_sync,
+)
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models import (
     BackfillJob,
@@ -2101,6 +2104,11 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             nested.rollback()
             return {"status": "already_dispatched", "sync_run_id": sync_run_id}
         else:
+            invalidate_sync_coverage_projection_sync(
+                session,
+                str(run.org_id),
+                integration_id=run.integration_id,
+            )
             upsert_outbox_wakeup(
                 session,
                 sync_run_id=run_uuid,

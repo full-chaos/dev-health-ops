@@ -201,8 +201,8 @@ func TestBeatScheduleParserFindsTheCheckedInventory(t *testing.T) {
 	// The TRD acceptance criteria are stated against exactly these counts. A
 	// change here means a Beat entry was added or removed, which must be a
 	// reviewed ownership decision rather than an unnoticed coverage change.
-	if unconditional != 19 {
-		t.Fatalf("parsed %d unconditional beat entries, want 19", unconditional)
+	if unconditional != 20 {
+		t.Fatalf("parsed %d unconditional beat entries, want 20", unconditional)
 	}
 	if optional != 1 {
 		t.Fatalf("parsed %d optional beat entries, want 1", optional)

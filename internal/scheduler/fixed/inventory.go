@@ -429,6 +429,14 @@ func LegacyBeatInventory() []LegacyEntry {
 			OwnerRef: "prune_external_ingest_batches",
 		},
 		{
+			Name:     "refresh-sync-coverage-projections",
+			Cadence:  EveryInterval(300 * time.Second),
+			Owner:    OwnerRemoved,
+			OwnerRef: "coverage projection refresh",
+			Note: "Temporary safety net while exact summaries are rebuilt from retained facts. " +
+				"A native write-side projector makes this periodic Celery refresh unnecessary.",
+		},
+		{
 			Name:     "consume-pending-scheduled-sync-occurrences",
 			Cadence:  EveryInterval(300 * time.Second),
 			Optional: true,

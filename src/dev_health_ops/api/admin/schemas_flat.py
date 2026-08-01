@@ -338,6 +338,12 @@ class SyncCoverageSource(BaseModel):
     failed_range_count: int
 
 
+class SyncCoverageBackfillWindow(BaseModel):
+    since: date
+    before: date
+    reasons: list[Literal["gap", "failed"]] = Field(default_factory=list)
+
+
 class SyncCoverageSummaryResponse(BaseModel):
     """Coverage for this sync config's effective source/dataset scope.
 
@@ -351,17 +357,21 @@ class SyncCoverageSummaryResponse(BaseModel):
     generated_at: datetime
     data_basis: Literal["planner", "legacy"]
     history_lookback_days: int = Field(
-        description=(
-            "Effective history window used for this response. May be smaller than "
-            "the requested upper bound when the recent sync-unit history is too large."
-        )
+        description="Exact history window used for this response."
     )
     truncated_before: datetime = Field(
-        description="Oldest timestamp included by the effective history window."
+        description="Oldest timestamp included by the requested history window."
     )
+    coverage_since: datetime | None = None
+    coverage_through: datetime | None = None
+    is_truncated: bool = False
+    truncation_reason: Literal["lookback_limit"] | None = None
+    projection_version: int
+    projection_complete: bool
     overall: SyncCoverageOverall
     datasets: list[SyncCoverageDataset]
     sources: list[SyncCoverageSource]
+    backfill_windows: list[SyncCoverageBackfillWindow] = Field(default_factory=list)
 
 
 class JobRunResponse(BaseModel):

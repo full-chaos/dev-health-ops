@@ -297,6 +297,11 @@ beat_schedule = {
         "schedule": crontab(hour=5, minute=15),
         "options": {"queue": "sync"},
     },
+    "refresh-sync-coverage-projections": {
+        "task": "dev_health_ops.workers.tasks.refresh_sync_coverage_projections",
+        "schedule": 300.0,
+        "options": {"queue": "sync"},
+    },
 }
 
 # The occurrence consumer is a default-off rollout seam for materializing

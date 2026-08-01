@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 154,
+  "row_count": 156,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -393,12 +393,12 @@
       "notes": "Beat entry prune-external-ingest-batches, crontab(5,15) UTC"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:756",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:759",
       "surface": "dispatch_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 756
+        "line": 759
       },
       "queue_or_cadence": "sync",
       "dispatches": "run_sync_unit (per unit)",
@@ -417,12 +417,12 @@
       "notes": "transport-routes.json kind dispatch_sync_run, route=celery"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1147",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1150",
       "surface": "run_sync_unit",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1147
+        "line": 1150
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -441,12 +441,12 @@
       "notes": "only launchdarkly/feature-flags route-ready in Go"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1971",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1974",
       "surface": "finalize_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1971
+        "line": 1974
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -1569,12 +1569,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry_conditional:src/dev_health_ops/workers/config.py:306",
+      "id": "beat_entry_conditional:src/dev_health_ops/workers/config.py:311",
       "surface": "consume-pending-scheduled-sync-occurrences",
       "class": "beat_entry_conditional",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 306
+        "line": 311
       },
       "queue_or_cadence": "300s, default off (SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED)",
       "dispatches": "consume_pending_scheduled_sync_occurrences",
@@ -2289,12 +2289,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1043",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1046",
       "surface": "getattr(signature,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1043
+        "line": 1046
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic per-provider signature",
@@ -2313,12 +2313,12 @@
       "notes": "grep-evading form; internal to dispatch_sync_run fan-out"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1606",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1609",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1606
+        "line": 1609
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -2337,12 +2337,12 @@
       "notes": "grep-evading form; internal to unit completion"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2417",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2425",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2417
+        "line": 2425
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",
@@ -2529,12 +2529,12 @@
       "notes": "grep-evading form; POST /integrations/{integration_id}/backfill"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/sync.py:2332",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/sync.py:2333",
       "surface": "getattr(dispatch_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2332
+        "line": 2333
       },
       "queue_or_cadence": "sync",
       "dispatches": "dispatch_sync_run",
@@ -2553,12 +2553,12 @@
       "notes": "grep-evading form; POST /sync-configs/{config_id}/trigger"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/sync.py:2472",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/sync.py:2478",
       "surface": "getattr(dispatch_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2472
+        "line": 2478
       },
       "queue_or_cadence": "sync",
       "dispatches": "dispatch_sync_run",
@@ -2652,12 +2652,12 @@
       "route_mount_prefix": ""
     },
     {
-      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/sync.py:2235",
+      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/sync.py:2231",
       "surface": "POST /sync-configs/{config_id}/trigger",
       "class": "api_trigger_endpoint",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2235
+        "line": 2231
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_sync_run",
@@ -2677,12 +2677,12 @@
       "route_mount_prefix": ""
     },
     {
-      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/sync.py:2376",
+      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/sync.py:2377",
       "surface": "POST /sync-configs/{config_id}/backfill",
       "class": "api_trigger_endpoint",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2376
+        "line": 2377
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_sync_run",
@@ -3713,6 +3713,54 @@
       "acceptance_test_id": "tests/api/test_worker_operational_bridge.py::test_internal_bridge_passes_only_durable_billing_reference",
       "notes": "Added CUT-01 round-4 (Codex HIGH-1): billing_edge.py is a SEPARATELY DEPLOYED FastAPI app (own `app = FastAPI(...)` instance, not the primary API's router tree) -- see deploy/helm/dev-health/templates/billing-edge-deployment.yaml. Its /api/v1/billing/webhooks/stripe route (stripe_webhook_public) is a thin proxy that calls the imported `stripe_webhook` from billing/router.py directly; a same-file call-graph search can never find this because the actual handler is defined in a different file. Discovered via a targeted cross-file-forwarding scan scoped to modules with their own FastAPI() instance whose handler calls an imported name already known to be dispatch-relevant, not a general cross-file call-graph resolver (see docs/architecture/transitional-workload-inventory.md Known limitations).",
       "route_mount_prefix": ""
+    },
+    {
+      "id": "celery_task:src/dev_health_ops/workers/sync_coverage.py:77",
+      "surface": "refresh_sync_coverage_projections",
+      "class": "celery_task",
+      "source": {
+        "file": "src/dev_health_ops/workers/sync_coverage.py",
+        "line": 77
+      },
+      "queue_or_cadence": "sync",
+      "dispatches": "self (Beat)",
+      "dispatch_mechanism": "celery_task_decorator",
+      "owner_role": "contributor",
+      "target_owner": {
+        "type": "native_process",
+        "value": "coverage projection worker"
+      },
+      "target_kind_id": "beat:refresh-sync-coverage-projections",
+      "current_implementation_state": "celery_only",
+      "verification_status": "verified",
+      "compatibility_dependency": "Celery worker process consuming the sync queue.",
+      "deletion_evidence_requirement": "Replace the periodic projection refresh with a native scheduler-owned exact-summary rebuild before deleting this task.",
+      "acceptance_test_id": "tests/api/admin/test_sync_coverage_api.py::test_sync_coverage_projects_more_than_40000_raw_units_exactly",
+      "notes": "Keeps versioned exact-history projections warm; invalidated or missing projections return an explicit pending response until rebuilt."
+    },
+    {
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:300",
+      "surface": "refresh-sync-coverage-projections",
+      "class": "beat_entry",
+      "source": {
+        "file": "src/dev_health_ops/workers/config.py",
+        "line": 300
+      },
+      "queue_or_cadence": "300s",
+      "dispatches": "refresh_sync_coverage_projections",
+      "dispatch_mechanism": "beat_schedule_entry",
+      "owner_role": "primary",
+      "target_owner": {
+        "type": "native_process",
+        "value": "coverage projection worker"
+      },
+      "target_kind_id": "beat:refresh-sync-coverage-projections",
+      "current_implementation_state": "celery_only",
+      "verification_status": "verified",
+      "compatibility_dependency": "Celery Beat scheduler process plus the sync queue worker.",
+      "deletion_evidence_requirement": "Remove the Beat entry only after a native cadence refreshes every configuration without starvation.",
+      "acceptance_test_id": "tests/api/admin/test_sync_coverage_api.py::test_sync_coverage_projection_is_reused_when_source_is_unchanged",
+      "notes": "Unconditional five-minute refresh for exact coverage projections."
     }
   ]
 }

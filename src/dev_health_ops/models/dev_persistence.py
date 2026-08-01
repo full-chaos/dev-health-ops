@@ -222,6 +222,23 @@ class DevRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now
     )
+    # -- Wave 3.1 (CHAOS-3299) additive columns -----------------------------
+    # contract_generation defaults 'v1' at the DB level so every pre-existing
+    # row is correctly marked legacy the instant the column exists -- no
+    # backfill UPDATE required.
+    contract_generation: Mapped[str] = mapped_column(
+        String(4), nullable=False, default="v1"
+    )
+    # Orthogonal to `state` (the internal admission/lifecycle FSM above):
+    # public_outcome is the TRD v2 §10 dev_answer.v2 outcome vocabulary, set
+    # once at terminal transition. Widening `state`/`ck_dev_runs_state` to the
+    # §10 orchestrator stage names is out of this ticket's scope.
+    public_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    compatibility_projection_version: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    plan_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    plan_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -230,6 +247,16 @@ class DevRun(Base):
             "'tool_validation', 'tool_execution', 'answer_validation', "
             "'completed', 'insufficient_evidence', 'refused', 'failed', 'cancelled')",
             name="ck_dev_runs_state",
+        ),
+        CheckConstraint(
+            "contract_generation IN ('v1', 'v2')",
+            name="ck_dev_runs_contract_generation",
+        ),
+        CheckConstraint(
+            "public_outcome IS NULL OR public_outcome IN ('answered', "
+            "'answered_with_gaps', 'needs_clarification', 'not_found', "
+            "'temporarily_unavailable', 'unsupported', 'denied', 'failed')",
+            name="ck_dev_runs_public_outcome",
         ),
         ForeignKeyConstraint(
             ["conversation_id", "org_id", "user_id"],
@@ -374,6 +401,414 @@ class DevToolCall(Base):
             "run_id",
             "ordinal",
         ),
+    )
+
+
+class DevRunIntent(Base):
+    """Wave 3.1 (CHAOS-3299): the authoritative, server-owned interpretation.
+
+    One row per run (``dev_question_intent.v1``). ``payload`` is the full
+    validated contract dump (bounded, sensitive-key-checked at the service
+    layer); the columns below duplicate only the fields that need CHECK
+    discipline or direct querying.
+    """
+
+    __tablename__ = "dev_run_intents"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    intent_id: Mapped[str] = mapped_column(String(48), nullable=False)
+    cardinality: Mapped[str] = mapped_column(String(24), nullable=False)
+    requires_clarification: Mapped[bool] = mapped_column(nullable=False)
+    interpreter_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "intent_id IN ('entity_status', 'portfolio_status', 'remaining_work', "
+            "'observed_change', 'registered_statistics', 'metric_comparison', "
+            "'data_trust', 'project_health', 'team_health', "
+            "'team_workload_balance', 'operational_deficiency_inventory', "
+            "'bounded_investigation')",
+            name="ck_dev_run_intents_intent_id",
+        ),
+        CheckConstraint(
+            "cardinality IN ('singular', 'plural_cohort', 'organization_wide')",
+            name="ck_dev_run_intents_cardinality",
+        ),
+        UniqueConstraint("run_id", name="uq_dev_run_intents_run"),
+        ForeignKeyConstraint(
+            ["run_id", "org_id", "user_id"],
+            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
+            name="fk_dev_run_intents_run_owner",
+            ondelete="CASCADE",
+        ),
+        Index("ix_dev_run_intents_owner_run", "org_id", "user_id", "run_id"),
+    )
+
+
+class DevRunResolution(Base):
+    """Wave 3.1: one append-only entity-resolution ledger entry per run.
+
+    ``dev_resolution_ledger.v1``'s ``entries`` are contiguous, strictly
+    increasing, and never rewritten -- the service exposes no UPDATE path for
+    an existing row, only INSERT of the next ``entry_ordinal``.
+    """
+
+    __tablename__ = "dev_run_resolutions"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    entry_ordinal: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    mention_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    resolved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "entry_ordinal >= 0 AND entry_ordinal <= 99",
+            name="ck_dev_run_resolutions_entry_ordinal",
+        ),
+        CheckConstraint(
+            "outcome IN ('exact_match', 'ambiguous_candidates', "
+            "'no_authorized_match', 'catalog_unavailable', 'unsupported_kind')",
+            name="ck_dev_run_resolutions_outcome",
+        ),
+        UniqueConstraint(
+            "run_id", "entry_ordinal", name="uq_dev_run_resolutions_run_ordinal"
+        ),
+        ForeignKeyConstraint(
+            ["run_id", "org_id", "user_id"],
+            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
+            name="fk_dev_run_resolutions_run_owner",
+            ondelete="CASCADE",
+        ),
+        Index("ix_dev_run_resolutions_owner_run", "org_id", "user_id", "run_id"),
+    )
+
+
+class DevRunSubjectSet(Base):
+    """Wave 3.1: the committed plural/cohort subject set for one run.
+
+    ``dev_subject_set.v1``. Present only for plural/cohort intents (0..1 per
+    run).
+    """
+
+    __tablename__ = "dev_run_subject_sets"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    set_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    entity_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    cohort_complete: Mapped[bool] = mapped_column(nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "entity_kind IN ('repository', 'project', 'work_unit', 'issue', "
+            "'pull_request', 'team')",
+            name="ck_dev_run_subject_sets_entity_kind",
+        ),
+        UniqueConstraint("run_id", name="uq_dev_run_subject_sets_run"),
+        ForeignKeyConstraint(
+            ["run_id", "org_id", "user_id"],
+            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
+            name="fk_dev_run_subject_sets_run_owner",
+            ondelete="CASCADE",
+        ),
+        Index("ix_dev_run_subject_sets_owner_run", "org_id", "user_id", "run_id"),
+    )
+
+
+class DevRunSourceObservation(Base):
+    """Wave 3.1: one ``dev_source_observation.v1`` deterministic-plan-step row.
+
+    Kept separate from ``dev_tool_calls`` (model-issued tool-call audit)
+    deliberately -- this is the deterministic source-adapter analogue with a
+    different CHECK shape. One row per observation, ordinal-keyed.
+    """
+
+    __tablename__ = "dev_run_source_observations"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    ordinal: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    observation_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    source_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    requirement_level: Mapped[str] = mapped_column(String(16), nullable=False)
+    observed_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    data_semantics: Mapped[str] = mapped_column(String(16), nullable=False)
+    usable_fact_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    sample_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subject_coverage: Mapped[float] = mapped_column(nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "ordinal >= 0 AND ordinal <= 24",
+            name="ck_dev_run_source_observations_ordinal",
+        ),
+        CheckConstraint(
+            "source_class IN ('status_change', 'work_item', 'work_graph', "
+            "'pull_request', 'code_change', 'review', 'ci_run', 'test_report', "
+            "'deployment', 'incident', 'operational_control', 'source_health')",
+            name="ck_dev_run_source_observations_source_class",
+        ),
+        CheckConstraint(
+            "requirement_level IN ('mandatory', 'conditional', 'optional', "
+            "'not_applicable')",
+            name="ck_dev_run_source_observations_requirement_level",
+        ),
+        CheckConstraint(
+            "observed_state IN ('available_current', 'available_stale', "
+            "'available_unknown', 'unconfigured', 'unavailable', "
+            "'unauthorized_or_not_visible', 'not_applicable', 'truncated')",
+            name="ck_dev_run_source_observations_observed_state",
+        ),
+        CheckConstraint(
+            "data_semantics IN ('measured_zero', 'no_data', 'not_measured')",
+            name="ck_dev_run_source_observations_data_semantics",
+        ),
+        CheckConstraint(
+            "usable_fact_count >= 0 AND (sample_count IS NULL OR sample_count >= 0)",
+            name="ck_dev_run_source_observations_counts_nonnegative",
+        ),
+        CheckConstraint(
+            "subject_coverage >= 0 AND subject_coverage <= 1",
+            name="ck_dev_run_source_observations_coverage_range",
+        ),
+        UniqueConstraint(
+            "run_id", "ordinal", name="uq_dev_run_source_observations_run_ordinal"
+        ),
+        ForeignKeyConstraint(
+            ["run_id", "org_id", "user_id"],
+            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
+            name="fk_dev_run_source_observations_run_owner",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_dev_run_source_observations_owner_run", "org_id", "user_id", "run_id"
+        ),
+    )
+
+
+class DevRunInvestigationResult(Base):
+    """Wave 3.1: the ``dev_investigation_result.v1`` wrapper for one run.
+
+    Reconciliation delta (not in the original pre-implementation plan): the
+    landed CHAOS-3294 contract has ``dev_investigation_result.v1`` as a
+    distinct top-level object wrapping ``observations`` (persisted 1:N in
+    ``dev_run_source_observations``) plus step-completion bookkeeping
+    (``completed_steps``/``skipped_steps``/``failed_steps`` -- which *plan
+    steps* ran, distinct from which *source observations* exist, since a step
+    can be skipped without ever producing an observation) and
+    ``relationship_closure_verified``. One row per run.
+    """
+
+    __tablename__ = "dev_run_investigation_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    result_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    relationship_closure_verified: Mapped[bool] = mapped_column(nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_dev_run_investigation_results_run"),
+        ForeignKeyConstraint(
+            ["run_id", "org_id", "user_id"],
+            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
+            name="fk_dev_run_investigation_results_run_owner",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_dev_run_investigation_results_owner_run",
+            "org_id",
+            "user_id",
+            "run_id",
+        ),
+    )
+
+
+class DevAnswerFrame(Base):
+    """Wave 3.1: the canonical, server-owned ``dev_answer_frame.v1``.
+
+    One row per terminal run, regardless of public outcome -- a
+    ``needs_clarification``/``not_found``/``unsupported``/``denied`` run still
+    produces a (minimal) frame, confirmed by the landed no-answer field
+    policy (``NO_ANSWER_FRAME_FIELD_POLICY`` classifies every frame field,
+    including ``frame_id``/``run_id`` as IDENTIFIER-shaped, rather than
+    omitting the frame entirely).
+    """
+
+    __tablename__ = "dev_answer_frames"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    frame_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    public_outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "public_outcome IN ('answered', 'answered_with_gaps', "
+            "'needs_clarification', 'not_found', 'temporarily_unavailable', "
+            "'unsupported', 'denied', 'failed')",
+            name="ck_dev_answer_frames_public_outcome",
+        ),
+        UniqueConstraint("run_id", name="uq_dev_answer_frames_run"),
+        ForeignKeyConstraint(
+            ["run_id", "org_id", "user_id"],
+            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
+            name="fk_dev_answer_frames_run_owner",
+            ondelete="CASCADE",
+        ),
+        Index("ix_dev_answer_frames_owner_run", "org_id", "user_id", "run_id"),
+    )
+
+
+class DevRunNarrative(Base):
+    """Wave 3.1: the optional ``dev_narrative.v1`` presentation text for one run.
+
+    0..1 per run, present only when narrative_mode != 'none'. Text is stored
+    verbatim (not a digest) because the contract guarantees it is
+    presentation-only text mapped to existing frame section/fact IDs -- it
+    cannot introduce new facts, numbers, or subjects (TRD v2 §4.5), so it is
+    not raw provider output, prompt, or chain-of-thought.
+    """
+
+    __tablename__ = "dev_run_narratives"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    narrative_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    frame_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False)
+    provider_fingerprint: Mapped[str | None] = mapped_column(String(71), nullable=True)
+    narrative_text: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('provider', 'deterministic_fallback')",
+            name="ck_dev_run_narratives_mode",
+        ),
+        CheckConstraint(
+            "provider_fingerprint IS NULL OR "
+            "(length(provider_fingerprint) = 71 "
+            "AND provider_fingerprint LIKE 'sha256:%')",
+            name="ck_dev_run_narratives_provider_fingerprint",
+        ),
+        UniqueConstraint("run_id", name="uq_dev_run_narratives_run"),
+        ForeignKeyConstraint(
+            ["run_id", "org_id", "user_id"],
+            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
+            name="fk_dev_run_narratives_run_owner",
+            ondelete="CASCADE",
+        ),
+        Index("ix_dev_run_narratives_owner_run", "org_id", "user_id", "run_id"),
+    )
+
+
+class DevRunStageDiagnostic(Base):
+    """Wave 3.1: content-free per-stage timing/count/status diagnostics.
+
+    One row per orchestrator stage (TRD v2 §10:
+    interpreting/resolving_subjects/planning/collecting/synthesizing_frame/
+    narrating_optional/projecting_answer) per run. ``counts`` reuses the
+    existing ``_safe_count_summary`` bounded-keys/nonnegative discipline
+    already built for ``dev_tool_calls.safe_scope_summary``.
+    """
+
+    __tablename__ = "dev_run_stage_diagnostics"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    ordinal: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    stage_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    counts: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "ordinal >= 0 AND ordinal <= 9",
+            name="ck_dev_run_stage_diagnostics_ordinal",
+        ),
+        CheckConstraint(
+            "stage_id IN ('interpreting', 'resolving_subjects', 'planning', "
+            "'collecting', 'synthesizing_frame', 'narrating_optional', "
+            "'projecting_answer')",
+            name="ck_dev_run_stage_diagnostics_stage_id",
+        ),
+        CheckConstraint(
+            "status IN ('started', 'completed', 'failed', 'skipped')",
+            name="ck_dev_run_stage_diagnostics_status",
+        ),
+        CheckConstraint(
+            "latency_ms IS NULL OR latency_ms >= 0",
+            name="ck_dev_run_stage_diagnostics_latency_nonnegative",
+        ),
+        UniqueConstraint(
+            "run_id", "ordinal", name="uq_dev_run_stage_diagnostics_run_ordinal"
+        ),
+        ForeignKeyConstraint(
+            ["run_id", "org_id", "user_id"],
+            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
+            name="fk_dev_run_stage_diagnostics_run_owner",
+            ondelete="CASCADE",
+        ),
+        Index("ix_dev_run_stage_diagnostics_owner_run", "org_id", "user_id", "run_id"),
     )
 
 

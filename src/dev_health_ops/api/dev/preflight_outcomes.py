@@ -272,9 +272,13 @@ def project_preflight_error(answer: DevAnswerV2, *, request_id: str) -> DevError
     orchestrator already terminates an ambiguous scope as
     ``insufficient_evidence`` + ``scope_ambiguous``, and that is both the more
     faithful statement and the shape the router and web client already handle.
-    The real candidate list is recorded on the resolution ledger; delivering it
-    to a user needs the v2 surface (CHAOS-3298) and persisted clarification
-    state (CHAOS-3299).
+    The real candidate list is recorded on the resolution ledger, so "ambiguous
+    targets return stable authorized candidates" holds at the ledger and v2
+    level — but **not** on the v1 surface, which has no candidate field to
+    carry them. That gap is CHAOS-3325 (a candidate block on
+    ``dev_answer_frame.v1``); delivery to a user additionally needs the v2
+    rendering surface (CHAOS-3298) and persisted clarification state
+    (CHAOS-3299).
     """
 
     if answer.public_outcome is PublicOutcome.NEEDS_CLARIFICATION:

@@ -99,6 +99,11 @@ SQL, so an entity belonging to another tenant is simply absent — it reads as
 "no authorized match", never as "forbidden", and nothing about it appears in
 any user-visible string.
 
+When a name is ambiguous, the authorized candidates are recorded on the
+ledger, but the retained v1 answer surface has no field that can carry them —
+so a v1 client is told the name was ambiguous without being shown the choices.
+Closing that is CHAOS-3325.
+
 Resolutions are recorded on an **append-only ledger**. A later success cannot
 erase an earlier unresolved mention: entries carry contiguous ordinals, the
 objects are immutable, and every update is checked against the previous

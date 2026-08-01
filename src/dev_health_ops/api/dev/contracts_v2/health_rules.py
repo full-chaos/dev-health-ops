@@ -390,6 +390,28 @@ class HealthRuleFinding(ContractModelV2):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_shadow_only_matches_calibration_state(self) -> Self:
+        """``shadow_only`` is not an independent caller-set flag -- it is a
+
+        direct function of ``calibration_state`` (Codex-confirmed finding,
+        2026-08-01): a finding from a ``provisional`` rule must be
+        shadow-only, and a finding from any reviewed calibration state must
+        not be. Without this invariant, a normally-constructed finding could
+        declare ``calibration_state=provisional, shadow_only=False`` and
+        reach ``qualify_team_needs_attention`` as if it were launch
+        authority that was never earned.
+        """
+
+        expected_shadow_only = self.calibration_state == CalibrationState.PROVISIONAL
+        if self.shadow_only != expected_shadow_only:
+            raise ValueError(
+                "shadow_only must equal (calibration_state == provisional): "
+                f"got shadow_only={self.shadow_only!r} calibration_state="
+                f"{self.calibration_state.value!r}"
+            )
+        return self
+
 
 class TeamQualificationResult(ContractModelV2):
     """The team-needs-attention qualification contract (CHAOS-3302).

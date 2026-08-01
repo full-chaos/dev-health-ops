@@ -29,6 +29,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import MappingProxyType
 
 from .contracts_v2.base import SourceClass, SourceRequirementState
 from .contracts_v2.health_rules import (
@@ -122,14 +123,31 @@ _FINDING_ID_NAMESPACE = uuid.UUID("6f6e6531-6865-616c-7468-72756c657631")
 
 
 def _mint_finding_id(
-    rule: HealthRuleDefinition, observation: DimensionObservation
+    org_id: str, rule: HealthRuleDefinition, observation: DimensionObservation
 ) -> str:
+    """Mint a deterministic finding id, scoped to tenant and cohort/window identity.
+
+    ``org_id`` is required (Codex-confirmed finding, 2026-08-01): the
+    subject id is a provider-scoped key (e.g. a Jira/Linear project key),
+    not globally unique, so two different organizations reusing the same
+    key at the same timestamp would otherwise mint the same finding id and
+    collide cross-tenant -- risking incorrect deduplication, joins, or
+    finding references across an organization boundary. ``cohort_size`` and
+    ``window_index`` are included as the observation's own cohort/window
+    identity: without them, two evaluations of the same subject at the same
+    timestamp but over different cohorts (e.g. cohort_size=1 vs. 99) minted
+    the identical finding id.
+    """
+
     payload = "|".join(
         (
+            org_id,
             rule.rule_id,
             rule.rule_version,
             observation.subject_kind.value,
             observation.subject_id,
+            str(observation.cohort_size),
+            str(observation.window_index),
             observation.observed_at.isoformat(),
         )
     )
@@ -144,15 +162,35 @@ class HealthRuleRegistry:
         if len(ids) != len(set(ids)):
             duplicates = sorted({rule_id for rule_id in ids if ids.count(rule_id) > 1})
             raise DuplicateRuleError(f"duplicate rule id(s): {duplicates}")
+        validated: dict[str, HealthRuleDefinition] = {}
         for rule in rules:
             if not RULE_ID_PATTERN.match(rule.rule_id):
                 raise InvalidRuleIDError(
                     f"rule id {rule.rule_id!r} does not match the closed "
                     "health_rule.<name>.vN grammar"
                 )
-        self._rules: dict[str, HealthRuleDefinition] = {
-            rule.rule_id: rule for rule in rules
-        }
+            # Revalidate every definition here rather than trust the
+            # instance handed in. ``HealthRuleDefinition`` is frozen, but
+            # frozen only blocks attribute assignment -- ``model_copy``
+            # bypasses every validator (Codex-confirmed finding,
+            # 2026-08-01), so a caller could otherwise hand this
+            # constructor a rule that reports e.g.
+            # ``calibration_state=product_approved`` with no
+            # ``calibration_evidence_ref``, a combination
+            # ``validate_calibration_evidence`` would never allow through
+            # ``__init__``. Round-tripping through ``model_validate`` forces
+            # every validator to run again; a model-copy-invalid definition
+            # is rejected here, not silently admitted.
+            validated[rule.rule_id] = HealthRuleDefinition.model_validate(
+                rule.model_dump(mode="json")
+            )
+        # An immutable mapping, not a plain dict: the only reference to the
+        # underlying mutable dict is local to this constructor, so no
+        # caller can reach in and replace a shipped rule post-construction
+        # (e.g. ``registry._rules[rule_id] = mutated_rule``) to smuggle a
+        # forged rule into the singleton after it has already passed the
+        # checks above.
+        self._rules: Mapping[str, HealthRuleDefinition] = MappingProxyType(validated)
 
     def rule(self, rule_id: str) -> HealthRuleDefinition:
         try:
@@ -218,7 +256,10 @@ def _condition_met(
 
 
 def evaluate_rule(
-    rule: HealthRuleDefinition, observations: Sequence[DimensionObservation]
+    rule: HealthRuleDefinition,
+    observations: Sequence[DimensionObservation],
+    *,
+    org_id: str,
 ) -> HealthRuleFinding:
     """Evaluate one rule against its ordered observation windows.
 
@@ -228,6 +269,12 @@ def evaluate_rule(
     in a fixed order -- no-data, cohort, sample, coverage, denominator,
     attribution, then the condition itself -- so exactly one governs any
     given suppressed result.
+
+    ``org_id`` is required, keyword-only: it scopes the minted
+    ``finding_id`` to the calling tenant (see ``_mint_finding_id``) and is
+    never inferred or defaulted, so a caller cannot accidentally evaluate
+    (and mint a finding id for) one organization's observations without
+    naming which organization they belong to.
     """
 
     if not observations:
@@ -242,7 +289,7 @@ def evaluate_rule(
     ) -> HealthRuleFinding:
         return HealthRuleFinding(
             schema_version="health_rule_finding.v1",
-            finding_id=_mint_finding_id(rule, current),
+            finding_id=_mint_finding_id(org_id, rule, current),
             rule_id=rule.rule_id,
             rule_version=rule.rule_version,
             dimension=rule.dimension,
@@ -319,13 +366,15 @@ class HealthRuleEvaluationResult:
 def evaluate_registry(
     registry: HealthRuleRegistry,
     observations_by_rule: Mapping[str, Sequence[DimensionObservation]],
+    *,
+    org_id: str,
 ) -> HealthRuleEvaluationResult:
     launch: list[HealthRuleFinding] = []
     shadow: list[HealthRuleFinding] = []
     suppressed: list[HealthRuleFinding] = []
     for rule_id, observations in observations_by_rule.items():
         rule = registry.rule(rule_id)
-        finding = evaluate_rule(rule, observations)
+        finding = evaluate_rule(rule, observations, org_id=org_id)
         if finding.shadow_only:
             shadow.append(finding)
         elif finding.suppressed_reason is not None:
@@ -356,10 +405,16 @@ def qualify_team_needs_attention(
     is filtered defensively rather than trusted silently.
     """
 
-    evaluated_at = max(
-        (finding.evaluated_at for finding in findings), default=_utc_now()
-    )
+    # ``evaluated_at`` must be derived strictly from launch-authorized
+    # evidence -- filter shadow_only findings out FIRST, then aggregate.
+    # Aggregating over the unfiltered ``findings`` (Codex-confirmed finding,
+    # 2026-08-01) let a fresher shadow/provisional finding's timestamp make
+    # stale launch evidence look current, even though shadow activity never
+    # contributes to the qualification decision itself.
     launch_only = [finding for finding in findings if not finding.shadow_only]
+    evaluated_at = max(
+        (finding.evaluated_at for finding in launch_only), default=_utc_now()
+    )
 
     critical = [
         finding

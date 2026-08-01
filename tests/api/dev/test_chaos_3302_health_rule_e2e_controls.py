@@ -245,7 +245,7 @@ def test_positive_two_independent_at_risk_dimensions_qualify_team_needs_attentio
             periods=2,
         ),
     }
-    result = evaluate_registry(_AUTHORIZED_TEST_REGISTRY, observations)
+    result = evaluate_registry(_AUTHORIZED_TEST_REGISTRY, observations, org_id="org-1")
     launch_dimensions = {finding.dimension for finding in result.launch_findings}
     assert HealthDimension.EXECUTION_COMPLETION in launch_dimensions
     assert HealthDimension.REVIEW_CI_PRESSURE in launch_dimensions
@@ -268,7 +268,7 @@ def test_positive_one_critical_rule_with_evidence_and_coverage_qualifies_team() 
             sample_count=100,
         ),
     }
-    result = evaluate_registry(_AUTHORIZED_TEST_REGISTRY, observations)
+    result = evaluate_registry(_AUTHORIZED_TEST_REGISTRY, observations, org_id="org-1")
     critical = [f for f in result.launch_findings if f.state == DimensionState.CRITICAL]
     assert len(critical) == 1
     assert critical[0].evidence_source_classes
@@ -303,7 +303,7 @@ def test_negative_single_provisional_threshold_alone_produces_no_launch_finding(
         rule_id: _sustained(rule_id, registry=HEALTH_RULE_REGISTRY, periods=3)
     }
 
-    result = evaluate_registry(HEALTH_RULE_REGISTRY, observations)
+    result = evaluate_registry(HEALTH_RULE_REGISTRY, observations, org_id="org-1")
     assert result.launch_findings == ()
     assert len(result.shadow_findings) == 1
     assert result.shadow_findings[0].shadow_only is True
@@ -330,7 +330,7 @@ def test_negative_single_at_risk_dimension_alone_does_not_qualify_team() -> None
             periods=2,
         ),
     }
-    result = evaluate_registry(_AUTHORIZED_TEST_REGISTRY, observations)
+    result = evaluate_registry(_AUTHORIZED_TEST_REGISTRY, observations, org_id="org-1")
     assert len(result.launch_findings) == 1
     assert result.launch_findings[0].state == DimensionState.AT_RISK
 
@@ -355,7 +355,7 @@ def test_negative_cohort_below_minimum_suppresses_finding() -> None:
             cohort_size=small_cohort,
         ),
     }
-    result = evaluate_registry(_AUTHORIZED_TEST_REGISTRY, observations)
+    result = evaluate_registry(_AUTHORIZED_TEST_REGISTRY, observations, org_id="org-1")
     assert result.launch_findings == ()
     assert len(result.suppressed_findings) == 1
     suppressed = result.suppressed_findings[0]
@@ -379,7 +379,9 @@ def test_negative_measured_zero_and_no_data_are_not_collapsed() -> None:
         data_semantics="measured_zero",
         current_value=0.0,
     )
-    result_zero = evaluate_registry(HEALTH_RULE_REGISTRY, {rule_id: measured_zero})
+    result_zero = evaluate_registry(
+        HEALTH_RULE_REGISTRY, {rule_id: measured_zero}, org_id="org-1"
+    )
     zero_finding = (
         result_zero.launch_findings
         + result_zero.shadow_findings
@@ -396,7 +398,9 @@ def test_negative_measured_zero_and_no_data_are_not_collapsed() -> None:
         )
         for index in range(2)
     ]
-    result_no_data = evaluate_registry(HEALTH_RULE_REGISTRY, {rule_id: no_data})
+    result_no_data = evaluate_registry(
+        HEALTH_RULE_REGISTRY, {rule_id: no_data}, org_id="org-1"
+    )
     no_data_finding = (
         result_no_data.launch_findings
         + result_no_data.shadow_findings

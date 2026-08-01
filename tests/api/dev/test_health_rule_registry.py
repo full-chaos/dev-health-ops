@@ -68,6 +68,20 @@ def _windows(count: int, **overrides: object) -> list[DimensionObservation]:
     return [_obs(window_index=index, **overrides) for index in range(count)]
 
 
+#: A fixed org scope for guardrail/boundary tests that don't exercise
+#: tenant-scoping itself (that is ``test_finding_id_scoped_to_org`` and
+#: ``test_finding_id_scoped_to_cohort_size`` below) -- ``org_id`` is
+#: still required on every call, per the Codex-confirmed cross-tenant
+#: collision finding, but its exact value is irrelevant to these tests.
+_ORG_ID = "org-test-1"
+
+
+def _eval(
+    rule: HealthRuleDefinition, observations: list[DimensionObservation]
+) -> HealthRuleFinding:
+    return evaluate_rule(rule, observations, org_id=_ORG_ID)
+
+
 # ---------------------------------------------------------------------------
 # Registry construction
 # ---------------------------------------------------------------------------
@@ -113,6 +127,58 @@ def test_no_shipped_rule_is_launch_authorized() -> None:
         if rule.calibration_state != CalibrationState.PROVISIONAL
     ]
     assert non_provisional == []
+
+
+def test_registry_rules_mapping_cannot_be_mutated_into_launch_authority() -> None:
+    """Codex finding (high): the registry's rule mapping must not be
+
+    replaceable in place. Before the fix, ``HealthRuleRegistry`` stored
+    rules in a plain mutable dict; a caller could replace a shipped
+    provisional rule with a ``model_copy``-forged ``product_approved`` rule
+    (bypassing every constructor validator) and ``evaluate_registry`` would
+    then treat it as launch authority. The rule mapping is now a read-only
+    view, so item assignment must raise, and the shipped rule must remain
+    exactly what construction validated.
+    """
+
+    rule_id = next(iter(HEALTH_RULE_REGISTRY))
+    forged = HEALTH_RULE_REGISTRY.rule(rule_id).model_copy(
+        update={
+            "calibration_state": CalibrationState.PRODUCT_APPROVED,
+            "calibration_evidence_ref": "forged-evidence-ref",
+        }
+    )
+    with pytest.raises(TypeError):
+        HEALTH_RULE_REGISTRY._rules[rule_id] = forged  # type: ignore[index]
+    assert (
+        HEALTH_RULE_REGISTRY.rule(rule_id).calibration_state
+        == CalibrationState.PROVISIONAL
+    )
+
+
+def test_registry_construction_rejects_model_copy_invalid_rule() -> None:
+    """Codex finding (high): construction must reject a rule whose fields
+
+    were set through ``model_copy`` (which bypasses every validator on a
+    frozen model) into a combination the constructor itself would never
+    allow -- here, ``calibration_state=product_approved`` with no
+    ``calibration_evidence_ref``, which ``validate_calibration_evidence``
+    forbids.
+    """
+
+    forged = _RULE.model_copy(
+        update={
+            "rule_id": "health_rule.forged_authority.v1",
+            "rule_version": "health_rule.forged_authority.v1",
+            "calibration_state": CalibrationState.PRODUCT_APPROVED,
+        }
+    )
+    # model_copy bypassed validate_calibration_evidence entirely -- confirm
+    # the forged instance really is in the state __init__ forbids.
+    assert forged.calibration_state == CalibrationState.PRODUCT_APPROVED
+    assert forged.calibration_evidence_ref is None
+    with pytest.raises(ValidationError):
+        HealthRuleRegistry((forged,))
 
 
 # ---------------------------------------------------------------------------
@@ -167,12 +233,12 @@ def test_project_only_rule_with_cohort_size_rejected() -> None:
 def test_cohort_at_exact_minimum_is_not_suppressed() -> None:
     """Kill site: cohort guard `<` mutated to `<=` would suppress at the boundary."""
 
-    finding = evaluate_rule(_RULE, _windows(_RULE.sustained_periods_required))
+    finding = _eval(_RULE, _windows(_RULE.sustained_periods_required))
     assert finding.suppressed_reason != "insufficient_cohort"
 
 
 def test_cohort_one_below_minimum_is_suppressed() -> None:
-    finding = evaluate_rule(
+    finding = _eval(
         _RULE,
         _windows(
             _RULE.sustained_periods_required, cohort_size=_MINIMUM_COHORT_SIZE - 1
@@ -183,12 +249,12 @@ def test_cohort_one_below_minimum_is_suppressed() -> None:
 
 
 def test_sample_at_exact_minimum_is_not_suppressed() -> None:
-    finding = evaluate_rule(_RULE, _windows(_RULE.sustained_periods_required))
+    finding = _eval(_RULE, _windows(_RULE.sustained_periods_required))
     assert finding.suppressed_reason != "insufficient_sample"
 
 
 def test_sample_one_below_minimum_is_suppressed() -> None:
-    finding = evaluate_rule(
+    finding = _eval(
         _RULE,
         _windows(
             _RULE.sustained_periods_required, sample_count=_RULE.minimum_sample - 1
@@ -198,12 +264,12 @@ def test_sample_one_below_minimum_is_suppressed() -> None:
 
 
 def test_coverage_at_exact_minimum_is_not_suppressed() -> None:
-    finding = evaluate_rule(_RULE, _windows(_RULE.sustained_periods_required))
+    finding = _eval(_RULE, _windows(_RULE.sustained_periods_required))
     assert finding.suppressed_reason != "insufficient_coverage"
 
 
 def test_coverage_just_below_minimum_is_suppressed() -> None:
-    finding = evaluate_rule(
+    finding = _eval(
         _RULE,
         _windows(
             _RULE.sustained_periods_required, coverage=_RULE.minimum_coverage - 0.01
@@ -213,7 +279,7 @@ def test_coverage_just_below_minimum_is_suppressed() -> None:
 
 
 def test_missing_denominator_suppresses_when_required() -> None:
-    finding = evaluate_rule(
+    finding = _eval(
         _RULE, _windows(_RULE.sustained_periods_required, denominator_present=False)
     )
     assert finding.suppressed_reason == "missing_denominator"
@@ -222,7 +288,7 @@ def test_missing_denominator_suppresses_when_required() -> None:
 def test_missing_attribution_suppresses_only_when_required() -> None:
     rule = HEALTH_RULE_REGISTRY.rule("health_rule.review_latency_sustained.v1")
     assert rule.attribution_required is False
-    finding = evaluate_rule(
+    finding = _eval(
         rule,
         [
             _obs(
@@ -244,7 +310,7 @@ def test_higher_is_worse_triggers_exactly_at_threshold() -> None:
     """Kill site: >= mutated to > on the higher-is-worse comparison."""
 
     rule = HEALTH_RULE_REGISTRY.rule("health_rule.review_latency_sustained.v1")
-    finding = evaluate_rule(
+    finding = _eval(
         rule,
         [
             _obs(
@@ -264,7 +330,7 @@ def test_higher_is_worse_does_not_trigger_just_below_threshold() -> None:
     rule = HEALTH_RULE_REGISTRY.rule("health_rule.review_latency_sustained.v1")
     assert rule.threshold is not None
     below_threshold = rule.threshold - 0.001
-    finding = evaluate_rule(
+    finding = _eval(
         rule,
         [
             _obs(
@@ -284,7 +350,7 @@ def test_deterministic_zero_value_does_not_trigger() -> None:
     """Kill site: `!= 0` mutated to a tautology on the deterministic condition."""
 
     rule = HEALTH_RULE_REGISTRY.rule("health_rule.data_trust_broken.v1")
-    finding = evaluate_rule(
+    finding = _eval(
         rule,
         [
             _obs(
@@ -302,7 +368,7 @@ def test_deterministic_zero_value_does_not_trigger() -> None:
 
 def test_deterministic_nonzero_value_triggers_critical() -> None:
     rule = HEALTH_RULE_REGISTRY.rule("health_rule.data_trust_broken.v1")
-    finding = evaluate_rule(
+    finding = _eval(
         rule,
         [
             _obs(
@@ -334,7 +400,7 @@ def test_sustained_window_requires_every_period_to_trigger() -> None:
         )
         for index in range(rule.sustained_periods_required)
     ]
-    finding = evaluate_rule(rule, windows)
+    finding = _eval(rule, windows)
     assert finding.suppressed_reason == "not_sustained"
     assert finding.state == DimensionState.UNKNOWN
 
@@ -342,7 +408,7 @@ def test_sustained_window_requires_every_period_to_trigger() -> None:
 def test_no_data_short_circuits_before_cohort_guard() -> None:
     """Kill site: guard ordering swapped so cohort check runs before no-data check."""
 
-    finding = evaluate_rule(
+    finding = _eval(
         _RULE,
         _windows(
             _RULE.sustained_periods_required,
@@ -367,7 +433,7 @@ def test_not_measured_short_circuits_before_cohort_guard() -> None:
     ``insufficient_cohort``.
     """
 
-    finding = evaluate_rule(
+    finding = _eval(
         _RULE,
         _windows(
             _RULE.sustained_periods_required,
@@ -379,6 +445,41 @@ def test_not_measured_short_circuits_before_cohort_guard() -> None:
     )
     assert finding.state == DimensionState.UNKNOWN
     assert finding.suppressed_reason is None
+
+
+def test_finding_id_scoped_to_org() -> None:
+    """Codex finding (medium): ``subject_id`` is a provider-scoped key, not
+
+    globally unique. Two different organizations reusing the same subject
+    id at the same timestamp must not mint the same ``finding_id``, or
+    findings could collide/dedupe/join across a tenant boundary.
+    """
+
+    windows = _windows(_RULE.sustained_periods_required)
+    finding_org_a = evaluate_rule(_RULE, windows, org_id="org-a")
+    finding_org_b = evaluate_rule(_RULE, windows, org_id="org-b")
+    assert finding_org_a.finding_id != finding_org_b.finding_id
+
+
+def test_finding_id_scoped_to_cohort_size() -> None:
+    """Codex finding (medium): the exact repro shape -- two evaluations of the
+
+    same subject at the same timestamp but over different cohort sizes
+    (1 vs. 99) previously minted the identical finding_id because
+    cohort_size was absent from the mint payload.
+    """
+
+    small_cohort = evaluate_rule(
+        _RULE,
+        _windows(_RULE.sustained_periods_required, cohort_size=1),
+        org_id=_ORG_ID,
+    )
+    large_cohort = evaluate_rule(
+        _RULE,
+        _windows(_RULE.sustained_periods_required, cohort_size=99),
+        org_id=_ORG_ID,
+    )
+    assert small_cohort.finding_id != large_cohort.finding_id
 
 
 # ---------------------------------------------------------------------------
@@ -432,11 +533,69 @@ def test_shadow_only_finding_excluded_from_qualification() -> None:
     """Kill site: shadow_only filter dropped before qualification."""
 
     findings = (
-        _finding(dimension=HealthDimension.EXECUTION_COMPLETION, shadow_only=True),
-        _finding(dimension=HealthDimension.REVIEW_CI_PRESSURE, shadow_only=True),
+        _finding(
+            dimension=HealthDimension.EXECUTION_COMPLETION,
+            shadow_only=True,
+            calibration_state=CalibrationState.PROVISIONAL,
+        ),
+        _finding(
+            dimension=HealthDimension.REVIEW_CI_PRESSURE,
+            shadow_only=True,
+            calibration_state=CalibrationState.PROVISIONAL,
+        ),
     )
     result = qualify_team_needs_attention(findings, team_id="t")
     assert result.qualifies is False
+
+
+def test_shadow_only_must_match_calibration_state() -> None:
+    """Codex finding (high): ``shadow_only`` is not an independent caller-set
+
+    flag -- it must equal ``calibration_state == provisional``. Before the
+    fix, a finding claiming ``calibration_state=provisional`` while
+    declaring ``shadow_only=False`` (or the reverse -- a reviewed
+    calibration_state declaring ``shadow_only=True``) constructed without
+    error and would be treated as launch authority it never earned.
+    """
+
+    with pytest.raises(ValidationError):
+        _finding(
+            calibration_state=CalibrationState.PROVISIONAL,
+            shadow_only=False,
+        )
+    with pytest.raises(ValidationError):
+        _finding(
+            calibration_state=CalibrationState.PRODUCT_APPROVED,
+            shadow_only=True,
+        )
+
+
+def test_qualify_team_evaluated_at_excludes_shadow_findings() -> None:
+    """Codex finding (high): ``evaluated_at`` must be derived strictly from
+
+    launch-only evidence. Before the fix, ``max()`` was computed over the
+    unfiltered findings list, so a fresher shadow/provisional finding could
+    make stale launch evidence appear current.
+    """
+
+    from datetime import timedelta
+
+    launch_only_at = _NOW
+    later_shadow_at = _NOW + timedelta(days=30)
+
+    launch_finding = _finding(
+        dimension=HealthDimension.EXECUTION_COMPLETION,
+        evaluated_at=launch_only_at,
+    )
+    shadow_finding = _finding(
+        dimension=HealthDimension.REVIEW_CI_PRESSURE,
+        shadow_only=True,
+        calibration_state=CalibrationState.PROVISIONAL,
+        evaluated_at=later_shadow_at,
+    )
+    result = qualify_team_needs_attention((launch_finding, shadow_finding), team_id="t")
+    assert result.evaluated_at == launch_only_at
+    assert result.evaluated_at != later_shadow_at
 
 
 def test_suppressed_finding_cannot_be_constructed_as_critical() -> None:

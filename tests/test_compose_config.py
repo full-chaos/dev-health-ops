@@ -607,7 +607,7 @@ def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
     template = (_HELM_DIR / "templates" / "migrate-job.yaml").read_text(
         encoding="utf-8"
     )
-    assert "helm.sh/hook: pre-install,pre-upgrade" in template
+    assert 'helm.sh/hook: {{ join "," $hookEvents }}' in template
     assert "helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded" in template
     assert "dev-hops migrate clickhouse" in template
     assert "dev-hops admin features seed" in template
@@ -620,6 +620,11 @@ def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
 
     values = _load_yaml(_HELM_DIR / "values.yaml")
     assert values["migrations"]["hook"]["enabled"] is True
+    assert values["migrations"]["hook"]["events"] == [
+        "pre-install",
+        "pre-upgrade",
+    ]
+    assert values["migrations"]["hook"]["localBundledPostgres"] is False
 
 
 def test_deploy_stacks_keep_celery_beat_singleton() -> None:

@@ -331,11 +331,13 @@ web:
 # =============================================================================
 # Database migrations (CHAOS-2304)
 # =============================================================================
-# When enabled, a pre-install/pre-upgrade Helm hook Job applies PostgreSQL
-# (Alembic) + ClickHouse migrations before the release's workloads are
-# (re)deployed, and the shared ConfigMap sets AUTO_RUN_MIGRATIONS=false so
-# api/worker/beat never ambient-migrate. Set config.AUTO_RUN_MIGRATIONS
-# explicitly to override the computed value.
+# When enabled, the default pre-install/pre-upgrade Helm hook Job applies
+# PostgreSQL (Alembic) + ClickHouse migrations before the release's workloads
+# are (re)deployed. For local evaluation with bundled PostgreSQL only, opt into
+# localBundledPostgres and replace pre-install with post-install; the Job waits
+# for PostgreSQL before migrating. The shared ConfigMap sets
+# AUTO_RUN_MIGRATIONS=false so api/worker/beat never ambient-migrate. Set
+# config.AUTO_RUN_MIGRATIONS explicitly to override the computed value.
 #
 # The preferred MIGRATION_DATABASE_URI used for Alembic plus River must point
 # DIRECTLY at Postgres. Legacy POSTGRES_URI / DATABASE_URI values remain
@@ -345,6 +347,14 @@ web:
 migrations:
   hook:
     enabled: true
+    # -- Hook lifecycle events. Production keeps pre-install/pre-upgrade. The
+    #    post-install option is fail-closed unless localBundledPostgres=true.
+    events:
+      - pre-install
+      - pre-upgrade
+    # -- Explicit local/evaluation-only acknowledgement for post-install with
+    #    the chart's bundled PostgreSQL. Requires postgresql.enabled=true.
+    localBundledPostgres: false
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:

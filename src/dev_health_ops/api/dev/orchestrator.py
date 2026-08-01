@@ -1174,7 +1174,9 @@ class DevOrchestrator:
                         answer=answer,
                     )
                     if guard_reason is not None:
-                        if preflight_result is not None:
+                        if preflight_result is not None and not (
+                            self._legacy_guard_is_terminal(preflight_result)
+                        ):
                             # TRD §10: kept as defense in depth, but it must
                             # not create public copy or delete an answer once
                             # the server owns the subject. A firing here is a
@@ -1691,6 +1693,18 @@ class DevOrchestrator:
                 ):
                     return "narrated_unresolved_entity"
         return None
+
+    @staticmethod
+    def _legacy_guard_is_terminal(preflight: SubjectPreflightResult | None) -> bool:
+        """Whether a CHAOS-3289 guard firing may still terminate the run.
+
+        A named seam rather than an inline condition so a mutation test can
+        defeat exactly this decision and observe which acceptance case notices
+        (TRD §10: on the preflight path a firing is a cutover defect to record,
+        not an outcome to act on).
+        """
+
+        return preflight is None
 
     @staticmethod
     def _subject_gate_rejection(

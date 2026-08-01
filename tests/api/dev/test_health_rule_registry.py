@@ -10,6 +10,7 @@ discipline already used by ``contracts_v2.validators``
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta, timezone
 from types import MappingProxyType
 
@@ -34,6 +35,7 @@ from dev_health_ops.api.dev.health_rule_registry import (
     HealthRuleRegistry,
     InvalidCalibrationEvidenceError,
     InvalidRuleIDError,
+    _qualify_team_needs_attention_against_registry,
     evaluate_registry,
     evaluate_rule,
     qualify_team_needs_attention,
@@ -287,6 +289,105 @@ def test_registry_construction_accepts_reviewed_rule_with_matching_calibration_r
         registry.rule(claimed_reviewed.rule_id).calibration_state
         == CalibrationState.PRODUCT_APPROVED
     )
+
+
+def _matching_calibration_fixture() -> tuple[HealthRuleDefinition, CalibrationRecord]:
+    """A rule and calibration record that resolve against each other cleanly.
+
+    Each mismatch test below mutates exactly one field of ``record`` away
+    from this baseline to prove that field, specifically, is checked.
+    """
+
+    rule = _rebuild(
+        _RULE,
+        calibration_state=CalibrationState.PRODUCT_APPROVED,
+        calibration_evidence_ref="health_rule_calibration.mismatch_fixture.v1",
+    )
+    record = CalibrationRecord(
+        schema_version="health_rule_calibration.v1",
+        calibration_id="health_rule_calibration.mismatch_fixture.v1",
+        rule_id=rule.rule_id,
+        rule_version=rule.rule_version,
+        calibration_state=CalibrationState.PRODUCT_APPROVED,
+        sample_size=500,
+        distribution_summary="test fixture",
+        false_positive_review="test fixture",
+        false_negative_review="test fixture",
+        small_cohort_behavior="test fixture",
+        owner="test-owner",
+        decided_at=date(2026, 8, 1),
+        evidence_ref="doc:real-review",
+        notes=None,
+    )
+    return rule, record
+
+
+def test_registry_construction_rejects_calibration_id_mismatch() -> None:
+    """Codex finding (high, round 4): the mapping key is not proof the
+
+    record's own ``calibration_id`` actually matches -- resolution checks
+    the record's own field, never trusting however the caller happened to
+    key the ``calibration_records`` mapping.
+    """
+
+    rule, record = _matching_calibration_fixture()
+    mismatched_record = record.model_copy(
+        update={"calibration_id": "health_rule_calibration.a_different_id.v1"}
+    )
+    with pytest.raises(InvalidCalibrationEvidenceError):
+        HealthRuleRegistry(
+            (rule,), calibration_records={record.calibration_id: mismatched_record}
+        )
+
+
+def test_registry_construction_rejects_rule_id_mismatch() -> None:
+    """A record naming a different rule cannot authorize this one."""
+
+    rule, record = _matching_calibration_fixture()
+    mismatched_record = record.model_copy(
+        update={"rule_id": "health_rule.review_latency_sustained.v1"}
+    )
+    with pytest.raises(InvalidCalibrationEvidenceError):
+        HealthRuleRegistry(
+            (rule,), calibration_records={record.calibration_id: mismatched_record}
+        )
+
+
+def test_registry_construction_rejects_rule_version_mismatch() -> None:
+    """Codex finding (high, round 4): the exact repro shape -- a
+
+    ``product_approved`` v1 rule must not resolve against a record for a
+    *different version* of the same rule (e.g. v99). A changed threshold
+    bumps the version; a record for the stale version must not authorize
+    the new one.
+    """
+
+    rule, record = _matching_calibration_fixture()
+    mismatched_record = record.model_copy(
+        update={"rule_version": "health_rule.completion_stalled.v99"}
+    )
+    with pytest.raises(InvalidCalibrationEvidenceError):
+        HealthRuleRegistry(
+            (rule,), calibration_records={record.calibration_id: mismatched_record}
+        )
+
+
+def test_registry_construction_rejects_calibration_state_mismatch() -> None:
+    """Codex finding (high, round 4): a record documenting a DIFFERENT
+
+    reviewed state than the rule claims cannot authorize it -- a
+    ``data_derived`` review does not make a ``product_approved`` claim
+    true, and vice versa.
+    """
+
+    rule, record = _matching_calibration_fixture()
+    mismatched_record = record.model_copy(
+        update={"calibration_state": CalibrationState.DATA_DERIVED}
+    )
+    with pytest.raises(InvalidCalibrationEvidenceError):
+        HealthRuleRegistry(
+            (rule,), calibration_records={record.calibration_id: mismatched_record}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +722,31 @@ def test_finding_id_deterministic_across_equivalent_utc_offsets() -> None:
 # qualify_team_needs_attention -- clause-level
 # ---------------------------------------------------------------------------
 
+#: Codex finding (high, round 4): qualification now derives launch
+#: eligibility from the REGISTRY's own record of a finding's rule_id/
+#: rule_version, never from what the finding itself claims -- so these
+#: clause-level tests (dimension counting, evidence-presence, etc.) need a
+#: registry in which ``_RULE.rule_id`` genuinely resolves to a reviewed
+#: rule; the real ``HEALTH_RULE_REGISTRY`` cannot serve that purpose since
+#: every shipped rule is provisional. This test-scoped registry mirrors
+#: ``_AUTHORIZED_TEST_REGISTRY`` in ``test_chaos_3302_health_rule_e2e_
+#: controls.py``: honest test-scoped authority, never merged into or read
+#: from the production singleton.
+_QUALIFY_TEST_RULE = _rebuild(
+    _RULE,
+    calibration_state=CalibrationState.PRODUCT_APPROVED,
+    calibration_evidence_ref="test.calibration.qualify_fixture.v1",
+)
+_QUALIFY_TEST_REGISTRY = HealthRuleRegistry((_QUALIFY_TEST_RULE,))
+
+
+def _qualify(
+    findings: Sequence[HealthRuleFinding], *, team_id: str
+) -> TeamQualificationResult:
+    return _qualify_team_needs_attention_against_registry(
+        findings, team_id=team_id, registry=_QUALIFY_TEST_REGISTRY
+    )
+
 
 def _finding(**overrides: object) -> HealthRuleFinding:
     base = dict(
@@ -649,7 +775,7 @@ def test_two_distinct_at_risk_dimensions_qualify() -> None:
         _finding(dimension=HealthDimension.EXECUTION_COMPLETION),
         _finding(dimension=HealthDimension.REVIEW_CI_PRESSURE),
     )
-    result = qualify_team_needs_attention(findings, team_id="t")
+    result = _qualify(findings, team_id="t")
     assert result.qualifies is True
 
 
@@ -660,12 +786,21 @@ def test_two_findings_same_dimension_do_not_qualify() -> None:
         _finding(dimension=HealthDimension.EXECUTION_COMPLETION),
         _finding(dimension=HealthDimension.EXECUTION_COMPLETION, subject_id="team-2"),
     )
-    result = qualify_team_needs_attention(findings, team_id="t")
+    result = _qualify(findings, team_id="t")
     assert result.qualifies is False
 
 
 def test_shadow_only_finding_excluded_from_qualification() -> None:
-    """Kill site: shadow_only filter dropped before qualification."""
+    """Kill site (round 3 shape, still a valid negative): these findings
+
+    claim ``shadow_only=True, calibration_state=provisional``, but what
+    actually excludes them (round 4) is that their rule_id resolves, in
+    the real ``HEALTH_RULE_REGISTRY``, to a genuinely provisional rule --
+    not their own claimed fields, which qualification no longer reads.
+    Uses the production seam deliberately (not ``_qualify``/
+    ``_QUALIFY_TEST_REGISTRY``) since the point is that the real registry
+    excludes them.
+    """
 
     findings = (
         _finding(
@@ -708,9 +843,14 @@ def test_shadow_only_must_match_calibration_state() -> None:
 def test_qualify_team_evaluated_at_excludes_shadow_findings() -> None:
     """Codex finding (high): ``evaluated_at`` must be derived strictly from
 
-    launch-only evidence. Before the fix, ``max()`` was computed over the
-    unfiltered findings list, so a fresher shadow/provisional finding could
-    make stale launch evidence appear current.
+    launch-only evidence. Before the round-3 fix, ``max()`` was computed
+    over the unfiltered findings list, so a fresher shadow/provisional
+    finding could make stale launch evidence appear current. Uses
+    ``_QUALIFY_TEST_REGISTRY`` (round 4: eligibility is registry-derived)
+    for the launch finding; the "shadow" finding's rule_id
+    (``review_latency_sustained``) is deliberately absent from that
+    registry, so it is excluded by registry resolution regardless of its
+    own claimed ``shadow_only``/``calibration_state``.
     """
 
     launch_only_at = _NOW
@@ -721,12 +861,14 @@ def test_qualify_team_evaluated_at_excludes_shadow_findings() -> None:
         evaluated_at=launch_only_at,
     )
     shadow_finding = _finding(
+        rule_id="health_rule.review_latency_sustained.v1",
+        rule_version="health_rule.review_latency_sustained.v1",
         dimension=HealthDimension.REVIEW_CI_PRESSURE,
         shadow_only=True,
         calibration_state=CalibrationState.PROVISIONAL,
         evaluated_at=later_shadow_at,
     )
-    result = qualify_team_needs_attention((launch_finding, shadow_finding), team_id="t")
+    result = _qualify((launch_finding, shadow_finding), team_id="t")
     assert result.evaluated_at == launch_only_at
     assert result.evaluated_at != later_shadow_at
 
@@ -737,8 +879,11 @@ def test_qualify_team_ignores_forged_shadow_only_via_model_copy() -> None:
     shadow finding, ``model_copy(update={"shadow_only": False})`` bypasses
     every validator and produces a finding reporting
     ``calibration_state=provisional, shadow_only=False``. Qualification
-    must not be fooled by the forged flag -- it derives launch eligibility
-    from ``calibration_state`` alone.
+    must not be fooled by the forged flag. (Round 4 strengthens this
+    further: qualification no longer even reads ``calibration_state`` off
+    the finding -- it resolves ``_RULE.rule_id`` against the real
+    ``HEALTH_RULE_REGISTRY``, itself genuinely provisional, via the
+    production seam.)
     """
 
     genuine_shadow = _finding(
@@ -761,6 +906,7 @@ def test_qualify_team_ignores_forged_shadow_only_via_model_construct() -> None:
     validator even more directly than ``model_copy`` (it does not require
     starting from a valid instance at all) and can produce
     ``calibration_state=provisional, shadow_only=False`` from scratch.
+    (Round 4: same strengthening note as the ``model_copy`` variant above.)
     """
 
     forged = HealthRuleFinding.model_construct(
@@ -787,6 +933,37 @@ def test_qualify_team_ignores_forged_shadow_only_via_model_construct() -> None:
     assert result.qualifies is False
 
 
+def test_qualify_team_ignores_ordinary_finding_claiming_unearned_authority() -> None:
+    """Codex finding (high, round 4): qualification previously trusted
+
+    ``finding.calibration_state`` directly. An entirely ORDINARY
+    ``HealthRuleFinding`` construction -- no ``model_copy``, no
+    ``model_construct``, no guard bypass of any kind -- claiming
+    ``calibration_state=product_approved`` for a rule that is
+    ``provisional`` in the canonical registry (every shipped rule is,
+    today) qualified a team through the critical-rule path. Launch
+    eligibility must be re-derived from the registry's own record of the
+    rule; the finding's own ``calibration_state`` is read nowhere in that
+    decision. Uses the production ``qualify_team_needs_attention`` seam
+    deliberately -- this is exactly the seam the finding names.
+    """
+
+    forged_authority = _finding(
+        dimension=HealthDimension.EXECUTION_COMPLETION,
+        state=DimensionState.CRITICAL,
+    )
+    # An entirely ordinary construction. rule_id/rule_version are the real,
+    # canonical -- and genuinely provisional -- health_rule.completion_
+    # stalled.v1; calibration_state/shadow_only/evidence_source_classes are
+    # _finding()'s ordinary defaults (product_approved, False, non-empty).
+    assert forged_authority.rule_id == _RULE.rule_id
+    assert forged_authority.calibration_state == CalibrationState.PRODUCT_APPROVED
+    assert _RULE.calibration_state == CalibrationState.PROVISIONAL
+
+    result = qualify_team_needs_attention((forged_authority,), team_id="t")
+    assert result.qualifies is False
+
+
 def test_suppressed_finding_cannot_be_constructed_as_critical() -> None:
     """A suppressed finding is structurally confined to unknown/not_applicable
 
@@ -805,10 +982,16 @@ def test_suppressed_finding_cannot_be_constructed_as_critical() -> None:
 
 
 def test_critical_finding_without_evidence_does_not_qualify() -> None:
-    """Kill site: evidence_source_classes non-empty check dropped."""
+    """Kill site: evidence_source_classes non-empty check dropped.
+
+    Uses ``_qualify``/``_QUALIFY_TEST_REGISTRY`` (round 4: eligibility is
+    registry-derived) so the finding is registry-eligible and this
+    exercises the evidence-presence clause specifically, not registry
+    ineligibility.
+    """
 
     findings = (_finding(state=DimensionState.CRITICAL, evidence_source_classes=()),)
-    result = qualify_team_needs_attention(findings, team_id="t")
+    result = _qualify(findings, team_id="t")
     assert result.qualifies is False
 
 

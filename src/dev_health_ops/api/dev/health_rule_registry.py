@@ -192,14 +192,34 @@ def _resolves_against_inventory(
     in ``records`` -- not merely checked for non-emptiness (Codex-confirmed
     finding, 2026-08-01, round 3: "a normally valid second registry with
     caller-asserted calibration evidence passed construction"). The
-    matched record must itself name the same rule and report a genuinely
-    reviewed ``calibration_state`` with its own ``evidence_ref`` present --
-    an unrelated record, or one that is itself still provisional, cannot
-    back a claim of review. Today every record in the shipped
-    ``health_rule_calibration_inventory`` is ``provisional`` with
-    ``evidence_ref=None`` (nothing has actually been reviewed yet), so this
-    makes it structurally impossible to ship a reviewed launch rule until a
-    real calibration decision exists to cite.
+    matched record must resolve on every one of four independent fields
+    (Codex-confirmed finding, round 4 -- checking only ``rule_id`` and
+    "not provisional" let a ``product_approved`` v1 rule resolve against a
+    ``data_derived`` record for v99: a real record for a *different*
+    version, or a record recording a *different* reviewed state than the
+    rule itself claims, are each their own way to authorize a rule that
+    was never actually reviewed):
+
+    * ``record.calibration_id == ref`` -- the mapping key actually matches
+      the record's own identity, not merely however the caller happened to
+      key the ``records`` mapping;
+    * ``record.rule_id == rule.rule_id`` -- the record is about this rule,
+      not an unrelated one;
+    * ``record.rule_version == rule.rule_version`` -- the record is about
+      *this exact version* of the rule, not a stale or future one (a
+      changed threshold bumps the version; a record for the old version
+      must not authorize the new one);
+    * ``record.calibration_state == rule.calibration_state`` -- the record
+      documents the same reviewed state the rule claims (a
+      ``data_derived`` review does not make a ``product_approved`` claim
+      true, and vice versa);
+    * ``record.evidence_ref is not None`` -- the record itself cites real
+      evidence, not just a same-changeset placeholder.
+
+    Today every record in the shipped ``health_rule_calibration_inventory``
+    is ``provisional`` with ``evidence_ref=None`` (nothing has actually
+    been reviewed yet), so this makes it structurally impossible to ship a
+    reviewed launch rule until a real calibration decision exists to cite.
     """
 
     if rule.calibration_state == CalibrationState.PROVISIONAL:
@@ -211,8 +231,10 @@ def _resolves_against_inventory(
     if record is None:
         return False
     return (
-        record.rule_id == rule.rule_id
-        and record.calibration_state != CalibrationState.PROVISIONAL
+        record.calibration_id == ref
+        and record.rule_id == rule.rule_id
+        and record.rule_version == rule.rule_version
+        and record.calibration_state == rule.calibration_state
         and record.evidence_ref is not None
     )
 
@@ -550,32 +572,56 @@ def evaluate_registry(
     )
 
 
-def qualify_team_needs_attention(
-    findings: Sequence[HealthRuleFinding], *, team_id: str
+def _is_canonically_launch_eligible(
+    finding: HealthRuleFinding, registry: HealthRuleRegistry
+) -> bool:
+    """Is this finding backed by the registry's OWN record of its rule?
+
+    Never trusts ``finding.calibration_state`` (Codex-confirmed finding,
+    2026-08-01, round 4): a ``HealthRuleFinding`` is a bare value object --
+    an entirely ordinary constructor call, no ``model_copy`` or
+    ``model_construct`` bypass required, can claim
+    ``calibration_state=product_approved`` for a rule that is provisional
+    (or does not exist at all) in ``registry``. Launch eligibility is
+    re-derived here from the registry's own, construction-time
+    inventory-validated record of the named ``rule_id``/``rule_version`` --
+    the finding's own ``calibration_state`` field is read nowhere in this
+    function.
+    """
+
+    try:
+        rule = registry.rule(finding.rule_id)
+    except UnknownRuleError:
+        return False
+    return (
+        rule.rule_version == finding.rule_version
+        and rule.calibration_state != CalibrationState.PROVISIONAL
+    )
+
+
+def _qualify_team_needs_attention_against_registry(
+    findings: Sequence[HealthRuleFinding],
+    *,
+    team_id: str,
+    registry: HealthRuleRegistry,
 ) -> TeamQualificationResult:
-    """The team-needs-attention qualification contract (CHAOS-3302):
+    """The team-needs-attention qualification contract (CHAOS-3302), against
+
+    an explicitly supplied registry.
+
+    NOT the production seam -- see ``qualify_team_needs_attention`` below,
+    which is the only entry point production code should call. This
+    function's launch-eligibility check (``_is_canonically_launch_eligible``)
+    resolves every finding against ``registry``, so it is only as
+    trustworthy as the registry it is handed; it exists so tests can prove
+    the qualification mechanism against a registry defined entirely in test
+    scope (``_AUTHORIZED_TEST_REGISTRY``) without that test-only authority
+    ever being reachable from the production seam.
 
     "A team-level finding requires either at least two independent
     applicable dimensions at risk for the sustained window; or one critical
     rule with required evidence and coverage. One metric, one bad week, one
     missing source, or one provisional threshold is insufficient."
-
-    Only launch-eligible findings (never shadow/provisional) are
-    considered. Launch eligibility is derived from ``calibration_state``,
-    never read off the ``shadow_only`` field (Codex-confirmed finding,
-    2026-08-01, round 3): ``shadow_only`` is a serialization convenience
-    that a normal ``HealthRuleFinding(...)`` construction already keeps
-    consistent with ``calibration_state`` (see
-    ``validate_shadow_only_matches_calibration_state``), but both
-    ``model_copy(update={"shadow_only": False})`` and
-    ``HealthRuleFinding.model_construct(...)`` bypass every validator and
-    can produce a finding reporting ``calibration_state=provisional,
-    shadow_only=False``. Trusting the redundant boolean at this trust
-    boundary let such a finding qualify a team. ``calibration_state`` is
-    the single field this function treats as ground truth; a finding
-    reaching this function with a calibration_state/shadow_only mismatch
-    is a caller defect regardless, but that mismatch no longer matters to
-    the decision made here.
     """
 
     # ``evaluated_at`` must be derived strictly from launch-authorized
@@ -587,7 +633,7 @@ def qualify_team_needs_attention(
     launch_only = [
         finding
         for finding in findings
-        if finding.calibration_state != CalibrationState.PROVISIONAL
+        if _is_canonically_launch_eligible(finding, registry)
     ]
     evaluated_at = max(
         (finding.evaluated_at for finding in launch_only), default=_utc_now()
@@ -644,6 +690,26 @@ def qualify_team_needs_attention(
         qualifies=False,
         basis=None,
         evaluated_at=evaluated_at,
+    )
+
+
+def qualify_team_needs_attention(
+    findings: Sequence[HealthRuleFinding], *, team_id: str
+) -> TeamQualificationResult:
+    """The production qualification seam: hard-bound to ``HEALTH_RULE_REGISTRY``.
+
+    Deliberately takes no registry parameter, mirroring ``evaluate_registry``
+    (Codex-confirmed finding, 2026-08-01, round 4) -- every finding passed
+    here has its launch eligibility re-derived against the canonical,
+    construction-validated, inventory-cross-checked, rebind-resistant
+    module singleton, never against what the finding itself claims. A
+    caller that genuinely needs to qualify against a different registry
+    (tests only) must say so explicitly by calling
+    ``_qualify_team_needs_attention_against_registry``.
+    """
+
+    return _qualify_team_needs_attention_against_registry(
+        findings, team_id=team_id, registry=HEALTH_RULE_REGISTRY
     )
 
 

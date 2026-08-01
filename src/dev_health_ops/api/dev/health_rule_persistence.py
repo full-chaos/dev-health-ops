@@ -20,7 +20,6 @@ Two writes, both against ``models.health_rule_governance``:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -32,7 +31,12 @@ from dev_health_ops.models.health_rule_governance import (
 )
 
 from .contracts_v2.health_rules import CalibrationRecord
-from .health_rule_registry import HealthRuleDefinition, rule_version_fingerprint
+from .health_rule_registry import (
+    HEALTH_RULE_REGISTRY,
+    HealthRuleDefinition,
+    HealthRuleRegistry,
+    rule_version_fingerprint,
+)
 
 
 class HealthRuleFingerprintDriftError(RuntimeError):
@@ -86,9 +90,26 @@ async def record_calibration_decision(
     return row
 
 
-async def record_rule_version_fingerprint(
+async def _record_fingerprint_for_rule(
     session: AsyncSession, rule: HealthRuleDefinition
 ) -> HealthRuleVersionFingerprint:
+    """Core fingerprint-persistence logic for an explicitly supplied rule.
+
+    NOT the production seam -- see ``record_rule_version_fingerprint``
+    below, which is hard-bound to ``HEALTH_RULE_REGISTRY``. This accepts an
+    arbitrary ``HealthRuleDefinition`` (Codex-confirmed finding, 2026-08-01,
+    round 4): a caller-supplied definition sharing a canonical
+    ``rule_id``/``rule_version`` but differing in some other field (e.g. a
+    mutated ``threshold``) could otherwise poison the authoritative
+    fingerprint row on first write through the production seam, causing the
+    REAL canonical rule to be rejected as drift later. This function exists
+    only so tests can prove the drift-rejection mechanism itself against a
+    deliberately mutated rule (``test_postgres_fingerprint_drift_without_
+    version_bump_is_rejected``) -- never for a caller to persist a
+    fingerprint for anything other than a rule already resolved from the
+    canonical registry.
+    """
+
     fingerprint = rule_version_fingerprint(rule)
     now = _utc_now()
     existing = await session.scalar(
@@ -121,9 +142,30 @@ async def record_rule_version_fingerprint(
     return existing
 
 
-async def record_registry_fingerprints(
-    session: AsyncSession, rules: Sequence[HealthRuleDefinition]
-) -> list[HealthRuleVersionFingerprint]:
-    """Convenience: record every rule in a registry in one pass."""
+async def record_rule_version_fingerprint(
+    session: AsyncSession, rule_id: str
+) -> HealthRuleVersionFingerprint:
+    """The production persistence seam: hard-bound to ``HEALTH_RULE_REGISTRY``.
 
-    return [await record_rule_version_fingerprint(session, rule) for rule in rules]
+    Takes a ``rule_id``, not an arbitrary ``HealthRuleDefinition``
+    (Codex-confirmed finding, 2026-08-01, round 4) -- the rule persisted is
+    always resolved from the canonical, construction-validated,
+    inventory-cross-checked, rebind-resistant module singleton, so a
+    caller cannot smuggle a rule sharing a canonical id/version but
+    differing in some other field through this seam. Resolution happens
+    before ``session`` is touched at all, so an unresolvable ``rule_id``
+    (``UnknownRuleError``) never reaches the database.
+    """
+
+    rule = HEALTH_RULE_REGISTRY.rule(rule_id)
+    return await _record_fingerprint_for_rule(session, rule)
+
+
+async def record_registry_fingerprints(
+    session: AsyncSession, registry: HealthRuleRegistry = HEALTH_RULE_REGISTRY
+) -> list[HealthRuleVersionFingerprint]:
+    """Convenience: record every canonical rule's fingerprint in one pass."""
+
+    return [
+        await record_rule_version_fingerprint(session, rule_id) for rule_id in registry
+    ]

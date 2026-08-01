@@ -70,6 +70,7 @@ from dev_health_ops.api.dev.health_rule_registry import (
     HEALTH_RULE_REGISTRY,
     HealthRuleRegistry,
     _evaluate_with_registry,
+    _qualify_team_needs_attention_against_registry,
     evaluate_registry,
     qualify_team_needs_attention,
 )
@@ -253,8 +254,13 @@ def test_positive_two_independent_at_risk_dimensions_qualify_team_needs_attentio
     assert HealthDimension.EXECUTION_COMPLETION in launch_dimensions
     assert HealthDimension.REVIEW_CI_PRESSURE in launch_dimensions
 
-    qualification = qualify_team_needs_attention(
-        result.launch_findings, team_id="team-1"
+    # Round 4: qualification re-derives eligibility from the registry, so
+    # proving it against test-scoped authority means qualifying against
+    # _AUTHORIZED_TEST_REGISTRY explicitly -- the production
+    # qualify_team_needs_attention() would (correctly) find these test-only
+    # rule_ids absent from HEALTH_RULE_REGISTRY and exclude them.
+    qualification = _qualify_team_needs_attention_against_registry(
+        result.launch_findings, team_id="team-1", registry=_AUTHORIZED_TEST_REGISTRY
     )
     assert qualification.qualifies is True
     assert qualification.basis == "multi_dimension"
@@ -278,8 +284,8 @@ def test_positive_one_critical_rule_with_evidence_and_coverage_qualifies_team() 
     assert len(critical) == 1
     assert critical[0].evidence_source_classes
 
-    qualification = qualify_team_needs_attention(
-        result.launch_findings, team_id="team-1"
+    qualification = _qualify_team_needs_attention_against_registry(
+        result.launch_findings, team_id="team-1", registry=_AUTHORIZED_TEST_REGISTRY
     )
     assert qualification.qualifies is True
     assert qualification.basis == "critical_rule"
@@ -341,8 +347,11 @@ def test_negative_single_at_risk_dimension_alone_does_not_qualify_team() -> None
     assert len(result.launch_findings) == 1
     assert result.launch_findings[0].state == DimensionState.AT_RISK
 
-    qualification = qualify_team_needs_attention(
-        result.launch_findings, team_id="team-1"
+    # Qualify against _AUTHORIZED_TEST_REGISTRY (not the production seam):
+    # the point is that ONE genuinely-authorized signal is still
+    # insufficient, not that the rule goes unrecognized.
+    qualification = _qualify_team_needs_attention_against_registry(
+        result.launch_findings, team_id="team-1", registry=_AUTHORIZED_TEST_REGISTRY
     )
     assert qualification.qualifies is False
     assert qualification.basis is None

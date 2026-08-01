@@ -36,6 +36,7 @@ from dev_health_ops.api.dev.contracts_v2.health_rules import (
 from dev_health_ops.api.dev.health_rule_persistence import (
     DuplicateCalibrationError,
     HealthRuleFingerprintDriftError,
+    _record_fingerprint_for_rule,
     record_calibration_decision,
     record_rule_version_fingerprint,
 )
@@ -157,14 +158,24 @@ async def test_postgres_rejects_calibration_evidence_ref_check_constraint(
 async def test_postgres_fingerprint_first_observation_then_repeat_increments(
     postgres_governance: async_sessionmaker[AsyncSession],
 ) -> None:
-    rule = HEALTH_RULE_REGISTRY.rule("health_rule.completion_stalled.v1")
+    """Uses the production seam (rule_id, resolved against
+
+    HEALTH_RULE_REGISTRY) -- this test is about the seen-count/idempotency
+    behavior, not about forging a non-canonical rule, so it exercises the
+    real production API rather than the private test-only seam.
+    """
+
     async with postgres_governance() as session:
-        first = await record_rule_version_fingerprint(session, rule)
+        first = await record_rule_version_fingerprint(
+            session, "health_rule.completion_stalled.v1"
+        )
         await session.commit()
         assert first.times_seen == 1
 
     async with postgres_governance() as session:
-        second = await record_rule_version_fingerprint(session, rule)
+        second = await record_rule_version_fingerprint(
+            session, "health_rule.completion_stalled.v1"
+        )
         await session.commit()
         assert second.times_seen == 2
         assert second.fingerprint == first.fingerprint
@@ -179,13 +190,18 @@ async def test_postgres_fingerprint_drift_without_version_bump_is_rejected(
     Records one fingerprint for a (rule_id, rule_version) pair, then
     attempts to record a *different* fingerprint for the same pair (as
     would happen if a rule's threshold changed but its version string did
-    not) -- must reject rather than silently overwrite.
+    not) -- must reject rather than silently overwrite. Uses the private
+    ``_record_fingerprint_for_rule`` seam throughout (Codex-confirmed
+    finding, 2026-08-01, round 4): the production
+    ``record_rule_version_fingerprint`` seam takes only a ``rule_id`` and
+    always resolves the real canonical rule, so it has no way to accept the
+    drifted, caller-mutated rule this test needs to construct.
     """
 
     rule = HEALTH_RULE_REGISTRY.rule("health_rule.completion_stalled.v1")
     assert rule.threshold is not None
     async with postgres_governance() as session:
-        await record_rule_version_fingerprint(session, rule)
+        await _record_fingerprint_for_rule(session, rule)
         await session.commit()
 
     drifted_rule = rule.model_copy(update={"threshold": rule.threshold + 100})
@@ -194,4 +210,4 @@ async def test_postgres_fingerprint_drift_without_version_bump_is_rejected(
     # it is never persisted as a HealthRuleDefinition itself.
     async with postgres_governance() as session:
         with pytest.raises(HealthRuleFingerprintDriftError):
-            await record_rule_version_fingerprint(session, drifted_rule)
+            await _record_fingerprint_for_rule(session, drifted_rule)

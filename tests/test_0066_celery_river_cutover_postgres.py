@@ -165,7 +165,7 @@ def test_application_migrator_applies_safe_schema_without_0066_opt_in(
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
 
-    assert _revisions(migrated_to_0065.engine) == {"0075"}
+    assert _revisions(migrated_to_0065.engine) == {"0076"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     assert _table_exists(migrated_to_0065.engine, "dev_conversations")
     assert _routes(migrated_to_0065.engine, migration) == before

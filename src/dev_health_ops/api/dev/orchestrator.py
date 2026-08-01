@@ -762,6 +762,19 @@ class DevOrchestrator:
                         # instead -- a dropped frame is recoverable, a
                         # stranded run is not.
                         await self._recorder.rollback()
+                        # The rollback above discards every unflushed write
+                        # on this session, not just the poisoned frame --
+                        # including the record_preflight() diagnostic
+                        # flushed a few lines above, which shares this same
+                        # transaction. Re-persist it before finish() writes
+                        # the terminal row, or the run lands with
+                        # preflight_outcome=None and silently loses the
+                        # closed-vocabulary explanation of why it
+                        # terminated (Codex review finding, CHAOS-3297).
+                        await self._recorder.record_preflight(
+                            preflight_outcome=preflight_result.diagnostic,
+                            legacy_guard_reason=None,
+                        )
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=project_preflight_error(

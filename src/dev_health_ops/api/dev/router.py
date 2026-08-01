@@ -639,28 +639,55 @@ def _replayed_result(
         # v2-to-v1 projector (CHAOS-3294 guardrail) live preflight uses, so
         # this is never a second, divergent mapping.
         from .contracts_v2.answer import _OUTCOME_DISPLAY_LABELS, DevAnswerV2
+        from .contracts_v2.base import PublicOutcome
         from .contracts_v2.frame import DevAnswerFrame as _DevAnswerFrameV2
+        from .contracts_v2.no_answer_policy import NO_ANSWER_OUTCOMES
         from .preflight_outcomes import project_preflight_error
 
+        # project_preflight_error is only total over the no-answer outcomes
+        # plus needs_clarification (CHAOS-3292's ratified vocabulary for a
+        # preflight termination) -- ANSWERED/ANSWERED_WITH_GAPS raise
+        # RuntimeError there by design, since a preflight never terminates
+        # with an answer. A row reachable through this branch (no
+        # answer_payload) is only trustworthy if the frame agrees: it must
+        # both carry one of those outcomes *and* match the run's own
+        # `public_outcome` column, which is written from the same frame at
+        # persist time (CHAOS-3297 Codex review MEDIUM #2). A corrupted or
+        # schema-skewed row that still happens to validate must not project
+        # false public semantics or crash the replay -- degrade to the same
+        # safe fallback used for a missing frame.
+        _REPLAYABLE_PREFLIGHT_OUTCOMES = NO_ANSWER_OUTCOMES | {
+            PublicOutcome.NEEDS_CLARIFICATION.value
+        }
         try:
             frame_obj = _DevAnswerFrameV2.model_validate(frame_payload)
-            answer_v2 = DevAnswerV2(
-                schema_version="dev_answer.v2",
-                answer_id=str(run.id),
-                conversation_id=str(run.conversation_id),
-                run_id=str(run.id),
-                # SQLite (test fixtures only) does not round-trip tz-aware
-                # datetimes through DateTime(timezone=True); PostgreSQL
-                # does, so this was unobserved until CHAOS-3299 Codex
-                # finding 1's fix made this branch reachable for the first
-                # time.
-                generated_at=_aware_required(run.ended_at or run.started_at),
-                public_outcome=frame_obj.public_outcome,
-                outcome_display_label=_OUTCOME_DISPLAY_LABELS[frame_obj.public_outcome],
-                frame=frame_obj,
-                narrative=None,
-            )
-            error = project_preflight_error(answer_v2, request_id=str(run.request_id))
+            if (
+                frame_obj.public_outcome.value not in _REPLAYABLE_PREFLIGHT_OUTCOMES
+                or run.public_outcome != frame_obj.public_outcome.value
+            ):
+                error = _replay_fallback_error(run)
+            else:
+                answer_v2 = DevAnswerV2(
+                    schema_version="dev_answer.v2",
+                    answer_id=str(run.id),
+                    conversation_id=str(run.conversation_id),
+                    run_id=str(run.id),
+                    # SQLite (test fixtures only) does not round-trip
+                    # tz-aware datetimes through DateTime(timezone=True);
+                    # PostgreSQL does, so this was unobserved until
+                    # CHAOS-3299 Codex finding 1's fix made this branch
+                    # reachable for the first time.
+                    generated_at=_aware_required(run.ended_at or run.started_at),
+                    public_outcome=frame_obj.public_outcome,
+                    outcome_display_label=_OUTCOME_DISPLAY_LABELS[
+                        frame_obj.public_outcome
+                    ],
+                    frame=frame_obj,
+                    narrative=None,
+                )
+                error = project_preflight_error(
+                    answer_v2, request_id=str(run.request_id)
+                )
         except ValidationError:
             error = _replay_fallback_error(run)
     else:

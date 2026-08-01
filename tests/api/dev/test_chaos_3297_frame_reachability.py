@@ -30,6 +30,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.dev import router as dev_router_module
+from dev_health_ops.api.dev.contract_fixtures_v2 import (
+    no_answer_answer_fixture,
+    positive_fixtures,
+)
 from dev_health_ops.api.dev.contracts import (
     DevContractVersions,
     DevScope,
@@ -375,6 +379,17 @@ async def test_preflight_frame_flush_failure_reaches_terminal_state_not_stranded
             select(DevAnswerFrame).where(DevAnswerFrame.run_id == run.id)
         )
         assert frame_row is None, "the poisoned frame insert must have been rolled back"
+        # Codex review MEDIUM #2: record_preflight()'s diagnostic flush
+        # happens before record_frame() on this same session/transaction, so
+        # the session.rollback() above -- necessary to clear the poisoned
+        # frame's rollback-only state -- would also erase it unless the
+        # orchestrator re-persists it. A run that terminated for a reason
+        # must not silently lose the reason.
+        assert run.preflight_outcome == "unresolved_no_authorized_match", (
+            "the record_preflight() diagnostic must survive the post-poison "
+            "rollback, not be silently erased along with the bad frame write "
+            f"(got {run.preflight_outcome!r})"
+        )
 
     # The duplicate POST must replay, not 409 -- proving the run actually
     # reached a terminal state the router's not-created branch can see.
@@ -451,3 +466,151 @@ async def test_replay_with_corrupted_frame_payload_falls_back_safely(
     # fallback -- otherwise this test could not distinguish "used the real
     # frame" from "always falls back".
     assert live_message != fallback_message
+
+
+async def test_replay_with_mismatched_frame_outcome_falls_back_safely(
+    dev_api_context,  # noqa: F811 -- pytest fixture imported from test_router
+) -> None:
+    """Codex re-review MEDIUM: a self-consistent but wrong-outcome frame must
+    not project its own semantics over the run's persisted outcome.
+
+    Persists a real preflight-terminated ``not_found`` frame, then swaps the
+    stored payload for a *different*, independently valid no-answer frame (a
+    ``denied`` fixture built by the real fixture producer --
+    ``DevAnswerFrame.model_validate`` accepts it on its own). Before this fix
+    ``_replayed_result`` trusted the frame's own ``public_outcome`` with no
+    cross-check against ``dev_runs.public_outcome``, so a stale or corrupted
+    row could replay a ``forbidden``/"You do not have access" error for a run
+    that actually terminated ``not_found`` -- false public semantics.
+    """
+
+    org_id = dev_api_context.org_id
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=_preflight_runtime(org_id=org_id)
+    )
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = _preflight_terminating_payload(conversation_id, org_id)
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+
+    async with dev_api_context.maker() as session:
+        run = await session.scalar(
+            select(DevRun).where(DevRun.conversation_id == uuid.UUID(conversation_id))
+        )
+        assert run is not None
+        assert run.public_outcome == "not_found"
+        frame_row = await session.scalar(
+            select(DevAnswerFrame).where(DevAnswerFrame.run_id == run.id)
+        )
+        assert frame_row is not None
+        # A fully valid frame, produced by the real fixture builder -- just
+        # for a different outcome than the run itself recorded.
+        denied_frame = no_answer_answer_fixture("denied")["frame"]
+        # The frame's own run_id must match the real run's id -- DevAnswerV2
+        # independently enforces that consistency, and this test's target
+        # (the run/frame *outcome* cross-check) must fail on its own merits,
+        # not be masked by an unrelated run_id mismatch.
+        denied_frame["run_id"] = str(run.id)
+        FrameContract.model_validate(denied_frame)  # sanity: valid on its own
+        frame_row.payload = denied_frame
+        await session.commit()
+
+    replay = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert replay.status_code == 200, (
+        f"a mismatched-but-valid frame outcome must degrade to a safe "
+        f"error, not project the frame's own outcome: "
+        f"{replay.status_code} {replay.text}"
+    )
+    replay_events = dict(_parse_sse_events(replay.text))
+    assert "answer.completed" not in replay_events
+    assert "error" in replay_events
+    fallback_message = "The prior Ask Dev request did not complete with an answer."
+    assert replay_events["error"]["error"]["safe_message"] == fallback_message
+    # "forbidden" is the code the (wrong) denied frame would have projected
+    # -- proving the replay did not adopt the mismatched frame's semantics.
+    assert replay_events["error"]["error"]["code"] != "forbidden"
+
+
+async def test_replay_with_answered_frame_falls_back_safely(
+    dev_api_context,  # noqa: F811 -- pytest fixture imported from test_router
+) -> None:
+    """Codex re-review MEDIUM: an out-of-vocabulary ``answered`` frame must
+    not crash the replay.
+
+    ``project_preflight_error`` is only total over the no-answer outcomes
+    plus ``needs_clarification`` (CHAOS-3292's ratified preflight-
+    termination vocabulary) -- a preflight itself never terminates with
+    ``answered``. Swaps the stored payload for the canonical ``answered``
+    positive fixture, which validates cleanly as a ``DevAnswerFrame`` but
+    hits ``project_preflight_error``'s own defensive
+    ``isinstance(projected, DevError)`` assertion. Before this fix that
+    raised an uncaught ``RuntimeError``, turning every future replay of the
+    idempotency key into a 500.
+    """
+
+    org_id = dev_api_context.org_id
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=_preflight_runtime(org_id=org_id)
+    )
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = _preflight_terminating_payload(conversation_id, org_id)
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+
+    async with dev_api_context.maker() as session:
+        run = await session.scalar(
+            select(DevRun).where(DevRun.conversation_id == uuid.UUID(conversation_id))
+        )
+        assert run is not None
+        frame_row = await session.scalar(
+            select(DevAnswerFrame).where(DevAnswerFrame.run_id == run.id)
+        )
+        assert frame_row is not None
+        # positive_fixtures()'s canonical "answered" frame: fully valid,
+        # produced by the real fixture builder, not a shape this run ever
+        # actually persisted.
+        answered_frame = positive_fixtures()["dev_answer_frame.v1"]
+        # See the mismatched-outcome test above: the frame's run_id must
+        # match the real run so this test's target (the answered-outcome
+        # totality gap) fails on its own merits.
+        answered_frame["run_id"] = str(run.id)
+        FrameContract.model_validate(answered_frame)  # sanity: valid on its own
+        frame_row.payload = answered_frame
+        await session.commit()
+
+    replay = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert replay.status_code == 200, (
+        f"an answered-outcome frame on a preflight-terminated run must "
+        f"degrade to a safe error, not 500: {replay.status_code} {replay.text}"
+    )
+    replay_events = dict(_parse_sse_events(replay.text))
+    assert "answer.completed" not in replay_events
+    assert "error" in replay_events
+    fallback_message = "The prior Ask Dev request did not complete with an answer."
+    assert replay_events["error"]["error"]["safe_message"] == fallback_message

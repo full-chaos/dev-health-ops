@@ -15,6 +15,8 @@ from dev_health_ops.llm.errors import (
     classify_provider_error,
 )
 
+from .contracts import AgentUsage
+
 
 class AgentProviderErrorCode(str, Enum):
     DISABLED = "disabled"
@@ -29,6 +31,7 @@ class AgentProviderErrorCode(str, Enum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     BUDGET_UNAVAILABLE = "budget_unavailable"
     PROVIDER_CONTRACT_VIOLATION = "provider_contract_violation"
+    OUTPUT_EXHAUSTED = "output_exhausted"
 
 
 _SAFE_MESSAGES = {
@@ -47,6 +50,10 @@ _SAFE_MESSAGES = {
         "The model provider returned more than one tool decision in a single "
         "turn, violating the sequential decision contract."
     ),
+    AgentProviderErrorCode.OUTPUT_EXHAUSTED: (
+        "The model provider exhausted its output/reasoning token budget "
+        "before completing a response."
+    ),
 }
 
 
@@ -57,10 +64,19 @@ class AgentProviderError(RuntimeError):
         *,
         retryable: bool = False,
         provider_dispatched: bool = True,
+        usage: AgentUsage | None = None,
     ):
         self.code = code
         self.retryable = retryable
         self.provider_dispatched = provider_dispatched
+        # Populated whenever the provider actually returned a response before
+        # this error was raised (e.g. OUTPUT_EXHAUSTED, a malformed decision,
+        # or a sequential-tool-contract violation): the caller still billed
+        # real tokens for that response. Both the BYO budget reservation
+        # reconciliation (guard_byo_call's exception path) and the
+        # orchestrator's terminal run accounting (ProviderBudget.add) read
+        # this so a failed call is never silently free (CHAOS-3285).
+        self.usage = usage
         super().__init__(_SAFE_MESSAGES[code])
 
 

@@ -381,6 +381,11 @@ async def test_deprecated_post_readiness_route_is_410_and_touches_nothing(
             "unsupported_model",
             "sequential tool-call contract",
         ),
+        (
+            "output_exhausted",
+            "unsupported_model",
+            "output/reasoning token budget",
+        ),
     ],
 )
 def test_failed_readiness_exposes_only_specific_safe_remediation(

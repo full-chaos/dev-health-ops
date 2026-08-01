@@ -19,6 +19,7 @@ from dev_health_ops.llm.providers.openai_capabilities import (
 )
 from dev_health_ops.logging_config import pin_content_carrying_client_loggers
 
+from .budget_policy import model_family_budget
 from .contracts import (
     AgentDecisionResult,
     AgentDisambiguation,
@@ -205,6 +206,7 @@ class OpenAICompatibleAgentProvider:
         allow_final_answer = not tools or any(
             message.role is AgentMessageRole.TOOL for message in messages
         )
+        budget = model_family_budget(self.model)
         completion_kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": [self._message_payload(item) for item in messages],
@@ -212,7 +214,9 @@ class OpenAICompatibleAgentProvider:
             "tool_choice": (
                 ("auto" if allow_final_answer else "required") if tools else None
             ),
-            "max_completion_tokens": max_output_tokens,
+            "max_completion_tokens": budget.request_max_completion_tokens(
+                max_output_tokens
+            ),
         }
         if tools and supports_parallel_tool_calls(self.model):
             # Ask Dev's runtime is a sequential one-decision-per-round state
@@ -266,7 +270,45 @@ class OpenAICompatibleAgentProvider:
                 cancel_task.cancel()
                 await asyncio.gather(cancel_task, return_exceptions=True)
 
+        # Normalized once the response is in hand, so it is available to
+        # attach to every raise path below -- not only the success path. A
+        # provider that reported output/reasoning exhaustion, a sequential-
+        # tool-contract violation, or an otherwise malformed decision still
+        # returned (and billed) a real response; discarding it before it is
+        # read poisons BYO budget reconciliation into "usage_unavailable",
+        # which disables enforcement and then rejects every later call
+        # without dispatching it (CHAOS-3285).
+        agent_usage = self._normalize_usage(response)
+        # A response with no usage object at all normalizes to 0 input / 0
+        # output above; a response that genuinely reports zero of both is
+        # indistinguishable from that and, per the same invariant the
+        # success path already relies on (a valid completion cannot consume
+        # zero input AND zero output tokens), can't be real either. Only
+        # attach usage to the raised error when it's actually informative --
+        # otherwise a failure with unreported usage would reconcile as a
+        # real $0 call (poisoning nothing, but silently making an unknown
+        # cost look free) instead of the pre-existing conservative
+        # "usage unavailable" handling for genuinely unreported usage
+        # (CHAOS-3285).
+        reported_usage = (
+            agent_usage
+            if agent_usage.input_tokens or agent_usage.output_tokens
+            else None
+        )
+
         try:
+            # A model that ran out of its output/reasoning token budget
+            # reports finish_reason="length" -- checked, and raised, before
+            # any attempt to parse message content as JSON (below, inside
+            # _normalize_response), so exhaustion never masquerades as
+            # malformed output (INVALID_RESPONSE). This covers both an empty
+            # ``content`` and a truncated-but-technically-parseable partial
+            # JSON payload alike: the finish_reason alone is dispositive
+            # (CHAOS-3285).
+            if getattr(response.choices[0], "finish_reason", None) == "length":
+                raise AgentProviderError(
+                    AgentProviderErrorCode.OUTPUT_EXHAUSTED, usage=reported_usage
+                )
             decision = self._normalize_response(
                 response,
                 allowed_tool_ids=frozenset(item.tool_id for item in tools),
@@ -274,7 +316,8 @@ class OpenAICompatibleAgentProvider:
             )
         except _SequentialToolContractViolation:
             raise AgentProviderError(
-                AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION
+                AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION,
+                usage=reported_usage,
             ) from None
         except (
             AttributeError,
@@ -283,29 +326,39 @@ class OpenAICompatibleAgentProvider:
             ValueError,
             json.JSONDecodeError,
         ):
-            raise AgentProviderError(AgentProviderErrorCode.INVALID_RESPONSE) from None
+            raise AgentProviderError(
+                AgentProviderErrorCode.INVALID_RESPONSE, usage=reported_usage
+            ) from None
+        return AgentDecisionResult(
+            decision=decision,
+            usage=agent_usage,
+            latency_ms=max(0, round((time.monotonic() - started) * 1000)),
+            provider_fingerprint=self.provider_fingerprint,
+            model_fingerprint=self.model_fingerprint,
+        )
+
+    def _normalize_usage(self, response: Any) -> AgentUsage:
         usage = getattr(response, "usage", None)
         input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
         prompt_details = getattr(usage, "prompt_tokens_details", None)
         cached_tokens = getattr(prompt_details, "cached_tokens", None)
-        return AgentDecisionResult(
-            decision=decision,
-            usage=AgentUsage(
+        completion_details = getattr(usage, "completion_tokens_details", None)
+        reasoning_tokens = getattr(completion_details, "reasoning_tokens", None)
+        return AgentUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=(
+                int(cached_tokens) if cached_tokens is not None else None
+            ),
+            reasoning_tokens=(
+                int(reasoning_tokens) if reasoning_tokens is not None else None
+            ),
+            estimated_cost_microusd=_estimated_cost_microusd(
+                model=self.model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                cached_input_tokens=(
-                    int(cached_tokens) if cached_tokens is not None else None
-                ),
-                estimated_cost_microusd=_estimated_cost_microusd(
-                    model=self.model,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                ),
             ),
-            latency_ms=max(0, round((time.monotonic() - started) * 1000)),
-            provider_fingerprint=self.provider_fingerprint,
-            model_fingerprint=self.model_fingerprint,
         )
 
     @staticmethod

@@ -48,10 +48,13 @@ def response(
     content: str | None = None,
     tool_call: Any = None,
     tool_calls: list[Any] | None = None,
+    finish_reason: str = "stop",
+    reasoning_tokens: int | None = None,
 ) -> Any:
     return SimpleNamespace(
         choices=[
             SimpleNamespace(
+                finish_reason=finish_reason,
                 message=SimpleNamespace(
                     content=content,
                     tool_calls=(
@@ -61,13 +64,16 @@ def response(
                         if tool_call
                         else []
                     ),
-                )
+                ),
             )
         ],
         usage=SimpleNamespace(
             prompt_tokens=11,
             completion_tokens=7,
             prompt_tokens_details=SimpleNamespace(cached_tokens=3),
+            completion_tokens_details=SimpleNamespace(
+                reasoning_tokens=reasoning_tokens
+            ),
         ),
     )
 
@@ -929,6 +935,378 @@ async def test_tool_result_continuation_allows_tools_and_strict_final_answer() -
     ]
     assert schema["properties"]["value"]["anyOf"][0]["required"] == ["ok"]
     assert client.chat.completions.calls[0]["tool_choice"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_combined_tools_auto_and_strict_grammar_shape_pinned_together() -> None:
+    """CHAOS-3285 plan §6.2: the wire shape sent on every production round
+    >= 2 -- tools present *and* tool_choice:"auto" *and* a strict
+    json_schema response_format *and* parallel_tool_calls:false, all
+    simultaneously -- is the exact shape certification never sent
+    (readiness's two probe calls each send only a subset). Pin all four in
+    one kwargs dict from a single round so a regression in any one clause
+    fails this test.
+    """
+    client = Client(
+        [response(content=json.dumps({"kind": "final_answer", "value": {"ok": True}}))]
+    )
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="agent-model", client=client
+    )
+    request = AgentToolRequest("lookup", {"id": "WU-1"}, "call-1")
+
+    await provider.decide(
+        [
+            AgentMessage(AgentMessageRole.USER, "question"),
+            AgentMessage(AgentMessageRole.ASSISTANT, "", tool_request=request),
+            AgentMessage(AgentMessageRole.TOOL, '{"result":1}', tool_call_id="call-1"),
+        ],
+        [AgentToolDefinition("lookup", "Lookup", {"type": "object"})],
+        {"type": "object", "properties": {"ok": {"type": "boolean"}}},
+        1,
+        256,
+    )
+
+    sent = client.chat.completions.calls[0]
+    assert sent["tools"] is not None and len(sent["tools"]) == 1
+    assert sent["tool_choice"] == "auto"
+    assert sent["parallel_tool_calls"] is False
+    assert sent["response_format"]["json_schema"]["strict"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-5-nano", "o3-mini", "agent-model"])
+async def test_max_completion_tokens_unchanged_for_every_family_at_zero_headroom(
+    model: str,
+) -> None:
+    """Behavior-unchanged proof for CHAOS-3285 commit 2's budget_policy
+    wiring: at reasoning_headroom_tokens == 0 (the only value any family has
+    today), the wire max_completion_tokens must equal the caller's visible
+    cap verbatim -- byte-identical to the pre-commit-2 behavior -- for a
+    reasoning-counted family (gpt-5, o-series) and the default family alike.
+    """
+    call = SimpleNamespace(
+        id="call-1", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    client = Client([response(tool_call=call)])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model=model, client=client
+    )
+
+    await provider.decide(
+        [AgentMessage(AgentMessageRole.USER, "question")],
+        [AgentToolDefinition("lookup", "Lookup", {"type": "object"})],
+        {"type": "object"},
+        1,
+        4_096,
+    )
+
+    assert client.chat.completions.calls[0]["max_completion_tokens"] == 4_096
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_length_with_empty_content_raises_output_exhausted() -> (
+    None
+):
+    """CHAOS-3285: before this fix, a reasoning model that ran out of its
+    output budget mid-decision returned finish_reason="length" with empty
+    content, which json.loads() turned into a JSONDecodeError, classified as
+    INVALID_RESPONSE -> internal_error (an opaque application failure for
+    what is actually a structural model-capability mismatch). finish_reason
+    is now read and dispositive before any JSON parsing is attempted.
+    """
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="gpt-5-nano",
+        client=Client([response(content="", finish_reason="length")]),
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+    assert caught.value.code is not AgentProviderErrorCode.INVALID_RESPONSE
+    assert caught.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_length_with_truncated_partial_content_still_exhausted() -> (
+    None
+):
+    """Belt-and-braces (plan §3.3): a truncated-but-technically-parseable
+    partial JSON payload is the *worse* case, because it can validate and
+    silently pass through as a malformed-but-plausible decision. finish_reason
+    alone must be dispositive regardless of whether content happens to parse.
+    """
+    truncated = '{"kind": "final_answer", "value": {"ok"'
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="gpt-5-nano",
+        client=Client([response(content=truncated, finish_reason="length")]),
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_length_attaches_billed_usage_to_the_error() -> None:
+    """CHAOS-3285: before this fix, OUTPUT_EXHAUSTED was raised before
+    response.usage was ever read, so the error carried no usage data at
+    all -- downstream, guard_byo_call's exception handler
+    (dev_health_ops.llm.budget) treats a usage-less failure as
+    "usage_unavailable", which poisons the whole BYO budget window and
+    rejects every later call without dispatching it. Reviewer's exact
+    reproduction: a parseable finish_reason="length" response reporting 40
+    input / 256 output / 240 reasoning tokens must still surface those
+    numbers on the raised error.
+    """
+    exhausted = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="length",
+                message=SimpleNamespace(content="", tool_calls=[]),
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=40,
+            completion_tokens=256,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=240),
+        ),
+    )
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-nano", client=Client([exhausted])
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+    usage = caught.value.usage
+    assert usage is not None
+    assert usage.input_tokens == 40
+    assert usage.output_tokens == 256
+    assert usage.reasoning_tokens == 240
+    assert usage.cached_input_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_length_with_zero_reported_usage_withholds_usage() -> None:
+    """CHAOS-3285 follow-up: a valid completion can never consume zero input
+    AND zero output tokens (the same invariant budget.py's _agent_usage()
+    already relies on for the success path). A provider that reports
+    exactly that on an exhausted response must not have that zero usage
+    attached to the error -- otherwise guard_byo_call reconciles the
+    reservation as a real $0 charge and silently drops the actual
+    (unreported) cost from BYO budget accounting instead of holding the
+    reservation conservatively.
+    """
+    exhausted = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="length",
+                message=SimpleNamespace(content="", tool_calls=[]),
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=0,
+            completion_tokens=0,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=0),
+        ),
+    )
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-nano", client=Client([exhausted])
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+    assert caught.value.usage is None
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_length_with_no_usage_object_withholds_usage() -> None:
+    """A response that omits ``usage`` entirely normalizes to the same 0/0
+    shape as one that reports literal zeros -- both must be treated as
+    unreported, not as a free call.
+    """
+    exhausted = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="length",
+                message=SimpleNamespace(content="", tool_calls=[]),
+            )
+        ],
+        usage=None,
+    )
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-nano", client=Client([exhausted])
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.OUTPUT_EXHAUSTED
+    assert caught.value.usage is None
+
+
+@pytest.mark.asyncio
+async def test_contract_violation_and_invalid_response_also_attach_usage() -> None:
+    """CHAOS-3285 audit: OUTPUT_EXHAUSTED was the reported finding, but every
+    raise path inside the same try block discards response.usage the same
+    way once a response has been received -- a sequential-tool-contract
+    violation and a malformed-but-received decision both still billed real
+    tokens and must not be reconciled as usage_unavailable either.
+    """
+    first = SimpleNamespace(
+        id="call-1", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    second = SimpleNamespace(
+        id="call-2", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="agent-model",
+        client=Client([response(tool_calls=[first, second])]),
+    )
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [AgentToolDefinition("lookup", "Lookup", {"type": "object"})],
+            {"type": "object"},
+            1,
+            256,
+        )
+    assert caught.value.code is AgentProviderErrorCode.PROVIDER_CONTRACT_VIOLATION
+    assert caught.value.usage is not None
+    assert caught.value.usage.input_tokens == 11
+    assert caught.value.usage.output_tokens == 7
+
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="agent-model",
+        client=Client([response(content="not-json", finish_reason="stop")]),
+    )
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+    assert caught.value.code is AgentProviderErrorCode.INVALID_RESPONSE
+    assert caught.value.usage is not None
+    assert caught.value.usage.input_tokens == 11
+    assert caught.value.usage.output_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_stop_does_not_raise_output_exhausted() -> None:
+    """The fail-before/pass-after control: an ordinary, non-exhausted
+    malformed response (finish_reason="stop") must still classify as
+    INVALID_RESPONSE, exactly as before this change -- proving the new
+    finish_reason check is additive, not a wholesale reclassification of
+    every malformed response as exhaustion.
+    """
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="agent-model",
+        client=Client([response(content="not-json", finish_reason="stop")]),
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.INVALID_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_reasoning_tokens_surfaced_on_agent_usage() -> None:
+    call = SimpleNamespace(
+        id="call-1", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    client = Client([response(tool_call=call, reasoning_tokens=192)])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-nano", client=client
+    )
+
+    result = await provider.decide(
+        [AgentMessage(AgentMessageRole.USER, "question")],
+        [AgentToolDefinition("lookup", "Lookup", {"type": "object"})],
+        {"type": "object"},
+        1,
+        256,
+    )
+
+    assert result.usage.reasoning_tokens == 192
+
+
+@pytest.mark.asyncio
+async def test_missing_reasoning_tokens_detail_surfaces_as_none_not_zero() -> None:
+    """None (field absent/unreported) must stay distinguishable from an
+    explicit 0 -- collapsing them would make a provider that never reports
+    reasoning usage indistinguishable from one that reported zero reasoning
+    tokens, corrupting the accounting CHAOS-3285's later commits build on.
+    """
+    call = SimpleNamespace(
+        id="call-1", function=SimpleNamespace(name="lookup", arguments="{}")
+    )
+    client = Client([response(tool_call=call, reasoning_tokens=None)])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="agent-model", client=client
+    )
+
+    result = await provider.decide(
+        [AgentMessage(AgentMessageRole.USER, "question")],
+        [AgentToolDefinition("lookup", "Lookup", {"type": "object"})],
+        {"type": "object"},
+        1,
+        256,
+    )
+
+    assert result.usage.reasoning_tokens is None
 
 
 @pytest.mark.asyncio

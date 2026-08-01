@@ -17,6 +17,29 @@ lifecycle: active
 
 AI Attribution, several report subroutes, and some other product routes are currently marked preview in the product navigation source. Their absence from v2 navigation is intentional.
 
+## Ask Dev named a subject it could not confirm
+
+When you ask Ask Dev about a specific project, repository, team, issue, pull
+request, or work unit, the server resolves that name against your workspace's
+authorized catalog **before** it looks anything up. Three replies come from
+that step, and each means something different:
+
+- **"No matching subject was found."** No entity you are authorized to see
+  matches the name. This is also what you see for an entity that exists in a
+  different workspace, deliberately: the reply cannot be used to discover
+  whether something exists elsewhere. Check the spelling, or the workspace you
+  are signed in to.
+- **"More than one authorized entity matches..."** The name is ambiguous. Ask
+  again naming exactly which one you mean.
+- **"This answer is temporarily unavailable."** The catalog could not be
+  reached. This one is worth retrying in a few minutes; the others are not.
+
+Ask Dev will not answer about your whole organization under a name it could
+not confirm. If a question that names something specific comes back with one
+of these replies, that is the intended behaviour, not a lookup failure.
+
+Questions that name nothing specific still answer organization-wide as usual.
+
 ## Ask Dev metrics
 
 Ask Dev metric catalog and query fields require an authenticated workspace

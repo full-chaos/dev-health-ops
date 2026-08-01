@@ -89,6 +89,15 @@ When the selected context is correct, continue to [Check synchronization status 
 
 For Investment, a result also depends on supported WorkUnits, effort values, categorization output, and the selected scope. Missing source material can reduce the result or leave no usable rows; it must not be interpreted as a deliberate zero distribution.
 
+## An Ask Dev answer that declines to name a subject
+
+"This question is not supported yet" from Ask Dev, for a question that names a
+team or names several subjects at once, is a capability boundary rather than a
+data gap. The subject was found; the answer shape for it is not built yet.
+Asking about a single project or repository instead will answer normally.
+
+Do not read this as "no data for that team". Nothing was looked up.
+
 ## Escalate runtime failures separately
 
 If workspace configuration and coverage are correct but synchronization, ingestion, workers, queues, or stores are failing, continue to the operator runbooks:

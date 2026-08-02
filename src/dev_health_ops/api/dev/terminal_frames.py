@@ -60,6 +60,7 @@ from .contracts_v2.base import (
     PublicOutcome,
     SourceClass,
 )
+from .contracts_v2.deficiency import DeficiencyFinding
 from .contracts_v2.embedded import DevCoverageV2, DevEvidenceRefV2, DevMetricRefV2
 from .contracts_v2.frame import (
     DevAnswerFact,
@@ -69,7 +70,13 @@ from .contracts_v2.frame import (
     DevFrameConflict,
     DevFrameVersions,
 )
+from .contracts_v2.health_rules import HealthRuleFinding
 from .contracts_v2.no_answer_policy import CANONICAL_NO_ANSWER_COPY, NO_ANSWER_OUTCOMES
+from .contracts_v2.result import DevInvestigationResult
+from .investigation_plans.wave_3_1_plans import (
+    capped_deficiency_findings,
+    capped_health_findings,
+)
 
 __all__ = [
     "LEGACY_ANSWER_PLAN_ID",
@@ -390,7 +397,64 @@ def build_error_frame(
     )
 
 
-def wrap_legacy_answer_as_frame(answer: DevAnswer, *, run_id: str) -> DevAnswerFrame:
+def _findings_from_investigation_result(
+    investigation_result: DevInvestigationResult | None,
+) -> tuple[
+    tuple[HealthRuleFinding, ...],
+    bool,
+    tuple[DeficiencyFinding, ...],
+    bool,
+]:
+    """Flatten every observation's ``content.health_findings``/
+    ``deficiency_findings`` across ``investigation_result``, then re-sort
+    and cap at the frame's own bound via the SAME
+    ``capped_health_findings``/``capped_deficiency_findings`` functions
+    ``investigation_plans.wave_3_1_plans``'s own step wiring uses -- one
+    capping function, never a second copy that could disagree on which 50
+    survive.
+
+    A per-observation ``content.health_findings_truncated``/
+    ``deficiency_findings_truncated`` is preserved by ORing it into the
+    frame-level flag, never discarded: a source that already dropped
+    findings before this function ever saw them must still disclose that,
+    even if the flattened-and-recapped total this function computes
+    happens to land back under 50 (Codex-anticipated finding: re-deriving
+    truncation only from ``len(flattened) > 50`` would silently lose a
+    truncation signal from any single observation whose OWN pre-cap set
+    exceeded 50 but whose surviving 50 combine with few enough others to
+    read as untruncated overall).
+    """
+
+    if investigation_result is None:
+        return (), False, (), False
+    contents = [
+        obs.content
+        for obs in investigation_result.observations
+        if obs.content is not None
+    ]
+    all_health = tuple(
+        finding for content in contents for finding in content.health_findings
+    )
+    all_deficiency = tuple(
+        finding for content in contents for finding in content.deficiency_findings
+    )
+    health, health_truncated = capped_health_findings(all_health)
+    deficiency, deficiency_truncated = capped_deficiency_findings(all_deficiency)
+    health_truncated = health_truncated or any(
+        content.health_findings_truncated for content in contents
+    )
+    deficiency_truncated = deficiency_truncated or any(
+        content.deficiency_findings_truncated for content in contents
+    )
+    return health, health_truncated, deficiency, deficiency_truncated
+
+
+def wrap_legacy_answer_as_frame(
+    answer: DevAnswer,
+    *,
+    run_id: str,
+    investigation_result: DevInvestigationResult | None = None,
+) -> DevAnswerFrame:
     """Mirror a fully-validated legacy v1 ``DevAnswer`` into a real frame.
 
     Always ``answered_with_gaps``, never plain ``answered``: the legacy
@@ -407,7 +471,28 @@ def wrap_legacy_answer_as_frame(answer: DevAnswer, *, run_id: str) -> DevAnswerF
     and ``contracts_v2.base.FactDisclosure``), so a v1 claim carrying
     stale/uncertain/conflicting/untrusted_source is no longer silently
     dropped when embedded into a frame.
+
+    CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02):
+    ``investigation_result``, when the run's plan executor produced one
+    ALONGSIDE the legacy model loop (both run unconditionally today --
+    see ``orchestrator.run()``), is embedded into this SAME frame's
+    ``health_findings``/``deficiency_findings`` -- never a second,
+    separate frame. ``direct_answer``/``public_outcome``/``completion``
+    stay driven purely by ``answer`` (the legacy loop is still what a
+    caller sees); the plan's structured findings ride alongside as
+    additional, independently-verifiable content. ``versions.plan_id``
+    stays ``LEGACY_ANSWER_PLAN_ID`` regardless -- it discloses provenance
+    of ``direct_answer``, which the plan never authored, not of every
+    field on the frame. Collapsing this divergence (the frame becoming
+    authoritative end to end) is explicitly stack #4/#5 territory.
     """
+
+    (
+        health_findings,
+        health_findings_truncated,
+        deficiency_findings,
+        deficiency_findings_truncated,
+    ) = _findings_from_investigation_result(investigation_result)
 
     facts = tuple(
         DevAnswerFact(
@@ -449,6 +534,10 @@ def wrap_legacy_answer_as_frame(answer: DevAnswer, *, run_id: str) -> DevAnswerF
         completion=DevCompletionBlock(calculable=False),
         sections=(section,),
         facts=facts,
+        health_findings=health_findings,
+        health_findings_truncated=health_findings_truncated,
+        deficiency_findings=deficiency_findings,
+        deficiency_findings_truncated=deficiency_findings_truncated,
         metrics=tuple(
             DevMetricRefV2.model_validate(metric.model_dump())
             for metric in answer.metrics

@@ -640,6 +640,14 @@ class DevOrchestrator:
         resolve_scope_attempted = False
         last_resolve_scope_outcome: ScopeResolutionOutcome | None = None
         selected_event_sink = event_sink or self._event_sink
+        # CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02): set
+        # by the CHAOS-3295 plan-execution block below when a plan actually
+        # runs, read by `finish()`'s closure (a free variable over this
+        # enclosing scope, not `nonlocal` -- `finish()` only reads it) so
+        # the legacy answer's frame can embed the plan's findings alongside
+        # it, without threading a new parameter through every one of
+        # `finish()`'s ~35 call sites.
+        investigation_result: DevInvestigationResult | None = None
 
         async def transition(state: RunState, safe_code: str | None = None) -> None:
             event = OrchestratorEvent(state=state, safe_code=safe_code)
@@ -734,7 +742,9 @@ class DevOrchestrator:
                 try:
                     frame = (
                         terminal_frames.wrap_legacy_answer_as_frame(
-                            answer, run_id=run_id
+                            answer,
+                            run_id=run_id,
+                            investigation_result=investigation_result,
                         )
                         if answer is not None
                         else terminal_frames.build_error_frame(

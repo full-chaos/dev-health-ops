@@ -43,7 +43,11 @@ from ..contracts_v2.base import (
     SourceClass,
     SourceRequirementState,
 )
-from ..contracts_v2.deficiency import DeficiencyFinding, OperationalDeficiencyInventory
+from ..contracts_v2.deficiency import (
+    DeficiencyFinding,
+    OperationalDeficiencyInventory,
+    finding_sort_key,
+)
 from ..contracts_v2.health_rules import HealthRuleFinding
 from ..contracts_v2.plan import DevInvestigationPlan, DevSourceRequirement
 from ..contracts_v2.result import HEALTH_FINDING_SEVERITY_RANK, DevSourceContent
@@ -59,6 +63,8 @@ __all__ = [
     "WAVE_3_1_PLANS_BY_INTENT",
     "WAVE_3_1_QUESTION_INTENT_IDS",
     "build_registry_with_wave_3_1",
+    "capped_deficiency_findings",
+    "capped_health_findings",
     "register_wave_3_1_steps",
 ]
 
@@ -127,16 +133,21 @@ class _OperationalDeficiencyEvaluator(Protocol):
 _MAX_FINDINGS = 50
 
 
-def _capped_health_findings(
+def capped_health_findings(
     findings: tuple[HealthRuleFinding, ...],
 ) -> tuple[tuple[HealthRuleFinding, ...], bool]:
     """Sort ``findings`` (launch-eligible only -- see the caller) into the
     canonical worst-severity-first-then-``finding_id`` order
-    ``DevSourceContent.validate_finding_order`` requires, then cap at
-    :data:`_MAX_FINDINGS`, returning whether the cap actually bit.
-    Reuses ``contracts_v2.result.HEALTH_FINDING_SEVERITY_RANK`` by
-    reference -- the exact table the contract-layer validator checks
-    against, never a second copy that could silently disagree with it.
+    ``DevSourceContent.validate_finding_order``/``DevAnswerFrame.
+    validate_frame_semantics`` require, then cap at :data:`_MAX_FINDINGS`,
+    returning whether the cap actually bit. Reuses ``contracts_v2.result.
+    HEALTH_FINDING_SEVERITY_RANK`` by reference -- the exact table both
+    contract-layer validators check against, never a second copy that
+    could silently disagree with them. Public (not module-private): also
+    used by ``terminal_frames.wrap_legacy_answer_as_frame`` to flatten a
+    ``DevInvestigationResult``'s observations into ``DevAnswerFrame.
+    health_findings`` -- one capping function, never a second copy that
+    could disagree on which 50 survive.
     """
 
     ordered = tuple(
@@ -162,7 +173,7 @@ def _health_profile_content(result: HealthProfileResult) -> DevSourceContent:
     ``health_profile_synthesis``'s own module docstring).
     """
 
-    capped, truncated = _capped_health_findings(result.launch_findings)
+    capped, truncated = capped_health_findings(result.launch_findings)
     return DevSourceContent(
         schema_version="dev_source_content.v1",
         health_findings=capped,
@@ -192,27 +203,34 @@ def _health_profile_outcome(result: HealthProfileResult) -> StepOutcome:
     )
 
 
-def _capped_deficiency_findings(
+def capped_deficiency_findings(
     findings: tuple[DeficiencyFinding, ...],
 ) -> tuple[tuple[DeficiencyFinding, ...], bool]:
-    """``OperationalDeficiencyInventory.findings`` is already validated,
-    at its own contract layer, into the canonical
-    (severity, category, finding_id) order ``DevSourceContent.
-    validate_finding_order`` checks deficiency_findings against (via the
-    SAME ``finding_sort_key`` import) -- so unlike health findings, no
-    re-sort is needed here, only the cap. Keeping the first
-    ``_MAX_FINDINGS`` of an already worst-first list is exactly "keep the
-    most severe N".
+    """Sort ``findings`` by ``deficiency.finding_sort_key`` (severity,
+    category, finding_id) -- the exact key ``OperationalDeficiencyInventory.
+    findings`` is already validated against at its own contract layer, and
+    ``DevSourceContent``/``DevAnswerFrame``'s ``validate_finding_order``
+    check deficiency_findings against -- then cap at :data:`_MAX_FINDINGS`.
+
+    Always re-sorts, even though a SINGLE ``OperationalDeficiencyInventory.
+    findings`` tuple already arrives in this order (a no-op re-sort there):
+    ``terminal_frames.wrap_legacy_answer_as_frame`` calls this over a
+    FLATTENED concatenation of every observation's own
+    ``content.deficiency_findings`` -- each individually sorted, but their
+    concatenation is not -- so trusting pre-sorted input here would be
+    correct only for today's single-observation callers and silently wrong
+    the moment a plan emits more than one.
     """
 
-    truncated = len(findings) > _MAX_FINDINGS
-    return findings[:_MAX_FINDINGS], truncated
+    ordered = tuple(sorted(findings, key=finding_sort_key))
+    truncated = len(ordered) > _MAX_FINDINGS
+    return ordered[:_MAX_FINDINGS], truncated
 
 
 def _deficiency_inventory_content(
     inventory: OperationalDeficiencyInventory,
 ) -> DevSourceContent:
-    capped, truncated = _capped_deficiency_findings(inventory.findings)
+    capped, truncated = capped_deficiency_findings(inventory.findings)
     return DevSourceContent(
         schema_version="dev_source_content.v1",
         deficiency_findings=capped,

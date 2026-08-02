@@ -110,6 +110,14 @@ class DevActualCompletion:
     rule_version: str
     reason_codes: list[str]
     required_children: list[DevStatusFact]
+    # CHAOS-3297 stack #2: the complete denominator/numerator from the
+    # server's UNBOUNDED required-work assessment set, never derived from
+    # ``len(required_children)`` (display-bounded above). Both are
+    # ``None`` together when the required-child source itself was
+    # truncated -- an honestly unknown total, not a fabricated one.
+    required_child_total: int | None
+    required_child_complete: int | None
+    display_truncated: bool
     conflicts: list[DevStatusConflict]
     source_ref_ids: list[strawberry.ID]
     evidence_ref_ids: list[strawberry.ID]

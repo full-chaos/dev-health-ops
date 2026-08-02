@@ -424,3 +424,54 @@ async def test_savepoint_wrapped_failure_does_not_lose_an_earlier_write(
             SettingsService(verify_session, org_id)
         ).load()
     assert final.for_role(AgentRole.LEGACY_AGENT) == earlier_write
+
+
+class _FakeDialect:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeBind:
+    def __init__(self, dialect_name: str) -> None:
+        self.dialect = _FakeDialect(dialect_name)
+
+
+class _FakeUnsupportedDialectSession:
+    """A session double exposing only what ``_upsert_setting_row`` reads
+    before it must reject -- ``get_bind().dialect.name`` -- so this test
+    proves the rejection happens WITHOUT ever attempting a database
+    operation, on a dialect with no engine available to test against at
+    all (real production is postgresql, tests are sqlite; a fake is the
+    only way to exercise the "some other dialect" branch)."""
+
+    def __init__(self, dialect_name: str) -> None:
+        self._dialect_name = dialect_name
+
+    def get_bind(self) -> _FakeBind:
+        return _FakeBind(self._dialect_name)
+
+
+@pytest.mark.asyncio
+async def test_upsert_setting_row_rejects_a_dialect_without_native_upsert() -> None:
+    """CHAOS-3285 round 4 (Codex MEDIUM, ratified): a prior version of
+    ``_upsert_setting_row`` fell back to a SAVEPOINT-guarded select-then-
+    insert for any dialect other than postgresql/sqlite -- itself still
+    racy under true concurrent same-role writers (two sessions can both
+    observe "no row yet" inside their own savepoint and both attempt
+    INSERT), so the fallback's implicit "atomic" claim was one this
+    function could not actually honor. Production runs postgresql, tests
+    run sqlite -- both have a native upsert -- so an unsupported dialect
+    must be rejected loudly and by name, not silently handled by a
+    guarantee that does not hold."""
+
+    from dev_health_ops.llm.agent.roles import _upsert_setting_row
+
+    with pytest.raises(NotImplementedError, match="mysql"):
+        await _upsert_setting_row(
+            _FakeUnsupportedDialectSession("mysql"),  # type: ignore[arg-type]
+            org_id="org_1",
+            category="llm",
+            key="some_key",
+            value="some_value",
+            description="some description",
+        )

@@ -25,7 +25,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.services.configuration.generic import SettingsService
@@ -161,10 +160,29 @@ async def _upsert_setting_row(
     already expects from re-running preflight; this fix only makes it
     race-safe (no uncaught ``IntegrityError``) rather than changing what it
     means to certify a role twice.
+
+    Only ``postgresql`` (production) and ``sqlite`` (tests) are supported.
+    CHAOS-3285 round 4 (Codex MEDIUM, ratified): a prior version of this
+    function fell back to a SAVEPOINT-guarded select-then-insert for any
+    OTHER dialect, still racy in the same way ``SettingsService.set()`` is
+    (two sessions can both observe "no row yet" inside their own savepoint
+    and both attempt INSERT) -- an "atomic fallback" this function cannot
+    actually honor. Rejecting loudly here, naming the dialect, is strictly
+    better than a claimed guarantee this function cannot keep on a dialect
+    nobody has verified against.
     """
 
     now = datetime.now(timezone.utc)
     dialect_name = session.get_bind().dialect.name
+    if dialect_name not in ("postgresql", "sqlite"):
+        raise NotImplementedError(
+            f"SettingsRoleCertificationStore has no atomic upsert for the "
+            f"{dialect_name!r} SQLAlchemy dialect -- only 'postgresql' "
+            "(production) and 'sqlite' (tests) are supported. Add native "
+            "ON CONFLICT DO UPDATE support for this dialect before using "
+            "it here; do not reintroduce a non-atomic fallback."
+        )
+
     table = Setting.__table__
     insert_values: dict[str, Any] = {
         "id": uuid.uuid4(),
@@ -177,53 +195,23 @@ async def _upsert_setting_row(
         "created_at": now,
         "updated_at": now,
     }
-    if dialect_name in ("postgresql", "sqlite"):
-        dialect_insert: Any
-        if dialect_name == "postgresql":
-            from sqlalchemy.dialects.postgresql import insert as dialect_insert
-        else:
-            from sqlalchemy.dialects.sqlite import insert as dialect_insert
+    dialect_insert: Any
+    if dialect_name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as dialect_insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert as dialect_insert
 
-        stmt = dialect_insert(table).values(**insert_values)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["org_id", "category", "key"],
-            set_={
-                "value": stmt.excluded.value,
-                "description": stmt.excluded.description,
-                "updated_at": stmt.excluded.updated_at,
-            },
-        )
-        await session.execute(stmt)
-        await session.flush()
-        return
-    # Any other dialect: still atomic (a SAVEPOINT rolls back only this
-    # operation on conflict, never the caller's outer transaction, unlike an
-    # uncaught IntegrityError from a bare select-then-insert), just not a
-    # single-statement native upsert.
-    async with session.begin_nested():
-        existing = (
-            await session.execute(
-                select(Setting).where(
-                    Setting.org_id == org_id,
-                    Setting.category == category,
-                    Setting.key == key,
-                )
-            )
-        ).scalar_one_or_none()
-        if existing is None:
-            session.add(
-                Setting(
-                    key=key,
-                    category=category,
-                    value=value,
-                    org_id=org_id,
-                    description=description,
-                )
-            )
-        else:
-            existing.value = value
-            existing.description = description
-        await session.flush()
+    stmt = dialect_insert(table).values(**insert_values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["org_id", "category", "key"],
+        set_={
+            "value": stmt.excluded.value,
+            "description": stmt.excluded.description,
+            "updated_at": stmt.excluded.updated_at,
+        },
+    )
+    await session.execute(stmt)
+    await session.flush()
 
 
 class SettingsRoleCertificationStore:

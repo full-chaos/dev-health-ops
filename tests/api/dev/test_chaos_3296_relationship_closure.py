@@ -143,8 +143,10 @@ def _edge(
     relationship: str = "references",
     confidence: float = 1.0,
     evidence_ref_ids: tuple[str, ...] = ("ev1_" + "a" * 40,),
+    edge_id: str | None = None,
 ) -> DevGraphEdgeV2:
     return DevGraphEdgeV2(
+        edge_id=edge_id or f"edge:{source_entity_id}:{relationship}:{target_entity_id}",
         source_entity_id=source_entity_id,
         relationship=relationship,
         target_entity_id=target_entity_id,

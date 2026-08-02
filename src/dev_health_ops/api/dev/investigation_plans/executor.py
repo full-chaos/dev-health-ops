@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from ..contracts import DevScope, DirectScope, FreshnessState
 from ..contracts_v2.base import EvidenceHandle, SourceClass, SourceRequirementState
@@ -31,6 +32,7 @@ from ..contracts_v2.result import (
 from .builtin_steps import PlanExecutorRuntime
 from .relationship_matrix import (
     CONTENT_SLOT_FIELDS,
+    EVIDENCE_IDENTITY_TABLE,
     MAX_RELATIONSHIP_PATHS,
     MIN_RELATIONSHIP_CONFIDENCE,
     approved_relationship,
@@ -51,7 +53,7 @@ __all__ = ["PlanExecutionError", "PlanExecutor", "wrap_runtime_with_mint_receipt
 @dataclass(frozen=True, slots=True)
 class _MintedReceipt:
     """The identity a ``mint_evidence`` call actually issued a handle
-    against -- the same three fields ``EvidenceReferenceSigner._payload``
+    against -- the same four fields ``EvidenceReferenceSigner._payload``
     binds into its HMAC (``evidence_service.py``), captured directly from
     the mint call's own keyword arguments rather than re-derived from
     anything a step could shape afterward.
@@ -64,9 +66,16 @@ class _MintedReceipt:
     closes that: verification compares each fact's own claimed identity
     against the receipt of every handle it cites (see
     ``_evidence_identity_mismatches``).
+
+    ``source_version`` added in round 4 (Codex [MEDIUM], 2026-08-02): CI
+    checks mint against the coarsened run-level ``entity_id`` but embed the
+    check-specific discriminator into ``source_version`` -- dropping that
+    field let one check's handle "verify" a fabricated fact for a different
+    check on the same run.
     """
 
     source_system: str
+    source_version: str
     entity_type: str
     entity_id: str
 
@@ -275,6 +284,7 @@ class _MintReceiptRuntime:
         if receipts is not None:
             receipts[handle] = _MintedReceipt(
                 source_system=source_system,
+                source_version=source_version,
                 entity_type=entity_type,
                 entity_id=entity_id,
             )
@@ -490,80 +500,71 @@ def _unminted_evidence_handles(
     return frozenset(claimed - minted_evidence_handles.keys())
 
 
-#: Codex finding (MEDIUM, round 2, 2026-08-02): the exact identity each
-#: content category minted its evidence against, mirroring
-#: ``builtin_steps.py``'s own ``_wire_*_content`` derivation *by value*
-#: (matching this package's established ``_STATUS_ENTITY_SOURCE_SYSTEM``
-#: posture) so this can never spuriously reject a legitimately-minted fact
-#: by guessing wrong at how identity was derived. ``graph_edges`` is
-#: deliberately absent: ``DevGraphEdgeV2`` never preserves the ``edge_id``
-#: ``_wire_work_graph_content`` minted against on the wire (only
-#: source/target/relationship survive), so no identity claim can be
-#: faithfully reconstructed for that one category here -- its handles still
-#: go through :func:`_unminted_evidence_handles`'s existence-only check,
-#: never through identity comparison. Only ``entity_type``/``entity_id`` are
-#: compared (not ``source_system``): those two answer "is this citing the
-#: right real-world thing," the question this finding is about; verifying
-#: the more failure-prone, per-category ``source_system`` derivation too
-#: would add drift risk for a lower-value check.
-def _content_fact_claims(
-    content: DevSourceContent,
-) -> list[tuple[str, str, tuple[str, ...]]]:
-    claims: list[tuple[str, str, tuple[str, ...]]] = []
-    for status_fact in content.status_facts:
-        entity_type, _sep, entity_id = status_fact.fact_id.partition(":")
-        claims.append((entity_type, entity_id, status_fact.evidence_ref_ids))
-    for child_fact in content.required_children:
-        entity_type, _sep, entity_id = child_fact.fact_id.partition(":")
-        claims.append((entity_type, entity_id, child_fact.evidence_ref_ids))
-    for pr_fact in content.pull_requests:
-        claims.append(("pull_request", pr_fact.entity_id, pr_fact.evidence_ref_ids))
-    for ci_fact in content.ci_checks:
-        # Mirrors builtin_steps._ci_evidence_identity's coarsening exactly:
-        # a ci_acceptance_checks row's "{repo}#ci{run}#check{key}" entity_id
-        # was minted against the coarsened "{repo}#ci{run}" run identity.
-        lookup_entity_id = ci_fact.entity_id.split("#check", 1)[0]
-        claims.append(("ci_run", lookup_entity_id, ci_fact.evidence_ref_ids))
-    for deployment_fact in content.deployments:
-        claims.append(
-            ("deployment", deployment_fact.entity_id, deployment_fact.evidence_ref_ids)
+def _content_field_facts(content: DevSourceContent) -> list[tuple[str, Any]]:
+    """``(field_name, fact)`` for every fact in every ``CONTENT_SLOT_FIELDS``
+    category, in stable declared field order and each field's own tuple
+    order -- never dict/set iteration."""
+
+    return [
+        (slot, item) for slot in CONTENT_SLOT_FIELDS for item in getattr(content, slot)
+    ]
+
+
+def _missing_evidence_facts(content: DevSourceContent) -> tuple[str, ...]:
+    """CHAOS-3296 round-4 (Codex finding, HIGH, 2026-08-02): every
+    ``"required"``-cell fact citing ZERO evidence handles -- the
+    "evidence-free forgery" class. Rounds 1-2 only ever inspected handles a
+    fact actually cited; a fact citing none skipped every check (unminted
+    existence, identity match) entirely, so a step needed no mint call at
+    all to fabricate a fully-believed fact. ``evidence_ref_ids`` has no
+    ``min_length`` on any of these nine embedded types at the contract
+    layer (only ``status_facts`` requires >=1 there), so this is a real,
+    structurally-reachable gap, not a hypothetical one. Sorted field names,
+    deterministic.
+    """
+
+    return tuple(
+        sorted(
+            {
+                slot
+                for slot, fact in _content_field_facts(content)
+                if EVIDENCE_IDENTITY_TABLE[slot].mode == "required"
+                and not fact.evidence_ref_ids
+            }
         )
-    for incident_fact in content.incidents:
-        claims.append(
-            ("incident", incident_fact.entity_id, incident_fact.evidence_ref_ids)
-        )
-    for change in content.observed_changes:
-        # Mirrors builtin_steps._wire_change_summary_content's
-        # change_evidence_identity exactly: a "relationship" category change
-        # was minted against its own change_id, every other category against
-        # entity_id.
-        lookup_entity_id = (
-            change.change_id if change.category == "relationship" else change.entity_id
-        )
-        claims.append((change.entity_type, lookup_entity_id, change.evidence_ref_ids))
-    for ref in content.metric_refs:
-        claims.append(("metric", ref.metric_ref_id, ref.evidence_ref_ids))
-    return claims
+    )
 
 
 def _evidence_identity_mismatches(
     content: DevSourceContent, minted_evidence_handles: Mapping[str, _MintedReceipt]
 ) -> tuple[str, ...]:
     """Every claimed ``entity_id`` from a fact citing a handle that WAS
-    minted this step -- just not for that fact's own entity. A handle
+    minted this step -- just not for that fact's own identity. A handle
     absent from ``minted_evidence_handles`` entirely is
-    :func:`_unminted_evidence_handles`'s concern, not this function's; here
-    a receipt exists, it is simply bound to a different identity than the
-    fact citing it claims -- exactly the "mint once for issue-1, reuse on a
-    fabricated issue-999 fact" forgery this finding closes.
+    :func:`_unminted_evidence_handles`'s concern; a fact with no handles at
+    all is :func:`_missing_evidence_facts`'s. Here a receipt exists, it is
+    simply bound to a different identity (source_system, source_version,
+    entity_type, entity_id -- the exact four the real signer's HMAC binds)
+    than the fact citing it claims, per :data:`EVIDENCE_IDENTITY_TABLE`'s
+    per-category derivation -- exactly the "mint once for issue-1, reuse on
+    a fabricated issue-999 fact" forgery this finding closes, now complete
+    across every evidence-capable category including graph_edges and
+    check-specific CI identity (round-3 Codex findings 2 and 3).
     """
 
     mismatched: set[str] = set()
-    for entity_type, entity_id, evidence_ref_ids in _content_fact_claims(content):
-        for handle in evidence_ref_ids:
+    for slot, fact in _content_field_facts(content):
+        cell = EVIDENCE_IDENTITY_TABLE[slot]
+        if cell.mode != "required" or cell.derive is None:
+            continue
+        source_system, source_version, entity_type, entity_id = cell.derive(fact)
+        for handle in fact.evidence_ref_ids:
             receipt = minted_evidence_handles.get(handle)
             if receipt is not None and (
-                receipt.entity_type != entity_type or receipt.entity_id != entity_id
+                receipt.source_system != source_system
+                or receipt.source_version != source_version
+                or receipt.entity_type != entity_type
+                or receipt.entity_id != entity_id
             ):
                 mismatched.add(entity_id)
                 break
@@ -897,6 +898,24 @@ class PlanExecutor:
                     closed=False,
                 )
             if self._verify_mint_receipts:
+                # Codex finding (HIGH, round 3, 2026-08-02): every check below
+                # only ever inspects handles a fact actually cites -- a fact
+                # citing NONE skipped every one of them, so a step needed no
+                # mint call at all to fabricate a fully-believed fact (a
+                # forged CI conclusion with evidence_ref_ids=() was accepted
+                # as available_current with a minted "verified" relationship
+                # path). Require-known-good, not reject-known-bad: every
+                # evidence-capable fact MUST cite >=1 handle before its
+                # identity is even considered.
+                missing = _missing_evidence_facts(content)
+                if missing:
+                    return self._unmeasured_observation(
+                        requirement,
+                        SourceRequirementState.UNAVAILABLE,
+                        "evidence_required:" + ",".join(missing),
+                        observation_id,
+                        closed=False,
+                    )
                 # Codex finding (MEDIUM, 2026-08-01): pydantic's ``EvidenceHandle``
                 # pattern only proves a string is *shaped* like ``ev1_...`` --
                 # never that this exact step run actually minted it through

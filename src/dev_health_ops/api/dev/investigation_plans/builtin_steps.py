@@ -400,6 +400,7 @@ def _wire_work_graph_content(
             repository_ids=repository_ids,
         )
         return DevGraphEdgeV2(
+            edge_id=item.edge_id,
             source_entity_id=item.source_id,
             relationship=item.relationship_type,
             target_entity_id=item.target_id,

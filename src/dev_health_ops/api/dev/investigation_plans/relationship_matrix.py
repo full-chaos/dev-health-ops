@@ -19,15 +19,41 @@ verify," independent of which plan or subject kind asked.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from ..contracts_v2.base import SourceClass
 from ..contracts_v2.result import DevSourceContent
 from ..work_graph_neighbors_service import ALLOWED_RELATIONSHIP_TYPES
 
+# CHAOS-3296 round-4 closure: imported BY REFERENCE, not duplicated by value
+# -- unlike ``_STATUS_ENTITY_SOURCE_SYSTEM``'s existing by-value posture
+# elsewhere in this package (circular-import driven), there is no cycle here
+# (``builtin_steps.py`` imports neither this module nor ``executor.py``), so
+# a real import is strictly stronger than a copy: if a minting call site's
+# identity derivation ever changes shape, this import breaks at MODULE LOAD
+# for the whole test suite, not just whenever a specific drift test happens
+# to run. This is exactly the "the cell's test breaks if minting changes"
+# property the round-4 closure requires -- enforced at the strongest
+# available layer, with :func:`test_evidence_identity_table_matches_the_real_minting_call_sites`-style
+# tests (see ``tests/api/dev/test_chaos_3296_round4_evidence_identity_table.py``)
+# as the second, still-necessary layer for logic an import alone cannot
+# catch (a constant staying correct while the *call* that uses it changes).
+from .builtin_steps import (
+    _CHANGE_CATEGORY_SOURCE_SYSTEM,
+    _CHANGE_COLLISION_PRONE_CATEGORIES,
+    _CHANGE_EVIDENCE_SOURCE_VERSION,
+    _CI_ACCEPTANCE_CHECK_MARKER,
+    _GRAPH_EVIDENCE_SOURCE_VERSION,
+    _METRIC_EVIDENCE_SOURCE_VERSION,
+    _STATUS_ENTITY_SOURCE_SYSTEM,
+    _STATUS_EVIDENCE_SOURCE_VERSION,
+)
+
 __all__ = [
     "APPROVED_CONTENT_SLOTS",
     "CONTENT_SLOT_FIELDS",
+    "EVIDENCE_IDENTITY_TABLE",
+    "EvidenceIdentityCell",
     "MAX_RELATIONSHIP_PATHS",
     "MIN_RELATIONSHIP_CONFIDENCE",
     "RelationshipMatrixEntry",
@@ -346,3 +372,187 @@ def content_slot_violations(
 
     populated = {field for field in CONTENT_SLOT_FIELDS if getattr(content, field)}
     return tuple(sorted(populated - APPROVED_CONTENT_SLOTS[source_class]))
+
+
+# -- Evidence identity table (CHAOS-3296 round-4 closure) -------------------
+#
+# Codex round 3 (2026-08-02) confirmed the mint-receipt verification built in
+# rounds 1-2 was reject-known-bad (flag a handle only if it is PRESENT and
+# wrong) rather than require-known-good (every evidence-capable fact MUST
+# cite >=1 receipted handle whose FULL identity matches). That shape left
+# three holes: a fact with zero evidence_ref_ids skipped every check
+# entirely; graph_edges was excluded from identity comparison because
+# DevGraphEdgeV2 never preserved the edge_id minting bound identity to; and
+# CI-check identity collapsed to the run level (entity_type/entity_id only),
+# discarding the check-specific discriminator the real signer's HMAC
+# actually binds into source_version.
+#
+# This table closes all three by construction: one cell per
+# CONTENT_SLOT_FIELDS entry (import-time-total, same posture as
+# APPROVED_CONTENT_SLOTS), each either "required" (every fact in that field
+# must cite >=1 handle whose (source_system, source_version, entity_type,
+# entity_id) -- the exact four fields the real EvidenceReferenceSigner binds
+# into its HMAC, evidence_service.py's EvidenceReferenceSigner._payload --
+# match what THIS field's own minting call site actually passed) or
+# "accepted_risk" (a category the platform has explicitly decided may
+# legitimately carry no evidence, with its own rationale -- there are
+# currently none; every wire_* helper in builtin_steps.py mints
+# unconditionally for every fact it constructs, so an empty cell here would
+# be a fabricated exemption, not an honest one).
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceIdentityCell:
+    mode: Literal["required", "accepted_risk"]
+    #: ``None`` only for "accepted_risk" cells. Takes one fact object from
+    #: the corresponding ``DevSourceContent`` field's tuple and returns
+    #: exactly ``(source_system, source_version, entity_type, entity_id)``
+    #: -- must match what that field's own ``builtin_steps.py`` wiring
+    #: function passed to ``mint_evidence`` for that same fact, which the
+    #: source-anchored tests prove by spying on a real mint call and
+    #: comparing.
+    derive: Any | None = None
+    #: ``None`` for "required" cells; a short, reviewed sentence for
+    #: "accepted_risk" ones explaining why no evidence is, and always will
+    #: be, legitimate for that category.
+    rationale: str | None = None
+
+
+def _identity_status_like(fact: Any) -> tuple[str, str, str, str]:
+    """``status_facts`` / ``required_children`` -- both wired by
+    ``_wire_status_snapshot_content``'s ``mint_status``, which mints against
+    the raw ``StatusFact.entity_type``/``entity_id`` pair the wire fact's own
+    ``fact_id`` encodes as ``f"{entity_type}:{entity_id}"``."""
+
+    entity_type, _sep, entity_id = fact.fact_id.partition(":")
+    source_system = _STATUS_ENTITY_SOURCE_SYSTEM.get(entity_type, "work_items")
+    return source_system, _STATUS_EVIDENCE_SOURCE_VERSION, entity_type, entity_id
+
+
+def _identity_pull_request(fact: Any) -> tuple[str, str, str, str]:
+    """``wire_pull_request`` -> ``mint_delivery(source_system="pull_requests",
+    entity_type="pull_request", entity_id=fact.entity_id)`` with the default
+    (unoverridden) ``source_version``."""
+
+    return (
+        "pull_requests",
+        _STATUS_EVIDENCE_SOURCE_VERSION,
+        "pull_request",
+        fact.entity_id,
+    )
+
+
+def _identity_ci_check(fact: Any) -> tuple[str, str, str, str]:
+    """``wire_ci`` coarsens ``fact.entity_id`` (strip the
+    ``#check...`` acceptance-check suffix) for the minted ``entity_id``, but
+    -- when coarsening actually changed anything -- embeds the FULL,
+    uncoarsened id into ``source_version`` specifically so two checks on the
+    same run mint distinct, non-interchangeable handles. Losing that
+    discriminator (round 2's gap) let one check's handle verify another's
+    fabricated fact; comparing ``source_version`` too closes it."""
+
+    lookup_entity_id = fact.entity_id.split(_CI_ACCEPTANCE_CHECK_MARKER, 1)[0]
+    source_version = (
+        f"{_STATUS_EVIDENCE_SOURCE_VERSION}:{fact.entity_id}"
+        if lookup_entity_id != fact.entity_id
+        else _STATUS_EVIDENCE_SOURCE_VERSION
+    )
+    return "ci_runs", source_version, "ci_run", lookup_entity_id
+
+
+def _identity_deployment(fact: Any) -> tuple[str, str, str, str]:
+    return "deployments", _STATUS_EVIDENCE_SOURCE_VERSION, "deployment", fact.entity_id
+
+
+def _identity_incident(fact: Any) -> tuple[str, str, str, str]:
+    return "incidents", _STATUS_EVIDENCE_SOURCE_VERSION, "incident", fact.entity_id
+
+
+def _identity_observed_change(change: Any) -> tuple[str, str, str, str]:
+    """Mirrors ``_wire_change_summary_content``'s ``change_evidence_identity``
+    closure exactly: a ``"relationship"``-category change mints against its
+    own ``change_id`` (never ``entity_id``); a collision-prone category
+    (``status``/``metric``) embeds ``change_id`` into ``source_version`` on
+    top of minting against ``entity_id``; every other category mints
+    straight against ``entity_id`` with the base source_version. Every input
+    (``category``, ``change_id``, ``entity_id``, ``entity_type``) survives
+    unchanged onto ``DevObservedChangeV2``, so this is fully reconstructible
+    from the wire fact alone."""
+
+    category = change.category
+    source_system = _CHANGE_CATEGORY_SOURCE_SYSTEM.get(category, "work_items")
+    if category == "relationship":
+        return (
+            source_system,
+            _CHANGE_EVIDENCE_SOURCE_VERSION,
+            change.entity_type,
+            change.change_id,
+        )
+    if category in _CHANGE_COLLISION_PRONE_CATEGORIES:
+        return (
+            source_system,
+            f"{_CHANGE_EVIDENCE_SOURCE_VERSION}:{change.change_id}",
+            change.entity_type,
+            change.entity_id,
+        )
+    return (
+        source_system,
+        _CHANGE_EVIDENCE_SOURCE_VERSION,
+        change.entity_type,
+        change.entity_id,
+    )
+
+
+def _identity_graph_edge(edge: Any) -> tuple[str, str, str, str]:
+    """``wire_edge`` mints against ``item.edge_id`` -- CHAOS-3296 round-4
+    adds ``DevGraphEdgeV2.edge_id`` specifically so this identity survives
+    to the wire; round 1-3 could not implement this cell at all."""
+
+    return "work_graph", _GRAPH_EVIDENCE_SOURCE_VERSION, "work_graph_edge", edge.edge_id
+
+
+def _identity_metric_ref(ref: Any) -> tuple[str, str, str, str]:
+    return "metrics", _METRIC_EVIDENCE_SOURCE_VERSION, "metric", ref.metric_ref_id
+
+
+EVIDENCE_IDENTITY_TABLE: dict[str, EvidenceIdentityCell] = {
+    "status_facts": EvidenceIdentityCell(mode="required", derive=_identity_status_like),
+    "required_children": EvidenceIdentityCell(
+        mode="required", derive=_identity_status_like
+    ),
+    "pull_requests": EvidenceIdentityCell(
+        mode="required", derive=_identity_pull_request
+    ),
+    "ci_checks": EvidenceIdentityCell(mode="required", derive=_identity_ci_check),
+    "deployments": EvidenceIdentityCell(mode="required", derive=_identity_deployment),
+    "incidents": EvidenceIdentityCell(mode="required", derive=_identity_incident),
+    "graph_edges": EvidenceIdentityCell(mode="required", derive=_identity_graph_edge),
+    "observed_changes": EvidenceIdentityCell(
+        mode="required", derive=_identity_observed_change
+    ),
+    "metric_refs": EvidenceIdentityCell(mode="required", derive=_identity_metric_ref),
+}
+
+_missing_evidence_cells = set(CONTENT_SLOT_FIELDS) - set(EVIDENCE_IDENTITY_TABLE)
+if _missing_evidence_cells:
+    raise RuntimeError(
+        f"evidence_identity_table.v1 is missing cells for: {sorted(_missing_evidence_cells)}"
+    )
+_unknown_evidence_cells = set(EVIDENCE_IDENTITY_TABLE) - set(CONTENT_SLOT_FIELDS)
+if _unknown_evidence_cells:
+    raise RuntimeError(
+        f"evidence_identity_table.v1 has cells for unknown fields: "
+        f"{sorted(_unknown_evidence_cells)}"
+    )
+_malformed_evidence_cells = sorted(
+    field
+    for field, cell in EVIDENCE_IDENTITY_TABLE.items()
+    if (cell.mode == "required") == (cell.derive is None)
+    or (cell.mode == "accepted_risk") == (cell.rationale is None)
+)
+if _malformed_evidence_cells:
+    raise RuntimeError(
+        f"evidence_identity_table.v1 cells must pair mode='required' with a "
+        f"derive function (never both/neither), and mode='accepted_risk' "
+        f"with a rationale: {_malformed_evidence_cells}"
+    )

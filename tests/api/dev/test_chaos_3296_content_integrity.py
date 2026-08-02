@@ -179,6 +179,7 @@ async def test_content_shaped_for_a_different_source_class_is_rejected_structura
     persistence -- demoted to unmeasured, closure disclosed False."""
 
     edge = DevGraphEdgeV2(
+        edge_id="edge-1",
         source_entity_id=ROOT_ENTITY_ID,
         relationship="references",
         target_entity_id="pr-9",

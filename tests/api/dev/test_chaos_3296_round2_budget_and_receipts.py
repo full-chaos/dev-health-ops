@@ -927,13 +927,16 @@ async def test_two_facts_each_citing_their_own_handle_are_both_accepted():
 
 
 @pytest.mark.asyncio
-async def test_graph_edge_handle_reuse_is_caught_only_by_existence_not_identity():
-    """Documented residual gap: ``DevGraphEdgeV2`` never preserves the
-    ``edge_id`` minting bound identity to, so a handle genuinely minted for
-    one edge, reused verbatim on a second, different edge, is NOT caught by
-    identity comparison here -- only a wholly-unminted handle would be. This
-    test exists to keep that gap honest and visible (never silently assumed
-    closed) rather than to assert it is fixed."""
+async def test_graph_edge_handle_reuse_is_rejected():
+    """RED (CHAOS-3296 Codex round 3, [HIGH]): round 2 excluded graph_edges
+    from identity comparison because ``DevGraphEdgeV2`` never preserved the
+    ``edge_id`` minting bound identity to -- a handle genuinely minted for
+    edge-1, reused verbatim on a fabricated second edge, passed both the
+    existence check (the handle really was minted) and (vacuously) identity
+    comparison (which never ran for this category at all). Round 4 adds
+    ``DevGraphEdgeV2.edge_id`` and a real identity cell for graph_edges --
+    this must now be rejected exactly like the round-2 status-fact reuse
+    repro."""
 
     from dev_health_ops.api.dev.contracts_v2.embedded import DevGraphEdgeV2
 
@@ -952,6 +955,7 @@ async def test_graph_edge_handle_reuse_is_caught_only_by_existence_not_identity(
             freshness=FreshnessState.FRESH,
         )
         edge_a = DevGraphEdgeV2(
+            edge_id="edge-1",
             source_entity_id=ROOT_ENTITY_ID,
             relationship="references",
             target_entity_id="pr-1",
@@ -961,6 +965,7 @@ async def test_graph_edge_handle_reuse_is_caught_only_by_existence_not_identity(
             evidence_ref_ids=(handle,),
         )
         edge_b_reusing_handle = DevGraphEdgeV2(
+            edge_id="edge-2-fabricated",
             source_entity_id=ROOT_ENTITY_ID,
             relationship="references",
             target_entity_id="pr-2-unrelated",
@@ -980,12 +985,80 @@ async def test_graph_edge_handle_reuse_is_caught_only_by_existence_not_identity(
         source_class=SourceClass.WORK_GRAPH, run=run, verify_mint_receipts=True
     )
 
-    # Both edges pass -- the existence check sees the handle in the receipt
-    # map (it WAS minted, just for a different edge); identity comparison
-    # never runs for graph_edges at all. This is the known, tested gap.
+    assert runtime.mint_calls == 1
+    assert observation.content is None
+    assert observation.observed_state is SourceRequirementState.UNAVAILABLE
+    assert observation.limitation is not None
+    assert observation.limitation.startswith("evidence_entity_mismatch:")
+    assert "edge-2-fabricated" in observation.limitation
+    assert result.relationship_closure_verified is False
+
+
+@pytest.mark.asyncio
+async def test_two_graph_edges_each_citing_their_own_handle_are_both_accepted():
+    """Cross-edge positive control, mirroring the status-fact equivalent."""
+
+    from dev_health_ops.api.dev.contracts_v2.embedded import DevGraphEdgeV2
+
+    runtime = _MintOnlyRuntime()
+    wrapped = wrap_runtime_with_mint_receipts(runtime)
+
+    async def run(_ctx: StepContext) -> StepOutcome:
+        handle_a = wrapped.mint_evidence(
+            org_id=ORG_ID,
+            source_system="work_graph",
+            source_version="work-graph-evidence.v1",
+            entity_type="work_graph_edge",
+            entity_id="edge-1",
+            display_label="issue-1 references pr-1",
+            observed_at=OBSERVED_AT,
+            freshness=FreshnessState.FRESH,
+        )
+        handle_b = wrapped.mint_evidence(
+            org_id=ORG_ID,
+            source_system="work_graph",
+            source_version="work-graph-evidence.v1",
+            entity_type="work_graph_edge",
+            entity_id="edge-2",
+            display_label="issue-1 references pr-2",
+            observed_at=OBSERVED_AT,
+            freshness=FreshnessState.FRESH,
+        )
+        edge_a = DevGraphEdgeV2(
+            edge_id="edge-1",
+            source_entity_id=ROOT_ENTITY_ID,
+            relationship="references",
+            target_entity_id="pr-1",
+            provenance="work_graph",
+            confidence=1.0,
+            observed_at=OBSERVED_AT,
+            evidence_ref_ids=(handle_a,),
+        )
+        edge_b = DevGraphEdgeV2(
+            edge_id="edge-2",
+            source_entity_id=ROOT_ENTITY_ID,
+            relationship="references",
+            target_entity_id="pr-2",
+            provenance="work_graph",
+            confidence=1.0,
+            observed_at=OBSERVED_AT,
+            evidence_ref_ids=(handle_b,),
+        )
+        return _queried_outcome(
+            DevSourceContent(
+                schema_version="dev_source_content.v1",
+                graph_edges=(edge_a, edge_b),
+            )
+        )
+
+    result, observation = await _run_single_step(
+        source_class=SourceClass.WORK_GRAPH, run=run, verify_mint_receipts=True
+    )
+
+    assert runtime.mint_calls == 2
     assert observation.content is not None
     assert len(observation.content.graph_edges) == 2
-    del result
+    assert result.relationship_closure_verified is True
 
 
 # -- end to end through the real persistence path ---------------------------

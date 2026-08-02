@@ -51,7 +51,7 @@
       "description": "Seed recent organization deployments, PRs, incidents, and metrics unrelated to the named target. They must be absent from the named-target answer but available in an explicit organization-wide answer.",
       "status": "proven_unit",
       "evidence": [
-        "tests/api/dev/test_chaos_3292_preflight_acceptance.py"
+        "tests/api/dev/test_chaos_3296_relationship_closure.py"
       ],
       "blocked_reason": null
     },
@@ -175,7 +175,7 @@
       "description": "Prohibited write/execution/arbitrary-query request.",
       "status": "proven_unit",
       "evidence": [
-        "tests/api/dev/test_chaos_3292_mutations.py"
+        "tests/api/dev/test_tool_registry.py"
       ],
       "blocked_reason": null
     },
@@ -231,7 +231,7 @@
       "description": "Provider timeout/refusal/malformed/empty/budget failure after a valid frame.",
       "status": "proven_unit",
       "evidence": [
-        "tests/api/dev/test_chaos_3297_frame_reachability.py"
+        "tests/api/dev/test_orchestrator.py"
       ],
       "blocked_reason": null
     },
@@ -356,7 +356,7 @@
       "description": "Calculate completion without a complete denominator.",
       "status": "proven_unit",
       "evidence": [
-        "tests/api/dev/test_chaos_3303_portfolio_status_service.py"
+        "tests/api/dev/test_status_change_service.py"
       ],
       "blocked_reason": null
     },
@@ -422,7 +422,7 @@
       "description": "Remove relationship filtering.",
       "status": "proven_unit",
       "evidence": [
-        "tests/api/dev/test_chaos_3303_team_health_service.py"
+        "tests/api/dev/test_chaos_3296_relationship_closure.py"
       ],
       "blocked_reason": null
     },

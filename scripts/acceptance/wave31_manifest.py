@@ -172,8 +172,10 @@ def _attacks() -> tuple[ManifestItem, ...]:
                 "organization-wide answer."
             ),
             status="proven_unit",
-            evidence=("tests/api/dev/test_chaos_3292_preflight_acceptance.py",),
-            blocked_reason=None,
+            evidence=("tests/api/dev/test_chaos_3296_relationship_closure.py",),
+            content_markers=(
+                "test_an_edge_unrelated_to_the_committed_subject_fails_closed",
+            ),
         ),
         ManifestItem(
             id="attack.team-attribution",
@@ -186,6 +188,9 @@ def _attacks() -> tuple[ManifestItem, ...]:
             ),
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3303_team_health_service.py",),
+            content_markers=(
+                "test_evaluate_team_zero_attribution_suppresses_even_with_real_facts",
+            ),
         ),
         ManifestItem(
             id="attack.missing-data",
@@ -199,6 +204,9 @@ def _attacks() -> tuple[ManifestItem, ...]:
             evidence=(
                 "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py",
                 "tests/api/dev/test_chaos_3304_workload_observation_adapters.py",
+            ),
+            content_markers=(
+                "test_data_trust_no_sources_is_no_data_not_measured_zero",
             ),
         ),
         ManifestItem(
@@ -332,7 +340,8 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
             category="blocking_matrix",
             description=("Prohibited write/execution/arbitrary-query request."),
             status="proven_unit",
-            evidence=("tests/api/dev/test_chaos_3292_mutations.py",),
+            evidence=("tests/api/dev/test_tool_registry.py",),
+            content_markers=("test_manifest_is_the_exact_nine_tool_server_allowlist",),
         ),
         ManifestItem(
             id="matrix.provider-narrative-failure-after-frame",
@@ -342,7 +351,11 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
                 "after a valid frame."
             ),
             status="proven_unit",
-            evidence=("tests/api/dev/test_chaos_3297_frame_reachability.py",),
+            evidence=("tests/api/dev/test_orchestrator.py",),
+            content_markers=(
+                "test_provider_timeout_is_caller_enforced_and_terminal_once",
+                "test_budget_exhaustion_after_grounded_tool_data_returns_bounded_partial",
+            ),
         ),
     )
 
@@ -610,20 +623,29 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             evidence=(
                 "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py",
             ),
+            content_markers=(
+                "test_data_trust_no_sources_is_no_data_not_measured_zero",
+            ),
         ),
         ManifestItem(
             id="mutation.remove-relationship-filtering",
             category="mutation_proof",
             description="Remove relationship filtering.",
             status="proven_unit",
-            evidence=("tests/api/dev/test_chaos_3303_team_health_service.py",),
+            evidence=("tests/api/dev/test_chaos_3296_relationship_closure.py",),
+            content_markers=(
+                "test_an_edge_unrelated_to_the_committed_subject_fails_closed",
+            ),
         ),
         ManifestItem(
             id="mutation.completion-without-denominator",
             category="mutation_proof",
             description="Calculate completion without a complete denominator.",
             status="proven_unit",
-            evidence=("tests/api/dev/test_chaos_3303_portfolio_status_service.py",),
+            evidence=("tests/api/dev/test_status_change_service.py",),
+            content_markers=(
+                "test_completed_parent_with_incomplete_required_child_is_not_ready",
+            ),
         ),
         ManifestItem(
             id="mutation.burden-without-denominator",
@@ -633,6 +655,9 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             evidence=(
                 "tests/api/dev/test_chaos_3304_workload_observation_adapters.py",
             ),
+            content_markers=(
+                "test_review_request_load_without_denominator_reports_raw_value_not_calculable",
+            ),
         ),
         ManifestItem(
             id="mutation.single-signal-struggling-team",
@@ -640,6 +665,9 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             description="Enable a single-signal struggling-team finding.",
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3304_workload_health_rules.py",),
+            content_markers=(
+                "test_negative_single_at_risk_dimension_does_not_qualify",
+            ),
         ),
         ManifestItem(
             id="mutation.expose-forbidden-or-not-found",

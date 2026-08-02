@@ -202,6 +202,20 @@ class RawStatusSnapshot:
     # length bound. True only when the source itself reports truncation
     # (see the sentinel fetch there); never inferred from a length check.
     membership_source_truncated: bool = False
+    # Round 5 (codex MEDIUM): the same explicit-provenance-only rule,
+    # finished for every remaining assessment category. Each is True only
+    # when that category's source reports truncation via its own
+    # limit+1 sentinel (native_status_change._bounded_read) -- never
+    # inferred from ``len(category) >= MAX_STATUS_ASSESSMENT_ITEMS``,
+    # which both false-negatives (a bound shared with a collapsed/reduced
+    # set, e.g. CI runs collapsed to latest-per-PR after a global-order
+    # LIMIT) and false-positives (exactly MAX_STATUS_ASSESSMENT_ITEMS
+    # legitimate, untruncated results).
+    blockers_source_truncated: bool = False
+    pull_requests_source_truncated: bool = False
+    ci_source_truncated: bool = False
+    deployments_source_truncated: bool = False
+    incidents_source_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,15 +398,18 @@ class StatusChangeService:
         children_source_truncated = (
             raw.children_source_truncated or raw.membership_source_truncated
         )
-        assessment_source_limit_reached = children_source_truncated or any(
-            len(facts) >= MAX_STATUS_ASSESSMENT_ITEMS
-            for facts in (
-                raw.blockers,
-                raw.pull_requests,
-                raw.ci,
-                raw.deployments,
-                raw.incidents,
-            )
+        # Round 5 (codex MEDIUM): finish what round 3 started -- every
+        # remaining category's truncation signal is now explicit
+        # source-provided provenance too (see the RawStatusSnapshot field
+        # comments above); the ``len(category) >= MAX_STATUS_ASSESSMENT_ITEMS``
+        # equality inference is gone entirely, not just for children.
+        assessment_source_limit_reached = (
+            children_source_truncated
+            or raw.blockers_source_truncated
+            or raw.pull_requests_source_truncated
+            or raw.ci_source_truncated
+            or raw.deployments_source_truncated
+            or raw.incidents_source_truncated
         )
         bounded = replace(
             raw,

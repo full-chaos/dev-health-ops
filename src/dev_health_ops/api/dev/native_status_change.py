@@ -980,6 +980,7 @@ class ClickHouseStatusChangeSource:
                 ),
             )
 
+        requested = min(limit, MAX_STATUS_ASSESSMENT_ITEMS)
         common = {
             "org_id": org_id,
             "repository_ids": repositories,
@@ -987,7 +988,7 @@ class ClickHouseStatusChangeSource:
             "entity_id": entity_id,
             "pr_number": self._pr_number(entity_id),
             "as_of": as_of.astimezone(UTC),
-            "limit": min(limit, MAX_STATUS_ASSESSMENT_ITEMS),
+            "limit": requested,
             "member_issue_ids": [],
             "member_pr_ids": [],
             # CHAOS-3303 round 2: the canonical-primary-attribution team arms
@@ -1030,7 +1031,7 @@ class ClickHouseStatusChangeSource:
             # its own >= 1000 check). Fetch one sentinel row beyond the
             # real budget, exactly as for work items, and record
             # truncation BEFORE the split.
-            membership_requested = min(limit, MAX_STATUS_ASSESSMENT_ITEMS)
+            membership_requested = requested
             try:
                 async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
                     member_rows = await query_dicts(
@@ -1090,7 +1091,7 @@ class ClickHouseStatusChangeSource:
             # back proves the source had more matching rows than we asked
             # for, independent of how the parent/child split later divides
             # the (trimmed-back-down) result.
-            work_items_requested = min(limit, MAX_STATUS_ASSESSMENT_ITEMS)
+            work_items_requested = requested
             work_item_rows, ref, warning = await self._read(
                 "work_items",
                 _WORK_ITEMS_SQL,
@@ -1106,6 +1107,7 @@ class ClickHouseStatusChangeSource:
 
         blocker_rows: list[dict[str, Any]] = []
         blocker_ref: SourceReference | None = None
+        blockers_source_truncated = False
         if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT} or (
             scope.direct_scope is DirectScope.WORK_UNIT
             and bool(common["member_issue_ids"])
@@ -1125,14 +1127,27 @@ class ClickHouseStatusChangeSource:
                 try:
                     async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
                         blocker_rows = await query_dicts(
-                            self._client, _BLOCKERS_SQL, common
+                            self._client,
+                            _BLOCKERS_SQL,
+                            {**common, "limit": requested + 1},
                         )
                 except Exception:
                     blocker_ref = self._unavailable_ref("work_graph", scope)
                     warnings.append("work_graph blocker source unavailable")
+                else:
+                    # CHAOS-3297 s2 round 5 (codex MEDIUM): sentinel, not a
+                    # post-fetch length inference -- see _bounded_read.
+                    if len(blocker_rows) > requested:
+                        blockers_source_truncated = True
+                        blocker_rows = blocker_rows[:requested]
 
-        pr_rows, pr_ref, warning = await self._read(
-            "pull_requests", _PULL_REQUESTS_SQL, common, scope
+        (
+            pr_rows,
+            pr_ref,
+            warning,
+            pull_requests_source_truncated,
+        ) = await self._bounded_read(
+            "pull_requests", _PULL_REQUESTS_SQL, common, scope, requested=requested
         )
         source_refs.append(pr_ref)
         if warning:
@@ -1146,9 +1161,14 @@ class ClickHouseStatusChangeSource:
         ci_rows: list[dict[str, Any]] = []
         ci_acceptance_rows: list[dict[str, Any]] = []
         ci_acceptance_ref: SourceReference | None = None
+        ci_source_truncated = False
         if pr_numbers:
-            ci_rows, ci_ref, warning = await self._read(
-                "ci_runs", _CI_SQL, {**common, "pr_numbers": pr_numbers}, scope
+            ci_rows, ci_ref, warning, ci_runs_truncated = await self._bounded_read(
+                "ci_runs",
+                _CI_SQL,
+                {**common, "pr_numbers": pr_numbers},
+                scope,
+                requested=requested,
             )
             source_refs.append(ci_ref)
             if warning:
@@ -1159,11 +1179,17 @@ class ClickHouseStatusChangeSource:
                 if (str(row.get("repository_id") or ""), int(row.get("pr_number") or 0))
                 in pr_pairs
             ]
-            ci_acceptance_rows, ci_acceptance_ref, warning = await self._read(
+            (
+                ci_acceptance_rows,
+                ci_acceptance_ref,
+                warning,
+                ci_acceptance_truncated,
+            ) = await self._bounded_read(
                 "ci_acceptance_checks",
                 _CI_ACCEPTANCE_SQL,
                 {**common, "pr_numbers": pr_numbers},
                 scope,
+                requested=requested,
             )
             source_refs.append(ci_acceptance_ref)
             if warning:
@@ -1186,12 +1212,27 @@ class ClickHouseStatusChangeSource:
                 )
                 == str(row.get("run_id") or "")
             ]
+            # CHAOS-3297 s2 round 5 (codex HIGH): truncation is measured on
+            # the RAW fetched rows, before the pr_pairs filter and the
+            # latest-run-per-PR collapse -- the global bound applies to
+            # per-EVENT rows, not per-PR ones, so a high-churn PR can push
+            # a different PR's latest (possibly failing) run out of the
+            # fetch window entirely; the collapse can only pick a latest
+            # run from what was actually fetched, never recover one that
+            # never arrived.
+            ci_source_truncated = ci_runs_truncated or ci_acceptance_truncated
 
-        deployment_rows, deployment_ref, warning = await self._read(
+        (
+            deployment_rows,
+            deployment_ref,
+            warning,
+            deployments_source_truncated,
+        ) = await self._bounded_read(
             "deployments",
             _DEPLOYMENTS_SQL,
             {**common, "pr_numbers": pr_numbers},
             scope,
+            requested=requested,
         )
         source_refs.append(deployment_ref)
         if warning:
@@ -1235,12 +1276,19 @@ class ClickHouseStatusChangeSource:
         ]
 
         incident_rows: list[dict[str, Any]] = []
+        incidents_source_truncated = False
         if deployment_pairs:
-            incident_rows, incident_ref, warning = await self._read(
+            (
+                incident_rows,
+                incident_ref,
+                warning,
+                incidents_source_truncated,
+            ) = await self._bounded_read(
                 "incidents",
                 _INCIDENTS_SQL,
                 {**common, "org_id": org_id, "deployment_pairs": deployment_pairs},
                 scope,
+                requested=requested,
             )
             source_refs.append(incident_ref)
             if warning:
@@ -1444,6 +1492,11 @@ class ClickHouseStatusChangeSource:
             warnings=tuple(warnings),
             children_source_truncated=children_source_truncated,
             membership_source_truncated=membership_source_truncated,
+            blockers_source_truncated=blockers_source_truncated,
+            pull_requests_source_truncated=pull_requests_source_truncated,
+            ci_source_truncated=ci_source_truncated,
+            deployments_source_truncated=deployments_source_truncated,
+            incidents_source_truncated=incidents_source_truncated,
         )
 
     async def change_summary(
@@ -1621,6 +1674,35 @@ class ClickHouseStatusChangeSource:
         watermark = max(watermarks, default=None)
         ref = self._source_ref(source, scope, watermark)
         return rows, ref, None
+
+    async def _bounded_read(
+        self,
+        source: str,
+        sql: str,
+        params: dict[str, Any],
+        scope: DevScope,
+        *,
+        requested: int,
+    ) -> tuple[list[dict[str, Any]], SourceReference, str | None, bool]:
+        """``_read`` plus a limit+1 sentinel (CHAOS-3297 s2 round 5, codex
+        MEDIUM): fetch one row beyond ``requested`` so truncation is
+        detected from the source's own row count, never inferred from
+        ``len(result) >= MAX_STATUS_ASSESSMENT_ITEMS`` -- that equality
+        heuristic has two proven failure modes: it never fires when a
+        query shares its LIMIT budget with another entity type sharing the
+        row before a post-fetch split (rounds 2-3: _WORK_ITEMS_SQL,
+        _WORK_UNIT_MEMBERS_SQL), and it fires on a false positive at
+        exactly ``MAX_STATUS_ASSESSMENT_ITEMS`` legitimate, untruncated
+        results (round 3). Trims back down to ``requested`` so every
+        caller's row count is unaffected by the +1 probe.
+        """
+        rows, ref, warning = await self._read(
+            source, sql, {**params, "limit": requested + 1}, scope
+        )
+        truncated = len(rows) > requested
+        if truncated:
+            rows = rows[:requested]
+        return rows, ref, warning, truncated
 
     def _source_ref(
         self, source: str, scope: DevScope, watermark: datetime | None

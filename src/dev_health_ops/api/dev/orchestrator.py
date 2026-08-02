@@ -41,6 +41,7 @@ from dev_health_ops.llm.agent.errors import (
 )
 from dev_health_ops.llm.budget import budget_idempotency_scope
 from dev_health_ops.metrics.prometheus import (
+    ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
     ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL,
     ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL,
     ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL,
@@ -86,7 +87,11 @@ from .contracts_v2.plan import DevInvestigationPlan
 from .investigation_plans import PlanExecutor, StepContext
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
-from .preflight_outcomes import TERMINAL_STATE_BY_OUTCOME, project_preflight_error
+from .preflight_outcomes import (
+    LEGACY_ONLY_QUESTION_INTENTS,
+    TERMINAL_STATE_BY_OUTCOME,
+    project_preflight_error,
+)
 from .prompts import PromptComposer, PromptConversationTurn
 from .subject_preflight import (
     SUBJECT_BEARING_TOOLS,
@@ -1026,6 +1031,26 @@ class DevOrchestrator:
             if self._plan_executor is not None and preflight_result is not None:
                 intent = preflight_result.interpretation.intent
                 plan = self._plan_registry.get(intent.intent_id)
+                # CHAOS-3300 finding (2026-08-02): a plan-eligible-by-vocabulary
+                # intent whose plan.registry.get(...) returns None silently
+                # falls through to the legacy model-tool-choice loop below --
+                # a real capability downgrade (a status_snapshot.v1-only
+                # answer instead of a governed health/deficiency/portfolio
+                # evaluation) that produced no signal anywhere. Distinguish it
+                # from BOUNDED_INVESTIGATION, whose fallthrough is the
+                # DESIGNED behavior (preflight_outcomes.LEGACY_ONLY_QUESTION_INTENTS'
+                # own docstring) -- only the genuine gap is loud.
+                if (
+                    plan is None
+                    and intent.intent_id not in LEGACY_ONLY_QUESTION_INTENTS
+                ):
+                    logger.warning(
+                        "ask_dev.orchestrator.plan_registry_gap",
+                        extra={"run_id": run_id, "intent_id": intent.intent_id.value},
+                    )
+                    ASK_DEV_PLAN_REGISTRY_GAP_TOTAL.labels(
+                        intent=intent.intent_id.value
+                    ).inc()
                 cardinality = intent.cardinality
                 plan_eligible = (
                     plan is not None and cardinality in plan.supported_cardinalities

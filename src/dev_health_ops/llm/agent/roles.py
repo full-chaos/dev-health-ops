@@ -18,13 +18,18 @@ reads the old key back is unaffected by anything written here.
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Protocol
+from typing import Any, Protocol
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.services.configuration.generic import SettingsService
-from dev_health_ops.models.settings import SettingCategory
+from dev_health_ops.models.settings import Setting, SettingCategory
 
 #: Version of the persisted profile envelope's own JSON shape -- distinct
 #: from ``readiness_version``/``certification_key`` below, which invalidate
@@ -131,6 +136,96 @@ def _role_setting_key(base_key: str, role: AgentRole) -> str:
     return f"{base_key}:{role.value}"
 
 
+async def _upsert_setting_row(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    category: str,
+    key: str,
+    value: str,
+    description: str,
+) -> None:
+    """Atomic, single-statement insert-or-update of exactly one settings row,
+    targeting the table's own ``uq_settings_org_category_key`` unique
+    constraint -- never ``SettingsService.set()``'s select-then-insert-or-
+    update, which races under true concurrent writers: two sessions can both
+    observe "no row yet", both attempt INSERT, and the loser's flush raises
+    ``IntegrityError``. Bypassing the ORM here mirrors the codebase's
+    existing dialect-aware upsert precedent (``sync.dispatch_outbox.
+    upsert_outbox_wakeup``).
+
+    Winner policy for two sessions certifying the SAME role concurrently:
+    **last COMMIT wins** -- ``ON CONFLICT DO UPDATE`` always applies whichever
+    writer's transaction commits last, overwriting the other's value. This is
+    the same "the most recent preflight result governs" semantic an operator
+    already expects from re-running preflight; this fix only makes it
+    race-safe (no uncaught ``IntegrityError``) rather than changing what it
+    means to certify a role twice.
+    """
+
+    now = datetime.now(timezone.utc)
+    dialect_name = session.get_bind().dialect.name
+    table = Setting.__table__
+    insert_values: dict[str, Any] = {
+        "id": uuid.uuid4(),
+        "org_id": org_id,
+        "category": category,
+        "key": key,
+        "value": value,
+        "is_encrypted": False,
+        "description": description,
+        "created_at": now,
+        "updated_at": now,
+    }
+    if dialect_name in ("postgresql", "sqlite"):
+        dialect_insert: Any
+        if dialect_name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as dialect_insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert as dialect_insert
+
+        stmt = dialect_insert(table).values(**insert_values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["org_id", "category", "key"],
+            set_={
+                "value": stmt.excluded.value,
+                "description": stmt.excluded.description,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        await session.execute(stmt)
+        await session.flush()
+        return
+    # Any other dialect: still atomic (a SAVEPOINT rolls back only this
+    # operation on conflict, never the caller's outer transaction, unlike an
+    # uncaught IntegrityError from a bare select-then-insert), just not a
+    # single-statement native upsert.
+    async with session.begin_nested():
+        existing = (
+            await session.execute(
+                select(Setting).where(
+                    Setting.org_id == org_id,
+                    Setting.category == category,
+                    Setting.key == key,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(
+                Setting(
+                    key=key,
+                    category=category,
+                    value=value,
+                    org_id=org_id,
+                    description=description,
+                )
+            )
+        else:
+            existing.value = value
+            existing.description = description
+        await session.flush()
+
+
 class SettingsRoleCertificationStore:
     """Persists one settings row **per role**, not one shared envelope blob.
 
@@ -144,12 +239,12 @@ class SettingsRoleCertificationStore:
     updates touched logically independent roles. Splitting storage per role
     removes the shared mutable state that race depended on: two different
     roles are two different settings rows, so there is no read-before-write
-    dependency between them and no commit order can lose either one. A
-    same-role concurrent write (two sessions certifying the identical role at
-    the identical moment) still resolves via ``SettingsService.set()``'s
-    existing select-or-insert semantics -- the same behavior every other
-    settings-backed value in this codebase already has; broadening that to a
-    general atomic upsert is out of scope here.
+    dependency between them and no commit order can lose either one.
+
+    A same-role concurrent write (two sessions certifying the identical role
+    at the identical moment) is handled by ``_upsert_setting_row``'s atomic
+    ``INSERT ... ON CONFLICT DO UPDATE`` -- see that function's docstring for
+    the stated winner policy.
     """
 
     def __init__(
@@ -210,9 +305,10 @@ class SettingsRoleCertificationStore:
             return None
 
     async def save_record(self, record: RoleCertificationRecord) -> None:
-        """Upsert exactly one role's row. This is the write path
+        """Atomically upsert exactly one role's row. This is the write path
         ``RoleReadinessService`` uses -- no read-modify-write of any other
-        role's data, so certifying one role can never lose another's."""
+        role's data, so certifying one role can never lose another's, and no
+        select-then-insert race against a concurrent same-role write."""
 
         payload = {
             "version": ROLE_CERTIFICATION_PROFILE_VERSION,
@@ -222,10 +318,12 @@ class SettingsRoleCertificationStore:
                 "state": record.state.value,
             },
         }
-        await self._settings.set(
-            _role_setting_key(self._base_key, record.role),
-            json.dumps(payload, separators=(",", ":"), sort_keys=True),
+        await _upsert_setting_row(
+            self._settings.session,
+            org_id=self._settings.org_id,
             category=SettingCategory.LLM.value,
+            key=_role_setting_key(self._base_key, record.role),
+            value=json.dumps(payload, separators=(",", ":"), sort_keys=True),
             description=f"Safe Ask Dev {record.role.value} role certification result",
         )
 

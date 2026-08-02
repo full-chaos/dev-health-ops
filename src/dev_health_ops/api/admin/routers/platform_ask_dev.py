@@ -275,11 +275,25 @@ async def run_platform_ask_dev_readiness(
             # turns every AgentProviderError into a FAILED/INCOMPATIBLE
             # record internally, so only a genuinely unexpected failure
             # (e.g. store I/O) reaches this except.
-            await RoleReadinessService(_platform_role_store(session)).certify_role(
-                AgentRole.LEGACY_AGENT,
-                resolution.provider,
-                certification_key=resolution.readiness_fingerprint,
-            )
+            #
+            # CHAOS-3285 round 2 (Codex MEDIUM): the whole attempt runs
+            # inside a SAVEPOINT (begin_nested), never bare. A DB error
+            # caught by a plain except -- without a rollback or savepoint --
+            # leaves the session's transaction unable to accept further
+            # operations; the NEXT query on it raises PendingRollbackError,
+            # and when the request's own session dependency later tries to
+            # commit, THAT failure rolls back the whole transaction --
+            # silently discarding the binary certify() write just above,
+            # despite this being "caught". begin_nested()'s __aexit__ rolls
+            # back only to the savepoint on an exception, leaving the outer
+            # transaction (and the binary write already flushed into it)
+            # intact and the session usable for the rest of this request.
+            async with session.begin_nested():
+                await RoleReadinessService(_platform_role_store(session)).certify_role(
+                    AgentRole.LEGACY_AGENT,
+                    resolution.provider,
+                    certification_key=resolution.readiness_fingerprint,
+                )
         except Exception:
             logger.warning(
                 "Failed to certify the legacy_agent role during platform "

@@ -354,13 +354,22 @@ async def run_llm_settings_readiness(
             # (Codex CHAOS-3285 review). Best-effort: a bug here must never
             # regress the existing, already-relied-upon binary preflight
             # result written above.
-            await RoleReadinessService(
-                SettingsRoleCertificationStore(SettingsService(session, org_id))
-            ).certify_role(
-                AgentRole.LEGACY_AGENT,
-                resolution.provider,
-                certification_key=resolution.readiness_fingerprint,
-            )
+            #
+            # CHAOS-3285 round 2 (Codex MEDIUM): run inside a SAVEPOINT
+            # (begin_nested), never bare -- see platform_ask_dev.py's
+            # identical comment for the full rationale. A DB error caught
+            # without a rollback/savepoint poisons the session's
+            # transaction; the request's own session dependency then rolls
+            # back the WHOLE transaction on its final commit attempt,
+            # silently discarding the binary certify() write just above.
+            async with session.begin_nested():
+                await RoleReadinessService(
+                    SettingsRoleCertificationStore(SettingsService(session, org_id))
+                ).certify_role(
+                    AgentRole.LEGACY_AGENT,
+                    resolution.provider,
+                    certification_key=resolution.readiness_fingerprint,
+                )
         except Exception:
             logger.warning(
                 "Failed to certify the legacy_agent role during BYO Ask Dev preflight",

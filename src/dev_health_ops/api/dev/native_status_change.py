@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections import OrderedDict
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -88,6 +90,44 @@ TEAM_NOT_APPLICABLE_SOURCES: frozenset[str] = frozenset(
 )
 
 _BLOCKER_PROJECTION_RULE_VERSION = "canonical-blocks.v2"
+
+#: CHAOS-3303 round 2 (Codex HIGH, 2026-08-02): ``team_repo_ownership`` rows
+#: can represent mere *provider_access* to a repository -- a parent team can
+#: have access to a repo whose canonical primary work-item attribution
+#: belongs to a *different* (e.g. child) team. Repository co-location is not
+#: team ownership. Every fact-level team arm below joins through this exact
+#: canonical-primary snapshot instead of the coarser ``repository_ids``
+#: bound, so a parent team with broader repo access never inherits a child
+#: team's canonically-owned facts. Mirrors
+#: ``api/graphql/resolvers/team_attribution.py``'s own ``is_primary = 1`` +
+#: latest-``computed_at``-snapshot pattern verbatim (not re-derived): a work
+#: item's *latest compute* is scoped by ``(work_item_id, computed_at) IN
+#: (SELECT work_item_id, max(computed_at) ... GROUP BY work_item_id)``
+#: because ``compute_work_item_team_attributions`` appends every candidate
+#: of one compute run and never deletes prior ones -- without this bound, a
+#: retired candidate from an earlier compute could survive ``FINAL`` (its
+#: RMT key includes ``source``, so a superseded row is a distinct key, not
+#: replaced) and reappear as a stale extra ``is_primary`` row.
+#:
+#: Plain (non-f-string) text spliced into each query with ``+`` at the exact
+#: point it's needed -- every ``{name:Type}`` placeholder here is
+#: interpreted by clickhouse-connect server-side, never by Python string
+#: formatting (see ``api/queries/client.py``'s server-placeholder detection),
+#: so verbatim splicing is safe and avoids doubling every brace an f-string
+#: embedding would require across ~500 lines of surrounding SQL.
+_TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY = """
+    SELECT work_item_id
+    FROM work_item_team_attributions FINAL
+    WHERE org_id = {org_id:String}
+      AND team_id = {team_id:String}
+      AND is_primary = 1
+      AND (work_item_id, computed_at) IN (
+          SELECT work_item_id, max(computed_at)
+          FROM work_item_team_attributions
+          WHERE org_id = {org_id:String}
+          GROUP BY work_item_id
+      )
+"""
 
 _WORK_UNIT_MEMBERSHIP_WATERMARK_SQL = """
 SELECT max(completed_at) AS last_synced
@@ -186,7 +226,8 @@ ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
 """
 
-_PULL_REQUESTS_SQL = """
+_PULL_REQUESTS_SQL = (
+    """
 WITH linked AS (
   SELECT toString(link.repo_id) AS repository_id, link.pr_number
   FROM work_graph_issue_pr AS link FINAL
@@ -201,6 +242,11 @@ WITH linked AS (
         AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
       OR ({scope_type:String} = 'work_unit'
         AND link.work_item_id IN {member_issue_ids:Array(String)})
+      OR ({scope_type:String} = 'team'
+        AND link.work_item_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+        ))
     )
 ), latest_reviews AS (
   SELECT toString(repo_id) AS repository_id, number, reviewer,
@@ -240,7 +286,7 @@ WHERE pr.org_id = {org_id:String}
   AND pr.created_at <= {as_of:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'pull_request' AND pr.number = {pr_number:UInt32})
-    OR ({scope_type:String} IN ('issue', 'project')
+    OR ({scope_type:String} IN ('issue', 'project', 'team')
       AND (toString(pr.repo_id), pr.number) IN
           (SELECT repository_id, pr_number FROM linked))
     OR ({scope_type:String} = 'work_unit'
@@ -250,11 +296,12 @@ WHERE pr.org_id = {org_id:String}
         OR concat(toString(pr.repo_id), '#pr', toString(pr.number))
           IN {member_pr_ids:Array(String)}
       ))
-    OR ({scope_type:String} IN ('organization', 'repository', 'team'))
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
 """
+)
 
 _CI_SQL = """
 SELECT toString(repo_id) AS repository_id, run_id,
@@ -298,7 +345,18 @@ FROM deployments FINAL
 WHERE org_id = {org_id:String}
   AND toString(repo_id) IN {repository_ids:Array(String)}
   AND (
-    ({scope_type:String} IN ('organization', 'repository', 'team'))
+    ({scope_type:String} IN ('organization', 'repository'))
+    -- CHAOS-3303 round 2 (Codex HIGH): a bare repository-membership arm
+    -- would admit every deployment in the team's team_repo_ownership
+    -- repos, including ones belonging to a different (e.g. child) team
+    -- that merely shares the repo. A team-scoped deployment is admitted
+    -- ONLY through an already team-owned PR (pr_numbers is derived from
+    -- the now canonically-filtered _PULL_REQUESTS_SQL rows) -- the same
+    -- rule every other scope narrower than organization/repository
+    -- already follows via the unconditional arm below, made explicit here
+    -- for 'team' rather than left implicit.
+    OR ({scope_type:String} = 'team'
+      AND ifNull(pull_request_number, 0) IN {pr_numbers:Array(UInt32)})
     OR ifNull(pull_request_number, 0) IN {pr_numbers:Array(UInt32)}
   )
   AND coalesce(deployed_at, finished_at, started_at, last_synced)
@@ -362,7 +420,8 @@ FROM (
 WHERE g.repo_id IS NOT NULL
 """
 
-_TRANSITIONS_SQL = """
+_TRANSITIONS_SQL = (
+    """
 SELECT transition.work_item_id AS entity_id, item.title AS display_label,
        transition.from_status, transition.to_status,
        transition.occurred_at AS observed_at, transition.last_synced
@@ -380,13 +439,19 @@ WHERE transition.org_id = {org_id:String}
     ({scope_type:String} = 'issue' AND transition.work_item_id = {entity_id:String})
     OR ({scope_type:String} = 'project'
       AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-    OR ({scope_type:String} IN ('organization', 'repository', 'team'))
+    OR ({scope_type:String} = 'team' AND transition.work_item_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+    ))
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at, entity_id, from_status, to_status
 LIMIT {limit:UInt32}
 """
+)
 
-_RELATIONSHIPS_SQL = """
+_RELATIONSHIPS_SQL = (
+    """
 SELECT edge_id AS change_id, source_type, source_id, edge_type,
        target_type, target_id, provenance, confidence,
        discovered_at AS observed_at, last_synced
@@ -412,13 +477,25 @@ WHERE org_id = {org_id:String}
           AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
       )
     ))
-    OR ({scope_type:String} IN ('organization', 'repository', 'team'))
+    OR ({scope_type:String} = 'team' AND (
+      source_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+      )
+      OR target_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+      )
+    ))
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at, source_type, source_id, edge_type, target_type, target_id
 LIMIT {limit:UInt32}
 """
+)
 
-_PULL_REQUEST_CHANGES_SQL = """
+_PULL_REQUEST_CHANGES_SQL = (
+    """
 WITH linked AS (
   SELECT toString(link.repo_id) AS repository_id, link.pr_number
   FROM work_graph_issue_pr AS link FINAL
@@ -433,6 +510,10 @@ WITH linked AS (
       ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
       OR ({scope_type:String} = 'project'
         AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+      ))
     )
 )
 SELECT concat(toString(pr.repo_id), '#pr', toString(pr.number), '#state#',
@@ -453,16 +534,18 @@ WHERE pr.org_id = {org_id:String}
   AND observed_at < {end:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'pull_request' AND pr.number = {pr_number:UInt32})
-    OR ({scope_type:String} IN ('issue', 'project')
+    OR ({scope_type:String} IN ('issue', 'project', 'team')
       AND (toString(pr.repo_id), pr.number) IN
           (SELECT repository_id, pr_number FROM linked))
-    OR ({scope_type:String} IN ('organization', 'repository', 'team'))
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at, entity_id, change_id
 LIMIT {limit:UInt32}
 """
+)
 
-_REVIEW_CHANGES_SQL = """
+_REVIEW_CHANGES_SQL = (
+    """
 WITH linked AS (
   SELECT toString(link.repo_id) AS repository_id, link.pr_number
   FROM work_graph_issue_pr AS link FINAL
@@ -477,6 +560,10 @@ WITH linked AS (
       ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
       OR ({scope_type:String} = 'project'
         AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+      ))
     )
 )
 SELECT concat(toString(review.repo_id), '#pr', toString(review.number),
@@ -494,16 +581,18 @@ WHERE review.org_id = {org_id:String}
   AND review.submitted_at < {end:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'pull_request' AND review.number = {pr_number:UInt32})
-    OR ({scope_type:String} IN ('issue', 'project')
+    OR ({scope_type:String} IN ('issue', 'project', 'team')
       AND (toString(review.repo_id), review.number) IN
           (SELECT repository_id, pr_number FROM linked))
-    OR ({scope_type:String} IN ('organization', 'repository', 'team'))
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at, entity_id, change_id
 LIMIT {limit:UInt32}
 """
+)
 
-_CI_CHANGES_SQL = """
+_CI_CHANGES_SQL = (
+    """
 WITH linked AS (
   SELECT toString(link.repo_id) AS repository_id, link.pr_number
   FROM work_graph_issue_pr AS link FINAL
@@ -518,6 +607,10 @@ WITH linked AS (
       ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
       OR ({scope_type:String} = 'project'
         AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+      ))
     )
 )
 SELECT concat(toString(run.repo_id), '#ci#', run.run_id) AS change_id,
@@ -534,16 +627,18 @@ WHERE run.org_id = {org_id:String}
   AND observed_at < {end:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'pull_request' AND ifNull(run.pr_number, 0) = {pr_number:UInt32})
-    OR ({scope_type:String} IN ('issue', 'project')
+    OR ({scope_type:String} IN ('issue', 'project', 'team')
       AND (toString(run.repo_id), ifNull(run.pr_number, 0)) IN
           (SELECT repository_id, pr_number FROM linked))
-    OR ({scope_type:String} IN ('organization', 'repository', 'team'))
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at, entity_id, change_id
 LIMIT {limit:UInt32}
 """
+)
 
-_DEPLOYMENT_CHANGES_SQL = """
+_DEPLOYMENT_CHANGES_SQL = (
+    """
 WITH linked AS (
   SELECT toString(link.repo_id) AS repository_id, link.pr_number
   FROM work_graph_issue_pr AS link FINAL
@@ -558,6 +653,10 @@ WITH linked AS (
       ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
       OR ({scope_type:String} = 'project'
         AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+      ))
     )
 )
 SELECT concat(toString(deployment.repo_id), '#deployment#',
@@ -577,16 +676,18 @@ WHERE deployment.org_id = {org_id:String}
   AND (
     ({scope_type:String} = 'pull_request'
       AND ifNull(deployment.pull_request_number, 0) = {pr_number:UInt32})
-    OR ({scope_type:String} IN ('issue', 'project')
+    OR ({scope_type:String} IN ('issue', 'project', 'team')
       AND (toString(deployment.repo_id), ifNull(deployment.pull_request_number, 0)) IN
           (SELECT repository_id, pr_number FROM linked))
-    OR ({scope_type:String} IN ('organization', 'repository', 'team'))
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at, entity_id, change_id
 LIMIT {limit:UInt32}
 """
+)
 
-_INCIDENT_CHANGES_SQL = """
+_INCIDENT_CHANGES_SQL = (
+    """
 WITH linked AS (
   SELECT toString(link.repo_id) AS repository_id, link.pr_number
   FROM work_graph_issue_pr AS link FINAL
@@ -601,6 +702,10 @@ WITH linked AS (
       ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
       OR ({scope_type:String} = 'project'
         AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+      ))
     )
 )
 SELECT concat(incident.id, '#state#',
@@ -632,14 +737,40 @@ WHERE incident.org_id = {org_id:String}
   AND (
     ({scope_type:String} = 'pull_request'
       AND ifNull(deployment.pull_request_number, 0) = {pr_number:UInt32})
-    OR ({scope_type:String} IN ('issue', 'project')
+    OR ({scope_type:String} IN ('issue', 'project', 'team')
       AND (toString(deployment.repo_id), ifNull(deployment.pull_request_number, 0)) IN
           (SELECT repository_id, pr_number FROM linked))
-    OR ({scope_type:String} IN ('organization', 'repository', 'team'))
+    OR ({scope_type:String} IN ('organization', 'repository'))
   )
 ORDER BY observed_at, entity_id, change_id
 LIMIT {limit:UInt32}
 """
+)
+
+
+#: Bounded so a long-lived ``ClickHouseStatusChangeSource`` (e.g. a worker
+#: process serving many orgs/teams over time) cannot accumulate an unbounded
+#: cache -- mirrors ``metrics.service.MetricRequestCache``'s reviewed
+#: bounded-``OrderedDict`` pattern.
+_TEAM_REPOSITORY_CACHE_MAX_ENTRIES = 64
+
+
+@dataclass(frozen=True, slots=True)
+class TeamAttributionResult:
+    """Distinguishes a genuinely empty cohort from a failed lookup.
+
+    Codex finding (MEDIUM, 2026-08-02): the two must never collapse to the
+    same caller-visible outcome. ``measured=False`` means the lookup itself
+    failed (client/query error) -- cohort_size is UNKNOWABLE, not zero, and
+    a caller must report every dimension unmeasured rather than suppress
+    them as ``insufficient_cohort`` (which claims a real, measured zero).
+    ``measured=True`` with an empty ``repository_ids`` is the genuine
+    zero-cohort case, which correctly does suppress as
+    ``insufficient_cohort``.
+    """
+
+    measured: bool
+    repository_ids: tuple[str, ...] = ()
 
 
 class ClickHouseStatusChangeSource:
@@ -655,10 +786,23 @@ class ClickHouseStatusChangeSource:
         self._client = client
         self._policies = dict(policies or default_native_freshness_policies())
         self._now = now
+        # Codex finding (MEDIUM, 2026-08-02): TeamHealthService resolves its
+        # own cohort attribution snapshot, and status_snapshot/change_summary
+        # independently re-derive the same team's repositories internally
+        # (via _authorized_repository_ids). When both calls share this same
+        # ClickHouseStatusChangeSource instance (the natural production
+        # wiring) and the SAME as_of, this cache turns the second lookup
+        # into a hit instead of a second ClickHouse round trip -- "one
+        # immutable attribution snapshot, reused" without changing
+        # PlanExecutorRuntime's wire contract (a team DevScope cannot carry
+        # its own repository list -- CHAOS-3301 addendum, ratified).
+        self._team_repository_cache: OrderedDict[
+            tuple[str, str, datetime], TeamAttributionResult
+        ] = OrderedDict()
 
     async def team_repository_ids(
         self, org_id: str, team_id: str, *, as_of: datetime
-    ) -> list[str]:
+    ) -> TeamAttributionResult:
         """Re-derive one team's owned repositories from ``team_repo_ownership``.
 
         Public (CHAOS-3303, Codex finding HIGH 2026-08-02): this is the
@@ -673,12 +817,19 @@ class ClickHouseStatusChangeSource:
         for "what repositories does this team own right now", never two
         independently-drifting queries.
 
-        A genuinely failing lookup or zero-row result both return ``[]``,
-        by design indistinguishable to a caller other than "no verified
-        attribution" -- exactly what the fail-closed floor (N0) already
-        requires downstream.
+        A genuine query failure is never cached (a transient outage must
+        not poison a later, successful call within the same evaluation);
+        a successful (possibly empty) result is cached by the exact
+        ``(org_id, team_id, as_of)`` key -- safe because the underlying
+        predicate (``valid_from <= as_of AND (valid_to IS NULL OR valid_to
+        > as_of)``) is a pure function of that key, not of wall-clock time.
         """
 
+        cache_key = (org_id, team_id, as_of)
+        cached = self._team_repository_cache.get(cache_key)
+        if cached is not None:
+            self._team_repository_cache.move_to_end(cache_key)
+            return cached
         try:
             async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
                 rows = await query_dicts(
@@ -691,10 +842,23 @@ class ClickHouseStatusChangeSource:
                     },
                 )
         except Exception:
-            return []
-        return sorted(
-            {str(row["repository_id"]) for row in rows if row.get("repository_id")}
+            return TeamAttributionResult(measured=False)
+        result = TeamAttributionResult(
+            measured=True,
+            repository_ids=tuple(
+                sorted(
+                    {
+                        str(row["repository_id"])
+                        for row in rows
+                        if row.get("repository_id")
+                    }
+                )
+            ),
         )
+        self._team_repository_cache[cache_key] = result
+        while len(self._team_repository_cache) > _TEAM_REPOSITORY_CACHE_MAX_ENTRIES:
+            self._team_repository_cache.popitem(last=False)
+        return result
 
     async def _authorized_repository_ids(
         self, org_id: str, scope: DevScope, *, as_of: datetime
@@ -727,9 +891,15 @@ class ClickHouseStatusChangeSource:
         regardless of real ownership data.
         """
         if scope.direct_scope is DirectScope.TEAM:
-            return await self.team_repository_ids(
+            # Unmeasured (failed lookup) and measured-but-empty both fall
+            # through to the existing empty-repositories fail-closed branch
+            # below -- N0's guarantee holds either way; the measured/failed
+            # distinction matters to TeamHealthService's own cohort_size
+            # resolution, not to this read-bounding helper.
+            result = await self.team_repository_ids(
                 org_id, scope.team_ids[0], as_of=as_of
             )
+            return list(result.repository_ids)
         if scope.direct_scope is not DirectScope.ORGANIZATION or scope.team_ids:
             return self._repository_ids(scope)
         try:
@@ -772,6 +942,13 @@ class ClickHouseStatusChangeSource:
             "limit": min(limit, MAX_STATUS_ASSESSMENT_ITEMS),
             "member_issue_ids": [],
             "member_pr_ids": [],
+            # CHAOS-3303 round 2: the canonical-primary-attribution team arms
+            # (_PULL_REQUESTS_SQL, _TRANSITIONS_SQL, _RELATIONSHIPS_SQL, and
+            # the five _*_CHANGES_SQL delivery projections) bind this
+            # directly; harmless/unused for every other scope_type.
+            "team_id": scope.team_ids[0]
+            if scope.direct_scope is DirectScope.TEAM
+            else "",
         }
         if scope.direct_scope is DirectScope.WORK_UNIT:
             marker_rows, membership_ref, warning = await self._read(
@@ -1124,6 +1301,9 @@ class ClickHouseStatusChangeSource:
             "start": current.start.astimezone(UTC),
             "end": current.end.astimezone(UTC),
             "limit": min(limit, 100),
+            "team_id": scope.team_ids[0]
+            if scope.direct_scope is DirectScope.TEAM
+            else "",
         }
         transitions, transition_ref, transition_warning = await self._read(
             "work_items", _TRANSITIONS_SQL, params, scope

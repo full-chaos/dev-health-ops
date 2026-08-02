@@ -15,11 +15,36 @@ person-level output" requirements:
   report a fabricated healthy finding for an unattributed team. There is no
   parameter left for a caller to assert a cohort size through -- it is
   always the length of the *verified* repository set this service itself
-  queries for the exact ``team_id``/``as_of`` the evaluation uses. Every
-  CHAOS-3302 rule applicable to ``team`` carries a ``minimum_cohort_size``
-  (``HealthRuleDefinition.validate_cohort_requirement``), so a team with no
-  resolved attribution (``cohort_size=0``) still has every applicable rule
-  honestly suppressed as ``insufficient_cohort`` -> ``UNKNOWN``.
+  queries. Every CHAOS-3302 rule applicable to ``team`` carries a
+  ``minimum_cohort_size`` (``HealthRuleDefinition.validate_cohort_
+  requirement``), so a team with no resolved attribution (``cohort_size=0``)
+  still has every applicable rule honestly suppressed as
+  ``insufficient_cohort`` -> ``UNKNOWN``.
+
+  Codex finding (MEDIUM, 2026-08-02): the attribution snapshot is resolved
+  at ``scope.time_range.end`` -- the SAME instant
+  ``StatusSnapshotRequest.as_of`` defaults to inside
+  ``StatusChangeService.status_snapshot`` (and therefore the same instant
+  the runtime's own internal ``team_repository_ids`` call, made through
+  ``_authorized_repository_ids``, uses) -- never wall-clock ``now``. An
+  ownership row valid at scope-end but since expired by ``now`` would
+  otherwise pair real, historical, in-window facts with a wrongly-zeroed
+  cohort_size, misreporting a genuinely attributed team as
+  ``insufficient_cohort``. ``ClickHouseStatusChangeSource`` additionally
+  caches by the exact ``(org_id, team_id, as_of)`` key, so when this
+  service and the wrapped runtime share one source instance (the natural
+  production wiring), the internal call is a cache hit rather than a
+  second round trip -- one resolved attribution snapshot, reused, without
+  changing ``PlanExecutorRuntime``'s wire contract (a team ``DevScope``
+  cannot carry its own repository list -- CHAOS-3301 addendum, ratified).
+
+  A genuine attribution-lookup FAILURE (``measured=False``) is never
+  treated as a zero cohort: cohort_size is UNKNOWABLE, not zero, so this
+  service reports every dimension honestly unmeasured (routing through
+  ``health_profile_synthesis``'s existing unbound/unavailable path) rather
+  than the misleading ``insufficient_cohort`` suppression a measured-zero
+  cohort would produce. The runtime is not even called in that case --
+  nothing meaningful could be reported regardless of what it returns.
 * ``health_rule.change_failure_rate.v1`` is unconditionally reported
   ``not_applicable`` for a team subject: ``MetricID.CHANGE_FAILURE_RATE``'s
   own ``supported_scopes`` (``metrics/definitions.py``) does not include
@@ -27,14 +52,15 @@ person-level output" requirements:
   structurally inapplicable, not merely unqueried.
 
 ``native_status_change.py``'s ``ClickHouseStatusChangeSource`` re-derives a
-team's owned repositories from ``team_repo_ownership`` at query time and
-executes real team-scoped pull-request/CI/deployment/incident reads (see
-``TEAM_NOT_APPLICABLE_SOURCES``, limited to the two sources -- declared/
-children work items and their blockers -- that structurally describe a
-single entity's completion tree, not a team cohort). A team with no
-resolved ``team_repo_ownership`` rows (or a genuinely failing lookup) still
-falls back to the same explicit ``FreshnessState.UNAVAILABLE`` observation
-as before -- never a silently empty answer.
+team's owned repositories from ``team_repo_ownership`` at query time,
+filtered through canonical-primary work-item attribution (CHAOS-3303 round
+2), and executes real team-scoped pull-request/CI/deployment/incident
+reads (see ``TEAM_NOT_APPLICABLE_SOURCES``, limited to the two sources --
+declared/children work items and their blockers -- that structurally
+describe a single entity's completion tree, not a team cohort). A team
+with no resolved ``team_repo_ownership`` rows (or a genuinely failing
+lookup) still falls back to the same explicit ``FreshnessState.UNAVAILABLE``
+observation as before -- never a silently empty answer.
 """
 
 from __future__ import annotations
@@ -50,6 +76,7 @@ from .health_profile_synthesis import (
     synthesize_health_profile,
 )
 from .investigation_plans.builtin_steps import PlanExecutorRuntime
+from .native_status_change import TeamAttributionResult
 
 __all__ = ["TeamAttributionSource", "TeamHealthService"]
 
@@ -63,7 +90,7 @@ class TeamAttributionSource(Protocol):
 
     async def team_repository_ids(
         self, org_id: str, team_id: str, *, as_of: datetime
-    ) -> list[str]: ...
+    ) -> TeamAttributionResult: ...
 
 
 class TeamHealthService:
@@ -91,10 +118,27 @@ class TeamHealthService:
 
         # The ONLY source of cohort_size: verified, queried at evaluation
         # time, never a caller-supplied assertion -- see module docstring.
-        owned_repository_ids = await self._attribution.team_repository_ids(
-            org_id, team_id, as_of=now
+        # as_of=scope.time_range.end (not `now`) matches the instant the
+        # runtime's own internal team-repository lookup uses.
+        attribution = await self._attribution.team_repository_ids(
+            org_id, team_id, as_of=scope.time_range.end
         )
-        cohort_size = len(owned_repository_ids)
+        if not attribution.measured:
+            # The lookup itself failed -- cohort_size is unknowable, not a
+            # measured zero. Every dimension must be honestly unmeasured;
+            # calling the runtime would produce facts we cannot responsibly
+            # attach a trustworthy cohort to.
+            return synthesize_health_profile(
+                applicability=RuleApplicability.TEAM,
+                subject_id=team_id,
+                cohort_size=None,
+                sources=HealthEvaluationSources(
+                    change_failure_rate_not_applicable=True
+                ),
+                org_id=org_id,
+                observed_at=now,
+            )
+        cohort_size = len(attribution.repository_ids)
 
         status_snapshot = await self._runtime.status_snapshot(
             org_id=org_id, permission_fingerprint=permission_fingerprint, scope=scope

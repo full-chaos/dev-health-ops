@@ -33,6 +33,7 @@ from dev_health_ops.api.dev.contracts import (
 )
 from dev_health_ops.api.dev.contracts_v2.health_rules import DimensionState
 from dev_health_ops.api.dev.data_health_service import DataHealthResult
+from dev_health_ops.api.dev.native_status_change import TeamAttributionResult
 from dev_health_ops.api.dev.status_change_service import (
     ActualCompletion,
     CompletionState,
@@ -124,24 +125,30 @@ class FakeAttributionSource:
     """A configurable ``TeamAttributionSource`` double -- ``repository_ids``
     is the ONLY thing that determines ``cohort_size`` (see
     ``TeamHealthService.evaluate_team``); there is no other lever a test
-    (or a caller) has to influence it.
+    (or a caller) has to influence it. ``measured=False`` simulates a
+    genuine lookup failure, distinct from a measured-empty cohort (Codex
+    finding, MEDIUM, 2026-08-02).
     """
 
     repository_ids: tuple[str, ...] = ()
-    calls: list[tuple[str, str]] | None = None
+    measured: bool = True
+    calls: list[tuple[str, str, datetime]] | None = None
 
     async def team_repository_ids(
         self, org_id: str, team_id: str, *, as_of: datetime
-    ) -> list[str]:
+    ) -> TeamAttributionResult:
         if self.calls is not None:
-            self.calls.append((org_id, team_id))
-        return list(self.repository_ids)
+            self.calls.append((org_id, team_id, as_of))
+        return TeamAttributionResult(
+            measured=self.measured, repository_ids=self.repository_ids
+        )
 
 
 _NO_ATTRIBUTION = FakeAttributionSource(repository_ids=())
 _FULL_ATTRIBUTION = FakeAttributionSource(
     repository_ids=tuple(f"repo-{i}" for i in range(25))
 )
+_FAILED_ATTRIBUTION = FakeAttributionSource(measured=False)
 
 
 @pytest.mark.asyncio
@@ -382,3 +389,96 @@ async def test_evaluate_team_with_attribution_and_real_facts_reports_real_findin
     # threshold 10.0 -- a real, measured healthy finding.
     assert incident_finding.state == DimensionState.HEALTHY
     assert incident_finding.suppressed_reason is None
+
+
+@dataclass
+class _UncallableRuntime:
+    """A runtime that fails the test immediately if any method is called --
+    proves ``evaluate_team`` short-circuits on a failed attribution lookup
+    rather than proceeding to fetch facts it cannot responsibly attach a
+    cohort to.
+    """
+
+    async def status_snapshot(self, *, org_id, permission_fingerprint, scope):
+        raise AssertionError(
+            "the runtime must never be called when attribution measurement "
+            "itself failed -- cohort_size is unknowable, not merely small"
+        )
+
+    async def change_summary(self, *, org_id, permission_fingerprint, scope):
+        raise AssertionError("unexpected call")
+
+    def list_metrics(self, scope):
+        raise AssertionError("unexpected call")
+
+    async def query_metric(self, *, org_id, permission_fingerprint, metric_id, scope):
+        raise AssertionError("unexpected call")
+
+    async def work_graph_neighbors(self, *, org_id, permission_fingerprint, scope):
+        raise AssertionError("unexpected call")
+
+    async def data_health(self, *, org_id, permission_fingerprint, scope):
+        raise AssertionError("unexpected call")
+
+
+@pytest.mark.asyncio
+async def test_evaluate_team_attribution_failure_is_unmeasured_not_insufficient_cohort() -> (
+    None
+):
+    """Codex finding (MEDIUM, 2026-08-02): a genuine attribution-lookup
+    FAILURE must be distinct from a measured-empty cohort. Both currently
+    suppress via the same UNKNOWN state (evaluate_rule's own no_data/
+    not_measured short-circuit fires before the cohort guard even runs --
+    see health_rule_registry.evaluate_rule), but a failure must never carry
+    ``suppressed_reason="insufficient_cohort"`` (a claim that a real,
+    measured zero was found) and the runtime must never even be called.
+    """
+
+    service = TeamHealthService(_UncallableRuntime(), _FAILED_ATTRIBUTION)
+    profile = await service.evaluate_team(
+        org_id=_ORG_ID,
+        permission_fingerprint="fp",
+        scope=_team_scope(),
+        team_id="team-1",
+        now=_NOW,
+    )
+    assert profile.launch_findings == ()
+    assert profile.suppressed_findings == ()
+    assert profile.shadow_findings
+    for finding in profile.shadow_findings:
+        assert finding.state in (DimensionState.UNKNOWN, DimensionState.NOT_APPLICABLE)
+        assert finding.suppressed_reason != "insufficient_cohort"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_team_resolves_attribution_at_scope_end_not_wall_clock_now() -> (
+    None
+):
+    """Codex finding (MEDIUM, 2026-08-02), the exact repro shape: an
+    ownership row valid at ``scope.time_range.end`` but since expired by
+    wall-clock ``now`` must not wrongly zero the cohort. This service must
+    resolve attribution at ``scope.time_range.end``, never ``now`` -- proven
+    here with a ``now`` far past the scope window.
+    """
+
+    recorded_calls: list[tuple[str, str, datetime]] = []
+    attribution = FakeAttributionSource(
+        repository_ids=("repo-a",), calls=recorded_calls
+    )
+    scope = _team_scope()
+    much_later_now = scope.time_range.end + timedelta(days=90)
+    assert much_later_now != scope.time_range.end
+
+    service = TeamHealthService(FakeAttributedTeamRuntime(), attribution)
+    await service.evaluate_team(
+        org_id=_ORG_ID,
+        permission_fingerprint="fp",
+        scope=scope,
+        team_id="team-1",
+        now=much_later_now,
+    )
+
+    assert len(recorded_calls) == 1
+    _org_id, _team_id, as_of = recorded_calls[0]
+    assert as_of == scope.time_range.end
+    assert as_of != much_later_now

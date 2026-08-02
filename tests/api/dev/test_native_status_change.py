@@ -14,6 +14,7 @@ from dev_health_ops.api.dev.contracts import (
 )
 from dev_health_ops.api.dev.native_status_change import ClickHouseStatusChangeSource
 from dev_health_ops.api.dev.status_change_service import (
+    ChangeCategory,
     ChangeSummaryRequest,
     CompletionState,
     StatusChangeService,
@@ -59,13 +60,13 @@ def _scope(
     )
 
 
-def _deployment_row(status: str = "success") -> dict[str, Any]:
+def _deployment_row(status: str = "success", *, pr_number: int = 7) -> dict[str, Any]:
     return {
         "entity_id": "deployment-1",
         "display_label": "Production deployment",
         "status": status,
         "environment": "production",
-        "pr_number": 7,
+        "pr_number": pr_number,
         "observed_at": NOW,
         "last_synced": NOW,
     }
@@ -1114,8 +1115,8 @@ async def test_organization_scope_status_snapshot_enumerates_repos_natively(
     # _DEPLOYMENTS_SQL (CHAOS-3255 follow-up — this is the regression the
     # prior HIGH finding actually shipped, and a table-name-only mock
     # cannot detect it re-appearing).
-    assert "IN ('organization', 'repository', 'team')" in pull_request_calls[0]["sql"]
-    assert "IN ('organization', 'repository', 'team')" in deployment_calls[0]["sql"]
+    assert "IN ('organization', 'repository')" in pull_request_calls[0]["sql"]
+    assert "IN ('organization', 'repository')" in deployment_calls[0]["sql"]
     assert result.pull_requests, "organization scope must surface PR facts"
     assert result.deployments, "organization scope must surface deployment facts"
 
@@ -1192,8 +1193,8 @@ async def test_organization_scope_change_summary_enumerates_repos_natively(
     # Assert the SQL text itself, not just the mocked row: a table-name-only
     # mock returns rows regardless of the real WHERE clause and would not
     # catch the 'organization' branch being deleted again.
-    assert "IN ('organization', 'repository', 'team')" in transitions_calls[0]["sql"]
-    assert "IN ('organization', 'repository', 'team')" in relationship_calls[0]["sql"]
+    assert "IN ('organization', 'repository')" in transitions_calls[0]["sql"]
+    assert "IN ('organization', 'repository')" in relationship_calls[0]["sql"]
     change_ids = {change.change_id for change in result.changes}
     assert any(
         change.entity_id == "issue-1" and change.before == "in_progress"
@@ -1325,6 +1326,12 @@ async def test_team_scope_status_snapshot_re_derives_owned_repos_and_executes(
                 "as_of": NOW,
             }
             return [{"repository_id": "repo-x"}, {"repository_id": "repo-y"}]
+        # _PULL_REQUESTS_SQL now embeds the canonical-primary-attribution
+        # subquery INSIDE its own single query string (no separate
+        # query_dicts round trip for it) -- matching on
+        # "work_item_team_attributions" here would incorrectly intercept
+        # that composite query itself, since the substring appears within
+        # it. Match the outer query's own unique marker instead.
         if "FROM git_pull_requests AS pr" in sql:
             return [_pull_request_row()]
         if "FROM deployments" in sql:
@@ -1349,11 +1356,14 @@ async def test_team_scope_status_snapshot_re_derives_owned_repos_and_executes(
     assert pull_request_calls, "expected the pull_requests read to execute"
     assert deployment_calls, "expected the deployments read to execute"
     assert pull_request_calls[0]["params"]["repository_ids"] == ["repo-x", "repo-y"]
-    # Assert the SQL text itself carries the team branch, not just that a
-    # mocked row came back -- a table-name-only mock would still pass even
-    # if 'team' were dropped from the disjunction.
-    assert "IN ('organization', 'repository', 'team')" in pull_request_calls[0]["sql"]
-    assert "IN ('organization', 'repository', 'team')" in deployment_calls[0]["sql"]
+    # Assert the SQL text itself carries the canonical-primary-attribution
+    # team branch, not just that a mocked row came back -- a table-name-only
+    # mock would still pass even if 'team' were dropped from the
+    # disjunction, or if it fell back to the coarser repository-membership
+    # arm (CHAOS-3303 round 2's own regression).
+    assert "IN ('issue', 'project', 'team')" in pull_request_calls[0]["sql"]
+    assert "work_item_team_attributions" in pull_request_calls[0]["sql"]
+    assert "is_primary = 1" in pull_request_calls[0]["sql"]
     assert result.pull_requests, "team scope must surface pull-request facts"
     assert result.deployments, "team scope must surface deployment facts"
     assert (
@@ -1455,7 +1465,8 @@ async def test_team_scope_change_summary_re_derives_owned_repos_and_executes(
     ]
     assert transitions_calls
     assert transitions_calls[0]["params"]["repository_ids"] == ["repo-x"]
-    assert "IN ('organization', 'repository', 'team')" in transitions_calls[0]["sql"]
+    assert "work_item_team_attributions" in transitions_calls[0]["sql"]
+    assert "is_primary = 1" in transitions_calls[0]["sql"]
     assert any(
         change.entity_id == "issue-1" and change.before == "in_progress"
         for change in result.changes
@@ -1498,12 +1509,352 @@ async def test_team_scope_with_zero_owned_repositories_is_explicit_not_masked(
     )
 
 
-def _pull_request_row() -> dict[str, Any]:
+# ---------------------------------------------------------------------------
+# CHAOS-3303 round 2 (Codex HIGH, 2026-08-02): repository co-location is not
+# team ownership. A PARENT team with team_repo_ownership access to a shared
+# repository must NEVER receive facts whose canonical PRIMARY work-item
+# attribution belongs to a different (here, CHILD) team -- every one of the
+# nine team arms must exclude them. Parametrized across all nine arms (not
+# sampled) per the round-2 directive; the CHILD-team run is the required
+# positive control proving the mock (and the underlying plumbing) genuinely
+# discriminates by team_id rather than always returning empty.
+#
+# The mock cannot execute the embedded work_item_team_attributions subquery
+# (it interprets SQL by table-name substring, not by running it) -- so, like
+# every other structural regression check already in this file (see the
+# CHAOS-3255 'organization' branch assertions above), each case ALSO asserts
+# the query's own SQL text still contains the canonical-attribution join
+# text, so a future edit that silently reverts to bare repository-membership
+# admission is caught even though the mock's behavioral check alone could
+# not detect it.
+# ---------------------------------------------------------------------------
+
+_PARENT_TEAM_ID = "team-parent"
+_CHILD_TEAM_ID = "team-child"
+_SHARED_REPO_ID = "repo-shared"
+_CHILD_WORK_ITEM_ID = "work-item-child-owned"
+
+
+def _team_scope_for(team_id: str) -> DevScope:
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id="org-a",
+        direct_scope=DirectScope.TEAM,
+        repositories=[],
+        entity_refs=[
+            DevEntityRef(
+                entity_type=EntityType.TEAM, entity_id=team_id, display_label=team_id
+            )
+        ],
+        team_ids=[team_id],
+        time_range=DevTimeRange(start=NOW - timedelta(days=7), end=NOW, timezone="UTC"),
+        comparison_range=DevTimeRange(
+            start=NOW - timedelta(days=14),
+            end=NOW - timedelta(days=7),
+            timezone="UTC",
+        ),
+    )
+
+
+def _generic_delivery_change_row() -> dict[str, Any]:
+    """The row shape every _*_CHANGES_SQL query feeds into the SAME generic
+    ``ClickHouseStatusChangeSource._delivery_changes`` mapper -- one shape
+    covers all five delivery-projection cases regardless of which table the
+    real SQL selects from.
+    """
+
+    return {
+        "change_id": f"change-{_CHILD_WORK_ITEM_ID}",
+        "entity_id": f"{_SHARED_REPO_ID}#pr7",
+        "display_label": "Child-owned delivery event",
+        "before_value": None,
+        "after_value": "changed",
+        "observed_at": NOW - timedelta(hours=1),
+        "last_synced": NOW,
+    }
+
+
+def _make_team_repo_only_fake_query(*, target_marker: str, target_row: dict[str, Any]):
+    """A fake_query that admits ``target_row`` for the query matching
+    ``target_marker`` ONLY when ``params["team_id"] == _CHILD_TEAM_ID`` --
+    the parent (mere repository co-location) always sees an empty result
+    for that same arm, proving exclusion rather than a client-side crash or
+    an accidentally-always-empty mock.
+    """
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [{"repository_id": _SHARED_REPO_ID}]
+        if target_marker in sql:
+            if params.get("team_id") == _CHILD_TEAM_ID:
+                return [target_row]
+            return []
+        return []
+
+    return fake_query
+
+
+_STATUS_SNAPSHOT_CASE = (
+    "pull_requests",
+    "reviews.review_state AS review_state",
+    lambda: _pull_request_row(),
+    lambda result: result.pull_requests,
+)
+
+_CHANGE_SUMMARY_CASES = (
+    (
+        "transitions",
+        "FROM work_item_transitions AS transition FINAL",
+        lambda: {
+            "entity_id": _CHILD_WORK_ITEM_ID,
+            "display_label": "Child work item",
+            "from_status": "in_progress",
+            "to_status": "done",
+            "observed_at": NOW - timedelta(hours=1),
+            "last_synced": NOW,
+        },
+        lambda result: [
+            c for c in result.changes if c.category is ChangeCategory.STATUS
+        ],
+    ),
+    (
+        "relationships",
+        "edge_id AS change_id",
+        lambda: {
+            "change_id": "edge-child-1",
+            "source_type": "issue",
+            "source_id": _CHILD_WORK_ITEM_ID,
+            "edge_type": "implements",
+            "target_type": "pull_request",
+            "target_id": f"{_SHARED_REPO_ID}#pr7",
+            "provenance": "native",
+            "confidence": 1.0,
+            "observed_at": NOW - timedelta(hours=1),
+            "last_synced": NOW,
+        },
+        lambda result: [
+            c
+            for c in result.changes
+            if c.category
+            in {
+                ChangeCategory.RELATIONSHIP,
+                ChangeCategory.BLOCKER,
+                ChangeCategory.DEPENDENCY,
+            }
+        ],
+    ),
+    (
+        "pull_request_changes",
+        "'#state#'",
+        _generic_delivery_change_row,
+        lambda result: [
+            c for c in result.changes if c.category is ChangeCategory.PULL_REQUEST
+        ],
+    ),
+    (
+        "review_changes",
+        "FROM git_pull_request_reviews AS review FINAL",
+        _generic_delivery_change_row,
+        lambda result: [
+            c for c in result.changes if c.category is ChangeCategory.REVIEW
+        ],
+    ),
+    (
+        "ci_changes",
+        "FROM ci_pipeline_runs AS run FINAL",
+        _generic_delivery_change_row,
+        lambda result: [c for c in result.changes if c.category is ChangeCategory.CI],
+    ),
+    (
+        "deployment_changes",
+        "FROM deployments AS deployment FINAL",
+        _generic_delivery_change_row,
+        lambda result: [
+            c for c in result.changes if c.category is ChangeCategory.DEPLOYMENT
+        ],
+    ),
+    (
+        "incident_changes",
+        "INNER JOIN deployments AS deployment FINAL",
+        _generic_delivery_change_row,
+        lambda result: [
+            c for c in result.changes if c.category is ChangeCategory.INCIDENT
+        ],
+    ),
+)
+
+
+@pytest.mark.asyncio
+async def test_team_arm_excludes_child_owned_facts_pull_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _label, marker, row_factory, extract = _STATUS_SNAPSHOT_CASE
+    row = row_factory()
+
+    parent_query = _make_team_repo_only_fake_query(target_marker=marker, target_row=row)
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", parent_query
+    )
+    parent_result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_team_scope_for(_PARENT_TEAM_ID)),
+    )
+    assert extract(parent_result) == (), (
+        "a team with mere repository co-location must not receive facts "
+        "canonically owned by a different team"
+    )
+
+    observed_sql: list[str] = []
+
+    async def child_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        observed_sql.append(sql)
+        return await parent_query(_client, sql, params)
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", child_query
+    )
+    child_result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_team_scope_for(_CHILD_TEAM_ID))
+    )
+    assert extract(child_result), (
+        "positive control: the canonically-owning team must receive the fact "
+        "-- proves the mock discriminates rather than always excluding"
+    )
+    target_sql = next(sql for sql in observed_sql if marker in sql)
+    assert "work_item_team_attributions" in target_sql
+    assert "is_primary = 1" in target_sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "label,marker,row_factory,extract",
+    _CHANGE_SUMMARY_CASES,
+    ids=[case[0] for case in _CHANGE_SUMMARY_CASES],
+)
+async def test_team_arm_excludes_child_owned_facts_change_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    label: str,
+    marker: str,
+    row_factory: Any,
+    extract: Any,
+) -> None:
+    del label
+    row = row_factory()
+
+    def _request(team_id: str) -> ChangeSummaryRequest:
+        return ChangeSummaryRequest(
+            scope=_team_scope_for(team_id),
+            current_start=NOW - timedelta(days=7),
+            current_end=NOW,
+            comparison_start=NOW - timedelta(days=14),
+            comparison_end=NOW - timedelta(days=7),
+        )
+
+    parent_query = _make_team_repo_only_fake_query(target_marker=marker, target_row=row)
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", parent_query
+    )
+    parent_result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).change_summary("org-a", "permission-v1", _request(_PARENT_TEAM_ID))
+    assert extract(parent_result) == [], (
+        "a team with mere repository co-location must not receive facts "
+        "canonically owned by a different team"
+    )
+
+    observed_sql: list[str] = []
+
+    async def child_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        observed_sql.append(sql)
+        return await parent_query(_client, sql, params)
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", child_query
+    )
+    child_result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).change_summary("org-a", "permission-v1", _request(_CHILD_TEAM_ID))
+    assert extract(child_result), (
+        "positive control: the canonically-owning team must receive the fact "
+        "-- proves the mock discriminates rather than always excluding"
+    )
+    target_sql = next(sql for sql in observed_sql if marker in sql)
+    assert "work_item_team_attributions" in target_sql
+    assert "is_primary = 1" in target_sql
+
+
+@pytest.mark.asyncio
+async def test_team_arm_excludes_child_owned_facts_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ninth arm: _DEPLOYMENTS_SQL has no canonical-attribution join of
+    its own -- team-scoped deployments are admitted only through an already
+    team-owned PR (pr_numbers, derived from the now-correctly-filtered
+    _PULL_REQUESTS_SQL rows). Exclusion is therefore proven end to end: the
+    parent's canonically-excluded PR never contributes a PR number, so its
+    deployment is never admitted either, despite sharing the same repo.
+    """
+
+    child_pr_number = 77
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [{"repository_id": _SHARED_REPO_ID}]
+        if "reviews.review_state AS review_state" in sql:
+            if params.get("team_id") == _CHILD_TEAM_ID:
+                return [_pull_request_row(number=child_pr_number)]
+            return []
+        if "FROM deployments FINAL" in sql:
+            if child_pr_number in (params.get("pr_numbers") or []):
+                return [_deployment_row(pr_number=child_pr_number)]
+            return []
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    parent_result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_team_scope_for(_PARENT_TEAM_ID)),
+    )
+    assert parent_result.deployments == (), (
+        "a team with mere repository co-location must not receive deployment "
+        "facts reachable only through a PR canonically owned by a different team"
+    )
+
+    child_result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_team_scope_for(_CHILD_TEAM_ID))
+    )
+    assert child_result.deployments, (
+        "positive control: the canonically-owning team must receive the "
+        "deployment via its own admitted PR"
+    )
+
+
+def _pull_request_row(*, number: int = 3) -> dict[str, Any]:
     return {
         "repository_id": "repo-x",
-        "number": 3,
-        "entity_id": "repo-x#pr3",
-        "display_label": "PR 3",
+        "number": number,
+        "entity_id": f"repo-x#pr{number}",
+        "display_label": f"PR {number}",
         "state": "open",
         "review_state": None,
         "changes_requested": 0,

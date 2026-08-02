@@ -851,6 +851,28 @@ CREATE TRIGGER dev_answer_frames_validate_payload_trigger
 #: undashed lowercase hex (see `GUID.process_bind_param`); the JSON
 #: payload's own copy is the dashed ServerHandle form, so the extracted
 #: value has its dashes stripped before comparing.
+#:
+#: CHAOS-3297 Codex review round 10 MEDIUM: `json_extract` reads the
+#: FIRST occurrence of a duplicate JSON object key; Python's `json`
+#: decoder (what the application actually validates against) and
+#: Postgres's `->>` operator on `json`/`jsonb` both keep the LAST --
+#: confirmed empirically. A payload engineered with a matching
+#: schema_version/frame_id/run_id/public_outcome first and a duplicate,
+#: mismatched copy of one of them after would read as valid to this
+#: trigger (checking the first copy) while the application (loading the
+#: last copy) sees something else, and Postgres would reject the same
+#: bytes outright -- a real dialect divergence, not merely a style
+#: difference. Rejecting outright, not attempting to replicate
+#: last-occurrence semantics in SQL: a well-formed payload from the real
+#: contract encoder can never contain a duplicate key at all (JSON
+#: objects are Python dicts on the way out; a dict has no duplicate
+#: keys), so this can only ever fire on an already-adversarial payload --
+#: there is no legitimate write this could reject. `json_each` -- unlike
+#: `json_extract` -- enumerates every occurrence of a repeated key, so
+#: `GROUP BY key HAVING COUNT(*) > 1` reliably detects one; `json_each`
+#: of a NULL payload yields zero rows (verified), so this is safe to OR
+#: in unconditionally rather than needing to be gated behind the
+#: `NEW.payload IS NULL` check above it.
 DEV_ANSWER_FRAMES_TRIGGER_SQLITE = f"""
 CREATE TRIGGER IF NOT EXISTS dev_answer_frames_validate_payload_insert
 BEFORE INSERT ON dev_answer_frames
@@ -860,6 +882,12 @@ WHEN NEW.payload IS NULL
     OR REPLACE(json_extract(NEW.payload, '$.frame_id'), '-', '') IS NOT NEW.frame_id
     OR REPLACE(json_extract(NEW.payload, '$.run_id'), '-', '') IS NOT NEW.run_id
     OR json_extract(NEW.payload, '$.public_outcome') IS NOT NEW.public_outcome
+    OR EXISTS (
+        SELECT 1 FROM json_each(NEW.payload)
+        WHERE key IN ('schema_version', 'frame_id', 'run_id', 'public_outcome')
+        GROUP BY key
+        HAVING COUNT(*) > 1
+    )
 BEGIN
     SELECT RAISE(ABORT, 'dev_answer_frames.payload invalid or does not match the row');
 END;
@@ -874,6 +902,12 @@ WHEN NEW.payload IS NULL
     OR REPLACE(json_extract(NEW.payload, '$.frame_id'), '-', '') IS NOT NEW.frame_id
     OR REPLACE(json_extract(NEW.payload, '$.run_id'), '-', '') IS NOT NEW.run_id
     OR json_extract(NEW.payload, '$.public_outcome') IS NOT NEW.public_outcome
+    OR EXISTS (
+        SELECT 1 FROM json_each(NEW.payload)
+        WHERE key IN ('schema_version', 'frame_id', 'run_id', 'public_outcome')
+        GROUP BY key
+        HAVING COUNT(*) > 1
+    )
 BEGIN
     SELECT RAISE(ABORT, 'dev_answer_frames.payload invalid or does not match the row');
 END;
@@ -915,6 +949,9 @@ CREATE TRIGGER dev_run_narratives_validate_payload_trigger
     FOR EACH ROW EXECUTE FUNCTION dev_run_narratives_validate_payload();
 """
 
+#: See the identical round-10 comment above
+#: `DEV_ANSWER_FRAMES_TRIGGER_SQLITE` -- same duplicate-protected-key
+#: rejection, this table's own protected key set.
 DEV_RUN_NARRATIVES_TRIGGER_SQLITE = f"""
 CREATE TRIGGER IF NOT EXISTS dev_run_narratives_validate_payload_insert
 BEFORE INSERT ON dev_run_narratives
@@ -925,6 +962,12 @@ WHEN NEW.payload IS NULL
     OR REPLACE(json_extract(NEW.payload, '$.run_id'), '-', '') IS NOT NEW.run_id
     OR REPLACE(json_extract(NEW.payload, '$.frame_id'), '-', '') IS NOT NEW.frame_id
     OR json_extract(NEW.payload, '$.mode') IS NOT NEW.mode
+    OR EXISTS (
+        SELECT 1 FROM json_each(NEW.payload)
+        WHERE key IN ('schema_version', 'narrative_id', 'run_id', 'frame_id', 'mode')
+        GROUP BY key
+        HAVING COUNT(*) > 1
+    )
 BEGIN
     SELECT RAISE(ABORT, 'dev_run_narratives.payload invalid or does not match the row');
 END;
@@ -940,6 +983,12 @@ WHEN NEW.payload IS NULL
     OR REPLACE(json_extract(NEW.payload, '$.run_id'), '-', '') IS NOT NEW.run_id
     OR REPLACE(json_extract(NEW.payload, '$.frame_id'), '-', '') IS NOT NEW.frame_id
     OR json_extract(NEW.payload, '$.mode') IS NOT NEW.mode
+    OR EXISTS (
+        SELECT 1 FROM json_each(NEW.payload)
+        WHERE key IN ('schema_version', 'narrative_id', 'run_id', 'frame_id', 'mode')
+        GROUP BY key
+        HAVING COUNT(*) > 1
+    )
 BEGIN
     SELECT RAISE(ABORT, 'dev_run_narratives.payload invalid or does not match the row');
 END;

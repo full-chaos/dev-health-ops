@@ -41,6 +41,7 @@ from dev_health_ops.models.dev_persistence import (
     DevConversation,
     DevMessage,
     DevRun,
+    DevRunNarrative,
 )
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization, User
@@ -54,11 +55,48 @@ _TABLES = tables_of(
     DevMessage,
     DevRun,
     DevAnswerFrame,
+    DevRunNarrative,
 )
 
 _ERROR_CODE_BY_OUTCOME: dict[str, str] = {
     "not_found": "scope_not_found",
 }
+
+
+def _raw_duplicate_key_frame_payload(*, matching_frame_id: str, run_id: str) -> str:
+    """See test_persistence_v2.py's identical helper. Postgres's `->>`
+    operator reads the LAST occurrence of a duplicate JSON object key
+    (confirmed empirically, same as Python's `json` decoder) -- this
+    same raw payload shape that needed an explicit SQLite trigger fix
+    (CHAOS-3297 Codex review round 10) is expected to be rejected by the
+    round-9 trigger AS-IS on Postgres, with no round-10-specific change,
+    because the mismatched duplicate (being LAST) is exactly what
+    Postgres's row-binding cross-check reads."""
+
+    return (
+        '{"schema_version": "dev_answer_frame.v1", '
+        f'"frame_id": "{matching_frame_id}", '
+        f'"run_id": "{run_id}", '
+        '"public_outcome": "not_found", '
+        '"frame_id": "11111111-1111-1111-1111-111111111111"}'
+    )
+
+
+def _raw_duplicate_key_narrative_payload(
+    *, matching_narrative_id: str, run_id: str, frame_id: str, mode: str
+) -> str:
+    return (
+        '{"schema_version": "dev_narrative.v1", '
+        f'"narrative_id": "{matching_narrative_id}", '
+        f'"run_id": "{run_id}", '
+        f'"frame_id": "{frame_id}", '
+        f'"mode": "{mode}", '
+        '"referenced_fact_ids": [], "referenced_section_ids": [], '
+        '"provider_metadata": null, '
+        f'"generated_at": "{datetime.now(UTC).isoformat()}", '
+        '"validation_warnings": [], '
+        '"narrative_id": "11111111-1111-1111-1111-111111111111"}'
+    )
 
 
 def _frame_payload(*, run_id: uuid.UUID, outcome: str) -> dict[str, Any]:
@@ -650,3 +688,281 @@ async def test_postgres_db_trigger_rejects_an_on_conflict_do_update_set_clause(
             select(func.count(DevAnswerFrame.id)).where(DevAnswerFrame.run_id == run_id)
         )
         assert count == 1
+
+
+# -- CHAOS-3297 Codex review round 10 MEDIUM, PostgreSQL confirmation:
+# `json_extract` on SQLite reads the FIRST occurrence of a duplicate JSON
+# object key; Postgres's `->>` operator (like Python's `json` decoder)
+# reads the LAST -- confirmed empirically. These tests assert Postgres
+# ALREADY rejects the same raw duplicate-key payload shape that needed an
+# explicit SQLite trigger fix, with no round-10-specific Postgres change
+# at all -- pinning the equivalence in both directions: SQLite needed a
+# patch, Postgres's existing round-9 row-binding cross-check already
+# reads the mismatched (last) copy and rejects on its own.
+
+
+@pytest.mark.asyncio
+async def test_postgres_trigger_already_rejects_duplicate_key_frame_insert(
+    postgres_persistence: tuple[
+        async_sessionmaker[AsyncSession], AsyncEngine, uuid.UUID, uuid.UUID
+    ],
+) -> None:
+    maker, _engine, org_id, user_id = postgres_persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="What is the status of this project?",
+            scope_snapshot={},
+        )
+        await session.commit()
+        run_id = accepted.run.id
+
+        valid_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        connection = await session.connection()
+        raw_payload = _raw_duplicate_key_frame_payload(
+            matching_frame_id=valid_payload["frame_id"], run_id=str(run_id)
+        )
+        new_id = uuid.uuid4()
+        with pytest.raises(IntegrityError, match="dev_answer_frames"):
+            await connection.execute(
+                text(
+                    "INSERT INTO dev_answer_frames "
+                    "(id, run_id, org_id, user_id, frame_id, public_outcome, "
+                    "payload, created_at) VALUES "
+                    "(:id, :run_id, :org_id, :user_id, :frame_id, :public_outcome, "
+                    ":payload, :created_at)"
+                ),
+                {
+                    "id": new_id,
+                    "run_id": run_id,
+                    "org_id": org_id,
+                    "user_id": user_id,
+                    "frame_id": uuid.UUID(valid_payload["frame_id"]),
+                    "public_outcome": "not_found",
+                    "payload": raw_payload,
+                    "created_at": datetime.now(UTC),
+                },
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        count = await session.scalar(
+            select(func.count(DevAnswerFrame.id)).where(DevAnswerFrame.id == new_id)
+        )
+        assert count == 0, "the duplicate-key insert must not have created a row"
+
+
+@pytest.mark.asyncio
+async def test_postgres_trigger_already_rejects_duplicate_key_frame_update(
+    postgres_persistence: tuple[
+        async_sessionmaker[AsyncSession], AsyncEngine, uuid.UUID, uuid.UUID
+    ],
+) -> None:
+    maker, _engine, org_id, user_id = postgres_persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="What is the status of this project?",
+            scope_snapshot={},
+        )
+        await session.commit()
+        run_id = accepted.run.id
+
+        valid_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(valid_payload["frame_id"]),
+            public_outcome="not_found",
+            payload=valid_payload,
+        )
+        await session.commit()
+        frame_id = frame.id
+
+        connection = await session.connection()
+        raw_payload = _raw_duplicate_key_frame_payload(
+            matching_frame_id=valid_payload["frame_id"], run_id=str(run_id)
+        )
+        with pytest.raises(IntegrityError, match="dev_answer_frames"):
+            await connection.execute(
+                text("UPDATE dev_answer_frames SET payload = :payload WHERE id = :id"),
+                {"payload": raw_payload, "id": frame_id},
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevAnswerFrame, frame_id)
+        assert reloaded is not None
+        assert reloaded.payload == valid_payload, (
+            "the duplicate-key update must leave the original payload untouched"
+        )
+
+
+@pytest.mark.asyncio
+async def test_postgres_trigger_already_rejects_duplicate_key_narrative_insert(
+    postgres_persistence: tuple[
+        async_sessionmaker[AsyncSession], AsyncEngine, uuid.UUID, uuid.UUID
+    ],
+) -> None:
+    maker, _engine, org_id, user_id = postgres_persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="What is the status of this project?",
+            scope_snapshot={},
+        )
+        await session.commit()
+        run_id = accepted.run.id
+
+        frame_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(frame_payload["frame_id"]),
+            public_outcome="not_found",
+            payload=frame_payload,
+        )
+        await session.commit()
+
+        narrative_id = uuid.uuid4()
+        connection = await session.connection()
+        raw_payload = _raw_duplicate_key_narrative_payload(
+            matching_narrative_id=str(narrative_id),
+            run_id=str(run_id),
+            frame_id=str(frame.frame_id),
+            mode="deterministic_fallback",
+        )
+        new_id = uuid.uuid4()
+        with pytest.raises(IntegrityError, match="dev_run_narratives"):
+            await connection.execute(
+                text(
+                    "INSERT INTO dev_run_narratives "
+                    "(id, run_id, org_id, user_id, narrative_id, frame_id, mode, "
+                    "provider_fingerprint, narrative_text, payload, created_at) VALUES "
+                    "(:id, :run_id, :org_id, :user_id, :narrative_id, :frame_id, :mode, "
+                    ":provider_fingerprint, :narrative_text, :payload, :created_at)"
+                ),
+                {
+                    "id": new_id,
+                    "run_id": run_id,
+                    "org_id": org_id,
+                    "user_id": user_id,
+                    "narrative_id": narrative_id,
+                    "frame_id": frame.frame_id,
+                    "mode": "deterministic_fallback",
+                    "provider_fingerprint": None,
+                    "narrative_text": "A safe presentation summary.",
+                    "payload": raw_payload,
+                    "created_at": datetime.now(UTC),
+                },
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        count = await session.scalar(
+            select(func.count(DevRunNarrative.id)).where(DevRunNarrative.id == new_id)
+        )
+        assert count == 0, "the duplicate-key insert must not have created a row"
+
+
+@pytest.mark.asyncio
+async def test_postgres_trigger_already_rejects_duplicate_key_narrative_update(
+    postgres_persistence: tuple[
+        async_sessionmaker[AsyncSession], AsyncEngine, uuid.UUID, uuid.UUID
+    ],
+) -> None:
+    maker, _engine, org_id, user_id = postgres_persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="What is the status of this project?",
+            scope_snapshot={},
+        )
+        await session.commit()
+        run_id = accepted.run.id
+
+        frame_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(frame_payload["frame_id"]),
+            public_outcome="not_found",
+            payload=frame_payload,
+        )
+        narrative_id = uuid.uuid4()
+        narrative_text = "A safe presentation summary."
+        narrative_payload: dict[str, Any] = {
+            "schema_version": "dev_narrative.v1",
+            "narrative_id": str(narrative_id),
+            "run_id": str(run_id),
+            "frame_id": str(frame.frame_id),
+            "mode": "deterministic_fallback",
+            "referenced_fact_ids": [],
+            "referenced_section_ids": [],
+            "provider_metadata": None,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "validation_warnings": [],
+        }
+        narrative = await service.record_narrative(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            narrative_id=narrative_id,
+            frame_id=frame.frame_id,
+            mode="deterministic_fallback",
+            provider_fingerprint=None,
+            narrative_text=narrative_text,
+            payload=narrative_payload,
+        )
+        await session.commit()
+        narrative_pk = narrative.id
+
+        connection = await session.connection()
+        raw_payload = _raw_duplicate_key_narrative_payload(
+            matching_narrative_id=str(narrative_id),
+            run_id=str(run_id),
+            frame_id=str(frame.frame_id),
+            mode="deterministic_fallback",
+        )
+        with pytest.raises(IntegrityError, match="dev_run_narratives"):
+            await connection.execute(
+                text("UPDATE dev_run_narratives SET payload = :payload WHERE id = :id"),
+                {"payload": raw_payload, "id": narrative_pk},
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevRunNarrative, narrative_pk)
+        assert reloaded is not None
+        assert reloaded.narrative_text == narrative_text

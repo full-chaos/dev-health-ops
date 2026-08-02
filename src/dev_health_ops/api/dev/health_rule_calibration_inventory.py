@@ -91,6 +91,50 @@ _NOT_YET_COHORT_REVIEWED = (
     "minimum-cohort floor."
 )
 
+_CHAOS_3331_PROMOTION_BLOCKED_NOTE = (
+    "Promotion out of provisional is BLOCKED by CHAOS-3331 (disclose-and-"
+    "defer ruling, 2026-08-02, corrected round 2, 2026-08-02): this rule's "
+    "sole source table cannot be verified as canonically attributed on the "
+    "read side -- see native_team_workload.py's module docstring and "
+    "dimension_observation_adapters.py's adapter docstring for the "
+    "file:line evidence. Do not change this rule's calibration_state until "
+    "CHAOS-3331 lands -- health_rule_registry.py's construction-time guard "
+    "(CHAOS_3331_BLOCKED_SOURCE_CLASSES, enforced on EVERY "
+    "HealthRuleRegistry construction, not just this module's singleton) "
+    "and test_chaos_3304_workload_health_rules.py's "
+    "test_chaos_3331_blocked_rules_stay_provisional both fail loudly if "
+    "you do."
+)
+
+#: Rules whose provisional calibration_state is blocked from promotion by
+#: CHAOS-3331 (disclose-and-defer ruling, 2026-08-02). DOCUMENTATION ONLY
+#: as of round 2 (2026-08-02) -- the actual enforcement is
+#: ``health_rule_registry.CHAOS_3331_BLOCKED_SOURCE_CLASSES``, which blocks
+#: by SourceClass family on every ``HealthRuleRegistry`` construction, not
+#: by enumerating rule ids here (Codex-confirmed finding, round 2: an
+#: exact-ID, import-once check is bypassable by constructing a second
+#: registry with a differently-named rule reading the same blocked
+#: source). This frozenset exists for human review/audit and for
+#: ``test_chaos_3331_blocked_rules_stay_provisional``'s cross-check that
+#: the two representations agree.
+#:
+#: ``health_rule.investment_allocation_shift.v1`` IS included (round 2
+#: correction): its source table (``investment_metrics_daily``) resolves
+#: team_id via the canonical path in the common case, but that path's own
+#: attribution-context load fails open to the same legacy resolver
+#: CHAOS-3331 already flags for the other three rules, and no field
+#: anywhere distinguishes which path produced a given row -- see
+#: ``dimension_observation_adapters.investment_allocation_shift_
+#: observation``'s docstring for the full trace.
+CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS: frozenset[str] = frozenset(
+    {
+        "health_rule.after_hours_pressure_sustained.v1",
+        "health_rule.review_request_load_pressure.v1",
+        "health_rule.pr_interruption_load_pressure.v1",
+        "health_rule.investment_allocation_shift.v1",
+    }
+)
+
 CALIBRATION_RECORDS: tuple[CalibrationRecord, ...] = (
     CalibrationRecord(
         schema_version="health_rule_calibration.v1",
@@ -294,5 +338,101 @@ CALIBRATION_RECORDS: tuple[CalibrationRecord, ...] = (
         decided_at=_DECIDED_AT,
         evidence_ref=None,
         notes="Illustrative example rule -- see module docstring. Never launch-authorized.",
+    ),
+    # -- CHAOS-3304: team workload pressure / investment-balance rules,
+    #    newly authored with that changeset. Provisional/evidence-free like
+    #    every other entry here -- none of these has run in shadow against
+    #    a representative distribution or been through owner sign-off.
+    CalibrationRecord(
+        schema_version="health_rule_calibration.v1",
+        calibration_id="health_rule_calibration.after_hours_pressure_sustained.v1",
+        rule_id="health_rule.after_hours_pressure_sustained.v1",
+        rule_version="health_rule.after_hours_pressure_sustained.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
+        distribution_summary=(
+            "New CHAOS-3304 rule; threshold=0.25 after_hours_commit_ratio "
+            "is an engineer-chosen round number, not derived from this "
+            "product's own data."
+        ),
+        false_positive_review=_NOT_YET_FP_FN_REVIEWED,
+        false_negative_review=_NOT_YET_FP_FN_REVIEWED,
+        small_cohort_behavior=(
+            "minimum_cohort_size=5 suppresses to unknown below that floor "
+            "(mechanism verified against a test-scoped registry -- see "
+            "test_chaos_3304_workload_health_rules.py)."
+        ),
+        owner=_OWNER,
+        decided_at=_DECIDED_AT,
+        evidence_ref=None,
+        notes=f"{_NOT_YET_REVIEWED} {_CHAOS_3331_PROMOTION_BLOCKED_NOTE}",
+    ),
+    CalibrationRecord(
+        schema_version="health_rule_calibration.v1",
+        calibration_id="health_rule_calibration.review_request_load_pressure.v1",
+        rule_id="health_rule.review_request_load_pressure.v1",
+        rule_version="health_rule.review_request_load_pressure.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
+        distribution_summary=(
+            "New CHAOS-3304 rule; threshold=5.0 review requests per active "
+            "contributor over 14 days is an engineer-chosen round number."
+        ),
+        false_positive_review=_NOT_YET_FP_FN_REVIEWED,
+        false_negative_review=_NOT_YET_FP_FN_REVIEWED,
+        small_cohort_behavior=(
+            "minimum_cohort_size=5 suppresses to unknown below that floor."
+        ),
+        owner=_OWNER,
+        decided_at=_DECIDED_AT,
+        evidence_ref=None,
+        notes=f"{_NOT_YET_REVIEWED} {_CHAOS_3331_PROMOTION_BLOCKED_NOTE}",
+    ),
+    CalibrationRecord(
+        schema_version="health_rule_calibration.v1",
+        calibration_id="health_rule_calibration.pr_interruption_load_pressure.v1",
+        rule_id="health_rule.pr_interruption_load_pressure.v1",
+        rule_version="health_rule.pr_interruption_load_pressure.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
+        distribution_summary=(
+            "New CHAOS-3304 rule; threshold=5.0 PR interruptions per "
+            "active contributor over 14 days is an engineer-chosen round "
+            "number."
+        ),
+        false_positive_review=_NOT_YET_FP_FN_REVIEWED,
+        false_negative_review=_NOT_YET_FP_FN_REVIEWED,
+        small_cohort_behavior=(
+            "minimum_cohort_size=5 suppresses to unknown below that floor."
+        ),
+        owner=_OWNER,
+        decided_at=_DECIDED_AT,
+        evidence_ref=None,
+        notes=f"{_NOT_YET_REVIEWED} {_CHAOS_3331_PROMOTION_BLOCKED_NOTE}",
+    ),
+    CalibrationRecord(
+        schema_version="health_rule_calibration.v1",
+        calibration_id="health_rule_calibration.investment_allocation_shift.v1",
+        rule_id="health_rule.investment_allocation_shift.v1",
+        rule_version="health_rule.investment_allocation_shift.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
+        distribution_summary=(
+            "New CHAOS-3304 rule; threshold=0.25 (25 percentage points of "
+            "new-value share) between the current and prior 14-day window "
+            "is an engineer-chosen round number. Deliberately magnitude-"
+            "only (a shift toward OR away from new-value work triggers "
+            "identically) -- see investment_allocation_shift_observation's "
+            "docstring for the 'no feature-work value judgment' rationale."
+        ),
+        false_positive_review=_NOT_YET_FP_FN_REVIEWED,
+        false_negative_review=_NOT_YET_FP_FN_REVIEWED,
+        small_cohort_behavior=(
+            "minimum_cohort_size=5 suppresses to unknown below that floor."
+        ),
+        owner=_OWNER,
+        decided_at=_DECIDED_AT,
+        evidence_ref=None,
+        notes=f"{_NOT_YET_REVIEWED} {_CHAOS_3331_PROMOTION_BLOCKED_NOTE}",
     ),
 )

@@ -1135,7 +1135,9 @@
         "deployment",
         "incident",
         "operational_control",
-        "source_health"
+        "source_health",
+        "cognitive_load",
+        "investment_allocation"
       ],
       "title": "SourceClass",
       "type": "string"

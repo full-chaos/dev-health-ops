@@ -49,13 +49,18 @@ from .contracts_v2.health_rules import (
 )
 from .data_health_service import DataHealthResult
 from .dimension_observation_adapters import (
+    after_hours_pressure_observation,
     change_failure_rate_observation,
     data_trust_observation,
     incident_load_observation,
+    investment_allocation_shift_observation,
+    pr_interruption_load_observation,
+    review_request_load_observation,
     unavailable_observation,
 )
 from .health_rule_registry import HEALTH_RULE_REGISTRY, evaluate_registry
 from .metrics.service import MetricQueryResult
+from .native_team_workload import TeamCognitiveLoadResult, TeamInvestmentMixResult
 from .status_change_service import StatusSnapshotResult
 
 __all__ = [
@@ -85,6 +90,21 @@ class HealthEvaluationSources:
     #: reports ``NOT_APPLICABLE`` rather than ``UNAVAILABLE``.
     change_failure_rate_not_applicable: bool = False
 
+    # -- CHAOS-3304: team workload / investment-balance sources. All four
+    #    default to None so ProjectHealthService/TeamHealthService (which
+    #    never populate these) leave the four new rules honestly
+    #    unavailable -- see _observation_for_rule below.
+    cognitive_load: TeamCognitiveLoadResult | None = None
+    cognitive_load_comparison: TeamCognitiveLoadResult | None = None
+    #: Denominator-contract order item 2 ("observed active work/review
+    #: population") for the current window only -- the comparison window's
+    #: own denominator is not needed, since ``comparison_value`` on the
+    #: per-active-contributor observations carries the RAW prior-period
+    #: count, not a second normalized rate.
+    active_contributor_count: int | None = None
+    investment_mix: TeamInvestmentMixResult | None = None
+    investment_mix_comparison: TeamInvestmentMixResult | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class HealthProfileResult:
@@ -109,6 +129,10 @@ _BOUND_RULE_IDS: frozenset[str] = frozenset(
         "health_rule.data_trust_broken.v1",
         "health_rule.incident_load.v1",
         "health_rule.change_failure_rate.v1",
+        "health_rule.after_hours_pressure_sustained.v1",
+        "health_rule.review_request_load_pressure.v1",
+        "health_rule.pr_interruption_load_pressure.v1",
+        "health_rule.investment_allocation_shift.v1",
     }
 )
 
@@ -202,6 +226,98 @@ def _observation_for_rule(
             )
         return change_failure_rate_observation(
             sources.change_failure_rate_metric,
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            cohort_size=cohort_size,
+            window_index=0,
+            observed_at=observed_at,
+        )
+    if rule.rule_id == "health_rule.after_hours_pressure_sustained.v1":
+        if sources.cognitive_load is None:
+            return unavailable_observation(
+                subject_kind=subject_kind,
+                subject_id=subject_id,
+                cohort_size=cohort_size,
+                window_index=0,
+                observed_at=observed_at,
+            )
+        comparison_value = (
+            sources.cognitive_load_comparison.after_hours_commit_ratio
+            if sources.cognitive_load_comparison is not None
+            and sources.cognitive_load_comparison.measured
+            else None
+        )
+        return after_hours_pressure_observation(
+            sources.cognitive_load,
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            cohort_size=cohort_size,
+            comparison_value=comparison_value,
+            window_index=0,
+            observed_at=observed_at,
+        )
+    if rule.rule_id == "health_rule.review_request_load_pressure.v1":
+        if sources.cognitive_load is None:
+            return unavailable_observation(
+                subject_kind=subject_kind,
+                subject_id=subject_id,
+                cohort_size=cohort_size,
+                window_index=0,
+                observed_at=observed_at,
+            )
+        comparison_value = (
+            sources.cognitive_load_comparison.review_request_load
+            if sources.cognitive_load_comparison is not None
+            and sources.cognitive_load_comparison.measured
+            else None
+        )
+        return review_request_load_observation(
+            sources.cognitive_load,
+            active_contributor_count=sources.active_contributor_count,
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            cohort_size=cohort_size,
+            comparison_value=comparison_value,
+            window_index=0,
+            observed_at=observed_at,
+        )
+    if rule.rule_id == "health_rule.pr_interruption_load_pressure.v1":
+        if sources.cognitive_load is None:
+            return unavailable_observation(
+                subject_kind=subject_kind,
+                subject_id=subject_id,
+                cohort_size=cohort_size,
+                window_index=0,
+                observed_at=observed_at,
+            )
+        comparison_value = (
+            sources.cognitive_load_comparison.pr_interruption_load
+            if sources.cognitive_load_comparison is not None
+            and sources.cognitive_load_comparison.measured
+            else None
+        )
+        return pr_interruption_load_observation(
+            sources.cognitive_load,
+            active_contributor_count=sources.active_contributor_count,
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            cohort_size=cohort_size,
+            comparison_value=comparison_value,
+            window_index=0,
+            observed_at=observed_at,
+        )
+    if rule.rule_id == "health_rule.investment_allocation_shift.v1":
+        if sources.investment_mix is None:
+            return unavailable_observation(
+                subject_kind=subject_kind,
+                subject_id=subject_id,
+                cohort_size=cohort_size,
+                window_index=0,
+                observed_at=observed_at,
+            )
+        return investment_allocation_shift_observation(
+            sources.investment_mix,
+            sources.investment_mix_comparison,
             subject_kind=subject_kind,
             subject_id=subject_id,
             cohort_size=cohort_size,

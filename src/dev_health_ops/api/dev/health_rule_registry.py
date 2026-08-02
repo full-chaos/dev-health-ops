@@ -48,8 +48,10 @@ from .contracts_v2.health_rules import (
 from .health_rule_calibration_inventory import CALIBRATION_RECORDS
 
 __all__ = [
+    "CHAOS_3331_BLOCKED_SOURCE_CLASSES",
     "HEALTH_RULE_REGISTRY",
     "RULE_ID_PATTERN",
+    "AttributionProvenanceBlockedError",
     "DuplicateRuleError",
     "HealthRuleEvaluationResult",
     "HealthRuleRegistry",
@@ -96,6 +98,34 @@ class InvalidCalibrationEvidenceError(HealthRuleRegistryError):
     to a genuinely reviewed ``CalibrationRecord`` for that same rule --
     see ``_resolves_against_inventory``.
     """
+
+
+class AttributionProvenanceBlockedError(HealthRuleRegistryError):
+    """A rule reads a CHAOS-3331-blocked source class but is not provisional.
+
+    Raised by :meth:`HealthRuleRegistry.__init__` -- see
+    ``CHAOS_3331_BLOCKED_SOURCE_CLASSES``.
+    """
+
+
+#: CHAOS-3331 (disclose-and-defer ruling, 2026-08-02): source classes whose
+#: writers do not yet resolve ``team_id`` through canonical primary
+#: attribution -- see ``native_team_workload.py``'s module docstring for
+#: the file:line evidence (``metrics/compute.py``, ``metrics/compute_
+#: wellbeing.py`` for ``COGNITIVE_LOAD``; ``metrics/job_work_items.py``'s
+#: ``attribution_context`` load can itself fail open to the same legacy
+#: resolver for ``INVESTMENT_ALLOCATION`` -- Codex-confirmed finding, round
+#: 2, 2026-08-02). Any rule whose ``required_source_classes`` intersects
+#: this set is blocked from promotion out of provisional, enforced by
+#: ``HealthRuleRegistry.__init__`` on EVERY construction (never once at
+#: import, and never by enumerating rule ids) -- see that constructor for
+#: why: a rule-id-based, import-once check (the CHAOS-3304 original
+#: version of this guard) is bypassable by constructing a *second*
+#: registry with a differently-named rule reading the same blocked source,
+#: which the shipped singleton's own import-time check never saw.
+CHAOS_3331_BLOCKED_SOURCE_CLASSES: frozenset[SourceClass] = frozenset(
+    {SourceClass.COGNITIVE_LOAD, SourceClass.INVESTMENT_ALLOCATION}
+)
 
 
 def rule_version_fingerprint(rule: HealthRuleDefinition) -> str:
@@ -318,6 +348,29 @@ class HealthRuleRegistry:
                     "does not resolve to a reviewed calibration record for "
                     "this rule in the supplied inventory"
                 )
+            # CHAOS-3331 (Codex-confirmed finding, round 2, 2026-08-02):
+            # enforced HERE, unconditionally, on every construction --
+            # never gated behind ``calibration_records is not None``. The
+            # round-2 repro built a *second*, differently-named rule
+            # reading a blocked source class, entirely independent of
+            # whether the caller supplied a calibration inventory to
+            # cross-check against; only a check that runs for every
+            # registry, every time, closes that path. See
+            # ``CHAOS_3331_BLOCKED_SOURCE_CLASSES``.
+            blocked_sources = CHAOS_3331_BLOCKED_SOURCE_CLASSES & set(
+                revalidated.required_source_classes
+            )
+            if blocked_sources and revalidated.calibration_state != (
+                CalibrationState.PROVISIONAL
+            ):
+                raise AttributionProvenanceBlockedError(
+                    f"rule {revalidated.rule_id!r} reads CHAOS-3331-blocked "
+                    f"source class(es) {sorted(s.value for s in blocked_sources)} "
+                    f"but claims calibration_state="
+                    f"{revalidated.calibration_state.value!r} -- promotion is "
+                    "blocked until CHAOS-3331 lands (see native_team_workload.py's "
+                    "module docstring)"
+                )
             validated[revalidated.rule_id] = revalidated
         # An immutable mapping, not a plain dict: the only reference to the
         # underlying mutable dict is local to this constructor, so no
@@ -413,9 +466,12 @@ def evaluate_rule(
     ``observations`` must include ``window_index=0`` (the current period);
     later windows (1, 2, ...) supply the sustained-window history a rule
     with ``sustained_periods_required > 1`` needs. Guardrails are checked
-    in a fixed order -- no-data, cohort, sample, coverage, denominator,
-    attribution, then the condition itself -- so exactly one governs any
-    given suppressed result.
+    in a fixed order -- no-data, ATTRIBUTION, cohort, sample, coverage,
+    denominator, then the condition itself -- so exactly one governs any
+    given suppressed result. Attribution is checked before cohort/sample/
+    coverage/denominator (Codex-confirmed finding, round 2, 2026-08-02): a
+    rule that cannot vouch for WHO the measured facts belong to must never
+    surface a different, more specific-sounding reason first.
 
     ``org_id`` is required, keyword-only: it scopes the minted
     ``finding_id`` to the calling tenant (see ``_mint_finding_id``) and is
@@ -463,6 +519,18 @@ def evaluate_rule(
     if current.data_semantics in ("no_data", "not_measured"):
         return _finding(DimensionState.UNKNOWN)
 
+    # Attribution is the CONTROLLING guard, checked before cohort/sample/
+    # coverage/denominator (Codex-confirmed finding, round 2, 2026-08-02):
+    # a rule that cannot even vouch for WHO the measured facts belong to
+    # must never surface a different, more specific-sounding reason
+    # (insufficient_cohort, missing_denominator) that implies the facts
+    # themselves were otherwise trustworthy. No rule shipped before
+    # CHAOS-3304 sets ``attribution_required=True``, so this reordering is
+    # a no-op for every pre-existing rule; it only changes which reason a
+    # CHAOS-3304/CHAOS-3331-affected rule reports.
+    if rule.attribution_required and not current.attribution_present:
+        return _finding(DimensionState.UNKNOWN, "missing_attribution")
+
     needs_cohort = current.subject_kind in (
         RuleApplicability.TEAM,
         RuleApplicability.PORTFOLIO,
@@ -479,9 +547,6 @@ def evaluate_rule(
 
     if rule.denominator_required and not current.denominator_present:
         return _finding(DimensionState.UNKNOWN, "missing_denominator")
-
-    if rule.attribution_required and not current.attribution_present:
-        return _finding(DimensionState.UNKNOWN, "missing_attribution")
 
     if not _condition_met(rule, current):
         return _finding(DimensionState.HEALTHY)
@@ -503,6 +568,17 @@ class HealthRuleEvaluationResult:
     calibration/observability but are structurally excluded from
     ``launch_findings`` -- the only set ``qualify_team_needs_attention``
     (and any downstream launch surface) may read.
+
+    ``suppressed_reason`` is partitioned BEFORE ``shadow_only`` (Codex-
+    confirmed finding, round 2, 2026-08-02): a suppressed finding from a
+    provisional rule previously landed in ``shadow_findings`` (the
+    ``shadow_only`` check ran first and short-circuited), so
+    ``suppressed_findings`` never actually contained a provisional rule's
+    own guardrail suppressions -- only a reviewed rule's. A caller reading
+    ``suppressed_findings`` to find every guardrail-suppressed finding,
+    regardless of calibration state, got an incomplete answer.
+    ``shadow_findings`` therefore now holds only UNSUPPRESSED provisional
+    findings (a genuinely measured, unguarded result awaiting review).
     """
 
     launch_findings: tuple[HealthRuleFinding, ...]
@@ -538,10 +614,10 @@ def _evaluate_with_registry(
     for rule_id, observations in observations_by_rule.items():
         rule = registry.rule(rule_id)
         finding = evaluate_rule(rule, observations, org_id=org_id)
-        if finding.shadow_only:
-            shadow.append(finding)
-        elif finding.suppressed_reason is not None:
+        if finding.suppressed_reason is not None:
             suppressed.append(finding)
+        elif finding.shadow_only:
+            shadow.append(finding)
         else:
             launch.append(finding)
     return HealthRuleEvaluationResult(
@@ -556,7 +632,7 @@ def evaluate_registry(
     *,
     org_id: str,
 ) -> HealthRuleEvaluationResult:
-    """The production evaluation seam: hard-bound to ``HEALTH_RULE_REGISTRY``.
+    """The production evaluation seam: hard-bound to ``_PRODUCTION_REGISTRY``.
 
     Deliberately takes no registry parameter (Codex-confirmed finding,
     2026-08-01, round 3) -- a caller-supplied registry is exactly the
@@ -565,10 +641,22 @@ def evaluate_registry(
     inventory-cross-checked, rebind-resistant module singleton. A caller
     that genuinely needs to evaluate against a different registry (tests
     only) must say so explicitly by calling ``_evaluate_with_registry``.
+
+    Reads the private ``_PRODUCTION_REGISTRY`` binding, never the public
+    ``HEALTH_RULE_REGISTRY`` name (Codex-confirmed finding, round 2,
+    2026-08-02): this function's body is a free-variable lookup resolved
+    at CALL time against the module's global namespace, so reading the
+    public name meant ``health_rule_registry.HEALTH_RULE_REGISTRY =
+    forged_registry`` silently redirected every future call here with no
+    error -- codex's exact repro. ``_PRODUCTION_REGISTRY`` is a second,
+    independent reference to the same validated object, set once right
+    after construction and never exported in ``__all__``; rebinding the
+    public ``HEALTH_RULE_REGISTRY`` name no longer has any effect on what
+    this function actually evaluates against.
     """
 
     return _evaluate_with_registry(
-        HEALTH_RULE_REGISTRY, observations_by_rule, org_id=org_id
+        _PRODUCTION_REGISTRY, observations_by_rule, org_id=org_id
     )
 
 
@@ -696,7 +784,7 @@ def _qualify_team_needs_attention_against_registry(
 def qualify_team_needs_attention(
     findings: Sequence[HealthRuleFinding], *, team_id: str
 ) -> TeamQualificationResult:
-    """The production qualification seam: hard-bound to ``HEALTH_RULE_REGISTRY``.
+    """The production qualification seam: hard-bound to ``_PRODUCTION_REGISTRY``.
 
     Deliberately takes no registry parameter, mirroring ``evaluate_registry``
     (Codex-confirmed finding, 2026-08-01, round 4) -- every finding passed
@@ -706,10 +794,14 @@ def qualify_team_needs_attention(
     caller that genuinely needs to qualify against a different registry
     (tests only) must say so explicitly by calling
     ``_qualify_team_needs_attention_against_registry``.
+
+    Reads ``_PRODUCTION_REGISTRY``, not the public ``HEALTH_RULE_REGISTRY``
+    name -- see ``evaluate_registry``'s docstring (Codex-confirmed finding,
+    round 2, 2026-08-02) for why.
     """
 
     return _qualify_team_needs_attention_against_registry(
-        findings, team_id=team_id, registry=HEALTH_RULE_REGISTRY
+        findings, team_id=team_id, registry=_PRODUCTION_REGISTRY
     )
 
 
@@ -733,6 +825,7 @@ def _rule(
     minimum_sample: int,
     minimum_coverage: float,
     current_window_days: int,
+    comparison_window_days: int | None = None,
     sustained_periods_required: int,
     denominator_required: bool,
     attribution_required: bool,
@@ -759,7 +852,7 @@ def _rule(
         minimum_sample=minimum_sample,
         minimum_coverage=minimum_coverage,
         current_window_days=current_window_days,
-        comparison_window_days=None,
+        comparison_window_days=comparison_window_days,
         sustained_periods_required=sustained_periods_required,
         denominator_required=denominator_required,
         attribution_required=attribution_required,
@@ -1021,6 +1114,117 @@ _LAUNCH_RULES: tuple[HealthRuleDefinition, ...] = (
         calibration_state=CalibrationState.PROVISIONAL,
         calibration_evidence_ref=None,
     ),
+    # -- CHAOS-3304: team workload pressure / investment-balance rules -----
+    # Team-only (Wave 3.1's workload/investment analysis is a team-level
+    # question family, per PRD 6.6); provisional/shadow-only like every
+    # other rule in this file -- none of these have been through the
+    # CHAOS-3302 calibration review either.
+    _rule(
+        rule_id="health_rule.after_hours_pressure_sustained.v1",
+        owner="ask-dev-governance",
+        applicability=(RuleApplicability.TEAM,),
+        dimension=HealthDimension.COGNITIVE_WORKLOAD_PRESSURE,
+        required_source_classes=(SourceClass.COGNITIVE_LOAD,),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=0.25,
+        comparison_unit="after_hours_commit_ratio",
+        minimum_sample=1,
+        minimum_coverage=0.0,
+        current_window_days=14,
+        sustained_periods_required=1,
+        denominator_required=False,
+        attribution_required=True,
+        minimum_cohort_size=5,
+        triggered_state=DimensionState.WATCH,
+        evidence_source_classes=(SourceClass.COGNITIVE_LOAD,),
+        fact_kind="observed",
+        remediation_template=(
+            "Review recent after-hours commit activity with the team as a "
+            "pressure signal -- not a commitment or performance judgment."
+        ),
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
+    ),
+    _rule(
+        rule_id="health_rule.review_request_load_pressure.v1",
+        owner="ask-dev-governance",
+        applicability=(RuleApplicability.TEAM,),
+        dimension=HealthDimension.COGNITIVE_WORKLOAD_PRESSURE,
+        required_source_classes=(SourceClass.COGNITIVE_LOAD,),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=5.0,
+        comparison_unit="review_request_load_per_active_contributor",
+        minimum_sample=1,
+        minimum_coverage=0.0,
+        current_window_days=14,
+        sustained_periods_required=1,
+        denominator_required=True,
+        attribution_required=True,
+        minimum_cohort_size=5,
+        triggered_state=DimensionState.WATCH,
+        evidence_source_classes=(SourceClass.COGNITIVE_LOAD,),
+        fact_kind="observed",
+        remediation_template=(
+            "Review distribution of incoming review requests before it "
+            "affects the team's delivery pace."
+        ),
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
+    ),
+    _rule(
+        rule_id="health_rule.pr_interruption_load_pressure.v1",
+        owner="ask-dev-governance",
+        applicability=(RuleApplicability.TEAM,),
+        dimension=HealthDimension.COGNITIVE_WORKLOAD_PRESSURE,
+        required_source_classes=(SourceClass.COGNITIVE_LOAD,),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=5.0,
+        comparison_unit="pr_interruption_load_per_active_contributor",
+        minimum_sample=1,
+        minimum_coverage=0.0,
+        current_window_days=14,
+        sustained_periods_required=1,
+        denominator_required=True,
+        attribution_required=True,
+        minimum_cohort_size=5,
+        triggered_state=DimensionState.WATCH,
+        evidence_source_classes=(SourceClass.COGNITIVE_LOAD,),
+        fact_kind="observed",
+        remediation_template=(
+            "Review context-switching load from pull request interruptions "
+            "before it affects the team's delivery pace."
+        ),
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
+    ),
+    _rule(
+        rule_id="health_rule.investment_allocation_shift.v1",
+        owner="ask-dev-governance",
+        applicability=(RuleApplicability.TEAM,),
+        dimension=HealthDimension.INVESTMENT_BALANCE,
+        required_source_classes=(SourceClass.INVESTMENT_ALLOCATION,),
+        direction=RuleDirection.HIGHER_IS_WORSE,
+        threshold=0.25,
+        comparison_unit="new_value_share_shift",
+        minimum_sample=1,
+        minimum_coverage=0.5,
+        current_window_days=14,
+        comparison_window_days=14,
+        sustained_periods_required=1,
+        denominator_required=True,
+        attribution_required=True,
+        minimum_cohort_size=5,
+        triggered_state=DimensionState.WATCH,
+        evidence_source_classes=(SourceClass.INVESTMENT_ALLOCATION,),
+        fact_kind="observed",
+        remediation_template=(
+            "Review the team's investment mix shift with planning -- a "
+            "large swing in either direction, not a value judgment about "
+            "the mix itself."
+        ),
+        calibration_state=CalibrationState.PROVISIONAL,
+        calibration_evidence_ref=None,
+    ),
 )
 
 HEALTH_RULE_REGISTRY = HealthRuleRegistry(
@@ -1029,3 +1233,15 @@ HEALTH_RULE_REGISTRY = HealthRuleRegistry(
         record.calibration_id: record for record in CALIBRATION_RECORDS
     },
 )
+
+#: The construction-validated registry instance ``evaluate_registry`` and
+#: ``qualify_team_needs_attention`` are permanently bound to -- see their
+#: docstrings (Codex-confirmed finding, round 2, 2026-08-02) and
+#: ``CHAOS_3331_BLOCKED_SOURCE_CLASSES`` above for the two-part fix this
+#: name is half of: construction-time validation (every ``HealthRuleRegistry``
+#: call, not just this one) closes the "build a second forged registry"
+#: vector; this private, non-exported second reference to the SAME
+#: validated object closes the "rebind the public name" vector, since
+#: rebinding ``HEALTH_RULE_REGISTRY`` no longer has any effect on what the
+#: two production seams above actually read.
+_PRODUCTION_REGISTRY: HealthRuleRegistry = HEALTH_RULE_REGISTRY

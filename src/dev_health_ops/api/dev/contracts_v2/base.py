@@ -168,6 +168,14 @@ class SourceClass(StrEnum):
     INCIDENT = "incident"
     OPERATIONAL_CONTROL = "operational_control"
     SOURCE_HEALTH = "source_health"
+    #: CHAOS-3304: per-developer/per-team cognitive-load rollups
+    #: (``user_metrics_daily``/``team_metrics_daily`` -- interruption load,
+    #: context spread, review-request load, after-hours/weekend ratios).
+    COGNITIVE_LOAD = "cognitive_load"
+    #: CHAOS-3304: classified completed-work investment mix
+    #: (``investment_metrics_daily`` -- new-value/KTLO/security/infra/
+    #: unclassified delivery units).
+    INVESTMENT_ALLOCATION = "investment_allocation"
 
 
 #: A **server-minted opaque handle**: the canonical hyphenated UUID form.

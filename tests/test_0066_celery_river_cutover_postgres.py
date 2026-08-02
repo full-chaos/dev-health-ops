@@ -165,7 +165,7 @@ def test_application_migrator_applies_safe_schema_without_0066_opt_in(
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
 
-    assert _revisions(migrated_to_0065.engine) == {"0077"}
+    assert _revisions(migrated_to_0065.engine) == {"0080"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     assert _table_exists(migrated_to_0065.engine, "dev_conversations")
     assert _routes(migrated_to_0065.engine, migration) == before
@@ -189,7 +189,7 @@ def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
     from dev_health_ops.migrate import _run_upgrade
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0077"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0080"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     assert _routes(migrated_to_0065.engine, migration) == [
         (kind, "river", False, 2) for kind in sorted(migration._KINDS)
@@ -214,7 +214,7 @@ def test_application_migrator_opt_in_applies_both_heads(
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
 
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0077"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0080"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     assert _routes(migrated_to_0065.engine, migration) == [
         (kind, "river", False, 2) for kind in sorted(migration._KINDS)
@@ -255,7 +255,7 @@ def test_old_linear_0071_provenance_converges_to_both_heads(
     from dev_health_ops.migrate import _run_upgrade
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0077"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0080"}
     assert _routes(migrated_to_0065.engine, migration) == before
 
 

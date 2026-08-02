@@ -357,8 +357,16 @@ class StatusChangeService:
         actual = self._assess(
             raw,
             assessment_source_limit_reached=assessment_source_limit_reached,
+            # CHAOS-3303: a team subject has no single declared/children
+            # completion tree (_WORK_ITEMS_SQL is never queried for team
+            # scope -- see native_status_change.TEAM_NOT_APPLICABLE_SOURCES),
+            # exactly like PROJECT/WORK_UNIT already. Without TEAM here,
+            # every team snapshot would report declared_status_missing ->
+            # CompletionState.INDETERMINATE -> StatusResultState.
+            # INSUFFICIENT_EVIDENCE regardless of how much real pull-request/
+            # CI/deployment/incident evidence the team's SQL arms return.
             declared_optional=request.scope.direct_scope
-            in {DirectScope.PROJECT, DirectScope.WORK_UNIT},
+            in {DirectScope.PROJECT, DirectScope.WORK_UNIT, DirectScope.TEAM},
             release_evidence_required=request.scope.direct_scope
             in {
                 DirectScope.ISSUE,

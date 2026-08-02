@@ -17,16 +17,20 @@ import re
 import textwrap
 import types
 import uuid
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal, get_args, get_origin
+from typing import Any, Literal, cast, get_args, get_origin
 
 import pytest
 import pytest_asyncio
 from pydantic import AwareDatetime
-from sqlalchemy import event, func, insert, select, update
+from sqlalchemy import Table, event, func, insert, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session
 
 from dev_health_ops.api.dev import terminal_frames
 from dev_health_ops.api.dev.contract_fixtures import (
@@ -2784,22 +2788,29 @@ def test_orm_boundary_bulk_dml_denies_an_unrecognized_write_shape() -> None:
 
 
 @pytest.mark.asyncio
-async def test_raw_connection_execution_is_a_documented_out_of_scope_escape_hatch(
+async def test_raw_connection_execution_bypasses_the_listener_but_not_the_trigger(
     persistence,
 ) -> None:
-    """Partition cell (f): Core execution against a ``Connection``
-    obtained via ``session.connection()``, entirely outside the Session,
-    is confirmed empirically to fire neither the mapper events nor
-    ``do_orm_execute`` -- there is no Session-level event surface to hook
-    for it at all, since it is not a session-mediated write in the first
-    place. This is a documented, deliberate non-goal, not an unnoticed
-    gap: it is the exact mechanism
-    test_chaos_3297_frame_reachability.py's corrupted/mismatched-frame
-    tests use to simulate genuinely out-of-band data (a damaged row,
-    data from before a schema/contract change, manual DB surgery) that
-    the application's own ORM writes could never produce. This test
-    exists so that guarantee stays intentional and visible, not an
-    accident nobody wrote down."""
+    """Partition cell (f), CHAOS-3297 Codex review round 9: Core
+    execution against a ``Connection`` obtained via
+    ``session.connection()``, entirely outside the Session, is confirmed
+    empirically to fire neither the mapper events nor ``do_orm_execute``
+    -- there is no Session-level event surface to hook for it at all,
+    since it is not a session-mediated write in the first place. Round 8
+    documented this as an out-of-scope non-goal for the (session-level)
+    listener; the round-9 DB trigger closes it anyway, because it is not
+    a session-level hook -- it validates every row on its way into the
+    table, whatever wrote it. This is exactly what makes the DB trigger
+    total where the listener could only ever be partial: a bypass this
+    specific (raw connection, no Session at all) still cannot produce an
+    invalid row.
+
+    (``test_chaos_3297_frame_reachability.py``'s corrupted-frame tests
+    still need to write genuinely out-of-band-invalid data through this
+    same raw-connection path, to prove replay degrades safely -- they now
+    drop the trigger first, which is the honest way to simulate a DBA-
+    level bypass, not a reason to weaken the trigger itself.)
+    """
 
     maker, org_id, _other_org, user_id, _other_user = persistence
     async with maker() as session:
@@ -2818,17 +2829,223 @@ async def test_raw_connection_execution_is_a_documented_out_of_scope_escape_hatc
         frame_id = frame.id
 
         connection = await session.connection()
-        await connection.execute(
-            update(DevAnswerFrame)
-            .where(DevAnswerFrame.id == frame_id)
-            .values(payload={"schema_version": "dev_answer_frame.v1"})
-        )
-        await session.commit()
+        with pytest.raises(IntegrityError):
+            await connection.execute(
+                update(DevAnswerFrame)
+                .where(DevAnswerFrame.id == frame_id)
+                .values(payload={"schema_version": "dev_answer_frame.v1"})
+            )
+        await session.rollback()
 
     async with maker() as session:
         reloaded = await session.get(DevAnswerFrame, frame_id)
         assert reloaded is not None
-        assert reloaded.payload == {"schema_version": "dev_answer_frame.v1"}, (
-            "raw Connection execution outside the Session is a documented "
-            "escape hatch, not validated by this boundary"
+        assert reloaded.payload == valid_payload, (
+            "the raw-connection bypass attempt must leave the original, "
+            "valid payload completely untouched"
         )
+
+
+# -- CHAOS-3297 Codex review round 9: the DB trigger closure. Ship-gate on
+# round 8 confirmed two more real bypasses of every session-level guard
+# above -- a Core-table UPDATE issued through the Session (no `bind_mapper`
+# to look up) and an `INSERT ... ON CONFLICT DO UPDATE` whose conflict SET
+# clause is never inspected. Both are reproduced here verbatim, first with
+# the session-level listeners genuinely disabled (via `event.remove`, not
+# a monkeypatched module attribute -- the listeners were registered with
+# direct references to the original functions at import time, so patching
+# the module attribute would not affect them) to prove the DB trigger
+# alone rejects both, then again with the listeners restored to prove
+# normal operation is unaffected.
+
+
+@contextmanager
+def _session_level_payload_guards_disabled():
+    """Temporarily unregisters every session-level payload guard
+    (mapper events + do_orm_execute) so a test can prove the DB trigger
+    -- not this layer -- is what rejects a given write. Always restores
+    on exit, including when the body raises (e.g. inside
+    ``pytest.raises``, which itself absorbs the write's own exception
+    before this context manager's ``finally`` ever runs)."""
+
+    at_flush = dev_persistence_service._enforce_payload_contract_at_flush
+    on_bulk_dml = dev_persistence_service._enforce_payload_contract_on_bulk_dml
+    payload_models = list(_PAYLOAD_MODEL_VALIDATORS)
+    for model in payload_models:
+        event.remove(model, "before_insert", at_flush)
+        event.remove(model, "before_update", at_flush)
+    event.remove(Session, "do_orm_execute", on_bulk_dml)
+    try:
+        yield
+    finally:
+        for model in payload_models:
+            event.listen(model, "before_insert", at_flush)
+            event.listen(model, "before_update", at_flush)
+        event.listen(Session, "do_orm_execute", on_bulk_dml)
+
+
+@pytest.mark.asyncio
+async def test_db_trigger_rejects_a_core_table_update_with_no_bind_mapper(
+    persistence,
+) -> None:
+    """Codex round 9 repro 1/2: ``session.execute(update(DevAnswerFrame
+    .__table__)...)`` -- a Core-table UPDATE against the bare ``Table``,
+    not the mapped class. ``orm_execute_state.bind_mapper`` is ``None``
+    for this statement (there is no ORM mapper to resolve a bare
+    ``Table`` against), so ``_enforce_payload_contract_on_bulk_dml``
+    returns at its very first ``if mapper is None: return`` -- this is
+    session-mediated, and it still defeats every session-level guard.
+
+    Run with the session-level guards disabled first (proving the DB
+    trigger alone rejects it), then with them restored (proving normal
+    operation still works and this write is still rejected -- the
+    listener's own early return means it was never going to help here
+    either way).
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        valid_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(valid_payload["frame_id"]),
+            public_outcome="not_found",
+            payload=valid_payload,
+        )
+        await session.commit()
+        frame_id = frame.id
+
+        with _session_level_payload_guards_disabled():
+            with pytest.raises(IntegrityError, match="dev_answer_frames"):
+                await session.execute(
+                    update(cast(Table, DevAnswerFrame.__table__))
+                    .where(DevAnswerFrame.__table__.c.id == frame_id)
+                    .values(payload={"schema_version": "dev_answer_frame.v1"})
+                )
+            await session.rollback()
+
+        async with maker() as check_session:
+            reloaded = await check_session.get(DevAnswerFrame, frame_id)
+            assert reloaded is not None
+            assert reloaded.payload == valid_payload, (
+                "trigger-alone: the bare-Table update must not have "
+                "touched the original payload"
+            )
+
+        # Re-run with the guards restored -- normal operation, still
+        # rejected (the trigger is unconditional either way).
+        with pytest.raises(IntegrityError, match="dev_answer_frames"):
+            await session.execute(
+                update(cast(Table, DevAnswerFrame.__table__))
+                .where(DevAnswerFrame.__table__.c.id == frame_id)
+                .values(payload={"schema_version": "dev_answer_frame.v1"})
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevAnswerFrame, frame_id)
+        assert reloaded is not None
+        assert reloaded.payload == valid_payload
+
+
+@pytest.mark.asyncio
+async def test_db_trigger_rejects_an_on_conflict_do_update_set_clause(
+    persistence,
+) -> None:
+    """Codex round 9 repro 2/2: ``insert(...).on_conflict_do_update(...,
+    set_={"payload": ...})`` -- the INSERT's own values are whatever the
+    session-level guard validates, but the conflict resolution's SET
+    clause is a separate part of the compiled statement nothing in that
+    layer inspects. Two variants, both against the SAME conflicting row:
+    a malformed payload (fails contract validity) and a fully valid
+    payload for a completely different run/frame (fails the row-binding
+    cross-check) -- the trigger enforces both regardless of which
+    session-level guard would or would not have caught either one.
+
+    Run with the session-level guards disabled first (proving the DB
+    trigger alone rejects both), then with them restored.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        valid_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(valid_payload["frame_id"]),
+            public_outcome="not_found",
+            payload=valid_payload,
+        )
+        await session.commit()
+        frame_id = frame.id
+
+        # The INSERT's own values target the SAME run_id as the existing
+        # frame -- the unique constraint on run_id is exactly what makes
+        # this an UPSERT against the row above, not a fresh insert. The
+        # INSERT's own payload is fully valid (it would legitimately pass
+        # every check on its own, including the row-binding cross-check,
+        # since it matches run_id); only the ON CONFLICT SET clause,
+        # which fires INSTEAD once the conflict is detected, is malicious.
+        insert_payload = _frame_payload(run_id=run_id, outcome="not_found")
+
+        alien_run_id = uuid.uuid4()
+        alien_payload = _frame_payload(run_id=alien_run_id, outcome="answered")
+
+        def _upsert_statement(conflict_payload: dict[str, Any]) -> Any:
+            return (
+                sqlite_insert(DevAnswerFrame)
+                .values(
+                    id=uuid.uuid4(),
+                    run_id=run_id,
+                    org_id=org_id,
+                    user_id=user_id,
+                    frame_id=uuid.UUID(insert_payload["frame_id"]),
+                    public_outcome="not_found",
+                    payload=insert_payload,
+                    created_at=datetime.now(UTC),
+                )
+                .on_conflict_do_update(
+                    index_elements=["run_id"],
+                    set_={"payload": conflict_payload},
+                )
+            )
+
+        with _session_level_payload_guards_disabled():
+            for conflict_payload, label in (
+                ({"schema_version": "dev_answer_frame.v1"}, "malformed"),
+                (alien_payload, "alien-but-internally-valid"),
+            ):
+                with pytest.raises(IntegrityError, match="dev_answer_frames"):
+                    await session.execute(_upsert_statement(conflict_payload))
+                await session.rollback()
+                async with maker() as check_session:
+                    reloaded = await check_session.get(DevAnswerFrame, frame_id)
+                    assert reloaded is not None
+                    assert reloaded.payload == valid_payload, (
+                        f"trigger-alone ({label}): the conflicting row's "
+                        f"original payload must be untouched"
+                    )
+
+        # Re-run (guards restored) -- normal operation, still rejected.
+        with pytest.raises(IntegrityError, match="dev_answer_frames"):
+            await session.execute(_upsert_statement(alien_payload))
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevAnswerFrame, frame_id)
+        assert reloaded is not None
+        assert reloaded.payload == valid_payload
+        # And the upsert's own INSERT branch did not sneak a second row
+        # in either -- every attempted write in this test rolled back in
+        # full, and run_id's unique constraint allows exactly one frame.
+        count = await session.scalar(
+            select(func.count(DevAnswerFrame.id)).where(DevAnswerFrame.run_id == run_id)
+        )
+        assert count == 1

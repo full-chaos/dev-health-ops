@@ -26,7 +26,7 @@ import uuid
 from typing import Any, cast
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.dev import router as dev_router_module
@@ -65,6 +65,31 @@ from tests.api.dev.test_router import (  # noqa: F401
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _disable_frame_payload_trigger(connection: Any) -> None:
+    """The corruption-simulation tests below intentionally write an
+    out-of-band-invalid frame payload directly, to prove replay degrades
+    safely when it encounters one. CHAOS-3297 Codex review round 9's DB
+    trigger (``models/dev_persistence.py``) now enforces payload
+    validity and row-binding unconditionally -- including against this
+    exact raw-connection write, which is the whole point of it being a
+    DB-level invariant rather than a Session-level one.
+
+    Out-of-band corruption means a DBA-level bypass by definition (a
+    damaged row, data from before a schema/contract change, manual DB
+    surgery) -- simulating it here means dropping the trigger for this
+    one write, on this test's own throwaway database, not weakening the
+    trigger itself. SQLite-only (this fixture's engine); a Postgres
+    equivalent would be ``ALTER TABLE ... DISABLE TRIGGER ...``.
+    """
+
+    await connection.execute(
+        text("DROP TRIGGER IF EXISTS dev_answer_frames_validate_payload_insert")
+    )
+    await connection.execute(
+        text("DROP TRIGGER IF EXISTS dev_answer_frames_validate_payload_update")
+    )
 
 
 def _test_versions() -> DevContractVersions:
@@ -466,6 +491,7 @@ async def test_replay_with_corrupted_frame_payload_falls_back_safely(
         # really arrive: on the raw connection, outside the ORM Session
         # entirely, never through session.execute()/attribute assignment.
         connection = await session.connection()
+        await _disable_frame_payload_trigger(connection)
         await connection.execute(
             update(DevAnswerFrame)
             .where(DevAnswerFrame.id == frame_row.id)
@@ -564,6 +590,7 @@ async def test_replay_with_mismatched_frame_outcome_falls_back_safely(
         # that guarantee -- simulate it on the raw connection, outside the
         # ORM Session entirely, same as the corrupted-payload test above.
         connection = await session.connection()
+        await _disable_frame_payload_trigger(connection)
         await connection.execute(
             update(DevAnswerFrame)
             .where(DevAnswerFrame.id == frame_row.id)
@@ -660,6 +687,7 @@ async def test_replay_with_answered_frame_falls_back_safely(
         # public_outcome against the same write's own columns, so this must
         # be simulated on the raw connection, outside the ORM Session.
         connection = await session.connection()
+        await _disable_frame_payload_trigger(connection)
         await connection.execute(
             update(DevAnswerFrame)
             .where(DevAnswerFrame.id == frame_row.id)

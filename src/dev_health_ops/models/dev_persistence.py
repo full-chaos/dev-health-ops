@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
+    DDL,
     JSON,
     BigInteger,
     CheckConstraint,
@@ -24,6 +25,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -741,6 +743,260 @@ class DevRunNarrative(Base):
         ),
         Index("ix_dev_run_narratives_owner_run", "org_id", "user_id", "run_id"),
     )
+
+
+# -- DB-enforced payload invariant (CHAOS-3297 Codex review round 9).
+#
+# Three rounds of session-level guards (an AST scanner, then
+# before_insert/before_update mapper events, then a do_orm_execute
+# session-level hook covering every Core DML shape SQLAlchemy 2.x has)
+# were each defeated by a write shape the previous one could not see --
+# most recently a Core-table UPDATE issued through the Session (where
+# `bind_mapper` is None, since the statement targets a bare `Table`, not
+# a mapped class the listener can look up) and an
+# `INSERT ... ON CONFLICT DO UPDATE` whose conflict `SET` clause is never
+# inspected by anything that validates the INSERT values. Codex's
+# conclusion, and the standing line here: stop extending a parser over
+# SQLAlchemy's statement shapes. The invariant moves to the one boundary
+# every one of those paths -- ORM, Core, executemany, upsert, even a raw
+# connection -- must cross to become a row: the database itself.
+#
+# A BEFORE INSERT/UPDATE trigger on each payload-bearing table validates
+# the FINAL row about to be written, whatever produced it:
+#   * payload IS NOT NULL
+#   * payload->>'schema_version' equals the table's one contract version
+#   * payload's own identity fields equal this row's own columns --
+#     frame_id/run_id/public_outcome (dev_answer_frames), narrative_id/
+#     run_id/frame_id/mode (dev_run_narratives) -- mirroring
+#     record_frame's/record_narrative's own cross-checks.
+#
+# Scope note: `provider_fingerprint` is NOT cross-checked at the trigger
+# level. record_narrative's own cross-check compares a SHA-256 digest of
+# `payload.provider_metadata.model_fingerprint` against the column, and
+# computing that digest inside a trigger needs an extension neither
+# engine has installed by default (pgcrypto on Postgres; no built-in
+# SQLite equivalent at all) -- a new production dependency this round
+# was not asked to take on. The session listener
+# (`persistence/service.py::_validate_run_narrative_payload`) still
+# performs that specific check on every session-mediated write, which is
+# every write this application's own code ever issues; it is a residual,
+# documented gap only for a write that goes around the session AND
+# forges a self-consistent-but-wrong provider_fingerprint, which is
+# strictly narrower than either of Codex's round-9 repros.
+#
+# This does not replace full contract validation (every field
+# DevAnswerFrameContract/DevNarrativeContract enforce beyond identity) --
+# that remains the session listener's job, now correctly described as
+# fast-fail UX (a caller going through the ORM gets a clean
+# DevPersistenceValidationError before ever reaching the database), not
+# the load-bearing guard. The trigger is unconditional and total; the
+# listener is a nicer error message for the 99% of writes that go
+# through it.
+#
+# Registered via `event.listen(<table>, "after_create", DDL(...)
+# .execute_if(dialect=...))` so `Base.metadata.create_all` -- what every
+# unit test's in-memory SQLite fixture already calls -- installs the
+# SQLite arm automatically. The Postgres arm additionally ships as
+# Alembic migration 0080, since production databases are never built via
+# `create_all`.
+
+_DEV_ANSWER_FRAME_SCHEMA_VERSION = "dev_answer_frame.v1"
+_DEV_NARRATIVE_SCHEMA_VERSION = "dev_narrative.v1"
+
+DEV_ANSWER_FRAMES_TRIGGER_FUNCTION_POSTGRESQL = f"""
+CREATE OR REPLACE FUNCTION dev_answer_frames_validate_payload() RETURNS trigger AS $$
+BEGIN
+    IF NEW.payload IS NULL THEN
+        RAISE EXCEPTION 'dev_answer_frames.payload must not be null' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.payload->>'schema_version' IS DISTINCT FROM '{_DEV_ANSWER_FRAME_SCHEMA_VERSION}' THEN
+        RAISE EXCEPTION 'dev_answer_frames.payload.schema_version does not equal {_DEV_ANSWER_FRAME_SCHEMA_VERSION}' USING ERRCODE = '23514';
+    END IF;
+    IF (NEW.payload->>'frame_id')::uuid IS DISTINCT FROM NEW.frame_id THEN
+        RAISE EXCEPTION 'dev_answer_frames.payload.frame_id does not match the row''s frame_id' USING ERRCODE = '23514';
+    END IF;
+    IF (NEW.payload->>'run_id')::uuid IS DISTINCT FROM NEW.run_id THEN
+        RAISE EXCEPTION 'dev_answer_frames.payload.run_id does not match the row''s run_id' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.payload->>'public_outcome' IS DISTINCT FROM NEW.public_outcome THEN
+        RAISE EXCEPTION 'dev_answer_frames.payload.public_outcome does not match the row''s public_outcome' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+#: asyncpg (the async Postgres driver this project uses) prepares each
+#: statement individually and rejects multiple SQL commands in one
+#: `execute()` call ("cannot insert multiple commands into a prepared
+#: statement") -- confirmed empirically against a live Postgres database.
+#: The DROP and CREATE must be two separate DDL objects (and, further
+#: down, two separate `event.listen` registrations), never one string.
+DEV_ANSWER_FRAMES_TRIGGER_DROP_POSTGRESQL = """
+DROP TRIGGER IF EXISTS dev_answer_frames_validate_payload_trigger ON dev_answer_frames;
+"""
+
+DEV_ANSWER_FRAMES_TRIGGER_CREATE_POSTGRESQL = """
+CREATE TRIGGER dev_answer_frames_validate_payload_trigger
+    BEFORE INSERT OR UPDATE ON dev_answer_frames
+    FOR EACH ROW EXECUTE FUNCTION dev_answer_frames_validate_payload();
+"""
+
+#: SQLite has no functions/procedures -- the same WHEN predicate, negated,
+#: is duplicated onto one INSERT trigger and one UPDATE trigger (SQLite
+#: triggers fire on exactly one event each; there is no "INSERT OR
+#: UPDATE"). `IS NOT` is NULL-safe (SQLite's `IS DISTINCT FROM`
+#: equivalent) -- a payload missing a key extracts NULL and correctly
+#: reads as a mismatch, not an error. GUID columns are stored as
+#: undashed lowercase hex (see `GUID.process_bind_param`); the JSON
+#: payload's own copy is the dashed ServerHandle form, so the extracted
+#: value has its dashes stripped before comparing.
+DEV_ANSWER_FRAMES_TRIGGER_SQLITE = f"""
+CREATE TRIGGER IF NOT EXISTS dev_answer_frames_validate_payload_insert
+BEFORE INSERT ON dev_answer_frames
+FOR EACH ROW
+WHEN NEW.payload IS NULL
+    OR json_extract(NEW.payload, '$.schema_version') IS NOT '{_DEV_ANSWER_FRAME_SCHEMA_VERSION}'
+    OR REPLACE(json_extract(NEW.payload, '$.frame_id'), '-', '') IS NOT NEW.frame_id
+    OR REPLACE(json_extract(NEW.payload, '$.run_id'), '-', '') IS NOT NEW.run_id
+    OR json_extract(NEW.payload, '$.public_outcome') IS NOT NEW.public_outcome
+BEGIN
+    SELECT RAISE(ABORT, 'dev_answer_frames.payload invalid or does not match the row');
+END;
+"""
+
+DEV_ANSWER_FRAMES_TRIGGER_SQLITE_UPDATE = f"""
+CREATE TRIGGER IF NOT EXISTS dev_answer_frames_validate_payload_update
+BEFORE UPDATE ON dev_answer_frames
+FOR EACH ROW
+WHEN NEW.payload IS NULL
+    OR json_extract(NEW.payload, '$.schema_version') IS NOT '{_DEV_ANSWER_FRAME_SCHEMA_VERSION}'
+    OR REPLACE(json_extract(NEW.payload, '$.frame_id'), '-', '') IS NOT NEW.frame_id
+    OR REPLACE(json_extract(NEW.payload, '$.run_id'), '-', '') IS NOT NEW.run_id
+    OR json_extract(NEW.payload, '$.public_outcome') IS NOT NEW.public_outcome
+BEGIN
+    SELECT RAISE(ABORT, 'dev_answer_frames.payload invalid or does not match the row');
+END;
+"""
+
+DEV_RUN_NARRATIVES_TRIGGER_FUNCTION_POSTGRESQL = f"""
+CREATE OR REPLACE FUNCTION dev_run_narratives_validate_payload() RETURNS trigger AS $$
+BEGIN
+    IF NEW.payload IS NULL THEN
+        RAISE EXCEPTION 'dev_run_narratives.payload must not be null' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.payload->>'schema_version' IS DISTINCT FROM '{_DEV_NARRATIVE_SCHEMA_VERSION}' THEN
+        RAISE EXCEPTION 'dev_run_narratives.payload.schema_version does not equal {_DEV_NARRATIVE_SCHEMA_VERSION}' USING ERRCODE = '23514';
+    END IF;
+    IF (NEW.payload->>'narrative_id')::uuid IS DISTINCT FROM NEW.narrative_id THEN
+        RAISE EXCEPTION 'dev_run_narratives.payload.narrative_id does not match the row''s narrative_id' USING ERRCODE = '23514';
+    END IF;
+    IF (NEW.payload->>'run_id')::uuid IS DISTINCT FROM NEW.run_id THEN
+        RAISE EXCEPTION 'dev_run_narratives.payload.run_id does not match the row''s run_id' USING ERRCODE = '23514';
+    END IF;
+    IF (NEW.payload->>'frame_id')::uuid IS DISTINCT FROM NEW.frame_id THEN
+        RAISE EXCEPTION 'dev_run_narratives.payload.frame_id does not match the row''s frame_id' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.payload->>'mode' IS DISTINCT FROM NEW.mode THEN
+        RAISE EXCEPTION 'dev_run_narratives.payload.mode does not match the row''s mode' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+DEV_RUN_NARRATIVES_TRIGGER_DROP_POSTGRESQL = """
+DROP TRIGGER IF EXISTS dev_run_narratives_validate_payload_trigger ON dev_run_narratives;
+"""
+
+DEV_RUN_NARRATIVES_TRIGGER_CREATE_POSTGRESQL = """
+CREATE TRIGGER dev_run_narratives_validate_payload_trigger
+    BEFORE INSERT OR UPDATE ON dev_run_narratives
+    FOR EACH ROW EXECUTE FUNCTION dev_run_narratives_validate_payload();
+"""
+
+DEV_RUN_NARRATIVES_TRIGGER_SQLITE = f"""
+CREATE TRIGGER IF NOT EXISTS dev_run_narratives_validate_payload_insert
+BEFORE INSERT ON dev_run_narratives
+FOR EACH ROW
+WHEN NEW.payload IS NULL
+    OR json_extract(NEW.payload, '$.schema_version') IS NOT '{_DEV_NARRATIVE_SCHEMA_VERSION}'
+    OR REPLACE(json_extract(NEW.payload, '$.narrative_id'), '-', '') IS NOT NEW.narrative_id
+    OR REPLACE(json_extract(NEW.payload, '$.run_id'), '-', '') IS NOT NEW.run_id
+    OR REPLACE(json_extract(NEW.payload, '$.frame_id'), '-', '') IS NOT NEW.frame_id
+    OR json_extract(NEW.payload, '$.mode') IS NOT NEW.mode
+BEGIN
+    SELECT RAISE(ABORT, 'dev_run_narratives.payload invalid or does not match the row');
+END;
+"""
+
+DEV_RUN_NARRATIVES_TRIGGER_SQLITE_UPDATE = f"""
+CREATE TRIGGER IF NOT EXISTS dev_run_narratives_validate_payload_update
+BEFORE UPDATE ON dev_run_narratives
+FOR EACH ROW
+WHEN NEW.payload IS NULL
+    OR json_extract(NEW.payload, '$.schema_version') IS NOT '{_DEV_NARRATIVE_SCHEMA_VERSION}'
+    OR REPLACE(json_extract(NEW.payload, '$.narrative_id'), '-', '') IS NOT NEW.narrative_id
+    OR REPLACE(json_extract(NEW.payload, '$.run_id'), '-', '') IS NOT NEW.run_id
+    OR REPLACE(json_extract(NEW.payload, '$.frame_id'), '-', '') IS NOT NEW.frame_id
+    OR json_extract(NEW.payload, '$.mode') IS NOT NEW.mode
+BEGIN
+    SELECT RAISE(ABORT, 'dev_run_narratives.payload invalid or does not match the row');
+END;
+"""
+
+event.listen(
+    DevAnswerFrame.__table__,
+    "after_create",
+    DDL(DEV_ANSWER_FRAMES_TRIGGER_FUNCTION_POSTGRESQL).execute_if(dialect="postgresql"),
+)
+event.listen(
+    DevAnswerFrame.__table__,
+    "after_create",
+    DDL(DEV_ANSWER_FRAMES_TRIGGER_DROP_POSTGRESQL).execute_if(dialect="postgresql"),
+)
+event.listen(
+    DevAnswerFrame.__table__,
+    "after_create",
+    DDL(DEV_ANSWER_FRAMES_TRIGGER_CREATE_POSTGRESQL).execute_if(dialect="postgresql"),
+)
+event.listen(
+    DevAnswerFrame.__table__,
+    "after_create",
+    DDL(DEV_ANSWER_FRAMES_TRIGGER_SQLITE).execute_if(dialect="sqlite"),
+)
+event.listen(
+    DevAnswerFrame.__table__,
+    "after_create",
+    DDL(DEV_ANSWER_FRAMES_TRIGGER_SQLITE_UPDATE).execute_if(dialect="sqlite"),
+)
+event.listen(
+    DevRunNarrative.__table__,
+    "after_create",
+    DDL(DEV_RUN_NARRATIVES_TRIGGER_FUNCTION_POSTGRESQL).execute_if(
+        dialect="postgresql"
+    ),
+)
+event.listen(
+    DevRunNarrative.__table__,
+    "after_create",
+    DDL(DEV_RUN_NARRATIVES_TRIGGER_DROP_POSTGRESQL).execute_if(dialect="postgresql"),
+)
+event.listen(
+    DevRunNarrative.__table__,
+    "after_create",
+    DDL(DEV_RUN_NARRATIVES_TRIGGER_CREATE_POSTGRESQL).execute_if(dialect="postgresql"),
+)
+event.listen(
+    DevRunNarrative.__table__,
+    "after_create",
+    DDL(DEV_RUN_NARRATIVES_TRIGGER_SQLITE).execute_if(dialect="sqlite"),
+)
+event.listen(
+    DevRunNarrative.__table__,
+    "after_create",
+    DDL(DEV_RUN_NARRATIVES_TRIGGER_SQLITE_UPDATE).execute_if(dialect="sqlite"),
+)
 
 
 class DevRunStageDiagnostic(Base):

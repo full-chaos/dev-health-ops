@@ -469,15 +469,30 @@ def _safe_count_summary(value: Mapping[str, Any], *, field: str) -> dict[str, An
 
 
 # -- ORM-boundary payload validation (CHAOS-3297 Codex review round 7
-# MEDIUM). The AST scanner (test_persistence_v2.py) is a syntax-level
-# tripwire -- it can only ever recognize the write *shapes* it was taught
-# to look for, and it only sees this module's own source. This is the
-# load-bearing guard instead: a SQLAlchemy mapper event fires for every
-# INSERT/UPDATE of a payload-bearing row, however it was constructed --
-# attribute assignment, kwargs-splat, ``update().values(...)``, a bulk
-# helper in a completely different module, anything -- and validates the
-# payload actually on its way to the database, not the syntax that
-# produced it. -------------------------------------------------------
+# MEDIUM, demoted to fast-fail UX by round 9). The AST scanner
+# (test_persistence_v2.py) is a syntax-level tripwire -- it can only ever
+# recognize the write *shapes* it was taught to look for, and it only sees
+# this module's own source. This session-level layer (mapper events below,
+# plus the do_orm_execute hook further down) is broader -- it fires for
+# every write issued *through this Session*, mapped-instance or Core DML
+# alike -- but it is still bounded by "through this Session": a Core-table
+# UPDATE against a bare Table has no `bind_mapper` to look up, and nothing
+# here can see the SET clause of an `INSERT ... ON CONFLICT DO UPDATE`'s
+# conflict resolution. Both are real, Codex-confirmed bypasses of this
+# layer specifically.
+#
+# The LOAD-BEARING, total guard is the DB trigger on each payload-bearing
+# table (see the round-9 comment block below `_PAYLOAD_MODEL_VALIDATORS`,
+# and `models/dev_persistence.py`) -- it validates the row on its way into
+# the table however it got there, ORM or Core or upsert or raw connection,
+# with no statement shape it does not see. This layer's job now is purely
+# fast-fail UX: a caller going through the ORM gets a clean
+# DevPersistenceValidationError before ever reaching the database, instead
+# of an IntegrityError surfacing from a trigger three layers down the
+# stack. Every check here is intentionally a strict subset of what the
+# trigger enforces (contract validity is a superset the trigger does not
+# attempt) -- keeping both correct never requires them to diverge, only
+# this layer to occasionally have less to say. -----------------------
 
 
 class _KnownUnvalidatedPayloadGap:
@@ -652,10 +667,17 @@ _PAYLOAD_MODEL_VALIDATORS: dict[type, Any] = {
 }
 
 
-# -- CHAOS-3297 Codex review round 8: closure argument over the complete
-# partition of session-mediated write paths, verified empirically against
-# SQLAlchemy 2.0.49 (probed directly, not assumed from docs) rather than
-# patched a fourth time against one more example:
+# -- CHAOS-3297 Codex review round 8: partition of session-mediated write
+# paths this layer covers, verified empirically against SQLAlchemy 2.0.49
+# (probed directly, not assumed from docs). Round 9 found two more real
+# rows this layer could not see at all -- a Core-table UPDATE issued
+# through the Session (`bind_mapper` is None for a bare `Table`, not a
+# mapped class) and an `INSERT ... ON CONFLICT DO UPDATE`'s conflict SET
+# clause -- and moved the LOAD-BEARING guarantee to a DB trigger instead
+# (see the round-9 comment block below `_PAYLOAD_MODEL_VALIDATORS`). What
+# follows is still correct and still runs on every write it describes; it
+# is fast-fail UX layered in front of the trigger, not the total guard
+# anymore:
 #
 #   a) unit-of-work flush of ORM instances (attribute assignment, kwargs
 #      construction, merge, cascades) -> before_insert/before_update
@@ -812,16 +834,61 @@ def _enforce_payload_contract_on_bulk_dml(orm_execute_state: Any) -> None:
 event.listen(Session, "do_orm_execute", _enforce_payload_contract_on_bulk_dml)
 
 
+# -- CHAOS-3297 Codex review round 9: two more real bypasses of
+# everything above, both against a live database, both committing an
+# invalid or row-mismatched payload:
+#
+#   * `session.execute(update(DevAnswerFrame.__table__)...)` -- a
+#     Core-table UPDATE issued through the Session, not through the
+#     mapped class. `orm_execute_state.bind_mapper` is `None` for this
+#     statement (there is no ORM mapper to resolve a bare `Table`
+#     against), so `_enforce_payload_contract_on_bulk_dml` above returns
+#     at its very first `if mapper is None: return` -- correctly, by its
+#     own logic, since it has nothing to look up `_PAYLOAD_MODEL_VALIDATORS`
+#     with. This is not a bug in that function; it is the edge of what a
+#     mapper-keyed registry can see at all.
+#   * `insert(...).on_conflict_do_update(..., set_={"payload": ...})` --
+#     the INSERT's own values are whatever this layer validates, but the
+#     conflict resolution's SET clause is a separate part of the compiled
+#     statement nothing here inspects; an UPDATE that only takes effect
+#     on a conflict rides through completely unvalidated.
+#
+# Both are still "session-mediated" by any reasonable definition, and
+# both defeated this layer anyway -- the standing conclusion after three
+# rounds of extending a parser over SQLAlchemy's statement shapes: stop.
+# The load-bearing, TOTAL guarantee is now a BEFORE INSERT/UPDATE trigger
+# on each payload-bearing table (`dev_answer_frames`, `dev_run_narratives`
+# -- see `models/dev_persistence.py` for the full DDL and design
+# rationale, and Alembic migration 0080 for the Postgres arm). A trigger
+# validates the row the database is about to accept, independent of
+# which SQLAlchemy construct -- or non-SQLAlchemy client -- produced the
+# SQL that got it there. Neither bypass above, nor any bypass this module
+# has not yet been taught about, can write an invalid or row-mismatched
+# payload past it.
+#
+# Everything below this point (the legacy-bulk-API prohibition) and
+# everything above it (mapper events, `do_orm_execute`) remain exactly as
+# correct as they were -- they still catch what they catch, before the
+# database round-trip, with a clean `DevPersistenceValidationError`
+# instead of an `IntegrityError` surfacing from three layers down. They
+# are kept for that reason: fast-fail UX, not the load-bearing guarantee
+# anymore.
+
+
 # -- (e) above: legacy bulk APIs structurally prohibited for
 # payload-bearing models. Confirmed empirically that
 # `Session.bulk_save_objects`/`bulk_insert_mappings`/`bulk_update_mappings`
 # fire neither the mapper events nor `do_orm_execute` -- there is no event
 # hook in SQLAlchemy 2.x that sees these at all, so unlike (a)-(d) this
-# cannot be validated, only refused. `AsyncSession` does not expose these
-# methods directly (only the underlying sync `Session` does, reachable via
-# `session.run_sync(...)`), but wrapping the sync `Session` class methods
-# themselves covers that path too, and every other way these might be
-# reached in-process.
+# cannot be validated by an event, only refused up front. `AsyncSession`
+# does not expose these methods directly (only the underlying sync
+# `Session` does, reachable via `session.run_sync(...)`), but wrapping the
+# sync `Session` class methods themselves covers that path too, and every
+# other way these might be reached in-process. (The DB trigger would also
+# reject an invalid payload written this way -- these SQL statements are
+# not exempt from it -- but the prohibition still gives a clean Python
+# exception before ever reaching the database, same as the rest of this
+# layer.)
 
 _ORIGINAL_BULK_SAVE_OBJECTS = Session.bulk_save_objects
 _ORIGINAL_BULK_INSERT_MAPPINGS = Session.bulk_insert_mappings

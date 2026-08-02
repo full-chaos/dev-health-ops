@@ -122,24 +122,58 @@ def _empty_profile() -> RoleCertificationProfile:
 class RoleCertificationStore(Protocol):
     async def load(self) -> RoleCertificationProfile: ...
 
+    async def save_record(self, record: RoleCertificationRecord) -> None: ...
+
     async def save(self, profile: RoleCertificationProfile) -> None: ...
 
 
+def _role_setting_key(base_key: str, role: AgentRole) -> str:
+    return f"{base_key}:{role.value}"
+
+
 class SettingsRoleCertificationStore:
-    """Persists the per-role profile envelope under a key distinct from the
-    legacy binary readiness record (see module docstring for the
-    backward-compatibility rationale)."""
+    """Persists one settings row **per role**, not one shared envelope blob.
+
+    This is deliberate, not incidental: an earlier version of this store held
+    the whole three-role profile as a single JSON blob under one settings
+    key, read-modified-written on every certification. Two roles certifying
+    concurrently (session A certifies ``legacy_agent``, session B certifies
+    ``intent_classification``, both starting from the same snapshot) raced a
+    classic lost update -- whichever session's ``save()`` committed second
+    silently discarded the other's sibling record, even though the two
+    updates touched logically independent roles. Splitting storage per role
+    removes the shared mutable state that race depended on: two different
+    roles are two different settings rows, so there is no read-before-write
+    dependency between them and no commit order can lose either one. A
+    same-role concurrent write (two sessions certifying the identical role at
+    the identical moment) still resolves via ``SettingsService.set()``'s
+    existing select-or-insert semantics -- the same behavior every other
+    settings-backed value in this codebase already has; broadening that to a
+    general atomic upsert is out of scope here.
+    """
 
     def __init__(
         self, settings: SettingsService, *, key: str = ROLE_CERTIFICATION_SETTING_KEY
     ):
         self._settings = settings
-        self._key = key
+        self._base_key = key
 
     async def load(self) -> RoleCertificationProfile:
-        raw = await self._settings.get(self._key, category=SettingCategory.LLM.value)
+        records: dict[AgentRole, RoleCertificationRecord] = {}
+        for role in AgentRole:
+            record = await self._load_role(role)
+            if record is not None:
+                records[role] = record
+        return RoleCertificationProfile(
+            version=ROLE_CERTIFICATION_PROFILE_VERSION, records=records
+        )
+
+    async def _load_role(self, role: AgentRole) -> RoleCertificationRecord | None:
+        raw = await self._settings.get(
+            _role_setting_key(self._base_key, role), category=SettingCategory.LLM.value
+        )
         if not raw:
-            return _empty_profile()
+            return None
         try:
             payload = json.loads(raw)
             if (
@@ -147,52 +181,62 @@ class SettingsRoleCertificationStore:
                 or payload.get("version") != ROLE_CERTIFICATION_PROFILE_VERSION
             ):
                 # An envelope-shape mismatch (including a future version this
-                # build predates) is never partially trusted -- every role
+                # build predates) is never partially trusted -- the role
                 # reads as UNCHECKED rather than risk misreading a foreign
                 # shape as a certification.
-                return _empty_profile()
-            raw_records = payload.get("records")
-            if not isinstance(raw_records, Mapping):
-                return _empty_profile()
-            records: dict[AgentRole, RoleCertificationRecord] = {}
-            for role_value, record_payload in raw_records.items():
-                role = AgentRole(role_value)
-                records[role] = RoleCertificationRecord(
-                    role=role,
-                    certification_key=str(record_payload["certification_key"]),
-                    readiness_version=str(record_payload["readiness_version"]),
-                    checked_at=str(record_payload["checked_at"]),
-                    state=RoleCertificationState(record_payload["state"]),
-                    safe_error_code=(
-                        str(record_payload["safe_error_code"])
-                        if record_payload.get("safe_error_code")
-                        else None
-                    ),
-                )
-            return RoleCertificationProfile(
-                version=ROLE_CERTIFICATION_PROFILE_VERSION, records=records
+                return None
+            record_payload = payload.get("record")
+            if not isinstance(record_payload, Mapping):
+                return None
+            stored_role = AgentRole(record_payload["role"])
+            if stored_role is not role:
+                # Defensive: a row found under this role's own key must
+                # actually describe this role. A mismatch means storage was
+                # corrupted or hand-edited -- never trust it either way.
+                return None
+            return RoleCertificationRecord(
+                role=stored_role,
+                certification_key=str(record_payload["certification_key"]),
+                readiness_version=str(record_payload["readiness_version"]),
+                checked_at=str(record_payload["checked_at"]),
+                state=RoleCertificationState(record_payload["state"]),
+                safe_error_code=(
+                    str(record_payload["safe_error_code"])
+                    if record_payload.get("safe_error_code")
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-            return _empty_profile()
+            return None
 
-    async def save(self, profile: RoleCertificationProfile) -> None:
+    async def save_record(self, record: RoleCertificationRecord) -> None:
+        """Upsert exactly one role's row. This is the write path
+        ``RoleReadinessService`` uses -- no read-modify-write of any other
+        role's data, so certifying one role can never lose another's."""
+
         payload = {
             "version": ROLE_CERTIFICATION_PROFILE_VERSION,
-            "records": {
-                record.role.value: {
-                    **asdict(record),
-                    "role": record.role.value,
-                    "state": record.state.value,
-                }
-                for record in profile.records.values()
+            "record": {
+                **asdict(record),
+                "role": record.role.value,
+                "state": record.state.value,
             },
         }
         await self._settings.set(
-            self._key,
+            _role_setting_key(self._base_key, record.role),
             json.dumps(payload, separators=(",", ":"), sort_keys=True),
             category=SettingCategory.LLM.value,
-            description="Safe per-role Ask Dev provider certification result",
+            description=f"Safe Ask Dev {record.role.value} role certification result",
         )
+
+    async def save(self, profile: RoleCertificationProfile) -> None:
+        """Upsert every record in ``profile`` -- a convenience for tests and
+        bulk seeding. Each record is written through ``save_record``, so this
+        is exactly as safe (and touches exactly the same rows) as calling
+        ``save_record`` once per record."""
+
+        for record in profile.records.values():
+            await self.save_record(record)
 
 
 __all__ = [

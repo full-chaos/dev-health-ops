@@ -56,8 +56,11 @@ class RoleReadinessService:
             state=probe_result.state,
             safe_error_code=probe_result.safe_error_code,
         )
-        profile = await self._store.load()
-        await self._store.save(profile.with_record(record))
+        # Writes exactly this role's row -- no read-modify-write of the
+        # whole profile, so a concurrent certification of a sibling role can
+        # never be lost regardless of commit order (see
+        # SettingsRoleCertificationStore's docstring).
+        await self._store.save_record(record)
         return record
 
 

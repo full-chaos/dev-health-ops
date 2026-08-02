@@ -328,7 +328,6 @@ class RunRecorder(Protocol):
         """
         ...
 
-
     async def rollback(self) -> None:
         """Discard pending writes after a failed record_frame flush (CHAOS-3297).
 
@@ -343,7 +342,6 @@ class RunRecorder(Protocol):
         forever.
         """
         ...
-
 
     async def terminal(
         self,
@@ -391,10 +389,8 @@ class NullRunRecorder:
     async def record_frame(self, frame: DevAnswerFrame) -> None:
         del frame
 
-
     async def rollback(self) -> None:
         return None
-
 
     async def terminal(
         self,

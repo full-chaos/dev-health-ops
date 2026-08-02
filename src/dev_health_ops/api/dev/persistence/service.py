@@ -2425,6 +2425,17 @@ class DevPersistenceService:
         a schema-valid frame could name an entity the resolution ledger
         never authorized. Extends the same cross-check posture one field
         further: see ``_authorize_clarification_candidates``.
+
+        CHAOS-3325 confirmation review (MEDIUM): the row is built from
+        ``validated.model_dump(mode="json")`` -- the authorized snapshot --
+        never from ``payload``. Every check above runs against ``validated``,
+        an immutable contract object, while ``payload`` is the caller's
+        mapping and stays mutable throughout; building the row from it meant
+        anything that changed it after authorization returned was persisted
+        unchecked, which review demonstrated by mutating in that window.
+        Persisting what was actually authorized, rather than re-reading the
+        input, is the same row-binding lesson as CHAOS-3297 s1's payload-vs-
+        row identity closure.
         """
 
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
@@ -2465,7 +2476,7 @@ class DevPersistenceService:
         )
         record = await self._construct_validated_payload_row(
             model_cls=DevAnswerFrame,
-            payload_dict=payload,
+            payload_dict=validated.model_dump(mode="json"),
             field_name="frame_payload",
             max_bytes=_FRAME_PAYLOAD_MAX_BYTES,
             run_id=run.id,

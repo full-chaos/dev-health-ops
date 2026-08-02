@@ -200,6 +200,34 @@ def _core_defect_reproductions() -> tuple[ManifestItem, ...]:
             # after any change to preflight_outcomes.py, the scripted
             # provider, or this Compose overlay.
         ),
+        ManifestItem(
+            id="defect.ask-dev-exact-commit.e2e-live-validated",
+            category="original_defect_reproduction",
+            description=(
+                "The exact-commit defect reproduction proven through the "
+                "real live Compose stack -- the positive control the "
+                "not-found negative control needs to hold against, over "
+                "the same real HTTP/SSE surface."
+            ),
+            status="proven_e2e",
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_exact_commit.py",
+                "scripts/acceptance/run_ask_dev_compose.sh",
+                "tests/acceptance/test_ask_dev_exact_commit_smoke.py",
+            ),
+            requires_live_infra=True,
+            # Actually executed by this lane 2026-08-02 15:52 UTC (third
+            # live compose run, same session, images warm): "What's the
+            # status of meridian/web-app?" (the fixture-generated
+            # repository) produced a scope.resolved event with a non-empty
+            # authorized_repository_ids and a terminal ANSWER_COMPLETED
+            # event with a non-empty, non-error direct_summary. Exit code
+            # 0. Regression-checked alongside the not-found and
+            # core-intents smokes in the same run; all three green. Stack
+            # torn down clean after, zero residual containers. Dated,
+            # non-auto-reverified evidence, same caveat as the not-found
+            # item above.
+        ),
     )
 
 
@@ -267,6 +295,52 @@ def _attacks() -> tuple[ManifestItem, ...]:
             test_nodeids=(
                 "tests/api/dev/test_chaos_3303_team_health_service.py::"
                 "test_evaluate_team_zero_attribution_suppresses_even_with_real_facts",
+            ),
+        ),
+        ManifestItem(
+            id="attack.team-attribution.e2e-blocked-by-live-defect",
+            category="attack",
+            description=(
+                "Live end-to-end team-attribution proof, attempted per "
+                "team-lead priority 2026-08-02 -- blocked by a newly "
+                "discovered, 100%-reproducible live defect, not by the "
+                "already-known stack-3 plan-wiring gap."
+            ),
+            status="blocked",
+            blocked_reason=(
+                "ANY status question naming a real, resolvable team subject "
+                "(tried all 3 fixture teams: core/growth/platform) returns "
+                "a terminal ERROR/internal_error over the live HTTP/SSE API "
+                "with ask_dev_wave_3_1 enabled -- 100% reproducible, zero "
+                "flake. This is NOT the CORE_PLANS_BY_INTENT gap: TEAM is a "
+                "supported_subject_kind on status.entity.v2 (a WIRED plan), "
+                "so this is a distinct, previously-unknown defect in an "
+                "intent CHAOS-3300 counted as working. Live diagnosis "
+                "(dev_runs row for one repro, org "
+                "0a155cab-8833-42ac-a4ef-0d121725a7b0, run_id "
+                "36ef85a2-960a-4223-a699-333270b74c70): "
+                "preflight_outcome=proceeded_committed_subject (team-name "
+                "resolution and commit work correctly); "
+                'plan_step_partition={"failed": [], "skipped": '
+                '["evidence_expansion", "work_graph_expansion"], '
+                '"completed": ["required_source_health", '
+                '"status_snapshot"]} (the plan-governed investigation '
+                "itself completes cleanly, 0 failed steps); "
+                "tool_call_count=0 (crashes before or during the legacy "
+                "model-round loop / frame emission that follows a "
+                "successful plan-governed investigation); safe_error_code= "
+                "internal_error with zero corresponding stderr/stdout log "
+                "line in the API container across three separate repro "
+                "runs (a silent server-side failure -- the exception is "
+                "caught and mapped to internal_error without being logged "
+                "anywhere this lane could find). team_repo_ownership was "
+                "empty for all 3 fixture teams in this run, so an "
+                "unattributed-team edge case is a plausible trigger, but "
+                "not confirmed without reading the frame-emission code "
+                "path directly, which this lane did not do (team-lead "
+                "condition: report and stop rather than debug an hour). "
+                "Not yet filed as its own Linear ticket -- reported to "
+                "team-lead for routing."
             ),
         ),
         ManifestItem(

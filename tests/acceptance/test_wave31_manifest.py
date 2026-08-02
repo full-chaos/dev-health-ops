@@ -52,7 +52,7 @@ def test_original_defect_reproductions_are_all_at_least_unit_proven() -> None:
     defects = [
         item for item in MANIFEST if item.category == "original_defect_reproduction"
     ]
-    assert len(defects) == 4
+    assert len(defects) == 5
     assert all(item.status in ("proven_unit", "proven_e2e") for item in defects)
 
 
@@ -115,6 +115,38 @@ def test_repeated_provider_gate_is_deferred_not_silently_green() -> None:
     assert item.status == "deferred"
     assert item.blocked_reason is not None
     assert "credentials" in item.blocked_reason
+
+
+def test_team_status_live_defect_is_pinned_not_silently_folded_into_the_wiring_gap() -> (
+    None
+):
+    """Locks in the 2026-08-02 live-discovered team-attribution blocker.
+
+    This is a DIFFERENT root cause from the 13 stack-3-sequenced items:
+    TEAM is a supported_subject_kind on status.entity.v2, a WIRED plan, so
+    this defect must never get silently merged into or explained away by
+    the CORE_PLANS_BY_INTENT wiring-gap reason -- doing so would hide a
+    live, 100%-reproducible bug behind an unrelated, already-tracked one.
+    """
+
+    by_id = {item.id: item for item in MANIFEST}
+    item = by_id["attack.team-attribution.e2e-blocked-by-live-defect"]
+    assert item.status == "blocked"
+    assert item.blocked_reason is not None
+    assert "internal_error" in item.blocked_reason
+    assert "proceeded_committed_subject" in item.blocked_reason
+    assert "tool_call_count=0" in item.blocked_reason
+    # Explicitly distinguishes itself from the stack-3 wiring gap rather
+    # than silently reusing that shared reason string.
+    assert "NOT the CORE_PLANS_BY_INTENT gap" in item.blocked_reason
+    stack3_blocked_ids = {
+        "matrix.legitimate-org-wide-status",
+        "matrix.organization-portfolio-status",
+    }
+    stack3_reasons = {
+        by_id[stack3_id].blocked_reason for stack3_id in stack3_blocked_ids
+    }
+    assert item.blocked_reason not in stack3_reasons
 
 
 # --- guard behavior: validate_manifest must actually catch every defect it

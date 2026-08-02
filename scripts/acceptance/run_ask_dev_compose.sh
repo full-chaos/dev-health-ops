@@ -98,6 +98,16 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
   "${ops_root}/scripts/acceptance/smoke_ask_dev_not_found.py"
 
+# CHAOS-3300: the "Ask Dev" exact-commit original defect reproduction --
+# the positive control the not-found negative control needs to hold against.
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_exact_commit.py"
+
 # CHAOS-3300: organization-wide DATA_TRUST and REMAINING_WORK questions,
 # proven the same way -- real HTTP/SSE API, no web/Playwright.
 PYTHONPATH="${ops_root}/src:${ops_root}" \

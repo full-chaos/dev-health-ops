@@ -93,6 +93,14 @@
     "DevAnswerFrame": {
       "additionalProperties": false,
       "properties": {
+        "clarification_candidates": {
+          "items": {
+            "$ref": "#/$defs/DevResolutionCandidate"
+          },
+          "maxItems": 25,
+          "title": "Clarification Candidates",
+          "type": "array"
+        },
         "comparisons": {
           "items": {
             "$ref": "#/$defs/DevComparisonPoint"

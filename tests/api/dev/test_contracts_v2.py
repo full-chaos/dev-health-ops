@@ -31,6 +31,8 @@ from dev_health_ops.api.dev.contract_fixtures import (
 )
 from dev_health_ops.api.dev.contract_fixtures_v2 import (
     NOW,
+    _needs_clarification_frame_base,
+    needs_clarification_frame_with_candidates,
     negative_fixtures,
     no_answer_answer_fixture,
     positive_fixtures,
@@ -40,14 +42,23 @@ from dev_health_ops.api.dev.contracts import (
     CONTRACT_MODELS,
     AnswerStatus,
     DevClaimFlags,
+    DevContractVersions,
     DevCoverage,
+    DevDisambiguationCandidate,
+    DevEntityRef,
     DevEvidenceRef,
+    DevModelMetadata,
     DevScope,
+    DevScopeResolution,
     DevTimeRange,
+    EntityType,
+    ScopeResolutionOutcome,
 )
 from dev_health_ops.api.dev.contracts import DevAnswer as DevAnswerV1
 from dev_health_ops.api.dev.contracts import DevError as DevErrorV1
+from dev_health_ops.api.dev.contracts_v2 import compat as compat_module
 from dev_health_ops.api.dev.contracts_v2 import validators as validators_module
+from dev_health_ops.api.dev.contracts_v2.validators import ANSWERED_CONTENT_OUTCOMES
 from dev_health_ops.api.dev.export_contracts_v2 import (
     check_artifacts,
     expected_artifacts,
@@ -270,7 +281,14 @@ _FRAME_VALIDATOR_CASES: dict[str, tuple[str, str]] = {
 #: has_content clause) -- both must flip when the validator is disabled, and
 #: neither should count as "a different guardrail" in the isolation loop below.
 _ADDITIONAL_CASES_SAME_VALIDATOR: dict[str, tuple[str, ...]] = {
-    "validate_outcome_consistency": ("answered_with_disclosure",),
+    # CHAOS-3325: answered_with_clarification_candidates is a second case
+    # validate_outcome_consistency alone rejects (its new clarification-
+    # candidates clause), alongside answered_with_disclosure (CHAOS-3297) and
+    # outcome_content_mismatch (the pre-existing has_content clause).
+    "validate_outcome_consistency": (
+        "answered_with_disclosure",
+        "answered_with_clarification_candidates",
+    ),
 }
 
 
@@ -456,9 +474,16 @@ def test_answered_disclosure_clause_is_new_not_preexisting(
     # must still be rejected under the RED replacement -- proving it is a
     # faithful full reproduction of the pre-changeset validator, not a stub
     # that happens to also let the disclosure fixture through by disabling
-    # everything.
+    # everything. CHAOS-3325's clarification-candidates clause is excluded
+    # too: this reproduction is frozen at the pre-3297 snapshot, which
+    # predates that clause as well, so it correctly passes that fixture for
+    # the same reason it passes the disclosure one -- not a different guard
+    # catching it.
     for other_case, other_payload in negative_fixtures()["dev_answer_frame.v1"]:
-        if other_case == "answered_with_disclosure":
+        if other_case in (
+            "answered_with_disclosure",
+            "answered_with_clarification_candidates",
+        ):
             continue
         with pytest.raises(ValidationError):
             v2.DevAnswerFrame.model_validate(other_payload)
@@ -627,6 +652,383 @@ def test_compat_projects_needs_clarification_to_insufficient_evidence() -> None:
     assert isinstance(projected, DevAnswerV1)
     assert projected.schema_version == "dev_answer.v1"
     assert projected.status is AnswerStatus.INSUFFICIENT_EVIDENCE
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3325: a typed clarification-candidate block on dev_answer_frame.v1,
+# carrying the resolution ledger's real authorized candidates instead of the
+# v1 projector's pre-3325 fabricated placeholder.
+# ---------------------------------------------------------------------------
+
+
+def _needs_clarification_answer_payload(
+    frame_payload: dict[str, Any],
+) -> dict[str, Any]:
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["frame"] = frame_payload
+    payload["public_outcome"] = "needs_clarification"
+    payload["outcome_display_label"] = "Needs clarification"
+    payload["narrative"] = None
+    return payload
+
+
+def test_needs_clarification_frame_may_carry_zero_or_many_clarification_candidates() -> (
+    None
+):
+    """Both shapes are legal on the contract: zero candidates (e.g. the
+    question could not be interpreted at all) is not an error state that
+    needs a placeholder to satisfy the type."""
+
+    zero = v2.DevAnswerFrame.model_validate(_needs_clarification_frame_base())
+    assert zero.clarification_candidates == ()
+
+    many = v2.DevAnswerFrame.model_validate(needs_clarification_frame_with_candidates())
+    assert [c.entity_ref.entity_id for c in many.clarification_candidates] == [
+        "repo_nightfall_public",
+        "repo_nightfall_internal",
+    ]
+
+
+#: Every outcome that may NOT carry clarification_candidates, derived from the
+#: enum rather than listed: a ninth PublicOutcome member is parametrized into
+#: the rejection test below the moment it is declared, and fails there until it
+#: is classified into one of the two guards.
+_CANDIDATE_GUARDED_OUTCOMES = tuple(
+    sorted(
+        outcome.value
+        for outcome in v2.PublicOutcome
+        if outcome is not v2.PublicOutcome.NEEDS_CLARIFICATION
+    )
+)
+
+
+def _candidate_bearing_frame_for(outcome: str) -> dict[str, Any]:
+    """One valid-but-for-the-candidates frame, retargeted at ``outcome``.
+
+    Built by retargeting the two committed negative fixtures rather than
+    hand-authoring a payload, so the candidate block under test is the exact
+    one those fixtures pin (Verification rule: build from the real producer).
+    Every other field is made legal for the outcome, so the ValidationError
+    the test asserts is attributable to ``clarification_candidates`` and not
+    to some unrelated invariant the retargeting broke.
+    """
+
+    negatives = dict(negative_fixtures()["dev_answer_frame.v1"])
+    if outcome in v2.NO_ANSWER_OUTCOMES:
+        payload = deepcopy(negatives["denied_with_clarification_candidates"])
+        payload["public_outcome"] = outcome
+        payload["direct_answer"] = v2.CANONICAL_NO_ANSWER_COPY[outcome]
+        return payload
+    payload = deepcopy(negatives["answered_with_clarification_candidates"])
+    payload["public_outcome"] = outcome
+    if outcome == "answered_with_gaps":
+        # answered_with_gaps independently requires a disclosed gap, so give
+        # it one -- otherwise the rejection could be that missing gap rather
+        # than the candidates.
+        payload["limitations"] = ["A required source was stale at query time."]
+    return payload
+
+
+def test_clarification_candidate_guards_partition_every_public_outcome() -> None:
+    """The two guards partition ``PublicOutcome`` exactly, with no gap.
+
+    Guard A is the ``ABSENT`` cell in ``NO_ANSWER_FRAME_FIELD_POLICY``, which
+    only reaches ``NO_ANSWER_OUTCOMES``; guard B is
+    ``validate_outcome_consistency``'s clause, which only reaches
+    ``ANSWERED_CONTENT_OUTCOMES``. ``needs_clarification`` is in neither, by
+    design -- it is the one outcome permitted to carry candidates. Asserting
+    the three sets tile the enum is what makes "forbidden everywhere else"
+    a closure rather than a claim about the cells someone happened to test.
+    """
+
+    guard_a = set(v2.NO_ANSWER_OUTCOMES)
+    guard_b = set(ANSWERED_CONTENT_OUTCOMES)
+    every_outcome = {outcome.value for outcome in v2.PublicOutcome}
+
+    assert guard_a & guard_b == set(), "an outcome cannot be governed by both guards"
+    assert guard_a | guard_b == every_outcome - {"needs_clarification"}
+    assert set(_CANDIDATE_GUARDED_OUTCOMES) == guard_a | guard_b
+    assert (
+        v2.NO_ANSWER_FRAME_FIELD_POLICY["clarification_candidates"]
+        is v2.NoAnswerFieldPolicy.ABSENT
+    )
+
+
+@pytest.mark.parametrize("outcome", _CANDIDATE_GUARDED_OUTCOMES)
+def test_clarification_candidates_forbidden_outside_needs_clarification(
+    outcome: str,
+) -> None:
+    """(f)/(b): every outcome but ``needs_clarification`` rejects candidates.
+
+    Total over the enum, not a sample of two cells: the earlier version of
+    this test exercised only ``denied`` and ``answered``, so a regression
+    opening any of the other five would not have been observed.
+    """
+
+    payload = _candidate_bearing_frame_for(outcome)
+    assert payload["clarification_candidates"], "the case must actually carry some"
+    with pytest.raises(ValidationError, match="clarification_candidates"):
+        v2.DevAnswerFrame.model_validate(payload)
+
+
+def test_needs_clarification_is_the_one_outcome_that_accepts_candidates() -> None:
+    """The positive half of the partition -- without it the test above is
+    satisfied by a validator that rejects candidates unconditionally."""
+
+    frame = v2.DevAnswerFrame.model_validate(
+        needs_clarification_frame_with_candidates()
+    )
+    assert frame.public_outcome is v2.PublicOutcome.NEEDS_CLARIFICATION
+    assert len(frame.clarification_candidates) == 2
+
+
+def test_answered_clarification_candidates_clause_is_new_not_preexisting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED/GREEN pair for the CHAOS-3325 'answered' clause on
+    validate_outcome_consistency, mirroring
+    test_answered_disclosure_clause_is_new_not_preexisting. The "old" body
+    below is byte-identical to the pre-3325 validator (copied, not imported
+    from history, so the RED half is self-contained)."""
+
+    payload = dict(negative_fixtures()["dev_answer_frame.v1"])[
+        "answered_with_clarification_candidates"
+    ]
+
+    def _pre_3325_validate_outcome_consistency(frame: Any) -> None:
+        outcome = frame.public_outcome.value
+        has_content = bool(frame.sections) or bool(frame.facts)
+        if outcome in validators_module._EMPTY_CONTENT_OUTCOMES and has_content:
+            raise ValueError(
+                f"public outcome {outcome!r} cannot carry answer sections/facts"
+            )
+        if outcome in validators_module.ANSWERED_CONTENT_OUTCOMES and not has_content:
+            raise ValueError(
+                f"public outcome {outcome!r} requires answer sections and facts"
+            )
+        if outcome == "answered":
+            if frame.limitations:
+                raise ValueError(
+                    "'answered' cannot carry limitations; use answered_with_gaps"
+                )
+            if frame.completion is not None and frame.completion.calculable is False:
+                raise ValueError(
+                    "'answered' cannot carry a non-calculable completion block; "
+                    "use answered_with_gaps"
+                )
+            disclosed_facts = [fact.fact_id for fact in frame.facts if fact.disclosures]
+            if disclosed_facts:
+                raise ValueError(
+                    "'answered' cannot carry a fact disclosure (stale/uncertain/"
+                    f"conflicting/untrusted_source) on fact(s) {sorted(disclosed_facts)}; "
+                    "use answered_with_gaps"
+                )
+        if outcome == "answered_with_gaps" and not frame.limitations:
+            if frame.completion is None or frame.completion.calculable is not False:
+                raise ValueError(
+                    "'answered_with_gaps' requires disclosed limitations or a "
+                    "non-calculable completion block"
+                )
+
+    original_validator = validators_module.validate_outcome_consistency
+
+    # RED: the pre-changeset validator body has no clarification-candidates
+    # clause and accepts this fixture.
+    monkeypatch.setattr(
+        validators_module,
+        "validate_outcome_consistency",
+        _pre_3325_validate_outcome_consistency,
+    )
+    v2.DevAnswerFrame.model_validate(payload)  # must not raise
+
+    # Every other frame negative fixture is a different guardrail and must
+    # still be rejected -- proves the RED body is a faithful reproduction,
+    # not a stub that disables everything.
+    for other_case, other_payload in negative_fixtures()["dev_answer_frame.v1"]:
+        if other_case == "answered_with_clarification_candidates":
+            continue
+        with pytest.raises(ValidationError):
+            v2.DevAnswerFrame.model_validate(other_payload)
+
+    # GREEN: restore the real, current validator -- it rejects the same
+    # payload.
+    monkeypatch.setattr(
+        validators_module, "validate_outcome_consistency", original_validator
+    )
+    with pytest.raises(ValidationError, match="clarification_candidates"):
+        v2.DevAnswerFrame.model_validate(payload)
+
+
+def test_clarification_candidate_entity_ids_must_be_unique() -> None:
+    payload = dict(negative_fixtures()["dev_answer_frame.v1"])[
+        "clarification_candidates_duplicate_entity_id"
+    ]
+    with pytest.raises(ValidationError, match="unique"):
+        v2.DevAnswerFrame.model_validate(payload)
+
+
+def test_clarification_candidate_entity_kind_is_a_closed_vocabulary() -> None:
+    """The only "unauthorized-shaped" candidate expressible at the wire-type
+    level: a candidate outside the closed EntityKind vocabulary. Real
+    authorization is enforced by the builder (subject_preflight only ever
+    constructs a candidate from an AuthorizedEntity the catalog itself
+    returned), never by a field on the wire shape -- there is no
+    "unauthorized" flag to smuggle a different value through."""
+
+    payload = dict(negative_fixtures()["dev_answer_frame.v1"])[
+        "clarification_candidate_unknown_entity_kind"
+    ]
+    with pytest.raises(ValidationError, match="entity_kind"):
+        v2.DevAnswerFrame.model_validate(payload)
+
+
+def test_compat_projects_real_clarification_candidates_not_a_placeholder() -> None:
+    """GREEN: the current projector carries the frame's own authorized
+    candidates -- the resolution ledger's real entries -- through to v1,
+    reporting AMBIGUOUS (matching DevScopeResolution's own "ambiguous
+    requires candidates" invariant)."""
+
+    answer = v2.DevAnswerV2.model_validate(
+        _needs_clarification_answer_payload(needs_clarification_frame_with_candidates())
+    )
+    projected = v2.project_answer_v2_to_v1(
+        answer, organization_id="org_fullchaos", time_range=_time_range_for_scope()
+    )
+    assert isinstance(projected, DevAnswerV1)
+    resolution = projected.resolved_scope
+    assert resolution.outcome is ScopeResolutionOutcome.AMBIGUOUS
+    assert [c.entity_ref.entity_id for c in resolution.candidates] == [
+        "repo_nightfall_public",
+        "repo_nightfall_internal",
+    ]
+    assert [c.entity_ref.display_label for c in resolution.candidates] == [
+        "full-chaos/nightfall-public",
+        "full-chaos/nightfall-internal",
+    ]
+    assert all(c.reason for c in resolution.candidates)
+    # v1 CONTRACT_MODELS accepts the projected object's own dict form too.
+    CONTRACT_MODELS["dev_answer.v1"].model_validate(projected.model_dump(mode="json"))
+
+
+def _pre_chaos_3325_project_needs_clarification(
+    answer: v2.DevAnswerV2, organization_id: str, time_range: DevTimeRange
+) -> DevAnswerV1:
+    """Byte-identical to ``compat._project_needs_clarification`` before
+    CHAOS-3325 -- copied, not imported from git history, so the RED half
+    below is self-contained. Fabricates a placeholder candidate
+    (``entity_id="clarification_required"``) whenever the frame carries
+    neither a real candidate list nor a ``subject_ref``."""
+
+    frame = answer.frame
+    versions = compat_module._require_versions(frame.versions, answer.public_outcome)
+    resolved = compat_module._build_resolved_scope(answer, organization_id, time_range)
+    resolution = DevScopeResolution(
+        schema_version="dev_scope_resolution.v1",
+        requested_scope=resolved,
+        resolved_scope=None,
+        outcome=ScopeResolutionOutcome.AMBIGUOUS,
+        authorized_repository_ids=[],
+        authorized_entity_ids=[],
+        candidates=[
+            DevDisambiguationCandidate(
+                entity_ref=DevEntityRef(
+                    entity_type=compat_module._KIND_TO_ENTITY_TYPE.get(
+                        frame.subject_ref.entity_kind, EntityType.REPOSITORY
+                    ),
+                    entity_id=frame.subject_ref.entity_id,
+                    display_label=frame.subject_ref.display_label,
+                    repository_id=frame.subject_ref.repository_id,
+                ),
+                reason="Clarification requested before continuing.",
+            )
+        ]
+        if frame.subject_ref is not None
+        else [
+            DevDisambiguationCandidate(
+                entity_ref=DevEntityRef(
+                    entity_type=EntityType.REPOSITORY,
+                    entity_id="clarification_required",
+                    display_label="Clarification required",
+                ),
+                reason="The question requires clarification before it can be answered.",
+            )
+        ],
+        fallbacks=[],
+        warnings=[],
+        resolved_at=answer.generated_at,
+    )
+    return DevAnswerV1(
+        schema_version="dev_answer.v1",
+        answer_id=answer.answer_id,
+        conversation_id=answer.conversation_id,
+        generated_at=answer.generated_at,
+        resolved_scope=resolution,
+        as_of=answer.generated_at,
+        status=AnswerStatus.INSUFFICIENT_EVIDENCE,
+        direct_summary=frame.direct_answer,
+        claims=[],
+        metrics=[],
+        evidence=[],
+        conflicts=[],
+        coverage=compat_module._as_v1(DevCoverage, frame.coverage),
+        warnings=list(frame.limitations),
+        suggested_follow_up_questions=list(frame.safe_follow_up_questions),
+        versions=DevContractVersions(
+            prompt_version=versions.prompt_version
+            or compat_module._DETERMINISTIC_VERSION_PLACEHOLDER,
+            tool_contract_version=versions.tool_contract_version,
+            metric_definition_version=versions.metric_definition_version,
+            query_version=versions.query_version,
+        ),
+        model=DevModelMetadata(
+            provider_source="platform",
+            provider_family="deterministic",
+            model_fingerprint=compat_module._DETERMINISTIC_VERSION_PLACEHOLDER,
+        ),
+    )
+
+
+def test_needs_clarification_zero_candidates_no_longer_fabricates_a_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED/GREEN pair: the pre-CHAOS-3325 projector invented a
+    ``clarification_required`` placeholder candidate for the zero-candidate,
+    no-subject_ref case (e.g. the question could not be interpreted at all).
+    The current projector reports UNRESOLVED with no candidates instead --
+    honest about "nothing to offer" rather than fabricating an option."""
+
+    answer = v2.DevAnswerV2.model_validate(
+        _needs_clarification_answer_payload(_needs_clarification_frame_base())
+    )
+    time_range = _time_range_for_scope()
+    original = compat_module._project_needs_clarification
+
+    # RED: the old projector fabricates a placeholder candidate and reports
+    # AMBIGUOUS, even though nothing was ever actually ambiguous.
+    monkeypatch.setattr(
+        compat_module,
+        "_project_needs_clarification",
+        _pre_chaos_3325_project_needs_clarification,
+    )
+    fabricated = v2.project_answer_v2_to_v1(
+        answer, organization_id="org_fullchaos", time_range=time_range
+    )
+    assert isinstance(fabricated, DevAnswerV1)
+    assert fabricated.resolved_scope.outcome is ScopeResolutionOutcome.AMBIGUOUS
+    assert len(fabricated.resolved_scope.candidates) == 1
+    assert (
+        fabricated.resolved_scope.candidates[0].entity_ref.entity_id
+        == "clarification_required"
+    )
+
+    # GREEN: restore the real projector -- no fabrication.
+    monkeypatch.setattr(compat_module, "_project_needs_clarification", original)
+    honest = v2.project_answer_v2_to_v1(
+        answer, organization_id="org_fullchaos", time_range=time_range
+    )
+    assert isinstance(honest, DevAnswerV1)
+    assert honest.resolved_scope.outcome is ScopeResolutionOutcome.UNRESOLVED
+    assert honest.resolved_scope.candidates == []
 
 
 @pytest.mark.parametrize(
@@ -1397,6 +1799,7 @@ def _frame_absent_field_samples() -> dict[str, object]:
     cases = dict(negative_fixtures()["dev_answer_frame.v1"])
     from_case = {
         "subject_ref": "denied_with_subject_identity",
+        "clarification_candidates": "denied_with_clarification_candidates",
         "completion": "denied_with_completion",
         "readiness": "denied_with_readiness",
         "metrics": "denied_with_metrics",

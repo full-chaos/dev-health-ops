@@ -37,6 +37,7 @@ from .contracts_v2 import (
     DevAnswerV2,
     DevCoverageV2,
     DevFrameVersions,
+    DevResolutionCandidate,
     PublicOutcome,
     QuestionIntentID,
     ResolutionOutcome,
@@ -218,6 +219,7 @@ def build_preflight_answer(
     conversation_id: str,
     generated_at: datetime,
     clarification_key: str = "ambiguous",
+    clarification_candidates: tuple[DevResolutionCandidate, ...] = (),
 ) -> DevAnswerV2:
     """Build the v2 answer one preflight termination emits.
 
@@ -226,6 +228,15 @@ def build_preflight_answer(
     ``direct_answer`` is the canonical server sentence; the contract's own
     ``validate_no_answer_projection`` re-derives that from the same table, so
     an error here is a validation failure rather than a silent disclosure.
+
+    ``clarification_candidates`` (CHAOS-3325) is the resolution ledger's own
+    ``DevResolutionCandidate`` tuple for one ``ambiguous_candidates`` mention
+    — passed straight through from the ledger entry that terminated the run,
+    never re-derived or invented here. It is meaningless for every outcome
+    but ``needs_clarification`` (``validate_outcome_consistency`` /
+    ``NO_ANSWER_FRAME_FIELD_POLICY`` both forbid it elsewhere), so callers on
+    the four no-answer paths simply never pass it and the default empty tuple
+    is always the correct value there.
     """
 
     is_no_answer = outcome is not PublicOutcome.NEEDS_CLARIFICATION
@@ -240,6 +251,7 @@ def build_preflight_answer(
             if is_no_answer
             else CLARIFICATION_COPY[clarification_key]
         ),
+        clarification_candidates=clarification_candidates,
         coverage=DevCoverageV2(
             required_source_count=0,
             available_source_count=0,
@@ -278,20 +290,31 @@ def project_preflight_error(answer: DevAnswerV2, *, request_id: str) -> DevError
     canonical tables. That is what makes "the internal combined outcome never
     leaves the server" structural on the v1 surface too.
 
-    ``needs_clarification`` is handled separately and deliberately. The
-    projector maps it to a v1 ``DevAnswer`` carrying one **fabricated**
-    disambiguation candidate synthesised from ``frame.subject_ref`` — which a
-    preflight ambiguity does not have, since nothing was committed. Today's
-    orchestrator already terminates an ambiguous scope as
-    ``insufficient_evidence`` + ``scope_ambiguous``, and that is both the more
-    faithful statement and the shape the router and web client already handle.
-    The real candidate list is recorded on the resolution ledger, so "ambiguous
-    targets return stable authorized candidates" holds at the ledger and v2
-    level — but **not** on the v1 surface, which has no candidate field to
-    carry them. That gap is CHAOS-3325 (a candidate block on
-    ``dev_answer_frame.v1``); delivery to a user additionally needs the v2
-    rendering surface (CHAOS-3298) and persisted clarification state
-    (CHAOS-3299).
+    ``needs_clarification`` is handled separately and deliberately, on both
+    the live path (``orchestrator.run``) and the replay path (``router``'s
+    terminal-payload reconstruction): both call this function, not
+    ``compat.project_answer_v2_to_v1``, for a preflight ambiguity, and it
+    always returns the fixed ``scope_ambiguous`` ``DevError`` above — never a
+    v1 ``DevAnswer``, so it never carries candidates at all, whatever the
+    frame's own ``clarification_candidates`` holds. That is deliberate and
+    unchanged by CHAOS-3325: it is both the more faithful terminal-state
+    statement (the run genuinely produced no answer) and the shape the router
+    and web client already handle.
+
+    The real candidate list is carried one level up instead. CHAOS-3325 gave
+    ``dev_answer_frame.v1`` a typed ``clarification_candidates`` block — the
+    resolution ledger's own ``DevResolutionCandidate`` entries for the
+    mention that went ambiguous, passed straight through by
+    ``build_preflight_answer`` rather than invented — and
+    ``contracts_v2.compat``'s ``_project_needs_clarification`` now projects
+    those real candidates (or, when there are none, an honest
+    ``ScopeResolutionOutcome.UNRESOLVED`` rather than a fabricated
+    placeholder) for whichever *other* caller runs a ``needs_clarification``
+    answer through the general ``project_answer_v2_to_v1`` projector — this
+    function's own preflight-ambiguity path does not, and still routes
+    through ``scope_ambiguous`` as above. Actually serving the candidate
+    block to a v1/v2 client still additionally needs the v2 rendering
+    surface (CHAOS-3298) and persisted clarification state (CHAOS-3299).
     """
 
     if answer.public_outcome is PublicOutcome.NEEDS_CLARIFICATION:

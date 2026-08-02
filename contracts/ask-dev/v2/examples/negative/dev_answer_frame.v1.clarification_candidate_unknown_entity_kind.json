@@ -1,5 +1,16 @@
 {
-  "clarification_candidates": [],
+  "clarification_candidates": [
+    {
+      "entity_ref": {
+        "display_label": "full-chaos/nightfall-public",
+        "entity_id": "repo_nightfall_public",
+        "entity_kind": "malicious_kind",
+        "repository_id": null,
+        "team_id": null
+      },
+      "reason": "Multiple authorized entities match this name."
+    }
+  ],
   "comparisons": [],
   "completion": null,
   "conflicts": [],
@@ -11,7 +22,7 @@
     "unavailable_required_sources": []
   },
   "deficiency_refs": [],
-  "direct_answer": "You do not have access to ask about this.",
+  "direct_answer": "Repository dev-health is on track; one required child issue remains open.",
   "evidence": [],
   "facts": [],
   "finding_refs": [],
@@ -20,11 +31,13 @@
   "health_profile_refs": [],
   "limitations": [],
   "metrics": [],
-  "public_outcome": "denied",
+  "public_outcome": "needs_clarification",
   "readiness": null,
   "relationship_paths": [],
   "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
-  "safe_follow_up_questions": [],
+  "safe_follow_up_questions": [
+    "What changed since last week?"
+  ],
   "schema_version": "dev_answer_frame.v1",
   "sections": [],
   "source_observations": [],

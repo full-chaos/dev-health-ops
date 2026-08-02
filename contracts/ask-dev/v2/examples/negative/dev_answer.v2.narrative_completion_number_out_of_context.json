@@ -2,6 +2,7 @@
   "answer_id": "0f1a2b3c-0004-4a00-8000-000000000001",
   "conversation_id": "0f1a2b3c-0005-4a00-8000-000000000001",
   "frame": {
+    "clarification_candidates": [],
     "comparisons": [],
     "completion": {
       "calculable": true,

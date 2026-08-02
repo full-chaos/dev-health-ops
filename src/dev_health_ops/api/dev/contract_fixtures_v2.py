@@ -75,6 +75,29 @@ def _evidence() -> dict[str, Any]:
     }
 
 
+def _clarification_candidate(
+    *,
+    entity_id: str,
+    display_label: str,
+    entity_kind: str = "repository",
+) -> dict[str, Any]:
+    """CHAOS-3325: one real, authorized ``DevResolutionCandidate``-shaped
+    entry -- the same shape ``dev_resolution_ledger.v1``'s own candidates
+    already use (see ``_resolution_entry``), reused here rather than a
+    separate fixture vocabulary."""
+
+    return {
+        "entity_ref": {
+            "entity_kind": entity_kind,
+            "entity_id": entity_id,
+            "display_label": display_label,
+            "repository_id": None,
+            "team_id": None,
+        },
+        "reason": "Multiple authorized entities match this name.",
+    }
+
+
 def _relationship_path() -> dict[str, Any]:
     return {
         "path_id": "path_01",
@@ -286,6 +309,7 @@ def _frame() -> dict[str, Any]:
         "public_outcome": "answered",
         "subject_ref": _entity_ref(),
         "subject_set_ref": None,
+        "clarification_candidates": [],
         "direct_answer": (
             "Repository dev-health is on track; one required child issue remains open."
         ),
@@ -456,6 +480,65 @@ def _denied_answer_base() -> dict[str, Any]:
     return answer
 
 
+def _needs_clarification_frame_base() -> dict[str, Any]:
+    """A fully compliant, content-free ``needs_clarification`` frame.
+
+    Mirrors ``_denied_frame_base`` but for the one empty-content outcome the
+    no-answer allowlist projection does not govern --
+    ``needs_clarification`` is deliberately excluded from
+    ``NO_ANSWER_OUTCOMES`` (see ``no_answer_policy``'s module docstring), so
+    ``direct_answer``/``versions`` are unconstrained free text/provenance
+    here rather than pinned to the canonical no-answer table.
+    ``clarification_candidates`` starts empty -- CHAOS-3325: a legal
+    ``needs_clarification`` payload in its own right (e.g. the question
+    could not be interpreted at all, before any mention was ever resolved),
+    never backfilled with an invented candidate.
+    """
+
+    frame = deepcopy(_frame())
+    frame["public_outcome"] = "needs_clarification"
+    frame["subject_ref"] = None
+    frame["subject_set_ref"] = None
+    frame["clarification_candidates"] = []
+    frame["direct_answer"] = "Which repository did you mean?"
+    frame["completion"] = None
+    frame["readiness"] = None
+    frame["sections"] = []
+    frame["facts"] = []
+    frame["metrics"] = []
+    frame["comparisons"] = []
+    frame["relationship_paths"] = []
+    frame["health_profile_refs"] = []
+    frame["finding_refs"] = []
+    frame["deficiency_refs"] = []
+    frame["conflicts"] = []
+    frame["limitations"] = []
+    frame["source_observations"] = []
+    frame["evidence"] = []
+    frame["safe_follow_up_questions"] = []
+    return frame
+
+
+def needs_clarification_frame_with_candidates() -> dict[str, Any]:
+    """CHAOS-3325: a ``needs_clarification`` frame carrying real, authorized
+    clarification candidates -- the positive counterpart to the zero-
+    candidate base above. Two candidates, never one, to keep this fixture
+    distinct from (and not degenerate with) the zero-candidate case."""
+
+    frame = _needs_clarification_frame_base()
+    frame["clarification_candidates"] = [
+        _clarification_candidate(
+            entity_id="repo_nightfall_public",
+            display_label="full-chaos/nightfall-public",
+        ),
+        _clarification_candidate(
+            entity_id="repo_nightfall_internal",
+            display_label="full-chaos/nightfall-internal",
+        ),
+    ]
+    return frame
+
+
 def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any]]]:
     """One negative fixture per field ``validate_no_answer_content_leaks`` forbids.
 
@@ -508,6 +591,20 @@ def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any
         case(
             "denied_with_relationship_paths",
             lambda v: v.__setitem__("relationship_paths", [_relationship_path()]),
+        ),
+        # CHAOS-3325: clarification_candidates is ABSENT on every true
+        # no-answer outcome -- only needs_clarification may carry it.
+        case(
+            "denied_with_clarification_candidates",
+            lambda v: v.__setitem__(
+                "clarification_candidates",
+                [
+                    _clarification_candidate(
+                        entity_id="repo_nightfall_public",
+                        display_label="full-chaos/nightfall-public",
+                    )
+                ],
+            ),
         ),
         case(
             "denied_with_evidence",
@@ -770,6 +867,93 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
         "dev_answer_frame.v1",
         lambda value: value["facts"][0].__setitem__("disclosures", ["stale", "stale"]),
     )
+    # CHAOS-3325: validate_outcome_consistency's new clause -- an 'answered'
+    # frame whose only defect is a clarification candidate. Distinct from
+    # denied_with_clarification_candidates (the ABSENT no-answer-policy
+    # path): 'answered' is not one of NO_ANSWER_OUTCOMES, so that policy
+    # never reaches it -- this clause is what does.
+    frame_answered_with_clarification_candidates = changed(
+        "dev_answer_frame.v1",
+        lambda value: value.__setitem__(
+            "clarification_candidates",
+            [
+                _clarification_candidate(
+                    entity_id="repo_nightfall_public",
+                    display_label="full-chaos/nightfall-public",
+                )
+            ],
+        ),
+    )
+    # A candidate outside the closed EntityKind vocabulary -- the only
+    # "unauthorized-shaped" candidate expressible at the wire-type level.
+    # Real authorization is enforced by the builder using only
+    # preflight-resolved entities (subject_preflight._entity_ref_v2), never
+    # by a field on the wire shape itself.
+    frame_clarification_candidate_unknown_entity_kind = changed(
+        "dev_answer_frame.v1",
+        lambda value: (
+            value.__setitem__("public_outcome", "needs_clarification"),
+            value.__setitem__("subject_ref", None),
+            value.__setitem__("subject_set_ref", None),
+            value.__setitem__("sections", []),
+            value.__setitem__("facts", []),
+            value.__setitem__("completion", None),
+            value.__setitem__("readiness", None),
+            value.__setitem__("metrics", []),
+            value.__setitem__("comparisons", []),
+            value.__setitem__("relationship_paths", []),
+            value.__setitem__("evidence", []),
+            value.__setitem__("source_observations", []),
+            value.__setitem__("health_profile_refs", []),
+            value.__setitem__("finding_refs", []),
+            value.__setitem__("deficiency_refs", []),
+            value.__setitem__(
+                "clarification_candidates",
+                [
+                    _clarification_candidate(
+                        entity_id="repo_nightfall_public",
+                        display_label="full-chaos/nightfall-public",
+                        entity_kind="malicious_kind",
+                    )
+                ],
+            ),
+        ),
+    )
+    # DevAnswerFrame.validate_frame_semantics: two candidates naming the same
+    # authorized entity are not two distinct options.
+    frame_clarification_candidates_duplicate_entity_id = changed(
+        "dev_answer_frame.v1",
+        lambda value: (
+            value.__setitem__("public_outcome", "needs_clarification"),
+            value.__setitem__("subject_ref", None),
+            value.__setitem__("subject_set_ref", None),
+            value.__setitem__("sections", []),
+            value.__setitem__("facts", []),
+            value.__setitem__("completion", None),
+            value.__setitem__("readiness", None),
+            value.__setitem__("metrics", []),
+            value.__setitem__("comparisons", []),
+            value.__setitem__("relationship_paths", []),
+            value.__setitem__("evidence", []),
+            value.__setitem__("source_observations", []),
+            value.__setitem__("health_profile_refs", []),
+            value.__setitem__("finding_refs", []),
+            value.__setitem__("deficiency_refs", []),
+            value.__setitem__(
+                "clarification_candidates",
+                [
+                    _clarification_candidate(
+                        entity_id="repo_nightfall_public",
+                        display_label="full-chaos/nightfall-public",
+                    ),
+                    _clarification_candidate(
+                        entity_id="repo_nightfall_public",
+                        display_label="full-chaos/nightfall (duplicate)",
+                    ),
+                ],
+            ),
+        ),
+    )
     answer_frame_run_id_mismatch = changed(
         "dev_answer.v2",
         lambda value: value["frame"].__setitem__(
@@ -999,6 +1183,18 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             ("answered_with_disclosure", frame_answered_with_disclosure),
             ("disclosures_out_of_order", frame_disclosures_out_of_order),
             ("disclosures_duplicated", frame_disclosures_duplicated),
+            (
+                "answered_with_clarification_candidates",
+                frame_answered_with_clarification_candidates,
+            ),
+            (
+                "clarification_candidate_unknown_entity_kind",
+                frame_clarification_candidate_unknown_entity_kind,
+            ),
+            (
+                "clarification_candidates_duplicate_entity_id",
+                frame_clarification_candidates_duplicate_entity_id,
+            ),
             *_no_answer_outcome_prohibited_field_cases(),
             *_coverage_source_vocabulary_cases(),
         ],
@@ -1176,6 +1372,7 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
 
 
 __all__ = [
+    "needs_clarification_frame_with_candidates",
     "negative_fixtures",
     "no_answer_answer_fixture",
     "positive_fixtures",

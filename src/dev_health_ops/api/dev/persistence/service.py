@@ -31,6 +31,9 @@ from dev_health_ops.api.dev.contracts_v2.frame import (
 from dev_health_ops.api.dev.contracts_v2.narrative import (
     DevNarrative as DevNarrativeContract,
 )
+from dev_health_ops.api.dev.contracts_v2.subject import (
+    DevResolutionEntry as DevResolutionEntryContract,
+)
 from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from dev_health_ops.models.dev_persistence import (
     DEV_RETENTION_DAYS,
@@ -964,6 +967,100 @@ def _guarded_bulk_update_mappings(
 Session.bulk_save_objects = _guarded_bulk_save_objects  # type: ignore[method-assign]
 Session.bulk_insert_mappings = _guarded_bulk_insert_mappings  # type: ignore[method-assign]
 Session.bulk_update_mappings = _guarded_bulk_update_mappings  # type: ignore[method-assign]
+
+
+async def _authorize_clarification_candidates(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    validated: DevAnswerFrameContract,
+) -> None:
+    """CHAOS-3325 Codex review (NO-SHIP, confirmed medium): a schema-valid
+    ``clarification_candidates`` entry only proves *shape*, not provenance --
+    a frame naming an entity the resolution ledger never authorized (e.g.
+    another org's repository, ``entity_id="other-org-secret-repo"``) would
+    otherwise persist as canonical v2 state and be served verbatim by any
+    general ``project_answer_v2_to_v1`` caller or future CHAOS-3298 consumer.
+
+    A separate, independently monkeypatchable function -- the same posture
+    ``contracts_v2.validators`` uses for its guardrails -- so a RED/GREEN
+    test pair can prove this specific check, not the whole of
+    ``record_frame``, is what rejects an unauthorized candidate.
+
+    The run's ``ambiguous_candidates`` resolution-ledger entry is **always**
+    fetched, regardless of whether the frame's own
+    ``clarification_candidates`` is empty (Codex review round 2, confirmed
+    medium: the round-1 early return on an empty frame tuple let an internal
+    caller silently *downgrade* canonical state -- persist ``needs_
+    clarification`` with zero candidates for a run whose ledger genuinely
+    recorded several, hiding the real choices the resolver offered from
+    every future reader of this "canonical" v2 row):
+
+    * **No ledger entry recorded at all** (e.g. the question could not be
+      interpreted -- ``build_preflight_answer`` never calls
+      ``append_resolution`` for that case): the frame's candidates must be
+      empty too. Non-empty here means the frame is claiming candidates
+      nothing authorized, and is rejected exactly like a mismatch below.
+    * **A ledger entry exists**: the frame's candidates must equal it
+      exactly, in the same order, element for element -- including
+      non-emptiness. An empty frame against a non-empty ledger entry is now
+      rejected (the round-2 fix): under-disclosure is no longer assumed
+      safe once a real ledger row exists to compare against, because that
+      row is exactly the canonical-state-downgrade signal above.
+
+    ``orchestrator.run`` persists the ledger entry via ``append_resolution``
+    immediately before calling ``record_frame`` for this outcome (see
+    ``SubjectPreflightResult.terminating_resolution_entry``), so both fetch
+    outcomes above correspond to a real caller state, never an artifact of
+    query timing.
+
+    Residual risk (CHAOS-3325 Codex review round 2 finding 1, deferred by
+    ruling -- not fixed in this branch): a caller *inside* the trust
+    boundary that forges both a schema-valid ledger row (via
+    ``append_resolution``, itself unvalidated against the actual scope
+    catalog today) and a frame whose candidates happen to equal it defeats
+    this equality check -- it only proves the two objects agree with each
+    other, not that either was honestly produced by ``subject_preflight``'s
+    real resolution. Closing that "double-forge" seam requires validating
+    ``append_resolution``'s own payload against the authorized catalog,
+    which is CHAOS-3330's scope, not a persistence-layer-to-resolver-catalog
+    coupling here. See
+    ``test_record_frame_double_forged_ledger_and_frame_defeats_the_equality_check``
+    (``xfail(strict=True)``, flips loudly once CHAOS-3330 lands).
+    """
+
+    ledger_row = await session.scalar(
+        select(DevRunResolution)
+        .where(
+            DevRunResolution.run_id == run_id,
+            DevRunResolution.org_id == org_id,
+            DevRunResolution.user_id == user_id,
+            DevRunResolution.outcome == "ambiguous_candidates",
+        )
+        .order_by(DevRunResolution.entry_ordinal.desc())
+    )
+    if ledger_row is None:
+        if validated.clarification_candidates:
+            raise DevPersistenceValidationError(
+                "frame_payload.clarification_candidates is non-empty but this "
+                "run has no recorded ambiguous_candidates resolution ledger "
+                "entry to authorize it"
+            )
+        return
+    try:
+        ledger_entry = DevResolutionEntryContract.model_validate(ledger_row.payload)
+    except PydanticValidationError as exc:
+        raise DevPersistenceValidationError(
+            "the run's recorded resolution ledger entry is not a valid "
+            f"dev_resolution_entry: {exc}"
+        ) from exc
+    if tuple(validated.clarification_candidates) != tuple(ledger_entry.candidates):
+        raise DevPersistenceValidationError(
+            "frame_payload.clarification_candidates does not match the "
+            "run's recorded ambiguous_candidates resolution ledger entry"
+        )
 
 
 class DevPersistenceService:
@@ -2322,6 +2419,23 @@ class DevPersistenceService:
         call's own arguments -- a caller passing a frame for a different
         run, or claiming a different outcome than it argues for, is a
         caller bug, not data to persist quietly.
+
+        CHAOS-3325 Codex review (NO-SHIP, confirmed medium): shape validation
+        alone did not prove *provenance* for ``clarification_candidates`` --
+        a schema-valid frame could name an entity the resolution ledger
+        never authorized. Extends the same cross-check posture one field
+        further: see ``_authorize_clarification_candidates``.
+
+        CHAOS-3325 confirmation review (MEDIUM): the row is built from
+        ``validated.model_dump(mode="json")`` -- the authorized snapshot --
+        never from ``payload``. Every check above runs against ``validated``,
+        an immutable contract object, while ``payload`` is the caller's
+        mapping and stays mutable throughout; building the row from it meant
+        anything that changed it after authorization returned was persisted
+        unchecked, which review demonstrated by mutating in that window.
+        Persisting what was actually authorized, rather than re-reading the
+        input, is the same row-binding lesson as CHAOS-3297 s1's payload-vs-
+        row identity closure.
         """
 
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
@@ -2348,9 +2462,21 @@ class DevPersistenceService:
                 "frame_payload.public_outcome does not match the "
                 "public_outcome argument"
             )
+        # CHAOS-3325 Codex review (NO-SHIP, confirmed): the contract only
+        # enforces wire shape, not provenance -- see
+        # _authorize_clarification_candidates's own docstring. Runs before
+        # the row is constructed, so an unauthorized candidate list never
+        # reaches the payload-bearing row at all.
+        await _authorize_clarification_candidates(
+            self.session,
+            run_id=run_id,
+            org_id=org_id,
+            user_id=user_id,
+            validated=validated,
+        )
         record = await self._construct_validated_payload_row(
             model_cls=DevAnswerFrame,
-            payload_dict=payload,
+            payload_dict=validated.model_dump(mode="json"),
             field_name="frame_payload",
             max_bytes=_FRAME_PAYLOAD_MAX_BYTES,
             run_id=run.id,

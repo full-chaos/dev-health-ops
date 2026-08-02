@@ -62,6 +62,7 @@ from dev_health_ops.models.dev_persistence import (
     DevFeedback,
     DevMessage,
     DevRun,
+    DevRunResolution,
     DevToolCall,
 )
 from dev_health_ops.models.git import Base
@@ -79,6 +80,15 @@ _TABLES = tables_of(
     DevFeedback,
     DevConversationTombstone,
     DevAnswerFrame,
+    # CHAOS-3325 Codex review round 2: record_frame's
+    # _authorize_clarification_candidates now always queries
+    # dev_run_resolutions (even for an empty-candidates frame), so every
+    # schema this fixture backs must provision it or the query itself
+    # raises and record_frame's failure path silently rolls back --
+    # exactly this table's prior absence broke every frame-persisting test
+    # in this module and its two dependents (test_chaos_3297_frame_e2e.py,
+    # test_chaos_3297_frame_reachability.py) that import dev_api_context.
+    DevRunResolution,
     Setting,
 )
 

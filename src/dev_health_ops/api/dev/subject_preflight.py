@@ -207,6 +207,15 @@ class SubjectPreflightResult:
     #: grammar only recognizes a name adjacent to an entity noun, so without
     #: these it cannot see the very names re-arming it is meant to guard.
     unresolved_name_spans: frozenset[str] = frozenset()
+    #: CHAOS-3325: the ledger entry that produced ``answer.frame.
+    #: clarification_candidates``, when the run terminated on an ambiguous
+    #: mention -- ``None`` for every other termination reason (nothing on
+    #: the frame to authorize) and for a non-terminal result. The caller
+    #: (``orchestrator.run``) persists this via ``recorder.append_resolution``
+    #: immediately before ``record_frame``, so the persistence layer has a
+    #: real ledger row to cross-check the frame's candidates against
+    #: (Codex review, CHAOS-3325 NO-SHIP finding).
+    terminating_resolution_entry: DevResolutionEntry | None = None
 
     @property
     def has_committed_subject(self) -> bool:
@@ -446,6 +455,19 @@ class SubjectPreflight:
                         answer_id=answer_id,
                         conversation_id=conversation_id,
                         generated_at=generated_at,
+                        # CHAOS-3325: only AMBIGUOUS_CANDIDATES carries real
+                        # candidates to persist/authorize (the other three
+                        # UNRESOLVED_OUTCOMES map to no-answer outcomes,
+                        # where clarification_candidates is ABSENT-forced
+                        # regardless) -- passing the whole entry, not just
+                        # its candidates, is what lets the orchestrator
+                        # persist the exact ledger row record_frame's new
+                        # cross-check authorizes against.
+                        terminating_resolution_entry=(
+                            entry
+                            if entry.outcome is ResolutionOutcome.AMBIGUOUS_CANDIDATES
+                            else None
+                        ),
                     )
 
         if unresolved_untyped:
@@ -925,7 +947,13 @@ class SubjectPreflight:
         generated_at: datetime,
         clarification_key: str = "ambiguous",
         subject_set: DevSubjectSet | None = None,
+        terminating_resolution_entry: DevResolutionEntry | None = None,
     ) -> SubjectPreflightResult:
+        # CHAOS-3325: the frame's clarification_candidates and the result's
+        # terminating_resolution_entry are always derived from the same
+        # single entry -- never set independently -- so a caller cannot
+        # attach candidates to the frame without also giving the
+        # orchestrator the ledger row that authorizes them.
         answer = build_preflight_answer(
             outcome=outcome,
             intent_id=interpretation.intent.intent_id,
@@ -935,6 +963,11 @@ class SubjectPreflight:
             conversation_id=conversation_id,
             generated_at=generated_at,
             clarification_key=clarification_key,
+            clarification_candidates=(
+                terminating_resolution_entry.candidates
+                if terminating_resolution_entry is not None
+                else ()
+            ),
         )
         return SubjectPreflightResult(
             decision=PreflightDecision.TERMINATE,
@@ -951,4 +984,5 @@ class SubjectPreflight:
             outcome=outcome,
             allowed_tools=frozenset(),
             diagnostic=diagnostic,
+            terminating_resolution_entry=terminating_resolution_entry,
         )

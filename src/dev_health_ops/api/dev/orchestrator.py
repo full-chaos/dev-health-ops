@@ -73,6 +73,7 @@ from .contracts import (
 from .contracts_v2 import (
     Cardinality,
     DevInvestigationResult,
+    DevResolutionEntry,
     DevSubjectSet,
     QuestionIntentID,
 )
@@ -329,6 +330,21 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def append_resolution(self, entry: DevResolutionEntry) -> None:
+        """Persist one ``dev_resolution_ledger.v1`` entry (CHAOS-3325).
+
+        Called only for the terminating ``ambiguous_candidates`` entry of a
+        preflight ambiguity — the exact entry
+        ``SubjectPreflightResult.terminating_resolution_entry`` carries —
+        always immediately before ``record_frame`` for the same outcome, so
+        the persisted frame's ``clarification_candidates`` always has a
+        matching ledger row to be authorized against
+        (``persistence.service._authorize_clarification_candidates``, a
+        Codex-review NO-SHIP finding: a schema-valid frame could otherwise
+        name an entity the ledger never authorized).
+        """
+        ...
+
     async def record_frame(self, frame: DevAnswerFrame) -> None:
         """Persist one already-built ``dev_answer_frame.v1`` (CHAOS-3297).
 
@@ -406,6 +422,9 @@ class NullRunRecorder:
 
     async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
         del subject_set
+
+    async def append_resolution(self, entry: DevResolutionEntry) -> None:
+        del entry
 
     async def record_frame(self, frame: DevAnswerFrame) -> None:
         del frame
@@ -900,6 +919,18 @@ class DevOrchestrator:
                     # land together -- mirrors record_answer's placement
                     # ahead of terminal() on the completed-answer path.
                     try:
+                        # CHAOS-3325 Codex review (NO-SHIP, confirmed): the
+                        # terminating ledger entry -- the one that produced
+                        # the frame's own clarification_candidates -- is
+                        # persisted first, in the same try/rollback unit, so
+                        # record_frame's cross-check
+                        # (_authorize_clarification_candidates) always has a
+                        # real ledger row to authorize against rather than
+                        # racing it.
+                        if preflight_result.terminating_resolution_entry is not None:
+                            await self._recorder.append_resolution(
+                                preflight_result.terminating_resolution_entry
+                            )
                         await self._recorder.record_frame(preflight_result.answer.frame)
                     except Exception:
                         # A database-layer failure here (constraint

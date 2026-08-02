@@ -157,6 +157,13 @@ NO_ANSWER_FRAME_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
     "public_outcome": NoAnswerFieldPolicy.CLOSED_VOCABULARY,
     "subject_ref": NoAnswerFieldPolicy.ABSENT,
     "subject_set_ref": NoAnswerFieldPolicy.ABSENT,
+    # CHAOS-3325: real per-mention candidates, only ever populated for
+    # needs_clarification -- which is not one of NO_ANSWER_OUTCOMES (see the
+    # module docstring), so this ABSENT cell governs the five true no-answer
+    # outcomes; validators.validate_outcome_consistency separately forbids it
+    # on 'answered'/'answered_with_gaps', the two outcomes this policy does
+    # not reach.
+    "clarification_candidates": NoAnswerFieldPolicy.ABSENT,
     "direct_answer": NoAnswerFieldPolicy.CANONICAL,
     "completion": NoAnswerFieldPolicy.ABSENT,
     "readiness": NoAnswerFieldPolicy.ABSENT,

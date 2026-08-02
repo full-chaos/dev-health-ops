@@ -37,6 +37,13 @@ from dev_health_ops.api.dev.contract_fixtures import (
     positive_fixtures as positive_fixtures_v1,
 )
 from dev_health_ops.api.dev.contract_fixtures_v2 import (
+    _clarification_candidate,
+    _needs_clarification_frame_base,
+)
+from dev_health_ops.api.dev.contract_fixtures_v2 import (
+    needs_clarification_frame_with_candidates as _needs_clarification_frame_with_candidates,
+)
+from dev_health_ops.api.dev.contract_fixtures_v2 import (
     positive_fixtures as positive_fixtures_v2,
 )
 from dev_health_ops.api.dev.contracts import DevAnswer, DevError
@@ -165,6 +172,44 @@ def _narrative_payload(
         "validation_warnings": [],
     }
     return payload, narrative_text, provider_fingerprint
+
+
+def _needs_clarification_frame_payload(
+    *, run_id: uuid.UUID, with_candidates: bool
+) -> dict[str, Any]:
+    """CHAOS-3325: a valid ``needs_clarification`` frame, with or without a
+    real ``clarification_candidates`` block, retargeted at ``run_id`` the
+    same way ``_frame_payload`` retargets the ``answered`` fixture."""
+
+    payload = deepcopy(
+        _needs_clarification_frame_with_candidates()
+        if with_candidates
+        else _needs_clarification_frame_base()
+    )
+    payload["run_id"] = str(run_id)
+    payload["frame_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"frame:{run_id}"))
+    return payload
+
+
+def _ambiguous_ledger_entry_payload(
+    *, mention_id: uuid.UUID, candidates: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """A valid ``dev_resolution_ledger.v1`` entry payload -- the shape
+    ``append_resolution`` stores and ``_authorize_clarification_candidates``
+    reads back and validates as ``DevResolutionEntry``."""
+
+    return {
+        "entry_ordinal": 0,
+        "mention_id": str(mention_id),
+        "outcome": "ambiguous_candidates",
+        "committed_entity_ref": None,
+        "candidates": candidates,
+        "repository_attribution": None,
+        "team_attribution": None,
+        "resolver_version": "resolver.v1",
+        "query_version": "resolve_scope.v1",
+        "resolved_at": datetime.now(UTC).isoformat(),
+    }
 
 
 _TABLES = tables_of(
@@ -765,6 +810,529 @@ async def test_record_frame_rejects_a_frame_id_mismatch(persistence):
         run = await session.get(DevRun, run_id)
         assert run is not None
         assert run.contract_generation == "v1"
+
+
+# -- CHAOS-3325: clarification_candidates must be authorized by the run's
+# own persisted resolution ledger, not merely schema-valid ------------------
+
+
+@pytest.mark.asyncio
+async def test_record_frame_accepts_clarification_candidates_matching_the_ledger(
+    persistence,
+):
+    """Positive control: real candidates that exactly match the run's own
+    persisted ``ambiguous_candidates`` ledger entry persist cleanly."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        mention_id = uuid.uuid4()
+
+        frame_payload = _needs_clarification_frame_payload(
+            run_id=run_id, with_candidates=True
+        )
+        candidates = frame_payload["clarification_candidates"]
+        assert candidates, "fixture must actually carry candidates"
+
+        await service.append_resolution(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            entry_ordinal=0,
+            mention_id=mention_id,
+            outcome="ambiguous_candidates",
+            resolved_at=datetime.now(UTC),
+            payload=_ambiguous_ledger_entry_payload(
+                mention_id=mention_id, candidates=candidates
+            ),
+        )
+
+        record = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(frame_payload["frame_id"]),
+            public_outcome="needs_clarification",
+            payload=frame_payload,
+        )
+        assert record.public_outcome == "needs_clarification"
+        assert record.payload["clarification_candidates"] == candidates
+
+
+@pytest.mark.asyncio
+async def test_record_frame_rejects_clarification_candidates_absent_from_the_ledger(
+    persistence,
+):
+    """CHAOS-3325 Codex review (NO-SHIP, confirmed medium), the exact repro:
+    a schema-valid ``clarification_candidates`` entry that the resolution
+    ledger never authorized (e.g. another org's repository) must never
+    persist as canonical v2 state -- no matching ledger row exists for this
+    run at all."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        # No append_resolution call at all for this run -- the exact repro:
+        # a needs_clarification frame carrying a schema-valid candidate the
+        # ledger never recorded.
+        frame_payload = _needs_clarification_frame_payload(
+            run_id=run_id, with_candidates=True
+        )
+        frame_payload["clarification_candidates"][0]["entity_ref"]["entity_id"] = (
+            "other-org-secret-repo"
+        )
+
+        with pytest.raises(
+            DevPersistenceValidationError, match="clarification_candidates"
+        ):
+            await service.record_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                frame_id=uuid.UUID(frame_payload["frame_id"]),
+                public_outcome="needs_clarification",
+                payload=frame_payload,
+            )
+
+        frame_count = await session.scalar(
+            select(func.count())
+            .select_from(DevAnswerFrame)
+            .where(DevAnswerFrame.run_id == run_id)
+        )
+        assert frame_count == 0, "an unauthorized candidate must never be written"
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        assert run.contract_generation == "v1"
+
+
+@pytest.mark.asyncio
+async def test_record_frame_persists_the_authorized_snapshot_not_the_caller_mapping(
+    persistence, monkeypatch
+):
+    """CHAOS-3325 confirmation-codex MEDIUM (in-model half), exact repro.
+
+    Every check in ``record_frame`` -- contract validation, the
+    frame_id/run_id/outcome cross-checks, and the ledger authorization --
+    runs against ``validated``, the immutable contract snapshot. The row
+    used to be constructed from ``payload``, the caller's *mutable*
+    mapping, so anything that changed that mapping after authorization
+    returned was persisted unchecked. Codex mutated it in exactly that
+    window and ``other-org-secret-repo`` reached the row.
+
+    The window is reproduced deterministically by wrapping the
+    authorization hook: it delegates to the real implementation (so the
+    frame genuinely is authorized) and then mutates the caller's mapping
+    before returning -- precisely the interleaving the fix must survive.
+    The fix is to build the row from ``validated.model_dump(mode="json")``;
+    with ``payload_dict=payload`` restored, this test fails.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        mention_id = uuid.uuid4()
+
+        frame_payload = _needs_clarification_frame_payload(
+            run_id=run_id, with_candidates=True
+        )
+        candidates = deepcopy(frame_payload["clarification_candidates"])
+        authorized_entity_id = candidates[0]["entity_ref"]["entity_id"]
+
+        await service.append_resolution(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            entry_ordinal=0,
+            mention_id=mention_id,
+            outcome="ambiguous_candidates",
+            resolved_at=datetime.now(UTC),
+            payload=_ambiguous_ledger_entry_payload(
+                mention_id=mention_id, candidates=candidates
+            ),
+        )
+
+        real_authorize = dev_persistence_service._authorize_clarification_candidates
+
+        async def _mutate_after_authorizing(session_arg, **kwargs):
+            await real_authorize(session_arg, **kwargs)
+            # Authorization has returned; the row is not constructed yet.
+            frame_payload["clarification_candidates"][0]["entity_ref"]["entity_id"] = (
+                "other-org-secret-repo"
+            )
+
+        monkeypatch.setattr(
+            dev_persistence_service,
+            "_authorize_clarification_candidates",
+            _mutate_after_authorizing,
+        )
+
+        record = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(frame_payload["frame_id"]),
+            public_outcome="needs_clarification",
+            payload=frame_payload,
+        )
+
+        # The caller's mapping really was mutated -- otherwise the test is
+        # vacuous and would pass against the unfixed code too.
+        assert (
+            frame_payload["clarification_candidates"][0]["entity_ref"]["entity_id"]
+            == "other-org-secret-repo"
+        )
+        stored = record.payload["clarification_candidates"][0]["entity_ref"][
+            "entity_id"
+        ]
+        assert stored == authorized_entity_id
+        assert "other-org-secret-repo" not in json.dumps(record.payload)
+
+
+@pytest.mark.asyncio
+async def test_direct_orm_frame_write_is_not_ledger_checked_documented_residual(
+    persistence,
+):
+    """DOCUMENTED RESIDUAL -- asserts today's behavior, not a desired one.
+
+    CHAOS-3325 confirmation-codex MEDIUM (out-of-model half): a direct
+    ORM/Core write carrying a candidate-bearing frame with no authorizing
+    ledger row is NOT rejected. That is deliberate and matches where s1 put
+    the boundary: the ORM listener and the 0080 trigger validate contract
+    shape and payload/row identity, never cross-table provenance. Enforcing
+    ledger equality inside a trigger would be cross-table DB logic out of
+    proportion to the risk, so ledger provenance stays a service-layer
+    guarantee and non-``record_frame`` frame writes remain unsupported
+    paths.
+
+    This test exists so that stays a decision rather than an assumption: if
+    ledger provenance is ever moved to the boundary, this test fails and is
+    flipped deliberately, instead of the residual being rediscovered.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        # No append_resolution for this run: nothing authorizes these
+        # candidates. record_frame would reject this exact payload -- see
+        # test_record_frame_rejects_clarification_candidates_absent_from_the_ledger.
+        frame_payload = _needs_clarification_frame_payload(
+            run_id=run_id, with_candidates=True
+        )
+        frame_payload["clarification_candidates"][0]["entity_ref"]["entity_id"] = (
+            "other-org-secret-repo"
+        )
+        row = DevAnswerFrame(
+            run_id=run_id,
+            org_id=org_id,
+            user_id=user_id,
+            frame_id=uuid.UUID(frame_payload["frame_id"]),
+            public_outcome="needs_clarification",
+            payload=frame_payload,
+        )
+        session.add(row)
+        await session.commit()
+
+    async with maker() as session:
+        stored = await session.scalar(
+            select(DevAnswerFrame).where(DevAnswerFrame.run_id == run_id)
+        )
+        assert stored is not None, (
+            "documented residual: the direct-ORM path is shape-checked and "
+            "identity-checked, but not ledger-checked -- if this now fails, "
+            "ledger provenance reached the boundary and the residual is closed"
+        )
+        assert (
+            stored.payload["clarification_candidates"][0]["entity_ref"]["entity_id"]
+            == "other-org-secret-repo"
+        )
+
+
+@pytest.mark.asyncio
+async def test_record_frame_rejects_clarification_candidates_mismatching_the_ledger(
+    persistence,
+):
+    """The other half of the same guard: a ledger entry does exist for this
+    run, but the frame's candidates diverge from it (a different entity, or
+    a different order) -- rejected exactly like the missing-entry case."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        mention_id = uuid.uuid4()
+
+        frame_payload = _needs_clarification_frame_payload(
+            run_id=run_id, with_candidates=True
+        )
+        ledger_candidates = deepcopy(frame_payload["clarification_candidates"])
+        # The ledger authorized a *different* entity than the frame claims.
+        ledger_candidates[0]["entity_ref"]["entity_id"] = "repo_authorized_only"
+
+        await service.append_resolution(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            entry_ordinal=0,
+            mention_id=mention_id,
+            outcome="ambiguous_candidates",
+            resolved_at=datetime.now(UTC),
+            payload=_ambiguous_ledger_entry_payload(
+                mention_id=mention_id, candidates=ledger_candidates
+            ),
+        )
+
+        with pytest.raises(
+            DevPersistenceValidationError, match="clarification_candidates"
+        ):
+            await service.record_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                frame_id=uuid.UUID(frame_payload["frame_id"]),
+                public_outcome="needs_clarification",
+                payload=frame_payload,
+            )
+
+        frame_count = await session.scalar(
+            select(func.count())
+            .select_from(DevAnswerFrame)
+            .where(DevAnswerFrame.run_id == run_id)
+        )
+        assert frame_count == 0, "a mismatched candidate must never be written"
+
+
+@pytest.mark.asyncio
+async def test_record_frame_allows_empty_clarification_candidates_only_when_the_ledger_is_also_empty(
+    persistence,
+):
+    """CHAOS-3325 Codex review round 2 (confirmed medium): the round-1
+    "empty is always allowed" rule let an internal caller downgrade
+    canonical state -- persist ``needs_clarification`` with zero candidates
+    for a run whose ledger genuinely recorded several, hiding the choices
+    the resolver actually offered. The ledger is now always fetched:
+
+    * no ledger entry at all (the uninterpretable-question case) -> an
+      empty frame is legitimate, nothing to authorize.
+    * a ledger entry exists -> the frame must match it exactly, including
+      non-emptiness; an empty frame against a non-empty ledger is now the
+      rejected counterexample, not an allowed one.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+
+        # Case 1 (unchanged): no ledger entry at all -> empty is legitimate.
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        empty_payload = _needs_clarification_frame_payload(
+            run_id=run_id, with_candidates=False
+        )
+        assert empty_payload["clarification_candidates"] == []
+        record = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(empty_payload["frame_id"]),
+            public_outcome="needs_clarification",
+            payload=empty_payload,
+        )
+        assert record.public_outcome == "needs_clarification"
+
+        # Case 2, the round-2 counterexample: a real ambiguous ledger entry
+        # exists for this run, but the frame being persisted carries none --
+        # a canonical-state downgrade, now rejected rather than allowed.
+        _conv_id2, run_id2 = await _accepted_run(
+            service, org_id=org_id, user_id=user_id
+        )
+        mention_id = uuid.uuid4()
+        real_candidates = _needs_clarification_frame_payload(
+            run_id=run_id2, with_candidates=True
+        )["clarification_candidates"]
+        await service.append_resolution(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id2,
+            entry_ordinal=0,
+            mention_id=mention_id,
+            outcome="ambiguous_candidates",
+            resolved_at=datetime.now(UTC),
+            payload=_ambiguous_ledger_entry_payload(
+                mention_id=mention_id, candidates=real_candidates
+            ),
+        )
+        empty_payload_2 = _needs_clarification_frame_payload(
+            run_id=run_id2, with_candidates=False
+        )
+        with pytest.raises(
+            DevPersistenceValidationError, match="clarification_candidates"
+        ):
+            await service.record_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id2,
+                frame_id=uuid.UUID(empty_payload_2["frame_id"]),
+                public_outcome="needs_clarification",
+                payload=empty_payload_2,
+            )
+        frame_count = await session.scalar(
+            select(func.count())
+            .select_from(DevAnswerFrame)
+            .where(DevAnswerFrame.run_id == run_id2)
+        )
+        assert frame_count == 0, (
+            "a canonical-state downgrade (empty frame vs. non-empty ledger) "
+            "must never be written"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    reason="CHAOS-3330: append_resolution validation closes the double-forge seam",
+)
+async def test_record_frame_double_forged_ledger_and_frame_defeats_the_equality_check(
+    persistence,
+):
+    """CHAOS-3325 Codex review round 2 finding 1 (deferred by ruling, NOT
+    fixed in this branch): an internal caller that forges BOTH a
+    schema-valid resolution-ledger row and a frame whose
+    ``clarification_candidates`` exactly match it defeats
+    ``_authorize_clarification_candidates`` -- the equality check only
+    proves the two objects agree with each other, not that either was
+    honestly produced by ``subject_preflight``'s real resolution against
+    the authorized catalog. ``append_resolution`` accepts any schema-valid
+    payload today with no check against the catalog, so a forged, mutually
+    consistent pair persists cleanly.
+
+    Ruling: the natural closure is CHAOS-3330's ``append_resolution``
+    payload validation (already escalated as authorization-load-bearing),
+    not a persistence-layer-to-resolver-catalog coupling in this branch.
+    This is the repro, held ``xfail(strict=True)`` so it flips loudly --
+    an unexpected pass fails the suite -- the moment CHAOS-3330 closes the
+    seam; until then it documents the residual risk rather than silently
+    passing over it.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        mention_id = uuid.uuid4()
+
+        # Neither the ledger entry nor the frame candidate was ever offered
+        # by the real authorized catalog -- an internal caller fabricated
+        # both, in agreement with each other, so the equality check alone
+        # cannot tell this apart from a genuine resolution.
+        forged_candidates = [
+            _clarification_candidate(
+                entity_id="forged-entity-never-in-catalog",
+                display_label="Forged Entity",
+            )
+        ]
+        await service.append_resolution(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            entry_ordinal=0,
+            mention_id=mention_id,
+            outcome="ambiguous_candidates",
+            resolved_at=datetime.now(UTC),
+            payload=_ambiguous_ledger_entry_payload(
+                mention_id=mention_id, candidates=forged_candidates
+            ),
+        )
+        forged_frame = _needs_clarification_frame_payload(
+            run_id=run_id, with_candidates=False
+        )
+        forged_frame["clarification_candidates"] = forged_candidates
+
+        # This SHOULD raise once CHAOS-3330 validates append_resolution's
+        # payload against the authorized catalog. It does not today, which
+        # is exactly the residual seam this test documents.
+        with pytest.raises(DevPersistenceValidationError):
+            await service.record_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                frame_id=uuid.UUID(forged_frame["frame_id"]),
+                public_outcome="needs_clarification",
+                payload=forged_frame,
+            )
+
+
+@pytest.mark.asyncio
+async def test_record_frame_clarification_candidates_check_is_new_not_preexisting(
+    persistence, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED/GREEN pair: before this fix, ``record_frame`` had no notion of
+    ``_authorize_clarification_candidates`` at all and would have persisted
+    an unauthorized candidate verbatim as canonical v2 state."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _needs_clarification_frame_payload(
+            run_id=run_id, with_candidates=True
+        )
+        frame_payload["clarification_candidates"][0]["entity_ref"]["entity_id"] = (
+            "other-org-secret-repo"
+        )
+
+        async def _pre_3325_noop_authorization(*_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        # RED: the pre-3325 record_frame had no cross-check for this field
+        # at all -- reproduced here as a no-op, and shown to accept the
+        # exact same unauthorized payload the negative test above rejects.
+        monkeypatch.setattr(
+            dev_persistence_service,
+            "_authorize_clarification_candidates",
+            _pre_3325_noop_authorization,
+        )
+        record = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(frame_payload["frame_id"]),
+            public_outcome="needs_clarification",
+            payload=frame_payload,
+        )
+        assert (
+            record.payload["clarification_candidates"][0]["entity_ref"]["entity_id"]
+            == "other-org-secret-repo"
+        ), "RED: the unauthorized candidate persisted verbatim, unguarded"
+
+        # GREEN: restore the real check -- the identical payload on a fresh
+        # run is now rejected (proven by the dedicated negative test above;
+        # re-asserted here on monkeypatch teardown for the direct contrast).
+        monkeypatch.undo()
+        _conv_id2, run_id2 = await _accepted_run(
+            service, org_id=org_id, user_id=user_id
+        )
+        frame_payload_2 = _needs_clarification_frame_payload(
+            run_id=run_id2, with_candidates=True
+        )
+        frame_payload_2["clarification_candidates"][0]["entity_ref"]["entity_id"] = (
+            "other-org-secret-repo"
+        )
+        with pytest.raises(
+            DevPersistenceValidationError, match="clarification_candidates"
+        ):
+            await service.record_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id2,
+                frame_id=uuid.UUID(frame_payload_2["frame_id"]),
+                public_outcome="needs_clarification",
+                payload=frame_payload_2,
+            )
 
 
 @pytest.mark.asyncio

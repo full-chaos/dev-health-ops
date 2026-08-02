@@ -413,6 +413,16 @@ def validate_outcome_consistency(frame: _frame.DevAnswerFrame) -> None:
         raise ValueError(
             f"public outcome {outcome!r} requires answer sections and facts"
         )
+    # CHAOS-3325: clarification_candidates is ABSENT-classified for the five
+    # true no-answer outcomes (no_answer_policy.NO_ANSWER_FRAME_FIELD_POLICY),
+    # but 'answered'/'answered_with_gaps' are not in NO_ANSWER_OUTCOMES either
+    # (see that module's docstring), so this clause is what forbids it there
+    # -- only 'needs_clarification' may carry it.
+    if outcome in ANSWERED_CONTENT_OUTCOMES and frame.clarification_candidates:
+        raise ValueError(
+            f"public outcome {outcome!r} cannot carry clarification_candidates; "
+            "only 'needs_clarification' may"
+        )
     if outcome == "answered":
         if frame.limitations:
             raise ValueError(

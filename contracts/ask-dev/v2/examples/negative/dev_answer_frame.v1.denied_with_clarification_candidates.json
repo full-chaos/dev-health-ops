@@ -1,16 +1,19 @@
 {
-  "clarification_candidates": [],
-  "comparisons": [],
-  "completion": null,
-  "conflicts": [
+  "clarification_candidates": [
     {
-      "evidence_ref_ids": [
-        "ev1_5e6770d32646fba023ff686db7decc73d792e808",
-        "ev1_65678803ca13ee1c70bd07e33adbb03fcc9144dc"
-      ],
-      "summary": "Project Nightfall is marked private in one provider and public in another."
+      "entity_ref": {
+        "display_label": "full-chaos/nightfall-public",
+        "entity_id": "repo_nightfall_public",
+        "entity_kind": "repository",
+        "repository_id": null,
+        "team_id": null
+      },
+      "reason": "Multiple authorized entities match this name."
     }
   ],
+  "comparisons": [],
+  "completion": null,
+  "conflicts": [],
   "coverage": {
     "as_of": "2026-07-28T12:00:00Z",
     "available_source_count": 1,

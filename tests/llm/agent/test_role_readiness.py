@@ -1,0 +1,286 @@
+"""CHAOS-3285: the production-sized legacy_agent probe reproduces
+OUTPUT_EXHAUSTED where the synthetic transport-echo probe cannot, and clears
+a compliant provider under the identical request-shape mechanism.
+
+Per the "four verification rules" (Rule 2 -- observe the guard failing):
+exhaustion here is a deterministic function of the REAL serialized request
+the production ``OpenAICompatibleAgentProvider.decide()`` builds -- driven by
+``_RequestSizeDrivenClient.tokens_per_byte`` -- never a hard-coded "return
+exhausted". The RED/GREEN pair below proves both directions: the same
+provider/budget combination that reproduces exhaustion for a
+production-sized request clears it for a smaller (compliant) one, and the
+old 512-token echo probe cannot see either case because its own request is
+never production-sized.
+"""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from dev_health_ops.llm.agent.openai_compatible import OpenAICompatibleAgentProvider
+from dev_health_ops.llm.agent.probes.legacy_agent import (
+    _PRODUCTION_FLOOR_BYTES,
+    _assert_production_shape,
+    certify_legacy_agent,
+)
+from dev_health_ops.llm.agent.readiness import (
+    AgentReadinessOutcome,
+    AgentReadinessService,
+)
+from dev_health_ops.llm.agent.roles import RoleCertificationState
+
+# A model whose per-byte reasoning-token cost is high enough that the
+# production-sized legacy_agent request (full 9-tool registry + fixed policy
+# sections + full DevAnswer grammar -- measured ~51-65 KB serialized wire
+# request for this probe's fixtures) exceeds the 4,096-token flat envelope
+# (TRD Option B -- this PR does not change that cap), while the ~0.5-1.5 KB
+# transport-echo probe's own request stays comfortably under its own
+# 512-token cap. 0.15 tokens/byte gives ~7.8K reasoning tokens for the
+# production request (1.9x over the 4,096 cap) and ~230 for the echo
+# request (2.2x under its 512 cap) -- wide margins in both directions, not a
+# knife-edge calibration.
+_NONCOMPLIANT_TOKENS_PER_BYTE = 0.15
+# A model whose per-byte cost is low enough that even the full
+# production-sized request (~65 KB) stays well inside the 4,096-token
+# envelope (~1.3K reasoning tokens at this rate).
+_COMPLIANT_TOKENS_PER_BYTE = 0.02
+
+
+def _stub_response(
+    *,
+    finish_reason: str,
+    content: str | None,
+    tool_calls: list[Any] | None,
+    prompt_tokens: int,
+    completion_tokens: int,
+    reasoning_tokens: int,
+) -> Any:
+    message = SimpleNamespace(content=content, tool_calls=tool_calls)
+    usage = SimpleNamespace(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=reasoning_tokens),
+    )
+    choice = SimpleNamespace(message=message, finish_reason=finish_reason)
+    return SimpleNamespace(choices=[choice], usage=usage)
+
+
+def _stub_tool_call(*, name: str, arguments: dict[str, Any]) -> Any:
+    return SimpleNamespace(
+        id="stub-call-1",
+        function=SimpleNamespace(name=name, arguments=json.dumps(arguments)),
+    )
+
+
+class _RequestSizeDrivenClient:
+    """Fake OpenAI client whose exhaustion behavior is a deterministic
+    function of the REAL serialized request the adapter builds -- never a
+    hard-coded "return exhausted" (verification Rule 2).
+
+    Serves both the readiness-echo (single tool, tiny request) and the
+    legacy_agent (full registry, production-sized request) request shapes:
+    round 1 always names whichever tool is offered first (schema-compliant
+    args are not validated client-side by the adapter); round 2 answers
+    ``{"nonce": "ready-v1"}`` when the flow was echo (detected from round 1's
+    tool name) or a DevAnswer-shaped draft otherwise.
+    """
+
+    def __init__(self, *, tokens_per_byte: float) -> None:
+        self._tokens_per_byte = tokens_per_byte
+        self._echo_mode: bool | None = None
+        self.requests: list[dict[str, Any]] = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    async def _create(self, **kwargs: Any) -> Any:
+        self.requests.append(kwargs)
+        tools = kwargs.get("tools") or []
+        if self._echo_mode is None:
+            tool_names = {str(item["function"]["name"]) for item in tools}
+            self._echo_mode = "readiness_echo_v1" in tool_names
+
+        serialized = json.dumps(kwargs, sort_keys=True, default=str).encode("utf-8")
+        reasoning_tokens = round(len(serialized) * self._tokens_per_byte)
+        max_completion = int(kwargs["max_completion_tokens"])
+        if reasoning_tokens >= max_completion:
+            return _stub_response(
+                finish_reason="length",
+                content="",
+                tool_calls=None,
+                prompt_tokens=len(serialized) // 4,
+                completion_tokens=max_completion,
+                reasoning_tokens=reasoning_tokens,
+            )
+
+        if kwargs.get("tool_choice") == "required":
+            name = str(tools[0]["function"]["name"])
+            arguments = {"nonce": "ready-v1"} if self._echo_mode else {}
+            return _stub_response(
+                finish_reason="tool_calls",
+                content=None,
+                tool_calls=[_stub_tool_call(name=name, arguments=arguments)],
+                prompt_tokens=len(serialized) // 4,
+                completion_tokens=8,
+                reasoning_tokens=reasoning_tokens,
+            )
+
+        value = (
+            {"nonce": "ready-v1"}
+            if self._echo_mode
+            else {"status": "complete", "direct_summary": "Stub legacy_agent answer."}
+        )
+        return _stub_response(
+            finish_reason="stop",
+            content=json.dumps({"kind": "final_answer", "value": value}),
+            tool_calls=None,
+            prompt_tokens=len(serialized) // 4,
+            completion_tokens=12,
+            reasoning_tokens=reasoning_tokens,
+        )
+
+
+def _provider(
+    *, tokens_per_byte: float, model: str = "gpt-5-nano"
+) -> tuple[OpenAICompatibleAgentProvider, _RequestSizeDrivenClient]:
+    client = _RequestSizeDrivenClient(tokens_per_byte=tokens_per_byte)
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model=model, base_url="http://127.0.0.1:1/v1", client=client
+    )
+    return provider, client
+
+
+class _Store:
+    async def load(self):  # pragma: no cover - readiness.py's own store protocol
+        return None
+
+    async def save(self, record) -> None:
+        self.record = record
+
+
+@pytest.mark.asyncio
+async def test_production_sized_legacy_probe_reproduces_exhaustion() -> None:
+    """The new probe (RED): reproduces OUTPUT_EXHAUSTED for a provider whose
+    reasoning cost, applied to the real production request shape, exceeds
+    the 4,096-token envelope."""
+
+    provider, client = _provider(tokens_per_byte=_NONCOMPLIANT_TOKENS_PER_BYTE)
+    result = await certify_legacy_agent(provider, timeout_seconds=30)
+
+    assert result.state is RoleCertificationState.INCOMPATIBLE
+    assert result.safe_error_code == "output_exhausted"
+    # Sanity: the request that triggered exhaustion really was
+    # production-sized, not a shrunk stand-in (Rule 4).
+    assert len(client.requests) >= 1
+    round_1_request = client.requests[0]
+    round_1_bytes = len(json.dumps(round_1_request, sort_keys=True, default=str))
+    assert round_1_bytes >= _PRODUCTION_FLOOR_BYTES
+
+
+@pytest.mark.asyncio
+async def test_transport_echo_probe_does_not_reproduce_exhaustion() -> None:
+    """The OLD probe (fail-before pair): the exact same non-compliant
+    provider certifies READY under the pre-existing 512-token echo probe,
+    because that probe's request is never production-sized. This is what
+    makes the new probe an actual gap-closer, not a redundant check."""
+
+    provider, client = _provider(tokens_per_byte=_NONCOMPLIANT_TOKENS_PER_BYTE)
+    store = _Store()
+    record = await AgentReadinessService(store).certify(
+        provider,
+        provider_name="openai",
+        model=provider.model,
+        fingerprint="probe-fingerprint",
+    )
+
+    assert record.outcome is AgentReadinessOutcome.READY
+    # Sanity: the transport-echo probe's own requests really were tiny
+    # relative to the production floor -- confirming it genuinely could not
+    # have observed the defect, not that our stub is miscalibrated.
+    for request in client.requests:
+        assert (
+            len(json.dumps(request, sort_keys=True, default=str))
+            < _PRODUCTION_FLOOR_BYTES
+        )
+
+
+@pytest.mark.asyncio
+async def test_production_sized_legacy_probe_certifies_a_compliant_model() -> None:
+    """The new probe (GREEN): the identical production-sized request shape
+    certifies COMPATIBLE against a provider whose reasoning cost fits the
+    same 4,096-token envelope."""
+
+    provider, _client = _provider(tokens_per_byte=_COMPLIANT_TOKENS_PER_BYTE)
+    result = await certify_legacy_agent(provider, timeout_seconds=30)
+
+    assert result.state is RoleCertificationState.COMPATIBLE
+    assert result.safe_error_code is None
+    assert result.observed_request_bytes >= _PRODUCTION_FLOOR_BYTES
+
+
+def test_production_shape_guard_fails_loudly_on_a_shrunk_probe() -> None:
+    """Rule 4: a probe whose composed request silently shrank below
+    production scale must fail loudly, not silently pass as coverage."""
+
+    from dev_health_ops.api.dev.tool_registry import TOOL_DEFINITIONS
+    from dev_health_ops.llm.agent.contracts import AgentToolDefinition
+
+    full_tool_set = tuple(
+        AgentToolDefinition(tool_id=item.tool_id.value, description="", input_schema={})
+        for item in TOOL_DEFINITIONS
+    )
+
+    with pytest.raises(
+        AssertionError, match="below the production-representative floor"
+    ):
+        _assert_production_shape("tiny prompt", tools=full_tool_set)
+
+    with pytest.raises(AssertionError, match="full 9-tool registry"):
+        _assert_production_shape("x" * (_PRODUCTION_FLOOR_BYTES + 1), tools=())
+
+
+class _InMemoryRoleStore:
+    def __init__(self) -> None:
+        from dev_health_ops.llm.agent.roles import RoleCertificationProfile
+
+        self.profile = RoleCertificationProfile()
+
+    async def load(self):
+        return self.profile
+
+    async def save(self, profile) -> None:
+        self.profile = profile
+
+
+@pytest.mark.asyncio
+async def test_role_readiness_service_persists_legacy_agent_certification() -> None:
+    from dev_health_ops.llm.agent.role_readiness import RoleReadinessService
+    from dev_health_ops.llm.agent.roles import AgentRole
+
+    provider, _client = _provider(tokens_per_byte=_COMPLIANT_TOKENS_PER_BYTE)
+    store = _InMemoryRoleStore()
+    service = RoleReadinessService(store)
+
+    record = await service.certify_role(
+        AgentRole.LEGACY_AGENT, provider, certification_key="key-01"
+    )
+
+    assert record.state is RoleCertificationState.COMPATIBLE
+    assert store.profile.for_role(AgentRole.LEGACY_AGENT) == record
+
+
+@pytest.mark.asyncio
+async def test_role_readiness_service_rejects_unimplemented_roles() -> None:
+    from dev_health_ops.llm.agent.role_readiness import RoleReadinessService
+    from dev_health_ops.llm.agent.roles import AgentRole
+
+    provider, _client = _provider(tokens_per_byte=_COMPLIANT_TOKENS_PER_BYTE)
+    service = RoleReadinessService(_InMemoryRoleStore())
+
+    with pytest.raises(NotImplementedError):
+        await service.certify_role(
+            AgentRole.INTENT_CLASSIFICATION, provider, certification_key="key-01"
+        )

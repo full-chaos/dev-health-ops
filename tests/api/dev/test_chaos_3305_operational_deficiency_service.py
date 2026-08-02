@@ -251,6 +251,9 @@ class FakeRuntime:
         self.data_health_scopes.append(scope)
         return self.data_health_result
 
+    def mint_evidence(self, **kwargs):
+        raise NotImplementedError
+
 
 def _runtime(
     *,
@@ -528,6 +531,9 @@ class RepoAwareFakeRuntime:
             complete_eligible=not missing,
         )
 
+    def mint_evidence(self, **kwargs):
+        raise NotImplementedError
+
 
 @dataclass
 class OmissionAwareFakeRuntime:
@@ -597,6 +603,9 @@ class OmissionAwareFakeRuntime:
             if system not in omitted
         )
         return DataHealthResult(sources=sources, complete_eligible=True)
+
+    def mint_evidence(self, **kwargs):
+        raise NotImplementedError
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ from .health_rules import DimensionState, HealthRuleFinding
 from .plan import PlanRegistryID
 
 __all__ = [
+    "HEALTH_FINDING_SEVERITY_RANK",
     "DevInvestigationResult",
     "DevObservedChangeV2",
     "DevRelationshipPath",
@@ -182,7 +183,7 @@ class DevSourceContent(ContractModelV2):
         """
 
         health_keys = [
-            (_HEALTH_STATE_SEVERITY[finding.state], finding.finding_id)
+            (HEALTH_FINDING_SEVERITY_RANK[finding.state], finding.finding_id)
             for finding in self.health_findings
         ]
         if health_keys != sorted(health_keys):
@@ -204,7 +205,7 @@ class DevSourceContent(ContractModelV2):
 #: ``portfolio_status_service._DIMENSION_STATE_SEVERITY`` exactly (lower
 #: sorts first). Import-time-total over ``DimensionState`` below, the same
 #: posture as every other closed-vocabulary table in this package.
-_HEALTH_STATE_SEVERITY: dict[DimensionState, int] = {
+HEALTH_FINDING_SEVERITY_RANK: dict[DimensionState, int] = {
     DimensionState.CRITICAL: 0,
     DimensionState.AT_RISK: 1,
     DimensionState.WATCH: 2,
@@ -212,7 +213,7 @@ _HEALTH_STATE_SEVERITY: dict[DimensionState, int] = {
     DimensionState.NOT_APPLICABLE: 4,
     DimensionState.HEALTHY: 5,
 }
-_missing_health_states = set(DimensionState) - set(_HEALTH_STATE_SEVERITY)
+_missing_health_states = set(DimensionState) - set(HEALTH_FINDING_SEVERITY_RANK)
 if _missing_health_states:
     raise RuntimeError(
         f"health_findings severity rank is missing DimensionState member(s): "

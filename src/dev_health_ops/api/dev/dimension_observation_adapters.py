@@ -45,12 +45,17 @@ from .investigation_plans.state_mapping import (
     status_result_state_to_requirement_state,
 )
 from .metrics.service import MetricDataState, MetricQueryResult
+from .native_team_workload import TeamCognitiveLoadResult, TeamInvestmentMixResult
 from .status_change_service import StatusSnapshotResult
 
 __all__ = [
+    "after_hours_pressure_observation",
     "change_failure_rate_observation",
     "data_trust_observation",
     "incident_load_observation",
+    "investment_allocation_shift_observation",
+    "pr_interruption_load_observation",
+    "review_request_load_observation",
     "unavailable_observation",
 ]
 
@@ -279,6 +284,272 @@ def change_failure_rate_observation(
         comparison_value=comparison_value,
         denominator_present=denominator_present,
         attribution_present=False,
+        window_index=window_index,
+        observed_at=observed_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3304: team workload / investment-balance adapters.
+#
+# Both sources below (``TeamCognitiveLoadResult``/``TeamInvestmentMixResult``,
+# ``native_team_workload.py``) are already team-scoped by construction: every
+# underlying query filters ``team_id`` directly on tables that carry it at
+# ingest time (unlike status/change facts, which re-derive an owned-
+# repository set from ``team_repo_ownership``). ``attribution_present`` is
+# therefore ``True`` whenever the source reports ``measured=True`` -- a
+# measured row is, by construction, a row this team was actually attributed
+# in the source table, never an org-wide or unrelated fact riding along.
+# ---------------------------------------------------------------------------
+
+
+def after_hours_pressure_observation(
+    result: TeamCognitiveLoadResult,
+    *,
+    subject_kind: RuleApplicability,
+    subject_id: str,
+    cohort_size: int | None,
+    comparison_value: float | None,
+    window_index: int,
+    observed_at: datetime,
+) -> DimensionObservation:
+    """``health_rule.after_hours_pressure_sustained.v1``: team-scoped after-hours commit ratio.
+
+    A ratio (after-hours commits / total commits, ``team_metrics_daily``'s
+    own AVG-of-latest-per-team projection) is already self-normalized
+    against the team's own commit population -- unlike a raw count, it
+    needs no separate contributor-count denominator to be meaningful.
+    ``denominator_present`` therefore tracks only whether the ratio was
+    genuinely computed at all (``result.measured``), matching the rule's
+    own ``denominator_required=False``. Per the PRD/TRD, this is a
+    *pressure signal only* -- the caller must never treat this dimension
+    alone as a burden/overburdened conclusion (enforced structurally by
+    ``qualify_team_needs_attention``'s two-independent-dimension
+    requirement, not by this adapter).
+    """
+
+    if not result.measured or result.after_hours_commit_ratio is None:
+        return unavailable_observation(
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            cohort_size=cohort_size,
+            window_index=window_index,
+            observed_at=observed_at,
+        )
+    current_value = result.after_hours_commit_ratio
+    return DimensionObservation(
+        schema_version="dimension_observation.v1",
+        subject_kind=subject_kind,
+        subject_id=subject_id,
+        cohort_size=cohort_size,
+        observed_states=(SourceRequirementState.AVAILABLE_CURRENT,),
+        data_semantics=_value_semantics(current_value),
+        sample_count=result.sample_days,
+        coverage=1.0,
+        current_value=current_value,
+        comparison_value=comparison_value,
+        denominator_present=True,
+        attribution_present=True,
+        window_index=window_index,
+        observed_at=observed_at,
+    )
+
+
+def _per_active_contributor_observation(
+    raw_value: float | None,
+    *,
+    measured: bool,
+    sample_days: int,
+    active_contributor_count: int | None,
+    subject_kind: RuleApplicability,
+    subject_id: str,
+    cohort_size: int | None,
+    comparison_value: float | None,
+    window_index: int,
+    observed_at: datetime,
+) -> DimensionObservation:
+    """Shared shape for a raw cognitive-load count divided by the team's
+    observed active-contributor count (denominator-contract preference
+    order item 2: "observed active work/review population").
+
+    Configured team membership (order item 1) has no canonical, scope-safe
+    source wired yet -- see ``native_team_workload.ClickHouseTeamWorkloadSource``'s
+    module docstring. When ``active_contributor_count`` is ``None`` or zero,
+    the raw count is still reported (so the finding can honestly say
+    "measured pressure, denominator unavailable" rather than nothing at
+    all), but ``denominator_present=False`` -- the rule's own
+    ``denominator_required=True`` then suppresses any burden conclusion to
+    ``UNKNOWN``/``missing_denominator`` (PRD 8.1's "not calculable").
+    """
+
+    if not measured or raw_value is None:
+        return unavailable_observation(
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            cohort_size=cohort_size,
+            window_index=window_index,
+            observed_at=observed_at,
+        )
+    denominator_present = bool(
+        active_contributor_count and active_contributor_count > 0
+    )
+    current_value = (
+        raw_value / active_contributor_count
+        if denominator_present and active_contributor_count is not None
+        else raw_value
+    )
+    return DimensionObservation(
+        schema_version="dimension_observation.v1",
+        subject_kind=subject_kind,
+        subject_id=subject_id,
+        cohort_size=cohort_size,
+        observed_states=(SourceRequirementState.AVAILABLE_CURRENT,),
+        data_semantics=_value_semantics(current_value),
+        sample_count=sample_days,
+        coverage=1.0,
+        current_value=current_value,
+        comparison_value=comparison_value,
+        denominator_present=denominator_present,
+        attribution_present=True,
+        window_index=window_index,
+        observed_at=observed_at,
+    )
+
+
+def review_request_load_observation(
+    result: TeamCognitiveLoadResult,
+    *,
+    active_contributor_count: int | None,
+    subject_kind: RuleApplicability,
+    subject_id: str,
+    cohort_size: int | None,
+    comparison_value: float | None,
+    window_index: int,
+    observed_at: datetime,
+) -> DimensionObservation:
+    """``health_rule.review_request_load_pressure.v1``: review requests per active contributor."""
+
+    return _per_active_contributor_observation(
+        result.review_request_load,
+        measured=result.measured,
+        sample_days=result.sample_days,
+        active_contributor_count=active_contributor_count,
+        subject_kind=subject_kind,
+        subject_id=subject_id,
+        cohort_size=cohort_size,
+        comparison_value=comparison_value,
+        window_index=window_index,
+        observed_at=observed_at,
+    )
+
+
+def pr_interruption_load_observation(
+    result: TeamCognitiveLoadResult,
+    *,
+    active_contributor_count: int | None,
+    subject_kind: RuleApplicability,
+    subject_id: str,
+    cohort_size: int | None,
+    comparison_value: float | None,
+    window_index: int,
+    observed_at: datetime,
+) -> DimensionObservation:
+    """``health_rule.pr_interruption_load_pressure.v1``: PR interruptions per active contributor."""
+
+    return _per_active_contributor_observation(
+        result.pr_interruption_load,
+        measured=result.measured,
+        sample_days=result.sample_days,
+        active_contributor_count=active_contributor_count,
+        subject_kind=subject_kind,
+        subject_id=subject_id,
+        cohort_size=cohort_size,
+        comparison_value=comparison_value,
+        window_index=window_index,
+        observed_at=observed_at,
+    )
+
+
+def investment_allocation_shift_observation(
+    current: TeamInvestmentMixResult,
+    comparison: TeamInvestmentMixResult | None,
+    *,
+    subject_kind: RuleApplicability,
+    subject_id: str,
+    cohort_size: int | None,
+    window_index: int,
+    observed_at: datetime,
+) -> DimensionObservation:
+    """``health_rule.investment_allocation_shift.v1``: |new-value share shift| between windows.
+
+    Deliberately magnitude-only (``abs(current_share - comparison_share)``),
+    never signed -- a shift *toward* new-value work is not reported as
+    "better" than a shift *away* from it (PRD 6.6/10's "No feature-work
+    value judgment" guardrail). A team with high KTLO/security/infra but a
+    *stable* mix reports ``current_value=0.0`` (``measured_zero`` -- a
+    shift was genuinely computed and found to be zero), never a value
+    judgment about the mix's composition itself.
+
+    Computing a shift requires a genuinely measured comparison window; a
+    missing/unmeasured comparison is reported as ``no_data``
+    (``current_value=None``), never coerced to ``0.0`` -- collapsing
+    "no baseline to compare against" into "no shift observed" would be
+    exactly the "missing data as zero" the platform-wide contract forbids.
+    """
+
+    if not current.measured or current.total_units <= 0:
+        return unavailable_observation(
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            cohort_size=cohort_size,
+            window_index=window_index,
+            observed_at=observed_at,
+        )
+    current_share = current.new_value_share
+    if current_share is None:
+        return unavailable_observation(
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            cohort_size=cohort_size,
+            window_index=window_index,
+            observed_at=observed_at,
+        )
+    comparison_share = (
+        comparison.new_value_share
+        if comparison is not None and comparison.measured
+        else None
+    )
+    if comparison_share is None:
+        return DimensionObservation(
+            schema_version="dimension_observation.v1",
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            cohort_size=cohort_size,
+            observed_states=(SourceRequirementState.AVAILABLE_CURRENT,),
+            data_semantics="no_data",
+            sample_count=None,
+            coverage=current.classification_coverage,
+            current_value=None,
+            comparison_value=None,
+            denominator_present=False,
+            attribution_present=True,
+            window_index=window_index,
+            observed_at=observed_at,
+        )
+    current_value = abs(current_share - comparison_share)
+    return DimensionObservation(
+        schema_version="dimension_observation.v1",
+        subject_kind=subject_kind,
+        subject_id=subject_id,
+        cohort_size=cohort_size,
+        observed_states=(SourceRequirementState.AVAILABLE_CURRENT,),
+        data_semantics=_value_semantics(current_value),
+        sample_count=None,
+        coverage=current.classification_coverage,
+        current_value=current_value,
+        comparison_value=comparison_share,
+        denominator_present=True,
+        attribution_present=True,
         window_index=window_index,
         observed_at=observed_at,
     )

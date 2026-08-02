@@ -169,44 +169,63 @@ async def _uncalibrated_round_requests() -> tuple[dict[str, Any], dict[str, Any]
     it sends without inducing exhaustion. Calibration is derived from
     these -- never a hand-guessed rate.
 
-    CHAOS-3285 round 2 (Codex HIGH): the probe now sends a THIRD request --
-    round 2 again under the uncommitted-subject prompt shape
-    (LEGACY_PROMPT_VERSION), proving that shape too rather than only ever
-    exercising the committed one. This calibration helper deliberately
-    keeps using only the first two (round 1 and the committed round 2):
-    the combined-shape claim it exists to prove (tool_choice="auto" + the
-    strict grammar + accumulated history, together, is what exhausts) is
-    the same claim for either prompt shape, and testing it twice here would
-    duplicate coverage rather than add any."""
+    CHAOS-3285 round 4 (Codex HIGH): the probe now runs two fully
+    independent chains -- committed-subject (requests[0], requests[1]) and
+    uncommitted-subject (requests[2], requests[3]) -- four requests total.
+    This calibration helper deliberately keeps using only the committed
+    chain's two requests: the combined-shape claim it exists to prove
+    (tool_choice="auto" + the strict grammar + accumulated history,
+    together, is what exhausts) is the same claim for either prompt shape,
+    and testing it twice here would duplicate coverage rather than add
+    any."""
 
     provider, client = _provider(tokens_per_byte=0.0)
     result = await certify_legacy_agent(provider, timeout_seconds=30)
     assert result.state is RoleCertificationState.COMPATIBLE, (
         "calibration precondition failed: a rate of 0 must never exhaust"
     )
-    assert len(client.requests) == 3
+    assert len(client.requests) == 4
     return client.requests[0], client.requests[1]
 
 
 @pytest.mark.asyncio
 async def test_certify_legacy_agent_probes_both_prompt_shapes() -> None:
-    """CHAOS-3285 round 2 (Codex HIGH): before this fix, the probe forced
+    """CHAOS-3285 round 2 (Codex HIGH): before that fix, the probe forced
     ``subject_committed=True`` unconditionally, so PromptComposer's OTHER
     shape -- ``LEGACY_PROMPT_VERSION`` (uncommitted subject / the Wave 3.1
-    flag off) -- was never exercised at all, and the fingerprint never
-    folded that constant either, so a text-only change to only that shape
-    invalidated nothing. Prove both shapes are now actually sent, not just
-    that a fingerprint constant changed."""
+    flag off) -- was never exercised at all. CHAOS-3285 round 4 (Codex
+    HIGH): round 1 itself is now also composed under each chain's own
+    shape (it was previously ALWAYS committed-subject, even for the
+    "uncommitted" chain's round 2, which then reused round 1's committed
+    tool request/result). Prove all four requests -- both rounds, both
+    shapes -- are genuinely distinct and shape-correct."""
 
     provider, client = _provider(tokens_per_byte=0.0)
     result = await certify_legacy_agent(provider, timeout_seconds=30)
 
     assert result.state is RoleCertificationState.COMPATIBLE
-    assert len(client.requests) == 3
+    assert len(client.requests) == 4
 
-    round_2_committed, round_2_uncommitted = client.requests[1], client.requests[2]
-    # Both are the same worst-case combined shape (tool_choice="auto" + the
-    # strict grammar)...
+    round_1_committed, round_2_committed, round_1_uncommitted, round_2_uncommitted = (
+        client.requests
+    )
+
+    # Round 1: tool_choice="required", no grammar yet, under EACH chain's
+    # own shape -- the exact combination round 4 found was never sent for
+    # the uncommitted chain before this fix.
+    for round_1 in (round_1_committed, round_1_uncommitted):
+        assert round_1.get("tool_choice") == "required"
+        assert "response_format" not in round_1
+    round_1_committed_text = round_1_committed["messages"][0]["content"]
+    round_1_uncommitted_text = round_1_uncommitted["messages"][0]["content"]
+    assert round_1_committed_text != round_1_uncommitted_text
+    assert PROMPT_VERSION in round_1_committed_text
+    assert PROMPT_VERSION not in round_1_uncommitted_text
+    assert LEGACY_PROMPT_VERSION in round_1_uncommitted_text
+    assert LEGACY_PROMPT_VERSION not in round_1_committed_text
+
+    # Round 2: both are the same worst-case combined shape (tool_choice=
+    # "auto" + the strict grammar)...
     for request in (round_2_committed, round_2_uncommitted):
         assert request.get("tool_choice") == "auto"
         assert request.get("response_format") is not None
@@ -221,6 +240,103 @@ async def test_certify_legacy_agent_probes_both_prompt_shapes() -> None:
     assert PROMPT_VERSION not in uncommitted_system_text
     assert LEGACY_PROMPT_VERSION in uncommitted_system_text
     assert LEGACY_PROMPT_VERSION not in committed_system_text
+
+
+class _UncommittedRound1DefectClient:
+    """A provider that fails ONLY on round 1's own ``tool_choice="required"``
+    shape under the uncommitted-subject prompt -- the committed chain
+    entirely, and the uncommitted chain's round 2, all succeed normally.
+    Isolates the exact combination CHAOS-3285 round 4 (Codex HIGH) found
+    was never sent to the provider at all before this fix (round 1 was
+    always composed committed-subject, and round 2's uncommitted call
+    reused round 1's committed tool request/result)."""
+
+    def __init__(self) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    async def _create(self, **kwargs: Any) -> Any:
+        self.requests.append(kwargs)
+        tools = kwargs.get("tools") or []
+        system_text = str(kwargs["messages"][0]["content"])
+        serialized = json.dumps(kwargs, sort_keys=True, default=str).encode("utf-8")
+
+        if (
+            kwargs.get("tool_choice") == "required"
+            and LEGACY_PROMPT_VERSION in system_text
+        ):
+            # The defect: this exact shape exhausts every time.
+            max_completion = int(kwargs["max_completion_tokens"])
+            return _stub_response(
+                finish_reason="length",
+                content="",
+                tool_calls=None,
+                prompt_tokens=len(serialized) // 4,
+                completion_tokens=max_completion,
+                reasoning_tokens=max_completion,
+            )
+
+        if kwargs.get("tool_choice") == "required":
+            name = str(tools[0]["function"]["name"])
+            return _stub_response(
+                finish_reason="tool_calls",
+                content=None,
+                tool_calls=[_stub_tool_call(name=name, arguments={})],
+                prompt_tokens=len(serialized) // 4,
+                completion_tokens=8,
+                reasoning_tokens=8,
+            )
+
+        return _stub_response(
+            finish_reason="stop",
+            content=json.dumps(
+                {
+                    "kind": "final_answer",
+                    "value": {
+                        "status": "complete",
+                        "direct_summary": "Stub legacy_agent answer.",
+                    },
+                }
+            ),
+            tool_calls=None,
+            prompt_tokens=len(serialized) // 4,
+            completion_tokens=12,
+            reasoning_tokens=12,
+        )
+
+
+@pytest.mark.asyncio
+async def test_certify_legacy_agent_fails_on_a_defect_isolated_to_uncommitted_round_1() -> (
+    None
+):
+    """CHAOS-3285 round 4 (Codex HIGH): a provider that fails ONLY on the
+    combination of the uncommitted-subject prompt (LEGACY_PROMPT_VERSION)
+    AND round 1's own tool_choice="required" shape must certify as failing
+    overall -- not COMPATIBLE. Before this fix, round 1 was ALWAYS composed
+    under subject_committed=True regardless of which chain it fed, so this
+    exact combination was never sent to the provider at all, and a provider
+    genuinely broken on it would still have certified COMPATIBLE."""
+
+    client = _UncommittedRound1DefectClient()
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used",
+        model="gpt-5-nano",
+        base_url="http://127.0.0.1:1/v1",
+        client=client,
+    )
+
+    result = await certify_legacy_agent(provider, timeout_seconds=30)
+
+    assert result.state is not RoleCertificationState.COMPATIBLE
+    # The defect really was reached -- round 1 under the uncommitted shape
+    # was actually sent, not skipped or silently reusing the committed
+    # chain's round 1.
+    uncommitted_round_1_sent = any(
+        request.get("tool_choice") == "required"
+        and LEGACY_PROMPT_VERSION in str(request["messages"][0]["content"])
+        for request in client.requests
+    )
+    assert uncommitted_round_1_sent
 
 
 def _without_grammar(round_2: dict[str, Any]) -> dict[str, Any]:

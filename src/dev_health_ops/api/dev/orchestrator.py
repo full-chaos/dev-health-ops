@@ -68,6 +68,7 @@ from .contracts import (
     dev_error_remediation,
 )
 from .contracts_v2 import DevSubjectSet
+from .contracts_v2.frame import DevAnswerFrame
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from .preflight_outcomes import TERMINAL_STATE_BY_OUTCOME, project_preflight_error
@@ -316,6 +317,32 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_frame(self, frame: DevAnswerFrame) -> None:
+        """Persist one already-built ``dev_answer_frame.v1`` (CHAOS-3297).
+
+        Called from the preflight TERMINATE branch with the frame
+        ``preflight_outcomes.build_preflight_answer`` already validated, so
+        the run tags ``contract_generation = 'v2'`` and the CHAOS-3299 v2
+        replay branch (``router._replayed_result``) becomes reachable for a
+        preflight-terminated run, not just a full model-round completion.
+        """
+        ...
+
+    async def rollback(self) -> None:
+        """Discard pending writes after a failed record_frame flush (CHAOS-3297).
+
+        A database-level failure during ``record_frame``'s flush (a
+        constraint violation, a dropped connection) marks the underlying
+        session rollback-only: the next write on it raises
+        ``PendingRollbackError`` instead of succeeding. A caller that catches
+        a ``record_frame`` failure must call this before any further
+        recorder write (``terminal()`` in particular) on the same run, or a
+        recoverable frame-write failure strands the run as a nonterminal
+        ``accepted``/v1 row that every idempotent retry then 409s against
+        forever.
+        """
+        ...
+
     async def terminal(
         self,
         *,
@@ -358,6 +385,12 @@ class NullRunRecorder:
 
     async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
         del subject_set
+
+    async def record_frame(self, frame: DevAnswerFrame) -> None:
+        del frame
+
+    async def rollback(self) -> None:
+        return None
 
     async def terminal(
         self,
@@ -706,6 +739,38 @@ class DevOrchestrator:
                 if preflight_result.decision is PreflightDecision.TERMINATE:
                     assert preflight_result.answer is not None
                     assert preflight_result.outcome is not None
+                    # CHAOS-3297: persist the frame the preflight already
+                    # built *before* finishing the run, so the terminal
+                    # state and the frame's contract_generation='v2' tag
+                    # land together -- mirrors record_answer's placement
+                    # ahead of terminal() on the completed-answer path.
+                    try:
+                        await self._recorder.record_frame(preflight_result.answer.frame)
+                    except Exception:
+                        # A database-layer failure here (constraint
+                        # violation, dropped connection) marks the
+                        # recorder's session rollback-only; the terminal()
+                        # write below would then raise PendingRollbackError
+                        # and strand this run as a nonterminal accepted/v1
+                        # row that every idempotent retry 409s against
+                        # forever (Codex review finding, CHAOS-3297). Roll
+                        # back and finish as a coherent v1 terminal run
+                        # instead -- a dropped frame is recoverable, a
+                        # stranded run is not.
+                        await self._recorder.rollback()
+                        # The rollback above discards every unflushed write
+                        # on this session, not just the poisoned frame --
+                        # including the record_preflight() diagnostic
+                        # flushed a few lines above, which shares this same
+                        # transaction. Re-persist it before finish() writes
+                        # the terminal row, or the run lands with
+                        # preflight_outcome=None and silently loses the
+                        # closed-vocabulary explanation of why it
+                        # terminated (Codex review finding, CHAOS-3297).
+                        await self._recorder.record_preflight(
+                            preflight_outcome=preflight_result.diagnostic,
+                            legacy_guard_reason=None,
+                        )
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=project_preflight_error(

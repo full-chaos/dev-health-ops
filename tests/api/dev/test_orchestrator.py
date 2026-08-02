@@ -68,6 +68,12 @@ class Recorder:
     async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
         del subject_set
 
+    async def record_frame(self, frame: Any) -> None:
+        del frame
+
+    async def rollback(self) -> None:
+        pass
+
     async def terminal(self, **values) -> None:
         self.terminals.append(values["state"])
 

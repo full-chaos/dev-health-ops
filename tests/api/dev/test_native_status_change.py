@@ -1970,9 +1970,9 @@ async def test_deployment_admission_uses_repo_pr_pairs_not_flattened_numbers(
                 },
             ]
         if "FROM operational_incidents" in sql:
-            deployment_ids = params.get("deployment_ids") or []
+            deployment_pairs = params.get("deployment_pairs") or []
             rows: list[dict[str, Any]] = []
-            if "deploy-a" in deployment_ids:
+            if (repo_a, "deploy-a") in deployment_pairs:
                 rows.append(
                     {
                         "entity_id": "incident-a",
@@ -1983,7 +1983,7 @@ async def test_deployment_admission_uses_repo_pr_pairs_not_flattened_numbers(
                         "last_synced": NOW,
                     }
                 )
-            if "deploy-b" in deployment_ids:
+            if (repo_b, "deploy-b") in deployment_pairs:
                 rows.append(
                     {
                         "entity_id": "incident-b",
@@ -2178,3 +2178,263 @@ async def test_team_with_genuinely_no_repo_activity_stays_clean(
         "attribution coverage" in warning or "could not be canonically" in warning
         for warning in result.warnings
     ), "a genuinely empty team must not be wrongly flagged with a coverage gap"
+
+
+@pytest.mark.asyncio
+async def test_incident_propagation_is_scoped_by_repository_not_bare_deployment_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round 4 (HIGH): deployment IDs are only unique PER REPO in the
+    schema. Round 3's pair filter correctly excludes repo B's deployment
+    from ``deployments``, but _INCIDENTS_SQL matched incident edges on the
+    bare ``edge.deployment_id`` -- an incident edge on the EXCLUDED
+    (repo-b, deployment_id) pair still leaked into the team snapshot
+    because the same deployment_id string collides across repos and
+    repo B remains in the team's authorized repository_ids.
+    """
+
+    repo_a, repo_b = "repo-a-owned", "repo-b-other"
+    shared_deployment_id = "42"  # deliberately identical across both repos
+    pr_number = 5
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [{"repository_id": repo_a}, {"repository_id": repo_b}]
+        if "SELECT 1 AS found" in sql:
+            return []
+        if "reviews.review_state AS review_state" in sql:
+            return [
+                {
+                    "repository_id": repo_a,
+                    "number": pr_number,
+                    "entity_id": f"{repo_a}#pr{pr_number}",
+                    "display_label": f"PR {pr_number}",
+                    "state": "merged",
+                    "review_state": "APPROVED",
+                    "changes_requested": 0,
+                    "merged": 1,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM deployments FINAL" in sql:
+            return [
+                {
+                    "repository_id": repo_a,
+                    "entity_id": shared_deployment_id,
+                    "display_label": "Deploy repo A",
+                    "status": "success",
+                    "environment": "production",
+                    "pr_number": pr_number,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                },
+                {
+                    "repository_id": repo_b,
+                    "entity_id": shared_deployment_id,
+                    "display_label": "Deploy repo B (unrelated, same ID)",
+                    "status": "success",
+                    "environment": "production",
+                    "pr_number": pr_number,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                },
+            ]
+        if "FROM operational_incidents" in sql:
+            # Discriminate by which admission shape the code actually
+            # sends: the fixed code passes repo-scoped (repo_id,
+            # deployment_id) PAIRS; the pre-fix code passed a bare
+            # deployment_id list that cannot tell repo A's admitted "42"
+            # apart from repo B's excluded "42".
+            deployment_pairs = params.get("deployment_pairs")
+            if deployment_pairs is not None:
+                if (repo_b, shared_deployment_id) in deployment_pairs:
+                    return [_incident_row("incident-leak")]
+                return []
+            deployment_ids = params.get("deployment_ids") or []
+            if shared_deployment_id in deployment_ids:
+                return [_incident_row("incident-leak")]
+            return []
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_team_scope_for("team-1"))
+    )
+
+    assert {d.entity_id for d in result.deployments} == {shared_deployment_id}
+    assert result.incidents == (), (
+        "an incident edge on the excluded (repo-b, deployment-id) pair "
+        "must not leak into the team snapshot merely because the bare "
+        "deployment_id collides with an admitted deployment in another repo"
+    )
+
+
+def _incident_row(entity_id: str) -> dict[str, Any]:
+    return {
+        "entity_id": entity_id,
+        "display_label": "Leaked incident",
+        "status": "resolved",
+        "active": False,
+        "observed_at": NOW,
+        "last_synced": NOW,
+    }
+
+
+@pytest.mark.asyncio
+async def test_coverage_probe_failure_fails_closed_not_silently_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round 4 (HIGH): a TimeoutError/query error on the coverage
+    probe collapsed to an empty result -- the SAME shape as "genuinely
+    nothing found" -- silently restoring the exact false-confidence
+    READY/COMPLETE state the round-3 probe exists to prevent. A probe
+    FAILURE must disclose exactly like a probe that finds activity.
+    """
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [{"repository_id": "repo-flaky"}]
+        if "SELECT 1 AS found" in sql:
+            raise TimeoutError("coverage probe timed out")
+        return []  # PRs, deployments genuinely empty
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_team_scope_for("team-flaky"))
+    )
+
+    assert result.actual.state is CompletionState.INDETERMINATE, (
+        "a failed coverage probe must never resolve as READY"
+    )
+    assert result.state is StatusResultState.DEGRADED, (
+        "a failed coverage probe must never resolve as a clean COMPLETE"
+    )
+    assert any(
+        "coverage probe" in warning or "cannot rule out" in warning
+        for warning in result.warnings
+    ), "the probe failure itself must be disclosed, not silently absorbed"
+
+
+@pytest.mark.asyncio
+async def test_unlinked_activity_probe_is_bounded_by_as_of(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round 4 (MEDIUM): _TEAM_REPO_HAS_UNLINKED_ACTIVITY_SQL had no
+    as_of predicate -- a pull request or deployment created strictly AFTER
+    the snapshot's as_of would still trip the probe, falsely degrading a
+    historical (as_of=t1) snapshot with activity that had not happened yet
+    at t1. The probe's SELECT list has no timestamp column to filter
+    client-side (it only returns ``1 AS found``), so this can only be
+    enforced inside the SQL text itself -- verified structurally, mirroring
+    the as_of-bound structural check used for the round-3 canonical-
+    attribution subquery.
+    """
+
+    observed_sql: list[str] = []
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [{"repository_id": "repo-solo"}]
+        if "SELECT 1 AS found" in sql:
+            observed_sql.append(sql)
+            return []
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_team_scope_for("team-solo"))
+    )
+
+    assert observed_sql, "the unlinked-activity probe must have actually been queried"
+    for sql in observed_sql:
+        pr_clause, _, deployment_clause = sql.partition("UNION ALL")
+        assert "created_at <= {as_of" in pr_clause, (
+            "the pull-request arm of the probe must bound by as_of, "
+            "mirroring the root _PULL_REQUESTS_SQL bound"
+        )
+        assert "<= {as_of" in deployment_clause, (
+            "the deployment arm of the probe must bound by as_of, "
+            "mirroring the root _DEPLOYMENTS_SQL bound"
+        )
+
+
+@pytest.mark.asyncio
+async def test_partial_unlinked_activity_alongside_linked_facts_stays_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ratified policy decision (round 4, team-lead, 2026-08-02): the
+    coverage-gap probe fires ONLY when a team's attributed facts
+    (pull_requests AND deployment_rows) are COMPLETELY empty -- see
+    _TEAM_REPO_HAS_UNLINKED_ACTIVITY_SQL's docstring. A team with at least
+    one genuinely attributed pull request in ANY repo stays a clean,
+    undisclosed result even if a DIFFERENT repo in its accessible set has
+    purely unlinked activity of its own. Partial-gap detection (an
+    unlinked-specific count query distinguishing "some repos have
+    unattributed activity" from "all of them do") is explicitly deferred,
+    not a defect -- this test pins the shipped behavior so any future
+    change to it is deliberate.
+    """
+
+    repo_attributed, repo_unlinked_only = "repo-attributed", "repo-unlinked-only"
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [
+                {"repository_id": repo_attributed},
+                {"repository_id": repo_unlinked_only},
+            ]
+        if "reviews.review_state AS review_state" in sql:
+            return [
+                {
+                    "repository_id": repo_attributed,
+                    "number": 1,
+                    "entity_id": f"{repo_attributed}#pr1",
+                    "display_label": "PR 1",
+                    "state": "merged",
+                    "review_state": "APPROVED",
+                    "changes_requested": 0,
+                    "merged": 1,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        return []  # deployments empty; probe never invoked (guard is False)
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_team_scope_for("team-mixed"))
+    )
+
+    assert not any(
+        "attribution coverage" in warning or "could not be canonically" in warning
+        for warning in result.warnings
+    ), (
+        "partial coverage (linked facts present, unattributed activity "
+        "elsewhere in the team's repos) is the documented, deferred "
+        "policy -- must NOT be flagged in this round"
+    )

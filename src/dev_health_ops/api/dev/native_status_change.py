@@ -366,6 +366,18 @@ ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
 """
 
+#: CHAOS-3303 round 4 (Codex HIGH, 2026-08-02): ``deployment_id`` is only
+#: unique PER REPO in the schema -- filtering incident edges by a bare
+#: ``edge.deployment_id IN {deployment_ids}`` list (even after the round-3
+#: (repository_id, pr_number) pair filter correctly excludes a deployment
+#: from ``deployments``) still matches ANY edge with that deployment_id in
+#: ANY of the team's authorized repos, including one whose OWN deployment
+#: happens to share the same id string as an admitted deployment in a
+#: different repo. Admission must therefore be scoped by the exact
+#: (repository_id, deployment_id) PAIR, mirroring the
+#: work_unit_investments.py ``(work_unit_id, categorization_run_id) IN
+#: {pairs:Array(Tuple(String, String))}`` idiom already used elsewhere in
+#: this codebase for the same reason.
 _INCIDENTS_SQL = """
 SELECT incident.id AS entity_id, incident.title AS display_label,
        ifNull(incident.normalized_status, 'unknown') AS status,
@@ -377,8 +389,8 @@ INNER JOIN work_graph_deployment_incident_edges AS edge FINAL
   ON edge.org_id = toUUIDOrZero(incident.org_id)
  AND edge.incident_id = incident.id
 WHERE incident.org_id = {org_id:String}
-  AND edge.deployment_id IN {deployment_ids:Array(String)}
-  AND toString(edge.repo_id) IN {repository_ids:Array(String)}
+  AND (toString(edge.repo_id), edge.deployment_id)
+      IN {deployment_pairs:Array(Tuple(String, String))}
   AND coalesce(incident.source_event_at, incident.observed_at)
       <= {as_of:DateTime64(3, 'UTC')}
 ORDER BY observed_at DESC, entity_id
@@ -404,17 +416,25 @@ WHERE org_id = {org_id:String}
 #: deployments only (the two root categories every other delivery fact --
 #: CI, reviews, incidents -- derives from), so a genuinely empty root
 #: category set implies the derived categories are empty too.
+#: CHAOS-3303 round 4 (Codex MEDIUM, 2026-08-02): bounded by as_of, mirroring
+#: the root _PULL_REQUESTS_SQL / _DEPLOYMENTS_SQL bounds exactly -- without
+#: this, a pull request or deployment created strictly AFTER the snapshot's
+#: as_of would still trip the probe, falsely degrading a historical
+#: (as_of=t1) snapshot with activity that had not happened yet at t1.
 _TEAM_REPO_HAS_UNLINKED_ACTIVITY_SQL = """
 SELECT 1 AS found
 FROM git_pull_requests FINAL
 WHERE org_id = {org_id:String}
   AND toString(repo_id) IN {repository_ids:Array(String)}
+  AND created_at <= {as_of:DateTime64(3, 'UTC')}
 LIMIT 1
 UNION ALL
 SELECT 1 AS found
 FROM deployments FINAL
 WHERE org_id = {org_id:String}
   AND toString(repo_id) IN {repository_ids:Array(String)}
+  AND coalesce(deployed_at, finished_at, started_at, last_synced)
+      <= {as_of:DateTime64(3, 'UTC')}
 LIMIT 1
 """
 
@@ -1167,14 +1187,19 @@ class ClickHouseStatusChangeSource:
                 if (str(row.get("repository_id") or ""), int(row.get("pr_number") or 0))
                 in pr_pairs
             ]
-        deployment_ids = [str(row.get("entity_id") or "") for row in deployment_rows]
+        # Codex round 4 (HIGH): pairs, not bare ids -- deployment_id alone
+        # collides across repos (see _INCIDENTS_SQL's docstring above).
+        deployment_pairs = [
+            (str(row.get("repository_id") or ""), str(row.get("entity_id") or ""))
+            for row in deployment_rows
+        ]
 
         incident_rows: list[dict[str, Any]] = []
-        if deployment_ids:
+        if deployment_pairs:
             incident_rows, incident_ref, warning = await self._read(
                 "incidents",
                 _INCIDENTS_SQL,
-                {**common, "org_id": org_id, "deployment_ids": deployment_ids},
+                {**common, "org_id": org_id, "deployment_pairs": deployment_pairs},
                 scope,
             )
             source_refs.append(incident_ref)
@@ -1240,17 +1265,32 @@ class ClickHouseStatusChangeSource:
                         self._client, _TEAM_REPO_HAS_UNLINKED_ACTIVITY_SQL, common
                     )
             except Exception:
-                unlinked_activity_rows = []
-            if unlinked_activity_rows:
+                # Codex round 4 (HIGH): a probe FAILURE must not collapse to
+                # the same empty shape as "genuinely nothing found" -- that
+                # silently restores the exact false-confidence
+                # READY/COMPLETE state this probe exists to prevent. Treat
+                # failure as unknown coverage, not clean coverage.
                 gap_refs.append(
                     self._unavailable_ref("team_attribution_coverage", scope)
                 )
                 warnings.append(
-                    "team-accessible repositories contain pull-request or "
-                    "deployment activity that could not be canonically "
-                    "attributed to this team; reporting insufficient "
-                    "attribution coverage rather than a genuinely empty team"
+                    "team attribution coverage probe failed; cannot rule "
+                    "out unattributed repository activity, reporting "
+                    "insufficient attribution coverage rather than a "
+                    "genuinely empty team"
                 )
+            else:
+                if unlinked_activity_rows:
+                    gap_refs.append(
+                        self._unavailable_ref("team_attribution_coverage", scope)
+                    )
+                    warnings.append(
+                        "team-accessible repositories contain pull-request "
+                        "or deployment activity that could not be "
+                        "canonically attributed to this team; reporting "
+                        "insufficient attribution coverage rather than a "
+                        "genuinely empty team"
+                    )
         acceptance_run_ids = {
             (str(row.get("repository_id") or ""), str(row.get("run_id") or ""))
             for row in ci_acceptance_rows

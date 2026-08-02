@@ -1390,6 +1390,13 @@ async def create_message(
             try:
                 await service.session.rollback()
             except Exception:
+                # Best-effort only: this session is about to be abandoned
+                # regardless (the fallback below always uses a fresh
+                # session/connection, never this one), so a rollback
+                # failure here -- the session already unusable, the
+                # connection already dropped -- changes nothing about
+                # what happens next. Swallowing it, not re-raising, is
+                # what lets the fallback attempt still run.
                 pass
             # Force the run terminal from a FRESH session/connection --
             # never the session just rolled back above -- so no run can

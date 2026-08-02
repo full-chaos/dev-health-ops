@@ -53,7 +53,16 @@ from tests._chaos_3292_preflight import (
 from tests.api.dev.test_router import (  # noqa: F401,E501
     FakeBoundedRuntime,
     _parse_sse_events,
-    dev_api_context,
+    # `dev_api_context` is a pytest fixture, not a plain symbol -- it is
+    # never referenced by name in this module's own code, only as each
+    # test function's own parameter (pytest resolves the parameter name
+    # against this imported fixture). It is defined in test_router.py,
+    # not a conftest.py, so pytest can only find it here because it is
+    # imported into this module's namespace; the same established
+    # pattern already used unflagged elsewhere in this codebase
+    # (test_chaos_3301_controls.py). CodeQL's unused-import check does
+    # not model pytest's fixture-injection mechanism.
+    dev_api_context,  # lgtm[py/unused-import]
 )
 
 #: The v1 evidence-handle grammar (`evidence_service.EvidenceHandleService.issue`).
@@ -146,7 +155,11 @@ async def test_n0_fails_loudly_when_the_frame_write_is_disabled(
     from dev_health_ops.api.dev import orchestrator_persistence as op
 
     async def _no_op_record_frame(self: Any, frame: Any) -> None:
-        del self, frame
+        # Deliberately does nothing -- self/frame match record_frame's own
+        # signature (this replaces it via monkeypatch) but are otherwise
+        # unused; ruff's selected rule set has no unused-argument check
+        # (no ARG* rules enabled), so `pass` alone is enough.
+        pass
 
     monkeypatch.setattr(op.PersistenceRunRecorder, "record_frame", _no_op_record_frame)
 

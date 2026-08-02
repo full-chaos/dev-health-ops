@@ -1769,13 +1769,6 @@ async def test_zero_day_immediate_purge_covers_every_new_artifact_and_orphan_wri
 # -- totality: every *_payload JSON-contract sink is registered (CHAOS-3297
 # Codex review round 3 CLASS B closure argument) ---------------------------
 
-#: Sinks CHAOS-3297 has brought into full contract-validated compliance:
-#: the payload is validated against its real wire contract
-#: (``DevXContract.model_validate``) and cross-checked against the call's
-#: own arguments before any write -- ``record_frame`` (round 2 MEDIUM #3),
-#: ``record_narrative`` (round 3 CLASS B).
-_VALIDATED_PAYLOAD_SINKS = frozenset({"record_frame", "record_narrative"})
-
 #: Known, filed gap -- NOT closed this round. Each of these also persists a
 #: full wire-contract dump as an opaque ``payload`` without validating it
 #: against that contract (``record_intent`` -> ``dev_question_intent.v1``,
@@ -1915,13 +1908,17 @@ def test_every_payload_field_reference_is_confined_to_the_audited_helper() -> No
     AST shapes, and asserts the result is exactly
     ``_KNOWN_UNVALIDATED_PAYLOAD_SINKS`` -- the filed, deliberate gap.
 
-    ``record_frame`` and ``record_narrative`` (``_VALIDATED_PAYLOAD_SINKS``)
-    route their construction entirely through the helper, so neither
-    appears in the discovered set at all -- not merely present in an
-    accounted-for bucket the way the round-3 scanner required. A
-    validated sink that regressed to touching ``payload`` directly again
-    would show up as an unaccounted-for name here, exactly like a
-    brand-new bypass would; there is nothing else it could hide behind.
+    ``record_frame`` and ``record_narrative`` -- the two sinks CHAOS-3297
+    has brought into full contract-validated compliance (payload validated
+    against its real wire contract and cross-checked against the call's
+    own arguments before any write: ``record_frame`` in round 2 MEDIUM #3,
+    ``record_narrative`` in round 3 CLASS B) -- route their construction
+    entirely through the helper, so neither appears in the discovered set
+    at all -- not merely present in an accounted-for bucket the way the
+    round-3 scanner required. A validated sink that regressed to touching
+    ``payload`` directly again would show up as an unaccounted-for name
+    here, exactly like a brand-new bypass would; there is nothing else it
+    could hide behind.
     """
 
     discovered = _discover_payload_field_references()

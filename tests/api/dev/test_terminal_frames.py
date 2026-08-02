@@ -155,7 +155,14 @@ def _provider_error_codes() -> set[str]:
     """
 
     codes: set[str] = set()
-    for member in AgentProviderErrorCode:
+    # CodeQL py/non-iterable-in-for-loop false positive -- AgentProviderErrorCode
+    # (str, Enum) IS iterable, via its metaclass (EnumType/EnumMeta provides
+    # __iter__ for the class object itself; the Enum subclass does not define
+    # its own __iter__, which is what a syntactic non-iterable check sees).
+    # Verified empirically (`list(AgentProviderErrorCode)` succeeds) and this
+    # is the same established pattern already used unflagged elsewhere in
+    # this codebase (`for tool_id in ToolID`, `for role in AgentRole`).
+    for member in AgentProviderErrorCode:  # lgtm[py/non-iterable-in-for-loop]
         result = _orchestrator_module.DevOrchestrator._provider_error(
             "request_totality_probe", AgentProviderError(member)
         )

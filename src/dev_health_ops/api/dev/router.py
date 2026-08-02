@@ -614,13 +614,37 @@ def _replayed_result(
     state = RunState(run.state)
     answer = None
     error = None
+    terminal_error_payload = getattr(run, "terminal_error_payload", None)
     if answer_payload is not None:
         answer = DevAnswer.model_validate(answer_payload)
+    elif terminal_error_payload is not None:
+        # CHAOS-3297 Codex review HIGH #1: the exact validated v1 DevError
+        # `PersistenceRunRecorder.terminal` persisted at terminal time, for
+        # *every* origin (the orchestrator's own error() closure,
+        # _provider_error, or a preflight termination's
+        # project_preflight_error) -- replayed verbatim. This supersedes the
+        # frame-reconstruction branch below: reconstructing from
+        # `compat._ERROR_OUTCOME_CODES`'s fixed, outcome-keyed table is only
+        # ever an *approximation* of the live copy (correct code, but a
+        # generic canonical safe_message/remediation that can differ from
+        # the producer-authored text a live run actually streamed -- e.g.
+        # "scope_not_found" reconstructs the same *code* on both sides but a
+        # different *message*, which the old code-only coherence guard could
+        # not catch). A row that has this column is authoritative on its
+        # own; it never needs the frame at all.
+        try:
+            error = DevError.model_validate(terminal_error_payload)
+        except ValidationError:
+            error = _replay_fallback_error(run)
     elif (
         frame_payload is not None
         and organization_id is not None
         and time_range is not None
     ):
+        # Compatibility fallback for a run persisted before 0079 added
+        # `terminal_error_payload` -- no such row has ever run through the
+        # branch above, so this reconstruction (with its documented
+        # code-only-fidelity caveat) is the best available replay for it.
         # CHAOS-3299 / TRD v2 Section 12: a v2 run with no answer message
         # (needs_clarification/not_found/temporarily_unavailable/unsupported/
         # denied/failed -- no assistant DevMessage is ever recorded for these)

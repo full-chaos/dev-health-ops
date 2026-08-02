@@ -238,6 +238,16 @@ def test_frame_construction_is_deterministic_for_the_same_inputs() -> None:
 def _fake_run(
     *, run_id: uuid.UUID, code: str, public_outcome: PublicOutcome
 ) -> SimpleNamespace:
+    """A run row that predates 0079's ``terminal_error_payload`` column.
+
+    Explicit ``terminal_error_payload=None`` (rather than omitting the
+    attribute) so ``_replayed_result`` takes its frame-reconstruction
+    fallback branch -- exactly what these F-COHERENCE tests exist to cover.
+    A run created after 0079 always has this column populated by
+    ``PersistenceRunRecorder.terminal`` and never reaches that branch; see
+    ``test_router.py``'s two-POST replay tests for that (current) path.
+    """
+
     now = datetime.now(UTC)
     return SimpleNamespace(
         id=run_id,
@@ -250,6 +260,7 @@ def _fake_run(
         ended_at=now,
         public_outcome=public_outcome.value,
         safe_error_code=code,
+        terminal_error_payload=None,
         input_tokens=0,
         output_tokens=0,
         estimated_cost_microusd=0,

@@ -204,6 +204,10 @@ _PLAN_STEP_LIST_MAX_ITEMS = 25
 _FRAME_PAYLOAD_MAX_BYTES = 128 * 1024
 _NARRATIVE_TEXT_MAX_BYTES = 8 * 1024
 _NARRATIVE_PAYLOAD_MAX_BYTES = 16 * 1024
+# CHAOS-3297 (0079): a dev_error.v1 payload is a handful of short strings
+# (code/safe_message/up-to-5-item remediation) -- generous relative to
+# ShortText's own bound, well under the frame payload's ceiling.
+_TERMINAL_ERROR_PAYLOAD_MAX_BYTES = 4 * 1024
 
 
 class DevPersistenceNotFound(LookupError):
@@ -1105,6 +1109,7 @@ class DevPersistenceService:
         metric_count: int | None = None,
         grounding_validation_status: str | None = None,
         safe_error_code: str | None = None,
+        terminal_error_payload: Mapping[str, Any] | None = None,
     ) -> DevRun | None:
         if state not in _RUN_STATES:
             raise DevPersistenceValidationError("invalid run state")
@@ -1168,6 +1173,18 @@ class DevPersistenceService:
         )
         run.safe_error_code = _safe_token(
             safe_error_code, field="safe_error_code", max_bytes=64
+        )
+        # CHAOS-3297 (0079): the exact terminal v1 DevError, so idempotent
+        # replay can reuse it verbatim instead of reconstructing an
+        # approximation from the frame (Codex review HIGH #1).
+        run.terminal_error_payload = (
+            _bounded_json(
+                terminal_error_payload,
+                field="terminal_error_payload",
+                max_bytes=_TERMINAL_ERROR_PAYLOAD_MAX_BYTES,
+            )
+            if terminal_error_payload is not None
+            else None
         )
         if state in _TERMINAL_RUN_STATES:
             run.ended_at = self._now()

@@ -404,14 +404,21 @@ async def test_preflight_frame_flush_failure_reaches_terminal_state_not_stranded
 async def test_replay_with_corrupted_frame_payload_falls_back_safely(
     dev_api_context,  # noqa: F811 -- pytest fixture imported from test_router
 ) -> None:
-    """Codex review MEDIUM: a corrupted v2 frame payload must not 500 every replay.
+    """Codex review MEDIUM, superseded by CHAOS-3297 (0079): a corrupted v2
+    frame payload must not 500 every replay -- and, since
+    ``terminal_error_payload`` was added, must not even need the frame at all.
 
-    Persists a real preflight-terminated frame, then corrupts the stored
-    payload directly (simulating a damaged row or a since-changed schema)
-    and asserts the idempotent replay degrades to the same generic "did not
-    complete" shape used when the frame row is missing outright, instead of
-    a 500 that would repeat on every future replay of the same
-    client_message_id.
+    Persists a real preflight-terminated run, then corrupts the stored
+    *frame* payload directly (simulating a damaged row or a since-changed
+    schema). Before CHAOS-3297 Codex review HIGH #1's fix, the frame was the
+    only source ``_replayed_result`` had for a no-answer-payload run, so a
+    corrupted frame degraded the replay to the generic "did not complete"
+    shape (still safe, but not the live run's own message). Now
+    ``PersistenceRunRecorder.terminal`` also persists the exact live
+    ``DevError`` on ``dev_runs.terminal_error_payload``, independent of the
+    frame -- so the replay reads that column first and never reaches the
+    (corrupted) frame at all, serving the *real* live message even with a
+    damaged frame row.
     """
 
     org_id = dev_api_context.org_id
@@ -461,18 +468,23 @@ async def test_replay_with_corrupted_frame_payload_falls_back_safely(
     assert "answer.completed" not in replay_events
     assert "error" in replay_events
     fallback_message = "The prior Ask Dev request did not complete with an answer."
-    assert replay_events["error"]["error"]["safe_message"] == fallback_message
     # The live run's own preflight-specific copy must differ from the
-    # fallback -- otherwise this test could not distinguish "used the real
-    # frame" from "always falls back".
+    # generic fallback -- otherwise this test could not distinguish "used
+    # the real terminal_error_payload" from "always falls back".
     assert live_message != fallback_message
+    assert replay_events["error"]["error"]["safe_message"] == live_message, (
+        "terminal_error_payload is independent of the frame, so a corrupted "
+        "frame must have no effect on replay fidelity at all"
+    )
 
 
 async def test_replay_with_mismatched_frame_outcome_falls_back_safely(
     dev_api_context,  # noqa: F811 -- pytest fixture imported from test_router
 ) -> None:
-    """Codex re-review MEDIUM: a self-consistent but wrong-outcome frame must
-    not project its own semantics over the run's persisted outcome.
+    """Codex re-review MEDIUM, superseded by CHAOS-3297 (0079): a
+    self-consistent but wrong-outcome frame must not project its own
+    semantics over the run's persisted outcome -- and, since
+    ``terminal_error_payload`` was added, the frame is not even consulted.
 
     Persists a real preflight-terminated ``not_found`` frame, then swaps the
     stored payload for a *different*, independently valid no-answer frame (a
@@ -481,7 +493,10 @@ async def test_replay_with_mismatched_frame_outcome_falls_back_safely(
     ``_replayed_result`` trusted the frame's own ``public_outcome`` with no
     cross-check against ``dev_runs.public_outcome``, so a stale or corrupted
     row could replay a ``forbidden``/"You do not have access" error for a run
-    that actually terminated ``not_found`` -- false public semantics.
+    that actually terminated ``not_found`` -- false public semantics. Now
+    ``dev_runs.terminal_error_payload`` (independent of the frame) is read
+    first, so this run replays its own real ``not_found`` error exactly,
+    never reaching the frame cross-check at all.
     """
 
     org_id = dev_api_context.org_id
@@ -503,6 +518,8 @@ async def test_replay_with_mismatched_frame_outcome_falls_back_safely(
         f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
     )
     assert live.status_code == 200
+    live_events = dict(_parse_sse_events(live.text))
+    live_error = live_events["error"]["error"]
 
     async with dev_api_context.maker() as session:
         run = await session.scalar(
@@ -537,18 +554,24 @@ async def test_replay_with_mismatched_frame_outcome_falls_back_safely(
     replay_events = dict(_parse_sse_events(replay.text))
     assert "answer.completed" not in replay_events
     assert "error" in replay_events
-    fallback_message = "The prior Ask Dev request did not complete with an answer."
-    assert replay_events["error"]["error"]["safe_message"] == fallback_message
+    replay_error = replay_events["error"]["error"]
     # "forbidden" is the code the (wrong) denied frame would have projected
     # -- proving the replay did not adopt the mismatched frame's semantics.
-    assert replay_events["error"]["error"]["code"] != "forbidden"
+    assert replay_error["code"] != "forbidden"
+    assert replay_error["safe_message"] == live_error["safe_message"], (
+        "terminal_error_payload is independent of the frame, so a "
+        "mismatched frame outcome must have no effect on replay fidelity "
+        "at all -- the run replays its own real error, not a fallback"
+    )
+    assert replay_error["code"] == live_error["code"]
 
 
 async def test_replay_with_answered_frame_falls_back_safely(
     dev_api_context,  # noqa: F811 -- pytest fixture imported from test_router
 ) -> None:
-    """Codex re-review MEDIUM: an out-of-vocabulary ``answered`` frame must
-    not crash the replay.
+    """Codex re-review MEDIUM, superseded by CHAOS-3297 (0079): an
+    out-of-vocabulary ``answered`` frame must not crash the replay -- and,
+    since ``terminal_error_payload`` was added, is not even reached.
 
     ``project_preflight_error`` is only total over the no-answer outcomes
     plus ``needs_clarification`` (CHAOS-3292's ratified preflight-
@@ -558,7 +581,10 @@ async def test_replay_with_answered_frame_falls_back_safely(
     hits ``project_preflight_error``'s own defensive
     ``isinstance(projected, DevError)`` assertion. Before this fix that
     raised an uncaught ``RuntimeError``, turning every future replay of the
-    idempotency key into a 500.
+    idempotency key into a 500. Now ``dev_runs.terminal_error_payload`` is
+    read first and this run's own real no-answer error replays verbatim,
+    never reaching the (corrupted) frame or ``project_preflight_error`` at
+    all.
     """
 
     org_id = dev_api_context.org_id
@@ -580,6 +606,8 @@ async def test_replay_with_answered_frame_falls_back_safely(
         f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
     )
     assert live.status_code == 200
+    live_events = dict(_parse_sse_events(live.text))
+    live_message = live_events["error"]["error"]["safe_message"]
 
     async with dev_api_context.maker() as session:
         run = await session.scalar(
@@ -612,5 +640,8 @@ async def test_replay_with_answered_frame_falls_back_safely(
     replay_events = dict(_parse_sse_events(replay.text))
     assert "answer.completed" not in replay_events
     assert "error" in replay_events
-    fallback_message = "The prior Ask Dev request did not complete with an answer."
-    assert replay_events["error"]["error"]["safe_message"] == fallback_message
+    assert replay_events["error"]["error"]["safe_message"] == live_message, (
+        "terminal_error_payload is independent of the frame, so a bogus "
+        "answered-outcome frame must have no effect on replay fidelity at "
+        "all -- the run replays its own real error, not a fallback"
+    )

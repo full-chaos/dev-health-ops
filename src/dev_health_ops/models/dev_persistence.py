@@ -263,6 +263,15 @@ class DevRun(Base):
     narrative_failure_code: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )
+    # CHAOS-3297 (0079): the exact validated v1 dev_error.v1 payload
+    # (code/safe_message/retryable/remediation/limit_reset_at) a terminal
+    # error carried, persisted verbatim so an idempotent replay can reuse it
+    # byte-for-byte instead of reconstructing an approximation from the
+    # frame (Codex review HIGH #1). NULL for every run that predates this
+    # column and for every non-error terminal (`answer_id` is set instead).
+    terminal_error_payload: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(

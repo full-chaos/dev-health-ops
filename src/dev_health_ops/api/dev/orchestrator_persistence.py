@@ -344,6 +344,16 @@ class PersistenceRunRecorder:
             metric_count=len(answer.metrics) if answer else 0,
             grounding_validation_status="passed" if answer else "not_applicable",
             safe_error_code=error.code if error else None,
+            # CHAOS-3297 Codex review HIGH #1: persist the exact validated
+            # v1 DevError this terminal call carried -- whichever origin
+            # built it (the orchestrator's own error() closure,
+            # _provider_error, or a preflight termination's
+            # project_preflight_error) -- so router._replayed_result can
+            # replay it verbatim instead of reconstructing an approximation
+            # from the frame.
+            terminal_error_payload=(
+                error.model_dump(mode="json") if error is not None else None
+            ),
         )
 
 

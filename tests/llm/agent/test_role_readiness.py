@@ -25,7 +25,10 @@ from dev_health_ops.api.dev.prompts.composer import (
     LEGACY_PROMPT_VERSION,
     PROMPT_VERSION,
 )
-from dev_health_ops.llm.agent.openai_compatible import OpenAICompatibleAgentProvider
+from dev_health_ops.llm.agent.openai_compatible import (
+    _DECISION_FIELDS,
+    OpenAICompatibleAgentProvider,
+)
 from dev_health_ops.llm.agent.probes.legacy_agent import (
     _PRODUCTION_FLOOR_BYTES,
     _assert_production_shape,
@@ -369,6 +372,70 @@ _MIN_CALIBRATION_ABSOLUTE_MARGIN_BYTES = 1_500
 _MIN_CALIBRATION_RELATIVE_MARGIN = 1.03
 
 
+def _assert_structurally_real_grammar(round_2: dict[str, Any]) -> None:
+    """CHAOS-3285 round 4 (Codex MEDIUM): byte-size margins ALONE can be
+    satisfied by PADDING -- a large ``description`` string stuffed into an
+    otherwise-empty schema, with no real ``properties``/``required`` -- so a
+    mutation that gutted the grammar's actual structure but kept its byte
+    size large would still clear the margin checks below. Assert the real
+    decision-schema shape is present BEFORE trusting any byte margin:
+    non-empty ``properties``, and a ``required`` set matching the real
+    decision envelope (``_DECISION_FIELDS``, the actual producer -- never a
+    hand-guessed field list)."""
+
+    response_format = round_2.get("response_format")
+    assert isinstance(response_format, dict), "round 2 must carry a response_format"
+    json_schema = response_format.get("json_schema")
+    assert isinstance(json_schema, dict), "response_format must wrap a json_schema"
+    assert json_schema.get("strict") is True, "grammar must be strict"
+    schema = json_schema.get("schema")
+    assert isinstance(schema, dict), "json_schema must carry a schema body"
+    properties = schema.get("properties")
+    assert isinstance(properties, dict) and properties, (
+        "grammar has no real schema properties -- padding a description "
+        "string does not substitute for actual grammar structure"
+    )
+    required = schema.get("required")
+    assert isinstance(required, list) and set(required) == _DECISION_FIELDS, (
+        "grammar's required fields do not match the real decision envelope "
+        "-- padding does not substitute for the actual schema shape"
+    )
+
+
+def _assert_structurally_real_history(round_2: dict[str, Any]) -> None:
+    """Same guard for the accumulated tool-result history dimension: a
+    large padded content string in the assistant/tool messages is not the
+    same as a real tool request followed by a schema-shaped tool result."""
+
+    messages = round_2.get("messages")
+    assert isinstance(messages, list) and len(messages) >= 4, (
+        "round 2 must carry the full history shape: system, user, "
+        "assistant tool-request, tool result"
+    )
+    assistant_message = messages[2]
+    assert assistant_message.get("role") == "assistant"
+    tool_calls = assistant_message.get("tool_calls")
+    assert isinstance(tool_calls, list) and tool_calls, (
+        "history's assistant message has no real tool_calls -- padding "
+        "content does not substitute for a real tool request"
+    )
+    tool_message = messages[3]
+    assert tool_message.get("role") == "tool"
+    content = tool_message.get("content")
+    assert isinstance(content, str)
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        parsed = None
+    assert isinstance(parsed, dict) and {"run_id", "tool_id", "tool_call_id"} <= set(
+        parsed
+    ), (
+        "history's tool message content is not a schema-shaped tool "
+        "result -- padding does not substitute for real tool-result "
+        "structure"
+    )
+
+
 def _calibrate_noncompliant_rate(
     round_1: dict[str, Any], round_2: dict[str, Any], *, cap: int
 ) -> float:
@@ -384,8 +451,15 @@ def _calibrate_noncompliant_rate(
     difference is not a real proof that the grammar or the history
     dimension matters -- it means the probe's production shape has become
     degenerate (round 1 and round 2 barely differ) and this calibration
-    must refuse to silently produce a knife-edge rate.
+    must refuse to silently produce a knife-edge rate. CHAOS-3285 round 4
+    (Codex MEDIUM): byte margins are necessary but NOT sufficient -- a
+    padded-but-structurally-empty grammar or history can satisfy them
+    without the dimension actually contributing any real structure, so
+    semantic-structure checks run FIRST, before any byte-margin math.
     """
+
+    _assert_structurally_real_grammar(round_2)
+    _assert_structurally_real_history(round_2)
 
     client = _RequestSizeDrivenClient(tokens_per_byte=1.0)
     insufficient_alone = max(
@@ -429,7 +503,10 @@ async def test_calibration_fails_loudly_when_the_grammar_degenerates() -> None:
     round 2's size were to collapse to near-nothing -- simulating a future
     regression that degenerates the combined-shape claim -- calibration
     must refuse to proceed with a knife-edge rate, not silently pick one
-    that no longer proves the grammar dimension matters."""
+    that no longer proves the grammar dimension matters. CHAOS-3285 round 4:
+    an empty schema is caught by the structural check now, before it would
+    even reach the byte-margin math -- a strictly earlier, more precise
+    failure than before."""
 
     round_1, round_2 = await _uncalibrated_round_requests()
     degenerate_grammar = dict(round_2)
@@ -437,7 +514,7 @@ async def test_calibration_fails_loudly_when_the_grammar_degenerates() -> None:
         "json_schema": {"strict": True, "schema": {}}
     }
 
-    with pytest.raises(AssertionError, match="calibration margin too small"):
+    with pytest.raises(AssertionError, match="no real schema properties"):
         _calibrate_noncompliant_rate(round_1, degenerate_grammar, cap=4096)
 
 
@@ -446,14 +523,67 @@ async def test_calibration_fails_loudly_when_the_history_degenerates() -> None:
     """Same guard, for the accumulated tool-result history dimension: if
     round 2's messages collapsed to be identical to round 1's (the
     synthetic tool result contributing nothing), calibration must refuse
-    to proceed."""
+    to proceed. CHAOS-3285 round 4: round 1 has only 2 messages (no
+    assistant tool-request, no tool result), so the structural shape check
+    now catches this before the byte-margin math."""
 
     round_1, round_2 = await _uncalibrated_round_requests()
     degenerate_history = dict(round_2)
     degenerate_history["messages"] = round_1["messages"]
 
-    with pytest.raises(AssertionError, match="calibration margin too small"):
+    with pytest.raises(AssertionError, match="full history shape"):
         _calibrate_noncompliant_rate(round_1, degenerate_history, cap=4096)
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_on_padded_but_structurally_empty_grammar() -> (
+    None
+):
+    """CHAOS-3285 round 4 (Codex MEDIUM): byte-size margins ALONE can be
+    satisfied by PADDING -- a large ``description`` string stuffed into an
+    otherwise-empty schema, with no real ``properties``/``required`` -- so a
+    mutant that gutted the grammar's actual structure while keeping its
+    byte size large would previously have cleared the (byte-only) margin
+    checks. Structural checks must catch this even though the byte margin
+    would pass."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    padded_empty_grammar = dict(round_2)
+    padded_empty_grammar["response_format"] = {
+        "json_schema": {
+            "strict": True,
+            # Padded well past _MIN_CALIBRATION_ABSOLUTE_MARGIN_BYTES --
+            # the byte-margin check alone would pass this.
+            "schema": {"description": "x" * 5_000},
+        }
+    }
+
+    with pytest.raises(AssertionError, match="no real schema properties"):
+        _calibrate_noncompliant_rate(round_1, padded_empty_grammar, cap=4096)
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_on_padded_but_structurally_empty_history() -> (
+    None
+):
+    """Same guard for history: a large padded content string in the
+    assistant/tool messages is not the same as a real tool request followed
+    by a schema-shaped tool result, even when it is byte-large enough to
+    clear the margin checks on its own."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    padded_empty_history = dict(round_2)
+    padded_empty_history["messages"] = [
+        round_2["messages"][0],
+        round_2["messages"][1],
+        # Padded well past _MIN_CALIBRATION_ABSOLUTE_MARGIN_BYTES, but no
+        # real tool_calls -- not a real tool request.
+        {"role": "assistant", "content": "x" * 5_000},
+        {"role": "tool", "content": "x" * 5_000, "tool_call_id": "stub"},
+    ]
+
+    with pytest.raises(AssertionError, match="no real tool_calls"):
+        _calibrate_noncompliant_rate(round_1, padded_empty_history, cap=4096)
 
 
 @pytest.mark.asyncio

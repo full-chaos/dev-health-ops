@@ -3293,3 +3293,247 @@ async def test_sqlite_trigger_rejects_duplicate_key_narrative_update(
         )
         assert reloaded is not None
         assert reloaded.narrative_text == narrative_text
+
+
+# -- CHAOS-3297 Codex review round 11 HIGH: round 10's duplicate-key fix
+# was itself incomplete. `json_extract`'s PATH matching (`'$.frame_id'`)
+# truncates an object label at an embedded NUL (U+0000) the same way a C
+# string does -- confirmed empirically: `json_extract('{"frame_id\x00XXXX":
+# "a", "frame_id": "b"}', '$.frame_id')` returns `'a'`, reading the
+# NUL-suffixed alias as if its label were exactly `frame_id`. Neither
+# Python's `json` decoder nor Postgres's `->>` operator truncates there,
+# so both read `'b'` -- the REAL exact key's value. A payload with a
+# NUL-aliased protected key first, carrying a value that matches the row,
+# and the real exact key after, carrying a mismatched value, passed both
+# round-10 checks: the (then still json_extract-based) value cross-check
+# read the aliased match, and the duplicate-key count correctly did NOT
+# see two occurrences of the SAME key (`'frame_id\x00XXXX' != 'frame_id'`
+# under exact equality -- these are genuinely different labels).
+#
+# These payloads can only be constructed via raw SQL (embedding a literal
+# NUL byte inside a JSON object key is not something any contract encoder
+# -- or Python's own json.dumps of a real dict -- would ever produce).
+
+
+def _raw_nul_alias_frame_payload(*, matching_frame_id: str, run_id: str) -> str:
+    return (
+        '{"frame_id\\u0000XXXX": "' + matching_frame_id + '", '
+        '"schema_version": "dev_answer_frame.v1", '
+        f'"run_id": "{run_id}", '
+        '"public_outcome": "not_found", '
+        '"frame_id": "11111111-1111-1111-1111-111111111111"}'
+    )
+
+
+def _raw_nul_alias_narrative_payload(
+    *, matching_narrative_id: str, run_id: str, frame_id: str, mode: str
+) -> str:
+    return (
+        '{"narrative_id\\u0000XXXX": "' + matching_narrative_id + '", '
+        '"schema_version": "dev_narrative.v1", '
+        f'"run_id": "{run_id}", '
+        f'"frame_id": "{frame_id}", '
+        f'"mode": "{mode}", '
+        '"referenced_fact_ids": [], "referenced_section_ids": [], '
+        '"provider_metadata": null, '
+        f'"generated_at": "{datetime.now(UTC).isoformat()}", '
+        '"validation_warnings": [], '
+        '"narrative_id": "11111111-1111-1111-1111-111111111111"}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_sqlite_trigger_rejects_nul_alias_frame_insert(persistence) -> None:
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        valid_payload = _frame_payload(run_id=run_id, outcome="not_found")
+
+        connection = await session.connection()
+        raw_payload = _raw_nul_alias_frame_payload(
+            matching_frame_id=valid_payload["frame_id"], run_id=str(run_id)
+        )
+        new_id = uuid.uuid4()
+        with pytest.raises(IntegrityError, match="dev_answer_frames"):
+            await connection.execute(
+                text(
+                    "INSERT INTO dev_answer_frames "
+                    "(id, run_id, org_id, user_id, frame_id, public_outcome, "
+                    "payload, created_at) VALUES "
+                    "(:id, :run_id, :org_id, :user_id, :frame_id, :public_outcome, "
+                    ":payload, :created_at)"
+                ),
+                {
+                    "id": new_id.hex,
+                    "run_id": run_id.hex,
+                    "org_id": org_id.hex,
+                    "user_id": user_id.hex,
+                    "frame_id": uuid.UUID(valid_payload["frame_id"]).hex,
+                    "public_outcome": "not_found",
+                    "payload": raw_payload,
+                    "created_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        count = await session.scalar(
+            select(func.count(DevAnswerFrame.id)).where(DevAnswerFrame.id == new_id)
+        )
+        assert count == 0, "the NUL-alias insert must not have created a row"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_trigger_rejects_nul_alias_frame_update(persistence) -> None:
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        valid_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(valid_payload["frame_id"]),
+            public_outcome="not_found",
+            payload=valid_payload,
+        )
+        await session.commit()
+        frame_id_hex = frame.id.hex
+
+        connection = await session.connection()
+        raw_payload = _raw_nul_alias_frame_payload(
+            matching_frame_id=valid_payload["frame_id"], run_id=str(run_id)
+        )
+        with pytest.raises(IntegrityError, match="dev_answer_frames"):
+            await connection.execute(
+                text("UPDATE dev_answer_frames SET payload = :payload WHERE id = :id"),
+                {"payload": raw_payload, "id": frame_id_hex},
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.scalar(
+            select(DevAnswerFrame).where(DevAnswerFrame.run_id == run_id)
+        )
+        assert reloaded is not None
+        assert reloaded.payload == valid_payload, (
+            "the NUL-alias update must leave the original payload untouched"
+        )
+
+
+@pytest.mark.asyncio
+async def test_sqlite_trigger_rejects_nul_alias_narrative_insert(persistence) -> None:
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(frame_payload["frame_id"]),
+            public_outcome="answered",
+            payload=frame_payload,
+        )
+        await session.commit()
+
+        narrative_id = uuid.uuid4()
+        connection = await session.connection()
+        raw_payload = _raw_nul_alias_narrative_payload(
+            matching_narrative_id=str(narrative_id),
+            run_id=str(run_id),
+            frame_id=str(frame.frame_id),
+            mode="deterministic_fallback",
+        )
+        new_id = uuid.uuid4()
+        with pytest.raises(IntegrityError, match="dev_run_narratives"):
+            await connection.execute(
+                text(
+                    "INSERT INTO dev_run_narratives "
+                    "(id, run_id, org_id, user_id, narrative_id, frame_id, mode, "
+                    "provider_fingerprint, narrative_text, payload, created_at) VALUES "
+                    "(:id, :run_id, :org_id, :user_id, :narrative_id, :frame_id, :mode, "
+                    ":provider_fingerprint, :narrative_text, :payload, :created_at)"
+                ),
+                {
+                    "id": new_id.hex,
+                    "run_id": run_id.hex,
+                    "org_id": org_id.hex,
+                    "user_id": user_id.hex,
+                    "narrative_id": narrative_id.hex,
+                    "frame_id": frame.frame_id.hex,
+                    "mode": "deterministic_fallback",
+                    "provider_fingerprint": None,
+                    "narrative_text": "A safe presentation summary.",
+                    "payload": raw_payload,
+                    "created_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        count = await session.scalar(
+            select(func.count(DevRunNarrative.id)).where(DevRunNarrative.id == new_id)
+        )
+        assert count == 0, "the NUL-alias insert must not have created a row"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_trigger_rejects_nul_alias_narrative_update(persistence) -> None:
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(frame_payload["frame_id"]),
+            public_outcome="answered",
+            payload=frame_payload,
+        )
+        narrative_id = uuid.uuid4()
+        payload, narrative_text, _fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=frame.frame_id,
+            narrative_id=narrative_id,
+            mode="deterministic_fallback",
+        )
+        narrative = await service.record_narrative(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            narrative_id=narrative_id,
+            frame_id=frame.frame_id,
+            mode="deterministic_fallback",
+            provider_fingerprint=None,
+            narrative_text=narrative_text,
+            payload=payload,
+        )
+        await session.commit()
+        narrative_pk_hex = narrative.id.hex
+
+        connection = await session.connection()
+        raw_payload = _raw_nul_alias_narrative_payload(
+            matching_narrative_id=str(narrative_id),
+            run_id=str(run_id),
+            frame_id=str(frame.frame_id),
+            mode="deterministic_fallback",
+        )
+        with pytest.raises(IntegrityError, match="dev_run_narratives"):
+            await connection.execute(
+                text("UPDATE dev_run_narratives SET payload = :payload WHERE id = :id"),
+                {"payload": raw_payload, "id": narrative_pk_hex},
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.scalar(
+            select(DevRunNarrative).where(DevRunNarrative.run_id == run_id)
+        )
+        assert reloaded is not None
+        assert reloaded.narrative_text == narrative_text

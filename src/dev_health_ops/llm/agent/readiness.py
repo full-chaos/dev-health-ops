@@ -29,6 +29,7 @@ from .errors import (
     AgentProviderErrorCode,
     safe_agent_provider_error,
 )
+from .roles import RoleCertificationState
 
 READINESS_SETTING_KEY = "ask_dev_agent_readiness"
 READINESS_MAX_OUTPUT_TOKENS = 512
@@ -312,6 +313,30 @@ def readiness_failure_state(safe_error_code: str | None) -> tuple[ReadinessState
     if safe_error_code == "provider_unavailable":
         return "degraded", "The configured Ask Dev model endpoint is unavailable."
     return "degraded", "The configured Ask Dev model failed readiness."
+
+
+def role_state_for_safe_error_code(
+    safe_error_code: str | None,
+) -> RoleCertificationState:
+    """Map a safe provider error code to a per-role certification verdict.
+
+    Reuses ``readiness_failure_state``'s existing safe_error_code ->
+    admin-facing-state mapping rather than re-deriving the same
+    classification twice (CHAOS-3285): ``"unsupported_model"`` is exactly
+    the deterministic/structural case (including ``output_exhausted``,
+    which maps there today) -- these become INCOMPATIBLE, since retrying
+    the same request shape against the same provider will not resolve
+    them. Every other failure state (missing credentials, disabled,
+    degraded/transient) becomes FAILED -- an operator or transient-retry
+    condition, not a structural one. ``None`` (no error) is COMPATIBLE.
+    """
+
+    if safe_error_code is None:
+        return RoleCertificationState.COMPATIBLE
+    state, _ = readiness_failure_state(safe_error_code)
+    if state == "unsupported_model":
+        return RoleCertificationState.INCOMPATIBLE
+    return RoleCertificationState.FAILED
 
 
 def _add_usage(left: AgentUsage, right: AgentUsage) -> AgentUsage:

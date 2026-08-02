@@ -15,12 +15,13 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, get_args
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.dev.contracts import DevError
 from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from dev_health_ops.models.dev_persistence import (
     DEV_RETENTION_DAYS,
@@ -204,10 +205,52 @@ _PLAN_STEP_LIST_MAX_ITEMS = 25
 _FRAME_PAYLOAD_MAX_BYTES = 128 * 1024
 _NARRATIVE_TEXT_MAX_BYTES = 8 * 1024
 _NARRATIVE_PAYLOAD_MAX_BYTES = 16 * 1024
-# CHAOS-3297 (0079): a dev_error.v1 payload is a handful of short strings
-# (code/safe_message/up-to-5-item remediation) -- generous relative to
-# ShortText's own bound, well under the frame payload's ceiling.
-_TERMINAL_ERROR_PAYLOAD_MAX_BYTES = 4 * 1024
+
+
+def _dev_error_worst_case_bytes() -> int:
+    """The largest byte size a *legal* ``dev_error.v1`` can serialize to.
+
+    CHAOS-3297 Codex review round 2 MEDIUM: a hand-picked byte constant
+    (previously 4 KiB) badly under-counted the contract's own worst case --
+    ``ShortText``'s ``max_length=2048`` is a *character* bound, and
+    ``json.dumps``'s default ``ensure_ascii=True`` (what ``_bounded_json``
+    uses) escapes an astral character as a UTF-16 surrogate pair, i.e. TWO
+    ``\\uXXXX`` sequences = 12 ASCII bytes per character. A ``safe_message``
+    alone at max length with such characters is already ~24.7 KB; with
+    ``remediation`` (``max_length=5`` more ``ShortText`` entries) also
+    maxed, a single legal, Pydantic-valid ``DevError`` reaches roughly
+    144 KB. Computed here by actually constructing and serializing the
+    worst-case object through the exact same encoding ``_bounded_json``
+    uses, rather than reasoning about the bound by hand -- so a future
+    change to either the contract's field bounds or the serialization path
+    keeps this bound honest automatically.
+    """
+
+    longest_code = max(get_args(DevError.model_fields["code"].annotation), key=len)
+    # An astral (non-BMP) character: forces the two-\uXXXX surrogate-pair
+    # escape ensure_ascii=True produces, the actual worst case for byte
+    # count -- a BMP character (most real text) only costs one \uXXXX.
+    worst_char = "\U0001f600"
+    worst = DevError(
+        schema_version="dev_error.v1",
+        request_id="x" * 128,
+        code=longest_code,
+        safe_message=worst_char * 2048,
+        retryable=True,
+        limit_reset_at=datetime(2099, 12, 31, tzinfo=UTC),
+        remediation=[worst_char * 2048] * 5,
+    )
+    encoded = json.dumps(
+        worst.model_dump(mode="json"), separators=(",", ":"), sort_keys=True
+    )
+    return len(encoded.encode("utf-8"))
+
+
+# CHAOS-3297 (0079): every legal dev_error.v1 must fit, computed from the
+# contract's own field bounds (see _dev_error_worst_case_bytes) -- never a
+# guessed constant, which previously rejected legal payloads well within
+# the wire contract.
+_TERMINAL_ERROR_PAYLOAD_MAX_BYTES = _dev_error_worst_case_bytes()
 
 
 class DevPersistenceNotFound(LookupError):
@@ -1134,28 +1177,73 @@ class DevPersistenceService:
             if value is not None and value < 0:
                 raise DevPersistenceValidationError(f"{field} must be nonnegative")
 
-        run.state = state
-        run.answer_id = answer_id
-        run.terminal_reason = _safe_token(
+        # CHAOS-3297 Codex review round 2 MEDIUM: every bound/validate call
+        # below must run to completion *before* a single `run.*` attribute
+        # is touched. Validating in the middle of a sequence of mutations
+        # (the previous shape) meant a legal-but-large terminal_error_payload
+        # raising here left `run.state`/`run.answer_id`/etc already mutated
+        # on the still-open session; the SSE layer catches this exception
+        # and never re-raises it to the request's session dependency, whose
+        # teardown then commits those partial mutations anyway -- silently
+        # persisting a "terminal" v2 run with terminal_error_payload=NULL,
+        # which replay can no longer serve verbatim. Computing every derived
+        # value into a local first makes this function atomic: either every
+        # value validates and every mutation happens, or the first failure
+        # raises with `run` completely untouched.
+        safe_terminal_reason = _safe_token(
             terminal_reason, field="terminal_reason", max_bytes=64
         )
-        run.provider_source = provider_source
-        run.provider_fingerprint = _digest(
+        safe_provider_fingerprint = _digest(
             provider_fingerprint, field="provider_fingerprint"
         )
-        run.model_fingerprint = _digest(model_fingerprint, field="model_fingerprint")
-        run.prompt_version = _safe_token(
+        safe_model_fingerprint = _digest(model_fingerprint, field="model_fingerprint")
+        safe_prompt_version = _safe_token(
             prompt_version, field="prompt_version", max_bytes=128
         )
-        run.tool_contract_version = _safe_token(
+        safe_tool_contract_version = _safe_token(
             tool_contract_version, field="tool_contract_version", max_bytes=128
         )
-        run.metric_version = _safe_token(
+        safe_metric_version = _safe_token(
             metric_version, field="metric_version", max_bytes=128
         )
-        run.query_version = _safe_token(
+        safe_query_version = _safe_token(
             query_version, field="query_version", max_bytes=128
         )
+        safe_grounding_validation_status = _safe_token(
+            grounding_validation_status,
+            field="grounding_validation_status",
+            max_bytes=32,
+        )
+        safe_error_code_value = _safe_token(
+            safe_error_code, field="safe_error_code", max_bytes=64
+        )
+        # CHAOS-3297 (0079): the exact terminal v1 DevError, so idempotent
+        # replay can reuse it verbatim instead of reconstructing an
+        # approximation from the frame (Codex review HIGH #1).
+        # _TERMINAL_ERROR_PAYLOAD_MAX_BYTES is computed from the contract's
+        # own field bounds (round 2 MEDIUM), so a legal dev_error.v1 -- not
+        # just today's small canned remediation strings -- always fits.
+        bounded_terminal_error_payload = (
+            _bounded_json(
+                terminal_error_payload,
+                field="terminal_error_payload",
+                max_bytes=_TERMINAL_ERROR_PAYLOAD_MAX_BYTES,
+            )
+            if terminal_error_payload is not None
+            else None
+        )
+
+        # Every value above validated cleanly -- now mutate.
+        run.state = state
+        run.answer_id = answer_id
+        run.terminal_reason = safe_terminal_reason
+        run.provider_source = provider_source
+        run.provider_fingerprint = safe_provider_fingerprint
+        run.model_fingerprint = safe_model_fingerprint
+        run.prompt_version = safe_prompt_version
+        run.tool_contract_version = safe_tool_contract_version
+        run.metric_version = safe_metric_version
+        run.query_version = safe_query_version
         run.latency_ms = latency_ms
         run.input_tokens = input_tokens
         run.output_tokens = output_tokens
@@ -1166,26 +1254,9 @@ class DevPersistenceService:
             run.citation_count = citation_count
         if metric_count is not None:
             run.metric_count = metric_count
-        run.grounding_validation_status = _safe_token(
-            grounding_validation_status,
-            field="grounding_validation_status",
-            max_bytes=32,
-        )
-        run.safe_error_code = _safe_token(
-            safe_error_code, field="safe_error_code", max_bytes=64
-        )
-        # CHAOS-3297 (0079): the exact terminal v1 DevError, so idempotent
-        # replay can reuse it verbatim instead of reconstructing an
-        # approximation from the frame (Codex review HIGH #1).
-        run.terminal_error_payload = (
-            _bounded_json(
-                terminal_error_payload,
-                field="terminal_error_payload",
-                max_bytes=_TERMINAL_ERROR_PAYLOAD_MAX_BYTES,
-            )
-            if terminal_error_payload is not None
-            else None
-        )
+        run.grounding_validation_status = safe_grounding_validation_status
+        run.safe_error_code = safe_error_code_value
+        run.terminal_error_payload = bounded_terminal_error_payload
         if state in _TERMINAL_RUN_STATES:
             run.ended_at = self._now()
         await self.session.flush()

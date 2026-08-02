@@ -295,9 +295,16 @@ class OrchestratorNativeErrorRuntime(FakeBoundedRuntime):
     must hold for both.
     """
 
-    def __init__(self, *, code: str, message: str) -> None:
+    def __init__(
+        self, *, code: str, message: str, remediation: list[str] | None = None
+    ) -> None:
         self.code = code
         self.message = message
+        # None -> the normal canned dev_error_remediation(code) lookup;
+        # explicit override lets a test drive a legal-but-large remediation
+        # list (CHAOS-3297 Codex review round 2 MEDIUM: DevError.remediation
+        # admits up to 5 ShortText entries, up to 2048 characters each).
+        self._remediation_override = remediation
 
     async def run(
         self,
@@ -320,7 +327,11 @@ class OrchestratorNativeErrorRuntime(FakeBoundedRuntime):
             code=self.code,
             safe_message=self.message,
             retryable=False,
-            remediation=dev_error_remediation(self.code),
+            remediation=(
+                self._remediation_override
+                if self._remediation_override is not None
+                else dev_error_remediation(self.code)
+            ),
         )
         frame = dev_terminal_frames.build_error_frame(
             code=self.code,
@@ -937,6 +948,115 @@ async def test_orchestrator_native_error_replay_serves_the_exact_live_payload(
         assert len(runs) == 1, "the replay must not have created a second run"
         assert runs[0].terminal_error_payload is not None
         assert runs[0].terminal_error_payload["code"] == code
+
+
+@pytest.mark.asyncio
+async def test_oversized_but_legal_error_persists_atomically_and_replays_byte_identical(
+    dev_api_context,
+) -> None:
+    """CHAOS-3297 Codex review round 2 MEDIUM (persistence/service.py):
+    a legal ``dev_error.v1`` must never be silently downgraded on write.
+
+    ``DevError.safe_message``/``remediation`` are ``ShortText`` -- a
+    *character* bound (``max_length=2048``), not a byte bound -- and
+    ``_bounded_json`` serializes with ``json.dumps``'s default
+    ``ensure_ascii=True``, which escapes an astral character as a
+    UTF-16 surrogate pair (two ``\\uXXXX`` sequences, 12 ASCII bytes each).
+    A fully legal, Pydantic-valid ``DevError`` with a maxed
+    ``safe_message`` and five maxed ``remediation`` entries therefore
+    serializes to roughly 144 KB -- far past the previous hand-picked 4 KiB
+    cap, which rejected this exact legal object. Before the fix, that
+    exception was raised *after* ``update_run`` had already mutated
+    ``run.state``/etc on the open session; the SSE layer swallows the
+    exception (never re-raising it to the request's session-dependency
+    teardown), so the partially-mutated run was committed anyway with
+    ``terminal_error_payload=NULL`` -- a "terminal" v2 run whose replay
+    silently lost verbatim fidelity. This test drives the real endpoint
+    with a maxed-out-but-legal error twice (live + idempotent replay) and
+    asserts the run persisted atomically (correct terminal state,
+    ``ended_at`` set, ``terminal_error_payload`` populated with the full
+    payload) and that replay is byte-identical to live.
+    """
+
+    worst_char = "\U0001f600"
+    huge_message = worst_char * 2048
+    huge_remediation = [worst_char * 2048] * 5
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=cast(
+            Any,
+            OrchestratorNativeErrorRuntime(
+                code="scope_not_found",
+                message=huge_message,
+                remediation=huge_remediation,
+            ),
+        )
+    )
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": "request_oversized_error",
+        "client_message_id": "client_oversized_error",
+        "conversation_id": conversation_id,
+        "question": "What is the status of the thing I mean?",
+        "question_class": "status",
+        "scope": _scope_payload(dev_api_context.org_id),
+    }
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+    live_events = dict(_parse_sse_events(live.text))
+    assert "error" in live_events
+    live_error = live_events["error"]["error"]
+    assert live_error["code"] == "scope_not_found"
+    assert live_error["safe_message"] == huge_message
+    assert live_error["remediation"] == huge_remediation
+
+    replay = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert replay.status_code == 200
+    replay_events = dict(_parse_sse_events(replay.text))
+    assert "error" in replay_events
+    replay_error = replay_events["error"]["error"]
+    assert replay_error["safe_message"] == huge_message, (
+        "replay must serve the oversized-but-legal message byte-identically, "
+        "not a truncated or fallback shape"
+    )
+    assert replay_error["remediation"] == huge_remediation
+
+    async with dev_api_context.maker() as session:
+        runs = (
+            await session.scalars(
+                select(DevRun).where(
+                    DevRun.conversation_id == uuid.UUID(conversation_id)
+                )
+            )
+        ).all()
+        assert len(runs) == 1, "the replay must not have created a second run"
+        run = runs[0]
+        assert run.state == "failed", (
+            "the run must land in its real terminal state, not be left "
+            "half-mutated by a validation failure mid-update_run"
+        )
+        assert run.ended_at is not None, (
+            "ended_at is set after every other field in update_run -- a "
+            "non-null value proves the whole call completed, not just the "
+            "fields that happened to be assigned before a mid-function raise"
+        )
+        assert run.terminal_error_payload is not None
+        assert run.terminal_error_payload["safe_message"] == huge_message
+        assert run.terminal_error_payload["remediation"] == huge_remediation
 
 
 @pytest.mark.asyncio

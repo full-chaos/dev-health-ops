@@ -99,6 +99,10 @@ def _deficiency_finding(
 
 
 def _base_fact() -> DevAnswerFact:
+    # F10: a fact needs evidence_ref_ids OR a disclosure. This fixture is
+    # about health_findings/deficiency_findings, not fact grounding, so an
+    # evidence-free legacy-style claim needs a disclosure to satisfy F10
+    # without asserting a real minted handle it does not need for this test.
     return DevAnswerFact(
         fact_id="fact_01",
         text="One dimension is at risk.",
@@ -106,6 +110,7 @@ def _base_fact() -> DevAnswerFact:
         evidence_ref_ids=(),
         relationship_path_ids=(),
         confidence=1.0,
+        disclosures=("uncertain",),
     )
 
 

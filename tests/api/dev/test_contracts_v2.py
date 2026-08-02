@@ -272,6 +272,11 @@ _FRAME_VALIDATOR_CASES: dict[str, tuple[str, str]] = {
         "dev_answer_frame.v1",
         "answered_without_versions",
     ),
+    # F10 (CHAOS-3297 stack #3, ratified 2026-08-02).
+    "validate_frame_grounding": (
+        "dev_answer_frame.v1",
+        "fact_missing_grounding",
+    ),
 }
 
 #: A validator can reject more than one negative fixture. CHAOS-3297 flags

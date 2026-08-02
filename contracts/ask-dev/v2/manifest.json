@@ -173,7 +173,7 @@
         {
           "case": "outcome_content_mismatch",
           "path": "examples/negative/dev_answer_frame.v1.outcome_content_mismatch.json",
-          "sha256": "f574d8ea763d393fe98fafe90eb80a39d0535e9c0af713bd4a64d96d4139fa8b"
+          "sha256": "c2a1252cccd3dd9c78d43542dae418a5900ec61a2124d2f4c010ae95f622fab3"
         },
         {
           "case": "completion_without_denominator",
@@ -194,6 +194,11 @@
           "case": "answered_with_disclosure",
           "path": "examples/negative/dev_answer_frame.v1.answered_with_disclosure.json",
           "sha256": "2b4cf375f97ddadfa79018c46a932c0f447a73835445b15a3064a49aad592afe"
+        },
+        {
+          "case": "fact_missing_grounding",
+          "path": "examples/negative/dev_answer_frame.v1.fact_missing_grounding.json",
+          "sha256": "dda964e85b2f5373096c53c5368e9e1b64048dbe73c67adbe8fcef8344c5af60"
         },
         {
           "case": "disclosures_out_of_order",

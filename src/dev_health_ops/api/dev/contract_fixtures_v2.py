@@ -880,6 +880,12 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
         # test_disabling_one_frame_validator_flips_only_its_own_fixture).
         value["public_outcome"] = "needs_clarification"
         value["facts"][0]["evidence_ref_ids"] = []
+        # F10 (CHAOS-3297 stack #3): a fact with neither evidence_ref_ids nor
+        # a disclosure now fails validate_frame_grounding too, which would
+        # make this fixture attributable to TWO guardrails instead of one.
+        # A disclosure is this fact's explicit no-evidence classification,
+        # keeping it isolated to validate_outcome_consistency's own check.
+        value["facts"][0]["disclosures"] = ["untrusted_source"]
         value["facts"][0]["relationship_path_ids"] = []
         value["completion"] = None
         value["readiness"] = None
@@ -916,6 +922,15 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     frame_answered_with_disclosure = changed(
         "dev_answer_frame.v1",
         lambda value: value["facts"][0].__setitem__("disclosures", ["stale"]),
+    )
+    # F10 (CHAOS-3297 stack #3, ratified 2026-08-02): a fact with neither
+    # evidence_ref_ids nor a disclosure -- isolated from every other frame
+    # guardrail (the base positive fixture is otherwise a valid 'answered'
+    # frame; only this one fact's evidence is cleared, with no disclosure
+    # substituted).
+    frame_fact_missing_grounding = changed(
+        "dev_answer_frame.v1",
+        lambda value: value["facts"][0].__setitem__("evidence_ref_ids", []),
     )
     # DevAnswerFact.validate_disclosures_canonical_order: declared out of
     # ascending FactDisclosure order.
@@ -1244,6 +1259,7 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             ("relationship_outside_frame", frame_relationship_outside_frame),
             ("answered_without_versions", frame_answered_without_versions),
             ("answered_with_disclosure", frame_answered_with_disclosure),
+            ("fact_missing_grounding", frame_fact_missing_grounding),
             ("disclosures_out_of_order", frame_disclosures_out_of_order),
             ("disclosures_duplicated", frame_disclosures_duplicated),
             (

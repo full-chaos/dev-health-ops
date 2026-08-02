@@ -311,6 +311,7 @@ class DevAnswerFrame(ContractModelV2):
         _validators.validate_no_answer_projection(self)
         _validators.validate_completion_denominator(self)
         _validators.validate_relationship_refs_within_frame(self)
+        _validators.validate_frame_grounding(self)
         return self
 
 

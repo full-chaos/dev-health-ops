@@ -41,6 +41,12 @@ reproduced against those five:
     subject's canonical identity, or a recommendation reference cannot be
     verified without a model in the loop. That layer is the TRD v2 §11
     layer-6 narrative-consistency validator, tracked as CHAOS-3297.
+(h) ``validate_frame_grounding`` — F10 (CHAOS-3297 stack #3, ratified
+    2026-08-02): every frame fact carries signer-minted evidence or an
+    explicit no-evidence classification (``fact.disclosures``). The
+    grounding floor ``contracts_v2/validators.py`` was missing before
+    stack #3 -- see that function's own docstring for the deliberately
+    NOT-yet-covered metrics half.
 
 Where the code lives
 --------------------
@@ -287,6 +293,7 @@ __all__ = [
     "register_no_answer_policy",
     "scan_public_text",
     "validate_completion_denominator",
+    "validate_frame_grounding",
     "validate_narrative_fact_references",
     "validate_narrative_frame_consistency",
     "validate_narrative_numeric_containment",
@@ -452,6 +459,56 @@ def validate_outcome_consistency(frame: _frame.DevAnswerFrame) -> None:
                 "'answered_with_gaps' requires disclosed limitations or a "
                 "non-calculable completion block"
             )
+
+
+def validate_frame_grounding(frame: _frame.DevAnswerFrame) -> None:
+    """F10 (CHAOS-3297 stack #3, ratified 2026-08-02): every frame fact
+    carries signer-minted evidence or an explicit no-evidence
+    classification. Mirrors ``answer_validator._answer_has_material_grounding``'s
+    v1 shape (a grounding floor at the contract layer, not merely
+    documented) applied here at the per-fact granularity F10's own text
+    specifies, rather than v1's whole-answer "something somewhere is
+    grounded" check.
+
+    ``fact.disclosures`` (CHAOS-3297 flags gap, ratified 2026-08-02) is the
+    "explicit no-evidence classification" channel for a
+    ``DevAnswerFact`` -- no new field is needed: a fact whose evidence
+    the server does not trust enough to cite (stale/uncertain/conflicting/
+    untrusted_source) still satisfies F10 by disclosing exactly why it has
+    none, the same way ``DeficiencyFinding.evidence_classification``
+    satisfies its own F10 requirement one layer down. A fact with BOTH
+    empty ``evidence_ref_ids`` and empty ``disclosures`` is the one
+    combination F10 forbids: neither real evidence nor an honest
+    explanation for its absence.
+
+    Deliberately does NOT check ``frame.metrics`` yet. ``DevMetricRefV2``
+    has no disclosure-equivalent field, and ``frame.metrics`` today is
+    populated ONLY from the legacy v1 answer's own metrics
+    (``wrap_legacy_answer_as_frame``), which in turn can originate from
+    ``production_runtime.py``'s v1 ``query_metric.v1`` tool --
+    that tool deliberately scrubs ``evidence_ref_ids`` to ``()`` on every
+    call (its metric-service refs are not signer-minted ``DevEvidenceRef``
+    ids; see that call site's own comment). A strict per-metric grounding
+    requirement here would reject essentially every existing legacy-answer
+    frame that cites a metric -- a real regression, not a hypothetical
+    one. Tracked as an explicit, honest gap pending a design decision on
+    whether ``DevMetricRefV2`` needs its own no-evidence classification or
+    the requirement is scoped to v2-investigation-plan-sourced metrics
+    only (CHAOS-3297 Linear issue) -- never silently claimed as covered.
+    """
+
+    ungrounded = [
+        fact.fact_id
+        for fact in frame.facts
+        if not fact.evidence_ref_ids and not fact.disclosures
+    ]
+    if ungrounded:
+        raise ValueError(
+            "F10: fact(s) "
+            f"{sorted(ungrounded)} carry neither evidence_ref_ids nor a "
+            "disclosure -- every fact requires signer-minted evidence or "
+            "an explicit no-evidence classification"
+        )
 
 
 def validate_versions_presence(frame: _frame.DevAnswerFrame) -> None:

@@ -63,7 +63,11 @@ class PlatformAskDevReadinessResponse(StrictAdminModel):
     configured: bool
     provider_label: str | None = Field(default=None, max_length=256)
     model_label: str | None = Field(default=None, max_length=256)
+    # CHAOS-3285 round 2 (Codex HIGH): the EFFECTIVE readiness -- binary
+    # transport check AND legacy_agent role certification combined. See
+    # AskDevAdminResponse's identical field for the full rationale.
     readiness: ReadinessState
+    binary_transport_readiness: ReadinessState
     readiness_checked_at: AwareDatetime | None = None
     readiness_version: str | None = Field(default=None, max_length=128)
     safe_remediation: str | None = Field(default=None, max_length=2_048)
@@ -124,6 +128,7 @@ async def _platform_readiness_response(
             provider_label=None,
             model_label=None,
             readiness=readiness,
+            binary_transport_readiness=readiness,
             readiness_checked_at=(
                 _checked_at(readiness_record.checked_at) if readiness_record else None
             ),
@@ -179,11 +184,29 @@ async def _platform_readiness_response(
             role_profile,
             legacy_agent_certification_key=resolution.readiness_fingerprint,
         )
+        # CHAOS-3285 round 2 (Codex HIGH): combine binary + role, same as
+        # ask_dev.py -- only override when the binary check itself passed.
+        binary_transport_readiness = readiness_state
+        legacy_role_entry = next(
+            (entry for entry in role_readiness if entry.role == "legacy_agent"), None
+        )
+        if (
+            readiness_state == "ready"
+            and legacy_role_entry is not None
+            and legacy_role_entry.state != "ready"
+        ):
+            readiness_state = (
+                "stale_readiness"
+                if legacy_role_entry.state == "not_yet_certified"
+                else legacy_role_entry.state
+            )
+            safe_remediation = legacy_role_entry.safe_remediation
         return PlatformAskDevReadinessResponse(
             configured=True,
             provider_label=resolution.provider_label,
             model_label=resolution.model_label,
             readiness=readiness_state,
+            binary_transport_readiness=binary_transport_readiness,
             readiness_checked_at=(
                 _checked_at(readiness_record.checked_at) if readiness_record else None
             ),

@@ -73,7 +73,17 @@ class LLMSettingsStatusResponse(BaseModel):
         "active",
     ]
     last_fallback_at: datetime | None = None
+    # CHAOS-3285 round 2 (Codex HIGH): `readiness` is the EFFECTIVE state --
+    # the binary transport-echo check AND the legacy_agent role
+    # certification live selection actually requires, combined. A
+    # binary-ready-but-role-incompatible BYO config must never report
+    # "ready" here. `binary_transport_readiness` is the raw, binary-only
+    # result, kept as a separately-named diagnostic (see ask_dev.py's
+    # AskDevAdminResponse.binary_transport_readiness for the full rationale).
     readiness: Literal["ready", "failed", "stale", "never_checked"] = "never_checked"
+    binary_transport_readiness: Literal["ready", "failed", "stale", "never_checked"] = (
+        "never_checked"
+    )
     readiness_checked_at: AwareDatetime | None = None
     readiness_safe_failure_reason: str | None = None
 

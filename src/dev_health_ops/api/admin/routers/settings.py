@@ -64,7 +64,7 @@ from dev_health_ops.metrics.schemas import LLMTokenSpendSummaryRecord
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.models.settings import SettingCategory
 
-from .ask_dev import _checked_at
+from .ask_dev import _checked_at, _role_readiness_list
 from .common import get_session
 
 router = APIRouter()
@@ -189,33 +189,66 @@ async def _llm_settings_status_response(
     # reports "stale" with a safe, accurate remediation -- never silently
     # reused as "ready", and never reported as if something is broken.
     readiness_record = await SettingsAgentReadinessStore(svc).load()
-    readiness: Literal["ready", "failed", "stale", "never_checked"] = "never_checked"
+    binary_transport_readiness: Literal["ready", "failed", "stale", "never_checked"] = (
+        "never_checked"
+    )
     readiness_checked_at: datetime | None = None
     readiness_safe_failure_reason: str | None = None
+    # Computed unconditionally (not just when a binary record exists): it is
+    # also the legacy_agent role's certification_key, needed below
+    # regardless of whether the binary probe has ever run.
+    current_byo = await _byo_candidate(svc, readiness=None, certification=True)
+    current_fingerprint = (
+        _readiness_fingerprint(current_byo) if current_byo is not None else None
+    )
     if readiness_record is not None:
         readiness_checked_at = _checked_at(readiness_record.checked_at)
-        current_byo = await _byo_candidate(svc, readiness=None, certification=True)
-        current_fingerprint = (
-            _readiness_fingerprint(current_byo) if current_byo is not None else None
-        )
         is_current = (
             current_fingerprint is not None
             and readiness_record.fingerprint == current_fingerprint
             and readiness_record.readiness_version == READINESS_VERSION
         )
         if not is_current:
-            readiness = "stale"
+            binary_transport_readiness = "stale"
             readiness_safe_failure_reason = (
                 "This configuration has not been certified under the current "
                 "readiness requirements. Run preflight again."
             )
         elif readiness_record.outcome is AgentReadinessOutcome.READY:
-            readiness = "ready"
+            binary_transport_readiness = "ready"
         else:
-            readiness = "failed"
+            binary_transport_readiness = "failed"
             _, readiness_safe_failure_reason = readiness_failure_state(
                 readiness_record.safe_error_code
             )
+
+    # CHAOS-3285 round 2 (Codex HIGH): the binary transport check alone is
+    # never sufficient for "ready" -- live selection also requires a
+    # current, COMPATIBLE legacy_agent role certification (see
+    # production_runtime.py _candidate()). Combine them the same way
+    # ask_dev.py's admin surface does, only overriding when the binary
+    # check itself passed.
+    role_profile = await SettingsRoleCertificationStore(svc).load()
+    role_readiness = _role_readiness_list(
+        role_profile, legacy_agent_certification_key=current_fingerprint
+    )
+    legacy_role_entry = next(
+        (entry for entry in role_readiness if entry.role == "legacy_agent"), None
+    )
+    readiness = binary_transport_readiness
+    if (
+        binary_transport_readiness == "ready"
+        and legacy_role_entry is not None
+        and legacy_role_entry.state != "ready"
+    ):
+        readiness_safe_failure_reason = legacy_role_entry.safe_remediation
+        readiness = (
+            "never_checked"
+            if legacy_role_entry.state == "not_yet_certified"
+            else "stale"
+            if legacy_role_entry.state == "stale_readiness"
+            else "failed"
+        )
     return LLMSettingsStatusResponse(
         configured=evaluation.configured,
         active=evaluation.active,
@@ -223,6 +256,7 @@ async def _llm_settings_status_response(
         reason_code=evaluation.reason_code,
         last_fallback_at=last_fallback_at,
         readiness=readiness,
+        binary_transport_readiness=binary_transport_readiness,
         readiness_checked_at=readiness_checked_at,
         readiness_safe_failure_reason=readiness_safe_failure_reason,
     )

@@ -240,6 +240,21 @@ async def test_admin_projection_nulls_platform_identity_until_platform_admin_cer
                 outcome=AgentReadinessOutcome.READY,
             )
         )
+        # CHAOS-3285 round 2: effective readiness also requires a current,
+        # COMPATIBLE legacy_agent role certification -- mirror what a real
+        # POST /platform/ask-dev/readiness run now also writes.
+        await SettingsRoleCertificationStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+        ).save_record(
+            RoleCertificationRecord(
+                role=AgentRole.LEGACY_AGENT,
+                certification_key="readiness-fingerprint",
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                state=RoleCertificationState.COMPATIBLE,
+            )
+        )
         await session.commit()
 
     certified = await admin_context.client.get("/api/v1/admin/ask-dev")
@@ -306,6 +321,19 @@ async def test_byo_source_keeps_its_own_identity_and_failure_reason(
                 readiness_version=READINESS_VERSION,
                 checked_at=datetime.now(timezone.utc).isoformat(),
                 outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        # CHAOS-3285 round 2: effective readiness also requires a current,
+        # COMPATIBLE legacy_agent role certification.
+        await SettingsRoleCertificationStore(
+            SettingsService(session, str(admin_context.org_id))
+        ).save_record(
+            RoleCertificationRecord(
+                role=AgentRole.LEGACY_AGENT,
+                certification_key="byo-readiness-fingerprint",
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                state=RoleCertificationState.COMPATIBLE,
             )
         )
         await session.commit()
@@ -761,3 +789,82 @@ async def test_role_readiness_platform_boundary_redacts_remediation_not_state(
     assert roles["legacy_agent"]["safe_remediation"] == (
         "Ask Dev is temporarily unavailable. Contact your platform operator."
     )
+
+
+@pytest.mark.asyncio
+async def test_binary_ready_role_absent_reports_unavailable_not_ready(
+    admin_context,
+):
+    """CHAOS-3285 round 2 (Codex HIGH): the exact contradiction codex found --
+    the binary transport-echo check passing must never, by itself, report
+    "ready"/available when the legacy_agent role has no certification at
+    all. Live selection (production_runtime.py) already rejects this
+    candidate; the admin surface must agree, not contradict it."""
+
+    async with admin_context.maker() as session:
+        await SettingsAgentReadinessStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_READINESS_SETTING_KEY,
+        ).save(
+            AgentReadinessRecord(
+                fingerprint="readiness-fingerprint",
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        # Deliberately NO role-certification row at all.
+        await session.commit()
+
+    response = await admin_context.client.get("/api/v1/admin/ask-dev")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["readiness"] != "ready"
+    assert body["binary_transport_readiness"] == "ready"
+    assert body["chat_window_available"] is False
+    assert body["full_page_available"] is False
+    roles = {entry["role"]: entry for entry in body["role_readiness"]}
+    assert roles["legacy_agent"]["state"] == "not_yet_certified"
+
+
+@pytest.mark.asyncio
+async def test_binary_ready_role_incompatible_reports_unavailable_not_ready(
+    admin_context,
+):
+    """Same contradiction, with a role record present but INCOMPATIBLE
+    rather than absent -- must also fail to report ready/available."""
+
+    async with admin_context.maker() as session:
+        await SettingsAgentReadinessStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_READINESS_SETTING_KEY,
+        ).save(
+            AgentReadinessRecord(
+                fingerprint="readiness-fingerprint",
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        await SettingsRoleCertificationStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+        ).save_record(
+            RoleCertificationRecord(
+                role=AgentRole.LEGACY_AGENT,
+                certification_key="readiness-fingerprint",
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                state=RoleCertificationState.INCOMPATIBLE,
+                safe_error_code="output_exhausted",
+            )
+        )
+        await session.commit()
+
+    response = await admin_context.client.get("/api/v1/admin/ask-dev")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["readiness"] != "ready"
+    assert body["binary_transport_readiness"] == "ready"
+    assert body["chat_window_available"] is False
+    assert body["full_page_available"] is False

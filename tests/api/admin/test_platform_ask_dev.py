@@ -675,3 +675,46 @@ async def test_role_certification_failure_does_not_regress_binary_readiness(
     assert posted_body["readiness"] == "unsupported_model"
     roles = {entry["role"]: entry for entry in posted_body["role_readiness"]}
     assert roles["legacy_agent"]["state"] == "unsupported_model"
+
+
+@pytest.mark.asyncio
+async def test_binary_ready_role_absent_reports_unavailable_not_ready(
+    platform_context: PlatformContext, monkeypatch: pytest.MonkeyPatch
+):
+    """CHAOS-3285 round 2 (Codex HIGH): the platform surface must agree with
+    live selection -- a binary-ready record with no legacy_agent role
+    certification at all must never report "ready" here."""
+
+    provider = FakeReadinessProvider()
+
+    async def resolve() -> ProductionProviderResolution:
+        return _resolution(provider)
+
+    monkeypatch.setattr(
+        platform_ask_dev, "resolve_platform_certification_provider", resolve
+    )
+
+    async with platform_context.maker() as session:
+        await SettingsAgentReadinessStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_READINESS_SETTING_KEY,
+        ).save(
+            AgentReadinessRecord(
+                fingerprint=_FINGERPRINT,
+                readiness_version=READINESS_VERSION,
+                checked_at="2026-07-29T12:00:00+00:00",
+                outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        # Deliberately NO role-certification row at all.
+        await session.commit()
+
+    response = await platform_context.client.get(
+        "/api/v1/admin/platform/ask-dev/readiness"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["readiness"] != "ready"
+    assert body["binary_transport_readiness"] == "ready"
+    roles = {entry["role"]: entry for entry in body["role_readiness"]}
+    assert roles["legacy_agent"]["state"] == "not_yet_certified"

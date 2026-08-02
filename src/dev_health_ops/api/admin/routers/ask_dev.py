@@ -275,7 +275,14 @@ class AskDevAdminResponse(StrictAdminModel):
     effective_provider_label: str | None = Field(default=None, max_length=256)
     effective_model_label: str | None = Field(default=None, max_length=256)
     provider_source: Literal["platform", "byo"] | None = None
+    # CHAOS-3285 round 2 (Codex HIGH): this is now the EFFECTIVE readiness --
+    # combining the transport-echo binary check AND the legacy_agent role
+    # certification live selection actually requires. A binary-ready-but-
+    # role-incompatible provider must never report "ready" here (it would
+    # contradict live selection, which already rejects it). The raw,
+    # binary-only result is kept separately below as a named diagnostic.
     readiness: ReadinessState
+    binary_transport_readiness: ReadinessState
     readiness_checked_at: AwareDatetime | None = None
     readiness_version: str | None = Field(default=None, max_length=128)
     administrator_safe_failure_reason: str | None = Field(
@@ -543,6 +550,36 @@ async def _admin_response(
                         exc_info=True,
                     )
 
+    # CHAOS-3285 round 2 (Codex HIGH): the binary transport check alone is
+    # never sufficient for "ready" -- live selection (production_runtime.py
+    # _candidate()) also requires a current, COMPATIBLE legacy_agent role
+    # certification. Combine them here so this response can never claim
+    # availability that selection would reject. Only override when the
+    # binary check itself passed: a binary failure (missing credentials,
+    # unsupported model, ...) already explains why nothing is available and
+    # must keep its own specific reason rather than being masked by a role
+    # state that was never meaningfully evaluated against a failing binary
+    # candidate in the first place.
+    binary_transport_readiness: ReadinessState = readiness
+    legacy_role_entry = next(
+        (entry for entry in role_readiness if entry.role == "legacy_agent"), None
+    )
+    if (
+        readiness == "ready"
+        and legacy_role_entry is not None
+        and legacy_role_entry.state != "ready"
+    ):
+        # "not_yet_certified" has no ReadinessState counterpart (it exists
+        # only to distinguish "never certified" from "stale" in the per-role
+        # array); both mean the same thing for this combined top-level
+        # field -- run preflight -- so it collapses to stale_readiness here.
+        readiness = (
+            "stale_readiness"
+            if legacy_role_entry.state == "not_yet_certified"
+            else legacy_role_entry.state
+        )
+        failure_reason = legacy_role_entry.safe_remediation
+
     if provider_source == "platform":
         # This organization's admin surface must never expose the
         # platform-owned provider's identity or its platform-specific
@@ -580,6 +617,7 @@ async def _admin_response(
         effective_model_label=model_label,
         provider_source=provider_source,
         readiness=readiness,
+        binary_transport_readiness=binary_transport_readiness,
         readiness_checked_at=(
             _checked_at(readiness_record.checked_at) if readiness_record else None
         ),

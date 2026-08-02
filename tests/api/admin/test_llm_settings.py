@@ -420,6 +420,7 @@ async def test_admin_llm_settings_status_reports_unconfigured_valid_and_invalid_
             "reason_code": "not_configured",
             "last_fallback_at": None,
             "readiness": "never_checked",
+            "binary_transport_readiness": "never_checked",
             "readiness_checked_at": None,
             "readiness_safe_failure_reason": None,
         }
@@ -435,6 +436,7 @@ async def test_admin_llm_settings_status_reports_unconfigured_valid_and_invalid_
             "reason_code": "active",
             "last_fallback_at": None,
             "readiness": "never_checked",
+            "binary_transport_readiness": "never_checked",
             "readiness_checked_at": None,
             "readiness_safe_failure_reason": None,
         }
@@ -534,6 +536,7 @@ async def test_admin_llm_settings_status_ignores_stale_or_cross_org_fallback_row
         "reason_code": "active",
         "last_fallback_at": None,
         "readiness": "never_checked",
+        "binary_transport_readiness": "never_checked",
         "readiness_checked_at": None,
         "readiness_safe_failure_reason": None,
     }
@@ -545,9 +548,58 @@ async def test_admin_llm_settings_status_ignores_stale_or_cross_org_fallback_row
         "reason_code": "invalid_base_url",
         "last_fallback_at": None,
         "readiness": "never_checked",
+        "binary_transport_readiness": "never_checked",
         "readiness_checked_at": None,
         "readiness_safe_failure_reason": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_binary_ready_role_absent_reports_unavailable_not_ready(session_maker):
+    """CHAOS-3285 round 2 (Codex HIGH): the BYO status endpoint must agree
+    with live selection -- a binary-ready record with no legacy_agent role
+    certification at all must never report "ready" here either."""
+
+    from dev_health_ops.llm.agent.readiness import (
+        AgentReadinessOutcome,
+        AgentReadinessRecord,
+        SettingsAgentReadinessStore,
+    )
+
+    state = await _seed_org(session_maker, "team")
+    await _set_llm_settings(
+        session_maker,
+        state["org_id"],
+        provider="openai",
+        api_key="sk-org",
+        base_url="https://api.openai.com/v1",
+    )
+    fingerprint = await _real_byo_fingerprint(session_maker, state["org_id"])
+
+    async with session_maker() as session:
+        await SettingsAgentReadinessStore(
+            SettingsService(session, state["org_id"])
+        ).save(
+            AgentReadinessRecord(
+                fingerprint=fingerprint,
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        # Deliberately NO role-certification row at all.
+        await session.commit()
+
+    app = _make_app(session_maker, state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.get("/api/v1/admin/llm-settings/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["readiness"] != "ready"
+    assert body["binary_transport_readiness"] == "ready"
 
 
 # Removed: test_byo_llm_status_reason_codes_match_documented_contract.

@@ -999,7 +999,91 @@ async def test_native_reader_preserves_the_completion_assessment_bound(
     )
 
     assert observed_limits
-    assert set(observed_limits) == {1_000}
+    # CHAOS-3297 s2 round 2 (codex HIGH): _WORK_ITEMS_SQL requests one
+    # sentinel row beyond the bound (1,001) so truncation can be detected
+    # even though the declared parent consumes one row of the shared
+    # budget -- every other query still binds exactly the bound.
+    assert set(observed_limits) == {1_000, 1_001}
+
+
+@pytest.mark.asyncio
+async def test_native_parent_inclusive_source_cap_never_fabricates_a_ready_ratio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3297 s2 round 2 (codex HIGH) regression: _WORK_ITEMS_SQL fetches
+    the declared parent AND its children from one query sharing a single
+    LIMIT. Simulate a Done parent with 999 newer completed children plus one
+    OLDER incomplete child that falls off the fetch window (1 parent + 1000
+    children = 1001 rows total, one more than the 1,000-item bound). Before
+    this fix, ``len(children)`` would be exactly 999 (< 1,000), so
+    ``assessment_source_limit_reached`` never fired and the omitted
+    incomplete child let the service report a fabricated 999/999
+    READY/COMPLETE. The fix must detect the truncation via the sentinel row
+    and never present that as a trustworthy ratio.
+    """
+
+    def _work_item_row(
+        work_item_id: str, status: str, *, updated_at: datetime, parent_id: str | None
+    ) -> dict[str, Any]:
+        return {
+            "repository_id": "repo-a",
+            "work_item_id": work_item_id,
+            "title": work_item_id,
+            "status": status,
+            "parent_id": parent_id,
+            "project_id": None,
+            "project_key": None,
+            "updated_at": updated_at,
+            "last_synced": NOW,
+        }
+
+    parent = _work_item_row("issue-1", "done", updated_at=NOW, parent_id=None)
+    newest_children = [
+        _work_item_row(
+            f"child-{index:04d}",
+            "done",
+            updated_at=NOW - timedelta(minutes=index),
+            parent_id="issue-1",
+        )
+        for index in range(999)
+    ]
+    # The oldest row -- by ``ORDER BY ... updated_at DESC``, this is the
+    # very last row and the first one a LIMIT cuts off.
+    oldest_incomplete_child = _work_item_row(
+        "child-oldest",
+        "in_progress",
+        updated_at=NOW - timedelta(days=365),
+        parent_id="issue-1",
+    )
+    all_work_item_rows = [parent, *newest_children, oldest_incomplete_child]
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if (
+            "SELECT toString(repo_id) AS repository_id, work_item_id, title, status,"
+            in sql
+        ):
+            return all_work_item_rows[: int(params["limit"])]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(), max_items=100),
+    )
+
+    # Regression: the pre-fix code reported 999/999 READY/COMPLETE here.
+    assert result.actual.state is not CompletionState.READY
+    assert result.state is not StatusResultState.COMPLETE
+    assert "assessment_source_limit_reached" in result.actual.reason_codes
+    assert result.actual.required_child_total is None
+    assert result.actual.required_child_complete is None
 
 
 @pytest.mark.asyncio

@@ -516,12 +516,13 @@ async def test_assessment_source_bound_never_false_passes_completion() -> None:
     assert result.actual.state is CompletionState.INDETERMINATE
     assert "assessment_source_limit_reached" in result.actual.reason_codes
     assert result.warnings == ("status assessment source bound reached",)
-    # CHAOS-3297 s2, case 4b: even when the SOURCE itself hit its bound
-    # (1,000 items), the denominator counts every child the source did
-    # return -- reaching the source limit must not corrupt or suppress the
-    # counts, only the reason code + state gate trust in them.
-    assert result.actual.required_child_total == 1_000
-    assert result.actual.required_child_complete == 1_000
+    # CHAOS-3297 s2 round 2 (codex HIGH): when the SOURCE itself hit its
+    # bound (1,000 items), the 1,000 children the source did return could
+    # look deceptively "complete" (1000/1000) even though the true total
+    # is unknown -- withhold the denominator entirely rather than publish
+    # a count that might be an undercount by exactly the omitted rows.
+    assert result.actual.required_child_total is None
+    assert result.actual.required_child_complete is None
     assert result.actual.display_truncated is True
 
 

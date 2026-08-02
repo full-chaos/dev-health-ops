@@ -1,15 +1,15 @@
 {
   "schema_version": "wave_3_1_proof_gate_manifest.v1",
-  "item_count": 51,
+  "item_count": 52,
   "status_counts": {
     "blocked": 14,
     "deferred": 7,
     "proven_e2e": 4,
-    "proven_unit": 26
+    "proven_unit": 27
   },
   "category_counts": {
     "attack": 4,
-    "blocking_matrix": 26,
+    "blocking_matrix": 27,
     "gate": 5,
     "mutation_proof": 12,
     "original_defect_reproduction": 3,
@@ -25,7 +25,12 @@
         "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py",
         "tests/api/dev/test_chaos_3304_workload_observation_adapters.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py::test_data_trust_no_sources_is_no_data_not_measured_zero",
+        "tests/api/dev/test_chaos_3304_workload_observation_adapters.py::test_investment_shift_missing_comparison_window_is_no_data_not_zero"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "attack.runtime-divergence",
@@ -33,7 +38,9 @@
       "description": "Run the same authorized subject/source fixture through every enabled consumer boundary (Web trusted-assertion, hosted API, MCP). Any difference in canonical subject, source state, status/readiness, health finding, metric, relationship, or evidence applicability fails.",
       "status": "deferred",
       "evidence": [],
-      "blocked_reason": "requires a cross-repo (dev-health-web + dev-health-acr) consumer-boundary harness that does not exist yet; the Wave 3.1 v2 contracts (dev_answer.v2 / dev_answer_frame.v1) are shared, but nothing runs the same fixture through Web, hosted API, and MCP in one assertion today"
+      "blocked_reason": "requires a cross-repo (dev-health-web + dev-health-acr) consumer-boundary harness that does not exist yet; the Wave 3.1 v2 contracts (dev_answer.v2 / dev_answer_frame.v1) are shared, but nothing runs the same fixture through Web, hosted API, and MCP in one assertion today",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "attack.team-attribution",
@@ -43,7 +50,11 @@
       "evidence": [
         "tests/api/dev/test_chaos_3303_team_health_service.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3303_team_health_service.py::test_evaluate_team_zero_attribution_suppresses_even_with_real_facts"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "attack.unrelated-evidence",
@@ -53,7 +64,11 @@
       "evidence": [
         "tests/api/dev/test_chaos_3296_relationship_closure.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3296_relationship_closure.py::test_an_edge_unrelated_to_the_committed_subject_fails_closed"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.ambiguous-candidate-selection",
@@ -63,7 +78,11 @@
       "evidence": [
         "tests/api/dev/test_chaos_3292_preflight_acceptance.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py::test_a3_ambiguous_target_needs_clarification_with_candidates"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.cross-tenant-identifier-change",
@@ -71,9 +90,13 @@
       "description": "Cross-tenant/cross-scope identifier and authorization change.",
       "status": "proven_unit",
       "evidence": [
-        "tests/fixtures/ask_dev/status_change/manifest.json"
+        "tests/api/dev/test_status_change_service.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_change_summary_is_reproducible_and_tenant_scoped"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.exact-project-complete",
@@ -83,7 +106,9 @@
       "evidence": [
         "tests/acceptance/ask-dev-oracle.v1.json"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true
     },
     {
       "id": "matrix.legitimate-org-wide-status",
@@ -91,7 +116,9 @@
       "description": "Legitimate organization-wide status.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.light-on-feature-work",
@@ -99,7 +126,9 @@
       "description": "'Which teams are light on feature work?' with adequate investment-classification coverage.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.light-on-feature-work-unclassified",
@@ -107,7 +136,9 @@
       "description": "The feature-work question with high unclassified work and no unsupported conclusion.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.multi-metric-comparison-stale-source",
@@ -115,7 +146,9 @@
       "description": "Multi-metric comparison with one stale source.",
       "status": "deferred",
       "evidence": [],
-      "blocked_reason": "metric.comparison.v1 is a wired core intent, but no acceptance-level or unit-level fixture exercises a multi-metric comparison with exactly one stale source yet"
+      "blocked_reason": "metric.comparison.v1 is a wired core intent, but no acceptance-level or unit-level fixture exercises a multi-metric comparison with exactly one stale source yet",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.no-authorized-match",
@@ -125,7 +158,11 @@
       "evidence": [
         "tests/api/dev/test_chaos_3292_preflight_acceptance.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py::test_a2_unknown_target_is_not_found_and_runs_no_subject_tool"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.observed-change-comparison-windows",
@@ -133,9 +170,13 @@
       "description": "Observed change across exact comparison windows.",
       "status": "proven_unit",
       "evidence": [
-        "tests/fixtures/ask_dev/status_change/manifest.json"
+        "tests/api/dev/test_status_change_service.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_change_summary_is_reproducible_and_tenant_scoped"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.operational-deficiencies-mixed",
@@ -143,7 +184,9 @@
       "description": "'What operational deficiencies do we have?' with mixed applicable, not-applicable, stale, unavailable, and unconfigured rules.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.organization-portfolio-status",
@@ -151,7 +194,9 @@
       "description": "Organization portfolio status.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.overburdened-teams-with-denominators",
@@ -159,7 +204,9 @@
       "description": "'Which teams are overburdened?' with approved denominators/baselines.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.pressure-without-denominator",
@@ -167,7 +214,9 @@
       "description": "High observed pressure without a valid denominator, producing pressure/not-calculable language.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.prohibited-write-request",
@@ -177,7 +226,11 @@
       "evidence": [
         "tests/api/dev/test_tool_registry.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_tool_registry.py::test_manifest_is_the_exact_nine_tool_server_allowlist"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.project-health-mixed-dimensions",
@@ -185,7 +238,9 @@
       "description": "Project health with mixed dimension states.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.project-health-unknown-not-applicable",
@@ -193,7 +248,9 @@
       "description": "Project health with unknown and not-applicable dimensions.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.project-incomplete-required-children",
@@ -201,9 +258,13 @@
       "description": "Exact project with incomplete required children.",
       "status": "proven_unit",
       "evidence": [
-        "tests/fixtures/ask_dev/status_change/manifest.json"
+        "tests/api/dev/test_status_change_service.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_completed_parent_with_incomplete_required_child_is_not_ready"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.project-source-unavailable-qualified",
@@ -211,9 +272,13 @@
       "description": "Exact project with unavailable required source but enough facts for a qualified answer.",
       "status": "proven_unit",
       "evidence": [
-        "tests/fixtures/ask_dev/status_change/manifest.json"
+        "tests/api/dev/test_status_change_service.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_merged_delivery_without_release_evidence_is_indeterminate"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.project-stale-required-source",
@@ -221,9 +286,13 @@
       "description": "Exact project with stale required source.",
       "status": "proven_unit",
       "evidence": [
-        "tests/fixtures/ask_dev/status_change/manifest.json"
+        "tests/api/dev/test_status_change_service.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_stale_source_is_partial_and_never_ready"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.provider-narrative-failure-after-frame",
@@ -233,7 +302,12 @@
       "evidence": [
         "tests/api/dev/test_orchestrator.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_orchestrator.py::test_provider_timeout_is_caller_enforced_and_terminal_once",
+        "tests/api/dev/test_orchestrator.py::test_budget_exhaustion_after_grounded_tool_data_returns_bounded_partial"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.registered-metric-catalog",
@@ -244,7 +318,9 @@
         "src/dev_health_ops/llm/agent/scripted_openai_service.py",
         "tests/acceptance/test_ask_dev_compose.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true
     },
     {
       "id": "matrix.remaining-work-exact-project",
@@ -252,9 +328,11 @@
       "description": "Remaining work for an exact project.",
       "status": "proven_e2e",
       "evidence": [
-        "tests/fixtures/ask_dev/status_change/manifest.json"
+        "tests/acceptance/ask-dev-oracle.v1.json"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true
     },
     {
       "id": "matrix.struggling-teams-insufficient-sample",
@@ -262,7 +340,9 @@
       "description": "The struggling-teams question with insufficient sample/coverage and no unsupported label.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.struggling-teams-positive",
@@ -270,7 +350,9 @@
       "description": "'Are there any struggling teams?' with a valid sustained multi-signal positive case.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.team-health-complete-attribution",
@@ -278,7 +360,9 @@
       "description": "Named team health with complete team attribution.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "matrix.team-health-unattributable-signals",
@@ -286,7 +370,24 @@
       "description": "Team health where repository/org signals are available but cannot be attributed to the team.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested"
+      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no StepRegistry registration; production_runtime.py:2169 wires only CORE_PLANS_BY_INTENT as the live plan_registry, so these intents cannot reach ProjectHealthService/TeamHealthService/PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService in production today even though all five services are implemented and unit-tested. This is SEQUENCED, not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec (2026-08-02) ratifies deferring plan/step registry wiring to the CHAOS-3297 stack-3 lane, which owns landing DevInvestigationPlan+StepRegistry entries for these five intents once its own s2/flags prerequisites merge; re-run this manifest after stack-3 lands to flip these rows to real evidence",
+      "test_nodeids": [],
+      "requires_live_infra": false
+    },
+    {
+      "id": "matrix.unwired-intent-safe-fallback",
+      "category": "blocking_matrix",
+      "description": "A safe, honest outcome for a question whose intent has no wired plan yet (PROJECT_HEALTH/TEAM_HEALTH/etc) -- traced, not guessed. Team-lead guidance 2026-08-02: 'don't leave presumably UNSUPPORTED in the manifest -- one traced run, assert the exact outcome/code'.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3300_unwired_intent_fallback.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3300_unwired_intent_fallback.py::test_project_health_question_falls_through_to_the_legacy_loop_not_a_plan",
+        "tests/api/dev/test_chaos_3300_unwired_intent_fallback.py::test_team_health_question_also_falls_through_when_subject_resolves"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "gate.content-security-audit",
@@ -294,7 +395,9 @@
       "description": "Scan logs, traces, metric labels, persistence metadata, CI artifacts, and retained reports for the listed leakage classes.",
       "status": "deferred",
       "evidence": [],
-      "blocked_reason": "requires a live deployed system's logs/traces/artifacts to scan; a static/unit suite cannot prove absence in production telemetry"
+      "blocked_reason": "requires a live deployed system's logs/traces/artifacts to scan; a static/unit suite cannot prove absence in production telemetry",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "gate.deterministic",
@@ -302,9 +405,13 @@
       "description": "The scripted-provider and canonical-service matrix passes 100% with no substantive skips; assertions are machine-readable.",
       "status": "proven_unit",
       "evidence": [
-        "scripts/acceptance/wave31_manifest.py"
+        "tests/acceptance/test_wave31_manifest.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/acceptance/test_wave31_manifest.py::test_the_landed_manifest_has_no_integrity_errors"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "gate.migration-coexistence",
@@ -312,7 +419,9 @@
       "description": "Prove Python/Go coexistence, cutover, rollback, and decommission per the CHAOS-3306 selected design.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "CHAOS-3306 resolved as Backlog/Low with an explicit decision to keep the Ask Dev runtime permanently on Python in dev-health-ops (people-facing) alongside Go acr-api/acr-mcp (agents/MCP) -- 'not part of Wave 3.1', 'does not block any active Ask Dev, Web, Ops, or ACR implementation issue', and 'no implementation or decommission work is authorized by this backlog item today'. This gate assumes an active cutover with a sunset date, which 3306 did not approve; treated as not-applicable-by-decision rather than unmet, but the report must say so explicitly rather than silently skip it"
+      "blocked_reason": "CHAOS-3306 resolved as Backlog/Low with an explicit decision to keep the Ask Dev runtime permanently on Python in dev-health-ops (people-facing) alongside Go acr-api/acr-mcp (agents/MCP) -- 'not part of Wave 3.1', 'does not block any active Ask Dev, Web, Ops, or ACR implementation issue', and 'no implementation or decommission work is authorized by this backlog item today'. This gate assumes an active cutover with a sunset date, which 3306 did not approve; treated as not-applicable-by-decision rather than unmet, but the report must say so explicitly rather than silently skip it",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "gate.repeated-certified-provider",
@@ -320,7 +429,9 @@
       "description": "For each certified provider profile and enabled role, run at least 20 repetitions of critical paths at the stated thresholds.",
       "status": "deferred",
       "evidence": [],
-      "blocked_reason": "scripts/acceptance/run_ask_dev_provider_profile.sh + smoke_ask_dev_provider_profile.py already wire the lmstudio-local/ollama-local/ollama-cloud profile mechanics, but running 20 reps against real certified providers requires live credentials/endpoints not available in this sandboxed environment; missing credentials must mark the provider-profile gate non-passing per CHAOS-3300, not silently green"
+      "blocked_reason": "scripts/acceptance/run_ask_dev_provider_profile.sh + smoke_ask_dev_provider_profile.py already wire the lmstudio-local/ollama-local/ollama-cloud profile mechanics, but running 20 reps against real certified providers requires live credentials/endpoints not available in this sandboxed environment; missing credentials must mark the provider-profile gate non-passing per CHAOS-3300, not silently green",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "gate.web-default-ci",
@@ -328,7 +439,9 @@
       "description": "Default required Playwright CI covers answer-v2 outcomes, subjects, rendering, and window/dev semantic equivalence.",
       "status": "deferred",
       "evidence": [],
-      "blocked_reason": "cross-repo (dev-health-web) CI wiring; likely owned by the lanes already carrying web CI surfaces (CHAOS-3287/3291), not duplicated here"
+      "blocked_reason": "cross-repo (dev-health-web) CI wiring; likely owned by the lanes already carrying web CI surfaces (CHAOS-3287/3291), not duplicated here",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.burden-without-denominator",
@@ -338,7 +451,12 @@
       "evidence": [
         "tests/api/dev/test_chaos_3304_workload_observation_adapters.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3304_workload_observation_adapters.py::test_review_request_load_without_denominator_reports_raw_value_not_calculable",
+        "tests/api/dev/test_chaos_3304_workload_observation_adapters.py::test_review_request_load_zero_active_contributors_is_not_calculable"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.bypass-subject-preflight",
@@ -348,7 +466,12 @@
       "evidence": [
         "tests/api/dev/test_chaos_3292_mutations.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m1a_pre_loop_gate_defeated_is_still_caught_at_dispatch",
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m1b_dispatch_gate_defeated_is_still_caught_before_the_loop"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.completion-without-denominator",
@@ -358,7 +481,11 @@
       "evidence": [
         "tests/api/dev/test_status_change_service.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_completed_parent_with_incomplete_required_child_is_not_ready"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.disable-deterministic-fallback",
@@ -368,7 +495,12 @@
       "evidence": [
         "tests/api/dev/test_chaos_3297_frame_reachability.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3297_frame_reachability.py::test_replay_with_corrupted_frame_payload_falls_back_safely",
+        "tests/api/dev/test_chaos_3297_frame_reachability.py::test_replay_with_mismatched_frame_outcome_falls_back_safely"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.duplicate-run-on-reconnect",
@@ -376,7 +508,9 @@
       "description": "Duplicate a run during expand/reconnect.",
       "status": "deferred",
       "evidence": [],
-      "blocked_reason": "reconnect/expand duplication is a persistence-layer concern (CHAOS-3299's replay work); no mutation test in this lane's evidence set exercises it yet"
+      "blocked_reason": "reconnect/expand duplication is a persistence-layer concern (CHAOS-3299's replay work); no mutation test in this lane's evidence set exercises it yet",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.expose-forbidden-or-not-found",
@@ -384,9 +518,13 @@
       "description": "Expose forbidden_or_not_found as display copy.",
       "status": "proven_unit",
       "evidence": [
-        "src/dev_health_ops/api/dev/preflight_outcomes.py"
+        "tests/api/dev/test_chaos_3292_mutations.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.mutate-fixture-differently-go-python",
@@ -394,7 +532,9 @@
       "description": "Mutate the same fixture differently in Go and Python.",
       "status": "deferred",
       "evidence": [],
-      "blocked_reason": "requires the cross-repo differential harness attack.runtime-divergence also needs (Web/API/MCP/Go/Python), which does not exist yet"
+      "blocked_reason": "requires the cross-repo differential harness attack.runtime-divergence also needs (Web/API/MCP/Go/Python), which does not exist yet",
+      "test_nodeids": [],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.no-data-to-zero",
@@ -404,7 +544,11 @@
       "evidence": [
         "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py::test_data_trust_no_sources_is_no_data_not_measured_zero"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.remove-mention-from-set",
@@ -414,7 +558,11 @@
       "evidence": [
         "tests/api/dev/test_chaos_3292_mutations.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m2_multi_mention_fallthrough_is_caught_in_both_orders"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.remove-relationship-filtering",
@@ -424,7 +572,11 @@
       "evidence": [
         "tests/api/dev/test_chaos_3296_relationship_closure.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3296_relationship_closure.py::test_an_edge_unrelated_to_the_committed_subject_fails_closed"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.restore-org-fallback",
@@ -434,7 +586,11 @@
       "evidence": [
         "tests/api/dev/test_chaos_3292_mutations.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m2_no_authorized_match_must_not_fall_through_to_organization_scope"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "mutation.single-signal-struggling-team",
@@ -444,7 +600,11 @@
       "evidence": [
         "tests/api/dev/test_chaos_3304_workload_health_rules.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py::test_negative_single_at_risk_dimension_does_not_qualify"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "defect.ask-dev-exact-commit",
@@ -454,7 +614,11 @@
       "evidence": [
         "tests/api/dev/test_chaos_3292_preflight_acceptance.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py::test_a1_known_project_commits_scope_before_the_status_tool"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "defect.ask-dev-not-found",
@@ -465,7 +629,11 @@
         "tests/_chaos_3292_preflight.py",
         "tests/api/dev/test_chaos_3292_preflight_acceptance.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py::test_a2_unknown_target_is_not_found_and_runs_no_subject_tool"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "defect.no-org-fallback-or-blank",
@@ -474,9 +642,14 @@
       "status": "proven_unit",
       "evidence": [
         "src/dev_health_ops/api/dev/preflight_outcomes.py",
-        "tests/api/dev/test_chaos_3297_frame_reachability.py"
+        "tests/api/dev/test_chaos_3292_mutations.py"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m2_no_authorized_match_must_not_fall_through_to_organization_scope",
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all"
+      ],
+      "requires_live_infra": false
     },
     {
       "id": "positive-control.real-project-status",
@@ -488,7 +661,9 @@
         "tests/acceptance/test_ask_dev_compose.py",
         "scripts/acceptance/run_ask_dev_compose.sh"
       ],
-      "blocked_reason": null
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true
     }
   ]
 }

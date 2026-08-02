@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,8 @@ from scripts.acceptance.wave31_manifest import (
     ManifestIntegrityError,
     ManifestItem,
     build_report,
+    execute_manifest,
+    run_evidence_tests,
     validate_manifest,
 )
 
@@ -88,6 +91,11 @@ def test_health_workload_deficiency_portfolio_items_are_honestly_blocked() -> No
         assert item.blocked_reason is not None
         assert "CORE_PLANS_BY_INTENT" in item.blocked_reason
         assert "production_runtime.py" in item.blocked_reason
+        # Must read as sequenced-to-stack-3, not silently dropped: pointer to
+        # the ratified CHAOS-3303 deferral comment.
+        assert "SEQUENCED" in item.blocked_reason
+        assert "d0985e79-051d-4b6f-8833-6137e8511aec" in item.blocked_reason
+        assert "stack-3" in item.blocked_reason
 
 
 def test_migration_coexistence_gate_reflects_chaos_3306_decision() -> None:
@@ -192,8 +200,170 @@ def test_validate_manifest_is_clean_over_a_single_well_formed_item() -> None:
         status="proven_e2e",
         evidence=("tests/acceptance/ask-dev-oracle.v1.json",),
         content_markers=("ask_dev_acceptance_oracle.v1",),
+        requires_live_infra=True,
     )
     assert validate_manifest(_ROOT, (clean,)) == []
+
+
+def test_validate_manifest_catches_proven_unit_with_no_test_nodeids() -> None:
+    file_only_claim = ManifestItem(
+        id="test.file-only-claim",
+        category="blocking_matrix",
+        description="a file exists but no specific test is cited",
+        status="proven_unit",
+        evidence=("tests/acceptance/ask-dev-oracle.v1.json",),
+    )
+    errors = validate_manifest(_ROOT, (file_only_claim,))
+    assert any("no test_nodeids" in error for error in errors)
+
+
+def test_validate_manifest_catches_proven_e2e_without_requires_live_infra() -> None:
+    unmarked_e2e = ManifestItem(
+        id="test.unmarked-e2e",
+        category="blocking_matrix",
+        description="claims e2e proof without flagging it needs live infra",
+        status="proven_e2e",
+        evidence=("tests/acceptance/ask-dev-oracle.v1.json",),
+    )
+    errors = validate_manifest(_ROOT, (unmarked_e2e,))
+    assert any("requires_live_infra" in error for error in errors)
+
+
+def test_validate_manifest_catches_a_test_nodeid_outside_its_own_evidence() -> None:
+    mismatched = ManifestItem(
+        id="test.mismatched-nodeid",
+        category="blocking_matrix",
+        description="cites a test in a file that isn't listed as evidence",
+        status="proven_unit",
+        evidence=("tests/acceptance/ask-dev-oracle.v1.json",),
+        test_nodeids=(
+            "tests/api/dev/test_tool_registry.py::"
+            "test_manifest_is_the_exact_nine_tool_server_allowlist",
+        ),
+    )
+    errors = validate_manifest(_ROOT, (mismatched,))
+    assert any(
+        "is not under any of this item's own evidence" in error for error in errors
+    )
+
+
+# --- execution proof: a cited test must actually run and pass, not merely
+# exist under a plausible name (team-lead emphasis 2026-08-02: "a scenario
+# that doesn't run must FAIL the manifest, never read as pass") ---
+
+
+def test_run_evidence_tests_marks_a_passing_test_as_passed(tmp_path: Path) -> None:
+    (tmp_path / "test_throwaway_pass.py").write_text(
+        "def test_it_passes() -> None:\n    assert True\n"
+    )
+    outcomes = run_evidence_tests(tmp_path, ("test_throwaway_pass.py::test_it_passes",))
+    assert outcomes == {"test_throwaway_pass.py::test_it_passes": "passed"}
+
+
+def test_run_evidence_tests_marks_a_failing_test_as_failed(tmp_path: Path) -> None:
+    (tmp_path / "test_throwaway_fail.py").write_text(
+        "def test_it_fails() -> None:\n    assert False, 'deliberate RED'\n"
+    )
+    outcomes = run_evidence_tests(tmp_path, ("test_throwaway_fail.py::test_it_fails",))
+    assert outcomes == {"test_throwaway_fail.py::test_it_fails": "failed"}
+
+
+def test_run_evidence_tests_marks_a_nonexistent_test_as_not_collected(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "test_throwaway_real.py").write_text(
+        "def test_real() -> None:\n    assert True\n"
+    )
+    outcomes = run_evidence_tests(
+        tmp_path, ("test_throwaway_real.py::test_this_function_does_not_exist",)
+    )
+    assert outcomes == {
+        "test_throwaway_real.py::test_this_function_does_not_exist": "not_collected"
+    }
+
+
+def test_run_evidence_tests_over_a_mixed_pass_fail_error_file(tmp_path: Path) -> None:
+    (tmp_path / "test_throwaway_mixed.py").write_text(
+        textwrap.dedent(
+            """\
+            import pytest
+
+            def test_passes() -> None:
+                assert True
+
+            def test_fails() -> None:
+                assert False
+
+            def test_errors() -> None:
+                raise RuntimeError("setup blew up")
+            """
+        )
+    )
+    outcomes = run_evidence_tests(
+        tmp_path,
+        (
+            "test_throwaway_mixed.py::test_passes",
+            "test_throwaway_mixed.py::test_fails",
+            "test_throwaway_mixed.py::test_errors",
+        ),
+    )
+    assert outcomes == {
+        "test_throwaway_mixed.py::test_passes": "passed",
+        "test_throwaway_mixed.py::test_fails": "failed",
+        "test_throwaway_mixed.py::test_errors": "failed",
+    }
+
+
+def test_execute_manifest_reports_a_failing_cited_test(tmp_path: Path) -> None:
+    (tmp_path / "test_throwaway_broken_claim.py").write_text(
+        "def test_the_claim() -> None:\n    assert False\n"
+    )
+    broken_claim = ManifestItem(
+        id="test.broken-claim",
+        category="blocking_matrix",
+        description="cites a test that does not actually pass",
+        status="proven_unit",
+        evidence=("test_throwaway_broken_claim.py",),
+        test_nodeids=("test_throwaway_broken_claim.py::test_the_claim",),
+    )
+    errors = execute_manifest(tmp_path, (broken_claim,))
+    assert any(
+        "test_throwaway_broken_claim.py::test_the_claim -> failed" in error
+        for error in errors
+    )
+
+
+def test_execute_manifest_reports_a_test_that_never_ran() -> None:
+    """A node id that fails to collect must fail loudly, not be skipped."""
+
+    vanished = ManifestItem(
+        id="test.vanished-evidence",
+        category="blocking_matrix",
+        description="cites a test function that does not exist",
+        status="proven_unit",
+        evidence=("tests/acceptance/test_wave31_manifest.py",),
+        test_nodeids=(
+            "tests/acceptance/test_wave31_manifest.py::"
+            "test_this_function_was_never_written",
+        ),
+    )
+    errors = execute_manifest(_ROOT, (vanished,))
+    assert any("not_collected" in error for error in errors)
+
+
+def test_execute_manifest_over_the_real_manifest_all_cited_tests_pass() -> None:
+    """The big claim: every test_nodeids entry any MANIFEST item cites
+    actually passes right now. This is what makes a proven_unit status a
+    verified fact rather than an assertion about a file's existence.
+
+    Deliberately unmarked (no ``slow``/``clickhouse``-style marker): this is
+    exactly the check that must run in every normal gate, never filtered out
+    of a default CI pass -- a manifest whose own proof-of-proof is opt-out
+    is the false-green failure mode this module exists to prevent.
+    """
+
+    errors = execute_manifest(_ROOT)
+    assert errors == [], "\n".join(errors)
 
 
 # --- report generation ---
@@ -229,6 +399,8 @@ def test_build_report_shape_over_the_real_manifest() -> None:
             "status",
             "evidence",
             "blocked_reason",
+            "test_nodeids",
+            "requires_live_infra",
         }
     # JSON-round-trippable -- a report a downstream tool cannot parse is not
     # a machine-readable deliverable.
@@ -252,3 +424,21 @@ def test_no_proven_item_lacks_evidence_in_the_real_manifest() -> None:
     for item in MANIFEST:
         if item.status in ("proven_e2e", "proven_unit"):
             assert item.evidence, f"{item.id} claims {item.status} with no evidence"
+
+
+def test_no_proven_unit_item_lacks_test_nodeids_in_the_real_manifest() -> None:
+    for item in MANIFEST:
+        if item.status == "proven_unit" and not item.requires_live_infra:
+            assert item.test_nodeids, (
+                f"{item.id} claims proven_unit with no test_nodeids -- a "
+                "plausible file name is not proof"
+            )
+
+
+def test_every_test_nodeid_file_half_is_one_of_its_item_evidence() -> None:
+    for item in MANIFEST:
+        for node_id in item.test_nodeids:
+            file_part = node_id.split("::", 1)[0]
+            assert file_part in item.evidence, (
+                f"{item.id}: {node_id} is not under its own evidence {item.evidence}"
+            )

@@ -22,6 +22,7 @@ that the evidence a status rests on still exists and is not fabricated.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass
@@ -37,6 +38,8 @@ __all__ = [
     "ManifestReportJSON",
     "Status",
     "build_report",
+    "execute_manifest",
+    "run_evidence_tests",
     "validate_manifest",
 ]
 
@@ -70,6 +73,18 @@ class ManifestItem:
     #: Substrings that must actually appear in the (first) evidence file, for
     #: the handful of items where "the file exists" is too weak a claim.
     content_markers: tuple[str, ...] = ()
+    #: Exact pytest node ids (``path::test_name``) that back a ``proven_*``
+    #: claim. ``execute_manifest`` actually runs these -- a status is not
+    #: "proven" because a file with a plausible name exists; it is proven
+    #: because the specific test that exercises it currently passes. Empty
+    #: only when ``requires_live_infra`` is True (a Compose/Docker scenario
+    #: this repo's unit-test run cannot execute) or the item does not rest
+    #: on a runnable test at all (e.g. a static-content claim).
+    test_nodeids: tuple[str, ...] = ()
+    #: True for the handful of ``proven_e2e`` items whose proof is a real
+    #: HTTP/SSE Compose acceptance run, not something ``execute_manifest``
+    #: can invoke inside a plain pytest process.
+    requires_live_infra: bool = False
 
 
 class ManifestIntegrityError(RuntimeError):
@@ -83,6 +98,8 @@ class ManifestItemJSON(TypedDict):
     status: str
     evidence: list[str]
     blocked_reason: str | None
+    test_nodeids: list[str]
+    requires_live_infra: bool
 
 
 class ManifestReportJSON(TypedDict):
@@ -110,6 +127,10 @@ def _core_defect_reproductions() -> tuple[ManifestItem, ...]:
                 "tests/api/dev/test_chaos_3292_preflight_acceptance.py",
             ),
             content_markers=("ASK_DEV_PROJECT",),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3292_preflight_acceptance.py::"
+                "test_a2_unknown_target_is_not_found_and_runs_no_subject_tool",
+            ),
         ),
         ManifestItem(
             id="defect.ask-dev-exact-commit",
@@ -120,6 +141,10 @@ def _core_defect_reproductions() -> tuple[ManifestItem, ...]:
             ),
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3292_preflight_acceptance.py",),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3292_preflight_acceptance.py::"
+                "test_a1_known_project_commits_scope_before_the_status_tool",
+            ),
         ),
         ManifestItem(
             id="defect.no-org-fallback-or-blank",
@@ -132,9 +157,15 @@ def _core_defect_reproductions() -> tuple[ManifestItem, ...]:
             status="proven_unit",
             evidence=(
                 "src/dev_health_ops/api/dev/preflight_outcomes.py",
-                "tests/api/dev/test_chaos_3297_frame_reachability.py",
+                "tests/api/dev/test_chaos_3292_mutations.py",
             ),
             content_markers=("FORBIDDEN_OR_NOT_FOUND",),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3292_mutations.py::"
+                "test_m2_no_authorized_match_must_not_fall_through_to_organization_scope",
+                "tests/api/dev/test_chaos_3292_mutations.py::"
+                "test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all",
+            ),
         ),
     )
 
@@ -156,6 +187,7 @@ def _real_project_positive_control() -> tuple[ManifestItem, ...]:
                 "tests/acceptance/test_ask_dev_compose.py",
                 "scripts/acceptance/run_ask_dev_compose.sh",
             ),
+            requires_live_infra=True,
         ),
     )
 
@@ -176,6 +208,10 @@ def _attacks() -> tuple[ManifestItem, ...]:
             content_markers=(
                 "test_an_edge_unrelated_to_the_committed_subject_fails_closed",
             ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3296_relationship_closure.py::"
+                "test_an_edge_unrelated_to_the_committed_subject_fails_closed",
+            ),
         ),
         ManifestItem(
             id="attack.team-attribution",
@@ -189,6 +225,10 @@ def _attacks() -> tuple[ManifestItem, ...]:
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3303_team_health_service.py",),
             content_markers=(
+                "test_evaluate_team_zero_attribution_suppresses_even_with_real_facts",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3303_team_health_service.py::"
                 "test_evaluate_team_zero_attribution_suppresses_even_with_real_facts",
             ),
         ),
@@ -207,6 +247,12 @@ def _attacks() -> tuple[ManifestItem, ...]:
             ),
             content_markers=(
                 "test_data_trust_no_sources_is_no_data_not_measured_zero",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py::"
+                "test_data_trust_no_sources_is_no_data_not_measured_zero",
+                "tests/api/dev/test_chaos_3304_workload_observation_adapters.py::"
+                "test_investment_shift_missing_comparison_window_is_no_data_not_zero",
             ),
         ),
         ManifestItem(
@@ -246,22 +292,38 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
             description="Exact named project status with complete current data.",
             status="proven_e2e",
             evidence=("tests/acceptance/ask-dev-oracle.v1.json",),
+            requires_live_infra=True,
         ),
         ManifestItem(
             id="matrix.project-incomplete-required-children",
             category="blocking_matrix",
             description="Exact project with incomplete required children.",
             status="proven_unit",
-            evidence=("tests/fixtures/ask_dev/status_change/manifest.json",),
-            content_markers=("required_child_incomplete",),
+            # tests/fixtures/ask_dev/status_change/manifest.json is a
+            # documentary case list; nothing in the repo actually loads it
+            # (grep confirms zero references to its case ids from any test).
+            # The real, executable proof is test_status_change_service.py,
+            # whose case names differ but whose asserted behavior matches.
+            evidence=("tests/api/dev/test_status_change_service.py",),
+            content_markers=(
+                "test_completed_parent_with_incomplete_required_child_is_not_ready",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_status_change_service.py::"
+                "test_completed_parent_with_incomplete_required_child_is_not_ready",
+            ),
         ),
         ManifestItem(
             id="matrix.project-stale-required-source",
             category="blocking_matrix",
             description="Exact project with stale required source.",
             status="proven_unit",
-            evidence=("tests/fixtures/ask_dev/status_change/manifest.json",),
-            content_markers=("source_stale",),
+            evidence=("tests/api/dev/test_status_change_service.py",),
+            content_markers=("test_stale_source_is_partial_and_never_ready",),
+            test_nodeids=(
+                "tests/api/dev/test_status_change_service.py::"
+                "test_stale_source_is_partial_and_never_ready",
+            ),
         ),
         ManifestItem(
             id="matrix.project-source-unavailable-qualified",
@@ -271,8 +333,14 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
                 "facts for a qualified answer."
             ),
             status="proven_unit",
-            evidence=("tests/fixtures/ask_dev/status_change/manifest.json",),
-            content_markers=("source_unavailable",),
+            evidence=("tests/api/dev/test_status_change_service.py",),
+            content_markers=(
+                "test_merged_delivery_without_release_evidence_is_indeterminate",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_status_change_service.py::"
+                "test_merged_delivery_without_release_evidence_is_indeterminate",
+            ),
         ),
         ManifestItem(
             id="matrix.no-authorized-match",
@@ -280,6 +348,10 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
             description="Named project with no authorized match.",
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3292_preflight_acceptance.py",),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3292_preflight_acceptance.py::"
+                "test_a2_unknown_target_is_not_found_and_runs_no_subject_tool",
+            ),
         ),
         ManifestItem(
             id="matrix.ambiguous-candidate-selection",
@@ -287,6 +359,10 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
             description="Ambiguous named project and candidate selection.",
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3292_preflight_acceptance.py",),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3292_preflight_acceptance.py::"
+                "test_a3_ambiguous_target_needs_clarification_with_candidates",
+            ),
         ),
         ManifestItem(
             id="matrix.registered-metric-catalog",
@@ -298,6 +374,7 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
                 "tests/acceptance/test_ask_dev_compose.py",
             ),
             content_markers=("LIST_METRICS_QUESTION",),
+            requires_live_infra=True,
         ),
         ManifestItem(
             id="matrix.multi-metric-comparison-stale-source",
@@ -315,15 +392,20 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
             category="blocking_matrix",
             description="Remaining work for an exact project.",
             status="proven_e2e",
-            evidence=("tests/fixtures/ask_dev/status_change/manifest.json",),
+            evidence=("tests/acceptance/ask-dev-oracle.v1.json",),
+            requires_live_infra=True,
         ),
         ManifestItem(
             id="matrix.observed-change-comparison-windows",
             category="blocking_matrix",
             description="Observed change across exact comparison windows.",
             status="proven_unit",
-            evidence=("tests/fixtures/ask_dev/status_change/manifest.json",),
-            content_markers=("identical-explicit-windows",),
+            evidence=("tests/api/dev/test_status_change_service.py",),
+            content_markers=("test_change_summary_is_reproducible_and_tenant_scoped",),
+            test_nodeids=(
+                "tests/api/dev/test_status_change_service.py::"
+                "test_change_summary_is_reproducible_and_tenant_scoped",
+            ),
         ),
         ManifestItem(
             id="matrix.cross-tenant-identifier-change",
@@ -332,8 +414,12 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
                 "Cross-tenant/cross-scope identifier and authorization change."
             ),
             status="proven_unit",
-            evidence=("tests/fixtures/ask_dev/status_change/manifest.json",),
-            content_markers=("cross-tenant-scope",),
+            evidence=("tests/api/dev/test_status_change_service.py",),
+            content_markers=("test_change_summary_is_reproducible_and_tenant_scoped",),
+            test_nodeids=(
+                "tests/api/dev/test_status_change_service.py::"
+                "test_change_summary_is_reproducible_and_tenant_scoped",
+            ),
         ),
         ManifestItem(
             id="matrix.prohibited-write-request",
@@ -342,6 +428,10 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
             status="proven_unit",
             evidence=("tests/api/dev/test_tool_registry.py",),
             content_markers=("test_manifest_is_the_exact_nine_tool_server_allowlist",),
+            test_nodeids=(
+                "tests/api/dev/test_tool_registry.py::"
+                "test_manifest_is_the_exact_nine_tool_server_allowlist",
+            ),
         ),
         ManifestItem(
             id="matrix.provider-narrative-failure-after-frame",
@@ -356,6 +446,12 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
                 "test_provider_timeout_is_caller_enforced_and_terminal_once",
                 "test_budget_exhaustion_after_grounded_tool_data_returns_bounded_partial",
             ),
+            test_nodeids=(
+                "tests/api/dev/test_orchestrator.py::"
+                "test_provider_timeout_is_caller_enforced_and_terminal_once",
+                "tests/api/dev/test_orchestrator.py::"
+                "test_budget_exhaustion_after_grounded_tool_data_returns_bounded_partial",
+            ),
         ),
     )
 
@@ -363,16 +459,25 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
 def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
     """Blocking-matrix items whose services exist but are not runtime-wired.
 
-    Root cause (all five items below): ``CORE_PLANS_BY_INTENT`` in
+    Root cause (all items below): ``CORE_PLANS_BY_INTENT`` in
     ``investigation_plans/plan_documents.py`` covers only 6 of the 12
     ``QuestionIntentID`` members. ``production_runtime.py`` passes that same
     dict as the live ``plan_registry`` and never threads
     ProjectHealthService/TeamHealthService/PortfolioStatusService/
     TeamWorkloadService/OperationalDeficiencyService into
-    ``_ProductionPlanExecutorRuntime``. CHAOS-3303's own acceptance
-    criteria required ``status.portfolio.v1``/``health.project.v1``/
-    ``health.team.v1`` as versioned plans; that half of the ticket did not
-    land despite the service layer merging.
+    ``_ProductionPlanExecutorRuntime``.
+
+    This is a **ratified, sequenced deferral, not an unmet acceptance
+    criterion silently dropped**: CHAOS-3303's comment thread (comment
+    d0985e79-051d-4b6f-8833-6137e8511aec, 2026-08-02, "Policy ratification
+    (orchestrator)") explicitly defers "the stack-3 wiring work alongside
+    plan/step registry integration"; the wave handoff
+    (.remember/wave31-stageBC-handoff.md) records the same as
+    "Deferred-to-stack-3: plan/step wiring". The dedicated CHAOS-3297 stack-3
+    lane owns landing this once its own prerequisites (s2, flags) merge --
+    see CHAOS-3300 team-lead guidance 2026-08-02. These manifest rows exist
+    now precisely so re-running this generator once stack-3 lands requires
+    no manifest changes: only ``status``/``evidence`` on each row flips.
     """
 
     reason = (
@@ -384,7 +489,13 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
         "cannot reach ProjectHealthService/TeamHealthService/"
         "PortfolioStatusService/TeamWorkloadService/"
         "OperationalDeficiencyService in production today even though all "
-        "five services are implemented and unit-tested"
+        "five services are implemented and unit-tested. This is SEQUENCED, "
+        "not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec "
+        "(2026-08-02) ratifies deferring plan/step registry wiring to the "
+        "CHAOS-3297 stack-3 lane, which owns landing "
+        "DevInvestigationPlan+StepRegistry entries for these five intents "
+        "once its own s2/flags prerequisites merge; re-run this manifest "
+        "after stack-3 lands to flip these rows to real evidence"
     )
     return (
         ManifestItem(
@@ -502,6 +613,41 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
             status="blocked",
             blocked_reason=reason,
         ),
+        ManifestItem(
+            id="matrix.unwired-intent-safe-fallback",
+            category="blocking_matrix",
+            description=(
+                "A safe, honest outcome for a question whose intent has no "
+                "wired plan yet (PROJECT_HEALTH/TEAM_HEALTH/etc) -- traced, "
+                "not guessed. Team-lead guidance 2026-08-02: 'don't leave "
+                "presumably UNSUPPORTED in the manifest -- one traced run, "
+                "assert the exact outcome/code'."
+            ),
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3300_unwired_intent_fallback.py",),
+            content_markers=(
+                "test_project_health_question_falls_through_to_the_legacy_loop_not_a_plan",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3300_unwired_intent_fallback.py::"
+                "test_project_health_question_falls_through_to_the_legacy_loop_not_a_plan",
+                "tests/api/dev/test_chaos_3300_unwired_intent_fallback.py::"
+                "test_team_health_question_also_falls_through_when_subject_resolves",
+            ),
+            # Traced actual behavior (orchestrator.py:967-969): the intent IS
+            # still correctly interpreted; the plan-governed investigation
+            # path is skipped (plan_registry.get returns None ->
+            # plan_eligible=False); the run falls through to the legacy
+            # pre-CHAOS-3295 model-tool-choice loop, which answers using
+            # only the generic 9-tool registry (observed: status_snapshot.v1
+            # alone) -- never a fabricated health verdict, never a crash,
+            # but also never a real project/team-health profile. This is
+            # safe-by-construction (CHAOS-3289's grounding guard still
+            # applies) but is a silent capability downgrade, not a clean
+            # "not supported yet" -- worth stack-3 landing a dedicated
+            # UNSUPPORTED short-circuit rather than relying on the legacy
+            # loop's grounding guard as the only backstop.
+        ),
     )
 
 
@@ -516,7 +662,17 @@ def _gates() -> tuple[ManifestItem, ...]:
                 "machine-readable."
             ),
             status="proven_unit",
-            evidence=("scripts/acceptance/wave31_manifest.py",),
+            evidence=("tests/acceptance/test_wave31_manifest.py",),
+            # Deliberately NOT test_build_report_shape_over_the_real_manifest
+            # or anything else that calls build_report()/execute_manifest():
+            # this item's own test_nodeids are executed BY execute_manifest,
+            # so citing a test that itself invokes execute_manifest would
+            # recurse. test_the_landed_manifest_has_no_integrity_errors only
+            # calls the non-recursive validate_manifest().
+            test_nodeids=(
+                "tests/acceptance/test_wave31_manifest.py::"
+                "test_the_landed_manifest_has_no_integrity_errors",
+            ),
         ),
         ManifestItem(
             id="gate.repeated-certified-provider",
@@ -600,6 +756,18 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             description="Bypass subject preflight.",
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3292_mutations.py",),
+            content_markers=(
+                "test_m1a_pre_loop_gate_defeated_is_still_caught_at_dispatch",
+            ),
+            # Kill site: the assertion inside the test body itself (the
+            # dispatch-time gate), not a shared setup fixture -- m1b proves
+            # the second, independent gate the same way.
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3292_mutations.py::"
+                "test_m1a_pre_loop_gate_defeated_is_still_caught_at_dispatch",
+                "tests/api/dev/test_chaos_3292_mutations.py::"
+                "test_m1b_dispatch_gate_defeated_is_still_caught_before_the_loop",
+            ),
         ),
         ManifestItem(
             id="mutation.remove-mention-from-set",
@@ -607,6 +775,13 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             description="Remove one mention from a subject set.",
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3292_mutations.py",),
+            content_markers=(
+                "test_m2_multi_mention_fallthrough_is_caught_in_both_orders",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3292_mutations.py::"
+                "test_m2_multi_mention_fallthrough_is_caught_in_both_orders",
+            ),
         ),
         ManifestItem(
             id="mutation.restore-org-fallback",
@@ -614,6 +789,13 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             description="Restore organization fallback.",
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3292_mutations.py",),
+            content_markers=(
+                "test_m2_no_authorized_match_must_not_fall_through_to_organization_scope",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3292_mutations.py::"
+                "test_m2_no_authorized_match_must_not_fall_through_to_organization_scope",
+            ),
         ),
         ManifestItem(
             id="mutation.no-data-to-zero",
@@ -626,6 +808,10 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             content_markers=(
                 "test_data_trust_no_sources_is_no_data_not_measured_zero",
             ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py::"
+                "test_data_trust_no_sources_is_no_data_not_measured_zero",
+            ),
         ),
         ManifestItem(
             id="mutation.remove-relationship-filtering",
@@ -636,6 +822,10 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             content_markers=(
                 "test_an_edge_unrelated_to_the_committed_subject_fails_closed",
             ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3296_relationship_closure.py::"
+                "test_an_edge_unrelated_to_the_committed_subject_fails_closed",
+            ),
         ),
         ManifestItem(
             id="mutation.completion-without-denominator",
@@ -644,6 +834,10 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             status="proven_unit",
             evidence=("tests/api/dev/test_status_change_service.py",),
             content_markers=(
+                "test_completed_parent_with_incomplete_required_child_is_not_ready",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_status_change_service.py::"
                 "test_completed_parent_with_incomplete_required_child_is_not_ready",
             ),
         ),
@@ -658,6 +852,12 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             content_markers=(
                 "test_review_request_load_without_denominator_reports_raw_value_not_calculable",
             ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3304_workload_observation_adapters.py::"
+                "test_review_request_load_without_denominator_reports_raw_value_not_calculable",
+                "tests/api/dev/test_chaos_3304_workload_observation_adapters.py::"
+                "test_review_request_load_zero_active_contributors_is_not_calculable",
+            ),
         ),
         ManifestItem(
             id="mutation.single-signal-struggling-team",
@@ -668,14 +868,29 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             content_markers=(
                 "test_negative_single_at_risk_dimension_does_not_qualify",
             ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
+                "test_negative_single_at_risk_dimension_does_not_qualify",
+            ),
         ),
         ManifestItem(
             id="mutation.expose-forbidden-or-not-found",
             category="mutation_proof",
             description="Expose forbidden_or_not_found as display copy.",
             status="proven_unit",
-            evidence=("src/dev_health_ops/api/dev/preflight_outcomes.py",),
-            content_markers=("unreachable from here",),
+            # preflight_outcomes.py's own docstring claims unreachability by
+            # construction; the executable proof that a leak is caught
+            # (rather than merely asserted in a comment) is m3a, which
+            # mutates the canonical no-answer copy table to inject a leaky
+            # token and observes the termination fail closed.
+            evidence=("tests/api/dev/test_chaos_3292_mutations.py",),
+            content_markers=(
+                "test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3292_mutations.py::"
+                "test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all",
+            ),
         ),
         ManifestItem(
             id="mutation.disable-deterministic-fallback",
@@ -683,6 +898,15 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
             description="Disable deterministic fallback.",
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3297_frame_reachability.py",),
+            content_markers=(
+                "test_replay_with_corrupted_frame_payload_falls_back_safely",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3297_frame_reachability.py::"
+                "test_replay_with_corrupted_frame_payload_falls_back_safely",
+                "tests/api/dev/test_chaos_3297_frame_reachability.py::"
+                "test_replay_with_mismatched_frame_outcome_falls_back_safely",
+            ),
         ),
         ManifestItem(
             id="mutation.duplicate-run-on-reconnect",
@@ -732,7 +956,17 @@ def validate_manifest(
     Checked, in order: duplicate ids; unknown status values; a ``proven_*``
     item with no evidence; a ``blocked`` item with no ``blocked_reason``; an
     evidence path that does not exist under ``root``; a ``content_markers``
-    string absent from its (first) evidence file.
+    string absent from its (first) evidence file; a ``proven_unit`` item that
+    is not ``requires_live_infra`` but names no ``test_nodeids`` (a status
+    resting on "a file with this name exists" rather than "this specific
+    test currently passes" is not proof); a ``test_nodeids`` entry whose file
+    half is not one of the item's own ``evidence`` paths (evidence and the
+    thing actually executed must agree).
+
+    This function is deliberately fast and offline -- it does NOT run any
+    test. That is :func:`execute_manifest`'s job; keeping them separate means
+    every commit's normal test run still gets this cheap structural check
+    even when the slower execution proof is invoked separately.
     """
 
     errors: list[str] = []
@@ -752,6 +986,31 @@ def validate_manifest(
         if item.status == "blocked" and not item.blocked_reason:
             errors.append(f"{item.id}: blocked without a blocked_reason")
 
+        if (
+            item.status == "proven_unit"
+            and not item.requires_live_infra
+            and not item.test_nodeids
+        ):
+            errors.append(
+                f"{item.id}: proven_unit with no test_nodeids -- a file "
+                "existing is not proof that a test exercises the claim"
+            )
+
+        if item.status == "proven_e2e" and not item.requires_live_infra:
+            errors.append(
+                f"{item.id}: proven_e2e without requires_live_infra -- if it "
+                "can run without Compose/Docker it should carry test_nodeids "
+                "and be executed like any other claim"
+            )
+
+        for node_id in item.test_nodeids:
+            file_part = node_id.split("::", 1)[0]
+            if file_part not in item.evidence:
+                errors.append(
+                    f"{item.id}: test_nodeids entry {node_id!r} is not under "
+                    f"any of this item's own evidence paths {item.evidence!r}"
+                )
+
         for relative_path in item.evidence:
             if not (root / relative_path).exists():
                 errors.append(
@@ -768,6 +1027,83 @@ def validate_manifest(
                             f"{item.id}: content marker {marker!r} not found "
                             f"in {item.evidence[0]}"
                         )
+    return errors
+
+
+def run_evidence_tests(root: Path, node_ids: tuple[str, ...]) -> dict[str, str]:
+    """Actually execute every distinct pytest node id and report its outcome.
+
+    Returns ``{node_id: outcome}`` where outcome is ``"passed"``,
+    ``"failed"``, ``"error"``, or ``"not_collected"``. A node id absent from
+    pytest's own short summary after the run is reported ``"not_collected"``
+    -- it is never assumed to have passed just because nothing said
+    otherwise. This is the "a measurement that did not happen must FAIL"
+    rule applied to this manifest's own proof: citing a test file is not
+    proof the cited test runs, let alone passes.
+    """
+
+    if not node_ids:
+        return {}
+    unique_ids = sorted(set(node_ids))
+    # sys.executable, not root/.venv/bin/python: this must also work when
+    # `root` is a throwaway tmp_path (the guard-behavior tests below), which
+    # has no venv of its own but does need pytest on its path -- the
+    # interpreter already running this process (started via .venv/bin/pytest
+    # in the real case) is always correct.
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            *unique_ids,
+            "-q",
+            "--no-header",
+            "-rA",
+            "--no-cov",
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    outcomes: dict[str, str] = {}
+    _OUTCOME_PREFIXES = {
+        "PASSED": "passed",
+        "FAILED": "failed",
+        "ERROR": "error",
+        "XFAIL": "passed",
+    }
+    for line in process.stdout.splitlines():
+        for prefix, outcome in _OUTCOME_PREFIXES.items():
+            marker = f"{prefix} "
+            if line.startswith(marker):
+                reported_id = line[len(marker) :].split(" - ", 1)[0].strip()
+                outcomes[reported_id] = outcome
+                break
+    for node_id in unique_ids:
+        outcomes.setdefault(node_id, "not_collected")
+    return outcomes
+
+
+def execute_manifest(
+    root: Path, items: tuple[ManifestItem, ...] = MANIFEST
+) -> list[str]:
+    """Run every ``test_nodeids`` entry across ``items`` and report failures.
+
+    Complements :func:`validate_manifest` (which never runs code): this is
+    the part of the "measurement that did not happen must FAIL" discipline
+    that actually executes the cited tests rather than trusting that a file
+    with the right name existing means the claim holds.
+    """
+
+    all_node_ids = tuple(node_id for item in items for node_id in item.test_nodeids)
+    outcomes = run_evidence_tests(root, all_node_ids)
+    errors: list[str] = []
+    for item in items:
+        for node_id in item.test_nodeids:
+            outcome = outcomes.get(node_id, "not_collected")
+            if outcome != "passed":
+                errors.append(f"{item.id}: {node_id} -> {outcome} (expected passed)")
     return errors
 
 
@@ -802,6 +1138,8 @@ def build_report(
                 "status": item.status,
                 "evidence": list(item.evidence),
                 "blocked_reason": item.blocked_reason,
+                "test_nodeids": list(item.test_nodeids),
+                "requires_live_infra": item.requires_live_infra,
             }
             for item in sorted(items, key=lambda i: (i.category, i.id))
         ],
@@ -815,6 +1153,22 @@ def main(argv: list[str] | None = None) -> int:
     except ManifestIntegrityError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+    args = argv if argv is not None else sys.argv[1:]
+    if "--skip-execution" not in args:
+        print(
+            "executing every cited test_nodeids entry (use --skip-execution to skip)..."
+        )
+        execution_errors = execute_manifest(root)
+        if execution_errors:
+            print(
+                "manifest execution check failed -- a cited test did not pass:",
+                file=sys.stderr,
+            )
+            for error in execution_errors:
+                print(f"- {error}", file=sys.stderr)
+            return 1
+
     output_path = root / "tests" / "acceptance" / "wave31-manifest-report.v1.json"
     output_path.write_text(
         json.dumps(report, indent=2, sort_keys=False) + "\n", encoding="utf-8"

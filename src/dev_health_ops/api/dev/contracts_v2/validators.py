@@ -423,6 +423,19 @@ def validate_outcome_consistency(frame: _frame.DevAnswerFrame) -> None:
                 "'answered' cannot carry a non-calculable completion block; "
                 "use answered_with_gaps"
             )
+        # CHAOS-3297 flags gap (ratified 2026-08-02): a disclosure bars
+        # 'answered' but does not by itself satisfy 'answered_with_gaps' --
+        # a disclosed fact still requires an explanatory limitation or a
+        # non-calculable completion block (checked below), so a builder
+        # emitting a disclosure must emit both the disclosure and the
+        # limitation that explains it.
+        disclosed_facts = [fact.fact_id for fact in frame.facts if fact.disclosures]
+        if disclosed_facts:
+            raise ValueError(
+                "'answered' cannot carry a fact disclosure (stale/uncertain/"
+                f"conflicting/untrusted_source) on fact(s) {sorted(disclosed_facts)}; "
+                "use answered_with_gaps"
+            )
     if outcome == "answered_with_gaps" and not frame.limitations:
         if frame.completion is None or frame.completion.calculable is not False:
             raise ValueError(

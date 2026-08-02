@@ -15,6 +15,7 @@
   "facts": [
     {
       "confidence": 1.0,
+      "disclosures": [],
       "evidence_ref_ids": [],
       "fact_id": "fact_01",
       "kind": "observed",

@@ -28,6 +28,14 @@
           "title": "Confidence",
           "type": "number"
         },
+        "disclosures": {
+          "items": {
+            "$ref": "#/$defs/FactDisclosure"
+          },
+          "maxItems": 4,
+          "title": "Disclosures",
+          "type": "array"
+        },
         "evidence_ref_ids": {
           "items": {
             "maxLength": 44,
@@ -2359,6 +2367,17 @@
         "team"
       ],
       "title": "EntityType",
+      "type": "string"
+    },
+    "FactDisclosure": {
+      "description": "Per-fact disclosure flags \u2014 the v2-native, closed-vocabulary\nequivalent of v1 ``DevClaimFlags`` (``stale``/``uncertain``/\n``conflicting``/``untrusted_source``, ``contracts.py:615-619``).\n\nRatified on CHAOS-3297 (\"DevAnswerFact flags gap \u2014 design ratified\n2026-08-02\"): option (a), a per-fact field, because all four disclosures\nare per-claim in v1 and every existing frame channel is per-frame\n(``DevAnswerFrame.limitations``) or per-evidence\n(``DevFrameConflict``/``DevEvidenceRefV2``'s inherited v1\n``DevEvidenceFlags``) \u2014 none of them is per-fact, so\n``compat._project_answered`` could never reconstruct ``DevClaim.flags``\nfrom frame-level prose alone.\n\nDeclared here rather than in ``frame.py``: ``no_answer_policy`` imports\nonly ``base`` (the leaf that broke the cyclic-import graph \u2014 see that\nmodule's docstring), and ``compat.py`` asserts this vocabulary is a\nname-level bijection with ``DevClaimFlags.model_fields`` at import time,\nso both sides of the seam read it from the same leaf module rather than\nfrom ``frame``.\n\nMember order is the canonical declaration order ``DevAnswerFact.disclosures``\nenforces (strictly ascending, no duplicates) \u2014 the tuple is isomorphic to\na 4-bit set, so two producers that disclose the same facts always emit\nbyte-identical frames regardless of the order they discovered them in.\n\nDeliberately **not** derived from ``DevEvidenceFlags.untrusted_content``:\nthat field defaults ``True`` on every evidence ref (see ``embedded.py``),\nso deriving ``UNTRUSTED_SOURCE`` from it would fire on nearly every fact\nand make ``answered`` unreachable. A disclosure is a claim about the\n*fact's own trustworthiness* (mirroring v1's model-authored\n``DevClaimFlags``), never a mechanical fold over its evidence's flags.",
+      "enum": [
+        "stale",
+        "uncertain",
+        "conflicting",
+        "untrusted_source"
+      ],
+      "title": "FactDisclosure",
       "type": "string"
     },
     "FreshnessState": {

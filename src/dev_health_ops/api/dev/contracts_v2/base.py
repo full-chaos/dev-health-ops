@@ -37,6 +37,7 @@ __all__ = [
     "ContractModelV2",
     "EntityKind",
     "EvidenceHandle",
+    "FactDisclosure",
     "IdempotencyKey",
     "Label",
     "LongText",
@@ -113,6 +114,46 @@ class Cardinality(StrEnum):
     SINGULAR = "singular"
     PLURAL_COHORT = "plural_cohort"
     ORGANIZATION_WIDE = "organization_wide"
+
+
+class FactDisclosure(StrEnum):
+    """Per-fact disclosure flags — the v2-native, closed-vocabulary
+    equivalent of v1 ``DevClaimFlags`` (``stale``/``uncertain``/
+    ``conflicting``/``untrusted_source``, ``contracts.py:615-619``).
+
+    Ratified on CHAOS-3297 ("DevAnswerFact flags gap — design ratified
+    2026-08-02"): option (a), a per-fact field, because all four disclosures
+    are per-claim in v1 and every existing frame channel is per-frame
+    (``DevAnswerFrame.limitations``) or per-evidence
+    (``DevFrameConflict``/``DevEvidenceRefV2``'s inherited v1
+    ``DevEvidenceFlags``) — none of them is per-fact, so
+    ``compat._project_answered`` could never reconstruct ``DevClaim.flags``
+    from frame-level prose alone.
+
+    Declared here rather than in ``frame.py``: ``no_answer_policy`` imports
+    only ``base`` (the leaf that broke the cyclic-import graph — see that
+    module's docstring), and ``compat.py`` asserts this vocabulary is a
+    name-level bijection with ``DevClaimFlags.model_fields`` at import time,
+    so both sides of the seam read it from the same leaf module rather than
+    from ``frame``.
+
+    Member order is the canonical declaration order ``DevAnswerFact.disclosures``
+    enforces (strictly ascending, no duplicates) — the tuple is isomorphic to
+    a 4-bit set, so two producers that disclose the same facts always emit
+    byte-identical frames regardless of the order they discovered them in.
+
+    Deliberately **not** derived from ``DevEvidenceFlags.untrusted_content``:
+    that field defaults ``True`` on every evidence ref (see ``embedded.py``),
+    so deriving ``UNTRUSTED_SOURCE`` from it would fire on nearly every fact
+    and make ``answered`` unreachable. A disclosure is a claim about the
+    *fact's own trustworthiness* (mirroring v1's model-authored
+    ``DevClaimFlags``), never a mechanical fold over its evidence's flags.
+    """
+
+    STALE = "stale"
+    UNCERTAIN = "uncertain"
+    CONFLICTING = "conflicting"
+    UNTRUSTED_SOURCE = "untrusted_source"
 
 
 class SourceRequirementState(StrEnum):

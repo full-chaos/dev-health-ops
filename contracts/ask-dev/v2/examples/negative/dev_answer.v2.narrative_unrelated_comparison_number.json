@@ -66,6 +66,7 @@
     "facts": [
       {
         "confidence": 1.0,
+        "disclosures": [],
         "evidence_ref_ids": [
           "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"
         ],

@@ -86,13 +86,35 @@ from dev_health_ops.api.dev.contracts import (
 )
 
 from .answer import DevAnswerV2
-from .base import EntityKind, OpaqueID, PublicOutcome
+from .base import EntityKind, FactDisclosure, OpaqueID, PublicOutcome
 from .frame import DevFrameVersions
 from .validators import CANONICAL_NO_ANSWER_COPY, CANONICAL_NO_ANSWER_REMEDIATION
 
 __all__ = ["project_answer_v2_to_v1"]
 
 _V1Model = TypeVar("_V1Model", bound=BaseModel)
+
+# Import-time totality (P2): `FactDisclosure` (contracts_v2/base.py) and v1
+# `DevClaimFlags.model_fields` (contracts.py:615-619) must name exactly the
+# same set of flags, or a claim's flag could round-trip through
+# `wrap_legacy_answer_as_frame` / `_project_answered` into the wrong bit, or
+# silently drop one. This is a name-level bijection only, not a semantic
+# one -- see `FactDisclosure`'s docstring for why derivation from
+# `DevEvidenceFlags` would be wrong even though the names would still match.
+_missing_from_fact_disclosure = set(DevClaimFlags.model_fields) - {
+    member.value for member in FactDisclosure
+}
+_missing_from_claim_flags = {member.value for member in FactDisclosure} - set(
+    DevClaimFlags.model_fields
+)
+if _missing_from_fact_disclosure or _missing_from_claim_flags:
+    raise RuntimeError(
+        "FactDisclosure (contracts_v2/base.py) and DevClaimFlags "
+        "(contracts.py) have diverged: DevClaimFlags field(s) missing from "
+        f"FactDisclosure={sorted(_missing_from_fact_disclosure)}, "
+        f"FactDisclosure value(s) missing from DevClaimFlags="
+        f"{sorted(_missing_from_claim_flags)}"
+    )
 
 
 def _as_v1(model_cls: type[_V1Model], value: BaseModel) -> _V1Model:
@@ -229,7 +251,9 @@ def _project_answered(
                 validity_scope=_build_resolved_scope(
                     answer, organization_id, time_range
                 ),
-                flags=DevClaimFlags(),
+                flags=DevClaimFlags(
+                    **{disclosure.value: True for disclosure in fact.disclosures}
+                ),
                 recommendation_rule_version=(
                     rule_version if kind is ClaimKind.RECOMMENDATION else None
                 ),

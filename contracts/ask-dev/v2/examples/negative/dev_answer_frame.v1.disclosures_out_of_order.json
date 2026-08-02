@@ -2,7 +2,7 @@
   "comparisons": [],
   "completion": {
     "calculable": true,
-    "denominator": null,
+    "denominator": 4,
     "numerator": 3,
     "rate": 0.75,
     "rule_id": "actual_completion",
@@ -56,7 +56,10 @@
   "facts": [
     {
       "confidence": 1.0,
-      "disclosures": [],
+      "disclosures": [
+        "conflicting",
+        "stale"
+      ],
       "evidence_ref_ids": [
         "ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"
       ],

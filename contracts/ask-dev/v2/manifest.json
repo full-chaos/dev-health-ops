@@ -168,27 +168,42 @@
         {
           "case": "internal_leakage",
           "path": "examples/negative/dev_answer_frame.v1.internal_leakage.json",
-          "sha256": "2df179cfa9d471c406534d18c1337fee223e71dcace524bc19cc09a0139f4be2"
+          "sha256": "1c46fbf12497ac6f4d425e7cfae0572e4694178b7529cfe678e09c829bee7cd1"
         },
         {
           "case": "outcome_content_mismatch",
           "path": "examples/negative/dev_answer_frame.v1.outcome_content_mismatch.json",
-          "sha256": "79edfbd2cfecb1524dc2a0ab6043dcc2476da351e2aea1007f759ec71f8d58cd"
+          "sha256": "b11b6273aeecfd6685e7463b141f097eb01da8e5cb691d3532849e35ea5df7b6"
         },
         {
           "case": "completion_without_denominator",
           "path": "examples/negative/dev_answer_frame.v1.completion_without_denominator.json",
-          "sha256": "92a22a1c97219af381ed1c9b0cf56fa26602837e9d642956e58fc2a5ddaa745d"
+          "sha256": "609dcef1925faafb01f16917eaba05250d1980ec4dd428909a5ab53ad8251884"
         },
         {
           "case": "relationship_outside_frame",
           "path": "examples/negative/dev_answer_frame.v1.relationship_outside_frame.json",
-          "sha256": "0f0f1232f1c214a4755b9b777e7f8a51934dfd0e3d9e23e036db07c282669c3e"
+          "sha256": "c50cb8ab4e4386c15a97744e41230ae244e515ad8ca351227bc3842e696b0d64"
         },
         {
           "case": "answered_without_versions",
           "path": "examples/negative/dev_answer_frame.v1.answered_without_versions.json",
-          "sha256": "5efd2f86d6d4896f777160b64e5bf9112e78a5000aae0db185252fdd76505b28"
+          "sha256": "f1546b8b77a01229f50a8ddfb91fff9cee2b9d5fdc566bd350b96a305defde46"
+        },
+        {
+          "case": "answered_with_disclosure",
+          "path": "examples/negative/dev_answer_frame.v1.answered_with_disclosure.json",
+          "sha256": "5d08ecdbd46a9ceb2f40d189a531b27f0524bfd2816fe369a9ae5588fd7b173e"
+        },
+        {
+          "case": "disclosures_out_of_order",
+          "path": "examples/negative/dev_answer_frame.v1.disclosures_out_of_order.json",
+          "sha256": "a94b60cbd63b19d61ed1fcf47a4d6f7bbc12210fbe01ae3dd0e4b1fc7ba3c9f5"
+        },
+        {
+          "case": "disclosures_duplicated",
+          "path": "examples/negative/dev_answer_frame.v1.disclosures_duplicated.json",
+          "sha256": "247536f5dd90cc8d9925f38399e7911c18329d69ce6ef2a6b8431451403eed79"
         },
         {
           "case": "denied_with_completion",
@@ -273,21 +288,21 @@
         {
           "case": "coverage_unavailable_source_outside_vocabulary",
           "path": "examples/negative/dev_answer_frame.v1.coverage_unavailable_source_outside_vocabulary.json",
-          "sha256": "5b9bb597a96736a669d25e84d9f2be2c0cff9229ee5caafb44d67189bd01fe18"
+          "sha256": "20666cd7f28656c1ceba96830ad0a2e630eaacf9889a2c06683b289711524694"
         },
         {
           "case": "coverage_stale_source_outside_vocabulary",
           "path": "examples/negative/dev_answer_frame.v1.coverage_stale_source_outside_vocabulary.json",
-          "sha256": "11e752615786be89f13928381020e49867be3c56777570813cb86fd6ac5b1af6"
+          "sha256": "e7d4abf56d9bf00059656562aac4625e58f0ca88b902904c311a9caa869bb602"
         }
       ],
       "positive": {
         "path": "examples/positive/dev_answer_frame.v1.json",
-        "sha256": "3fb614a35dffd4850fceefa7ed3ceb738086103542427b36cde6a5a9b46307be"
+        "sha256": "8998c14a47d4025dfb9da67ecbd290870266c6e83693bc33f9b244cc45f9b356"
       },
       "schema": {
         "path": "schemas/dev_answer_frame.v1.schema.json",
-        "sha256": "4e00565d33f52d64d5b085fadccde060ce5a0032beab4ff3118768f7572e9152"
+        "sha256": "62d7a905ac47af0c851b913d26960d6d5ea4b7a7113ce15568ed89411aa16e75"
       },
       "schema_version": "dev_answer_frame.v1"
     },
@@ -314,32 +329,32 @@
         {
           "case": "outcome_mismatch_with_frame",
           "path": "examples/negative/dev_answer.v2.outcome_mismatch_with_frame.json",
-          "sha256": "c61e0ea7a1b5a24b15bcff19e2d0b0b386819142261602fd6f30d8c939309d8b"
+          "sha256": "008bc1eb32383e815c136716023dac0843ad8f2ee64fa1345aeeb2df9f3216d2"
         },
         {
           "case": "frame_run_id_mismatch",
           "path": "examples/negative/dev_answer.v2.frame_run_id_mismatch.json",
-          "sha256": "84161713e88f9d05482b1f3f137fd409fd1a18a578d3cb1e04f4a69a8b942125"
+          "sha256": "594cc370974f9e824824f3fce14c10ce7c4cde597fb7a84e9f0efacd67bf23fb"
         },
         {
           "case": "narrative_contradicts_number",
           "path": "examples/negative/dev_answer.v2.narrative_contradicts_number.json",
-          "sha256": "a4bc39efb89f616b2e3cd657c170e5957a1e1f122a5f5fffc42a4ca0c74e1df5"
+          "sha256": "4bcc19a20cf5c94a1d542a27a92390c366a04e73560db4eff4e429b93be3944e"
         },
         {
           "case": "narrative_contradicts_readiness",
           "path": "examples/negative/dev_answer.v2.narrative_contradicts_readiness.json",
-          "sha256": "69ab9cf3abcecba6d78d0c20ecffd392d23e483f03332fc1e741d6982082bc1d"
+          "sha256": "5615600a9161d748af7a084a1999a27c09991371e358f6a5aea411541e5f7e6f"
         },
         {
           "case": "narrative_contradicts_subject",
           "path": "examples/negative/dev_answer.v2.narrative_contradicts_subject.json",
-          "sha256": "0712936e753d793e2b350b81099f2bf11d74713a43041216b2c3d942b43bb7d2"
+          "sha256": "27c7c470a505efc0f07c2ffa5c2c29530f8a5fe3b50b4e4633628997a75540ce"
         },
         {
           "case": "narrative_contradicts_recommendation",
           "path": "examples/negative/dev_answer.v2.narrative_contradicts_recommendation.json",
-          "sha256": "b5ab08ccb30139af5a42b126696b7b73a686f00d78e5c1edc0e04bfa3f269b6e"
+          "sha256": "dd1e0ba5880679f68a8650d998c567bdd2662271081c2aa91ae095b5163690e2"
         },
         {
           "case": "denied_with_narrative",
@@ -349,31 +364,31 @@
         {
           "case": "narrative_unrelated_comparison_number",
           "path": "examples/negative/dev_answer.v2.narrative_unrelated_comparison_number.json",
-          "sha256": "79b2c643d01658b7058966b714e3eb98d4917f04775a020fbd77f1825436bec0"
+          "sha256": "fdaf2f3a6fe014c1b4e6c15f980e77d9f027c66e251a8ae3690bbf5d26518cc9"
         },
         {
           "case": "narrative_substring_subject",
           "path": "examples/negative/dev_answer.v2.narrative_substring_subject.json",
-          "sha256": "ee40769b56501a4c72c50750d60dcb9c9e860803f78a33ac4bae5d6def057981"
+          "sha256": "9bb9055e73c9b94510a9567698f80d7fc34e965937e545a93260cd6048097c29"
         },
         {
           "case": "narrative_unbound_recommendation",
           "path": "examples/negative/dev_answer.v2.narrative_unbound_recommendation.json",
-          "sha256": "d334893fcba8ad187e6ca58e69a898ae1882455685ab82381967d6045e5dcd3e"
+          "sha256": "c8eaa616366056c8fa5c38e980b9667de99b2648be858bfb5c628822f577d23d"
         },
         {
           "case": "narrative_completion_number_out_of_context",
           "path": "examples/negative/dev_answer.v2.narrative_completion_number_out_of_context.json",
-          "sha256": "ebf45f617dcfd875700daeb9409aa2d11e21695ddcdd5f52875f6e9429f7674f"
+          "sha256": "e8bb2a3686a2c3ab21153c11e9297f0df0499ce5b929078f7a3d87c3592b8529"
         }
       ],
       "positive": {
         "path": "examples/positive/dev_answer.v2.json",
-        "sha256": "46cb07e12ca3abec5969aab91787c6afbe3047fa7649fabc0d461e205c181d97"
+        "sha256": "6ea9ca3b984ff0f987dc1291aa5ea9733243d5b8f3c6a6493f9c1d41cd75ee38"
       },
       "schema": {
         "path": "schemas/dev_answer.v2.schema.json",
-        "sha256": "99dfec58f9092b5f3108514366fdd5ba5d56a3b968ad4017fd8ceb9348d23305"
+        "sha256": "b04f0bf09b22da88784a16048bf38360614c4ed4b1f4f0d13150bfedf5354b8e"
       },
       "schema_version": "dev_answer.v2"
     },
@@ -391,7 +406,7 @@
       },
       "schema": {
         "path": "schemas/dev_stream_event.v2.schema.json",
-        "sha256": "c797f671f99b821b41b7d7af777b815bbac43311cb51ac63fe808bbd0d735c65"
+        "sha256": "e5d2af956ed1e64bdced7631ba15ceb5b4c2a825d1e2708a4e21beb55c484850"
       },
       "schema_version": "dev_stream_event.v2"
     }

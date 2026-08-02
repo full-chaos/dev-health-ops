@@ -192,9 +192,9 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Seven route-ready pairs can reach this closure today:
+			// Eight route-ready pairs can reach this closure today:
 			// launchdarkly/feature-flags plus github/repo-metadata, cicd,
-			// commits, deployments, security, and files. Each
+			// commits, deployments, security, files, and commit-stats. Each
 			// has its own CompleteRouteHandler and effect sink. session.Claim
 			// is already known here — providerunit.Handler.Work only calls
 			// BuildExecutor after its own descriptor gate passed for THIS
@@ -271,6 +271,13 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitHubFilesRouteHandler{}
 				sink, readback = ghFilesSink, ghFilesSink
+			case session.Claim.Provider == "github" &&
+				session.Claim.Dataset == "commit-stats":
+				ghCommitStatsSink := providersync.GitHubCommitStatsClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitHubCommitStatsRouteHandler{}
+				sink, readback = ghCommitStatsSink, ghCommitStatsSink
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
@@ -455,7 +462,8 @@ func providerSyncWorkerEnabled(cfg config.Config) bool {
 	return cfg.WorkerLaunchDarklyFeatureFlagsEnabled || cfg.WorkerGithubRepoMetadataEnabled ||
 		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubCICDEnabled ||
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
-		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled
+		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||
+		cfg.WorkerGithubCommitStatsEnabled
 }
 
 func providerSyncRiverConfig(

@@ -148,11 +148,26 @@ class FakeAttributionSource:
     """
 
     repository_ids: tuple[str, ...] = ()
+    as_of_calls: list[datetime] | None = None
 
     async def team_repository_ids(
         self, org_id: str, team_id: str, *, as_of: datetime
     ) -> list[str]:
+        if self.as_of_calls is not None:
+            self.as_of_calls.append(as_of)
         return list(self.repository_ids)
+
+
+@dataclass
+class FakeFailingAttributionSource:
+    """A ``TeamAttributionSource`` double whose lookup genuinely fails --
+    distinct from ``FakeAttributionSource(repository_ids=())``, which
+    succeeds with a real, empty answer."""
+
+    async def team_repository_ids(
+        self, org_id: str, team_id: str, *, as_of: datetime
+    ) -> list[str]:
+        raise RuntimeError("attribution lookup failed")
 
 
 _NO_ATTRIBUTION = FakeAttributionSource(repository_ids=())
@@ -406,3 +421,89 @@ async def test_evaluate_workload_without_comparison_range_skips_comparison_fetch
         now=_NOW,
     )
     assert len(source.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_evaluate_workload_resolves_attribution_at_scope_window_end_not_now() -> (
+    None
+):
+    """Attribution-snapshot discipline: evaluating a two-week-old scope
+    three days after the fact must attribute against the roster that was
+    true at ``scope.time_range.end`` -- never against today's wall-clock
+    ``now``, which could have drifted from it.
+    """
+
+    attribution = FakeAttributionSource(
+        repository_ids=tuple(f"repo-{i}" for i in range(25)), as_of_calls=[]
+    )
+    service = TeamWorkloadService(
+        FakeRuntime(), attribution, FakeUnmeasuredWorkloadSource()
+    )
+    scope = _team_scope()
+    evaluated_three_days_later = scope.time_range.end + timedelta(days=3)
+    await service.evaluate_workload(
+        org_id=_ORG_ID,
+        permission_fingerprint="fp",
+        scope=scope,
+        team_id="team-1",
+        now=evaluated_three_days_later,
+    )
+    assert attribution.as_of_calls == [scope.time_range.end]
+    assert evaluated_three_days_later not in attribution.as_of_calls
+
+
+@pytest.mark.asyncio
+async def test_evaluate_workload_attribution_lookup_failure_is_distinct_from_empty_cohort() -> (
+    None
+):
+    """A failed attribution lookup must never collapse into the
+    ``insufficient_cohort`` shape a genuinely empty, successfully resolved
+    cohort produces -- see the module docstring's attribution-snapshot
+    discipline. Proven both ways: the failure path carries no
+    ``suppressed_reason`` and ``cohort_size=None``; the empty-cohort path
+    carries ``suppressed_reason="insufficient_cohort"`` and a real
+    ``cohort_size=0``.
+    """
+
+    failing_service = TeamWorkloadService(
+        FakeRuntime(),
+        FakeFailingAttributionSource(),
+        FakeMeasuredWorkloadSource(calls=[]),
+    )
+    failure_profile = await failing_service.evaluate_workload(
+        org_id=_ORG_ID,
+        permission_fingerprint="fp",
+        scope=_team_scope(),
+        team_id="team-1",
+        now=_NOW,
+    )
+    assert failure_profile.launch_findings == ()
+    assert failure_profile.suppressed_findings == ()
+    assert failure_profile.shadow_findings
+    for finding in failure_profile.shadow_findings:
+        assert finding.state is DimensionState.UNKNOWN
+        assert finding.suppressed_reason is None
+    for observation in failure_profile.observations:
+        assert observation.cohort_size is None
+
+    empty_cohort_service = TeamWorkloadService(
+        FakeRuntime(), _NO_ATTRIBUTION, FakeMeasuredWorkloadSource(calls=[])
+    )
+    empty_cohort_profile = await empty_cohort_service.evaluate_workload(
+        org_id=_ORG_ID,
+        permission_fingerprint="fp",
+        scope=_team_scope(),
+        team_id="team-1",
+        now=_NOW,
+    )
+    after_hours = next(
+        f
+        for f in empty_cohort_profile.shadow_findings
+        if f.rule_id == "health_rule.after_hours_pressure_sustained.v1"
+    )
+    assert after_hours.state is DimensionState.UNKNOWN
+    assert after_hours.suppressed_reason == "insufficient_cohort"
+    assert any(
+        observation.cohort_size == 0
+        for observation in empty_cohort_profile.observations
+    )

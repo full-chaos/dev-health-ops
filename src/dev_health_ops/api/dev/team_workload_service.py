@@ -37,6 +37,28 @@ resolved by THIS service from :class:`~.team_health_service.TeamAttributionSourc
 ``TeamHealthService`` uses -- never a caller-asserted naked int. There is no
 ``cohort_size`` parameter on :meth:`TeamWorkloadService.evaluate_workload`
 for a caller to inject one through.
+
+Attribution-snapshot discipline (pre-staged ahead of 3303's in-flight fix
+for the same defect class, per team-lead 2026-08-02): the attribution
+lookup is resolved exactly ONCE, at ``as_of=scope.time_range.end`` -- the
+end of the window every fact this evaluation reads is itself bounded by --
+never at wall-clock ``now``. Evaluating a two-week-old scope days after the
+fact must not silently attribute against today's team roster instead of the
+roster that was true when the evaluated facts were produced.
+
+A lookup FAILURE (``team_repository_ids`` raising) is never collapsed into
+an empty cohort. This service catches the exception at its own call site
+(no protocol change required -- Python's exception channel already
+distinguishes "the query never returned an answer" from "the query
+answered zero") and short-circuits to an explicit unavailable profile:
+every source is left unread (``HealthEvaluationSources()`` all-default, so
+every bound rule reports ``unavailable_observation`` honestly) and
+``cohort_size=None`` throughout -- never ``0``. The two are deliberately
+distinguishable in the finding: an empty, successfully-resolved cohort
+reports ``UNKNOWN``/``insufficient_cohort`` (we know the cohort and it is
+too small); a failed lookup reports plain ``UNKNOWN`` with no suppressed
+reason and no cohort_size at all (we do not know the cohort). See
+:meth:`TeamWorkloadService._unavailable_profile`.
 """
 
 from __future__ import annotations
@@ -110,10 +132,18 @@ class TeamWorkloadService:
 
         # The ONLY source of cohort_size: verified, queried at evaluation
         # time, never a caller-supplied assertion -- see module docstring
-        # and TeamHealthService's own identical discipline.
-        owned_repository_ids = await self._attribution.team_repository_ids(
-            org_id, team_id, as_of=now
-        )
+        # and TeamHealthService's own identical discipline. Resolved ONCE,
+        # as_of the end of the window every fact below is itself bounded
+        # by (never wall-clock `now`) -- see module docstring.
+        attribution_as_of = scope.time_range.end
+        try:
+            owned_repository_ids = await self._attribution.team_repository_ids(
+                org_id, team_id, as_of=attribution_as_of
+            )
+        except Exception:
+            # A failed lookup is never silently treated as an empty cohort
+            # -- see module docstring's attribution-snapshot discipline.
+            return self._unavailable_profile(team_id=team_id, org_id=org_id, now=now)
         cohort_size = len(owned_repository_ids)
 
         # Sequential awaits throughout -- never asyncio.gather over these
@@ -180,6 +210,31 @@ class TeamWorkloadService:
             subject_id=team_id,
             cohort_size=cohort_size,
             sources=sources,
+            org_id=org_id,
+            observed_at=now,
+        )
+
+    def _unavailable_profile(
+        self, *, team_id: str, org_id: str, now: datetime
+    ) -> HealthProfileResult:
+        """The failed-attribution-lookup path -- see module docstring.
+
+        Every source is left unread (an all-default ``HealthEvaluationSources``),
+        so every bound rule reports an honest ``unavailable_observation``
+        rather than proceeding with an unknown/fabricated cohort.
+        ``cohort_size=None`` throughout -- never ``0`` -- is what makes this
+        finding shape distinguishable from a genuinely empty, successfully
+        resolved cohort (``insufficient_cohort``): a failed lookup carries no
+        ``suppressed_reason`` at all, because ``evaluate_rule`` never reaches
+        its cohort/sample/coverage guardrails for a ``not_measured``
+        observation -- it reports plain ``UNKNOWN`` before any of them run.
+        """
+
+        return synthesize_health_profile(
+            applicability=RuleApplicability.TEAM,
+            subject_id=team_id,
+            cohort_size=None,
+            sources=HealthEvaluationSources(change_failure_rate_not_applicable=True),
             org_id=org_id,
             observed_at=now,
         )

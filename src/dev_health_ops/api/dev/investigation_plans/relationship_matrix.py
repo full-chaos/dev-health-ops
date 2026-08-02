@@ -252,6 +252,16 @@ def approved_relationship(source_class: SourceClass, relationship: str) -> bool:
 #: is a visible, reviewed edit here too (the same posture as
 #: ``PLAN_ID_BY_INTENT``'s written-out mapping), not a silently-included slot
 #: no ``SourceClass`` entry below has judged yet.
+#:
+#: Dual-purpose (CHAOS-3296 Codex finding, HIGH, 2026-08-01): the order here
+#: is ALSO ``executor._budgeted_observation``'s truncation priority --
+#: issue body Section 6 "Evidence prioritization and bounds" ranks direct
+#: verdict > required incomplete work > blocking/delivery gates > optional
+#: context, which maps onto this exact field order (earliest = highest
+#: priority = dropped last; ``metric_refs`` at the tail is dropped first).
+#: One deliberate list rather than two that could silently drift apart --
+#: a future field addition here is reviewed for BOTH its approved-slot
+#: membership and where it ranks under budget pressure in the same edit.
 CONTENT_SLOT_FIELDS: tuple[str, ...] = (
     "status_facts",
     "required_children",

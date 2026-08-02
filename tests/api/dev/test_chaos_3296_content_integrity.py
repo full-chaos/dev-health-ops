@@ -323,8 +323,12 @@ async def test_verify_mint_receipts_accepts_a_genuinely_minted_handle():
             observed_at=OBSERVED_AT,
             freshness=FreshnessState.FRESH,
         )
+        # fact_id follows the real convention builtin_steps.py wires
+        # (``f"{entity_type}:{entity_id}"``) so the identity a genuine
+        # verification check derives from the fact matches exactly what
+        # was minted -- see ``executor._content_fact_claims``.
         fact = DevStatusFactV2(
-            fact_id="issue:1",
+            fact_id="issue:issue-1",
             text="Issue one is in_progress",
             evidence_ref_ids=(handle,),
         )
@@ -366,7 +370,7 @@ async def test_verify_mint_receipts_rejects_a_handle_this_step_never_minted():
             freshness=FreshnessState.FRESH,
         )
         genuine_fact = DevStatusFactV2(
-            fact_id="issue:1",
+            fact_id="issue:issue-1",
             text="Issue one is in_progress",
             evidence_ref_ids=(genuine,),
         )

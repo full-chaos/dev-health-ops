@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from ..contracts import DevScope, DirectScope, FreshnessState
@@ -29,11 +30,13 @@ from ..contracts_v2.result import (
 )
 from .builtin_steps import PlanExecutorRuntime
 from .relationship_matrix import (
+    CONTENT_SLOT_FIELDS,
     MAX_RELATIONSHIP_PATHS,
     MIN_RELATIONSHIP_CONFIDENCE,
     approved_relationship,
     content_slot_violations,
 )
+from .state_mapping import queried_semantics
 from .steps import (
     PlanRegistryError,
     PlanStepDefinition,
@@ -44,9 +47,34 @@ from .steps import (
 
 __all__ = ["PlanExecutionError", "PlanExecutor", "wrap_runtime_with_mint_receipts"]
 
+
+@dataclass(frozen=True, slots=True)
+class _MintedReceipt:
+    """The identity a ``mint_evidence`` call actually issued a handle
+    against -- the same three fields ``EvidenceReferenceSigner._payload``
+    binds into its HMAC (``evidence_service.py``), captured directly from
+    the mint call's own keyword arguments rather than re-derived from
+    anything a step could shape afterward.
+
+    Codex finding (MEDIUM, round 2, 2026-08-02): recording only the bare
+    handle string (round 1's fix) proved merely that *some* handle was
+    minted during this step -- a step could mint once for a real entity and
+    reuse that same string on an arbitrary number of fabricated facts, and
+    the round-1 check could not tell the difference. Binding identity here
+    closes that: verification compares each fact's own claimed identity
+    against the receipt of every handle it cites (see
+    ``_evidence_identity_mismatches``).
+    """
+
+    source_system: str
+    entity_type: str
+    entity_id: str
+
+
 #: Per-step-invocation scope (CHAOS-3296 Codex finding, MEDIUM 2026-08-01):
 #: every evidence handle a ``PlanExecutorRuntime`` actually issues during one
-#: step's own ``run()`` call is recorded here (see
+#: step's own ``run()`` call is recorded here, keyed by the handle and
+#: mapped to the identity it was minted against (see
 #: :class:`_MintReceiptRuntime`), isolated per ``asyncio`` task -- concurrent
 #: sibling steps (``asyncio.gather`` in :meth:`PlanExecutor.run`) each run in
 #: their own task with their own copy of this context var, so one step's
@@ -54,9 +82,87 @@ __all__ = ["PlanExecutionError", "PlanExecutor", "wrap_runtime_with_mint_receipt
 #: only value any pre-3296 test or ``verify_mint_receipts=False`` run ever
 #: sees) means "no receipt tracking is active" -- content is accepted
 #: unverified, exactly today's behavior.
-_MINTED_EVIDENCE_HANDLES: contextvars.ContextVar[set[str] | None] = (
+_MINTED_EVIDENCE_HANDLES: contextvars.ContextVar[dict[str, _MintedReceipt] | None] = (
     contextvars.ContextVar("chaos_3296_minted_evidence_handles", default=None)
 )
+
+#: A shared, never-mutated empty receipt map -- used as ``_to_observation``'s
+#: default so an ordinary mutable-default pitfall never applies (nothing
+#: ever writes into it; every real receipt map is its own fresh ``dict``
+#: from :meth:`PlanExecutor._run_one`).
+_EMPTY_RECEIPTS: Mapping[str, _MintedReceipt] = {}
+
+#: Codex finding (HIGH, 2026-08-02, round 2): raising the persistence
+#: envelope (``persistence/service.py``'s ``_SOURCE_OBSERVATION_PAYLOAD_
+#: MAX_BYTES``) from 16KiB to 64KiB only moved the failure -- a genuinely
+#: contract-valid observation (every category at its own ``max_length``,
+#: every string at its own bound) still serializes past 64KiB by an order
+#: of magnitude (~615KiB at the true maximum), and a legal metric
+#: observation with dense 366-point series alone cleared 64KiB in
+#: isolation. Bounding the CONTRACT does not bound the WIRE PAYLOAD --
+#: the fix has to happen at construction, before persistence ever sees it,
+#: so the persisted object is exactly the presented object (never a
+#: silent divergence between "what we showed" and "what we stored").
+#: Kept as a literal duplicate of the numeric relationship to the
+#: persistence envelope (64KiB), not an import -- this domain-layer module
+#: has no dependency on the storage layer (see ``_STATUS_ENTITY_SOURCE_
+#: SYSTEM`` in ``builtin_steps.py`` for the same by-value-not-import
+#: posture); the two constants must be changed together.
+_CONTENT_BYTE_BUDGET_DEFAULT = 56 * 1024
+
+
+def _observation_json_bytes(observation: DevSourceObservation) -> int:
+    """Byte-for-byte the same encoding ``persistence.service._bounded_json``
+    measures the persisted payload with -- so a budget check here is the
+    exact same measurement the persistence backstop would otherwise apply,
+    just performed before construction commits to a shape that might not
+    fit."""
+
+    encoded = json.dumps(
+        observation.model_dump(mode="json"), separators=(",", ":"), sort_keys=True
+    )
+    return len(encoded.encode("utf-8"))
+
+
+def _total_content_facts(content: DevSourceContent) -> int:
+    return sum(len(getattr(content, slot)) for slot in CONTENT_SLOT_FIELDS)
+
+
+def _drop_lowest_priority_item(
+    content: DevSourceContent, dropped: dict[str, int]
+) -> DevSourceContent | None:
+    """Remove exactly one item from the lowest-priority non-empty
+    ``DevSourceContent`` field (tail-drop -- fields are already tuples in
+    stable, service-determined order, so this never touches dict/set
+    iteration order). ``CONTENT_SLOT_FIELDS`` is walked in reverse: the
+    last field in that priority list is the first ever dropped. Returns
+    ``None`` once every field is empty -- nothing left to drop."""
+
+    for slot in reversed(CONTENT_SLOT_FIELDS):
+        items = getattr(content, slot)
+        if items:
+            dropped[slot] = dropped.get(slot, 0) + 1
+            return content.model_copy(update={slot: items[:-1]})
+    return None
+
+
+def _dropped_summary(dropped: dict[str, int]) -> str:
+    return ",".join(
+        f"{field}:{count}" for field, count in sorted(dropped.items()) if count
+    )
+
+
+def _downgrade_for_truncation(state: SourceRequirementState) -> SourceRequirementState:
+    """A truncated result can never claim to be fully current -- downgrade
+    exactly once, never re-upgrade an already-imperfect state. Mirrors
+    ``state_mapping.work_graph_result_state_to_requirement_state``'s own
+    "truncated but real facts survive" reasoning: PARTIAL/STALE, never
+    the zero-fact TRUNCATED state, as long as at least one fact remains."""
+
+    if state is SourceRequirementState.AVAILABLE_CURRENT:
+        return SourceRequirementState.AVAILABLE_STALE
+    return state
+
 
 #: Fixed namespace for every CHAOS-3295-minted id. A constant, not a secret --
 #: it exists only so ``uuid5`` output cannot collide with a UUID minted by an
@@ -84,19 +190,24 @@ class PlanExecutionError(RuntimeError):
 @dataclass(slots=True)
 class _MintReceiptRuntime:
     """A ``PlanExecutorRuntime`` pass-through that records every evidence
-    handle it actually issues into whichever step-scoped receipt set
+    handle it actually issues -- and the identity it issued that handle
+    against -- into whichever step-scoped receipt map
     :data:`_MINTED_EVIDENCE_HANDLES` names for the calling ``asyncio`` task.
 
-    CHAOS-3296 Codex finding (MEDIUM, 2026-08-01): a step's own
-    ``StepOutcome.content`` is entirely producer-controlled -- nothing
-    previously stopped a step from embedding a syntactically-valid-looking
-    ``ev1_...`` string it fabricated inline rather than one this exact
-    ``mint_evidence`` call actually signed. Wrapping the runtime here, once,
-    at registration (see :func:`wrap_runtime_with_mint_receipts`), means
-    every builtin step's ``mint=runtime.mint_evidence`` (``builtin_steps.py``)
+    CHAOS-3296 Codex finding (MEDIUM, 2026-08-01; sharpened round 2,
+    2026-08-02): a step's own ``StepOutcome.content`` is entirely
+    producer-controlled -- nothing previously stopped a step from embedding
+    a syntactically-valid-looking ``ev1_...`` string it fabricated inline
+    rather than one this exact ``mint_evidence`` call actually signed, and
+    round 1's existence-only receipt set could not stop a step from minting
+    once for a real entity and reusing that same handle on an arbitrary
+    number of fabricated facts. Wrapping the runtime here, once, at
+    registration (see :func:`wrap_runtime_with_mint_receipts`), means every
+    builtin step's ``mint=runtime.mint_evidence`` (``builtin_steps.py``)
     transparently goes through this recorder with no change to that module --
     the executor, not any individual step, becomes the sole authority on
-    which handles a step's own run genuinely minted.
+    which handles a step's own run genuinely minted, and what each one was
+    minted to prove.
     """
 
     _inner: PlanExecutorRuntime
@@ -162,7 +273,11 @@ class _MintReceiptRuntime:
         )
         receipts = _MINTED_EVIDENCE_HANDLES.get()
         if receipts is not None:
-            receipts.add(handle)
+            receipts[handle] = _MintedReceipt(
+                source_system=source_system,
+                entity_type=entity_type,
+                entity_id=entity_id,
+            )
         return handle
 
 
@@ -190,7 +305,7 @@ class _Attempt:
     step_id: str
     outcome: StepOutcome | None
     failed: bool
-    minted_evidence_handles: frozenset[str] = frozenset()
+    minted_evidence_handles: Mapping[str, _MintedReceipt] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,17 +467,19 @@ def _content_candidates(
 
 def _unminted_evidence_handles(
     content: DevSourceContent,
-    minted_evidence_handles: frozenset[str],
+    minted_evidence_handles: Mapping[str, _MintedReceipt],
     *,
     now: datetime,
 ) -> frozenset[str]:
     """Every evidence handle ``content`` claims that this step's own receipt
-    set (:data:`_MINTED_EVIDENCE_HANDLES`, captured per-step in
+    map (:data:`_MINTED_EVIDENCE_HANDLES`, captured per-step in
     :meth:`PlanExecutor._run_one`) never actually recorded -- i.e. a handle
     that is not proven to have come from this exact step's
     ``runtime.mint_evidence`` calls. Reuses :func:`_content_candidates`
     (already a total per-fact-category walk) rather than a second, parallel
-    traversal of ``DevSourceContent``'s nine fields.
+    traversal of ``DevSourceContent``'s nine fields. Existence-only: a
+    handle that *was* minted, but for a different entity, passes this check
+    and is instead caught by :func:`_evidence_identity_mismatches`.
     """
 
     claimed = {
@@ -370,7 +487,87 @@ def _unminted_evidence_handles(
         for candidate in _content_candidates(content, now=now)
         for handle in candidate.evidence_ref_ids
     }
-    return frozenset(claimed - minted_evidence_handles)
+    return frozenset(claimed - minted_evidence_handles.keys())
+
+
+#: Codex finding (MEDIUM, round 2, 2026-08-02): the exact identity each
+#: content category minted its evidence against, mirroring
+#: ``builtin_steps.py``'s own ``_wire_*_content`` derivation *by value*
+#: (matching this package's established ``_STATUS_ENTITY_SOURCE_SYSTEM``
+#: posture) so this can never spuriously reject a legitimately-minted fact
+#: by guessing wrong at how identity was derived. ``graph_edges`` is
+#: deliberately absent: ``DevGraphEdgeV2`` never preserves the ``edge_id``
+#: ``_wire_work_graph_content`` minted against on the wire (only
+#: source/target/relationship survive), so no identity claim can be
+#: faithfully reconstructed for that one category here -- its handles still
+#: go through :func:`_unminted_evidence_handles`'s existence-only check,
+#: never through identity comparison. Only ``entity_type``/``entity_id`` are
+#: compared (not ``source_system``): those two answer "is this citing the
+#: right real-world thing," the question this finding is about; verifying
+#: the more failure-prone, per-category ``source_system`` derivation too
+#: would add drift risk for a lower-value check.
+def _content_fact_claims(
+    content: DevSourceContent,
+) -> list[tuple[str, str, tuple[str, ...]]]:
+    claims: list[tuple[str, str, tuple[str, ...]]] = []
+    for status_fact in content.status_facts:
+        entity_type, _sep, entity_id = status_fact.fact_id.partition(":")
+        claims.append((entity_type, entity_id, status_fact.evidence_ref_ids))
+    for child_fact in content.required_children:
+        entity_type, _sep, entity_id = child_fact.fact_id.partition(":")
+        claims.append((entity_type, entity_id, child_fact.evidence_ref_ids))
+    for pr_fact in content.pull_requests:
+        claims.append(("pull_request", pr_fact.entity_id, pr_fact.evidence_ref_ids))
+    for ci_fact in content.ci_checks:
+        # Mirrors builtin_steps._ci_evidence_identity's coarsening exactly:
+        # a ci_acceptance_checks row's "{repo}#ci{run}#check{key}" entity_id
+        # was minted against the coarsened "{repo}#ci{run}" run identity.
+        lookup_entity_id = ci_fact.entity_id.split("#check", 1)[0]
+        claims.append(("ci_run", lookup_entity_id, ci_fact.evidence_ref_ids))
+    for deployment_fact in content.deployments:
+        claims.append(
+            ("deployment", deployment_fact.entity_id, deployment_fact.evidence_ref_ids)
+        )
+    for incident_fact in content.incidents:
+        claims.append(
+            ("incident", incident_fact.entity_id, incident_fact.evidence_ref_ids)
+        )
+    for change in content.observed_changes:
+        # Mirrors builtin_steps._wire_change_summary_content's
+        # change_evidence_identity exactly: a "relationship" category change
+        # was minted against its own change_id, every other category against
+        # entity_id.
+        lookup_entity_id = (
+            change.change_id if change.category == "relationship" else change.entity_id
+        )
+        claims.append((change.entity_type, lookup_entity_id, change.evidence_ref_ids))
+    for ref in content.metric_refs:
+        claims.append(("metric", ref.metric_ref_id, ref.evidence_ref_ids))
+    return claims
+
+
+def _evidence_identity_mismatches(
+    content: DevSourceContent, minted_evidence_handles: Mapping[str, _MintedReceipt]
+) -> tuple[str, ...]:
+    """Every claimed ``entity_id`` from a fact citing a handle that WAS
+    minted this step -- just not for that fact's own entity. A handle
+    absent from ``minted_evidence_handles`` entirely is
+    :func:`_unminted_evidence_handles`'s concern, not this function's; here
+    a receipt exists, it is simply bound to a different identity than the
+    fact citing it claims -- exactly the "mint once for issue-1, reuse on a
+    fabricated issue-999 fact" forgery this finding closes.
+    """
+
+    mismatched: set[str] = set()
+    for entity_type, entity_id, evidence_ref_ids in _content_fact_claims(content):
+        for handle in evidence_ref_ids:
+            receipt = minted_evidence_handles.get(handle)
+            if receipt is not None and (
+                receipt.entity_type != entity_type or receipt.entity_id != entity_id
+            ):
+                mismatched.add(entity_id)
+                break
+    return tuple(sorted(mismatched))
 
 
 def _resolve_target(candidate: _PathCandidate, root_entity_id: str) -> str | None:
@@ -395,9 +592,17 @@ class PlanExecutor:
         registry: StepRegistry,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         verify_mint_receipts: bool = False,
+        content_byte_budget: int = _CONTENT_BYTE_BUDGET_DEFAULT,
     ) -> None:
         self._registry = registry
         self._now = now
+        #: CHAOS-3296 Codex finding (HIGH, round 2): the deterministic,
+        #: disclosed-truncation byte budget every constructed observation is
+        #: held to (see :meth:`_budgeted_observation`). Overridable so tests
+        #: can pin an exact, small budget and construct boundary fixtures at
+        #: precisely-at-budget / one-item-over without needing to reverse
+        #: engineer the real ~56KiB target's byte arithmetic.
+        self._content_byte_budget = content_byte_budget
         #: CHAOS-3296 Codex finding (MEDIUM, 2026-08-01): off by default so
         #: every pre-3296 test/harness that hand-builds ``StepOutcome.content``
         #: (bypassing ``register_builtin_steps``/real minting entirely) is
@@ -573,19 +778,17 @@ class PlanExecutor:
         definition: PlanStepDefinition,
         context: StepContext,
         plan: DevInvestigationPlan,
-    ) -> tuple[StepOutcome, frozenset[str]]:
+    ) -> tuple[StepOutcome, Mapping[str, _MintedReceipt]]:
         # Each ``_run_one`` call is its own ``asyncio`` task (``run``'s
         # ``asyncio.gather`` wraps each coroutine passed to it), so setting
         # this context var here is isolated from every concurrent sibling
         # step by construction -- no cross-step leakage, no locking needed.
-        token = (
-            _MINTED_EVIDENCE_HANDLES.set(set()) if self._verify_mint_receipts else None
-        )
+        token = _MINTED_EVIDENCE_HANDLES.set({}) if self._verify_mint_receipts else None
         try:
             outcome = await asyncio.wait_for(
                 definition.run(context), timeout=plan.per_step_timeout_seconds
             )
-            minted = frozenset(_MINTED_EVIDENCE_HANDLES.get() or ())
+            minted = dict(_MINTED_EVIDENCE_HANDLES.get() or {})
             return outcome, minted
         finally:
             if token is not None:
@@ -671,7 +874,7 @@ class PlanExecutor:
         observation_id: str,
         context: StepContext,
         *,
-        minted_evidence_handles: frozenset[str] = frozenset(),
+        minted_evidence_handles: Mapping[str, _MintedReceipt] = _EMPTY_RECEIPTS,
     ) -> tuple[DevSourceObservation, bool]:
         content = outcome.content
         if content is not None:
@@ -702,7 +905,7 @@ class PlanExecutor:
                 # through unnoticed; every real handle a builtin step embeds
                 # came from ``runtime.mint_evidence`` via
                 # ``wrap_runtime_with_mint_receipts``, so any evidence_ref_id
-                # in ``content`` that this step's own receipt set never
+                # in ``content`` that this step's own receipt map never
                 # recorded is a handle this run did not actually mint.
                 unminted = _unminted_evidence_handles(
                     content, minted_evidence_handles, now=context.now
@@ -715,32 +918,124 @@ class PlanExecutor:
                         observation_id,
                         closed=False,
                     )
-        relationship_paths, closed = self._mint_relationship_paths(
-            source_class=requirement.source_class,
-            content=content,
-            context=context,
-            observation_id=observation_id,
+                # Codex finding (MEDIUM, round 2, 2026-08-02): a handle
+                # existing in the receipt map is not enough -- round 1's
+                # check could not stop a step minting once for a real
+                # entity and reusing that exact handle to "prove" an
+                # arbitrary, fabricated second fact. Every fact's own
+                # claimed identity must match the identity its cited
+                # handle(s) were actually minted against.
+                mismatched = _evidence_identity_mismatches(
+                    content, minted_evidence_handles
+                )
+                if mismatched:
+                    return self._unmeasured_observation(
+                        requirement,
+                        SourceRequirementState.UNAVAILABLE,
+                        "evidence_entity_mismatch:" + ",".join(mismatched),
+                        observation_id,
+                        closed=False,
+                    )
+        return self._budgeted_observation(
+            requirement, outcome, content, observation_id, context
         )
-        observation = DevSourceObservation(
-            schema_version="dev_source_observation.v1",
-            observation_id=observation_id,
-            source_class=requirement.source_class,
-            adapter_id=requirement.adapter_id,
-            requirement_level=requirement.requirement_level,
-            observed_state=outcome.observed_state,
-            data_semantics=outcome.data_semantics,
-            watermark=outcome.watermark,
-            subject_coverage=outcome.subject_coverage,
-            usable_fact_count=outcome.usable_fact_count,
-            sample_count=outcome.sample_count,
-            relationship_paths=relationship_paths,
-            evidence_ref_ids=(),
-            limitation=outcome.limitation,
-            observed_at=self._now(),
-            query_version=outcome.query_version,
-            content=outcome.content,
-        )
-        return observation, closed
+
+    def _budgeted_observation(
+        self,
+        requirement: DevSourceRequirement,
+        outcome: StepOutcome,
+        content: DevSourceContent | None,
+        observation_id: str,
+        context: StepContext,
+    ) -> tuple[DevSourceObservation, bool]:
+        """Construct the final observation, then -- before returning it to
+        persistence or presentation -- shrink ``content`` deterministically
+        until the *exact* payload persistence will store fits
+        ``self._content_byte_budget``.
+
+        Codex finding (HIGH, 2026-08-02, round 2): raising the persistence
+        envelope only moved the "valid run becomes internal_error" bug to a
+        higher threshold -- the true contract-legal maximum is far larger
+        than any envelope this layer could reasonably hold. The fix has to
+        cap what gets CONSTRUCTED, using the contract's own disclosed
+        mechanisms (a downgraded ``observed_state``/``TRUNCATED`` plus a
+        bounded ``limitation``), never a second silent truncation notion and
+        never converting a legitimate answer into an opaque platform error.
+
+        Every iteration re-derives ``relationship_paths`` from the CURRENT
+        (possibly already-shrunk) ``content`` -- never the original -- so a
+        dropped fact can never leave behind an orphaned relationship path
+        that cites content no longer present on the wire.
+        """
+
+        dropped: dict[str, int] = {}
+        working_content = content
+        while True:
+            relationship_paths, paths_closed = self._mint_relationship_paths(
+                source_class=requirement.source_class,
+                content=working_content,
+                context=context,
+                observation_id=observation_id,
+            )
+            usable_fact_count = outcome.usable_fact_count
+            observed_state = outcome.observed_state
+            data_semantics = outcome.data_semantics
+            limitation = outcome.limitation
+            if dropped:
+                # Recomputed from what actually survived -- never the
+                # step's original count, which may describe facts this
+                # observation no longer carries.
+                usable_fact_count = (
+                    _total_content_facts(working_content)
+                    if working_content is not None
+                    else 0
+                )
+                if usable_fact_count == 0:
+                    return self._unmeasured_observation(
+                        requirement,
+                        SourceRequirementState.TRUNCATED,
+                        "budget_truncated_to_empty:" + _dropped_summary(dropped),
+                        observation_id,
+                        closed=False,
+                    )
+                observed_state = _downgrade_for_truncation(observed_state)
+                data_semantics = queried_semantics(usable_fact_count)
+                limitation = "budget_truncated:" + _dropped_summary(dropped)
+            observation = DevSourceObservation(
+                schema_version="dev_source_observation.v1",
+                observation_id=observation_id,
+                source_class=requirement.source_class,
+                adapter_id=requirement.adapter_id,
+                requirement_level=requirement.requirement_level,
+                observed_state=observed_state,
+                data_semantics=data_semantics,
+                watermark=outcome.watermark,
+                subject_coverage=outcome.subject_coverage,
+                usable_fact_count=usable_fact_count,
+                sample_count=outcome.sample_count,
+                relationship_paths=relationship_paths,
+                evidence_ref_ids=(),
+                limitation=limitation,
+                observed_at=self._now(),
+                query_version=outcome.query_version,
+                content=working_content,
+            )
+            if _observation_json_bytes(observation) <= self._content_byte_budget:
+                return observation, paths_closed and not dropped
+            if working_content is None:
+                # Nothing left to drop yet still over budget: the non-content
+                # fields alone (e.g. an extreme ``provenance``/handle set on
+                # relationship_paths) exceed the budget. Fail closed exactly
+                # like the empty-after-truncation case above rather than
+                # persisting an oversized payload.
+                return self._unmeasured_observation(
+                    requirement,
+                    SourceRequirementState.TRUNCATED,
+                    "budget_truncated_to_empty:" + _dropped_summary(dropped),
+                    observation_id,
+                    closed=False,
+                )
+            working_content = _drop_lowest_priority_item(working_content, dropped)
 
     def _unmeasured_observation(
         self,

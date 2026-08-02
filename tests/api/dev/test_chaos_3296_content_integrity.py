@@ -63,8 +63,12 @@ from dev_health_ops.api.dev.investigation_plans import (
 from dev_health_ops.api.dev.investigation_plans.builtin_steps import (
     _STATUS_EVIDENCE_SOURCE_VERSION,
     _bind_content,
+    _claim_projection,
 )
-from tests._chaos_3295_plan_executor import TEST_EVIDENCE_SIGNER, sign_evidence
+from tests._chaos_3295_plan_executor import (
+    TEST_EVIDENCE_SIGNER,
+    sign_evidence_for_scope,
+)
 
 ORG_ID = "org_fullchaos"
 ROOT_ENTITY_ID = "project-1"
@@ -286,7 +290,12 @@ class _MintOnlyRuntime:
         repository_ids=(),
     ):
         self.mint_calls += 1
-        return sign_evidence(
+        # CHAOS-3296 round 6: route through the scope-bound helper (using
+        # THIS file's fixed ``_scope()``) so a handle minted here carries
+        # the same authorization-scope digest suffix a genuine
+        # ``_scope_bound_mint``-wrapped mint call would.
+        return sign_evidence_for_scope(
+            scope=_scope(),
             org_id=org_id,
             source_system=source_system,
             source_version=source_version,
@@ -298,6 +307,20 @@ class _MintOnlyRuntime:
             confidence=confidence,
             repository_ids=repository_ids,
         )
+
+
+def _status_fact_source_version(*, fact_id: str, text: str) -> str:
+    """The exact ``source_version`` a genuine ``wire_status_fact`` mint
+    computes for a ``DevStatusFactV2`` with this fact_id/text (round 6:
+    ``_identity_status_fact`` projects the WHOLE wire model programmatically,
+    not just ``text``)."""
+
+    provisional = DevStatusFactV2(
+        fact_id=fact_id, text=text, evidence_ref_ids=("ev1_" + "0" * 40,)
+    )
+    return _bind_content(
+        _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional)
+    )
 
 
 @pytest.mark.asyncio
@@ -335,7 +358,9 @@ async def test_verify_mint_receipts_accepts_a_genuinely_minted_handle():
         handle = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version=_bind_content(_STATUS_EVIDENCE_SOURCE_VERSION, claim=text),
+            source_version=_status_fact_source_version(
+                fact_id="issue:issue-1", text=text
+            ),
             entity_type="issue",
             entity_id="issue-1",
             display_label="Issue One",
@@ -387,8 +412,8 @@ async def test_verify_mint_receipts_rejects_a_handle_this_step_never_minted():
         genuine = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version=_bind_content(
-                _STATUS_EVIDENCE_SOURCE_VERSION, claim=genuine_text
+            source_version=_status_fact_source_version(
+                fact_id="issue:issue-1", text=genuine_text
             ),
             entity_type="issue",
             entity_id="issue-1",

@@ -15,8 +15,9 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..contracts import DevMetricPoint, DevScope, FreshnessState, MetricID
 from ..contracts_v2.base import EvidenceHandle, SourceClass, SourceRequirementState
@@ -110,6 +111,14 @@ _METRIC_EVIDENCE_SOURCE_VERSION = "metric-query-evidence.v1"
 #: prioritization and bounds" concern (issue body), not this deliverable's.
 _CONTENT_CATEGORY_LIMIT = 25
 _REQUIRED_CHILDREN_LIMIT = 100
+#: A handle-shaped placeholder for the construct-then-project-then-mint-
+#: then-patch pattern (see :func:`_claim_projection`) on the ONE category
+#: whose contract requires ``evidence_ref_ids`` non-empty at construction
+#: time (``DevStatusFactV2``, inherited from v1's ``DevStatusFact`` --
+#: every other embedded type defaults it to an empty tuple). Never read by
+#: anything: ``_claim_projection`` excludes ``evidence_ref_ids`` from the
+#: digest, and the real handle overwrites this immediately after minting.
+_PLACEHOLDER_EVIDENCE_REF_ID = "ev1_" + "0" * 40
 
 
 def _ci_evidence_identity(entity_id: str) -> str:
@@ -119,13 +128,21 @@ def _ci_evidence_identity(entity_id: str) -> str:
     return entity_id.split(_CI_ACCEPTANCE_CHECK_MARKER, 1)[0]
 
 
-def _content_digest(**claim_fields: object) -> str:
+def _content_digest(claim: Mapping[str, object]) -> str:
     """Canonical digest of a fact's own ASSERTED CONTENT -- the claim
     fields beyond bare identity, keyed by the exact canonical model field
     names, never a display/truncated form. Embedded into a minted
     ``source_version`` (see :func:`_bind_content`) so the real signer's
     HMAC binds not just WHICH entity a piece of evidence is for, but WHAT
     it is being cited to prove.
+
+    ``claim`` is a single ``Mapping``, never ``**kwargs`` -- CHAOS-3296
+    round 6 found that ``**kwargs`` collides with :func:`_bind_content`'s
+    OWN ``source_version`` parameter the moment a real claim field happens
+    to be named ``source_version`` (``DevMetricRefV2.source_version`` is
+    exactly this: the metric DEFINITION's own version, a genuine field
+    :func:`_claim_projection` legitimately includes). A single dict
+    argument has no name of its own to collide with anything.
 
     CHAOS-3296 round-5 structural inversion (Codex finding, HIGH, round 4,
     2026-08-02, generalized beyond its original ``ci_checks``-only scope
@@ -142,49 +159,178 @@ def _content_digest(**claim_fields: object) -> str:
     """
 
     canonical = json.dumps(
-        claim_fields, sort_keys=True, separators=(",", ":"), default=str
+        dict(claim), sort_keys=True, separators=(",", ":"), default=str
     )
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
-def _bind_content(source_version: str, **claim_fields: object) -> str:
-    """Fold :func:`_content_digest` of ``claim_fields`` into ``source_version``.
+def _bind_content(source_version: str, claim: Mapping[str, object]) -> str:
+    """Fold :func:`_content_digest` of ``claim`` into ``source_version``.
 
     Every ``wire_*`` mint call site below uses this (never a bespoke
     string-format) and every corresponding
     ``relationship_matrix.EVIDENCE_IDENTITY_TABLE`` cell recomputes the
-    SAME claim fields from the wire fact and calls this SAME function --
+    SAME claim mapping from the wire fact and calls this SAME function --
     the only way mint and verify can be PROVEN to agree, rather than
     merely described as agreeing, is for both to call the exact same code.
+
+    Never pass a hand-composed, delimiter-joined string as a single claim
+    field (e.g. ``f"{label}: {status}"``) when the two parts are ever
+    independently recoverable on the wire -- Codex round 6 flagged exactly
+    this shape as collision-prone (``"Repo: Alpha", "blocked"`` and
+    ``"Repo", "Alpha: blocked"`` compose to the identical string). Pass
+    each semantic part as its OWN dict key instead; JSON's own key/value
+    delimiting makes two different field sets produce different digests
+    unconditionally, with no delimiter for an attacker-controlled value to
+    collide across.
     """
 
-    return f"{source_version}#content:{_content_digest(**claim_fields)}"
+    return f"{source_version}#content:{_content_digest(claim)}"
+
+
+#: Fields every ``DevSourceContent`` embedded fact model carries that are
+#: NEVER part of its own asserted claim: ``schema_version`` is a fixed
+#: contract-version literal (never forgeable content), and
+#: ``evidence_ref_ids`` is the handle(s) being authenticated -- binding it
+#: into its own digest would be circular.
+_CLAIM_PROJECTION_EXCLUDED_FIELDS = frozenset({"schema_version", "evidence_ref_ids"})
+
+
+def _claim_projection(fact: Any) -> dict[str, object]:
+    """Every semantic field ``fact`` (a ``DevSourceContent`` embedded
+    pydantic model) carries except :data:`_CLAIM_PROJECTION_EXCLUDED_FIELDS`
+    -- derived PROGRAMMATICALLY from the wire model's own ``model_fields``,
+    never a hand-picked list.
+
+    CHAOS-3296 round 6 (Codex findings, HIGH): round 5's content binding
+    used hand-picked claim-field lists per category, and two of them
+    (``metric_refs``: bound ``value``/``comparison_value`` but not
+    ``metric_id``/``dimensions``/``series``/...; ``graph_edges``: bound
+    ``relationship``/orientation but not ``provenance``/``confidence``/
+    ``observed_at``) were incomplete -- a genuine handle for one claim
+    verified a fabricated DIFFERENT claim that happened to leave the
+    hand-picked fields unchanged. A hand list can always miss a field a
+    future change adds; reflecting on ``model_fields`` cannot -- a new
+    field is bound automatically the moment it exists on the model, so
+    this class of gap fails closed (an added-but-unbound field is
+    structurally impossible) rather than needing to be remembered.
+    """
+
+    return {
+        name: getattr(fact, name)
+        for name in type(fact).model_fields
+        if name not in _CLAIM_PROJECTION_EXCLUDED_FIELDS
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class _AuthorizationScope:
+    """A deeply immutable snapshot of the CALLER's already-authorized
+    scope -- captured ONCE, from :class:`~.steps.StepContext`'s ``scope``,
+    BEFORE any registered step (this executor's threat model's adversary)
+    gets a chance to run at all.
+
+    CHAOS-3296 round 6 (Codex finding, HIGH): ``DevScope`` is a frozen
+    pydantic model, but its OWN ``repositories``/``team_ids``/
+    ``entity_refs`` fields are mutable list VALUES -- pydantic's
+    ``frozen=True`` blocks attribute REASSIGNMENT, never mutation of
+    whatever an attribute already points to. A step that mutated
+    ``context.scope.repositories`` in place mid-run, then minted evidence
+    against the mutated (self-chosen) value, verified clean -- because
+    verification ALSO re-read ``context.scope.repositories`` AFTER the
+    step had already run, seeing the SAME self-chosen mutation the step
+    itself just wrote. Capturing fresh, independently-owned tuples here,
+    and never reading ``context.scope`` for anything authorization-relevant
+    again after this snapshot is taken, makes it impossible for any step to
+    retroactively rewrite what it was ever authorized to see.
+
+    ``repositories`` is exposed here for completeness but is NOT folded
+    into :func:`_authorization_scope_digest` -- it is already natively
+    bound into the real signer's HMAC (``EvidenceReferenceSigner._payload``'s
+    ``"repositories"`` key, via ``_CandidateIdentity.repository_ids`` at
+    verify time); folding it into the digest too would be redundant, not
+    incorrect, but the snapshot's ``repositories`` value is still the one
+    ``executor._evidence_signature_failures`` must use in place of a fresh
+    (mutation-vulnerable) read of ``context.scope.repositories``.
+    """
+
+    direct_scope: str
+    team_ids: tuple[str, ...]
+    entity_ids: tuple[str, ...]
+    repositories: tuple[str, ...]
+
+
+def _snapshot_authorization_scope(scope: DevScope) -> _AuthorizationScope:
+    return _AuthorizationScope(
+        direct_scope=scope.direct_scope.value,
+        team_ids=tuple(scope.team_ids),
+        entity_ids=tuple(ref.entity_id for ref in scope.entity_refs),
+        repositories=tuple(scope.repositories),
+    )
+
+
+def _authorization_scope_digest(auth_scope: _AuthorizationScope) -> str:
+    """Digest of the scope facets NOT already natively bound by the real
+    signer (see :class:`_AuthorizationScope`'s own docstring for why
+    ``repositories`` is excluded here specifically).
+
+    CHAOS-3296 round 6 (Codex finding, HIGH): a TEAM-scoped investigation
+    (``direct_scope=TEAM``) has an EMPTY ``repositories`` -- nothing
+    previously bound ``team_ids`` at all, so two investigations scoped to
+    DIFFERENT teams, both querying the same entity with the same content,
+    minted the exact same handle (repositories=() for both, team_ids
+    unsigned). Binding ``team_ids``/``direct_scope``/``entity_ids`` here,
+    folded into every minted ``source_version`` (see
+    :func:`_scope_bound_mint`) and recomputed at verify time from this
+    SAME snapshot type (never from the fact, never from a live re-read of
+    ``context.scope``), closes it: a handle genuinely minted under a
+    DIFFERENT team's/entity's authorization scope can never verify under
+    this one.
+    """
+
+    return _content_digest(
+        {
+            "direct_scope": auth_scope.direct_scope,
+            "team_ids": auth_scope.team_ids,
+            "entity_ids": auth_scope.entity_ids,
+        }
+    )
+
+
+def _scope_bound_mint(mint: _Mint, scope: DevScope) -> _Mint:
+    """Wrap ``mint`` so every call through it embeds
+    :func:`_authorization_scope_digest` of the CURRENT step's authorization
+    scope into ``source_version``.
+
+    Applied ONCE, here, at the top of each ``_wire_*_content`` function --
+    rather than touching every individual mint call site below -- is what
+    makes it structurally impossible for any CURRENT or FUTURE category to
+    omit this binding.
+    """
+
+    digest = _authorization_scope_digest(_snapshot_authorization_scope(scope))
+
+    def wrapped(*, source_version: str, **kwargs: object) -> EvidenceHandle:
+        return mint(source_version=f"{source_version}#scope:{digest}", **kwargs)
+
+    return wrapped
 
 
 def _ci_check_source_version(
-    fact_entity_id: str,
-    *,
-    conclusion: str,
-    required: bool | None,
-    skipped_required_work: bool | None,
+    fact_entity_id: str, *, claim: Mapping[str, object]
 ) -> str:
     """The exact ``source_version`` :func:`_wire_status_snapshot_content`'s
     ``wire_ci`` mints against for one CI check fact -- round 4's run-vs-check
     discriminator (embed the full, uncoarsened ``entity_id`` when coarsening
-    actually changed it) plus round 5's content digest (``conclusion``/
-    ``required``/``skipped_required_work``, ``DevCIFactV2``'s own claim
-    fields), always. A SHARED function, imported directly by
+    actually changed it) plus round 5/6's content digest of ``claim``
+    (round 6: :func:`_claim_projection` of the constructed ``DevCIFactV2``,
+    not a hand-picked field list). A SHARED function, imported directly by
     ``relationship_matrix.py``'s ``_identity_ci_check`` cell (never
     duplicated)."""
 
     lookup_entity_id = _ci_evidence_identity(fact_entity_id)
     discriminator = f":{fact_entity_id}" if lookup_entity_id != fact_entity_id else ""
-    return _bind_content(
-        f"{_STATUS_EVIDENCE_SOURCE_VERSION}{discriminator}",
-        conclusion=conclusion,
-        required=required,
-        skipped_required_work=skipped_required_work,
-    )
+    return _bind_content(f"{_STATUS_EVIDENCE_SOURCE_VERSION}{discriminator}", claim)
 
 
 def _scope_evidence_binding(scope: DevScope) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -212,29 +358,18 @@ def _wire_status_snapshot_content(
         ref.ref_id: ref.freshness for ref in result.source_refs
     }
     valid_entity_ids, repository_ids = _scope_evidence_binding(scope)
+    # CHAOS-3296 round 6: every mint below now goes through this scope-bound
+    # wrapper -- see _scope_bound_mint's own docstring.
+    mint = _scope_bound_mint(mint, scope)
 
     def status_source_system(entity_type: str) -> str:
         return _STATUS_ENTITY_SOURCE_SYSTEM.get(entity_type, "work_items")
 
-    def mint_status(fact: StatusFact) -> str:
-        # CHAOS-3296 round 5: the SAME composed "{label}: {status}" string
-        # ``wire_status_fact`` writes verbatim onto ``DevStatusFactV2.text``
-        # -- that field IS this fact's asserted content on the wire, so
-        # binding it here (rather than the raw ``fact.status`` alone) means
-        # ``_identity_status_fact`` can recompute the identical claim
-        # straight from ``fact.text`` with no parsing. ``wire_required_child``
-        # stores ``display_label``/``status`` as two SEPARATE wire fields
-        # instead, but ``_identity_required_child`` reconstructs this exact
-        # same composed string from them (see relationship_matrix.py) -- one
-        # shared mint-time claim, two ways to recover it depending on which
-        # wire shape kept which piece.
+    def mint_status_identity(fact: StatusFact, *, source_version: str) -> str:
         return mint(
             org_id=org_id,
             source_system=status_source_system(fact.entity_type),
-            source_version=_bind_content(
-                _STATUS_EVIDENCE_SOURCE_VERSION,
-                claim=f"{fact.display_label}: {fact.status}",
-            ),
+            source_version=source_version,
             entity_type=fact.entity_type,
             entity_id=fact.entity_id,
             display_label=fact.display_label,
@@ -245,21 +380,39 @@ def _wire_status_snapshot_content(
         )
 
     def wire_status_fact(fact: StatusFact) -> DevStatusFactV2:
-        evidence_id = mint_status(fact)
-        return DevStatusFactV2(
+        # CHAOS-3296 round 6 (Codex ask: check the status composed-string
+        # delimiter question): construct-then-project like every other
+        # category. ``DevStatusFactV2`` carries only ``fact_id``/``text``
+        # (the WHOLE composed "{label}: {status}" as ONE field) -- never
+        # decomposed/reconstructed anywhere, so there is no delimiter for
+        # two different (label, status) pairs to collide across. Contrast
+        # required_children below, whose wire type keeps label and status
+        # as genuinely SEPARATE fields -- projecting THAT model binds them
+        # as separate JSON keys, not a delimiter-joined string, for the
+        # same collision-safety reason.
+        provisional = DevStatusFactV2(
             fact_id=f"{fact.entity_type}:{fact.entity_id}",
             text=f"{fact.display_label}: {fact.status}",
-            evidence_ref_ids=(evidence_id,),
+            evidence_ref_ids=(_PLACEHOLDER_EVIDENCE_REF_ID,),
         )
+        source_version = _bind_content(
+            _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional)
+        )
+        evidence_id = mint_status_identity(fact, source_version=source_version)
+        return provisional.model_copy(update={"evidence_ref_ids": (evidence_id,)})
 
     def wire_required_child(fact: StatusFact) -> DevRequiredChildFactV2:
-        evidence_id = mint_status(fact)
-        return DevRequiredChildFactV2(
+        provisional = DevRequiredChildFactV2(
             fact_id=f"{fact.entity_type}:{fact.entity_id}",
             text=fact.display_label,
             status=fact.status,
-            evidence_ref_ids=(evidence_id,),
+            evidence_ref_ids=(),
         )
+        source_version = _bind_content(
+            _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional)
+        )
+        evidence_id = mint_status_identity(fact, source_version=source_version)
+        return provisional.model_copy(update={"evidence_ref_ids": (evidence_id,)})
 
     def mint_delivery(
         *,
@@ -269,7 +422,7 @@ def _wire_status_snapshot_content(
         display_label: str,
         observed_at: datetime,
         source_ref_id: str,
-        source_version: str = _STATUS_EVIDENCE_SOURCE_VERSION,
+        source_version: str,
     ) -> str:
         return mint(
             org_id=org_id,
@@ -285,26 +438,13 @@ def _wire_status_snapshot_content(
         )
 
     def wire_pull_request(fact: PullRequestFact) -> DevPullRequestFactV2:
-        evidence_id = mint_delivery(
-            source_system="pull_requests",
-            entity_type="pull_request",
-            entity_id=fact.entity_id,
-            display_label=fact.display_label,
-            observed_at=fact.observed_at,
-            source_ref_id=fact.source_ref_id,
-            # CHAOS-3296 round 5: bind DevPullRequestFactV2's own claim
-            # fields -- a genuine handle for one PR state must never
-            # authenticate a fabricated claim of a different state.
-            source_version=_bind_content(
-                _STATUS_EVIDENCE_SOURCE_VERSION,
-                state=fact.state,
-                review_state=fact.review_state,
-                changes_requested=fact.changes_requested,
-                merged=fact.merged,
-                required=fact.required,
-            ),
-        )
-        return DevPullRequestFactV2(
+        # CHAOS-3296 round 6: construct the wire model FIRST (evidence_ref_ids
+        # still empty), project ITS OWN fields programmatically
+        # (:func:`_claim_projection`), mint against that digest, then patch
+        # in the real handle -- the digest is computed from EXACTLY what
+        # the wire presents, never a hand-picked subset that can silently
+        # miss a future field.
+        provisional = DevPullRequestFactV2(
             entity_id=fact.entity_id,
             display_label=fact.display_label,
             state=fact.state,
@@ -313,16 +453,35 @@ def _wire_status_snapshot_content(
             merged=fact.merged,
             required=fact.required,
             observed_at=fact.observed_at,
-            evidence_ref_ids=(evidence_id,),
+            evidence_ref_ids=(),
         )
+        source_version = _bind_content(
+            _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional)
+        )
+        evidence_id = mint_delivery(
+            source_system="pull_requests",
+            entity_type="pull_request",
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            observed_at=fact.observed_at,
+            source_ref_id=fact.source_ref_id,
+            source_version=source_version,
+        )
+        return provisional.model_copy(update={"evidence_ref_ids": (evidence_id,)})
 
     def wire_ci(fact: CIFact) -> DevCIFactV2:
         lookup_entity_id = _ci_evidence_identity(fact.entity_id)
-        source_version = _ci_check_source_version(
-            fact.entity_id,
+        provisional = DevCIFactV2(
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
             conclusion=fact.conclusion,
             required=fact.required,
             skipped_required_work=fact.skipped_required_work,
+            observed_at=fact.observed_at,
+            evidence_ref_ids=(),
+        )
+        source_version = _ci_check_source_version(
+            fact.entity_id, claim=_claim_projection(provisional)
         )
         evidence_id = mint_delivery(
             source_system="ci_runs",
@@ -333,17 +492,21 @@ def _wire_status_snapshot_content(
             source_ref_id=fact.source_ref_id,
             source_version=source_version,
         )
-        return DevCIFactV2(
-            entity_id=fact.entity_id,
-            display_label=fact.display_label,
-            conclusion=fact.conclusion,
-            required=fact.required,
-            skipped_required_work=fact.skipped_required_work,
-            observed_at=fact.observed_at,
-            evidence_ref_ids=(evidence_id,),
-        )
+        return provisional.model_copy(update={"evidence_ref_ids": (evidence_id,)})
 
     def wire_deployment(fact: DeploymentFact) -> DevDeploymentFactV2:
+        provisional = DevDeploymentFactV2(
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            status=fact.status,
+            environment=fact.environment,
+            required=fact.required,
+            observed_at=fact.observed_at,
+            evidence_ref_ids=(),
+        )
+        source_version = _bind_content(
+            _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional)
+        )
         evidence_id = mint_delivery(
             source_system="deployments",
             entity_type="deployment",
@@ -351,26 +514,23 @@ def _wire_status_snapshot_content(
             display_label=fact.display_label,
             observed_at=fact.observed_at,
             source_ref_id=fact.source_ref_id,
-            # CHAOS-3296 round 5: bind DevDeploymentFactV2's own claim
-            # fields.
-            source_version=_bind_content(
-                _STATUS_EVIDENCE_SOURCE_VERSION,
-                status=fact.status,
-                environment=fact.environment,
-                required=fact.required,
-            ),
+            source_version=source_version,
         )
-        return DevDeploymentFactV2(
+        return provisional.model_copy(update={"evidence_ref_ids": (evidence_id,)})
+
+    def wire_incident(fact: IncidentFact) -> DevIncidentFactV2:
+        provisional = DevIncidentFactV2(
             entity_id=fact.entity_id,
             display_label=fact.display_label,
             status=fact.status,
-            environment=fact.environment,
-            required=fact.required,
+            active=fact.active,
+            blocking=fact.blocking,
             observed_at=fact.observed_at,
-            evidence_ref_ids=(evidence_id,),
+            evidence_ref_ids=(),
         )
-
-    def wire_incident(fact: IncidentFact) -> DevIncidentFactV2:
+        source_version = _bind_content(
+            _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional)
+        )
         evidence_id = mint_delivery(
             source_system="incidents",
             entity_type="incident",
@@ -378,23 +538,9 @@ def _wire_status_snapshot_content(
             display_label=fact.display_label,
             observed_at=fact.observed_at,
             source_ref_id=fact.source_ref_id,
-            # CHAOS-3296 round 5: bind DevIncidentFactV2's own claim fields.
-            source_version=_bind_content(
-                _STATUS_EVIDENCE_SOURCE_VERSION,
-                status=fact.status,
-                active=fact.active,
-                blocking=fact.blocking,
-            ),
+            source_version=source_version,
         )
-        return DevIncidentFactV2(
-            entity_id=fact.entity_id,
-            display_label=fact.display_label,
-            status=fact.status,
-            active=fact.active,
-            blocking=fact.blocking,
-            observed_at=fact.observed_at,
-            evidence_ref_ids=(evidence_id,),
-        )
+        return provisional.model_copy(update={"evidence_ref_ids": (evidence_id,)})
 
     status_facts = _capped(
         wire_status_fact(fact)
@@ -429,6 +575,7 @@ def _wire_change_summary_content(
         ref.ref_id: ref.freshness for ref in result.source_refs
     }
     valid_entity_ids, repository_ids = _scope_evidence_binding(scope)
+    mint = _scope_bound_mint(mint, scope)
 
     def change_freshness(item: ObservedChange) -> FreshnessState:
         for ref_id in item.source_ref_ids:
@@ -437,32 +584,43 @@ def _wire_change_summary_content(
                 return freshness
         return FreshnessState.UNKNOWN
 
-    def change_evidence_identity(item: ObservedChange) -> tuple[str, str, str]:
+    def change_base_identity(item: ObservedChange) -> tuple[str, str, str]:
         category = item.category.value
         source_system = _CHANGE_CATEGORY_SOURCE_SYSTEM.get(category, "work_items")
         if category == "relationship":
-            base_source_version = _CHANGE_EVIDENCE_SOURCE_VERSION
-            lookup_entity_id = item.change_id
-        elif category in _CHANGE_COLLISION_PRONE_CATEGORIES:
-            base_source_version = f"{_CHANGE_EVIDENCE_SOURCE_VERSION}:{item.change_id}"
-            lookup_entity_id = item.entity_id
-        else:
-            base_source_version = _CHANGE_EVIDENCE_SOURCE_VERSION
-            lookup_entity_id = item.entity_id
-        # CHAOS-3296 round 5: bind DevObservedChangeV2's own claim fields --
-        # ``before``/``after`` are the only ``ObservedChange`` fields that
-        # actually survive onto the wire type (``claim_kind``/
-        # ``relationship_chain``/``metric_value``/``metric_comparison_value``
-        # do not), so they are the only ones a verifier could ever
-        # recompute; binding them closes the reachable half of this
-        # category's forgery surface.
-        source_version = _bind_content(
-            base_source_version, before=item.before, after=item.after
-        )
-        return source_system, lookup_entity_id, source_version
+            return source_system, item.change_id, _CHANGE_EVIDENCE_SOURCE_VERSION
+        if category in _CHANGE_COLLISION_PRONE_CATEGORIES:
+            return (
+                source_system,
+                item.entity_id,
+                f"{_CHANGE_EVIDENCE_SOURCE_VERSION}:{item.change_id}",
+            )
+        return source_system, item.entity_id, _CHANGE_EVIDENCE_SOURCE_VERSION
 
     def wire_change(item: ObservedChange) -> DevObservedChangeV2:
-        source_system, lookup_entity_id, source_version = change_evidence_identity(item)
+        source_system, lookup_entity_id, base_source_version = change_base_identity(
+            item
+        )
+        # CHAOS-3296 round 6: construct first, project ITS OWN fields
+        # (before/after -- the only ``ObservedChange`` fields that survive
+        # onto the wire type at all; ``claim_kind``/``relationship_chain``/
+        # ``metric_value``/``metric_comparison_value`` do not, so binding
+        # them is unreachable regardless of hand-list vs projection), then
+        # mint against that digest.
+        provisional = DevObservedChangeV2(
+            change_id=item.change_id,
+            category=item.category.value,
+            entity_type=item.entity_type,
+            entity_id=item.entity_id,
+            display_label=item.display_label,
+            before=item.before,
+            after=item.after,
+            observed_at=item.observed_at,
+            evidence_ref_ids=(),
+        )
+        source_version = _bind_content(
+            base_source_version, _claim_projection(provisional)
+        )
         evidence_id = mint(
             org_id=org_id,
             source_system=source_system,
@@ -476,17 +634,7 @@ def _wire_change_summary_content(
             valid_entity_ids=valid_entity_ids,
             repository_ids=repository_ids,
         )
-        return DevObservedChangeV2(
-            change_id=item.change_id,
-            category=item.category.value,
-            entity_type=item.entity_type,
-            entity_id=item.entity_id,
-            display_label=item.display_label,
-            before=item.before,
-            after=item.after,
-            observed_at=item.observed_at,
-            evidence_ref_ids=(evidence_id,),
-        )
+        return provisional.model_copy(update={"evidence_ref_ids": (evidence_id,)})
 
     return DevSourceContent(
         schema_version="dev_source_content.v1",
@@ -502,20 +650,35 @@ def _wire_work_graph_content(
     scope: DevScope,
 ) -> DevSourceContent:
     valid_entity_ids, repository_ids = _scope_evidence_binding(scope)
+    mint = _scope_bound_mint(mint, scope)
 
     def wire_edge(item: WorkGraphNeighborEdge) -> DevGraphEdgeV2:
+        # CHAOS-3296 round 6 (Codex finding, HIGH): round 5 bound only
+        # relationship/source_entity_id/target_entity_id -- provenance,
+        # confidence, and observed_at were NOT bound, so a genuine handle
+        # verified a fact with a forged provenance ("fabricated-
+        # authoritative-source"), confidence, and a year-2036 timestamp.
+        # Construct the (already-normalized: stripped/truncated provenance,
+        # clamped confidence) wire model first, project ITS OWN fields --
+        # the normalization happens exactly once, here, and the digest
+        # reflects the SAME normalized values a verifier will read back.
+        provisional = DevGraphEdgeV2(
+            edge_id=item.edge_id,
+            source_entity_id=item.source_id,
+            relationship=item.relationship_type,
+            target_entity_id=item.target_id,
+            provenance=(item.provenance.strip() or "persisted")[:2_048],
+            confidence=max(0.0, min(1.0, item.confidence)),
+            observed_at=item.observed_at,
+            evidence_ref_ids=(),
+        )
+        source_version = _bind_content(
+            _GRAPH_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional)
+        )
         evidence_id = mint(
             org_id=org_id,
             source_system="work_graph",
-            # CHAOS-3296 round 5: bind DevGraphEdgeV2's own claim fields --
-            # a genuine handle for edge_id X must never authenticate a
-            # fabricated relationship/orientation for that same edge_id.
-            source_version=_bind_content(
-                _GRAPH_EVIDENCE_SOURCE_VERSION,
-                relationship=item.relationship_type,
-                source_entity_id=item.source_id,
-                target_entity_id=item.target_id,
-            ),
+            source_version=source_version,
             entity_type="work_graph_edge",
             entity_id=item.edge_id,
             display_label=(
@@ -528,21 +691,32 @@ def _wire_work_graph_content(
             valid_entity_ids=valid_entity_ids,
             repository_ids=repository_ids,
         )
-        return DevGraphEdgeV2(
-            edge_id=item.edge_id,
-            source_entity_id=item.source_id,
-            relationship=item.relationship_type,
-            target_entity_id=item.target_id,
-            provenance=(item.provenance.strip() or "persisted")[:2_048],
-            confidence=max(0.0, min(1.0, item.confidence)),
-            observed_at=item.observed_at,
-            evidence_ref_ids=(evidence_id,),
-        )
+        return provisional.model_copy(update={"evidence_ref_ids": (evidence_id,)})
 
     return DevSourceContent(
         schema_version="dev_source_content.v1",
         graph_edges=_capped(wire_edge(item) for item in result.edges),
     )
+
+
+def _metric_ref_id(
+    *, metric_id: str, dimensions: tuple[str, ...], window_start: str, window_end: str
+) -> str:
+    """The canonical, deterministic ``metric_ref_id`` for one
+    ``(metric_id, dimensions, window)`` triple -- called identically at
+    mint time (from the raw query result) and at verify time (from the
+    wire fact's OWN ``metric_id``/``dimensions``/``current_window``
+    fields, see ``relationship_matrix._identity_metric_ref``) so a wire
+    fact's claimed ``metric_ref_id`` can be independently RECOMPUTED and
+    checked, never merely trusted as a free-form entity id (Codex round 6
+    ask: "recompute/validate metric_ref_id from the same inputs").
+    ``dimensions`` must already be the flattened ``"key=value"`` wire form
+    (never the raw ``(key, value)`` tuple pairs) -- that flattened form is
+    the only one still recoverable from the wire fact alone.
+    """
+
+    digest_seed = f"{metric_id}:{dimensions}:{window_start}:{window_end}"
+    return f"metric:{hashlib.sha256(digest_seed.encode()).hexdigest()[:32]}"
 
 
 def _wire_metric_content(
@@ -553,30 +727,61 @@ def _wire_metric_content(
     scope: DevScope,
 ) -> DevSourceContent:
     valid_entity_ids, repository_ids = _scope_evidence_binding(scope)
+    mint = _scope_bound_mint(mint, scope)
     scope_v2 = DevScopeV2.model_validate(scope.model_dump(mode="json"))
     refs: list[DevMetricRefV2] = []
     for result in results:
         for value in result.values:
             dimensions = tuple(f"{key}={item}" for key, item in value.dimensions)
-            digest_seed = (
-                f"{result.definition.metric_id.value}:{value.dimensions}:"
-                f"{scope.time_range.start.isoformat()}:{scope.time_range.end.isoformat()}"
+            metric_ref_id = _metric_ref_id(
+                metric_id=result.definition.metric_id.value,
+                dimensions=dimensions,
+                window_start=scope.time_range.start.isoformat(),
+                window_end=scope.time_range.end.isoformat(),
             )
-            metric_ref_id = (
-                f"metric:{hashlib.sha256(digest_seed.encode()).hexdigest()[:32]}"
+            # CHAOS-3296 round 6 (Codex finding, HIGH): round 5 bound only
+            # value/comparison_value -- metric_id, dimensions, series, and
+            # every other field were NOT bound, so a genuine handle
+            # verified a fact re-labeled as a DIFFERENT metric with a
+            # forged 999-point series. Construct first, project the
+            # model's ENTIRE field set (minus schema_version/
+            # evidence_ref_ids) programmatically.
+            provisional = DevMetricRefV2(
+                schema_version="dev_metric_ref.v1",
+                metric_ref_id=metric_ref_id,
+                metric_id=result.definition.metric_id,
+                label=result.definition.label,
+                definition_version=result.definition.definition_version,
+                unit=result.definition.unit,
+                aggregation=result.definition.aggregation,
+                display_precision=result.definition.display_precision,
+                resolved_scope=scope_v2,
+                dimensions=dimensions,
+                current_window=scope.time_range,
+                comparison_window=(
+                    scope.comparison_range
+                    if value.comparison_value is not None
+                    else None
+                ),
+                value=value.value,
+                comparison_value=value.comparison_value,
+                series=tuple(
+                    DevMetricPoint(timestamp=point.timestamp, value=point.value)
+                    for point in value.series
+                ),
+                query_version=result.definition.query_version,
+                source_version=result.definition.source_version,
+                freshness=result.freshness,
+                coverage=result.coverage,
+                evidence_ref_ids=(),
+            )
+            source_version = _bind_content(
+                _METRIC_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional)
             )
             evidence_id = mint(
                 org_id=org_id,
                 source_system="metrics",
-                # CHAOS-3296 round 5: bind DevMetricRefV2's own claim
-                # fields -- a genuine handle for one metric value must
-                # never authenticate a fabricated different value for the
-                # same ``metric_ref_id``.
-                source_version=_bind_content(
-                    _METRIC_EVIDENCE_SOURCE_VERSION,
-                    value=value.value,
-                    comparison_value=value.comparison_value,
-                ),
+                source_version=source_version,
                 entity_type="metric",
                 entity_id=metric_ref_id,
                 display_label=result.definition.label,
@@ -586,35 +791,7 @@ def _wire_metric_content(
                 repository_ids=repository_ids,
             )
             refs.append(
-                DevMetricRefV2(
-                    schema_version="dev_metric_ref.v1",
-                    metric_ref_id=metric_ref_id,
-                    metric_id=result.definition.metric_id,
-                    label=result.definition.label,
-                    definition_version=result.definition.definition_version,
-                    unit=result.definition.unit,
-                    aggregation=result.definition.aggregation,
-                    display_precision=result.definition.display_precision,
-                    resolved_scope=scope_v2,
-                    dimensions=dimensions,
-                    current_window=scope.time_range,
-                    comparison_window=(
-                        scope.comparison_range
-                        if value.comparison_value is not None
-                        else None
-                    ),
-                    value=value.value,
-                    comparison_value=value.comparison_value,
-                    series=tuple(
-                        DevMetricPoint(timestamp=point.timestamp, value=point.value)
-                        for point in value.series
-                    ),
-                    query_version=result.definition.query_version,
-                    source_version=result.definition.source_version,
-                    freshness=result.freshness,
-                    coverage=result.coverage,
-                    evidence_ref_ids=(evidence_id,),
-                )
+                provisional.model_copy(update={"evidence_ref_ids": (evidence_id,)})
             )
     return DevSourceContent(
         schema_version="dev_source_content.v1",

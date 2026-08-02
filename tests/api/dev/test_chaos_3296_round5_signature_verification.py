@@ -1,72 +1,51 @@
-"""Round-5 closure (CHAOS-3296 Codex round 4, 2026-08-02): recomputed-
-signature verification, replacing the per-run receipt comparison rounds
-1-4 all built.
+"""Round-5/6 closure (CHAOS-3296 Codex rounds 4-5, 2026-08-02): recomputed-
+signature verification, an authorization-scope snapshot, and PROGRAMMATIC
+content-projection binding -- replacing the per-run receipt comparison
+rounds 1-4 built, and the hand-picked claim-field lists round 5 built.
 
 Round 4's closure (the evidence identity table + require-known-good) still
 compared a re-derived SUBSET of a handle's identity -- (source_system,
 source_version, entity_type, entity_id) -- against a per-run RECEIPT this
-executor maintained itself. An adversary only had to vary whatever the
-receipt didn't carry:
+executor maintained itself:
 
 1. [HIGH] The receipt never recorded org_id/repository_ids, though the real
    ``EvidenceReferenceSigner``'s HMAC binds both. A handle genuinely minted
-   for a DIFFERENT tenant/repository scope verified clean as long as the
-   remaining four fields happened to match.
-2. [HIGH] No round bound the fact's own asserted CONTENT at all. A genuine
-   handle for a failing CI check verified a fabricated fact claiming it
-   passed.
+   for a DIFFERENT tenant/repository scope verified clean.
+2. [HIGH] No round bound a fact's own asserted CONTENT at all.
 
-The fix is a structural inversion, not a wider receipt: verification
-recomputes the ACTUAL signature via ``EvidenceReferenceSigner.verify`` --
-the exact code every real mint call already goes through -- from (a) the
-fact's own re-derived identity and (b) the CURRENT ``StepContext``'s
-already-authorized org_id/repositories, never from anything carried by the
-fact or the handle being checked.
+Round 5 replaced the receipt with recomputed-signature verification
+(``EvidenceReferenceSigner.verify``, never re-implemented) and folded a
+content digest into ``source_version`` -- but round 5's own content binding
+used HAND-PICKED claim-field lists, and its ambient-scope binding read
+``context.scope`` fresh at verify time. Codex round 5 review confirmed 3
+MORE findings, closed here:
 
-Content binding (finding 2) was NOT scoped to ``ci_checks`` -- a provisional
-first pass claimed it was the sole category with a collision-prone identity,
-but the underlying gap is general: ANY category whose minted identity tuple
-does not already uniquely determine its content lets a genuinely-minted
-handle for one claim "verify" a fabricated, different claim about the same
-identity (a status fact citing a real handle while asserting a DIFFERENT
-status than what was observed at mint; a deployment/incident/PR the same
-way; an observed change with swapped before/after; a graph edge with a
-forged relationship/orientation; a metric with a fabricated value). Every
-``builtin_steps.py`` ``wire_*``/mint call site now folds a digest of that
-category's own claim fields -- the exact fields that survive onto its
-``DevSourceContent`` wire type -- into the minted ``source_version`` via ONE
-shared ``builtin_steps._bind_content``, and every
-``relationship_matrix.EVIDENCE_IDENTITY_TABLE`` cell's ``derive`` recomputes
-the SAME claim fields from the wire fact and calls the SAME function. Two
-facts differing only in their claim mint different, non-interchangeable
-handles; there is no receipt to bind content to, because there is no
-receipt.
+1. [HIGH] ``DevScope`` is frozen, but its ``repositories``/``team_ids``
+   fields are mutable LIST values -- a step that mutated
+   ``context.scope.repositories`` in place mid-run, then minted against its
+   own self-chosen value, verified clean (verification re-read the SAME
+   mutated list AFTER the step had already run). And a TEAM-scoped
+   investigation has an EMPTY ``repositories`` with ``team_ids`` never
+   bound at all, so two DIFFERENT teams' investigations minted identical
+   handles for identical content. Fixed: ``PlanExecutor.run`` snapshots a
+   deeply immutable ``_AuthorizationScope`` (direct_scope/team_ids/
+   entity_ids/repositories) BEFORE any step runs; verification uses ONLY
+   this snapshot, never a fresh ``context.scope`` read; its team_ids/
+   direct_scope/entity_ids digest is folded into every minted
+   ``source_version`` via ``builtin_steps._scope_bound_mint``.
+2. [HIGH] ``metric_refs``' hand-picked claim list bound only value/
+   comparison_value -- Codex re-labeled a metric to ``avg_wip`` with a
+   forged 999-point series and it verified.
+3. [HIGH] ``graph_edges``' hand-picked claim list omitted provenance/
+   confidence/observed_at -- Codex forged all three on a genuine handle.
 
-This file:
-
-* Proves both round-4 findings closed (cross-tenant/cross-repository
-  handles; content-swapped CI claims) -- the checkA/checkB content-swap
-  repro and the three round-1/2/3 repros (evidence-free fact, graph-edge
-  reuse, checkA-on-checkB run-level coarsening) already live as permanent
-  REDs in ``test_chaos_3296_round4_evidence_identity_table.py`` and
-  ``test_chaos_3296_round2_budget_and_receipts.py``, updated in the same
-  commit as this file to mint through the real signer and assert the new
-  ``evidence_signature_invalid:`` limitation -- not duplicated here.
-* Adds the two NEW round-4 findings this round closes (cross-tenant,
-  cross-repository-scope) as permanent REDs.
-* Adds representative content-swap REDs for two NON-ci_checks categories
-  (status_facts, observed_changes) proving the generalized closure -- not
-  exhaustive over all 9 categories (that would duplicate
-  ``test_evidence_identity_table_is_total_over_content_slot_fields`` and the
-  source-anchored per-cell tests in the round-4 file, which already prove
-  every cell's ``derive`` matches its real mint call site, content fields
-  included), but enough to demonstrate the pattern holds outside CI.
-* Adds the drift guard: a structural identity assertion that every
-  category's mint and verify call the literal same shared content-digest
-  function, plus a mutation test proving that if
-  ``EvidenceReferenceSigner``'s payload construction ever drifts between
-  mint and verify time, the result is REJECTION (fail-closed), never a
-  silent accept.
+Fixed generally, not per-category: ``builtin_steps._claim_projection``
+derives a fact's bound claim fields PROGRAMMATICALLY from the wire model's
+own ``model_fields`` (minus schema_version/evidence_ref_ids) -- a future
+field addition is bound automatically, never silently missed the way a
+hand-picked list can be. Every ``wire_*`` helper now constructs its wire
+model FIRST (evidence_ref_ids still empty), projects, mints, then patches
+in the real handle -- the digest reflects EXACTLY what the wire presents.
 """
 
 from __future__ import annotations
@@ -81,6 +60,7 @@ from dev_health_ops.api.dev.contracts import (
     DevTimeRange,
     DirectScope,
     FreshnessState,
+    MetricID,
 )
 from dev_health_ops.api.dev.contracts_v2.base import (
     Cardinality,
@@ -89,7 +69,13 @@ from dev_health_ops.api.dev.contracts_v2.base import (
     SourceClass,
     SourceRequirementState,
 )
-from dev_health_ops.api.dev.contracts_v2.embedded import DevCIFactV2, DevStatusFactV2
+from dev_health_ops.api.dev.contracts_v2.embedded import (
+    DevCIFactV2,
+    DevGraphEdgeV2,
+    DevMetricRefV2,
+    DevScopeV2,
+    DevStatusFactV2,
+)
 from dev_health_ops.api.dev.contracts_v2.plan import (
     DevInvestigationPlan,
     DevSourceRequirement,
@@ -117,12 +103,22 @@ from dev_health_ops.api.dev.investigation_plans import (
 )
 from dev_health_ops.api.dev.investigation_plans.builtin_steps import (
     _CHANGE_EVIDENCE_SOURCE_VERSION,
+    _GRAPH_EVIDENCE_SOURCE_VERSION,
+    _METRIC_EVIDENCE_SOURCE_VERSION,
     _STATUS_EVIDENCE_SOURCE_VERSION,
     _bind_content,
     _ci_check_source_version,
+    _claim_projection,
+    _metric_ref_id,
 )
 from dev_health_ops.api.dev.investigation_plans.executor import _CandidateIdentity
-from tests._chaos_3295_plan_executor import TEST_EVIDENCE_SIGNER, sign_evidence
+from dev_health_ops.api.dev.investigation_plans.relationship_matrix import (
+    _identity_metric_ref,
+)
+from tests._chaos_3295_plan_executor import (
+    TEST_EVIDENCE_SIGNER,
+    sign_evidence_for_scope,
+)
 
 ORG_ID = "org_fullchaos"
 OTHER_ORG_ID = "org_intruder"
@@ -132,6 +128,14 @@ OBSERVED_AT = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 
 def _now() -> datetime:
     return OBSERVED_AT
+
+
+def _time_range() -> DevTimeRange:
+    return DevTimeRange(
+        start=datetime(2026, 7, 1, tzinfo=UTC),
+        end=datetime(2026, 7, 31, tzinfo=UTC),
+        timezone="UTC",
+    )
 
 
 def _scope(*, repositories: tuple[str, ...] = ()) -> DevScope:
@@ -148,19 +152,38 @@ def _scope(*, repositories: tuple[str, ...] = ()) -> DevScope:
                 "repository_id": None,
             }
         ],
-        time_range=DevTimeRange(
-            start=datetime(2026, 7, 1, tzinfo=UTC),
-            end=datetime(2026, 7, 31, tzinfo=UTC),
-            timezone="UTC",
-        ),
+        time_range=_time_range(),
     )
 
 
-def _context(*, repositories: tuple[str, ...] = ()) -> StepContext:
+def _team_scope(team_id: str) -> DevScope:
+    """A DirectScope.TEAM scope -- ``repositories`` must be empty (a team
+    direct scope has no repository list of its own; see ``DevScope.
+    validate_direct_scope``), which is exactly why ``team_ids`` needs its
+    own binding independent of ``repositories``."""
+
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id=ORG_ID,
+        direct_scope=DirectScope.TEAM,
+        team_ids=[team_id],
+        entity_refs=[
+            {
+                "entity_type": "team",
+                "entity_id": team_id,
+                "display_label": team_id,
+                "repository_id": None,
+            }
+        ],
+        time_range=_time_range(),
+    )
+
+
+def _context(*, scope: DevScope | None = None) -> StepContext:
     return StepContext(
         org_id=ORG_ID,
         permission_fingerprint="fingerprint",
-        scope=_scope(repositories=repositories),
+        scope=scope or _scope(),
         run_id="run-1",
         now=_now(),
     )
@@ -246,12 +269,33 @@ def _ci_fact(*, entity_id: str, conclusion: str, handle: str) -> DevCIFactV2:
     )
 
 
-# -- round-4 finding 1: cross-tenant / cross-repository receipt -------------
+def _ci_claim(*, entity_id: str, conclusion: str) -> dict[str, object]:
+    """The exact projection a genuine ``wire_ci`` mint would compute for a
+    CI fact with this entity_id/conclusion (the rest of ``_ci_fact``'s
+    fields are fixed) -- built from the SAME provisional-then-project
+    pattern production uses, never a hand-picked subset. ``evidence_ref_ids``
+    stays empty (never ``("",)`` -- ``OpaqueID`` rejects an empty string):
+    :func:`_claim_projection` excludes it from the digest regardless, so its
+    placeholder value here can never matter."""
+
+    provisional = DevCIFactV2(
+        entity_id=entity_id,
+        display_label="build",
+        conclusion=conclusion,
+        required=True,
+        skipped_required_work=False,
+        observed_at=OBSERVED_AT,
+        evidence_ref_ids=(),
+    )
+    return _claim_projection(provisional)
+
+
+# -- round-5 finding 1: cross-tenant / cross-repository receipt -------------
 
 
 @pytest.mark.asyncio
 async def test_red_cross_tenant_handle_is_rejected():
-    """RED (Codex round 4, [HIGH]): a handle genuinely minted for a
+    """RED (Codex round 4/5, [HIGH]): a handle genuinely minted for a
     DIFFERENT organization than the one running this step verifies clean
     under a receipt comparison that never carried org_id at all -- round 5
     supplies org_id fresh from the CURRENT ``StepContext`` on every check,
@@ -261,13 +305,12 @@ async def test_red_cross_tenant_handle_is_rejected():
     async def run(_ctx: StepContext) -> StepOutcome:
         source_version = _ci_check_source_version(
             "repo#ci7#checkA",
-            conclusion="success",
-            required=True,
-            skipped_required_work=False,
+            claim=_ci_claim(entity_id="repo#ci7#checkA", conclusion="success"),
         )
         # Minted for OTHER_ORG_ID -- a different tenant than the one this
         # step actually runs under (ORG_ID, via ``_context()`` below).
-        forged_handle = sign_evidence(
+        forged_handle = sign_evidence_for_scope(
+            scope=_scope(),
             org_id=OTHER_ORG_ID,
             source_system="ci_runs",
             source_version=source_version,
@@ -297,21 +340,19 @@ async def test_red_cross_tenant_handle_is_rejected():
 
 @pytest.mark.asyncio
 async def test_red_cross_repository_scope_handle_is_rejected():
-    """RED (Codex round 4, [HIGH], repository-scope half): a handle
+    """RED (Codex round 4/5, [HIGH], repository-scope half): a handle
     genuinely minted for a DIFFERENT repository scope than the one this
-    step's own ``StepContext`` authorizes. ``repository_ids`` is bound into
-    the real signer's HMAC exactly like ``org_id`` -- round 5 supplies it
-    fresh from ``context.scope.repositories`` on every check, never from the
-    handle."""
+    step's own ``StepContext`` authorizes."""
 
     async def run(_ctx: StepContext) -> StepOutcome:
         source_version = _ci_check_source_version(
             "repo#ci7#checkA",
-            conclusion="success",
-            required=True,
-            skipped_required_work=False,
+            claim=_ci_claim(entity_id="repo#ci7#checkA", conclusion="success"),
         )
-        forged_handle = sign_evidence(
+        forged_handle = sign_evidence_for_scope(
+            # Minted against a repository the CURRENT step's scope
+            # (``repo-authorized`` below) never authorized.
+            scope=_scope(repositories=("repo-unauthorized",)),
             org_id=ORG_ID,
             source_system="ci_runs",
             source_version=source_version,
@@ -320,9 +361,6 @@ async def test_red_cross_repository_scope_handle_is_rejected():
             display_label="checkA",
             observed_at=OBSERVED_AT,
             freshness=FreshnessState.FRESH,
-            # Minted against a repository the CURRENT step's scope
-            # (``repo-authorized`` below) never authorized.
-            repository_ids=("repo-unauthorized",),
         )
         fact = _ci_fact(
             entity_id="repo#ci7#checkA", conclusion="success", handle=forged_handle
@@ -334,7 +372,7 @@ async def test_red_cross_repository_scope_handle_is_rejected():
     result, observation = await _run_single_step(
         source_class=SourceClass.STATUS_CHANGE,
         run=run,
-        context=_context(repositories=("repo-authorized",)),
+        context=_context(scope=_scope(repositories=("repo-authorized",))),
     )
 
     assert observation.content is None
@@ -347,17 +385,17 @@ async def test_red_cross_repository_scope_handle_is_rejected():
 @pytest.mark.asyncio
 async def test_genuine_same_tenant_and_repository_handle_is_accepted():
     """Positive control: a handle minted for the SAME org and repository
-    scope the step actually runs under must still verify -- round 5 must
-    not over-reject legitimate same-tenant evidence."""
+    scope the step actually runs under must still verify."""
+
+    scope = _scope(repositories=("repo-authorized",))
 
     async def run(_ctx: StepContext) -> StepOutcome:
         source_version = _ci_check_source_version(
             "repo#ci7#checkA",
-            conclusion="success",
-            required=True,
-            skipped_required_work=False,
+            claim=_ci_claim(entity_id="repo#ci7#checkA", conclusion="success"),
         )
-        handle = sign_evidence(
+        handle = sign_evidence_for_scope(
+            scope=scope,
             org_id=ORG_ID,
             source_system="ci_runs",
             source_version=source_version,
@@ -366,7 +404,6 @@ async def test_genuine_same_tenant_and_repository_handle_is_accepted():
             display_label="checkA",
             observed_at=OBSERVED_AT,
             freshness=FreshnessState.FRESH,
-            repository_ids=("repo-authorized",),
         )
         fact = _ci_fact(
             entity_id="repo#ci7#checkA", conclusion="success", handle=handle
@@ -378,7 +415,7 @@ async def test_genuine_same_tenant_and_repository_handle_is_accepted():
     result, observation = await _run_single_step(
         source_class=SourceClass.STATUS_CHANGE,
         run=run,
-        context=_context(repositories=("repo-authorized",)),
+        context=_context(scope=scope),
     )
 
     assert observation.content is not None
@@ -386,35 +423,180 @@ async def test_genuine_same_tenant_and_repository_handle_is_accepted():
     assert result.relationship_closure_verified is True
 
 
-# -- generalized content binding: representative non-ci_checks REDs ---------
+# -- round-6 finding 1: mutable ambient scope / unbound team_ids ------------
+
+
+@pytest.mark.asyncio
+async def test_red_mid_step_repository_mutation_does_not_verify():
+    """RED (Codex round 6, [HIGH]): a step mutates ``context.scope.
+    repositories`` IN PLACE mid-step (``DevScope`` is frozen, but the LIST
+    its ``repositories`` attribute points to is not), then mints against
+    that self-chosen value. Verification must use the snapshot captured
+    BEFORE this step ran, never a fresh ``context.scope`` re-read -- so the
+    step's own mutation can never make its own forged handle verify."""
+
+    async def run(ctx: StepContext) -> StepOutcome:
+        # Attacker-controlled: swap the authorized repo list to one this
+        # run was never actually authorized for, AFTER the executor already
+        # snapshotted the true scope.
+        ctx.scope.repositories.clear()
+        ctx.scope.repositories.append("repo-self-chosen")
+        source_version = _ci_check_source_version(
+            "repo#ci7#checkA",
+            claim=_ci_claim(entity_id="repo#ci7#checkA", conclusion="success"),
+        )
+        handle = sign_evidence_for_scope(
+            scope=ctx.scope,  # the NOW-mutated scope
+            org_id=ORG_ID,
+            source_system="ci_runs",
+            source_version=source_version,
+            entity_type="ci_run",
+            entity_id="repo#ci7",
+            display_label="checkA",
+            observed_at=OBSERVED_AT,
+            freshness=FreshnessState.FRESH,
+        )
+        fact = _ci_fact(
+            entity_id="repo#ci7#checkA", conclusion="success", handle=handle
+        )
+        return _queried_outcome(
+            DevSourceContent(schema_version="dev_source_content.v1", ci_checks=(fact,))
+        )
+
+    result, observation = await _run_single_step(
+        source_class=SourceClass.STATUS_CHANGE,
+        run=run,
+        context=_context(scope=_scope(repositories=("repo-authorized",))),
+    )
+
+    assert observation.content is None
+    assert observation.observed_state is SourceRequirementState.UNAVAILABLE
+    assert observation.limitation is not None
+    assert observation.limitation.startswith("evidence_signature_invalid:")
+    assert result.relationship_closure_verified is False
+
+
+@pytest.mark.asyncio
+async def test_red_cross_team_handle_is_rejected():
+    """RED (Codex round 6, [HIGH]): a TEAM-scoped investigation has an EMPTY
+    ``repositories`` (structurally -- see ``DevScope.validate_direct_scope``)
+    -- a handle genuinely minted under a DIFFERENT team's authorization
+    scope must not verify under this team's, even though ``repositories``
+    is identically empty for both and could never itself distinguish them."""
+
+    async def run(_ctx: StepContext) -> StepOutcome:
+        source_version = _ci_check_source_version(
+            "repo#ci7#checkA",
+            claim=_ci_claim(entity_id="repo#ci7#checkA", conclusion="success"),
+        )
+        forged_handle = sign_evidence_for_scope(
+            scope=_team_scope("team-alpha"),  # a DIFFERENT team than team-beta
+            org_id=ORG_ID,
+            source_system="ci_runs",
+            source_version=source_version,
+            entity_type="ci_run",
+            entity_id="repo#ci7",
+            display_label="checkA",
+            observed_at=OBSERVED_AT,
+            freshness=FreshnessState.FRESH,
+        )
+        fact = _ci_fact(
+            entity_id="repo#ci7#checkA", conclusion="success", handle=forged_handle
+        )
+        return _queried_outcome(
+            DevSourceContent(schema_version="dev_source_content.v1", ci_checks=(fact,))
+        )
+
+    result, observation = await _run_single_step(
+        source_class=SourceClass.STATUS_CHANGE,
+        run=run,
+        context=_context(scope=_team_scope("team-beta")),
+    )
+
+    assert observation.content is None
+    assert observation.observed_state is SourceRequirementState.UNAVAILABLE
+    assert observation.limitation is not None
+    assert observation.limitation.startswith("evidence_signature_invalid:")
+    assert result.relationship_closure_verified is False
+
+
+@pytest.mark.asyncio
+async def test_genuine_team_scoped_handle_is_accepted():
+    """Positive control: a handle minted under a TEAM scope, cited within
+    the SAME team's investigation, must still verify -- round 6 must not
+    over-reject legitimate team-scoped evidence."""
+
+    scope = _team_scope("team-beta")
+
+    async def run(_ctx: StepContext) -> StepOutcome:
+        source_version = _ci_check_source_version(
+            "repo#ci7#checkA",
+            claim=_ci_claim(entity_id="repo#ci7#checkA", conclusion="success"),
+        )
+        handle = sign_evidence_for_scope(
+            scope=scope,
+            org_id=ORG_ID,
+            source_system="ci_runs",
+            source_version=source_version,
+            entity_type="ci_run",
+            entity_id="repo#ci7",
+            display_label="checkA",
+            observed_at=OBSERVED_AT,
+            freshness=FreshnessState.FRESH,
+        )
+        fact = _ci_fact(
+            entity_id="repo#ci7#checkA", conclusion="success", handle=handle
+        )
+        return _queried_outcome(
+            DevSourceContent(schema_version="dev_source_content.v1", ci_checks=(fact,))
+        )
+
+    result, observation = await _run_single_step(
+        source_class=SourceClass.STATUS_CHANGE,
+        run=run,
+        context=_context(scope=scope),
+    )
+
+    assert observation.content is not None
+    assert len(observation.content.ci_checks) == 1
+    assert result.relationship_closure_verified is True
+
+
+# -- generalized (round-6, programmatic) content binding: representative REDs
 
 
 @pytest.mark.asyncio
 async def test_red_status_fact_content_swap_is_rejected():
     """RED: a handle genuinely minted for a status fact asserting
     "in_progress" reused verbatim on a fabricated fact for the SAME entity
-    claiming "done" instead. Proves the generalized closure holds for
-    ``status_facts``, not just ``ci_checks`` -- a real handle for one status
-    claim can never verify a fabricated different status claim about the
-    same entity."""
+    claiming "done" instead."""
+
+    scope = _scope()
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        genuine_text = "Issue One: in_progress"
-        handle = sign_evidence(
+        # DevStatusFactV2.evidence_ref_ids carries min_length=1 at the
+        # contract layer -- a placeholder handle-shaped string, discarded
+        # by _claim_projection's exclusion regardless of its value.
+        genuine = DevStatusFactV2(
+            fact_id="issue:issue-1",
+            text="Issue One: in_progress",
+            evidence_ref_ids=("ev1_" + "0" * 40,),
+        )
+        source_version = _bind_content(
+            _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(genuine)
+        )
+        handle = sign_evidence_for_scope(
+            scope=scope,
             org_id=ORG_ID,
             source_system="work_items",
-            source_version=_bind_content(
-                _STATUS_EVIDENCE_SOURCE_VERSION, claim=genuine_text
-            ),
+            source_version=source_version,
             entity_type="issue",
             entity_id="issue-1",
             display_label="Issue One",
             observed_at=OBSERVED_AT,
             freshness=FreshnessState.FRESH,
         )
-        genuine_fact = DevStatusFactV2(
-            fact_id="issue:issue-1", text=genuine_text, evidence_ref_ids=(handle,)
-        )
+        genuine_fact = genuine.model_copy(update={"evidence_ref_ids": (handle,)})
         forged_fact = DevStatusFactV2(
             fact_id="issue:issue-1",
             text="Issue One: done (fabricated)",
@@ -428,7 +610,7 @@ async def test_red_status_fact_content_swap_is_rejected():
         )
 
     result, observation = await _run_single_step(
-        source_class=SourceClass.STATUS_CHANGE, run=run
+        source_class=SourceClass.STATUS_CHANGE, run=run, context=_context(scope=scope)
     )
 
     assert observation.content is None
@@ -442,14 +624,27 @@ async def test_red_status_fact_content_swap_is_rejected():
 async def test_red_observed_change_before_after_swap_is_rejected():
     """RED: a handle genuinely minted for an observed change asserting
     before="open"/after="closed" reused verbatim on a fabricated change for
-    the SAME entity/change_id claiming a DIFFERENT before/after pair. Proves
-    the generalized closure holds for ``observed_changes``."""
+    the SAME entity/change_id claiming a DIFFERENT before/after pair."""
+
+    scope = _scope()
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        source_version = _bind_content(
-            _CHANGE_EVIDENCE_SOURCE_VERSION, before="open", after="closed"
+        genuine = DevObservedChangeV2(
+            change_id="change-1",
+            category="entity",
+            entity_type="issue",
+            entity_id="issue-1",
+            display_label="Issue One closed",
+            before="open",
+            after="closed",
+            observed_at=OBSERVED_AT,
+            evidence_ref_ids=(),
         )
-        handle = sign_evidence(
+        source_version = _bind_content(
+            _CHANGE_EVIDENCE_SOURCE_VERSION, _claim_projection(genuine)
+        )
+        handle = sign_evidence_for_scope(
+            scope=scope,
             org_id=ORG_ID,
             source_system="work_items",
             source_version=source_version,
@@ -459,17 +654,7 @@ async def test_red_observed_change_before_after_swap_is_rejected():
             observed_at=OBSERVED_AT,
             freshness=FreshnessState.FRESH,
         )
-        genuine_change = DevObservedChangeV2(
-            change_id="change-1",
-            category="entity",
-            entity_type="issue",
-            entity_id="issue-1",
-            display_label="Issue One closed",
-            before="open",
-            after="closed",
-            observed_at=OBSERVED_AT,
-            evidence_ref_ids=(handle,),
-        )
+        genuine_change = genuine.model_copy(update={"evidence_ref_ids": (handle,)})
         forged_change = DevObservedChangeV2(
             change_id="change-1",
             category="entity",
@@ -489,7 +674,177 @@ async def test_red_observed_change_before_after_swap_is_rejected():
         )
 
     result, observation = await _run_single_step(
-        source_class=SourceClass.STATUS_CHANGE, run=run
+        source_class=SourceClass.STATUS_CHANGE, run=run, context=_context(scope=scope)
+    )
+
+    assert observation.content is None
+    assert observation.observed_state is SourceRequirementState.UNAVAILABLE
+    assert observation.limitation is not None
+    assert observation.limitation.startswith("evidence_signature_invalid:")
+    assert result.relationship_closure_verified is False
+
+
+def _metric_fact(
+    *,
+    metric_id: MetricID,
+    dimensions: tuple[str, ...] = (),
+    value: float,
+    series: tuple[tuple[str, float], ...] = (),
+) -> DevMetricRefV2:
+    window = _time_range()
+    scope_v2 = DevScopeV2.model_validate(_scope().model_dump(mode="json"))
+    metric_ref_id = _metric_ref_id(
+        metric_id=metric_id.value,
+        dimensions=dimensions,
+        window_start=window.start.isoformat(),
+        window_end=window.end.isoformat(),
+    )
+    return DevMetricRefV2(
+        schema_version="dev_metric_ref.v1",
+        metric_ref_id=metric_ref_id,
+        metric_id=metric_id,
+        label="Cycle time",
+        definition_version="v1",
+        unit="hours",
+        aggregation="p50",
+        display_precision=1,
+        resolved_scope=scope_v2,
+        dimensions=dimensions,
+        current_window=window,
+        comparison_window=None,
+        value=value,
+        comparison_value=None,
+        series=tuple({"timestamp": ts, "value": v} for ts, v in series),
+        query_version="v1",
+        source_version="v1",
+        freshness=FreshnessState.FRESH,
+        coverage=1.0,
+        evidence_ref_ids=(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_red_metric_full_field_swap_is_rejected():
+    """RED (Codex round 6, [HIGH]): round 5 bound only value/
+    comparison_value -- a genuine handle for CYCLE_TIME_P50_HOURS=10.0
+    verified a fabricated fact re-labeled AVG_WIP with a forged dense
+    series, because neither metric_id nor series were bound."""
+
+    scope = _scope()
+
+    async def run(_ctx: StepContext) -> StepOutcome:
+        genuine = _metric_fact(metric_id=MetricID.CYCLE_TIME_P50_HOURS, value=10.0)
+        source_version = _bind_content(
+            _METRIC_EVIDENCE_SOURCE_VERSION, _claim_projection(genuine)
+        )
+        handle = sign_evidence_for_scope(
+            scope=scope,
+            org_id=ORG_ID,
+            source_system="metrics",
+            source_version=source_version,
+            entity_type="metric",
+            entity_id=genuine.metric_ref_id,
+            display_label="Cycle time",
+            observed_at=OBSERVED_AT,
+            freshness=FreshnessState.FRESH,
+        )
+        genuine_ref = genuine.model_copy(update={"evidence_ref_ids": (handle,)})
+        forged_ref = genuine.model_copy(
+            update={
+                "metric_id": MetricID.AVG_WIP,
+                "series": tuple(
+                    {"timestamp": OBSERVED_AT, "value": float(i)} for i in range(999)
+                ),
+                "evidence_ref_ids": (handle,),
+            }
+        )
+        return _queried_outcome(
+            DevSourceContent(
+                schema_version="dev_source_content.v1",
+                metric_refs=(genuine_ref, forged_ref),
+            )
+        )
+
+    result, observation = await _run_single_step(
+        source_class=SourceClass.WORK_ITEM, run=run, context=_context(scope=scope)
+    )
+
+    assert observation.content is None
+    assert observation.observed_state is SourceRequirementState.UNAVAILABLE
+    assert observation.limitation is not None
+    assert observation.limitation.startswith("evidence_signature_invalid:")
+    assert result.relationship_closure_verified is False
+
+
+def test_metric_ref_id_is_recomputed_never_trusted_from_the_fact() -> None:
+    """Structural proof (round-6 ask: "recompute/validate metric_ref_id
+    from the same inputs"): two ``DevMetricRefV2`` facts sharing the
+    IDENTICAL (spoofed) ``metric_ref_id`` field but different
+    ``metric_id``s must derive DIFFERENT entity_ids -- ``_identity_
+    metric_ref`` never trusts ``ref.metric_ref_id`` as a free-form id, it
+    is always recomputed from the fact's own metric_id/dimensions/window."""
+
+    a = _metric_fact(metric_id=MetricID.CYCLE_TIME_P50_HOURS, value=1.0)
+    spoofed = a.model_copy(update={"metric_id": MetricID.AVG_WIP})
+    assert spoofed.metric_ref_id == a.metric_ref_id  # same spoofed field value
+
+    _source_a, _sv_a, _et_a, entity_id_a = _identity_metric_ref(a)
+    _source_b, _sv_b, _et_b, entity_id_b = _identity_metric_ref(spoofed)
+    assert entity_id_a != entity_id_b
+
+
+@pytest.mark.asyncio
+async def test_red_graph_edge_provenance_confidence_timestamp_swap_is_rejected():
+    """RED (Codex round 6, [HIGH]): round 5 bound only relationship/
+    source_entity_id/target_entity_id -- a genuine handle verified a fact
+    with a forged provenance ("fabricated-authoritative-source"), a forged
+    confidence, and a year-2036 observed_at."""
+
+    scope = _scope()
+
+    async def run(_ctx: StepContext) -> StepOutcome:
+        genuine = DevGraphEdgeV2(
+            edge_id="edge-1",
+            source_entity_id=ROOT_ENTITY_ID,
+            relationship="references",
+            target_entity_id="pr-1",
+            provenance="ci_pipeline",
+            confidence=0.8,
+            observed_at=OBSERVED_AT,
+            evidence_ref_ids=(),
+        )
+        source_version = _bind_content(
+            _GRAPH_EVIDENCE_SOURCE_VERSION, _claim_projection(genuine)
+        )
+        handle = sign_evidence_for_scope(
+            scope=scope,
+            org_id=ORG_ID,
+            source_system="work_graph",
+            source_version=source_version,
+            entity_type="work_graph_edge",
+            entity_id="edge-1",
+            display_label="issue-1 references pr-1",
+            observed_at=OBSERVED_AT,
+            freshness=FreshnessState.FRESH,
+        )
+        genuine_edge = genuine.model_copy(update={"evidence_ref_ids": (handle,)})
+        forged_edge = genuine.model_copy(
+            update={
+                "provenance": "fabricated-authoritative-source",
+                "confidence": 1.0,
+                "observed_at": datetime(2036, 1, 1, tzinfo=UTC),
+                "evidence_ref_ids": (handle,),
+            }
+        )
+        return _queried_outcome(
+            DevSourceContent(
+                schema_version="dev_source_content.v1",
+                graph_edges=(genuine_edge, forged_edge),
+            )
+        )
+
+    result, observation = await _run_single_step(
+        source_class=SourceClass.WORK_GRAPH, run=run, context=_context(scope=scope)
     )
 
     assert observation.content is None
@@ -503,35 +858,33 @@ async def test_red_observed_change_before_after_swap_is_rejected():
 
 
 def test_content_binding_is_shared_by_identity_between_every_mint_and_verify_site():
-    """Structural drift guard (round-5 item 3): EVERY category's mint
-    (``builtin_steps.py``'s ``wire_*``/mint closures) and verify
-    (``relationship_matrix.py``'s ``EVIDENCE_IDENTITY_TABLE`` cells) fold
-    content into ``source_version`` through the LITERAL SAME shared
-    function -- asserted by identity, not merely by matching behavior, so
-    no category's mint and verify can independently drift apart the way a
-    hand-duplicated constant could."""
+    """Structural drift guard: EVERY category's mint (``builtin_steps.py``'s
+    ``wire_*``/mint closures) and verify (``relationship_matrix.py``'s
+    ``EVIDENCE_IDENTITY_TABLE`` cells) fold content into ``source_version``
+    through the LITERAL SAME shared functions -- asserted by identity, not
+    merely by matching behavior."""
 
     assert (
         relationship_matrix_module._bind_content is builtin_steps_module._bind_content
     )
     assert (
+        relationship_matrix_module._claim_projection
+        is builtin_steps_module._claim_projection
+    )
+    assert (
         relationship_matrix_module._ci_check_source_version
         is builtin_steps_module._ci_check_source_version
+    )
+    assert (
+        relationship_matrix_module._metric_ref_id is builtin_steps_module._metric_ref_id
     )
 
 
 def test_signer_payload_drift_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mutation-style drift guard (round-5 item 3): if
-    ``EvidenceReferenceSigner``'s payload construction ever binds a field at
-    MINT time that the verifier's rebuilt candidate does not (or cannot)
-    supply, the result must be REJECTION, never a silent accept. Simulated
-    by minting through a deliberately WIDENED payload (one extra byte folded
-    in, standing in for a hypothetical future field the round-5 verifier
-    was never updated to rebuild) and then verifying the resulting handle
-    through the real, un-widened ``_payload`` -- exactly the shape an
-    accidental drift between mint and verify would take. If this test ever
-    fails (a widened payload still verifies), the signature check has
-    stopped being load-bearing."""
+    """Mutation-style drift guard: if ``EvidenceReferenceSigner``'s payload
+    construction ever binds a field at MINT time that the verifier's
+    rebuilt candidate does not (or cannot) supply, the result must be
+    REJECTION, never a silent accept."""
 
     signer = EvidenceReferenceSigner(b"round5-drift-guard-test-secret-000")
     real_payload = EvidenceReferenceSigner._payload
@@ -574,12 +927,7 @@ def test_signer_payload_drift_fails_closed(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_signer_payload_field_set_is_the_documented_allowlist() -> None:
     """Second half of the drift guard: pin the EXACT set of keys
-    ``EvidenceReferenceSigner._payload`` produces today. If a future change
-    adds (or removes) a bound field, this fails immediately and loudly --
-    the reviewer's cue to check whether ``_CandidateIdentity``/
-    ``_evidence_signature_failures`` (``executor.py``) still supply
-    everything the signer now binds, rather than discovering the gap only
-    when a real forgery slips through."""
+    ``EvidenceReferenceSigner._payload`` produces today."""
 
     import json as _json
 

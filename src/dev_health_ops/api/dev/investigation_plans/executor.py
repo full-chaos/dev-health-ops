@@ -29,6 +29,11 @@ from ..contracts_v2.result import (
     DevSourceObservation,
 )
 from ..evidence_service import EvidenceReferenceSigner
+from .builtin_steps import (
+    _authorization_scope_digest,
+    _AuthorizationScope,
+    _snapshot_authorization_scope,
+)
 from .relationship_matrix import (
     CONTENT_SLOT_FIELDS,
     EVIDENCE_IDENTITY_TABLE,
@@ -396,6 +401,7 @@ def _evidence_signature_failures(
     content: DevSourceContent,
     context: StepContext,
     signer: EvidenceReferenceSigner,
+    authorization_scope: _AuthorizationScope,
 ) -> tuple[str, ...]:
     """Every claimed ``entity_id`` from a fact citing a handle that does not
     cryptographically verify -- CHAOS-3296 round-5 structural inversion (see
@@ -408,17 +414,24 @@ def _evidence_signature_failures(
     distinct "existence" check, because a signature that does not verify is
     exactly as invalid whether or not it happens to resemble a real one.
 
-    ``context.org_id``/``context.scope.repositories`` -- the caller's own
-    already-authorized scope, mirroring exactly what
-    ``builtin_steps._scope_evidence_binding`` bound at mint -- are supplied
-    fresh for every candidate, never read from the fact or the handle being
-    checked (round-4 finding 1: a per-run receipt that omitted these let a
-    handle honestly minted for a DIFFERENT tenant/repository scope verify
-    clean whenever the remaining fields happened to match).
+    ``authorization_scope`` -- NEVER a fresh read of ``context.scope`` here
+    -- is the SAME :class:`_AuthorizationScope` snapshot :meth:`PlanExecutor.
+    run` captured before any step ran (round-6 finding, HIGH: a step that
+    mutated ``context.scope.repositories`` in place mid-run, then minted
+    against its own self-chosen value, previously verified clean, because
+    verification ALSO re-read the SAME mutated list AFTER the step had
+    already run). Its ``repositories`` supplies ``_CandidateIdentity``'s
+    natively-signer-bound field; its ``team_ids``/``direct_scope``/
+    ``entity_ids`` digest (:func:`~.builtin_steps._authorization_scope_digest`)
+    is appended to every derived ``source_version``, mirroring exactly what
+    ``builtin_steps._scope_bound_mint`` folded in at mint time (round-6
+    finding, HIGH: a TEAM-scoped investigation has empty ``repositories``,
+    and nothing previously bound ``team_ids`` at all, so two DIFFERENT
+    teams' investigations minted identical handles for identical content).
     """
 
     invalid: set[str] = set()
-    repository_ids = tuple(context.scope.repositories)
+    scope_digest = _authorization_scope_digest(authorization_scope)
     for slot, fact in _content_field_facts(content):
         cell = EVIDENCE_IDENTITY_TABLE[slot]
         if cell.mode != "required" or cell.derive is None:
@@ -428,10 +441,10 @@ def _evidence_signature_failures(
             candidate = _CandidateIdentity(
                 evidence_ref_id=handle,
                 source_system=source_system,
-                source_version=source_version,
+                source_version=f"{source_version}#scope:{scope_digest}",
                 entity_type=entity_type,
                 entity_id=entity_id,
-                repository_ids=repository_ids,
+                repository_ids=authorization_scope.repositories,
             )
             if not signer.verify(context.org_id, candidate):
                 invalid.add(entity_id)
@@ -493,6 +506,12 @@ class PlanExecutor:
         subject_entity_id: str | None = None,
         subject_set_fingerprint: str | None = None,
     ) -> DevInvestigationResult:
+        # CHAOS-3296 round 6: captured BEFORE any step (this executor's
+        # threat model's adversary) gets to run at all -- see
+        # _AuthorizationScope's own docstring for why this must never be a
+        # fresh read of context.scope taken later, after a step has already
+        # had the chance to mutate it.
+        authorization_scope = _snapshot_authorization_scope(context.scope)
         registered = self._registry.for_plan(plan.plan_id)
         known_steps = set(plan.mandatory_steps) | set(plan.conditional_steps)
         missing = known_steps - registered.keys()
@@ -602,6 +621,7 @@ class PlanExecutor:
                 run_id=run_id,
                 plan_id=plan.plan_id,
                 context=context,
+                authorization_scope=authorization_scope,
             )
             for requirement in plan.source_requirements
         ]
@@ -664,6 +684,7 @@ class PlanExecutor:
         run_id: str,
         plan_id: str,
         context: StepContext,
+        authorization_scope: _AuthorizationScope,
     ) -> tuple[DevSourceObservation, bool]:
         # A deterministic representative step_id for this requirement, used
         # only to seed the observation's minted id -- ``step_ids`` is already
@@ -692,6 +713,7 @@ class PlanExecutor:
                 outcome,
                 observation_id,
                 context,
+                authorization_scope,
             )
         if step_ids and all(step_id in not_applicable for step_id in step_ids):
             return self._unmeasured_observation(
@@ -730,6 +752,7 @@ class PlanExecutor:
         outcome: StepOutcome,
         observation_id: str,
         context: StepContext,
+        authorization_scope: _AuthorizationScope,
     ) -> tuple[DevSourceObservation, bool]:
         content = outcome.content
         if content is not None:
@@ -777,7 +800,7 @@ class PlanExecutor:
                 # re-derived identity via the real signer, not merely exist
                 # in something this executor tracked itself.
                 invalid = _evidence_signature_failures(
-                    content, context, self._evidence_signer
+                    content, context, self._evidence_signer, authorization_scope
                 )
                 if invalid:
                     return self._unmeasured_observation(

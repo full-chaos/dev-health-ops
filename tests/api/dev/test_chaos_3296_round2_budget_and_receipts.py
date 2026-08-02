@@ -54,6 +54,7 @@ from dev_health_ops.api.dev.contracts_v2.base import (
 from dev_health_ops.api.dev.contracts_v2.embedded import (
     DevCIFactV2,
     DevDeploymentFactV2,
+    DevGraphEdgeV2,
     DevIncidentFactV2,
     DevMetricPoint,
     DevMetricRefV2,
@@ -82,6 +83,7 @@ from dev_health_ops.api.dev.investigation_plans.builtin_steps import (
     _GRAPH_EVIDENCE_SOURCE_VERSION,
     _STATUS_EVIDENCE_SOURCE_VERSION,
     _bind_content,
+    _claim_projection,
 )
 from dev_health_ops.api.dev.investigation_plans.relationship_matrix import (
     CONTENT_SLOT_FIELDS,
@@ -105,7 +107,10 @@ from dev_health_ops.models.dev_persistence import (
 )
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization, User
-from tests._chaos_3295_plan_executor import TEST_EVIDENCE_SIGNER, sign_evidence
+from tests._chaos_3295_plan_executor import (
+    TEST_EVIDENCE_SIGNER,
+    sign_evidence_for_scope,
+)
 from tests._helpers import tables_of
 
 ORG_ID = "org_fullchaos"
@@ -782,7 +787,12 @@ class _MintOnlyRuntime:
         repository_ids=(),
     ):
         self.mint_calls += 1
-        return sign_evidence(
+        # CHAOS-3296 round 6: route through the scope-bound helper (using
+        # THIS file's fixed ``_scope()``) so a handle minted here carries
+        # the same authorization-scope digest suffix a genuine
+        # ``_scope_bound_mint``-wrapped mint call would.
+        return sign_evidence_for_scope(
+            scope=_scope(),
             org_id=org_id,
             source_system=source_system,
             source_version=source_version,
@@ -794,6 +804,49 @@ class _MintOnlyRuntime:
             confidence=confidence,
             repository_ids=repository_ids,
         )
+
+
+def _status_fact_source_version(*, fact_id: str, text: str) -> str:
+    """The exact ``source_version`` a genuine ``wire_status_fact`` mint
+    computes for a ``DevStatusFactV2`` with this fact_id/text -- built from
+    the SAME construct-then-project pattern production uses (round 6:
+    ``_identity_status_fact`` projects the WHOLE wire model, not just
+    ``text``), over a placeholder-handle provisional (excluded from the
+    digest regardless of its value)."""
+
+    provisional = DevStatusFactV2(
+        fact_id=fact_id, text=text, evidence_ref_ids=("ev1_" + "0" * 40,)
+    )
+    return _bind_content(
+        _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional)
+    )
+
+
+def _graph_edge_source_version(
+    *,
+    edge_id: str,
+    source_entity_id: str,
+    relationship: str,
+    target_entity_id: str,
+) -> str:
+    """The exact ``source_version`` a genuine ``wire_edge`` mint computes
+    for a ``DevGraphEdgeV2`` with these fields (provenance="work_graph",
+    confidence=1.0 fixed, matching every edge this file's permanent REDs
+    construct) -- built from the SAME construct-then-project pattern
+    production uses (round 6: ``_identity_graph_edge`` projects the WHOLE
+    wire model, including provenance/confidence/observed_at)."""
+
+    provisional = DevGraphEdgeV2(
+        edge_id=edge_id,
+        source_entity_id=source_entity_id,
+        relationship=relationship,
+        target_entity_id=target_entity_id,
+        provenance="work_graph",
+        confidence=1.0,
+        observed_at=OBSERVED_AT,
+        evidence_ref_ids=("ev1_" + "0" * 40,),
+    )
+    return _bind_content(_GRAPH_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional))
 
 
 @pytest.mark.asyncio
@@ -809,8 +862,8 @@ async def test_reused_handle_across_unrelated_facts_is_rejected():
         real_handle = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version=_bind_content(
-                _STATUS_EVIDENCE_SOURCE_VERSION, claim=real_text
+            source_version=_status_fact_source_version(
+                fact_id="issue:issue-1", text=real_text
             ),
             entity_type="issue",
             entity_id="issue-1",
@@ -860,7 +913,9 @@ async def test_correct_handle_on_correct_fact_is_accepted():
         handle = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version=_bind_content(_STATUS_EVIDENCE_SOURCE_VERSION, claim=text),
+            source_version=_status_fact_source_version(
+                fact_id="issue:issue-1", text=text
+            ),
             entity_type="issue",
             entity_id="issue-1",
             display_label="Issue One",
@@ -901,7 +956,9 @@ async def test_two_facts_each_citing_their_own_handle_are_both_accepted():
         handle_a = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version=_bind_content(_STATUS_EVIDENCE_SOURCE_VERSION, claim=text_a),
+            source_version=_status_fact_source_version(
+                fact_id="issue:issue-1", text=text_a
+            ),
             entity_type="issue",
             entity_id="issue-1",
             display_label="Issue One",
@@ -911,7 +968,9 @@ async def test_two_facts_each_citing_their_own_handle_are_both_accepted():
         handle_b = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version=_bind_content(_STATUS_EVIDENCE_SOURCE_VERSION, claim=text_b),
+            source_version=_status_fact_source_version(
+                fact_id="issue:issue-2", text=text_b
+            ),
             entity_type="issue",
             entity_id="issue-2",
             display_label="Issue Two",
@@ -956,18 +1015,16 @@ async def test_graph_edge_handle_reuse_is_rejected():
     this must now be rejected exactly like the round-2 status-fact reuse
     repro."""
 
-    from dev_health_ops.api.dev.contracts_v2.embedded import DevGraphEdgeV2
-
     runtime = _MintOnlyRuntime()
 
     async def run(_ctx: StepContext) -> StepOutcome:
         handle = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_graph",
-            source_version=_bind_content(
-                _GRAPH_EVIDENCE_SOURCE_VERSION,
-                relationship="references",
+            source_version=_graph_edge_source_version(
+                edge_id="edge-1",
                 source_entity_id=ROOT_ENTITY_ID,
+                relationship="references",
                 target_entity_id="pr-1",
             ),
             entity_type="work_graph_edge",
@@ -1020,18 +1077,16 @@ async def test_graph_edge_handle_reuse_is_rejected():
 async def test_two_graph_edges_each_citing_their_own_handle_are_both_accepted():
     """Cross-edge positive control, mirroring the status-fact equivalent."""
 
-    from dev_health_ops.api.dev.contracts_v2.embedded import DevGraphEdgeV2
-
     runtime = _MintOnlyRuntime()
 
     async def run(_ctx: StepContext) -> StepOutcome:
         handle_a = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_graph",
-            source_version=_bind_content(
-                _GRAPH_EVIDENCE_SOURCE_VERSION,
-                relationship="references",
+            source_version=_graph_edge_source_version(
+                edge_id="edge-1",
                 source_entity_id=ROOT_ENTITY_ID,
+                relationship="references",
                 target_entity_id="pr-1",
             ),
             entity_type="work_graph_edge",
@@ -1043,10 +1098,10 @@ async def test_two_graph_edges_each_citing_their_own_handle_are_both_accepted():
         handle_b = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_graph",
-            source_version=_bind_content(
-                _GRAPH_EVIDENCE_SOURCE_VERSION,
-                relationship="references",
+            source_version=_graph_edge_source_version(
+                edge_id="edge-2",
                 source_entity_id=ROOT_ENTITY_ID,
+                relationship="references",
                 target_entity_id="pr-2",
             ),
             entity_type="work_graph_edge",

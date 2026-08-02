@@ -55,6 +55,7 @@ __all__ = [
     "fixed_now",
     "project_scope",
     "sign_evidence",
+    "sign_evidence_for_scope",
     "step_context_for",
 ]
 
@@ -106,6 +107,39 @@ def sign_evidence(
         repository_ids=tuple(repository_ids),
     )
     return TEST_EVIDENCE_SIGNER.issue(org_id, record)
+
+
+def sign_evidence_for_scope(
+    *, scope: DevScope, org_id: str = ORG_ID, source_version: str, **mint_kwargs
+) -> str:
+    """Like :func:`sign_evidence`, but routes through the exact same
+    ``builtin_steps._scope_bound_mint`` wrap every real ``wire_*_content``
+    call applies (CHAOS-3296 round 6) -- appends the SAME authorization-
+    scope digest suffix to ``source_version`` that a genuine mint call
+    under this ``scope`` would, so a test-constructed handle is genuinely
+    indistinguishable from a production one and verifies under
+    ``PlanExecutor``'s round-6 scope-fingerprint check. Callers pass the
+    CONTENT-bound (but not yet scope-bound) ``source_version`` -- e.g. the
+    output of ``_bind_content``/``_ci_check_source_version`` -- exactly as
+    they would to a raw ``mint_evidence`` call inside a ``wire_*`` helper.
+
+    ``repository_ids`` defaults to ``tuple(scope.repositories)`` -- exactly
+    what every real ``builtin_steps.py`` mint call derives via
+    ``_scope_evidence_binding(scope)`` -- unless the caller passes an
+    explicit override (e.g. to construct a deliberately cross-repository
+    forged handle in a RED test)."""
+
+    from dev_health_ops.api.dev.investigation_plans.builtin_steps import (
+        _scope_bound_mint,
+    )
+
+    mint_kwargs.setdefault("repository_ids", tuple(scope.repositories))
+
+    def _raw_mint(**kwargs: object) -> str:
+        return sign_evidence(org_id=org_id, **kwargs)  # type: ignore[arg-type]
+
+    wrapped = _scope_bound_mint(_raw_mint, scope)
+    return wrapped(source_version=source_version, **mint_kwargs)
 
 
 def project_scope(*, entity_id: str = "project-ask-dev") -> DevScope:

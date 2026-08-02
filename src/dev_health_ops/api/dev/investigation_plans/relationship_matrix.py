@@ -49,6 +49,8 @@ from .builtin_steps import (
     _bind_content,
     _ci_check_source_version,
     _ci_evidence_identity,
+    _claim_projection,
+    _metric_ref_id,
 )
 
 __all__ = [
@@ -455,31 +457,37 @@ def _status_entity(fact: Any) -> tuple[str, str]:
 
 def _identity_status_fact(fact: Any) -> tuple[str, str, str, str]:
     """``status_facts`` -- wired by ``_wire_status_snapshot_content``'s
-    ``mint_status``/``wire_status_fact``, which mints against the raw
+    ``wire_status_fact``, which mints against the raw
     ``StatusFact.entity_type``/``entity_id`` pair the wire fact's own
-    ``fact_id`` encodes as ``f"{entity_type}:{entity_id}"``, with
-    ``source_version`` binding the SAME composed ``"{label}: {status}"``
-    string ``wire_status_fact`` writes verbatim onto ``DevStatusFactV2.text``
-    (round 5) -- recovered here with no parsing, since that field already
-    IS the bound claim."""
-
-    entity_type, entity_id = _status_entity(fact)
-    source_system = _STATUS_ENTITY_SOURCE_SYSTEM.get(entity_type, "work_items")
-    source_version = _bind_content(_STATUS_EVIDENCE_SOURCE_VERSION, claim=fact.text)
-    return source_system, source_version, entity_type, entity_id
-
-
-def _identity_required_child(fact: Any) -> tuple[str, str, str, str]:
-    """``required_children`` -- the same ``mint_status`` as ``status_facts``,
-    but ``wire_required_child`` splits the composed claim across TWO wire
-    fields instead of one (``text`` = ``display_label`` alone,
-    ``status`` separate) -- reconstruct the identical
-    ``"{label}: {status}"`` string ``mint_status`` bound from the two."""
+    ``fact_id`` encodes as ``f"{entity_type}:{entity_id}"``.
+    ``source_version`` binds :func:`~.builtin_steps._claim_projection` of
+    ``fact`` itself (round 6: every ``DevStatusFactV2`` field except
+    ``schema_version``/``evidence_ref_ids``, derived programmatically --
+    never a hand-picked subset)."""
 
     entity_type, entity_id = _status_entity(fact)
     source_system = _STATUS_ENTITY_SOURCE_SYSTEM.get(entity_type, "work_items")
     source_version = _bind_content(
-        _STATUS_EVIDENCE_SOURCE_VERSION, claim=f"{fact.text}: {fact.status}"
+        _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(fact)
+    )
+    return source_system, source_version, entity_type, entity_id
+
+
+def _identity_required_child(fact: Any) -> tuple[str, str, str, str]:
+    """``required_children`` -- the same raw ``StatusFact`` source as
+    ``status_facts``, wired to a DIFFERENT shape (``DevRequiredChildFactV2``
+    keeps ``text``=label and ``status`` as two SEPARATE fields, rather than
+    one composed string). Projecting THIS model binds them as separate
+    JSON keys, not a delimiter-joined string -- a forged fact cannot
+    re-split a genuine "Repo: Alpha"/"blocked" claim into "Repo"/
+    "Alpha: blocked" (or any other split producing the same composed
+    string) and still verify, the collision round 6 specifically asked to
+    rule out."""
+
+    entity_type, entity_id = _status_entity(fact)
+    source_system = _STATUS_ENTITY_SOURCE_SYSTEM.get(entity_type, "work_items")
+    source_version = _bind_content(
+        _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(fact)
     )
     return source_system, source_version, entity_type, entity_id
 
@@ -487,15 +495,12 @@ def _identity_required_child(fact: Any) -> tuple[str, str, str, str]:
 def _identity_pull_request(fact: Any) -> tuple[str, str, str, str]:
     """``wire_pull_request`` -> ``mint_delivery(source_system="pull_requests",
     entity_type="pull_request", entity_id=fact.entity_id)``, ``source_version``
-    binding ``DevPullRequestFactV2``'s own claim fields (round 5)."""
+    binding :func:`~.builtin_steps._claim_projection` of ``fact`` (round 6:
+    every ``DevPullRequestFactV2`` field except schema_version/
+    evidence_ref_ids)."""
 
     source_version = _bind_content(
-        _STATUS_EVIDENCE_SOURCE_VERSION,
-        state=fact.state,
-        review_state=fact.review_state,
-        changes_requested=fact.changes_requested,
-        merged=fact.merged,
-        required=fact.required,
+        _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(fact)
     )
     return "pull_requests", source_version, "pull_request", fact.entity_id
 
@@ -507,60 +512,49 @@ def _identity_ci_check(fact: Any) -> tuple[str, str, str, str]:
     ``builtin_steps._ci_check_source_version`` this cell calls -- never a
     parallel reimplementation. That shared function embeds the FULL,
     uncoarsened id (round 4: distinguishes two checks on the same run) and a
-    canonical digest of the fact's own asserted claim (round 5: distinguishes
-    two different CLAIMS about the SAME check -- a genuine handle for a
-    failing check can no longer verify a fabricated passing claim for that
-    same check, because the two claims mint different, non-interchangeable
-    handles in the first place)."""
+    canonical digest of :func:`~.builtin_steps._claim_projection` of ``fact``
+    (round 6: every ``DevCIFactV2`` field, programmatically derived --
+    round 5 hand-picked only conclusion/required/skipped_required_work)."""
 
     lookup_entity_id = _ci_evidence_identity(fact.entity_id)
     source_version = _ci_check_source_version(
-        fact.entity_id,
-        conclusion=fact.conclusion,
-        required=fact.required,
-        skipped_required_work=fact.skipped_required_work,
+        fact.entity_id, claim=_claim_projection(fact)
     )
     return "ci_runs", source_version, "ci_run", lookup_entity_id
 
 
 def _identity_deployment(fact: Any) -> tuple[str, str, str, str]:
-    """``source_version`` binds ``DevDeploymentFactV2``'s own claim fields
-    (round 5)."""
+    """``source_version`` binds :func:`~.builtin_steps._claim_projection`
+    of ``fact`` (round 6: every ``DevDeploymentFactV2`` field)."""
 
     source_version = _bind_content(
-        _STATUS_EVIDENCE_SOURCE_VERSION,
-        status=fact.status,
-        environment=fact.environment,
-        required=fact.required,
+        _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(fact)
     )
     return "deployments", source_version, "deployment", fact.entity_id
 
 
 def _identity_incident(fact: Any) -> tuple[str, str, str, str]:
-    """``source_version`` binds ``DevIncidentFactV2``'s own claim fields
-    (round 5)."""
+    """``source_version`` binds :func:`~.builtin_steps._claim_projection`
+    of ``fact`` (round 6: every ``DevIncidentFactV2`` field)."""
 
     source_version = _bind_content(
-        _STATUS_EVIDENCE_SOURCE_VERSION,
-        status=fact.status,
-        active=fact.active,
-        blocking=fact.blocking,
+        _STATUS_EVIDENCE_SOURCE_VERSION, _claim_projection(fact)
     )
     return "incidents", source_version, "incident", fact.entity_id
 
 
 def _identity_observed_change(change: Any) -> tuple[str, str, str, str]:
-    """Mirrors ``_wire_change_summary_content``'s ``change_evidence_identity``
+    """Mirrors ``_wire_change_summary_content``'s ``change_base_identity``
     closure exactly: a ``"relationship"``-category change mints against its
     own ``change_id`` (never ``entity_id``); a collision-prone category
     (``status``/``metric``) embeds ``change_id`` into ``source_version`` on
     top of minting against ``entity_id``; every other category mints
     straight against ``entity_id`` with the base source_version -- THEN
-    (round 5) every branch binds ``before``/``after``, the only
-    ``ObservedChange`` claim fields that survive onto ``DevObservedChangeV2``
-    at all. Every input (``category``, ``change_id``, ``entity_id``,
-    ``entity_type``, ``before``, ``after``) survives unchanged onto the wire
-    type, so this is fully reconstructible from the wire fact alone."""
+    every branch binds :func:`~.builtin_steps._claim_projection` of
+    ``change`` (round 6: every ``DevObservedChangeV2`` field -- ``before``/
+    ``after`` remain the only ones that actually vary meaningfully, since
+    ``claim_kind``/``relationship_chain``/``metric_value``/
+    ``metric_comparison_value`` never survive onto the wire type at all)."""
 
     category = change.category
     source_system = _CHANGE_CATEGORY_SOURCE_SYSTEM.get(category, "work_items")
@@ -573,9 +567,7 @@ def _identity_observed_change(change: Any) -> tuple[str, str, str, str]:
     else:
         base_source_version = _CHANGE_EVIDENCE_SOURCE_VERSION
         entity_id = change.entity_id
-    source_version = _bind_content(
-        base_source_version, before=change.before, after=change.after
-    )
+    source_version = _bind_content(base_source_version, _claim_projection(change))
     return source_system, source_version, change.entity_type, entity_id
 
 
@@ -583,31 +575,44 @@ def _identity_graph_edge(edge: Any) -> tuple[str, str, str, str]:
     """``wire_edge`` mints against ``item.edge_id`` -- CHAOS-3296 round-4
     adds ``DevGraphEdgeV2.edge_id`` specifically so this identity survives
     to the wire; round 1-3 could not implement this cell at all.
-    ``source_version`` binds ``DevGraphEdgeV2``'s own claim fields (round
-    5): a genuine handle for edge_id X must never authenticate a fabricated
-    relationship/orientation for that same edge_id."""
+    ``source_version`` binds :func:`~.builtin_steps._claim_projection` of
+    ``edge`` (round 6: every ``DevGraphEdgeV2`` field, including
+    ``provenance``/``confidence``/``observed_at`` -- round 5 hand-picked
+    only relationship/orientation and Codex forged the rest on a genuine
+    handle)."""
 
     source_version = _bind_content(
-        _GRAPH_EVIDENCE_SOURCE_VERSION,
-        relationship=edge.relationship,
-        source_entity_id=edge.source_entity_id,
-        target_entity_id=edge.target_entity_id,
+        _GRAPH_EVIDENCE_SOURCE_VERSION, _claim_projection(edge)
     )
     return "work_graph", source_version, "work_graph_edge", edge.edge_id
 
 
 def _identity_metric_ref(ref: Any) -> tuple[str, str, str, str]:
-    """``source_version`` binds ``DevMetricRefV2``'s own claim fields
-    (round 5): a genuine handle for one metric value must never
-    authenticate a fabricated different value for the same
-    ``metric_ref_id``."""
+    """``entity_id`` is INDEPENDENTLY RECOMPUTED from ``ref``'s own
+    ``metric_id``/``dimensions``/``current_window`` via the exact same
+    :func:`~.builtin_steps._metric_ref_id` mint used -- never trusted as a
+    free-form ``ref.metric_ref_id`` the wire fact merely claims (round 6
+    ask: "recompute/validate metric_ref_id from the same inputs"). A fact
+    whose claimed ``metric_ref_id`` does not match what its OWN claimed
+    metric_id/dimensions/window would genuinely hash to fails verification
+    here structurally: the candidate's entity_id (this recomputed value)
+    would not equal what a genuine handle for THAT metric_ref_id was ever
+    signed against. ``source_version`` binds
+    :func:`~.builtin_steps._claim_projection` of ``ref`` (round 6: every
+    ``DevMetricRefV2`` field -- round 5 hand-picked only value/
+    comparison_value, so Codex re-labeled the metric and forged its series
+    while leaving those two fields untouched)."""
 
-    source_version = _bind_content(
-        _METRIC_EVIDENCE_SOURCE_VERSION,
-        value=ref.value,
-        comparison_value=ref.comparison_value,
+    entity_id = _metric_ref_id(
+        metric_id=ref.metric_id.value,
+        dimensions=ref.dimensions,
+        window_start=ref.current_window.start.isoformat(),
+        window_end=ref.current_window.end.isoformat(),
     )
-    return "metrics", source_version, "metric", ref.metric_ref_id
+    source_version = _bind_content(
+        _METRIC_EVIDENCE_SOURCE_VERSION, _claim_projection(ref)
+    )
+    return "metrics", source_version, "metric", entity_id
 
 
 EVIDENCE_IDENTITY_TABLE: dict[str, EvidenceIdentityCell] = {

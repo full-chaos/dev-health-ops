@@ -88,6 +88,7 @@ from tests._chaos_3295_plan_executor import (
     TEST_EVIDENCE_SIGNER,
     project_scope,
     sign_evidence,
+    sign_evidence_for_scope,
     step_context_for,
 )
 
@@ -183,13 +184,23 @@ def _registry(spy: _SpyRuntime) -> StepRegistry:
 
 def _minted_identity(spy: _SpyRuntime, fact) -> tuple[str, str, str, str]:
     """The real minted identity for ``fact``'s (assumed single) evidence
-    handle, straight from the spy's recorded mint-call kwargs."""
+    handle, straight from the spy's recorded mint-call kwargs.
+
+    CHAOS-3296 round 6: the recorded ``source_version`` carries a
+    ``#scope:...`` suffix -- ``_scope_bound_mint`` (applied inside the real
+    ``wire_*_content`` functions, upstream of this spy) appends it to EVERY
+    mint call, but ``EVIDENCE_IDENTITY_TABLE`` cells' ``derive`` never
+    include it (the executor appends it centrally, once per verification
+    pass, not per-cell -- see ``executor._evidence_signature_failures``).
+    Stripped here so this test compares content-identity apples to apples;
+    the scope suffix itself is proven correct separately (round-6 tests in
+    ``test_chaos_3296_round5_signature_verification.py``)."""
 
     assert len(fact.evidence_ref_ids) == 1
     call = spy.mint_calls[fact.evidence_ref_ids[0]]
     return (
         call["source_system"],
-        call["source_version"],
+        call["source_version"].split("#scope:", 1)[0],
         call["entity_type"],
         call["entity_id"],
     )
@@ -653,6 +664,7 @@ from dev_health_ops.api.dev.investigation_plans import (  # noqa: E402
 )
 from dev_health_ops.api.dev.investigation_plans.builtin_steps import (  # noqa: E402
     _ci_check_source_version,
+    _claim_projection,
 )
 
 ROOT_ENTITY_ID = "project-1"
@@ -870,7 +882,13 @@ class _MintOnlyRuntime:
         repository_ids=(),
     ):
         self.mint_calls += 1
-        return sign_evidence(
+        # CHAOS-3296 round 6: route through the scope-bound helper (using
+        # THIS file's fixed ``_scope()``) so a handle minted here carries
+        # the same authorization-scope digest suffix a genuine
+        # ``_scope_bound_mint``-wrapped mint call would, and verifies
+        # under PlanExecutor's round-6 scope-fingerprint check.
+        return sign_evidence_for_scope(
+            scope=_scope(),
             org_id=org_id,
             source_system=source_system,
             source_version=source_version,
@@ -882,6 +900,29 @@ class _MintOnlyRuntime:
             confidence=confidence,
             repository_ids=repository_ids,
         )
+
+
+def _ci_claim(
+    *, entity_id: str, display_label: str, conclusion: str
+) -> dict[str, object]:
+    """The EXACT projection a genuine ``wire_ci`` mint computes for a CI
+    fact with these fields (required=True, skipped_required_work=False,
+    observed_at=OBSERVED_AT fixed, matching every CI fact this file's
+    permanent REDs construct) -- built from the SAME provisional-then-
+    project pattern production uses, over the SAME entity_id/display_label
+    the corresponding genuine ``DevCIFactV2`` will carry (the projection
+    binds those too -- they are real wire fields, not excluded)."""
+
+    provisional = DevCIFactV2(
+        entity_id=entity_id,
+        display_label=display_label,
+        conclusion=conclusion,
+        required=True,
+        skipped_required_work=False,
+        observed_at=OBSERVED_AT,
+        evidence_ref_ids=("ev1_" + "0" * 40,),
+    )
+    return _claim_projection(provisional)
 
 
 @pytest.mark.asyncio
@@ -903,9 +944,11 @@ async def test_red_ci_check_a_handle_reused_on_check_b_is_rejected():
             source_system="ci_runs",
             source_version=_ci_check_source_version(
                 "repo#ci7#checkA",
-                conclusion="success",
-                required=True,
-                skipped_required_work=False,
+                claim=_ci_claim(
+                    entity_id="repo#ci7#checkA",
+                    display_label="checkA really succeeded",
+                    conclusion="success",
+                ),
             ),
             entity_type="ci_run",
             entity_id="repo#ci7",
@@ -965,9 +1008,11 @@ async def test_ci_check_a_and_check_b_each_with_their_own_handle_are_both_accept
             source_system="ci_runs",
             source_version=_ci_check_source_version(
                 "repo#ci7#checkA",
-                conclusion="success",
-                required=True,
-                skipped_required_work=False,
+                claim=_ci_claim(
+                    entity_id="repo#ci7#checkA",
+                    display_label="checkA",
+                    conclusion="success",
+                ),
             ),
             entity_type="ci_run",
             entity_id="repo#ci7",
@@ -980,9 +1025,11 @@ async def test_ci_check_a_and_check_b_each_with_their_own_handle_are_both_accept
             source_system="ci_runs",
             source_version=_ci_check_source_version(
                 "repo#ci7#checkB",
-                conclusion="failure",
-                required=True,
-                skipped_required_work=False,
+                claim=_ci_claim(
+                    entity_id="repo#ci7#checkB",
+                    display_label="checkB",
+                    conclusion="failure",
+                ),
             ),
             entity_type="ci_run",
             entity_id="repo#ci7",

@@ -20,6 +20,7 @@ handed about the failed call, and what an operator can see afterwards.
 from __future__ import annotations
 
 import logging
+import traceback
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -47,7 +48,10 @@ from dev_health_ops.api.dev.scope_service import (
 from dev_health_ops.api.dev.tool_registry import (
     AskDevToolRegistry,
     ToolExecution,
+    ToolExecutionCancelled,
+    ToolRegistryError,
     ToolResultRejected,
+    UnknownToolError,
 )
 from dev_health_ops.llm.agent.contracts import (
     AgentFinalAnswer,
@@ -251,12 +255,20 @@ async def test_faulting_tool_call_degrades_and_the_run_still_answers(
 ) -> None:
     """The headline control: one broken call, and the run still reaches an answer.
 
-    Mutation kill site: deleting the ``except Exception`` executor-fault
-    handler from ``orchestrator.run`` -- so the exception falls through to the
-    catch-all, which is exactly the pre-fix code -- fails this at the
-    terminal-state assertion with ``RunState.FAILED``/``internal_error``
-    against the expected ``RunState.COMPLETED``. That observed pair is the
-    CHAOS-3332 production symptom.
+    Mutation kill site (observed 2026-08-02): reverting ``orchestrator.run``
+    to the exact pre-fix shape -- no executor-fault handler, no
+    ``ToolRegistryError`` re-raise, no catch-all logging or counters -- and
+    replaying *this* TEAM run through the harness produces::
+
+        pre-fix   state=failed     code=internal_error  tools=0  log_records=0
+        post-fix  state=completed  code=None            tools=2  log_records=2
+
+    The pre-fix row is the CHAOS-3332 field signature exactly as the ticket
+    recorded it, and it fails this test at the terminal-state assertion.
+    (The second post-fix record is a pre-existing
+    ``frame_construction_failed`` from the harness's answer fixture; it
+    reproduces identically on a clean no-fault baseline and is unrelated to
+    this fix.)
     """
 
     before = _counter(
@@ -300,7 +312,7 @@ async def test_faulting_tool_call_degrades_and_the_run_still_answers(
     assert faults[0].levelno == logging.ERROR
     assert _extra(faults[0], "exception_type") == "ValueError"
     assert _extra(faults[0], "tool_id") == ToolID.DATA_HEALTH.value
-    assert _extra(faults[0], "run_id") == "run_01"
+    assert _extra(faults[0], "run_id") == result.run_id
     # logger.exception, not logger.error: without the traceback an operator
     # still cannot find the throw site, and that was half of CHAOS-3332.
     assert faults[0].exc_info is not None
@@ -355,74 +367,165 @@ async def test_a_complete_answer_is_still_rejected_after_a_fault(
     assert len(_records(caplog, "ask_dev.orchestrator.tool_executor_fault")) == 1
 
 
-@pytest.mark.asyncio
-async def test_degraded_tool_result_never_echoes_the_exception_text() -> None:
-    """The model is told the call failed, never *why* in server terms.
+class ClickHouseDsnLeak(RuntimeError):
+    """An executor fault whose *class name* is as sensitive as its message.
 
-    Exception strings routinely carry DSNs, SQL, and internal identifiers.
-    The degraded result is serialised straight into the next prompt, so its
-    ``safe_message`` must be fixed, server-authored text.
+    Named so the containment test below can prove neither the exception text
+    nor its type name escapes into anything the model or the user sees --
+    ``exception_type`` is deliberately carried on the log record and the
+    metric label, and nowhere else.
+    """
+
+
+@pytest.mark.asyncio
+async def test_no_exception_detail_reaches_any_model_or_user_visible_field(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Containment control: only the safe code crosses the boundary.
+
+    Exception strings routinely carry DSNs, SQL, and internal identifiers, and
+    the exception *class name* leaks implementation shape on its own. The
+    degraded tool result is serialised straight into the next prompt, and the
+    answer and frame are persisted and replayed to the user, so none of the
+    three may contain either.
+
+    The same two details must simultaneously be *present* in the operator
+    channel -- otherwise "nothing leaked" would also be satisfied by a fix
+    that threw the diagnosis away entirely, which is the CHAOS-3332 defect
+    wearing different clothes.
     """
 
     secret = "clickhouse dsn user=svc_askdev password=hunter2"
-    output = await run_preflight_orchestrator(
-        question=TEAM_QUESTION,
-        entities=TEAM_ENTITIES,
-        script_id="chaos3332-no-echo",
-        script=_script(ToolID.DATA_HEALTH, ToolID.STATUS_SNAPSHOT),
-        recorder_factory=ToolResultRecorder,
-        registry_factory=_registry_with_fault(ToolID.DATA_HEALTH, RuntimeError(secret)),
-    )
+    with caplog.at_level(logging.ERROR):
+        output = await run_preflight_orchestrator(
+            question=TEAM_QUESTION,
+            entities=TEAM_ENTITIES,
+            script_id="chaos3332-no-echo",
+            script=_script(ToolID.DATA_HEALTH, ToolID.STATUS_SNAPSHOT),
+            recorder_factory=ToolResultRecorder,
+            registry_factory=_registry_with_fault(
+                ToolID.DATA_HEALTH, ClickHouseDsnLeak(secret)
+            ),
+        )
 
     recorder = output.recorder
     assert isinstance(recorder, ToolResultRecorder)
-    serialized = recorder.executions[0].result.model_dump_json()
-    assert secret not in serialized
-    assert "hunter2" not in serialized
-    assert "svc_askdev" not in serialized
+    degraded = recorder.executions[0].result
+    assert degraded.error is not None
+    # The whole user/model-visible surface: the tool result handed to the
+    # provider, plus every persisted answer and frame the user can replay.
+    surfaces = {
+        "degraded tool result": degraded.model_dump_json(),
+        **{
+            f"persisted answer {index}": answer.model_dump_json()
+            for index, answer in enumerate(recorder.answers)
+        },
+        **{
+            f"persisted frame {index}": frame.model_dump_json()
+            for index, frame in enumerate(recorder.frames)
+        },
+    }
+    # An empty surface set would make every assertion below vacuous.
+    assert len(surfaces) > 1, "the run must have persisted an answer or a frame"
+    for name, payload in surfaces.items():
+        for forbidden in (secret, "hunter2", "svc_askdev", "ClickHouseDsnLeak"):
+            assert forbidden not in payload, f"{forbidden!r} leaked into {name}"
+
+    # Fixed, server-authored text -- not a formatted exception.
+    assert degraded.error.code == "source_unavailable"
+    assert degraded.error.safe_message == "The tool did not produce a result."
+
+    # ...and the detail really did reach the operator channel.
+    faults = _records(caplog, "ask_dev.orchestrator.tool_executor_fault")
+    assert len(faults) == 1
+    assert _extra(faults[0], "exception_type") == "ClickHouseDsnLeak"
+    assert faults[0].exc_info is not None
+    assert secret in "".join(traceback.format_exception(*faults[0].exc_info))
 
 
+#: Every registry-level exception class that is fatal *by design* (see
+#: ``_rejected_tool_execution``'s docstring), with the terminal each one must
+#: still reach. Enumerated rather than sampled: the new degrade path sits
+#: directly above these in the same try, so one of them silently becoming
+#: degradable is the exact regression this fix could introduce.
+FATAL_REGISTRY_FAULTS = [
+    pytest.param(
+        ToolExecutionCancelled("tool execution cancelled"),
+        RunState.CANCELLED,
+        "cancelled",
+        id="cancelled",
+    ),
+    pytest.param(
+        ToolResultRejected("tool result type does not match request"),
+        RunState.FAILED,
+        "tool_unavailable",
+        id="result-rejected",
+    ),
+    pytest.param(
+        UnknownToolError("tool is not registered"),
+        RunState.FAILED,
+        "tool_unavailable",
+        id="unknown-tool",
+    ),
+    pytest.param(
+        ToolRegistryError("registry failure"),
+        RunState.FAILED,
+        "tool_unavailable",
+        id="registry-error",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("fault", "expected_state", "expected_code"), FATAL_REGISTRY_FAULTS
+)
 @pytest.mark.asyncio
 async def test_registry_level_faults_stay_fatal(
+    fault: BaseException,
+    expected_state: RunState,
+    expected_code: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Negative control bounding the new handler's blast radius.
 
-    ``ToolResultRejected`` means the executor produced output the registry
-    could not trust -- a run-level defect that is fatal *by design* (see
-    ``_rejected_tool_execution``'s docstring). Were the new catch swallowing
-    ``ToolRegistryError`` subclasses too, a malformed tool result would be
-    laundered into an ordinary degraded call and the run would answer over
-    it. This test is why the handler names that class explicitly rather than
-    relying on clause order alone.
+    A malformed tool result, an unregistered tool, or a cancellation are
+    run-level conditions that must end the run, not one degraded call. Were
+    the new ``except Exception`` swallowing ``ToolRegistryError`` subclasses
+    too, every one of these would be laundered into an ordinary failed call
+    and the run would answer over it. This is why the handler names that class
+    explicitly and re-raises, rather than relying on clause order alone.
 
-    It stays fatal under its own pre-existing, *typed* terminal
-    (``tool_unavailable``, from ``run()``'s ``except ToolRegistryError``
-    clause) rather than the ``internal_error`` bucket -- which is why it never
-    needed the new catch-all logging and must not acquire it: an operator can
-    already tell these runs apart by error code alone.
+    Each stays fatal under its own pre-existing, *typed* terminal -- never the
+    ``internal_error`` bucket -- which is also why none of them needs the new
+    catch-all logging: an operator can already tell these runs apart by error
+    code.
+
+    Mutation kill site: deleting the ``except ToolRegistryError: raise``
+    clause fails every parameter here -- each run reaches ``COMPLETED`` with a
+    degraded call instead of its terminal.
     """
 
     with caplog.at_level(logging.ERROR):
         output = await run_preflight_orchestrator(
             question=TEAM_QUESTION,
             entities=TEAM_ENTITIES,
-            script_id="chaos3332-fatal",
+            script_id=f"chaos3332-fatal-{expected_code}",
             script=_script(ToolID.DATA_HEALTH, ToolID.STATUS_SNAPSHOT),
-            registry_factory=_registry_with_fault(
-                ToolID.DATA_HEALTH,
-                ToolResultRejected("tool result type does not match request"),
-            ),
+            recorder_factory=ToolResultRecorder,
+            registry_factory=_registry_with_fault(ToolID.DATA_HEALTH, fault),
         )
 
     result = output.result
-    assert result.state is RunState.FAILED
+    assert result.state is expected_state
     assert result.error is not None
-    assert result.error.code == "tool_unavailable"
+    assert result.error.code == expected_code
     assert result.answer is None
     # The run died on the first call: nothing was degraded, and the second
     # scripted tool never ran.
     assert result.tool_call_count == 0
+    recorder = output.recorder
+    assert isinstance(recorder, ToolResultRecorder)
+    assert recorder.executions == []
     assert _records(caplog, "ask_dev.orchestrator.tool_executor_fault") == []
     assert _records(caplog, "ask_dev.orchestrator.unhandled_run_fault") == []
 
@@ -468,9 +571,15 @@ async def test_catch_all_internal_error_is_never_silent(
     assert result.error.code == "internal_error"
     unhandled = _records(caplog, "ask_dev.orchestrator.unhandled_run_fault")
     assert len(unhandled) == 1
+    # Correlated to *this* run, not merely "a log line existed somewhere":
+    # an internal_error an operator cannot tie back to the run that produced
+    # it is the same dead end CHAOS-3332 was, one step removed.
+    assert _extra(unhandled[0], "run_id") == result.run_id
     assert _extra(unhandled[0], "exception_type") == "PersistenceBoom"
     assert unhandled[0].exc_info is not None
     assert _extra(unhandled[0], "terminal_written") is False
+    # The exception really is the one that terminated the run.
+    assert unhandled[0].exc_info[0] is PersistenceBoom
 
     after = _counter(
         ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL, exception_type="PersistenceBoom"

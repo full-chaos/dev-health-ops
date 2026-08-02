@@ -136,6 +136,9 @@ def test_team_status_live_defect_is_pinned_not_silently_folded_into_the_wiring_g
     assert "internal_error" in item.blocked_reason
     assert "proceeded_committed_subject" in item.blocked_reason
     assert "tool_call_count=0" in item.blocked_reason
+    # Routed by team-lead 2026-08-02: filed as CHAOS-3332. The manifest must
+    # point at the tracker, not just the raw repro.
+    assert "CHAOS-3332" in item.blocked_reason
     # Explicitly distinguishes itself from the stack-3 wiring gap rather
     # than silently reusing that shared reason string.
     assert "NOT the CORE_PLANS_BY_INTENT gap" in item.blocked_reason

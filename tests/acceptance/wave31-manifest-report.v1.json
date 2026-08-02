@@ -1,14 +1,14 @@
 {
   "schema_version": "wave_3_1_proof_gate_manifest.v1",
-  "item_count": 57,
+  "item_count": 58,
   "status_counts": {
     "blocked": 15,
     "deferred": 7,
-    "proven_e2e": 8,
+    "proven_e2e": 9,
     "proven_unit": 27
   },
   "category_counts": {
-    "attack": 5,
+    "attack": 6,
     "blocking_matrix": 29,
     "gate": 5,
     "mutation_proof": 12,
@@ -62,7 +62,7 @@
       "description": "Live end-to-end team-attribution proof, attempted per team-lead priority 2026-08-02 -- blocked by a newly discovered, 100%-reproducible live defect, not by the already-known stack-3 plan-wiring gap.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "ANY status question naming a real, resolvable team subject (tried all 3 fixture teams: core/growth/platform) returns a terminal ERROR/internal_error over the live HTTP/SSE API with ask_dev_wave_3_1 enabled -- 100% reproducible, zero flake. This is NOT the CORE_PLANS_BY_INTENT gap: TEAM is a supported_subject_kind on status.entity.v2 (a WIRED plan), so this is a distinct, previously-unknown defect in an intent CHAOS-3300 counted as working. Live diagnosis (dev_runs row for one repro, org 0a155cab-8833-42ac-a4ef-0d121725a7b0, run_id 36ef85a2-960a-4223-a699-333270b74c70): preflight_outcome=proceeded_committed_subject (team-name resolution and commit work correctly); plan_step_partition={\"failed\": [], \"skipped\": [\"evidence_expansion\", \"work_graph_expansion\"], \"completed\": [\"required_source_health\", \"status_snapshot\"]} (the plan-governed investigation itself completes cleanly, 0 failed steps); tool_call_count=0 (crashes before or during the legacy model-round loop / frame emission that follows a successful plan-governed investigation); safe_error_code= internal_error with zero corresponding stderr/stdout log line in the API container across three separate repro runs (a silent server-side failure -- the exception is caught and mapped to internal_error without being logged anywhere this lane could find). team_repo_ownership was empty for all 3 fixture teams in this run, so an unattributed-team edge case is a plausible trigger, but not confirmed without reading the frame-emission code path directly, which this lane did not do (team-lead condition: report and stop rather than debug an hour). Not yet filed as its own Linear ticket -- reported to team-lead for routing.",
+      "blocked_reason": "ANY status question naming a real, resolvable team subject (tried all 3 fixture teams: core/growth/platform) returns a terminal ERROR/internal_error over the live HTTP/SSE API with ask_dev_wave_3_1 enabled -- 100% reproducible, zero flake. This is NOT the CORE_PLANS_BY_INTENT gap: TEAM is a supported_subject_kind on status.entity.v2 (a WIRED plan), so this is a distinct, previously-unknown defect in an intent CHAOS-3300 counted as working. Live diagnosis (dev_runs row for one repro, org 0a155cab-8833-42ac-a4ef-0d121725a7b0, run_id 36ef85a2-960a-4223-a699-333270b74c70): preflight_outcome=proceeded_committed_subject (team-name resolution and commit work correctly); plan_step_partition={\"failed\": [], \"skipped\": [\"evidence_expansion\", \"work_graph_expansion\"], \"completed\": [\"required_source_health\", \"status_snapshot\"]} (the plan-governed investigation itself completes cleanly, 0 failed steps); tool_call_count=0 (crashes before or during the legacy model-round loop / frame emission that follows a successful plan-governed investigation); safe_error_code= internal_error with zero corresponding stderr/stdout log line in the API container across three separate repro runs (a silent server-side failure -- the exception is caught and mapped to internal_error without being logged anywhere this lane could find). team_repo_ownership was empty for all 3 fixture teams in this run, so an unattributed-team edge case is a plausible trigger, but not confirmed without reading the frame-emission code path directly, which this lane did not do (team-lead condition: report and stop rather than debug an hour). Filed as CHAOS-3332 (parent CHAOS-3293, Ask Dev project) with the full repro plus the silent-catch as a second fix requirement -- this item flips once CHAOS-3332 ships and a live re-run of smoke_ask_dev_exact_commit.py's pattern against a named team subject confirms it.",
       "test_nodeids": [],
       "requires_live_infra": false
     },
@@ -79,6 +79,19 @@
         "tests/api/dev/test_chaos_3296_relationship_closure.py::test_an_edge_unrelated_to_the_committed_subject_fails_closed"
       ],
       "requires_live_infra": false
+    },
+    {
+      "id": "attack.unrelated-evidence.e2e-live-validated",
+      "category": "attack",
+      "description": "Live end-to-end unrelated-evidence proof: a named repository question over the real Compose stack excludes a second, unrelated real repository's evidence.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_unrelated_evidence.py",
+        "tests/acceptance/test_ask_dev_unrelated_evidence_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true
     },
     {
       "id": "matrix.ambiguous-candidate-selection",

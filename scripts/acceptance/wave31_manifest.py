@@ -304,6 +304,39 @@ def _attacks() -> tuple[ManifestItem, ...]:
             ),
         ),
         ManifestItem(
+            id="attack.unrelated-evidence.e2e-live-validated",
+            category="attack",
+            description=(
+                "Live end-to-end unrelated-evidence proof: a named "
+                "repository question over the real Compose stack excludes a "
+                "second, unrelated real repository's evidence."
+            ),
+            status="proven_e2e",
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_unrelated_evidence.py",
+                "tests/acceptance/test_ask_dev_unrelated_evidence_smoke.py",
+            ),
+            requires_live_infra=True,
+            # Actually executed 2026-08-02 16:19-16:21 UTC against a
+            # standalone --repo-count 2 bring-up (meridian/web-app +
+            # meridian/core-api, confirmed via direct default.repos query
+            # rather than assumed naming). Negative control: asking about
+            # meridian/web-app by name -- scope.resolved committed it, and
+            # zero evidence entities from meridian/core-api appeared in the
+            # answer. Positive control is WEAKER than intended and disclosed
+            # as such in the script docstring: the scripted provider's
+            # search_evidence.v1 call hardcodes its query to
+            # "meridian/web-app" regardless of question, so the org-wide
+            # control can only prove "not scope-blocked," not "multi-repo
+            # evidence actually appears" -- confirmed live by inspecting the
+            # returned evidence entity ids (all meridian/web-app-*, zero
+            # meridian/core-api-*). The negative control's exclusion proof
+            # is unaffected by this limitation. This scenario is NOT wired
+            # into the shared run_ask_dev_compose.sh launcher (which seeds
+            # exactly one repository for the other proven_e2e scripts) --
+            # run standalone against its own --repo-count 2 bring-up.
+        ),
+        ManifestItem(
             id="attack.team-attribution",
             category="attack",
             description=(
@@ -364,8 +397,11 @@ def _attacks() -> tuple[ManifestItem, ...]:
                 "not confirmed without reading the frame-emission code "
                 "path directly, which this lane did not do (team-lead "
                 "condition: report and stop rather than debug an hour). "
-                "Not yet filed as its own Linear ticket -- reported to "
-                "team-lead for routing."
+                "Filed as CHAOS-3332 (parent CHAOS-3293, Ask Dev project) "
+                "with the full repro plus the silent-catch as a second fix "
+                "requirement -- this item flips once CHAOS-3332 ships and a "
+                "live re-run of smoke_ask_dev_exact_commit.py's pattern "
+                "against a named team subject confirms it."
             ),
         ),
         ManifestItem(

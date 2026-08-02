@@ -180,6 +180,21 @@ if _PROMETHEUS_AVAILABLE:
         ["code"],
     )
 
+    ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_tool_executor_fault_total",
+        "Ask Dev tool executors that raised outside their declared contract "
+        "(not a rejection, timeout, or cancellation) and were degraded to one "
+        "failed tool result instead of terminating the run",
+        ["tool_id", "exception_type"],
+    )
+
+    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_unhandled_run_fault_total",
+        "Ask Dev runs terminated by the orchestrator's catch-all internal_error "
+        "handler (every increment is an unclassified server defect)",
+        ["exception_type"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -196,6 +211,8 @@ else:
     INVESTMENT_MEMBERSHIP_SCOPE_STALE_TOTAL = _noop_counter()
     INVESTMENT_MEMBERSHIP_SCOPE_LAG_SECONDS = _noop_gauge()
     ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL = _noop_counter()
+    ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL = _noop_counter()
+    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

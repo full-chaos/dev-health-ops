@@ -411,6 +411,20 @@ def _assert_structurally_real_grammar(round_2: dict[str, Any]) -> None:
     no real structure at all. Compare the ``kind`` property -- the field
     every decision variant depends on -- against the REAL generated schema
     field-for-field, not just its presence.
+
+    CHAOS-3285 round 6 (Codex MEDIUM): comparing only ``properties`` (round
+    5's fix) is STILL insufficient -- deleting the schema's top-level
+    ``$defs`` (leaving a dangling ``$ref`` inside a ``properties`` value
+    that points at a now-missing definition, e.g. ``AnswerStatus``) never
+    touches ``properties`` itself, so a properties-only comparison cannot
+    see it; neither can a mutation to the top-level ``type`` or
+    ``additionalProperties``, both siblings of ``properties``, not inside
+    it. Compare the COMPLETE schema tree -- every key ``_decision_response_
+    schema`` actually returns -- against the real one, not a sub-dict of
+    it. Per the ratified calibration-completeness threat-model policy, this
+    is the LAST round of narrowing this comparison: from field-presence, to
+    one field, to a sub-tree, to the complete tree everything else was
+    compared against.
     """
 
     response_format = round_2.get("response_format")
@@ -431,13 +445,14 @@ def _assert_structurally_real_grammar(round_2: dict[str, Any]) -> None:
         "-- padding does not substitute for the actual schema shape"
     )
 
-    real_properties = _real_decision_schema()["properties"]
-    assert properties == real_properties, (
-        "grammar's full properties tree does not match the real generated "
-        "schema -- comparing only 'kind' (round 5) is insufficient: every "
-        "OTHER property could still be retyped to {'type': 'null'} with "
-        "padding, and 'kind' alone would never catch it (CHAOS-3285 round "
-        "6, Codex MEDIUM)"
+    real_schema = _real_decision_schema()
+    assert schema == real_schema, (
+        "grammar's COMPLETE schema tree does not match the real generated "
+        "schema -- comparing only 'properties' (round 6) or only 'kind' "
+        "(round 5) is insufficient: deleting $defs (dangling $ref), or "
+        "changing the top-level type/additionalProperties, touches "
+        "neither and would never be caught by a sub-tree comparison "
+        "(CHAOS-3285 round 6, Codex MEDIUM)"
     )
 
 
@@ -854,8 +869,60 @@ async def test_calibration_fails_loudly_on_a_kind_preserved_all_null_schema() ->
         }
     }
 
-    with pytest.raises(AssertionError, match="full properties tree does not match"):
+    with pytest.raises(AssertionError, match="COMPLETE schema tree does not match"):
         _calibrate_noncompliant_rate(round_1, kind_preserved_schema, cap=4096)
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_when_defs_is_deleted() -> None:
+    """CHAOS-3285 round 6 (Codex MEDIUM), codex's exact repro: deleting the
+    schema's top-level $defs leaves a DANGLING $ref inside properties
+    (properties.value.anyOf[0].properties.status.$ref points at
+    "#/$defs/AnswerStatus", which no longer exists) -- properties itself
+    is completely untouched, so a properties-only comparison (this
+    round's earlier state) would never catch it. The full schema-tree
+    comparison must."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    real_schema = round_2["response_format"]["json_schema"]["schema"]
+    assert "$defs" in real_schema, "sanity: the real schema must have $defs to delete"
+    mutated_schema = {
+        key: value for key, value in real_schema.items() if key != "$defs"
+    }
+    defs_deleted = dict(round_2)
+    defs_deleted["response_format"] = {
+        "json_schema": {"strict": True, "schema": mutated_schema}
+    }
+
+    with pytest.raises(AssertionError, match="COMPLETE schema tree does not match"):
+        _calibrate_noncompliant_rate(round_1, defs_deleted, cap=4096)
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_when_answerstatus_definition_is_corrupted() -> (
+    None
+):
+    """Same guard: $defs.AnswerStatus corrupted (its real enum values
+    stripped) while properties itself is completely untouched -- also
+    invisible to a properties-only comparison, since the corruption lives
+    entirely in the sibling $defs key."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    real_schema = round_2["response_format"]["json_schema"]["schema"]
+    real_defs = real_schema.get("$defs")
+    assert isinstance(real_defs, dict) and "AnswerStatus" in real_defs, (
+        "sanity: the real schema must define AnswerStatus to corrupt"
+    )
+    corrupted_defs = dict(real_defs)
+    corrupted_defs["AnswerStatus"] = {"type": "string"}  # real enum values stripped
+    mutated_schema = {**real_schema, "$defs": corrupted_defs}
+    answerstatus_corrupted = dict(round_2)
+    answerstatus_corrupted["response_format"] = {
+        "json_schema": {"strict": True, "schema": mutated_schema}
+    }
+
+    with pytest.raises(AssertionError, match="COMPLETE schema tree does not match"):
+        _calibrate_noncompliant_rate(round_1, answerstatus_corrupted, cap=4096)
 
 
 @pytest.mark.asyncio

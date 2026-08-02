@@ -1,15 +1,15 @@
 {
   "schema_version": "wave_3_1_proof_gate_manifest.v1",
-  "item_count": 53,
+  "item_count": 54,
   "status_counts": {
     "blocked": 14,
     "deferred": 7,
-    "proven_e2e": 5,
+    "proven_e2e": 6,
     "proven_unit": 27
   },
   "category_counts": {
     "attack": 4,
-    "blocking_matrix": 27,
+    "blocking_matrix": 28,
     "gate": 5,
     "mutation_proof": 12,
     "original_defect_reproduction": 4,
@@ -97,6 +97,19 @@
         "tests/api/dev/test_status_change_service.py::test_change_summary_is_reproducible_and_tenant_scoped"
       ],
       "requires_live_infra": false
+    },
+    {
+      "id": "matrix.data-trust-organization-wide",
+      "category": "blocking_matrix",
+      "description": "Organization-wide data-trust question (freshness/coverage/configuration), safely answered.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_core_intents.py",
+        "tests/acceptance/test_ask_dev_core_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true
     },
     {
       "id": "matrix.exact-project-complete",
@@ -325,10 +338,11 @@
     {
       "id": "matrix.remaining-work-exact-project",
       "category": "blocking_matrix",
-      "description": "Remaining work for an exact project.",
+      "description": "Remaining work in scope (organization-wide today; an exact named project awaits a real fixture-resolvable project identity, not yet built).",
       "status": "proven_e2e",
       "evidence": [
-        "tests/acceptance/ask-dev-oracle.v1.json"
+        "scripts/acceptance/smoke_ask_dev_core_intents.py",
+        "tests/acceptance/test_ask_dev_core_intents_smoke.py"
       ],
       "blocked_reason": null,
       "test_nodeids": [],

@@ -427,10 +427,43 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
         ManifestItem(
             id="matrix.remaining-work-exact-project",
             category="blocking_matrix",
-            description="Remaining work for an exact project.",
+            description=(
+                "Remaining work in scope (organization-wide today; an exact "
+                "named project awaits a real fixture-resolvable project "
+                "identity, not yet built)."
+            ),
             status="proven_e2e",
-            evidence=("tests/acceptance/ask-dev-oracle.v1.json",),
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_core_intents.py",
+                "tests/acceptance/test_ask_dev_core_intents_smoke.py",
+            ),
             requires_live_infra=True,
+            # Actually executed by this lane 2026-08-02 15:42 UTC (second
+            # live compose run, same session): "What work remains in this
+            # scope right now?" (question_class=remaining_work,
+            # organization-wide) returned a non-error, non-empty,
+            # answer-terminated SSE stream. Point-in-time evidence, not
+            # auto-reverified (execute_manifest cannot run docker compose).
+            # Previously miscited ask-dev-oracle.v1.json, which is actually
+            # the observed_change/entity_status scenario -- fixed here.
+        ),
+        ManifestItem(
+            id="matrix.data-trust-organization-wide",
+            category="blocking_matrix",
+            description=(
+                "Organization-wide data-trust question (freshness/coverage/"
+                "configuration), safely answered."
+            ),
+            status="proven_e2e",
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_core_intents.py",
+                "tests/acceptance/test_ask_dev_core_intents_smoke.py",
+            ),
+            requires_live_infra=True,
+            # Actually executed alongside matrix.remaining-work-exact-project
+            # in the same live run: "Can we trust the data in this scope, or
+            # is anything stale or unconfigured?" returned a non-error,
+            # non-empty, answer-terminated SSE stream.
         ),
         ManifestItem(
             id="matrix.observed-change-comparison-windows",

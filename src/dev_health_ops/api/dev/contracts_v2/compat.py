@@ -88,6 +88,7 @@ from dev_health_ops.api.dev.contracts import (
 from .answer import DevAnswerV2
 from .base import EntityKind, FactDisclosure, OpaqueID, PublicOutcome
 from .frame import DevFrameVersions
+from .subject import DevResolutionCandidate
 from .validators import CANONICAL_NO_ANSWER_COPY, CANONICAL_NO_ANSWER_REMEDIATION
 
 __all__ = ["project_answer_v2_to_v1"]
@@ -164,6 +165,46 @@ _KIND_TO_ENTITY_TYPE: dict[EntityKind, EntityType] = {
     EntityKind.ISSUE: EntityType.ISSUE,
     EntityKind.PULL_REQUEST: EntityType.PULL_REQUEST,
 }
+
+#: Full ``EntityKind`` -> v1 ``EntityType`` mapping for a clarification
+#: candidate (CHAOS-3325), unlike ``_KIND_TO_ENTITY_TYPE`` above: that map
+#: intentionally omits ``TEAM`` because it backs ``_build_resolved_scope``,
+#: which never reaches a team kind at all (the team-subject guard in
+#: ``project_answer_v2_to_v1`` intercepts it first — v1 has no team
+#: *direct-scope* representation). A clarification candidate is never a
+#: resolved scope, only a named option in a list, and v1's own
+#: ``EntityType`` already has a ``TEAM`` member (``contracts.py``) — so a
+#: team candidate has a faithful v1 shape and this map is total over
+#: ``EntityKind`` rather than reusing the scope-building map's narrower one.
+_CANDIDATE_ENTITY_TYPE: dict[EntityKind, EntityType] = {
+    **_KIND_TO_ENTITY_TYPE,
+    EntityKind.TEAM: EntityType.TEAM,
+}
+
+
+def _project_clarification_candidate(
+    candidate: DevResolutionCandidate,
+) -> DevDisambiguationCandidate:
+    """One real, authorized ledger candidate -> its v1 wire shape.
+
+    Never invented: ``entity_ref``/``reason`` are carried straight across
+    from the ``DevResolutionCandidate`` the resolution ledger recorded (see
+    ``subject_preflight.SubjectPreflight._entry``) — the same object
+    ``build_preflight_answer`` places on ``frame.clarification_candidates``.
+    """
+
+    entity = candidate.entity_ref
+    return DevDisambiguationCandidate(
+        entity_ref=DevEntityRef(
+            entity_type=_CANDIDATE_ENTITY_TYPE[entity.entity_kind],
+            entity_id=entity.entity_id,
+            display_label=entity.display_label,
+            repository_id=entity.repository_id,
+        ),
+        repository_id=entity.repository_id,
+        reason=candidate.reason,
+    )
+
 
 _ERROR_OUTCOME_CODES: dict[PublicOutcome, tuple[str, bool]] = {
     PublicOutcome.NOT_FOUND: ("scope_not_found", False),
@@ -330,17 +371,45 @@ def _project_answered(
 def _project_needs_clarification(
     answer: DevAnswerV2, organization_id: OpaqueID, time_range: DevTimeRange
 ) -> DevAnswer:
+    """Project a ``needs_clarification`` v2 answer to a v1 ``DevAnswer``.
+
+    CHAOS-3325: candidates are now projected from ``frame.clarification_
+    candidates`` — the resolution ledger's own real, authorized entries — and
+    never fabricated. Three cases, in priority order:
+
+    1. ``frame.clarification_candidates`` is non-empty (the preflight
+       ambiguous-mention case): project each real candidate and report
+       ``ScopeResolutionOutcome.AMBIGUOUS``, matching v1's own invariant that
+       an ``AMBIGUOUS`` resolution carries candidates
+       (``DevScopeResolution.validate_outcome_payload``).
+    2. ``frame.subject_ref`` is set instead (pre-CHAOS-3325 behavior,
+       unchanged): a committed subject that itself needs narrowing on
+       something else — never set by the preflight ambiguity path, which
+       commits nothing (see ``build_preflight_answer``) — so this remains a
+       single derived candidate from the one real, committed entity.
+    3. Neither is present (e.g. the question could not be interpreted at all,
+       before any mention was ever resolved — no real candidate list exists
+       to report). The old code invented a placeholder entity
+       (``entity_id="clarification_required"``) here to satisfy v1's
+       ``AMBIGUOUS``-requires-candidates invariant; this reports
+       ``ScopeResolutionOutcome.UNRESOLVED`` instead, which carries no
+       candidates by the same invariant's other half
+       (``candidates are allowed only for ambiguous outcomes``) — an honest
+       "not resolved, nothing to offer" rather than a fabricated option.
+    """
+
     frame = answer.frame
     versions = _require_versions(frame.versions, answer.public_outcome)
     resolved = _build_resolved_scope(answer, organization_id, time_range)
-    resolution = DevScopeResolution(
-        schema_version="dev_scope_resolution.v1",
-        requested_scope=resolved,
-        resolved_scope=None,
-        outcome=ScopeResolutionOutcome.AMBIGUOUS,
-        authorized_repository_ids=[],
-        authorized_entity_ids=[],
-        candidates=[
+    if frame.clarification_candidates:
+        outcome = ScopeResolutionOutcome.AMBIGUOUS
+        candidates = [
+            _project_clarification_candidate(candidate)
+            for candidate in frame.clarification_candidates
+        ]
+    elif frame.subject_ref is not None:
+        outcome = ScopeResolutionOutcome.AMBIGUOUS
+        candidates = [
             DevDisambiguationCandidate(
                 entity_ref=DevEntityRef(
                     entity_type=_KIND_TO_ENTITY_TYPE.get(
@@ -353,17 +422,17 @@ def _project_needs_clarification(
                 reason="Clarification requested before continuing.",
             )
         ]
-        if frame.subject_ref is not None
-        else [
-            DevDisambiguationCandidate(
-                entity_ref=DevEntityRef(
-                    entity_type=EntityType.REPOSITORY,
-                    entity_id="clarification_required",
-                    display_label="Clarification required",
-                ),
-                reason="The question requires clarification before it can be answered.",
-            )
-        ],
+    else:
+        outcome = ScopeResolutionOutcome.UNRESOLVED
+        candidates = []
+    resolution = DevScopeResolution(
+        schema_version="dev_scope_resolution.v1",
+        requested_scope=resolved,
+        resolved_scope=None,
+        outcome=outcome,
+        authorized_repository_ids=[],
+        authorized_entity_ids=[],
+        candidates=candidates,
         fallbacks=[],
         warnings=[],
         resolved_at=answer.generated_at,

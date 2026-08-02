@@ -446,6 +446,13 @@ class SubjectPreflight:
                         answer_id=answer_id,
                         conversation_id=conversation_id,
                         generated_at=generated_at,
+                        # CHAOS-3325: the ledger entry's own candidates --
+                        # populated only for AMBIGUOUS_CANDIDATES
+                        # (DevResolutionEntry.validate_outcome_payload),
+                        # empty for the other three UNRESOLVED_OUTCOMES, so
+                        # this is always the correct value to pass through
+                        # regardless of which one fired.
+                        clarification_candidates=entry.candidates,
                     )
 
         if unresolved_untyped:
@@ -925,6 +932,7 @@ class SubjectPreflight:
         generated_at: datetime,
         clarification_key: str = "ambiguous",
         subject_set: DevSubjectSet | None = None,
+        clarification_candidates: tuple[DevResolutionCandidate, ...] = (),
     ) -> SubjectPreflightResult:
         answer = build_preflight_answer(
             outcome=outcome,
@@ -935,6 +943,7 @@ class SubjectPreflight:
             conversation_id=conversation_id,
             generated_at=generated_at,
             clarification_key=clarification_key,
+            clarification_candidates=clarification_candidates,
         )
         return SubjectPreflightResult(
             decision=PreflightDecision.TERMINATE,

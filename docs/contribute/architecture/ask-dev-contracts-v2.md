@@ -157,6 +157,73 @@ declaration) order via `_disclosures_from_claim_flags`, so a v1 claim
 carrying `stale`/`uncertain`/`conflicting`/`untrusted_source` is no longer
 silently dropped when embedded into a frame.
 
+## Clarification candidates
+
+`DevAnswerFrame.clarification_candidates` (CHAOS-3325) is a typed block of
+real, authorized entities for a `needs_clarification` outcome, reusing
+`dev_resolution_ledger.v1`'s own `DevResolutionCandidate` shape
+(`entity_ref` + `reason`) rather than declaring a second one: it carries
+exactly what the resolution ledger already recorded for an
+`ambiguous_candidates` mention, never a re-derived or invented copy.
+`subject_preflight.SubjectPreflight._terminate` passes the terminating
+ledger entry's own `candidates` tuple straight through
+`build_preflight_answer` onto the frame -- empty for the other three
+`UNRESOLVED_OUTCOMES` (`DevResolutionEntry.validate_outcome_payload` already
+guarantees those carry none) and populated only for
+`ambiguous_candidates`.
+
+Classification is split across two mechanisms because
+`needs_clarification` is deliberately **not** one of `NO_ANSWER_OUTCOMES`
+(see "No-content outcomes are rebuilt from an allowlist" below):
+
+- `no_answer_policy.NO_ANSWER_FRAME_FIELD_POLICY` classifies the field
+  `ABSENT`, which governs the five true no-answer outcomes
+  (`not_found | temporarily_unavailable | unsupported | denied | failed`).
+- `validators.validate_outcome_consistency` carries a dedicated clause
+  forbidding it on `answered`/`answered_with_gaps` -- the two outcomes the
+  no-answer allowlist does not reach.
+
+Between the two, every outcome but `needs_clarification` is forced empty;
+`needs_clarification` itself is unconstrained -- it may carry zero
+candidates (e.g. the question could not be interpreted at all, before any
+mention was ever resolved) or several, and zero is a legal terminal payload
+in its own right, never backfilled with an invented candidate.
+`DevAnswerFrame.validate_frame_semantics` additionally requires every
+candidate's `entity_ref.entity_id` to be unique -- two candidates naming the
+same authorized entity are not two distinct options. There is no
+"unauthorized" flag on the wire shape: authorization is enforced entirely by
+construction (`subject_preflight._entity_ref_v2` only ever builds a
+candidate from an `AuthorizedEntity` the catalog itself returned), and the
+one wire-level rejection available for a malformed candidate is the closed
+`EntityKind` vocabulary on `entity_ref.entity_kind`.
+
+`contracts_v2/compat.py`'s `_project_needs_clarification` projects the block
+to v1 in priority order: real `clarification_candidates` (reported
+`ScopeResolutionOutcome.AMBIGUOUS`, matching v1's own "ambiguous requires
+candidates" invariant), else a single candidate derived from
+`frame.subject_ref` (pre-CHAOS-3325 behavior, unchanged -- never set by the
+preflight ambiguity path, which commits nothing), else
+`ScopeResolutionOutcome.UNRESOLVED` with no candidates at all. That third
+case replaces what the pre-3325 projector did instead: fabricate a single
+placeholder candidate (`entity_id="clarification_required"`,
+`display_label="Clarification required"`) to satisfy v1's
+AMBIGUOUS-requires-candidates invariant. `UNRESOLVED` carries no candidates
+by the same invariant's other half (`candidates are allowed only for
+ambiguous outcomes`), so the zero-candidate case is now represented
+honestly -- "not resolved, nothing to offer" -- rather than inventing an
+option that was never real.
+
+On the live preflight path this block does not yet reach a v1 client:
+`orchestrator.run` and the router's replay-reconstruction path both call
+`preflight_outcomes.project_preflight_error` for a preflight ambiguity,
+which returns the fixed `scope_ambiguous` `DevError` (CHAOS-3292's ratified
+design) and never carries candidates, whatever the frame holds. The
+`_project_needs_clarification` path above is exercised by any *other*
+caller that runs a `needs_clarification` `dev_answer.v2` through the general
+`project_answer_v2_to_v1` projector. Actually serving the candidate block to
+a user still needs the v2 rendering surface (CHAOS-3298) and persisted
+clarification state (CHAOS-3299).
+
 ## Public outcome vocabulary and the five semantic validators
 
 `dev_answer.v2`'s `public_outcome` is exactly: `answered`,

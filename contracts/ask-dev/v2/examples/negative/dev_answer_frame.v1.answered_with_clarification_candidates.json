@@ -1,5 +1,16 @@
 {
-  "clarification_candidates": [],
+  "clarification_candidates": [
+    {
+      "entity_ref": {
+        "display_label": "full-chaos/nightfall-public",
+        "entity_id": "repo_nightfall_public",
+        "entity_kind": "repository",
+        "repository_id": null,
+        "team_id": null
+      },
+      "reason": "Multiple authorized entities match this name."
+    }
+  ],
   "comparisons": [],
   "completion": {
     "calculable": true,
@@ -18,7 +29,7 @@
     "unavailable_required_sources": []
   },
   "deficiency_refs": [],
-  "direct_answer": "Scope resolution failed with scope_forbidden for this repository.",
+  "direct_answer": "Repository dev-health is on track; one required child issue remains open.",
   "evidence": [
     {
       "citation_text": "Repository status observed directly.",

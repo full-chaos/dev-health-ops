@@ -47,7 +47,7 @@ from .base import (
 from .embedded import DevCoverageV2, DevEvidenceRefV2, DevMetricRefV2
 from .plan import PlanRegistryID
 from .result import DevRelationshipPath, DevSourceObservation
-from .subject import DevEntityRefV2
+from .subject import DevEntityRefV2, DevResolutionCandidate
 
 __all__ = [
     "DevAnswerFact",
@@ -188,6 +188,21 @@ class DevAnswerFrame(ContractModelV2):
     public_outcome: PublicOutcome
     subject_ref: DevEntityRefV2 | None = None
     subject_set_ref: OpaqueID | None = None
+    #: CHAOS-3325: the real, authorized candidates a preflight ambiguity
+    #: resolved -- the same ``DevResolutionCandidate`` shape the resolution
+    #: ledger already records per mention (``subject.py``), reused here
+    #: rather than re-declared, so the frame carries exactly what preflight
+    #: resolution actually found and nothing a builder invented. Populated
+    #: only for ``needs_clarification`` (``validate_outcome_consistency``
+    #: forbids it on ``answered``/``answered_with_gaps``; the no-answer
+    #: allowlist projection forces it empty on every no-content outcome --
+    #: see ``no_answer_policy.NO_ANSWER_FRAME_FIELD_POLICY``). Empty is a
+    #: legal ``needs_clarification`` payload in its own right (e.g. the
+    #: question could not be interpreted at all, before any mention was ever
+    #: resolved) -- it is never backfilled with an invented candidate.
+    clarification_candidates: tuple[DevResolutionCandidate, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
     direct_answer: LongText
     completion: DevCompletionBlock | None = None
     readiness: DevReadinessBlock | None = None
@@ -233,6 +248,12 @@ class DevAnswerFrame(ContractModelV2):
         relationship_ids = [path.path_id for path in self.relationship_paths]
         if len(relationship_ids) != len(set(relationship_ids)):
             raise ValueError("relationship path IDs must be unique")
+        candidate_ids = [
+            candidate.entity_ref.entity_id
+            for candidate in self.clarification_candidates
+        ]
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise ValueError("clarification candidate entity IDs must be unique")
         # Structural closure first: the five acceptance-criteria semantic
         # validators below assume a well-formed frame (unique, resolvable
         # fact/section/evidence IDs).

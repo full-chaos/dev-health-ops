@@ -1152,6 +1152,125 @@ async def test_native_mixed_issue_pr_membership_truncation_never_fabricates_a_re
 
 
 @pytest.mark.asyncio
+async def test_native_high_churn_ci_never_hides_another_prs_failing_latest_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3297 s2 round 5 (codex HIGH) exact repro: _CI_SQL orders by
+    ``observed_at DESC`` (a global, per-EVENT bound) and only collapses to
+    latest-run-per-PR AFTER the fetch. PR A has 1,000 newer CI runs (all
+    passing); PR B has a single, much OLDER, FAILING latest run. The global
+    bound admits every PR A run and none of PR B's -- PR B's run is never
+    fetched at all, so the latest-run collapse has nothing to recover it
+    from, and neither PR A's nor PR B's post-collapse row count ever
+    reaches the 1,000-item bound (there's exactly one collapsed row per
+    PR). Before this fix the service reported a clean READY/COMPLETE
+    covering only PR A; the fix must detect the truncation via the
+    sentinel and never present that as trustworthy.
+    """
+    ci_runs_for_pr_a = [
+        {
+            "repository_id": "repo-a",
+            "run_id": f"run-a-{index:04d}",
+            "pr_number": 1,
+            "entity_id": f"repo-a#ci#run-a-{index:04d}",
+            "display_label": "CI",
+            "conclusion": "success",
+            "observed_at": NOW - timedelta(minutes=index),
+            "last_synced": NOW,
+        }
+        for index in range(1_000)
+    ]
+    # PR B's only run: far older than every PR A run, and failing.
+    ci_run_for_pr_b = {
+        "repository_id": "repo-a",
+        "run_id": "run-b-old",
+        "pr_number": 2,
+        "entity_id": "repo-a#ci#run-b-old",
+        "display_label": "CI",
+        "conclusion": "failure",
+        "observed_at": NOW - timedelta(days=365),
+        "last_synced": NOW,
+    }
+    all_ci_rows = ci_runs_for_pr_a + [ci_run_for_pr_b]
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM work_items FINAL" in sql and "parent_id" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "work_item_id": "issue-1",
+                    "title": "Issue 1",
+                    "status": "done",
+                    "parent_id": "",
+                    "updated_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM git_pull_requests AS pr" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "number": number,
+                    "entity_id": f"repo-a#pr{number}",
+                    "display_label": f"PR {number}",
+                    "state": "merged",
+                    "review_state": "APPROVED",
+                    "changes_requested": 0,
+                    "merged": 1,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+                for number in (1, 2)
+            ]
+        if "FROM ci_pipeline_runs" in sql:
+            return all_ci_rows[: int(params["limit"])]
+        if "FROM ci_acceptance_checks" in sql:
+            # Only PR A's latest run has a matching required-check
+            # classification -- PR B's run is never fetched in the first
+            # place, so it can never have one either; that's the point.
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-a-0000",
+                    "pr_number": 1,
+                    "entity_id": "repo-a#ci#run-a-0000#required",
+                    "display_label": "required",
+                    "requirement": "required",
+                    "conclusion": "success",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM deployments" in sql:
+            # pr_number=1 so the (repository_id, pr_number) pair filter
+            # admits it as PR A's release evidence -- isolates the
+            # assertions below to the CI truncation mechanism, not an
+            # unrelated missing-release-evidence confound.
+            return [_deployment_row(pr_number=1)]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(), max_items=100),
+    )
+
+    # Regression: the pre-fix code reported READY/COMPLETE covering only
+    # PR A's (passing) latest run, PR B's failing run never having been
+    # fetched at all.
+    assert result.actual.state is not CompletionState.READY
+    assert result.state is not StatusResultState.COMPLETE
+    assert "assessment_source_limit_reached" in result.actual.reason_codes
+
+
+@pytest.mark.asyncio
 async def test_native_change_reader_returns_only_canonical_observed_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

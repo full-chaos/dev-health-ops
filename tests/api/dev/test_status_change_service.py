@@ -31,7 +31,9 @@ from dev_health_ops.api.dev.status_change_service import (
     CIFact,
     CompletionState,
     DeploymentFact,
+    IncidentFact,
     ObservedChange,
+    PullRequestFact,
     RawChangeSummary,
     RawStatusSnapshot,
     SourceReference,
@@ -604,6 +606,165 @@ async def test_membership_source_truncation_signal_also_withholds_the_denominato
     assert "assessment_source_limit_reached" in result.actual.reason_codes
     assert result.actual.required_child_total is None
     assert result.actual.required_child_complete is None
+
+
+def _many_blockers(n: int) -> tuple[StatusFact, ...]:
+    return tuple(_fact(f"blocker-{i:04d}", "resolved") for i in range(n))
+
+
+def _many_pull_requests(n: int) -> tuple[PullRequestFact, ...]:
+    return tuple(
+        PullRequestFact(
+            entity_id=f"pr-{i:04d}",
+            display_label=f"PR {i}",
+            state="merged",
+            review_state="APPROVED",
+            changes_requested=0,
+            merged=True,
+            observed_at=NOW,
+            source_ref_id="source:work-items",
+            evidence_ref_ids=(f"ev-pr-{i:04d}",),
+            required=False,
+        )
+        for i in range(n)
+    )
+
+
+def _many_ci(n: int) -> tuple[CIFact, ...]:
+    return tuple(
+        CIFact(
+            entity_id=f"ci-{i:04d}",
+            display_label=f"CI {i}",
+            conclusion="success",
+            required=False,
+            skipped_required_work=None,
+            observed_at=NOW,
+            source_ref_id="source:work-items",
+            evidence_ref_ids=(f"ev-ci-{i:04d}",),
+        )
+        for i in range(n)
+    )
+
+
+def _many_deployments(n: int) -> tuple[DeploymentFact, ...]:
+    return tuple(
+        DeploymentFact(
+            entity_id=f"deployment-{i:04d}",
+            display_label=f"Deployment {i}",
+            status="success",
+            environment="production",
+            required=True,
+            observed_at=NOW,
+            source_ref_id="source:work-items",
+            evidence_ref_ids=(f"ev-deployment-{i:04d}",),
+        )
+        for i in range(n)
+    )
+
+
+def _many_incidents(n: int) -> tuple[IncidentFact, ...]:
+    return tuple(
+        IncidentFact(
+            entity_id=f"incident-{i:04d}",
+            display_label=f"Incident {i}",
+            status="resolved",
+            active=False,
+            blocking=False,
+            observed_at=NOW,
+            source_ref_id="source:work-items",
+            evidence_ref_ids=(f"ev-incident-{i:04d}",),
+        )
+        for i in range(n)
+    )
+
+
+def _blockers_snapshot(n: int, *, truncated: bool) -> RawStatusSnapshot:
+    return RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        blockers=_many_blockers(n),
+        deployments=(_deployment(),),
+        source_refs=(_source_ref(),),
+        blockers_source_truncated=truncated,
+    )
+
+
+def _pull_requests_snapshot(n: int, *, truncated: bool) -> RawStatusSnapshot:
+    return RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        pull_requests=_many_pull_requests(n),
+        deployments=(_deployment(),),
+        source_refs=(_source_ref(),),
+        pull_requests_source_truncated=truncated,
+    )
+
+
+def _ci_snapshot(n: int, *, truncated: bool) -> RawStatusSnapshot:
+    return RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        ci=_many_ci(n),
+        deployments=(_deployment(),),
+        source_refs=(_source_ref(),),
+        ci_source_truncated=truncated,
+    )
+
+
+def _deployments_snapshot(n: int, *, truncated: bool) -> RawStatusSnapshot:
+    return RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        deployments=_many_deployments(n),
+        source_refs=(_source_ref(),),
+        deployments_source_truncated=truncated,
+    )
+
+
+def _incidents_snapshot(n: int, *, truncated: bool) -> RawStatusSnapshot:
+    return RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        incidents=_many_incidents(n),
+        deployments=(_deployment(),),
+        source_refs=(_source_ref(),),
+        incidents_source_truncated=truncated,
+    )
+
+
+_CATEGORY_SNAPSHOT_BUILDERS = {
+    "blockers_source_truncated": _blockers_snapshot,
+    "pull_requests_source_truncated": _pull_requests_snapshot,
+    "ci_source_truncated": _ci_snapshot,
+    "deployments_source_truncated": _deployments_snapshot,
+    "incidents_source_truncated": _incidents_snapshot,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag_name", sorted(_CATEGORY_SNAPSHOT_BUILDERS))
+async def test_category_truncation_is_explicit_provenance_only_not_a_length_count(
+    flag_name: str,
+) -> None:
+    """CHAOS-3297 s2 round 5 (codex MEDIUM): finish what round 3 started
+    for every remaining assessment category (blockers, pull_requests, ci,
+    deployments, incidents) -- ``assessment_source_limit_reached`` comes
+    ONLY from that category's own explicit truncation flag now, never from
+    ``len(category) >= MAX_STATUS_ASSESSMENT_ITEMS``. Parametrized: exactly
+    MAX_STATUS_ASSESSMENT_ITEMS (1,000) legitimate items with no signal
+    must NOT report truncation (the removed equality heuristic's false
+    positive); a small result set with the explicit flag set MUST.
+    """
+    build = _CATEGORY_SNAPSHOT_BUILDERS[flag_name]
+
+    result_at_cap = await StatusChangeService(
+        Source(build(1_000, truncated=False))
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+    assert "assessment_source_limit_reached" not in result_at_cap.actual.reason_codes
+
+    result_truncated = await StatusChangeService(
+        Source(build(1, truncated=True))
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+    assert "assessment_source_limit_reached" in result_truncated.actual.reason_codes
 
 
 def test_rejects_naive_as_of_and_out_of_bounds() -> None:

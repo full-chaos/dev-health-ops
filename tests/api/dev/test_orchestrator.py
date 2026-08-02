@@ -2278,6 +2278,98 @@ async def test_second_false_complete_claim_still_fails_closed() -> None:
     assert result.error.code == "answer_validation_failed"
 
 
+@pytest.mark.asyncio
+async def test_repair_exhausted_completion_ratio_claim_surfaces_truncation_detail() -> (
+    None
+):
+    """CHAOS-3297 s2 round 5 (codex MEDIUM): rejecting a fabricated
+    completion ratio must not leave the user with only a generic
+    "validation failed" if the one bounded repair pass also fails -- the
+    FAILED terminal's DevError.safe_message must still surface the reason
+    codes and how many required items were actually displayed, end to
+    end through the real orchestrator run loop (not just the validator
+    function in isolation).
+    """
+    script_id = "repair-exhausted-completion-ratio"
+
+    async def status_with_withheld_completion(
+        _context: Any, request: DevToolRequest
+    ) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": {
+                    "state": "indeterminate",
+                    "rule_id": "actual-completion",
+                    "rule_version": "actual-completion.v4",
+                    "reason_codes": ["assessment_source_limit_reached"],
+                    "required_children": [
+                        {
+                            "fact_id": "issue:child-1",
+                            "text": "Child 1",
+                            "status": "done",
+                            "evidence_ref_ids": ["ev_01"],
+                        }
+                    ],
+                    "required_child_total": None,
+                    "required_child_complete": None,
+                    "display_truncated": True,
+                    "conflicts": [],
+                    "evidence_ref_ids": [],
+                },
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry(
+        {tool_id: status_with_withheld_completion for tool_id in ToolID}
+    )
+    fabricated_answer = _answer(script_id=script_id)
+    fabricated_answer.update(
+        {
+            "status": "partial",
+            "direct_summary": "See the linked claim for details.",
+            "claims": [
+                {
+                    **fabricated_answer["claims"][0],
+                    "text": "All required work is 100% complete.",
+                }
+            ],
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(fabricated_answer)),
+                ScriptedStep(decision=AgentFinalAnswer(fabricated_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.FAILED
+    assert result.error is not None
+    # DevError.code is a closed wire vocabulary (dev_error.v1); the
+    # specific "completion_denominator_withheld" classification is
+    # internal-only (AnswerValidationError.code), used to select this
+    # enriched message, not to widen the wire contract.
+    assert result.error.code == "answer_validation_failed"
+    assert "assessment_source_limit_reached" in result.error.safe_message
+    assert "1 required item" in result.error.safe_message
+
+
 # --- CHAOS-3262: an invalid model tool request degrades, it does not kill the run ---
 
 

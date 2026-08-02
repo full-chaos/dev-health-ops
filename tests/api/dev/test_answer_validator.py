@@ -175,30 +175,114 @@ def test_claim_cannot_state_a_completion_ratio_the_server_withheld() -> None:
     the claim happens to cite SOME metric/evidence ref -- the existing
     numeric-claim check above only requires a citation exists, it never
     verifies the citation actually grounds the specific number, so a
-    withheld (None) denominator must be caught independently.
+    withheld (None) denominator must be caught independently. direct_summary
+    is neutralized so this isolates the claims-loop mechanism specifically
+    (not the sibling direct_summary check below).
     """
     payload = deepcopy(positive_fixtures()["dev_answer.v1"])
     payload["status"] = "partial"
+    payload["direct_summary"] = "See the linked claim for details."
     payload["claims"] = [
         {
             **payload["claims"][0],
             "text": "Required work is 100% complete.",
         }
     ]
-    with pytest.raises(AnswerValidationError, match="completion ratio"):
+    with pytest.raises(AnswerValidationError, match="claim states a completion ratio"):
         validate_answer_candidate(payload, _context_with_withheld_completion())
 
 
 def test_direct_summary_cannot_state_a_completion_ratio_the_server_withheld() -> None:
     """Same repro, direct_summary variant (codex round 3): direct_summary
     carries no citation requirement at all, so it needs the identical
-    guard independently of the claims loop.
+    guard independently of the claims loop. claims is emptied so this
+    isolates the direct_summary check specifically (grounding floor stays
+    satisfied via the base fixture's metrics/evidence, which do not
+    depend on claims).
     """
     payload = deepcopy(positive_fixtures()["dev_answer.v1"])
     payload["status"] = "partial"
     payload["direct_summary"] = "Required work is 100% complete."
-    with pytest.raises(AnswerValidationError, match="completion ratio"):
+    payload["claims"] = []
+    with pytest.raises(
+        AnswerValidationError, match="direct summary states a completion ratio"
+    ):
         validate_answer_candidate(payload, _context_with_withheld_completion())
+
+
+# CHAOS-3297 s2 round 5 (codex HIGH): a digit-and-ratio-shape check alone
+# is a paraphrase away from bypassed. Every one of these states the same
+# withheld completion total via a different surface form -- a percentage,
+# a digit fraction, a bare count + totalizing word, pure totalizing
+# vocabulary with no number at all, and a spelled-out fraction.
+_WITHHELD_COMPLETION_TOTAL_PARAPHRASES = [
+    "Required work is 100% complete.",
+    "3 of 5 required items are done.",
+    "All 500 required items are finished.",
+    "Nothing remains to be done on the required work.",
+    "The required work is fully complete.",
+    "Three of five required items are complete.",
+    "All required items are complete.",
+    "None of the required work is outstanding.",
+]
+
+
+@pytest.mark.parametrize("text", _WITHHELD_COMPLETION_TOTAL_PARAPHRASES)
+def test_every_paraphrase_of_a_withheld_completion_total_is_rejected(
+    text: str,
+) -> None:
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    payload["direct_summary"] = "See the linked claim for details."
+    payload["claims"] = [{**payload["claims"][0], "text": text}]
+    with pytest.raises(AnswerValidationError, match="completion ratio") as raised:
+        validate_answer_candidate(payload, _context_with_withheld_completion())
+    # Round 5 (codex MEDIUM): repairable, not a dead end -- a phrasing
+    # choice gets one bounded correction pass, not a hard failure.
+    assert raised.value.repairable is True
+    assert raised.value.code == "completion_denominator_withheld"
+
+
+# CHAOS-3297 s2 round 5 (codex MEDIUM): over-blocking honest answers is
+# its own bug. Hedged/uncertain phrasing, a partial-but-honest claim, and
+# language about something else entirely (an unrelated throughput number,
+# no completion vocabulary at all) must all still pass, even though the
+# tool result withheld its denominator.
+_LEGITIMATE_PHRASING_EVEN_WHEN_WITHHELD = [
+    "The completion status of required work is unknown because the data "
+    "source was truncated.",
+    "Some required items appear complete based on available data, but "
+    "the full set could not be verified.",
+    "Twelve work items were touched in the selected period.",
+]
+
+
+@pytest.mark.parametrize("text", _LEGITIMATE_PHRASING_EVEN_WHEN_WITHHELD)
+def test_honest_hedged_phrasing_is_never_blocked_even_when_withheld(
+    text: str,
+) -> None:
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    payload["direct_summary"] = text
+    payload["claims"] = [{**payload["claims"][0], "text": text}]
+    # Must not raise.
+    validate_answer_candidate(payload, _context_with_withheld_completion())
+
+
+def test_completion_ratio_language_is_fine_when_the_denominator_is_known() -> None:
+    """The completion-ratio guard only ever fires when the tool result
+    withheld its denominator -- the identical phrasing that's rejected
+    above must pass cleanly against a normal (non-withheld) context, or
+    this would be a blanket ban on completion language rather than a
+    guard against a specific, withheld-data claim.
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["direct_summary"] = "All required work is complete."
+    payload["claims"] = [
+        {**payload["claims"][0], "text": "All required work is complete."}
+    ]
+    # Should not raise -- _context()'s tool result has actual_completion=None.
+    validate_answer_candidate(payload, _context())
 
 
 # --- CHAOS-3290: a complete/substantive answer cannot be an empty shell ---

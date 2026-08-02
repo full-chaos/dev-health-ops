@@ -35,41 +35,43 @@ _NUMBER = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:[.,]\d+)*(?:%|\b)")
 # carries no citation requirement at all, so the same language needs the
 # identical guard independently of any claim.
 #
-# Round 5 (codex HIGH): a digit-and-ratio-shape check alone is a
-# paraphrase away from bypassed -- "All 500 required items are
-# finished", "Nothing remains", "fully complete", and spelled-out
-# fractions ("three of five items are complete") all state exactly the
-# same withheld total/complete claim without ever matching a
-# percentage/fraction regex.
+# Rounds 5, 6, and 7 (codex HIGH, three times) all tried to detect
+# FABRICATED completion language by vocabulary -- digit/fraction shapes,
+# then totalizing words, then bare unhedged predicates, then hedge-word
+# rescue. Each round's fix was defeated by the next round's fresh
+# synonym or a whole-text hedge-token bypassing an unequivocal clause
+# elsewhere in the same sentence ("The work appears fully complete --
+# and it is."). That is structural, not a vocabulary gap: natural-
+# language completion semantics is an open set, and absence-of-bad-
+# phrasing can never be closed by enumerating more phrasings -- there is
+# always one more synonym, and hedge-rescue at whole-text granularity
+# can always be defeated by a second, unequivocal clause.
 #
-# Round 6 (codex HIGH): a quantity-or-totalizer gate is STILL not enough
-# -- "The required work is done." states the identical claim with
-# neither a number nor a totalizing word, and that's the single most
-# likely phrasing ordinary production model prose actually uses (a
-# model narrating a status answer says "it's done", not "100% done" or
-# "all of it is done"). Once the denominator is withheld, a bare,
-# unhedged completion predicate is ITSELF the fabricated claim -- no
-# second token required to trigger. The only thing that rescues a
-# completion-language sentence now is explicit HEDGE language
-# (unknown/unclear/appears/some/possibly/...) that honestly signals the
-# claim is uncertain rather than a flat assertion -- that's the line:
-# hedge words rescue, bare assertions don't. Erring toward
-# over-rejection is deliberate: the failure mode this guards is silent
-# fabrication of trust, and a false rejection only costs one bounded
-# repair pass (see repairable=True below), never a hard failure.
-_COMPLETION_LANGUAGE = re.compile(
-    r"\bcomplet(?:e|ed|ion)\b|\bdone\b|\bfinished\b|\bremain(?:s|ing)?\b|"
-    r"\boutstanding\b|\bwrapped up\b|\bclosed out\b|\bleft\b",
-    re.IGNORECASE,
+# Round 8 (closure, ratified on the ticket): invert the obligation from
+# ABSENCE (no fabricated language) to PRESENCE (a required, exact,
+# server-specified disclosure). This is not a vocabulary sweep -- it is
+# a two-cell partition of the entire text domain: a string either
+# contains INCOMPLETE_DENOMINATOR_DISCLOSURE (verbatim, case-
+# insensitive) or it does not, with no third case and nothing left to
+# enumerate. The repair-turn prompt already echoes ``exc.detail``
+# (see orchestrator.py), which is exactly this message -- the model is
+# told the precise sentence to include, not asked to guess at "more
+# hedging". The residual risk this accepts (ratified, bounded, not an
+# open bypass): a text CAN still contain both the disclosure and an
+# unequivocal completion clause ("It's 100% done. Note: the
+# required-work completion total could not be fully verified.") -- the
+# reader always sees the caveat verbatim alongside whatever else the
+# text says, which is a materially different risk than the caveat being
+# silently absent.
+INCOMPLETE_DENOMINATOR_DISCLOSURE = (
+    "the required-work completion total could not be fully verified"
 )
-_HEDGE_LANGUAGE = re.compile(
-    r"\bunknown\b|\bunclear\b|\buncertain\b|\bunverified\b|\bnot verified\b|"
-    r"\bcould not be verified\b|\bcannot be verified\b|\bappears?\b|"
-    r"\bbased on available data\b|\bsome\b|\bpartial(?:ly)?\b|\bpossibly\b|"
-    r"\blikely\b|\bbelieved?\b|\bmay be\b|\bmight be\b|\bincomplete data\b|"
-    r"\bnot confirmed\b|\bcould not be determined\b|\bcannot be determined\b",
-    re.IGNORECASE,
-)
+
+
+def _has_incomplete_denominator_disclosure(text: str) -> bool:
+    return INCOMPLETE_DENOMINATOR_DISCLOSURE.casefold() in text.casefold()
+
+
 _NON_REPAIRABLE_VALIDATION_MARKERS = (
     "unknown evidence",
     "unknown metric",
@@ -149,21 +151,6 @@ _GROUNDABLE_TOOL_RESULT_FIELDS = (
 
 def _claim_has_grounding_reference(claim: DevClaim) -> bool:
     return bool(claim.metric_ref_ids or claim.evidence_ref_ids)
-
-
-def _states_a_completion_ratio(text: str) -> bool:
-    """Whether `text` asserts required-work completion in a way that
-    isn't honestly hedged -- e.g. "100% complete", "3 of 5 done", "All
-    500 required items are finished", "Nothing remains", "The required
-    work is done", "wrapped up", "closed out", "no required work is
-    left". No number or totalizing word is required to trigger (see the
-    module-level comment above ``_COMPLETION_LANGUAGE``); only explicit
-    hedge language (unknown/unclear/appears/some/...) rescues a
-    completion-language sentence from rejection.
-    """
-    if not _COMPLETION_LANGUAGE.search(text):
-        return False
-    return not _HEDGE_LANGUAGE.search(text)
 
 
 def _any_tool_result_withheld_its_completion_denominator(
@@ -476,36 +463,43 @@ def validate_answer_candidate(
                 code="answer_validation_failed",
                 repairable=False,
             )
-        # CHAOS-3297 s2 round 3: a citation existing (checked above) does
-        # not mean it grounds THIS number -- a withheld server-side
-        # completion denominator makes any completion ratio fabricated
-        # regardless of what the claim cites. Round 5 (codex MEDIUM):
-        # repairable=True, not False -- unlike an identity/scope/mutated-
-        # evidence violation (a trust breach with no honest alternative),
-        # this is a phrasing choice the model can correct: reissue the
-        # same grounded facts under hedged, non-quantified language. A
-        # hard failure here would turn a model's fabricated-but-innocent
-        # word choice into a dead end the user never gets an answer from;
-        # the bounded repair pass (schema_repairs) gives it one chance to
-        # say the same thing honestly before that happens.
-        if completion_denominator_withheld and _states_a_completion_ratio(claim.text):
+        # CHAOS-3297 s2 round 8 (closure): a citation existing (checked
+        # above) does not mean it grounds THIS number, and no vocabulary
+        # sweep can close an open set of fabricated-completion phrasings
+        # (see the module-level comment on INCOMPLETE_DENOMINATOR_
+        # DISCLOSURE for the round 5/6/7 history) -- so this is now a
+        # POSITIVE obligation, not a vocabulary check: whenever the
+        # server withheld the completion denominator, every claim must
+        # carry the disclosure verbatim, independent of what else it
+        # cites or says. repairable=True (round 5, still true): a
+        # missing disclosure is a phrasing omission the model can
+        # correct in one bounded pass, not a trust breach with no
+        # honest alternative -- see completion_truncation_detail and its
+        # caller for what happens if that pass also fails.
+        if (
+            completion_denominator_withheld
+            and not _has_incomplete_denominator_disclosure(claim.text)
+        ):
             raise AnswerValidationError(
-                "claim states a completion ratio the server withheld as unknown",
-                # Distinct code (not the shared "answer_validation_failed")
-                # so the orchestrator can build a specific, informative
-                # FAILED-terminal message if the repair pass doesn't fix
-                # it -- see completion_truncation_detail and its caller.
+                "claim omits the required disclosure for a withheld "
+                f'completion total -- include the exact sentence "'
+                f'{INCOMPLETE_DENOMINATOR_DISCLOSURE}" (verbatim, '
+                "case-insensitive)",
                 code="completion_denominator_withheld",
                 repairable=True,
             )
 
-    if completion_denominator_withheld and _states_a_completion_ratio(
+    if completion_denominator_withheld and not _has_incomplete_denominator_disclosure(
         answer.direct_summary
     ):
         # direct_summary carries no citation requirement at all, so it
-        # needs the identical guard independently of the claims loop.
+        # needs the identical positive obligation independently of the
+        # claims loop.
         raise AnswerValidationError(
-            "direct summary states a completion ratio the server withheld as unknown",
+            "direct summary omits the required disclosure for a withheld "
+            f'completion total -- include the exact sentence "'
+            f'{INCOMPLETE_DENOMINATOR_DISCLOSURE}" (verbatim, '
+            "case-insensitive)",
             code="completion_denominator_withheld",
             repairable=True,
         )
@@ -560,6 +554,7 @@ def validate_answer_candidate(
 
 
 __all__ = [
+    "INCOMPLETE_DENOMINATOR_DISCLOSURE",
     "AnswerValidationContext",
     "AnswerValidationError",
     "completion_truncation_detail",

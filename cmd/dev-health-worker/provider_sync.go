@@ -239,6 +239,13 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitHubCommitsRouteHandler{}
 				sink, readback = ghCommitsSink, ghCommitsSink
+			case session.Claim.Provider == "github" &&
+				session.Claim.Dataset == "deployments":
+				ghDeploymentsSink := providersync.GitHubDeploymentsClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitHubDeploymentsRouteHandler{}
+				sink, readback = ghDeploymentsSink, ghDeploymentsSink
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
@@ -315,7 +322,8 @@ func buildProviderSyncWorker(
 	if cfg.Profile != "sync" ||
 		(!cfg.WorkerLaunchDarklyFeatureFlagsEnabled &&
 			!cfg.WorkerGithubRepoMetadataEnabled && !cfg.WorkerGithubPRsEnabled &&
-			!cfg.WorkerGithubCICDEnabled && !cfg.WorkerGithubCommitsEnabled) {
+			!cfg.WorkerGithubCICDEnabled && !cfg.WorkerGithubCommitsEnabled &&
+			!cfg.WorkerGithubDeploymentsEnabled) {
 		return workerFamily{}, nil
 	}
 	if registry == nil || observer == nil || logger == nil ||

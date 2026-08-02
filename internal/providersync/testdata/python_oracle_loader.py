@@ -40,6 +40,7 @@ _LAUNCHDARKLY_BUDGET_SOURCE = _source("dev_health_ops/providers/launchdarkly/bud
 _DATASET_ADAPTERS_SOURCE = _source("dev_health_ops/processors/dataset_adapters.py")
 _BASE_GIT_SOURCE = _source("dev_health_ops/processors/base_git.py")
 _GITHUB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/github/code_client.py")
+_RELEASE_REF_SOURCE = _source("dev_health_ops/processors/release_ref.py")
 
 _SAFE_SOURCE_MODULES: dict[str, Path] = {
     "dev_health_ops.sync.budget_types": _BUDGET_TYPES_SOURCE,
@@ -136,7 +137,11 @@ def _target_base_git() -> None:
                 (),
                 {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
             ),
-            "Deployment": object,
+            "Deployment": type(
+                "Deployment",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            ),
             "GitBlame": object,
             "GitCommitStat": object,
             "GitFile": object,
@@ -405,6 +410,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.providers.github.code_client",
         _GITHUB_CODE_CLIENT_SOURCE,
         _target_github_code_client,
+    ),
+    _RELEASE_REF_SOURCE: (
+        "dev_health_ops.processors.release_ref",
+        _RELEASE_REF_SOURCE,
+        lambda: None,
     ),
     _GITHUB_PROCESSOR_SOURCE: (
         "dev_health_ops.processors.github",

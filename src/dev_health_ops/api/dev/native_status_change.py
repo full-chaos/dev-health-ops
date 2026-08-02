@@ -998,6 +998,7 @@ class ClickHouseStatusChangeSource:
             if scope.direct_scope is DirectScope.TEAM
             else "",
         }
+        membership_source_truncated = False
         if scope.direct_scope is DirectScope.WORK_UNIT:
             marker_rows, membership_ref, warning = await self._read(
                 "work_units",
@@ -1017,10 +1018,25 @@ class ClickHouseStatusChangeSource:
                         + ["canonical work-unit membership has no complete run"]
                     ),
                 )
+            # CHAOS-3297 s2 round 3 (codex HIGH): _WORK_UNIT_MEMBERS_SQL
+            # mixes issue and PR members in ONE query sharing a single
+            # LIMIT budget, then splits them post-fetch by node_type --
+            # the same shared-budget-then-split shape as _WORK_ITEMS_SQL's
+            # parent/child split. A plain post-split length check on
+            # either member_issue_ids or member_pr_ids can stay under the
+            # bound even when the true combined membership exceeds it
+            # (e.g. 500 issues + 501 PRs = 1001 rows against a 1000 cap
+            # drops the last PR, and neither 500-length list ever trips
+            # its own >= 1000 check). Fetch one sentinel row beyond the
+            # real budget, exactly as for work items, and record
+            # truncation BEFORE the split.
+            membership_requested = min(limit, MAX_STATUS_ASSESSMENT_ITEMS)
             try:
                 async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
                     member_rows = await query_dicts(
-                        self._client, _WORK_UNIT_MEMBERS_SQL, common
+                        self._client,
+                        _WORK_UNIT_MEMBERS_SQL,
+                        {**common, "limit": membership_requested + 1},
                     )
             except Exception:
                 return RawStatusSnapshot(
@@ -1028,6 +1044,9 @@ class ClickHouseStatusChangeSource:
                     source_refs=(self._unavailable_ref("work_units", scope),),
                     warnings=("work_units source unavailable",),
                 )
+            if len(member_rows) > membership_requested:
+                membership_source_truncated = True
+                member_rows = member_rows[:membership_requested]
             common["member_issue_ids"] = sorted(
                 {
                     str(row.get("node_id") or "")
@@ -1050,6 +1069,7 @@ class ClickHouseStatusChangeSource:
                     declared=None,
                     source_refs=tuple(source_refs),
                     warnings=tuple(warnings),
+                    membership_source_truncated=membership_source_truncated,
                 )
 
         work_item_rows: list[dict[str, Any]] = []
@@ -1423,6 +1443,7 @@ class ClickHouseStatusChangeSource:
             ),
             warnings=tuple(warnings),
             children_source_truncated=children_source_truncated,
+            membership_source_truncated=membership_source_truncated,
         )
 
     async def change_summary(

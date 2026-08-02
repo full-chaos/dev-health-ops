@@ -194,6 +194,14 @@ class RawStatusSnapshot:
     # undercount children by exactly the parent's slot, letting the plain
     # length check silently pass while real children were dropped.
     children_source_truncated: bool = False
+    # Same shape of defect, one hop further upstream (round 3, codex
+    # HIGH): for WORK_UNIT scope, native_status_change._WORK_UNIT_MEMBERS_SQL
+    # mixes issue and PR members in one limited query, then splits them by
+    # node_type -- membership truncation can silently drop members of
+    # EITHER type without either post-split list ever reaching its own
+    # length bound. True only when the source itself reports truncation
+    # (see the sentinel fetch there); never inferred from a length check.
+    membership_source_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,13 +369,20 @@ class StatusChangeService:
         # MAX_STATUS_ASSESSMENT_ITEMS`` check can never fire for a source
         # that fetches the declared parent and its children in one
         # limited query (the parent consumes one row of that budget), so
-        # OR in the source's own truncation signal computed before that
-        # split. Both conditions mean the same thing -- the required-child
-        # set is incomplete -- so both gate the denominator, not just the
-        # reason code.
+        # the source's own truncation signal -- computed before that split
+        # -- is required. Round 3 (codex MEDIUM): that length check is not
+        # just insufficient, it is actively wrong to keep as a fallback --
+        # exactly ``MAX_STATUS_ASSESSMENT_ITEMS`` legitimate children (no
+        # truncation at all) would trip it and falsely withhold a real,
+        # complete denominator. Truncation for children comes ONLY from
+        # explicit source-provided provenance now: the sentinel-detected
+        # ``children_source_truncated`` (native_status_change._WORK_ITEMS_SQL)
+        # and, one hop further upstream for WORK_UNIT scope,
+        # ``membership_source_truncated`` (_WORK_UNIT_MEMBERS_SQL) -- a
+        # dropped issue OR PR member there can undercount required work
+        # without either post-split list ever reaching its own bound.
         children_source_truncated = (
-            raw.children_source_truncated
-            or len(raw.children) >= MAX_STATUS_ASSESSMENT_ITEMS
+            raw.children_source_truncated or raw.membership_source_truncated
         )
         assessment_source_limit_reached = children_source_truncated or any(
             len(facts) >= MAX_STATUS_ASSESSMENT_ITEMS

@@ -1,10 +1,12 @@
 """Tests for CHAOS-3304's ``TeamWorkloadService``.
 
-Mirrors ``test_chaos_3303_team_health_service.py``'s discipline: proven
-against a fake ``PlanExecutorRuntime`` + fake ``TeamWorkloadDataSource`` in
-both directions -- a source with genuinely measured, attributed team facts
-produces real findings; an unmeasured/fail-closed source never fabricates a
-healthy/zero finding, regardless of whether a cohort size is supplied.
+Mirrors ``test_chaos_3303_team_health_service.py``'s post-03da63aeb
+discipline exactly: proven against a fake ``PlanExecutorRuntime``, a fake
+``TeamAttributionSource``, and a fake ``TeamWorkloadDataSource``
+independently -- cohort_size is always ``len(team_repository_ids(...))``,
+never a caller-supplied int, so an unattributed team (zero owned
+repositories) suppresses every applicable rule even when every other source
+returns otherwise-complete facts.
 """
 
 from __future__ import annotations
@@ -138,6 +140,28 @@ class FakeRuntime:
 
 
 @dataclass
+class FakeAttributionSource:
+    """A configurable ``TeamAttributionSource`` double -- ``repository_ids``
+    is the ONLY thing that determines ``cohort_size`` (see
+    ``TeamWorkloadService.evaluate_workload``); there is no other lever a
+    test (or a caller) has to influence it.
+    """
+
+    repository_ids: tuple[str, ...] = ()
+
+    async def team_repository_ids(
+        self, org_id: str, team_id: str, *, as_of: datetime
+    ) -> list[str]:
+        return list(self.repository_ids)
+
+
+_NO_ATTRIBUTION = FakeAttributionSource(repository_ids=())
+_FULL_ATTRIBUTION = FakeAttributionSource(
+    repository_ids=tuple(f"repo-{i}" for i in range(25))
+)
+
+
+@dataclass
 class FakeUnmeasuredWorkloadSource:
     async def cognitive_load(self, *, org_id, team_id, start, end):
         return _UNMEASURED_COGNITIVE_LOAD
@@ -214,59 +238,99 @@ def _project_scope() -> DevScope:
 
 @pytest.mark.asyncio
 async def test_evaluate_workload_rejects_non_team_scope() -> None:
-    service = TeamWorkloadService(FakeRuntime(), FakeUnmeasuredWorkloadSource())
+    service = TeamWorkloadService(
+        FakeRuntime(), _NO_ATTRIBUTION, FakeUnmeasuredWorkloadSource()
+    )
     with pytest.raises(ValueError, match="team direct scope"):
         await service.evaluate_workload(
             org_id=_ORG_ID,
             permission_fingerprint="fp",
             scope=_project_scope(),
             team_id="team-1",
-            cohort_size=5,
             now=_NOW,
         )
 
 
 @pytest.mark.asyncio
 async def test_evaluate_workload_rejects_mismatched_team_id() -> None:
-    service = TeamWorkloadService(FakeRuntime(), FakeUnmeasuredWorkloadSource())
+    service = TeamWorkloadService(
+        FakeRuntime(), _NO_ATTRIBUTION, FakeUnmeasuredWorkloadSource()
+    )
     with pytest.raises(ValueError, match="team_ids must name exactly"):
         await service.evaluate_workload(
             org_id=_ORG_ID,
             permission_fingerprint="fp",
             scope=_team_scope(team_id="team-1"),
             team_id="team-2",
-            cohort_size=5,
             now=_NOW,
         )
 
 
 @pytest.mark.asyncio
 async def test_evaluate_workload_without_attribution_never_reports_healthy() -> None:
-    service = TeamWorkloadService(FakeRuntime(), FakeUnmeasuredWorkloadSource())
+    """Zero resolved ``team_repo_ownership`` rows (cohort_size derives to 0):
+    every applicable rule requiring a minimum cohort must suppress -- never
+    a fabricated healthy/at-risk finding for an unattributed team.
+    """
+
+    service = TeamWorkloadService(
+        FakeRuntime(), _NO_ATTRIBUTION, FakeUnmeasuredWorkloadSource()
+    )
     profile = await service.evaluate_workload(
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_team_scope(),
         team_id="team-1",
-        cohort_size=0,
         now=_NOW,
     )
-    assert profile.findings
-    for finding in profile.findings:
+    assert profile.launch_findings == ()
+    assert profile.suppressed_findings == ()
+    assert profile.shadow_findings
+    for finding in profile.shadow_findings:
         assert finding.state in (DimensionState.UNKNOWN, DimensionState.NOT_APPLICABLE)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_workload_zero_attribution_suppresses_even_with_real_facts() -> (
+    None
+):
+    """Codex finding (HIGH, 2026-08-02), the exact repro shape reproduced
+    for the workload service: an unattributed team must stay suppressed
+    even when the workload source itself returns otherwise-complete, real
+    facts -- cohort_size is genuinely derived from the attribution source,
+    never inferable from "the sources look fine".
+    """
+
+    source = FakeMeasuredWorkloadSource(calls=[])
+    service = TeamWorkloadService(FakeRuntime(), _NO_ATTRIBUTION, source)
+    profile = await service.evaluate_workload(
+        org_id=_ORG_ID,
+        permission_fingerprint="fp",
+        scope=_team_scope(),
+        team_id="team-1",
+        now=_NOW,
+    )
+    after_hours = next(
+        f
+        for f in profile.shadow_findings
+        if f.rule_id == "health_rule.after_hours_pressure_sustained.v1"
+    )
+    assert after_hours.state is DimensionState.UNKNOWN
+    assert after_hours.suppressed_reason == "insufficient_cohort"
 
 
 @pytest.mark.asyncio
 async def test_evaluate_workload_unmeasured_source_reports_unknown_not_healthy() -> (
     None
 ):
-    service = TeamWorkloadService(FakeRuntime(), FakeUnmeasuredWorkloadSource())
+    service = TeamWorkloadService(
+        FakeRuntime(), _FULL_ATTRIBUTION, FakeUnmeasuredWorkloadSource()
+    )
     profile = await service.evaluate_workload(
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_team_scope(),
         team_id="team-1",
-        cohort_size=25,
         now=_NOW,
     )
     for rule_id in (
@@ -275,30 +339,32 @@ async def test_evaluate_workload_unmeasured_source_reports_unknown_not_healthy()
         "health_rule.pr_interruption_load_pressure.v1",
         "health_rule.investment_allocation_shift.v1",
     ):
-        finding = next(f for f in profile.findings if f.rule_id == rule_id)
+        finding = next(f for f in profile.shadow_findings if f.rule_id == rule_id)
         assert finding.state is DimensionState.UNKNOWN
 
 
 @pytest.mark.asyncio
-async def test_evaluate_workload_with_real_facts_reports_measured_findings() -> None:
-    """Positive control: real, attributed team facts and a cohort size that
-    clears every applicable rule's minimum produce genuinely measured
-    dimensions -- not honestly-unknown-by-construction.
+async def test_evaluate_workload_with_attribution_and_real_facts_reports_measured_findings() -> (
+    None
+):
+    """Positive control: real, attributed team facts and an attribution
+    source reporting real owned repositories clearing every applicable
+    rule's minimum cohort produce genuinely measured dimensions -- not
+    honestly-unknown-by-construction.
     """
 
     source = FakeMeasuredWorkloadSource(calls=[])
-    service = TeamWorkloadService(FakeRuntime(), source)
+    service = TeamWorkloadService(FakeRuntime(), _FULL_ATTRIBUTION, source)
     profile = await service.evaluate_workload(
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_team_scope(with_comparison=True),
         team_id="team-1",
-        cohort_size=25,
         now=_NOW,
     )
     after_hours = next(
         f
-        for f in profile.findings
+        for f in profile.shadow_findings
         if f.rule_id == "health_rule.after_hours_pressure_sustained.v1"
     )
     assert after_hours.state is DimensionState.WATCH  # 0.4 >= threshold 0.25
@@ -307,7 +373,7 @@ async def test_evaluate_workload_with_real_facts_reports_measured_findings() -> 
     # the raw pressure was still genuinely measured (never dropped).
     review_load = next(
         f
-        for f in profile.findings
+        for f in profile.shadow_findings
         if f.rule_id == "health_rule.review_request_load_pressure.v1"
     )
     assert review_load.state is DimensionState.UNKNOWN
@@ -315,7 +381,7 @@ async def test_evaluate_workload_with_real_facts_reports_measured_findings() -> 
 
     investment_shift = next(
         f
-        for f in profile.findings
+        for f in profile.shadow_findings
         if f.rule_id == "health_rule.investment_allocation_shift.v1"
     )
     # Stable mix across both fetched windows in this fixture -> genuinely
@@ -331,13 +397,12 @@ async def test_evaluate_workload_without_comparison_range_skips_comparison_fetch
     None
 ):
     source = FakeMeasuredWorkloadSource(calls=[])
-    service = TeamWorkloadService(FakeRuntime(), source)
+    service = TeamWorkloadService(FakeRuntime(), _FULL_ATTRIBUTION, source)
     await service.evaluate_workload(
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_team_scope(with_comparison=False),
         team_id="team-1",
-        cohort_size=25,
         now=_NOW,
     )
     assert len(source.calls) == 1

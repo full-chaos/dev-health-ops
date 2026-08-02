@@ -30,6 +30,13 @@ and ``cohort_size`` to build that comparison; this service never asserts
 peer values itself (constraint: cohort/attribution facts come from canonical
 sources resolved server-side, never caller-supplied numbers -- there is
 structurally no parameter here through which a caller could inject one).
+
+``cohort_size`` itself (CHAOS-3303's post-Codex-fix shape, 03da63aeb):
+resolved by THIS service from :class:`~.team_health_service.TeamAttributionSource`
+-- the same ``team_repo_ownership`` re-derivation
+``TeamHealthService`` uses -- never a caller-asserted naked int. There is no
+``cohort_size`` parameter on :meth:`TeamWorkloadService.evaluate_workload`
+for a caller to inject one through.
 """
 
 from __future__ import annotations
@@ -46,6 +53,7 @@ from .health_profile_synthesis import (
 )
 from .investigation_plans.builtin_steps import PlanExecutorRuntime
 from .native_team_workload import TeamCognitiveLoadResult, TeamInvestmentMixResult
+from .team_health_service import TeamAttributionSource
 
 __all__ = ["TeamWorkloadDataSource", "TeamWorkloadService"]
 
@@ -79,9 +87,11 @@ class TeamWorkloadService:
     def __init__(
         self,
         runtime: PlanExecutorRuntime,
+        attribution: TeamAttributionSource,
         workload_source: TeamWorkloadDataSource,
     ) -> None:
         self._runtime = runtime
+        self._attribution = attribution
         self._workload_source = workload_source
 
     async def evaluate_workload(
@@ -91,13 +101,20 @@ class TeamWorkloadService:
         permission_fingerprint: str,
         scope: DevScope,
         team_id: str,
-        cohort_size: int | None,
         now: datetime,
     ) -> HealthProfileResult:
         if scope.direct_scope is not DirectScope.TEAM:
             raise ValueError("TeamWorkloadService requires a team direct scope")
         if scope.team_ids != [team_id]:
             raise ValueError("scope.team_ids must name exactly this team subject")
+
+        # The ONLY source of cohort_size: verified, queried at evaluation
+        # time, never a caller-supplied assertion -- see module docstring
+        # and TeamHealthService's own identical discipline.
+        owned_repository_ids = await self._attribution.team_repository_ids(
+            org_id, team_id, as_of=now
+        )
+        cohort_size = len(owned_repository_ids)
 
         # Sequential awaits throughout -- never asyncio.gather over these
         # calls. Several share a ClickHouse client the same way an

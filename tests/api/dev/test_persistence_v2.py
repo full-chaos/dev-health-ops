@@ -14,6 +14,7 @@ import hashlib
 import inspect
 import json
 import re
+import textwrap
 import types
 import uuid
 from copy import deepcopy
@@ -1545,16 +1546,56 @@ def _payload_bearing_orm_model_names() -> frozenset[str]:
     return frozenset(names)
 
 
-def _discover_payload_writing_sinks() -> frozenset[str]:
-    """Every ``DevPersistenceService`` method that constructs a
-    payload-bearing ORM model (see ``_payload_bearing_orm_model_names``)
-    with a ``payload=`` keyword argument -- discovered by walking the
-    service's own source (AST), never a hand-typed method list. A method
-    renamed, added, or changed to build one of these models is picked up
-    automatically; nothing here has to be updated by hand for that.
+def _method_references_payload_field(node: ast.AsyncFunctionDef) -> bool:
+    """True if ``node``'s own body references the ``payload`` column
+    identifier in ANY of the three AST shapes Python has for naming it:
+
+    * a call keyword argument -- covers both ``Model(payload=x)`` and
+      ``update(Model).values(payload=x)`` alike, because ``sub.func`` is
+      never inspected here; it does not matter whether the call's callee
+      is a bare model name, an ``update(...)`` chain, or anything else.
+    * a dict-literal string key -- covers ``Model(**{"payload": x})``
+      kwargs-splat construction, where the identifier never appears as an
+      ``ast.keyword`` at all.
+    * an attribute-assignment target -- covers ``row.payload = x``, which
+      matches no ``Call`` pattern whatsoever.
+
+    Deny-by-default (CHAOS-3297 Codex review round 5 MEDIUM closure):
+    this does not try to recognize specific bypass *forms*, it simply
+    refuses to let the ``payload`` identifier appear anywhere in a sink
+    method's body in any of the three shapes above.
     """
 
-    payload_bearing_models = _payload_bearing_orm_model_names()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.keyword) and sub.arg == "payload":
+            return True
+        if isinstance(sub, ast.Constant) and sub.value == "payload":
+            return True
+        if isinstance(sub, ast.Assign) and any(
+            isinstance(target, ast.Attribute) and target.attr == "payload"
+            for target in sub.targets
+        ):
+            return True
+        if (
+            isinstance(sub, ast.AnnAssign)
+            and isinstance(sub.target, ast.Attribute)
+            and sub.target.attr == "payload"
+        ):
+            return True
+    return False
+
+
+def _discover_payload_field_references() -> frozenset[str]:
+    """Every ``DevPersistenceService`` method other than the one audited
+    construction helper (``_construct_validated_payload_row``) whose body
+    references the ``payload`` identifier in any of the three shapes
+    ``_method_references_payload_field`` checks -- discovered by walking
+    the service's own source (AST), never a hand-typed method list. A
+    method renamed, added, or changed to touch ``payload`` in any of
+    those shapes is picked up automatically; nothing here has to be
+    updated by hand for that.
+    """
+
     source = inspect.getsource(DevPersistenceService)
     tree = ast.parse(source)
     (class_node,) = (node for node in tree.body if isinstance(node, ast.ClassDef))
@@ -1562,14 +1603,10 @@ def _discover_payload_writing_sinks() -> frozenset[str]:
     for node in class_node.body:
         if not isinstance(node, ast.AsyncFunctionDef):
             continue
-        for sub in ast.walk(node):
-            if (
-                isinstance(sub, ast.Call)
-                and isinstance(sub.func, ast.Name)
-                and sub.func.id in payload_bearing_models
-                and any(kw.arg == "payload" for kw in sub.keywords)
-            ):
-                discovered.add(node.name)
+        if node.name == "_construct_validated_payload_row":
+            continue
+        if _method_references_payload_field(node):
+            discovered.add(node.name)
     return frozenset(discovered)
 
 
@@ -1590,26 +1627,41 @@ def test_payload_bearing_orm_model_names_matches_the_live_schema() -> None:
     }
 
 
-def test_every_payload_writing_sink_is_registered_validated_or_a_known_gap() -> None:
-    """CHAOS-3297 Codex review round 3 CLASS B closure argument.
+def test_every_payload_field_reference_is_confined_to_the_audited_helper() -> None:
+    """CHAOS-3297 Codex review round 5 MEDIUM closure argument.
 
-    Enumerates -- via AST introspection of ``DevPersistenceService``'s own
-    source, never a hand-typed method list -- every method that writes a
-    ``*_payload`` JSON contract column, and asserts each is accounted for:
-    either in ``_VALIDATED_PAYLOAD_SINKS`` (contract-validated and
-    cross-checked before any write) or explicitly in
-    ``_KNOWN_UNVALIDATED_PAYLOAD_SINKS`` (a filed, deliberate gap). A new
-    sink method that writes a payload column without being added to either
-    set fails this test at introduction -- it cannot silently ship as a
-    third instance of the open-boundary bug class this review round closed
-    twice already (``record_frame``, ``record_narrative``).
+    Deny-by-default, not pattern-completeness: the round-3 scanner this
+    replaces pattern-matched a single write *form* (a direct
+    ``Model(payload=...)`` call whose callee is a bare ``ast.Name`` on a
+    payload-bearing model class), and Codex found three shapes it
+    structurally could not see -- ``row.payload = x`` (no ``Call`` node at
+    all), ``Model(**{"payload": x})`` (the identifier is a dict key, not
+    an ``ast.keyword``), and ``update(Model).values(payload=x)`` (the
+    callee is a method-attribute chain, not a bare model name).
+
+    This scanner does not enumerate write forms. It enumerates -- via AST
+    introspection of ``DevPersistenceService``'s own source, never a
+    hand-typed method list -- every method OTHER than the one audited
+    construction helper (``_construct_validated_payload_row``) that
+    references the ``payload`` identifier in ANY of its three possible
+    AST shapes, and asserts the result is exactly
+    ``_KNOWN_UNVALIDATED_PAYLOAD_SINKS`` -- the filed, deliberate gap.
+
+    ``record_frame`` and ``record_narrative`` (``_VALIDATED_PAYLOAD_SINKS``)
+    route their construction entirely through the helper, so neither
+    appears in the discovered set at all -- not merely present in an
+    accounted-for bucket the way the round-3 scanner required. A
+    validated sink that regressed to touching ``payload`` directly again
+    would show up as an unaccounted-for name here, exactly like a
+    brand-new bypass would; there is nothing else it could hide behind.
     """
 
-    discovered = _discover_payload_writing_sinks()
-    accounted_for = _VALIDATED_PAYLOAD_SINKS | _KNOWN_UNVALIDATED_PAYLOAD_SINKS
-    assert discovered == accounted_for, (
-        f"unaccounted payload-writing sinks: {sorted(discovered - accounted_for)} -- "
-        f"stale entries: {sorted(accounted_for - discovered)}"
+    discovered = _discover_payload_field_references()
+    assert discovered == _KNOWN_UNVALIDATED_PAYLOAD_SINKS, (
+        f"unaudited payload-field references outside the helper: "
+        f"{sorted(discovered - _KNOWN_UNVALIDATED_PAYLOAD_SINKS)} -- "
+        f"stale ledger entries (no longer touch payload directly): "
+        f"{sorted(_KNOWN_UNVALIDATED_PAYLOAD_SINKS - discovered)}"
     )
 
 
@@ -1622,7 +1674,89 @@ def test_a_new_unvalidated_sink_is_caught_by_the_totality_assertion() -> None:
     bearing, not decorative.
     """
 
-    discovered = _discover_payload_writing_sinks() | {"record_something_new"}
-    accounted_for = _VALIDATED_PAYLOAD_SINKS | _KNOWN_UNVALIDATED_PAYLOAD_SINKS
-    assert discovered != accounted_for
-    assert "record_something_new" in (discovered - accounted_for)
+    discovered = _discover_payload_field_references() | {"record_something_new"}
+    assert discovered != _KNOWN_UNVALIDATED_PAYLOAD_SINKS
+    assert "record_something_new" in (discovered - _KNOWN_UNVALIDATED_PAYLOAD_SINKS)
+
+
+def _parse_single_async_method(source: str) -> ast.AsyncFunctionDef:
+    """Parse a standalone, dedented async-method snippet for the mutation
+    tests below -- these exercise ``_method_references_payload_field``
+    directly against synthetic bypass-shaped bodies, not the live service
+    source, to prove the scanner's own detection logic rather than merely
+    that today's service.py happens to be clean."""
+
+    (node,) = (
+        n
+        for n in ast.parse(textwrap.dedent(source)).body
+        if isinstance(n, ast.AsyncFunctionDef)
+    )
+    return node
+
+
+def test_scanner_catches_attribute_assignment_bypass() -> None:
+    """Codex round 5 bypass form 1/3: ``row.payload = x``. This matches no
+    ``Call`` node at all, which is exactly why the round-3 Name-call
+    scanner (RED: it only ever inspected ``ast.Call`` nodes) missed it."""
+
+    node = _parse_single_async_method(
+        """
+        async def sneaky_direct_assignment(self, *, payload):
+            row = DevAnswerFrame(run_id=self.run_id)
+            row.payload = payload
+            self.session.add(row)
+        """
+    )
+    assert _method_references_payload_field(node) is True
+
+
+def test_scanner_catches_kwargs_splat_bypass() -> None:
+    """Codex round 5 bypass form 2/3: ``Model(**{"payload": x})``. The
+    round-3 scanner only matched a literal ``payload=`` ``ast.keyword`` in
+    the call; a dict-literal key spread into the call via ``**`` is an
+    ``ast.Constant``, never an ``ast.keyword``, so it never matched
+    (RED)."""
+
+    node = _parse_single_async_method(
+        """
+        async def sneaky_kwargs_splat(self, *, payload):
+            row = DevAnswerFrame(**{"payload": payload, "run_id": self.run_id})
+            self.session.add(row)
+        """
+    )
+    assert _method_references_payload_field(node) is True
+
+
+def test_scanner_catches_update_values_bypass() -> None:
+    """Codex round 5 bypass form 3/3: ``update(Model).values(payload=x)``.
+    The round-3 scanner required ``sub.func`` to be a bare ``ast.Name``
+    equal to a payload-bearing model class name; ``update(...).values(...)``
+    is an attribute-chain call, so ``sub.func`` is an ``ast.Attribute``,
+    never a bare ``ast.Name`` -- it never matched regardless of the
+    keyword the call carried (RED)."""
+
+    node = _parse_single_async_method(
+        """
+        async def sneaky_update_values(self, *, payload):
+            stmt = update(DevAnswerFrame).values(payload=payload)
+            await self.session.execute(stmt)
+        """
+    )
+    assert _method_references_payload_field(node) is True
+
+
+def test_scanner_does_not_false_positive_on_a_clean_method() -> None:
+    """Control: a method that never touches ``payload`` in any shape --
+    not as a keyword, a dict key, nor an attribute target -- is not
+    flagged. Without this, the three mutation tests above would not prove
+    the scanner discriminates; they would only prove it always returns
+    ``True``."""
+
+    node = _parse_single_async_method(
+        """
+        async def clean_method(self, *, frame_id):
+            row = DevAnswerFrame(run_id=self.run_id, frame_id=frame_id)
+            self.session.add(row)
+        """
+    )
+    assert _method_references_payload_field(node) is False

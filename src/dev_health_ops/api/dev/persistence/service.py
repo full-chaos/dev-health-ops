@@ -1656,6 +1656,42 @@ class DevPersistenceService:
         await self.session.flush()
         return run
 
+    async def _construct_validated_payload_row(
+        self,
+        *,
+        model_cls: Any,
+        payload_dict: Mapping[str, Any],
+        field_name: str,
+        max_bytes: int,
+        **extra_columns: Any,
+    ) -> Any:
+        """The **one** place ``DevPersistenceService`` constructs a
+        payload-bearing ORM row (CHAOS-3297 Codex review round 5 MEDIUM
+        closure).
+
+        Every validated sink (``record_frame``, ``record_narrative``)
+        routes its already-validated, already-cross-checked canonical
+        payload dict through here rather than touching a payload-bearing
+        model's ``payload`` column anywhere in its own body. The totality
+        scanner
+        (``test_every_payload_field_reference_is_confined_to_the_audited_helper``)
+        denies by default: it scans every OTHER method on this class for
+        *any* reference to the literal column name ``"payload"`` --
+        a keyword argument, an attribute-assignment target, or a
+        dict-literal key -- which covers direct construction
+        (``Model(payload=x)``), ``**kwargs``-splat construction
+        (``Model(**{"payload": x})``), ORM ``update(Model).values(payload=x)``
+        calls, and direct attribute assignment (``row.payload = x``) alike,
+        with no write-form taxonomy to keep in sync as new bypass shapes
+        are discovered. A method outside this helper (and the explicitly
+        filed ``_KNOWN_UNVALIDATED_PAYLOAD_SINKS`` gap) that mentions
+        ``"payload"`` in any of those shapes fails that test at collection
+        time, before it ever runs against a database.
+        """
+
+        bounded = _bounded_json(payload_dict, field=field_name, max_bytes=max_bytes)
+        return model_cls(payload=bounded, **extra_columns)
+
     async def record_frame(
         self,
         *,
@@ -1727,15 +1763,16 @@ class DevPersistenceService:
                 "frame_payload.public_outcome does not match the "
                 "public_outcome argument"
             )
-        record = DevAnswerFrame(
+        record = await self._construct_validated_payload_row(
+            model_cls=DevAnswerFrame,
+            payload_dict=payload,
+            field_name="frame_payload",
+            max_bytes=_FRAME_PAYLOAD_MAX_BYTES,
             run_id=run.id,
             org_id=org_id,
             user_id=user_id,
             frame_id=frame_id,
             public_outcome=public_outcome,
-            payload=_bounded_json(
-                payload, field="frame_payload", max_bytes=_FRAME_PAYLOAD_MAX_BYTES
-            ),
             created_at=self._now(),
         )
         self.session.add(record)
@@ -1843,12 +1880,11 @@ class DevPersistenceService:
         )
         if not text:
             raise DevPersistenceValidationError("narrative_text must not be empty")
-        canonical_payload = _bounded_json(
-            validated.model_dump(mode="json", exclude={"body"}),
-            field="narrative_payload",
+        record = await self._construct_validated_payload_row(
+            model_cls=DevRunNarrative,
+            payload_dict=validated.model_dump(mode="json", exclude={"body"}),
+            field_name="narrative_payload",
             max_bytes=_NARRATIVE_PAYLOAD_MAX_BYTES,
-        )
-        record = DevRunNarrative(
             run_id=run.id,
             org_id=org_id,
             user_id=user_id,
@@ -1857,7 +1893,6 @@ class DevPersistenceService:
             mode=mode,
             provider_fingerprint=safe_provider_fingerprint,
             narrative_text=text,
-            payload=canonical_payload,
             created_at=self._now(),
         )
         self.session.add(record)

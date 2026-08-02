@@ -8,6 +8,7 @@ target user is explicit.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -15,7 +16,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, TypeAlias, get_args
+from typing import Any, TypeAlias
 
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import and_, case, func, or_, select
@@ -25,6 +26,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.api.dev.contracts import DevError
 from dev_health_ops.api.dev.contracts_v2.frame import (
     DevAnswerFrame as DevAnswerFrameContract,
+)
+from dev_health_ops.api.dev.contracts_v2.narrative import (
+    DevNarrative as DevNarrativeContract,
 )
 from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from dev_health_ops.models.dev_persistence import (
@@ -211,50 +215,26 @@ _NARRATIVE_TEXT_MAX_BYTES = 8 * 1024
 _NARRATIVE_PAYLOAD_MAX_BYTES = 16 * 1024
 
 
-def _dev_error_worst_case_bytes() -> int:
-    """The largest byte size a *legal* ``dev_error.v1`` can serialize to.
-
-    CHAOS-3297 Codex review round 2 MEDIUM: a hand-picked byte constant
-    (previously 4 KiB) badly under-counted the contract's own worst case --
-    ``ShortText``'s ``max_length=2048`` is a *character* bound, and
-    ``json.dumps``'s default ``ensure_ascii=True`` (what ``_bounded_json``
-    uses) escapes an astral character as a UTF-16 surrogate pair, i.e. TWO
-    ``\\uXXXX`` sequences = 12 ASCII bytes per character. A ``safe_message``
-    alone at max length with such characters is already ~24.7 KB; with
-    ``remediation`` (``max_length=5`` more ``ShortText`` entries) also
-    maxed, a single legal, Pydantic-valid ``DevError`` reaches roughly
-    144 KB. Computed here by actually constructing and serializing the
-    worst-case object through the exact same encoding ``_bounded_json``
-    uses, rather than reasoning about the bound by hand -- so a future
-    change to either the contract's field bounds or the serialization path
-    keeps this bound honest automatically.
-    """
-
-    longest_code = max(get_args(DevError.model_fields["code"].annotation), key=len)
-    # An astral (non-BMP) character: forces the two-\uXXXX surrogate-pair
-    # escape ensure_ascii=True produces, the actual worst case for byte
-    # count -- a BMP character (most real text) only costs one \uXXXX.
-    worst_char = "\U0001f600"
-    worst = DevError(
-        schema_version="dev_error.v1",
-        request_id="x" * 128,
-        code=longest_code,
-        safe_message=worst_char * 2048,
-        retryable=True,
-        limit_reset_at=datetime(2099, 12, 31, tzinfo=UTC),
-        remediation=[worst_char * 2048] * 5,
-    )
-    encoded = json.dumps(
-        worst.model_dump(mode="json"), separators=(",", ":"), sort_keys=True
-    )
-    return len(encoded.encode("utf-8"))
-
-
-# CHAOS-3297 (0079): every legal dev_error.v1 must fit, computed from the
-# contract's own field bounds (see _dev_error_worst_case_bytes) -- never a
-# guessed constant, which previously rejected legal payloads well within
-# the wire contract.
-_TERMINAL_ERROR_PAYLOAD_MAX_BYTES = _dev_error_worst_case_bytes()
+# CHAOS-3297 Codex review round 3 CLASS A: the acceptance predicate for
+# terminal_error_payload is contract validity itself (DevError.model_validate
+# succeeds -> persist) -- not a byte cap. Three prior byte-cap incarnations
+# on this branch alone (16 KiB, 64 KiB, 4 KiB) each rejected some legal
+# DevError instance a later review round could still construct; a fourth
+# hand-computed "worst case" constant (144 KiB) was *itself* wrong by 13
+# bytes (retryable=False serializes one byte longer than True; some legal
+# AwareDatetime renderings are longer than a no-fraction UTC instant) --
+# proof that hand-assembling one "worst" instance is the wrong shape of
+# argument, not just an error to correct again. This constant is now only
+# a loose, cheap anti-runaway backstop with no aspiration to be tight; the
+# real ceiling is enforced by DevError's own pydantic validation before
+# this is ever consulted. tests/api/dev/test_persistence_v2.py::
+# test_dev_error_worst_case_is_within_the_terminal_error_backstop proves
+# this backstop can never legitimately reject a valid dev_error.v1: it
+# derives the worst case by walking DevError.model_fields (not a
+# hand-built example) and asserts the sum stays under this constant, so
+# the proof -- not a guess -- is what has to keep holding as the contract
+# evolves.
+_TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES = 1024 * 1024
 
 
 class DevPersistenceNotFound(LookupError):
@@ -411,6 +391,17 @@ def _digest(value: str | None, *, field: str) -> str | None:
     except ValueError as exc:
         raise DevPersistenceValidationError(f"{field} must be a sha256 digest") from exc
     return value
+
+
+def _sha256_digest(value: str) -> str:
+    """Compute a ``sha256:``-prefixed digest, matching
+    ``orchestrator_persistence._digest`` exactly -- unlike ``_digest``
+    above (which only *validates* a value is already in that shape), this
+    *produces* one, for cross-checking a caller-supplied pre-hashed
+    fingerprint against the raw value a validated payload carries.
+    """
+
+    return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
 
 
 def _safe_token(value: str | None, *, field: str, max_bytes: int) -> str | None:
@@ -1224,18 +1215,41 @@ class DevPersistenceService:
         # CHAOS-3297 (0079): the exact terminal v1 DevError, so idempotent
         # replay can reuse it verbatim instead of reconstructing an
         # approximation from the frame (Codex review HIGH #1).
-        # _TERMINAL_ERROR_PAYLOAD_MAX_BYTES is computed from the contract's
-        # own field bounds (round 2 MEDIUM), so a legal dev_error.v1 -- not
-        # just today's small canned remediation strings -- always fits.
-        bounded_terminal_error_payload = (
-            _bounded_json(
-                terminal_error_payload,
-                field="terminal_error_payload",
-                max_bytes=_TERMINAL_ERROR_PAYLOAD_MAX_BYTES,
+        # CHAOS-3297 Codex review round 3 CLASS A: the acceptance predicate
+        # is contract validity itself -- DevError.model_validate succeeding
+        # is what admits a payload, not a byte cap (see
+        # _TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES's own comment for why a
+        # byte cap was the wrong shape of check here). The canonical
+        # round-tripped dump is what gets persisted, not the caller's raw
+        # dict, so a validated-but-differently-key-ordered payload can never
+        # diverge from what DevError itself considers this object to be.
+        # _TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES remains only as a loose
+        # anti-runaway guard that a valid dev_error.v1 can never trip.
+        bounded_terminal_error_payload: dict[str, Any] | None = None
+        if terminal_error_payload is not None:
+            try:
+                validated_terminal_error = DevError.model_validate(
+                    terminal_error_payload
+                )
+            except PydanticValidationError as exc:
+                raise DevPersistenceValidationError(
+                    f"terminal_error_payload is not a valid dev_error.v1: {exc}"
+                ) from exc
+            canonical_terminal_error_payload = validated_terminal_error.model_dump(
+                mode="json"
             )
-            if terminal_error_payload is not None
-            else None
-        )
+            encoded_terminal_error_bytes = len(
+                json.dumps(
+                    canonical_terminal_error_payload,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            )
+            if encoded_terminal_error_bytes > _TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES:
+                raise DevPersistenceValidationError(
+                    "terminal_error_payload exceeds the anti-runaway backstop"
+                )
+            bounded_terminal_error_payload = canonical_terminal_error_payload
 
         # Every value above validated cleanly -- now mutate.
         run.state = state
@@ -1283,6 +1297,45 @@ class DevPersistenceService:
             )
             return None
         return run
+
+    async def force_terminal_fallback(
+        self, *, org_id: uuid.UUID, user_id: uuid.UUID, run_id: uuid.UUID
+    ) -> None:
+        """Last-resort durability guarantee (CHAOS-3297 Codex review round 3
+        Finding 2).
+
+        ``finish()`` (``orchestrator.py``) can flush an answer and/or a
+        frame, then have its own ``terminal()``/``update_run`` write fail
+        for a reason unrelated to input validity (a dropped connection, a
+        constraint violation, any database-layer failure) -- on a session
+        that failure may have left rollback-only. The SSE layer
+        (``streaming.stream_orchestrator``) catches that exception and
+        converts it to a generic ``internal_error`` event without
+        re-raising to the request's own session-dependency teardown, which
+        then commits whatever was already flushed -- artifacts and a
+        ``contract_generation = 'v2'`` tag on a run stuck in a
+        *non-terminal* ``state`` forever, since ``update_run`` never ran to
+        completion.
+
+        Callers invoke this from a **fresh session** bound to a new
+        connection (never ``self.session``, which the original failure may
+        have poisoned) after that failure propagates, forcing the run into
+        a safe terminal state unconditionally. Idempotent: a no-op if the
+        run is already terminal (``finish()`` actually completed and
+        something else, unrelated, raised afterward) or does not exist.
+        Deliberately minimal -- only the columns needed to leave the run in
+        a coherent terminal shape for replay; every other field it already
+        wrote (or didn't) is left as-is.
+        """
+
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None or run.state in _TERMINAL_RUN_STATES:
+            return
+        run.state = "failed"
+        run.safe_error_code = "internal_error"
+        run.terminal_error_payload = None
+        run.ended_at = self._now()
+        await self.session.commit()
 
     async def append_tool_call(
         self,
@@ -1704,6 +1757,26 @@ class DevPersistenceService:
         narrative_text: str,
         payload: Mapping[str, Any],
     ) -> DevRunNarrative:
+        """Persist the canonical ``dev_narrative.v1`` for one run.
+
+        CHAOS-3297 Codex review round 3 CLASS B (record_frame's round 2 fix,
+        repeated here): ``payload`` used to be an opaque ``Mapping``,
+        bounded only by byte size and forbidden-key scanning -- never
+        validated as a real ``DevNarrative``, so a caller could tag a run
+        with a narrative row that does not actually satisfy the contract
+        (e.g. a ``provider`` mode narrative with no ``provider_metadata``).
+        ``payload`` is the narrative dump with ``body`` excluded
+        (``narrative_text`` is the separate authoritative copy --
+        ``PersistenceRunRecorder.record_narrative``), so the full contract
+        object is reconstructed (``body`` reinserted from
+        ``narrative_text``) before validating -- validation must exercise
+        every field the wire contract enforces, not the subset that happens
+        to already be in ``payload``. The validated object's own
+        ``narrative_id``/``run_id``/``frame_id``/``mode``/
+        ``provider_metadata`` must agree with this call's own arguments;
+        any mismatch rejects, no write.
+        """
+
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
         if run is None:
             raise DevPersistenceNotFound("run not found")
@@ -1720,11 +1793,61 @@ class DevPersistenceService:
             raise DevPersistenceValidationError(
                 "narrative frame_id must match the run's recorded answer frame"
             )
+        reconstructed = dict(payload)
+        reconstructed["body"] = narrative_text
+        try:
+            validated = DevNarrativeContract.model_validate(reconstructed)
+        except PydanticValidationError as exc:
+            raise DevPersistenceValidationError(
+                f"narrative payload is not a valid dev_narrative.v1: {exc}"
+            ) from exc
+        if validated.narrative_id != str(narrative_id):
+            raise DevPersistenceValidationError(
+                "narrative payload's narrative_id does not match the "
+                "narrative_id argument"
+            )
+        if validated.run_id != str(run_id):
+            raise DevPersistenceValidationError(
+                "narrative payload's run_id does not match the run_id argument"
+            )
+        if validated.frame_id != str(frame_id):
+            raise DevPersistenceValidationError(
+                "narrative payload's frame_id does not match the frame_id argument"
+            )
+        if validated.mode != mode:
+            raise DevPersistenceValidationError(
+                "narrative payload's mode does not match the mode argument"
+            )
+        # provider_fingerprint arrives already hashed (the caller -- see
+        # orchestrator_persistence.PersistenceRunRecorder.record_narrative --
+        # digests narrative.provider_metadata.model_fingerprint before this
+        # call); _digest here only validates that shape. To cross-check it
+        # against the *payload's own* raw model_fingerprint, that raw value
+        # must be hashed the identical way, not passed through the
+        # shape-only validator.
+        expected_provider_fingerprint = (
+            _sha256_digest(validated.provider_metadata.model_fingerprint)
+            if validated.provider_metadata is not None
+            else None
+        )
+        safe_provider_fingerprint = _digest(
+            provider_fingerprint, field="provider_fingerprint"
+        )
+        if expected_provider_fingerprint != safe_provider_fingerprint:
+            raise DevPersistenceValidationError(
+                "narrative payload's provider_metadata does not match the "
+                "provider_fingerprint argument"
+            )
         text = _bounded_text(
-            narrative_text, field="narrative_text", max_bytes=_NARRATIVE_TEXT_MAX_BYTES
+            validated.body, field="narrative_text", max_bytes=_NARRATIVE_TEXT_MAX_BYTES
         )
         if not text:
             raise DevPersistenceValidationError("narrative_text must not be empty")
+        canonical_payload = _bounded_json(
+            validated.model_dump(mode="json", exclude={"body"}),
+            field="narrative_payload",
+            max_bytes=_NARRATIVE_PAYLOAD_MAX_BYTES,
+        )
         record = DevRunNarrative(
             run_id=run.id,
             org_id=org_id,
@@ -1732,15 +1855,9 @@ class DevPersistenceService:
             narrative_id=narrative_id,
             frame_id=frame_id,
             mode=mode,
-            provider_fingerprint=_digest(
-                provider_fingerprint, field="provider_fingerprint"
-            ),
+            provider_fingerprint=safe_provider_fingerprint,
             narrative_text=text,
-            payload=_bounded_json(
-                payload,
-                field="narrative_payload",
-                max_bytes=_NARRATIVE_PAYLOAD_MAX_BYTES,
-            ),
+            payload=canonical_payload,
             created_at=self._now(),
         )
         self.session.add(record)

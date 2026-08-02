@@ -9,16 +9,21 @@ fails.
 
 from __future__ import annotations
 
+import ast
+import hashlib
+import inspect
 import json
 import re
+import types
 import uuid
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args, get_origin
 
 import pytest
 import pytest_asyncio
+from pydantic import AwareDatetime
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -29,7 +34,7 @@ from dev_health_ops.api.dev.contract_fixtures import (
 from dev_health_ops.api.dev.contract_fixtures_v2 import (
     positive_fixtures as positive_fixtures_v2,
 )
-from dev_health_ops.api.dev.contracts import DevAnswer
+from dev_health_ops.api.dev.contracts import DevAnswer, DevError
 from dev_health_ops.api.dev.persistence import (
     DevPersistenceNotFound,
     DevPersistenceService,
@@ -106,6 +111,45 @@ def _frame_payload(*, run_id: uuid.UUID, outcome: str) -> dict[str, Any]:
         payload["frame_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"frame:{run_id}"))
         return payload
     raise AssertionError(f"no frame builder registered for outcome {outcome!r}")
+
+
+def _narrative_payload(
+    *, run_id: uuid.UUID, frame_id: uuid.UUID, narrative_id: uuid.UUID, mode: str
+) -> tuple[dict[str, Any], str, str | None]:
+    """A valid ``dev_narrative.v1``, split into ``(payload_without_body,
+    narrative_text, provider_fingerprint)`` exactly the way
+    ``PersistenceRunRecorder.record_narrative`` splits a real
+    ``DevNarrative`` -- so ``record_narrative``'s reconstruction (``body``
+    reinserted from ``narrative_text``) round-trips to something valid
+    (CHAOS-3297 Codex review round 3 CLASS B).
+    """
+
+    provider_metadata: dict[str, Any] | None = None
+    provider_fingerprint: str | None = None
+    if mode == "provider":
+        model_fingerprint = "model-fingerprint-01"
+        provider_metadata = {
+            "provider_source": "platform",
+            "provider_family": "scripted",
+            "model_fingerprint": model_fingerprint,
+        }
+        provider_fingerprint = (
+            "sha256:" + hashlib.sha256(model_fingerprint.encode()).hexdigest()
+        )
+    narrative_text = "Here is a safe presentation summary."
+    payload: dict[str, Any] = {
+        "schema_version": "dev_narrative.v1",
+        "narrative_id": str(narrative_id),
+        "run_id": str(run_id),
+        "frame_id": str(frame_id),
+        "mode": mode,
+        "referenced_fact_ids": [],
+        "referenced_section_ids": [],
+        "provider_metadata": provider_metadata,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "validation_warnings": [],
+    }
+    return payload, narrative_text, provider_fingerprint
 
 
 _TABLES = tables_of(
@@ -741,16 +785,23 @@ async def test_record_narrative_requires_matching_recorded_frame(persistence):
                 payload={},
             )
 
+        narrative_id = uuid.uuid4()
+        narrative_payload, narrative_text, provider_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=narrative_id,
+            mode="deterministic_fallback",
+        )
         record = await service.record_narrative(
             org_id=org_id,
             user_id=user_id,
             run_id=run_id,
-            narrative_id=uuid.uuid4(),
+            narrative_id=narrative_id,
             frame_id=real_frame_id,
             mode="deterministic_fallback",
-            provider_fingerprint=None,
-            narrative_text="Here is a safe presentation summary.",
-            payload={},
+            provider_fingerprint=provider_fingerprint,
+            narrative_text=narrative_text,
+            payload=narrative_payload,
         )
         assert record.frame_id == real_frame_id
 
@@ -773,6 +824,364 @@ async def test_record_narrative_before_any_frame_is_rejected(persistence):
                 narrative_text="text",
                 payload={},
             )
+
+
+@pytest.mark.asyncio
+async def test_record_narrative_rejects_a_schema_only_junk_payload(persistence):
+    """CHAOS-3297 Codex review round 3 CLASS B, the exact record_frame
+    repro applied to record_narrative: a schema-only stub must not be
+    silently accepted just because a real frame already exists."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        real_frame_id = uuid.UUID(frame_payload["frame_id"])
+        await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=real_frame_id,
+            public_outcome="answered",
+            payload=frame_payload,
+        )
+
+        with pytest.raises(DevPersistenceValidationError, match="not a valid"):
+            await service.record_narrative(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                narrative_id=uuid.uuid4(),
+                frame_id=real_frame_id,
+                mode="deterministic_fallback",
+                provider_fingerprint=None,
+                narrative_text="Here is a safe presentation summary.",
+                payload={"schema_version": "dev_narrative.v1"},
+            )
+
+        narratives = await session.scalar(
+            select(func.count()).select_from(DevRunNarrative)
+        )
+        assert narratives == 0, "a rejected junk payload must never be written"
+
+
+# -- dev_runs.terminal_error_payload (CHAOS-3297 Codex review round 3
+# CLASS A closure argument) -------------------------------------------------
+
+
+def _dev_error_worst_case_bytes() -> int:
+    """Total worst-case JSON-encoded byte size of a legal ``dev_error.v1``.
+
+    Derived by walking ``DevError.model_fields`` -- never a single
+    hand-assembled "worst" instance, which is exactly what missed the prior
+    four attempts on this branch (16 KiB, 64 KiB, 4 KiB, and the fourth
+    "computed from the contract" 144 KiB constant that was itself short by
+    13 bytes: ``retryable=False`` serializes one byte longer than
+    ``True``, and some legal ``AwareDatetime`` renderings are longer than
+    a no-fraction UTC instant). Each field's own worst case is computed
+    from that field's own declared type/constraints *in isolation* and
+    summed; a field shape this walker does not recognize raises rather
+    than silently under-counting, so adding a new ``DevError`` field is
+    caught here, not discovered by a future review round.
+    """
+
+    def _string_worst_case(max_length: int) -> int:
+        # Verified empirically (not assumed): under ensure_ascii=True --
+        # what json.dumps uses by default, and what every payload in this
+        # module is encoded with -- an astral character needs a UTF-16
+        # surrogate pair: two \uXXXX escapes, 12 ASCII bytes. That is the
+        # worst per-character expansion across the full Unicode range
+        # (checked by direct measurement across every Unicode plane, not
+        # asserted from ISO/Unicode spec knowledge).
+        return max_length * 12 + 2
+
+    def _literal_worst_case(members: tuple[str, ...]) -> int:
+        return max(len(json.dumps(m).encode("utf-8")) for m in members)
+
+    def _datetime_worst_case() -> int:
+        # Measured through the real pydantic serializer across every
+        # combination of the *type's own* hard limits (MAXYEAR/MINYEAR,
+        # max microsecond, and the maximal timezone offset Python's
+        # datetime.timezone allows in both directions) -- not a guessed
+        # ISO 8601 format string. Which combination renders longest is an
+        # empirical fact about pydantic-core's renderer, not something to
+        # assume by reading the ISO 8601 spec.
+        from datetime import MAXYEAR, MINYEAR
+        from datetime import timezone as _timezone
+
+        offsets = [
+            timedelta(hours=23, minutes=59, seconds=59, microseconds=999999),
+            -timedelta(hours=23, minutes=59, seconds=59, microseconds=999999),
+            timedelta(0),
+        ]
+        worst = 0
+        for year in (MAXYEAR, MINYEAR + 1):
+            for microsecond in (999999, 0):
+                for offset in offsets:
+                    try:
+                        candidate = datetime(
+                            year,
+                            12,
+                            31,
+                            23,
+                            59,
+                            59,
+                            microsecond,
+                            tzinfo=_timezone(offset),
+                        )
+                    except ValueError:
+                        continue
+                    probe = DevError(
+                        schema_version="dev_error.v1",
+                        request_id="x",
+                        code="internal_error",
+                        safe_message="m",
+                        retryable=True,
+                        limit_reset_at=candidate,
+                    )
+                    dumped = probe.model_dump(mode="json")["limit_reset_at"]
+                    worst = max(worst, len(json.dumps(dumped).encode("utf-8")))
+        return worst
+
+    def _field_worst_case(annotation: Any, metadata: list[Any]) -> int:
+        origin = get_origin(annotation)
+        if origin is Literal:
+            return _literal_worst_case(get_args(annotation))
+        if origin is types.UnionType:
+            non_none = [a for a in get_args(annotation) if a is not type(None)]
+            assert len(non_none) == 1, (
+                f"only Optional[X] unions are handled, got {annotation!r}"
+            )
+            return max(len(b"null"), _field_worst_case(non_none[0], []))
+        if origin is list:
+            (inner_annotation,) = get_args(annotation)
+            inner_metadata = list(getattr(inner_annotation, "__metadata__", ()))
+            inner_type = (
+                get_args(inner_annotation)[0] if inner_metadata else inner_annotation
+            )
+            max_items = next(
+                (m.max_length for m in metadata if hasattr(m, "max_length")), None
+            )
+            assert max_items is not None, (
+                f"list field {annotation!r} has no MaxLen constraint"
+            )
+            inner_worst = _field_worst_case(inner_type, inner_metadata)
+            return 2 + max_items * (inner_worst + 1)
+        if annotation is bool:
+            return len(b"false")
+        if annotation is AwareDatetime:
+            return _datetime_worst_case()
+        if annotation is str:
+            max_length = next(
+                (m.max_length for m in metadata if hasattr(m, "max_length")), None
+            )
+            assert max_length is not None, (
+                f"str field has no max_length constraint: {metadata!r}"
+            )
+            return _string_worst_case(max_length)
+        raise NotImplementedError(
+            f"no worst-case handler for annotation={annotation!r} "
+            f"metadata={metadata!r} -- teach this walker the new DevError "
+            "field shape, do not let it silently under-count"
+        )
+
+    total = 2  # outer {}
+    for name, info in DevError.model_fields.items():
+        key_overhead = len(json.dumps(name).encode("utf-8")) + 2  # "key": + comma
+        total += key_overhead + _field_worst_case(info.annotation, info.metadata)
+    return total
+
+
+def test_dev_error_worst_case_is_within_the_terminal_error_backstop() -> None:
+    """CHAOS-3297 Codex review round 3 CLASS A closure argument.
+
+    ``_TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES`` (``persistence/service.py``)
+    is only a loose anti-runaway guard -- the real acceptance predicate for
+    ``terminal_error_payload`` is ``DevError.model_validate()`` succeeding,
+    not a byte cap. This proves the guard can never legitimately reject a
+    valid ``dev_error.v1``: the worst case is derived by walking every
+    field ``DevError`` actually declares (``_dev_error_worst_case_bytes``,
+    not a hand-picked example), so a field added or extended past the
+    margin fails *this* test, not a future codex round.
+    """
+
+    from dev_health_ops.api.dev.persistence.service import (
+        _TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES,
+    )
+
+    computed = _dev_error_worst_case_bytes()
+    assert computed < _TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES, (
+        f"DevError's own worst case ({computed} bytes) no longer fits "
+        f"inside the {_TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES}-byte "
+        "anti-runaway backstop -- a field was added or extended past the "
+        "margin"
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_run_persists_codexs_exact_previously_rejected_terminal_error(
+    persistence,
+) -> None:
+    """The exact payload CHAOS-3297 Codex review round 3 showed the prior
+    hand-computed 144 KiB cap rejected, by 13 bytes: ``retryable=False``
+    serializes one byte longer than ``True``, and a maxed
+    ``AwareDatetime`` with microseconds and a near-24h offset renders
+    longer than the no-fraction UTC instant the old computation used. Must
+    now persist cleanly, since acceptance is contract validity, not a
+    hand-tuned byte cap.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        worst_char = "\U0001f600"
+        payload = DevError(
+            schema_version="dev_error.v1",
+            request_id="x" * 128,
+            code="provider_contract_violation",
+            safe_message=worst_char * 2048,
+            retryable=False,
+            limit_reset_at=datetime(
+                9999,
+                12,
+                31,
+                23,
+                59,
+                59,
+                999999,
+                tzinfo=timezone(-timedelta(hours=23, minutes=59)),
+            ),
+            remediation=[worst_char * 2048] * 5,
+        ).model_dump(mode="json")
+
+        run = await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="failed",
+            terminal_error_payload=payload,
+        )
+        assert run is not None
+        assert run.terminal_error_payload is not None
+        assert run.terminal_error_payload["safe_message"] == worst_char * 2048
+        assert run.terminal_error_payload["retryable"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_run_rejects_an_invalid_terminal_error_payload(
+    persistence,
+) -> None:
+    """The acceptance predicate is contract validity, not a byte cap: a
+    payload that fails ``DevError.model_validate`` must be rejected
+    regardless of size."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        with pytest.raises(DevPersistenceValidationError, match="not a valid"):
+            await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="failed",
+                terminal_error_payload={"schema_version": "dev_error.v1"},
+            )
+
+
+# -- force_terminal_fallback (CHAOS-3297 Codex review round 3 Finding 2) --
+
+
+@pytest.mark.asyncio
+async def test_force_terminal_fallback_forces_a_stuck_run_terminal(persistence) -> None:
+    """CHAOS-3297 Codex review round 3 Finding 2.
+
+    A run stuck in a non-terminal state (simulating finish()'s own
+    terminal write having failed after other artifacts already flushed on
+    a now-poisoned session) must be forced into a safe terminal state by
+    this last-resort call, from an independent session, unconditionally.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="resolving_scope",
+        )
+
+        run_before = await session.get(DevRun, run_id)
+        assert run_before is not None
+        assert run_before.state == "resolving_scope"
+        assert run_before.ended_at is None
+
+        await service.force_terminal_fallback(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
+
+        run_after = await session.get(DevRun, run_id)
+        assert run_after is not None
+        assert run_after.state == "failed"
+        assert run_after.safe_error_code == "internal_error"
+        assert run_after.terminal_error_payload is None
+        assert run_after.ended_at is not None
+
+
+@pytest.mark.asyncio
+async def test_force_terminal_fallback_is_idempotent_for_an_already_terminal_run(
+    persistence,
+) -> None:
+    """A run that finish() actually completed successfully (already
+    terminal) must be left untouched -- the fallback only exists for a run
+    that never reached a terminal state at all."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="insufficient_evidence",
+            safe_error_code="scope_not_found",
+        )
+        completed_at = (await session.get(DevRun, run_id)).ended_at
+        assert completed_at is not None
+
+        await service.force_terminal_fallback(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
+
+        run_after = await session.get(DevRun, run_id)
+        assert run_after is not None
+        assert run_after.state == "insufficient_evidence", (
+            "an already-terminal run's real outcome must never be "
+            "overwritten by the fallback"
+        )
+        assert run_after.safe_error_code == "scope_not_found"
+        assert run_after.ended_at == completed_at
+
+
+@pytest.mark.asyncio
+async def test_force_terminal_fallback_is_a_noop_for_a_missing_run(persistence) -> None:
+    """A run_id that does not exist (or belongs to a different org) must
+    not raise -- this is a best-effort last resort, not a hard
+    precondition check."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        await service.force_terminal_fallback(
+            org_id=org_id, user_id=user_id, run_id=uuid.uuid4()
+        )
 
 
 # -- dev_run_stage_diagnostics ---------------------------------------------
@@ -953,16 +1362,23 @@ async def _record_every_v2_artifact(
         public_outcome="answered",
         payload=frame_payload,
     )
+    narrative_id = uuid.uuid4()
+    narrative_payload, narrative_text, provider_fingerprint = _narrative_payload(
+        run_id=run_id,
+        frame_id=frame_id,
+        narrative_id=narrative_id,
+        mode="deterministic_fallback",
+    )
     await service.record_narrative(
         org_id=org_id,
         user_id=user_id,
         run_id=run_id,
-        narrative_id=uuid.uuid4(),
+        narrative_id=narrative_id,
         frame_id=frame_id,
         mode="deterministic_fallback",
-        provider_fingerprint=None,
-        narrative_text="Safe presentation text.",
-        payload={},
+        provider_fingerprint=provider_fingerprint,
+        narrative_text=narrative_text,
+        payload=narrative_payload,
     )
     await service.append_stage_diagnostic(
         org_id=org_id,
@@ -1079,3 +1495,134 @@ async def test_zero_day_immediate_purge_covers_every_new_artifact_and_orphan_wri
                 public_outcome="answered",
                 payload={},
             )
+
+
+# -- totality: every *_payload JSON-contract sink is registered (CHAOS-3297
+# Codex review round 3 CLASS B closure argument) ---------------------------
+
+#: Sinks CHAOS-3297 has brought into full contract-validated compliance:
+#: the payload is validated against its real wire contract
+#: (``DevXContract.model_validate``) and cross-checked against the call's
+#: own arguments before any write -- ``record_frame`` (round 2 MEDIUM #3),
+#: ``record_narrative`` (round 3 CLASS B).
+_VALIDATED_PAYLOAD_SINKS = frozenset({"record_frame", "record_narrative"})
+
+#: Known, filed gap -- NOT closed this round. Each of these also persists a
+#: full wire-contract dump as an opaque ``payload`` without validating it
+#: against that contract (``record_intent`` -> ``dev_question_intent.v1``,
+#: ``append_resolution`` -> a ``dev_resolution_ledger.v1`` entry,
+#: ``record_subject_set`` -> ``dev_subject_set.v1``,
+#: ``append_source_observation`` -> ``dev_source_observation.v1``) -- the
+#: same open-boundary shape ``record_frame``/``record_narrative`` had.
+#: Enumerated here deliberately, not silently ignored: closing these is out
+#: of this round's scope, but touching any of these four names is now a
+#: conscious edit to this set, not a silent pass through the totality
+#: assertion below.
+_KNOWN_UNVALIDATED_PAYLOAD_SINKS = frozenset(
+    {
+        "record_intent",
+        "append_resolution",
+        "record_subject_set",
+        "append_source_observation",
+    }
+)
+
+
+def _payload_bearing_orm_model_names() -> frozenset[str]:
+    """Every ``models/dev_persistence`` ORM model with a ``payload``
+    column, discovered by walking the module's own classes and SQLAlchemy
+    column metadata -- never a hand-typed list."""
+
+    from dev_health_ops.models import dev_persistence as models_module
+
+    names: set[str] = set()
+    for name in dir(models_module):
+        candidate = getattr(models_module, name)
+        if not isinstance(candidate, type) or not hasattr(candidate, "__table__"):
+            continue
+        if "payload" in {column.name for column in candidate.__table__.columns}:
+            names.add(name)
+    return frozenset(names)
+
+
+def _discover_payload_writing_sinks() -> frozenset[str]:
+    """Every ``DevPersistenceService`` method that constructs a
+    payload-bearing ORM model (see ``_payload_bearing_orm_model_names``)
+    with a ``payload=`` keyword argument -- discovered by walking the
+    service's own source (AST), never a hand-typed method list. A method
+    renamed, added, or changed to build one of these models is picked up
+    automatically; nothing here has to be updated by hand for that.
+    """
+
+    payload_bearing_models = _payload_bearing_orm_model_names()
+    source = inspect.getsource(DevPersistenceService)
+    tree = ast.parse(source)
+    (class_node,) = (node for node in tree.body if isinstance(node, ast.ClassDef))
+    discovered: set[str] = set()
+    for node in class_node.body:
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        for sub in ast.walk(node):
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Name)
+                and sub.func.id in payload_bearing_models
+                and any(kw.arg == "payload" for kw in sub.keywords)
+            ):
+                discovered.add(node.name)
+    return frozenset(discovered)
+
+
+def test_payload_bearing_orm_model_names_matches_the_live_schema() -> None:
+    """Sanity for the sink-totality test below: the target model set must
+    itself track ``models/dev_persistence.py``'s live schema, not a value
+    frozen at write time. If this fails, a model gained or lost a
+    ``payload`` column and the sink-totality test's coverage silently
+    changed underneath it."""
+
+    assert _payload_bearing_orm_model_names() == {
+        "DevRunIntent",
+        "DevRunResolution",
+        "DevRunSubjectSet",
+        "DevRunSourceObservation",
+        "DevAnswerFrame",
+        "DevRunNarrative",
+    }
+
+
+def test_every_payload_writing_sink_is_registered_validated_or_a_known_gap() -> None:
+    """CHAOS-3297 Codex review round 3 CLASS B closure argument.
+
+    Enumerates -- via AST introspection of ``DevPersistenceService``'s own
+    source, never a hand-typed method list -- every method that writes a
+    ``*_payload`` JSON contract column, and asserts each is accounted for:
+    either in ``_VALIDATED_PAYLOAD_SINKS`` (contract-validated and
+    cross-checked before any write) or explicitly in
+    ``_KNOWN_UNVALIDATED_PAYLOAD_SINKS`` (a filed, deliberate gap). A new
+    sink method that writes a payload column without being added to either
+    set fails this test at introduction -- it cannot silently ship as a
+    third instance of the open-boundary bug class this review round closed
+    twice already (``record_frame``, ``record_narrative``).
+    """
+
+    discovered = _discover_payload_writing_sinks()
+    accounted_for = _VALIDATED_PAYLOAD_SINKS | _KNOWN_UNVALIDATED_PAYLOAD_SINKS
+    assert discovered == accounted_for, (
+        f"unaccounted payload-writing sinks: {sorted(discovered - accounted_for)} -- "
+        f"stale entries: {sorted(accounted_for - discovered)}"
+    )
+
+
+def test_a_new_unvalidated_sink_is_caught_by_the_totality_assertion() -> None:
+    """Rule 2: observe the totality guard actually fail, not just exist.
+
+    Simulates a new sink method being introduced (the discovered set gains
+    a name present in neither accounted-for bucket) and shows the
+    assertion the test above makes would now fail -- the guard is load
+    bearing, not decorative.
+    """
+
+    discovered = _discover_payload_writing_sinks() | {"record_something_new"}
+    accounted_for = _VALIDATED_PAYLOAD_SINKS | _KNOWN_UNVALIDATED_PAYLOAD_SINKS
+    assert discovered != accounted_for
+    assert "record_something_new" in (discovered - accounted_for)

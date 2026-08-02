@@ -23,6 +23,28 @@ from .contracts import (
 )
 
 _NUMBER = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:[.,]\d+)*(?:%|\b)")
+# CHAOS-3297 s2 round 3 (codex HIGH): the numeric-claim check just below
+# (a claim with a number needs *some* metric/evidence citation) is
+# necessary but not sufficient for completion language specifically -- it
+# never verifies the citation actually grounds the number it accompanies,
+# so a model can cite an unrelated evidence ref to "unlock" a fabricated
+# "100% complete" / "3 of 5 done" even when status_snapshot.v1 explicitly
+# withheld the denominator (ActualCompletion.required_child_total /
+# required_child_complete are ``None`` whenever the required-child source
+# itself was truncated -- see status_change_service.py). direct_summary
+# carries no citation requirement at all, so the same language needs the
+# identical guard independently of any claim. Detecting "some number" is
+# not enough (a deployment count or a cycle-time value is a legitimate,
+# differently-grounded number); require completion-specific vocabulary
+# AND a percentage/fraction/ratio shape together.
+_COMPLETION_LANGUAGE = re.compile(
+    r"\bcomplet(?:e|ed|ion)\b|\bdone\b|\bfinished\b|\bremaining\b|\boutstanding\b",
+    re.IGNORECASE,
+)
+_COMPLETION_RATIO_SHAPE = re.compile(
+    r"\d+(?:\.\d+)?\s*%|\b\d+\s*(?:/|of|out of)\s*\d+\b",
+    re.IGNORECASE,
+)
 _NON_REPAIRABLE_VALIDATION_MARKERS = (
     "unknown evidence",
     "unknown metric",
@@ -102,6 +124,33 @@ _GROUNDABLE_TOOL_RESULT_FIELDS = (
 
 def _claim_has_grounding_reference(claim: DevClaim) -> bool:
     return bool(claim.metric_ref_ids or claim.evidence_ref_ids)
+
+
+def _states_a_completion_ratio(text: str) -> bool:
+    """Whether `text` asserts a completion count/fraction/percentage/ratio
+    (e.g. "100% complete", "3 of 5 done", "2/5 remaining") -- see the
+    module-level comment above ``_COMPLETION_LANGUAGE``.
+    """
+    return bool(_COMPLETION_LANGUAGE.search(text)) and bool(
+        _COMPLETION_RATIO_SHAPE.search(text)
+    )
+
+
+def _any_tool_result_withheld_its_completion_denominator(
+    tool_results: tuple[DevToolResult, ...],
+) -> bool:
+    """Whether any executed tool in this run reported a completion
+    assessment whose denominator it explicitly withheld (CHAOS-3297 s2):
+    ``required_child_total``/``required_child_complete`` are ``None``
+    together whenever the required-child source itself was truncated (see
+    ``DevActualCompletion.validate_required_child_counts``, which already
+    enforces they can never be split -- checking one here is sufficient).
+    """
+    return any(
+        result.actual_completion is not None
+        and result.actual_completion.required_child_total is None
+        for result in tool_results
+    )
 
 
 def _answer_has_material_grounding(answer: DevAnswer) -> bool:
@@ -355,6 +404,9 @@ def validate_answer_candidate(
             code="answer_validation_failed",
             repairable=False,
         )
+    completion_denominator_withheld = (
+        _any_tool_result_withheld_its_completion_denominator(context.tool_results)
+    )
     for claim in answer.claims:
         if resolved_scope is not None and claim.validity_scope != resolved_scope:
             raise AnswerValidationError(
@@ -370,6 +422,27 @@ def validate_answer_candidate(
                 code="answer_validation_failed",
                 repairable=False,
             )
+        # CHAOS-3297 s2 round 3: a citation existing (checked above) does
+        # not mean it grounds THIS number -- a withheld server-side
+        # completion denominator makes any completion ratio fabricated
+        # regardless of what the claim cites.
+        if completion_denominator_withheld and _states_a_completion_ratio(claim.text):
+            raise AnswerValidationError(
+                "claim states a completion ratio the server withheld as unknown",
+                code="answer_validation_failed",
+                repairable=False,
+            )
+
+    if completion_denominator_withheld and _states_a_completion_ratio(
+        answer.direct_summary
+    ):
+        # direct_summary carries no citation requirement at all, so it
+        # needs the identical guard independently of the claims loop.
+        raise AnswerValidationError(
+            "direct summary states a completion ratio the server withheld as unknown",
+            code="answer_validation_failed",
+            repairable=False,
+        )
 
     # CHAOS-3290 grounding floor -- see the constants above for the full
     # reasoning. Only reachable once every other invariant already passed,

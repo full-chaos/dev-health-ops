@@ -906,6 +906,14 @@ _NON_HANDLE_IDENTIFIER_REASONS: dict[str, str] = {
     "DimensionObservation.subject_id": "provider entity key",
     "HealthRuleFinding.subject_id": "provider entity key",
     "TeamQualificationResult.team_id": "provider entity key",
+    # CHAOS-3305 operational-deficiency-inventory contracts
+    # (contracts_v2.deficiency) -- same category as the CHAOS-3302 rows
+    # above: subject identifiers name real project/team/portfolio entities,
+    # and evidence_ref_ids is scoped to one inventory document, the same
+    # category as DevSourceObservation.evidence_ref_ids above.
+    "DeficiencyFinding.subject_id": "provider entity key",
+    "OperationalDeficiencyInventory.subject_id": "provider entity key",
+    "DeficiencyFinding.evidence_ref_ids": "intra-document key",
 }
 
 

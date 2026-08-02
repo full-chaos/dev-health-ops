@@ -119,6 +119,14 @@ class HealthProfileResult:
     launch_findings: tuple[HealthRuleFinding, ...]
     shadow_findings: tuple[HealthRuleFinding, ...]
     suppressed_findings: tuple[HealthRuleFinding, ...]
+    #: CHAOS-3305 extension: the exact ``window_index=0`` observation each
+    #: finding (in any of the three buckets above) was evaluated from, keyed
+    #: by ``rule_id``. Additive-only (no existing caller reads it) -- lets a
+    #: downstream consumer (e.g. ``OperationalDeficiencyService``) report a
+    #: finding's real ``coverage``/``observed_states``/``sample_count``
+    #: instead of re-deriving or guessing them from the finding alone, which
+    #: carries none of those fields.
+    observations_by_rule: Mapping[str, DimensionObservation]
 
 
 #: Rules with a bound canonical source, handled directly in
@@ -395,4 +403,8 @@ def synthesize_health_profile(
         launch_findings=_ordered(evaluation.launch_findings),
         shadow_findings=_ordered(evaluation.shadow_findings),
         suppressed_findings=_ordered(evaluation.suppressed_findings),
+        observations_by_rule={
+            rule_id: observations[0]
+            for rule_id, observations in observations_by_rule.items()
+        },
     )

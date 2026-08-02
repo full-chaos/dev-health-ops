@@ -50,6 +50,13 @@ from dev_health_ops.llm.agent.readiness import (
     AgentReadinessService,
     SettingsAgentReadinessStore,
 )
+from dev_health_ops.llm.agent.role_readiness import RoleReadinessService
+from dev_health_ops.llm.agent.roles import (
+    PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    AgentRole,
+    RoleCertificationState,
+    SettingsRoleCertificationStore,
+)
 from dev_health_ops.llm.agent.scripted_openai_service import ScriptedOpenAIServer
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import Setting
@@ -159,8 +166,26 @@ async def test_acceptance_openai_runs_real_readiness_grounding_and_capabilities(
         model=certification.model,
         fingerprint=fingerprint,
     )
-    await certification.provider.aclose()
     assert readiness.outcome is AgentReadinessOutcome.READY
+
+    # CHAOS-3285: live selection also requires a current, COMPATIBLE
+    # legacy_agent role certification -- run the real production-sized probe
+    # against the SAME real scripted server (never a stub) before closing
+    # the provider, mirroring what the real admin routes now do.
+    role_record = await RoleReadinessService(
+        SettingsRoleCertificationStore(
+            SettingsService(settings_session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+        )
+    ).certify_role(
+        AgentRole.LEGACY_AGENT,
+        certification.provider,
+        certification_key=fingerprint,
+    )
+    await certification.provider.aclose()
+    assert role_record.state is RoleCertificationState.COMPATIBLE, (
+        role_record.safe_error_code
+    )
 
     production = await resolve_production_provider(settings_session, org_id=_ORG_ID)
     assert isinstance(production.provider, OpenAICompatibleAgentProvider)
@@ -360,7 +385,11 @@ async def test_acceptance_openai_runs_real_readiness_grounding_and_capabilities(
     assert capability.effective_provider_label == "OpenAI compatible"
     assert capability.effective_model_label == ACCEPTANCE_OPENAI_MODEL
     assert capability.provider_source == "platform"
-    assert len(scripted_openai_server.requests) == 8
+    # CHAOS-3285: 2 more requests than before -- the new production-sized
+    # legacy_agent role probe's two rounds, run against this same real
+    # scripted server above, in addition to the original transport-echo
+    # probe (2) and the orchestrator run's own requests.
+    assert len(scripted_openai_server.requests) == 10
 
 
 @pytest.mark.asyncio

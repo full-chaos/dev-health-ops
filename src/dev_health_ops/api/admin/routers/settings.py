@@ -52,6 +52,8 @@ from dev_health_ops.llm.agent.readiness import (
     SettingsAgentReadinessStore,
     readiness_failure_state,
 )
+from dev_health_ops.llm.agent.role_readiness import RoleReadinessService
+from dev_health_ops.llm.agent.roles import AgentRole, SettingsRoleCertificationStore
 from dev_health_ops.llm.budget import BUDGET_CATEGORY, get_budget_status
 from dev_health_ops.llm.credentials import (
     evaluate_org_llm_status,
@@ -307,6 +309,29 @@ async def run_llm_settings_readiness(
             model=resolution.model,
             fingerprint=resolution.readiness_fingerprint,
         )
+        try:
+            # CHAOS-3285: certify the legacy_agent role in the new per-role
+            # store too, on the same already-resolved provider. Live
+            # selection (resolve_production_provider) now REQUIRES a
+            # current, COMPATIBLE legacy_agent role record in addition to
+            # the binary record above -- without this call, this org's BYO
+            # candidate would become permanently unselectable for live
+            # traffic despite the binary preflight above reporting "ready"
+            # (Codex CHAOS-3285 review). Best-effort: a bug here must never
+            # regress the existing, already-relied-upon binary preflight
+            # result written above.
+            await RoleReadinessService(
+                SettingsRoleCertificationStore(SettingsService(session, org_id))
+            ).certify_role(
+                AgentRole.LEGACY_AGENT,
+                resolution.provider,
+                certification_key=resolution.readiness_fingerprint,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to certify the legacy_agent role during BYO Ask Dev preflight",
+                exc_info=True,
+            )
     finally:
         try:
             await resolution.provider.aclose()

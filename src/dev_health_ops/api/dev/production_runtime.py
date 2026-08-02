@@ -36,7 +36,12 @@ from dev_health_ops.llm.agent.readiness import (
     PLATFORM_SETTINGS_ORG_ID,
     SettingsAgentReadinessStore,
 )
-from dev_health_ops.llm.agent.roles import AgentRole
+from dev_health_ops.llm.agent.roles import (
+    PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    AgentRole,
+    RoleCertificationProfile,
+    SettingsRoleCertificationStore,
+)
 from dev_health_ops.llm.agent.scripted_openai_service import SCRIPTED_OPENAI_MODEL
 from dev_health_ops.llm.budget import attach_agent_budget_guard
 from dev_health_ops.llm.credentials import LLMCredentials, resolve_llm_credentials
@@ -253,17 +258,35 @@ def _platform_readiness_store(session: AsyncSession) -> SettingsAgentReadinessSt
     )
 
 
+def _platform_role_store(session: AsyncSession) -> SettingsRoleCertificationStore:
+    """Per-role certification store for the platform-owned provider -- same
+    ``org_id=""`` sentinel scoping and dedicated-key rationale as
+    ``_platform_readiness_store`` (CHAOS-3265)."""
+
+    return SettingsRoleCertificationStore(
+        SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+        key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    )
+
+
 async def resolve_production_provider(
     session: AsyncSession, *, org_id: str
 ) -> ProductionProviderResolution:
     settings = SettingsService(session, org_id)
     byo_readiness = await SettingsAgentReadinessStore(settings).load()
     platform_readiness = await _platform_readiness_store(session).load()
+    # CHAOS-3285: live selection additionally requires a CURRENT, COMPATIBLE
+    # legacy_agent role certification -- see _candidate()'s docstring for why
+    # the old binary AgentReadinessRecord alone is not sufficient here.
+    byo_role_profile = await SettingsRoleCertificationStore(settings).load()
+    platform_role_profile = await _platform_role_store(session).load()
 
     byo, platform, policy = await _provider_candidates(
         settings,
         byo_readiness=byo_readiness,
         platform_readiness=platform_readiness,
+        byo_role_profile=byo_role_profile,
+        platform_role_profile=platform_role_profile,
     )
     return _resolve_provider_selection(
         byo=byo,
@@ -379,6 +402,7 @@ async def _byo_candidate(
     *,
     readiness: Any,
     certification: bool = False,
+    role_profile: RoleCertificationProfile | None = None,
 ) -> AgentProviderCandidate | None:
     byo_provider_name = (await settings.get("provider", _LLM_CATEGORY) or "").strip()
     byo_model = (await settings.get("model", _LLM_CATEGORY) or "").strip()
@@ -395,6 +419,7 @@ async def _byo_candidate(
         source=AgentProviderSource.BYO,
         readiness=readiness,
         certification=certification,
+        role_profile=role_profile,
     )
 
 
@@ -402,6 +427,7 @@ def _platform_candidate(
     *,
     readiness: Any,
     certification: bool = False,
+    role_profile: RoleCertificationProfile | None = None,
 ) -> tuple[AgentProviderCandidate | None, str]:
     """Build the platform candidate purely from operator environment state.
 
@@ -442,6 +468,7 @@ def _platform_candidate(
         readiness=readiness,
         certification=certification,
         acceptance=acceptance is not None,
+        role_profile=role_profile,
     )
     return platform, platform_provider_name
 
@@ -452,16 +479,23 @@ async def _provider_candidates(
     byo_readiness: Any,
     platform_readiness: Any,
     certification: bool = False,
+    byo_role_profile: RoleCertificationProfile | None = None,
+    platform_role_profile: RoleCertificationProfile | None = None,
 ) -> tuple[
     AgentProviderCandidate | None,
     AgentProviderCandidate | None,
     AgentProviderPolicy,
 ]:
     byo = await _byo_candidate(
-        settings, readiness=byo_readiness, certification=certification
+        settings,
+        readiness=byo_readiness,
+        certification=certification,
+        role_profile=byo_role_profile,
     )
     platform, platform_provider_name = _platform_candidate(
-        readiness=platform_readiness, certification=certification
+        readiness=platform_readiness,
+        certification=certification,
+        role_profile=platform_role_profile,
     )
     org_policy = await load_ask_dev_org_policy(settings)
     policy = AgentProviderPolicy(
@@ -531,6 +565,7 @@ def _candidate(
     readiness: Any,
     certification: bool = False,
     acceptance: bool = False,
+    role_profile: RoleCertificationProfile | None = None,
 ) -> AgentProviderCandidate | None:
     if (
         not provider_name
@@ -553,6 +588,28 @@ def _candidate(
         readiness_current=certification,
     )
     provider_fingerprint = _readiness_fingerprint(candidate)
+    # CHAOS-3285: live selection (certification=False) additionally requires
+    # a CURRENT, COMPATIBLE legacy_agent role certification -- not just the
+    # old binary AgentReadinessRecord. Without this, an operator could
+    # re-certify through a route that only ever runs the old 512-token echo
+    # probe (or the new role probe could simply never have run), the binary
+    # store would read "current", and this candidate would become
+    # selectable for live traffic having never demonstrated it can handle
+    # the real production request shape at all -- the exact gap the role
+    # model exists to close (Codex CHAOS-3285 review). `role_profile is
+    # None` fails closed (never current), the same direction as every other
+    # missing-input default in this function; only ``certification=True``
+    # (the "give me a candidate to certify" preflight paths) bypasses this,
+    # exactly as it already bypasses the binary check below.
+    legacy_agent_record = (
+        role_profile.for_role(AgentRole.LEGACY_AGENT)
+        if role_profile is not None
+        else None
+    )
+    legacy_agent_current = bool(
+        legacy_agent_record is not None
+        and legacy_agent_record.is_current(certification_key=provider_fingerprint)
+    )
     current = bool(
         certification
         or (
@@ -561,6 +618,7 @@ def _candidate(
                 fingerprint=provider_fingerprint,
                 readiness_version=READINESS_VERSION,
             )
+            and legacy_agent_current
         )
     )
     return candidate_type(

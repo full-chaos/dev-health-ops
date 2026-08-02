@@ -97,19 +97,34 @@ class FakeReadinessProvider:
         )
 
     async def decide(self, *_args: Any, **_kwargs: Any) -> AgentDecisionResult:
+        # CHAOS-3285: BYO preflight now runs the OLD binary transport-echo
+        # probe (calls 1-2) AND the NEW production-sized legacy_agent role
+        # probe (calls 3-4) against the same resolved provider. Odd calls
+        # request a tool; even calls answer. Call 1 must echo
+        # READINESS_ECHO_TOOL_ID exactly (readiness.py's own strict match);
+        # every later tool_request round names a real registered tool
+        # instead, since certify_legacy_agent validates its synthetic tool
+        # result against the real DevToolResult/ToolID contract.
         self.calls += 1
-        if self.calls == 1:
+        if self.calls % 2 == 1:
+            tool_id = READINESS_ECHO_TOOL_ID if self.calls == 1 else "query_metric.v1"
+            arguments = (
+                {"nonce": "ready-v1"} if tool_id == READINESS_ECHO_TOOL_ID else {}
+            )
             return AgentDecisionResult(
-                decision=AgentToolRequest(
-                    READINESS_ECHO_TOOL_ID, {"nonce": "ready-v1"}, "call-1"
-                ),
+                decision=AgentToolRequest(tool_id, arguments, f"call-{self.calls}"),
                 usage=AgentUsage(input_tokens=3, output_tokens=2),
                 latency_ms=1,
                 provider_fingerprint="provider",
                 model_fingerprint="model",
             )
+        value = (
+            {"nonce": "ready-v1"}
+            if self.calls == 2
+            else {"status": "complete", "direct_summary": "Stub role probe answer."}
+        )
         return AgentDecisionResult(
-            decision=AgentFinalAnswer(value={"nonce": "ready-v1"}),
+            decision=AgentFinalAnswer(value=value),
             usage=AgentUsage(input_tokens=4, output_tokens=1),
             latency_ms=1,
             provider_fingerprint="provider",
@@ -1152,6 +1167,13 @@ async def test_llm_settings_readiness_can_flip_ask_dev_selection_to_byo(
         AgentReadinessRecord,
         SettingsAgentReadinessStore,
     )
+    from dev_health_ops.llm.agent.roles import (
+        PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+        AgentRole,
+        RoleCertificationRecord,
+        RoleCertificationState,
+        SettingsRoleCertificationStore,
+    )
 
     state = await _seed_org(session_maker, "team")
     await _set_llm_settings(
@@ -1188,6 +1210,21 @@ async def test_llm_settings_readiness_can_flip_ask_dev_selection_to_byo(
                 readiness_version=READINESS_VERSION,
                 checked_at=datetime.now(timezone.utc).isoformat(),
                 outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        # CHAOS-3285: live selection also requires a current, COMPATIBLE
+        # legacy_agent role certification -- mirror what a real
+        # POST /platform/ask-dev/readiness run now also writes.
+        await SettingsRoleCertificationStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+        ).save_record(
+            RoleCertificationRecord(
+                role=AgentRole.LEGACY_AGENT,
+                certification_key=platform_fingerprint,
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                state=RoleCertificationState.COMPATIBLE,
             )
         )
         await session.commit()

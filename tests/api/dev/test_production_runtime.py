@@ -22,7 +22,10 @@ from dev_health_ops.llm.agent.budget_policy import BUDGET_POLICY_VERSION
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
 from dev_health_ops.llm.agent.policy import AgentProviderCandidate, AgentProviderSource
 from dev_health_ops.llm.agent.readiness import PLATFORM_READINESS_SETTING_KEY
-from dev_health_ops.llm.agent.roles import AgentRole
+from dev_health_ops.llm.agent.roles import (
+    PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    AgentRole,
+)
 from dev_health_ops.llm.credentials import LLMCredentials
 
 
@@ -75,6 +78,34 @@ def _fingerprint(
             )
         ).encode()
     ).hexdigest()[:24]
+
+
+def _role_certification_setting(
+    *,
+    key_prefix: str = PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    role: AgentRole = AgentRole.LEGACY_AGENT,
+    certification_key: str,
+    state: str = "compatible",
+) -> tuple[str, str]:
+    """(settings_key, json_value) for one role's row under
+    SettingsRoleCertificationStore's per-role key format (CHAOS-3285)."""
+
+    return (
+        f"{key_prefix}:{role.value}",
+        json.dumps(
+            {
+                "version": "ask-dev-role-certification.v1",
+                "record": {
+                    "role": role.value,
+                    "certification_key": certification_key,
+                    "readiness_version": READINESS_VERSION,
+                    "checked_at": "2026-07-29T12:00:00+00:00",
+                    "state": state,
+                    "safe_error_code": None,
+                },
+            }
+        ),
+    )
 
 
 def test_readiness_fingerprint_changes_when_source_changes() -> None:
@@ -171,6 +202,7 @@ async def test_provider_resolution_requires_current_certification(
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_MODEL", "certified-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    role_key, role_value = _role_certification_setting(certification_key=_fingerprint())
     FakeSettingsService.values = {
         PLATFORM_READINESS_SETTING_KEY: json.dumps(
             {
@@ -180,7 +212,8 @@ async def test_provider_resolution_requires_current_certification(
                 "outcome": "ready",
                 "safe_error_code": None,
             }
-        )
+        ),
+        role_key: role_value,
     }
 
     session = cast(Any, object())
@@ -212,6 +245,84 @@ async def test_provider_resolution_requires_current_certification(
 
 
 @pytest.mark.asyncio
+async def test_echo_only_certification_does_not_restore_live_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 (Codex HIGH): the old binary AgentReadinessRecord being
+    "ready" must NOT be sufficient for live selection on its own. Before the
+    role-gate fix, an operator could re-certify through a route that only
+    ever runs the old 512-token echo probe (or the new role probe simply
+    never having run at all), the binary store would read current, and this
+    candidate would become selectable for real traffic having never
+    demonstrated it can handle the production request shape. This is the RED
+    half: binary readiness alone, with NO legacy_agent role certification on
+    record, must fail closed."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": _fingerprint(),
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        # Deliberately NO role-certification row at all.
+    }
+
+    session = cast(Any, object())
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_incompatible_legacy_agent_role_does_not_restore_live_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same gate, with a role record present but INCOMPATIBLE (e.g. the
+    production-sized probe reproduced output exhaustion) rather than absent
+    -- an INCOMPATIBLE verdict must never be silently treated as good
+    enough for live selection either."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    role_key, role_value = _role_certification_setting(
+        certification_key=_fingerprint(), state="incompatible"
+    )
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": _fingerprint(),
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+
+    session = cast(Any, object())
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
 async def test_platform_local_provider_uses_only_operator_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -236,20 +347,25 @@ async def test_platform_local_provider_uses_only_operator_environment(
     monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://host.docker.internal:1234/v1")
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
+    local_fingerprint = _fingerprint(
+        provider="local",
+        model="google/gemma-4-e4b",
+        base_url="http://host.docker.internal:1234/v1",
+    )
+    role_key, role_value = _role_certification_setting(
+        certification_key=local_fingerprint
+    )
     FakeSettingsService.values = {
         PLATFORM_READINESS_SETTING_KEY: json.dumps(
             {
-                "fingerprint": _fingerprint(
-                    provider="local",
-                    model="google/gemma-4-e4b",
-                    base_url="http://host.docker.internal:1234/v1",
-                ),
+                "fingerprint": local_fingerprint,
                 "readiness_version": READINESS_VERSION,
                 "checked_at": "2026-07-29T12:00:00+00:00",
                 "outcome": "ready",
                 "safe_error_code": None,
             }
         ),
+        role_key: role_value,
         # A complete organization BYO bundle remains database-owned and does
         # not overwrite the independently resolved platform candidate.
         "provider": "openai",

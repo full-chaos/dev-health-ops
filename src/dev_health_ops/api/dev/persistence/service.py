@@ -1337,6 +1337,75 @@ class DevPersistenceService:
         run.ended_at = self._now()
         await self.session.commit()
 
+    async def recover_stale_non_terminal_run(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        stale_after: timedelta,
+    ) -> DevRun | None:
+        """Recovery at the point of manifestation for the idempotent-replay
+        path (CHAOS-3297 Codex review round 5 HIGH closure).
+
+        ``force_terminal_fallback`` is the last-resort write from
+        ``run_with_events``'s own except-block; if it ALSO fails on the
+        same DB incident (a dropped connection outlives the request), a
+        run can be committed non-terminal forever. Every subsequent
+        duplicate ``client_message_id`` POST replays only TERMINAL runs
+        and 409s otherwise -- with no fallback attempt left to run, that
+        409 never stops. This is the second-chance recovery for exactly
+        that scenario, invoked from the replay path itself, at the moment
+        a caller actually asks for this run again, rather than a
+        background sweep discovering it "eventually".
+
+        Takes a row lock (``SELECT ... FOR UPDATE``) on the run before
+        looking at its state or age, so a genuinely still-running request
+        racing this call cannot have its own terminal write clobbered
+        out from under it -- this call and the real completion cannot
+        both proceed against the same row at once.
+
+        Returns:
+
+        * ``None`` if the run does not exist, or is non-terminal and
+          younger than ``stale_after`` -- a real in-flight run. The
+          caller must still 409.
+        * the run, forced terminal (``failed`` / ``internal_error``, the
+          same shape ``force_terminal_fallback`` uses) and committed, if
+          it was non-terminal and at least ``stale_after`` old.
+        * the run as-is, already terminal, if it completed (via this
+          call on an earlier replay, or the original request after all)
+          between the caller's own read and this lock.
+        """
+
+        run = await self.session.scalar(
+            select(DevRun)
+            .where(
+                DevRun.id == run_id,
+                DevRun.org_id == org_id,
+                DevRun.user_id == user_id,
+            )
+            .with_for_update()
+        )
+        if run is None:
+            return None
+        if run.state in _TERMINAL_RUN_STATES:
+            return run
+        # SQLite (test harness only -- Postgres always round-trips
+        # DateTime(timezone=True) as aware) reads a naive datetime back
+        # even though it was written aware; normalize before comparing.
+        started_at = run.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        if self._now() - started_at < stale_after:
+            return None
+        run.state = "failed"
+        run.safe_error_code = "internal_error"
+        run.terminal_error_payload = None
+        run.ended_at = self._now()
+        await self.session.commit()
+        return run
+
     async def append_tool_call(
         self,
         *,

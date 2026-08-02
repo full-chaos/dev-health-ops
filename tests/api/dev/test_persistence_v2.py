@@ -1185,6 +1185,159 @@ async def test_force_terminal_fallback_is_a_noop_for_a_missing_run(persistence) 
         )
 
 
+# -- recover_stale_non_terminal_run (CHAOS-3297 Codex review round 5 HIGH) --
+#
+# force_terminal_fallback is the request's own last-resort write. This is
+# the SECOND chance: if that ALSO fails on the same DB incident, a run
+# stays non-terminal forever and every future replay of that
+# client_message_id would 409 indefinitely with no fallback attempt left
+# to run. recover_stale_non_terminal_run is invoked from the replay path
+# itself, at the moment a caller actually asks for the run again.
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_non_terminal_run_forces_a_stuck_run_terminal_when_old_enough(
+    persistence,
+) -> None:
+    """The double-failure scenario this closes: force_terminal_fallback
+    itself failed (simulated here by never being called at all -- the run
+    is left exactly as a crashed run_with_events would leave it), and the
+    run is old enough that it cannot possibly still be genuinely in
+    flight. Recovery must force it terminal and persist that to the real
+    database, not merely return an in-memory value."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="resolving_scope",
+        )
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        run.started_at = datetime.now(UTC) - timedelta(minutes=10)
+        await session.commit()
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        recovered = await service.recover_stale_non_terminal_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            stale_after=timedelta(minutes=5),
+        )
+        assert recovered is not None
+        assert recovered.state == "failed"
+        assert recovered.safe_error_code == "internal_error"
+        assert recovered.terminal_error_payload is None
+        assert recovered.ended_at is not None
+
+    async with maker() as session:
+        run_after = await session.get(DevRun, run_id)
+        assert run_after is not None
+        assert run_after.state == "failed", (
+            "recovery must be durably committed to the database, not just "
+            "returned in-memory"
+        )
+        assert run_after.safe_error_code == "internal_error"
+        assert run_after.ended_at is not None
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_non_terminal_run_leaves_a_fresh_run_untouched_and_returns_none(
+    persistence,
+) -> None:
+    """A non-terminal run younger than the threshold is genuine in-flight
+    concurrency, not a stuck run -- it must be left exactly as-is, and the
+    caller (the 409 branch) must still be told to reject the duplicate."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="resolving_scope",
+        )
+        await session.commit()
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        recovered = await service.recover_stale_non_terminal_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            stale_after=timedelta(minutes=5),
+        )
+        assert recovered is None, (
+            "a fresh non-terminal run must not be recovered -- it may "
+            "still be a genuinely in-flight request"
+        )
+
+    async with maker() as session:
+        run_after = await session.get(DevRun, run_id)
+        assert run_after is not None
+        assert run_after.state == "resolving_scope", (
+            "a fresh non-terminal run must be left completely untouched"
+        )
+        assert run_after.ended_at is None
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_non_terminal_run_returns_an_already_terminal_run_as_is(
+    persistence,
+) -> None:
+    """If the run actually completed -- by the original request after
+    all, or a previous recovery -- between the caller's own read and this
+    call's row lock, its real outcome must never be overwritten."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="insufficient_evidence",
+            safe_error_code="scope_not_found",
+        )
+        completed_at = (await session.get(DevRun, run_id)).ended_at
+        assert completed_at is not None
+
+        recovered = await service.recover_stale_non_terminal_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            stale_after=timedelta(minutes=5),
+        )
+        assert recovered is not None
+        assert recovered.state == "insufficient_evidence"
+        assert recovered.safe_error_code == "scope_not_found"
+        assert recovered.ended_at == completed_at
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_non_terminal_run_is_a_noop_for_a_missing_run(
+    persistence,
+) -> None:
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        recovered = await service.recover_stale_non_terminal_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=uuid.uuid4(),
+            stale_after=timedelta(minutes=5),
+        )
+        assert recovered is None
+
+
 # -- dev_run_stage_diagnostics ---------------------------------------------
 
 

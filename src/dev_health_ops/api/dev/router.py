@@ -6,11 +6,12 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import uuid
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import (
@@ -95,6 +96,21 @@ from .streaming import encoded_sse_stream
 def _disable_shared_cache(response: Response) -> None:
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["Pragma"] = "no-cache"
+
+
+logger = logging.getLogger(__name__)
+
+#: How long a non-terminal run must sit unchanged before a duplicate
+#: ``client_message_id`` POST is allowed to force it terminal instead of
+#: 409ing indefinitely (CHAOS-3297 Codex review round 5 HIGH closure).
+#: Ask Dev turns are expected to complete in low tens of seconds end to
+#: end; five minutes is comfortably longer than any run that is still
+#: genuinely in flight could take without something else already having
+#: failed it, while still being short enough that the double-failure
+#: scenario this closes (the request's own fallback write ALSO failing)
+#: recovers within a user's normal retry patience rather than needing a
+#: background sweep to notice it.
+_STALE_NON_TERMINAL_RUN_THRESHOLD = timedelta(minutes=5)
 
 
 router = APIRouter(
@@ -1227,43 +1243,66 @@ async def create_message(
     run_id = str(accepted.run.id)
 
     if not accepted.created:
-        if accepted.run.state not in {
+        replay_run = accepted.run
+        if replay_run.state not in {
             RunState.COMPLETED.value,
             RunState.INSUFFICIENT_EVIDENCE.value,
             RunState.REFUSED.value,
             RunState.FAILED.value,
             RunState.CANCELLED.value,
         }:
-            _raise(
-                status.HTTP_409_CONFLICT,
-                "concurrency_limited",
-                "The matching Ask Dev request is still running.",
-                request_id=request_id,
-                retryable=True,
+            # CHAOS-3297 Codex review round 5 HIGH: recovery at the point
+            # of manifestation, not a background job. Ordinarily a
+            # non-terminal run here just means the original request is
+            # genuinely still running -- 409 is correct, and
+            # recover_stale_non_terminal_run leaves any run younger than
+            # the threshold untouched, returning None so this still 409s.
+            # But if run_with_events's own except-block fallback
+            # (force_terminal_fallback) ALSO failed on the same DB
+            # incident that broke the original attempt, this run would
+            # otherwise stay non-terminal forever and every future replay
+            # of this client_message_id would 409 indefinitely. Recover
+            # it here instead, once it is old enough that it cannot
+            # possibly still be a genuinely in-flight request.
+            recovered = await service.recover_stale_non_terminal_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=replay_run.id,
+                stale_after=_STALE_NON_TERMINAL_RUN_THRESHOLD,
             )
+            if recovered is None:
+                _raise(
+                    status.HTTP_409_CONFLICT,
+                    "concurrency_limited",
+                    "The matching Ask Dev request is still running.",
+                    request_id=request_id,
+                    retryable=True,
+                )
+                raise AssertionError("unreachable")
+            replay_run = recovered
         answer_payload = None
         frame_payload = None
-        if accepted.run.answer_id is not None:
+        if replay_run.answer_id is not None:
             try:
                 answer_message = await service.get_answer_message(
                     org_id=org_id,
                     user_id=user_id,
-                    answer_id=accepted.run.answer_id,
+                    answer_id=replay_run.answer_id,
                 )
                 answer_payload = answer_message.answer_payload
             except Exception as exc:
                 _raise_persistence(exc, request_id)
                 raise AssertionError("unreachable")
-        elif accepted.run.contract_generation == "v2":
+        elif replay_run.contract_generation == "v2":
             frame = await service.get_answer_frame(
                 org_id=org_id,
                 user_id=user_id,
-                run_id=accepted.run.id,
+                run_id=replay_run.id,
             )
             if frame is not None:
                 frame_payload = frame.payload
         replayed = _replayed_result(
-            run=accepted.run,
+            run=replay_run,
             answer_payload=answer_payload,
             frame_payload=frame_payload,
             organization_id=str(org_id),
@@ -1355,9 +1394,40 @@ async def create_message(
             # Force the run terminal from a FRESH session/connection --
             # never the session just rolled back above -- so no run can
             # end up stuck non-terminal after this failure.
-            async with get_postgres_session() as fallback_session:
-                await DevPersistenceService(fallback_session).force_terminal_fallback(
-                    org_id=org_id, user_id=user_id, run_id=accepted.run.id
+            #
+            # Bounded retry (CHAOS-3297 Codex review round 5 HIGH): one
+            # extra attempt, since a single transient failure here (the
+            # same connection blip that broke the original write, a
+            # momentary pool exhaustion) should not be allowed to strand
+            # the run non-terminal when a second attempt on a distinct
+            # connection would likely succeed. Not a queue-and-backoff
+            # mechanism -- if both attempts fail (the same DB incident
+            # taking out the fallback too), that failure is logged and
+            # swallowed here rather than replacing the original
+            # exception; recover_stale_non_terminal_run on the replay
+            # path is the durable backstop for that case, not this loop.
+            fallback_exc: Exception | None = None
+            for attempt in range(2):
+                try:
+                    async with get_postgres_session() as fallback_session:
+                        await DevPersistenceService(
+                            fallback_session
+                        ).force_terminal_fallback(
+                            org_id=org_id, user_id=user_id, run_id=accepted.run.id
+                        )
+                    fallback_exc = None
+                    break
+                except Exception as exc:
+                    fallback_exc = exc
+            if fallback_exc is not None:
+                logger.error(
+                    "ask_dev.force_terminal_fallback_failed",
+                    extra={
+                        "run_id": run_id,
+                        "org_id": str(org_id),
+                        "attempts": 2,
+                    },
+                    exc_info=fallback_exc,
                 )
             raise
 

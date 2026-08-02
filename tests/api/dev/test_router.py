@@ -5,7 +5,7 @@ import uuid
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -1242,6 +1242,173 @@ async def test_terminal_persist_failure_after_frame_write_still_ends_the_run_ter
             )
         ).all()
         assert len(runs) == 1, "the replay must not have created a second run"
+
+
+@pytest.mark.asyncio
+async def test_stale_non_terminal_run_recovers_via_replay_when_the_fallback_itself_failed(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-3297 Codex review round 5 HIGH.
+
+    ``force_terminal_fallback`` is the request's own last-resort write
+    (round 3 Finding 2, proven above). If it ALSO fails on the same DB
+    incident that broke the original ``runtime.run()`` call, that fix
+    alone leaves the run committed non-terminal forever: the replay path
+    only ever replays TERMINAL runs, so every future duplicate
+    ``client_message_id`` POST would 409 indefinitely with no fallback
+    attempt left to run. This proves the second-chance recovery closes
+    that gap -- against a REAL aiosqlite database, asserting the run's
+    actual persisted state, not a spy call count, exactly because a spy
+    that stubs the fallback out cannot see whether the *real* recovery
+    path leaves the row in a coherent, replayable state.
+
+    Two phases: a duplicate that arrives while the run is still fresh
+    must still 409 (genuine in-flight concurrency is not the bug this
+    closes); a duplicate old enough that the run cannot possibly still be
+    in flight must recover it and serve a terminal result instead.
+    """
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=cast(Any, FrameWrittenThenTerminalPersistCrashesRuntime())
+    )
+
+    @asynccontextmanager
+    async def _noop_fresh_session():
+        yield None
+
+    monkeypatch.setattr(dev_router_module, "get_postgres_session", _noop_fresh_session)
+
+    # Injected failure: the request's own last-resort fallback -- and its
+    # bounded retry -- fail every time this is called, simulating the
+    # same DB incident that broke runtime.run() also taking out the
+    # fallback write. This is the exact double failure the recovery below
+    # exists for.
+    async def _always_failing_fallback(self, **_kwargs: Any) -> None:
+        raise RuntimeError("simulated fallback failure -- same DB incident")
+
+    monkeypatch.setattr(
+        dev_router_module.DevPersistenceService,
+        "force_terminal_fallback",
+        _always_failing_fallback,
+    )
+
+    # See test_terminal_persist_failure_after_frame_write_still_ends_the_run_terminal
+    # above: the real AsyncSession.rollback() on the request-scoped
+    # session, called from run_with_events's except handler inside a task
+    # spawned by streaming.stream_orchestrator, hits an aiosqlite/
+    # SQLAlchemy greenlet-bridging limit specific to this in-process
+    # ASGI-transport test harness. Spying it out is an orthogonal
+    # test-harness workaround, not part of what this test proves.
+    async def _spy_rollback(self) -> None:
+        return None
+
+    monkeypatch.setattr(AsyncSession, "rollback", _spy_rollback)
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": "request_stale_recovery_original",
+        "client_message_id": "client_stale_recovery",
+        "conversation_id": conversation_id,
+        "question": "What is the status of the thing I mean?",
+        "question_class": "status",
+        "scope": _scope_payload(dev_api_context.org_id),
+    }
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+    live_events = dict(_parse_sse_events(live.text))
+    assert "error" in live_events, (
+        "the crash must still surface as a safe SSE error event, not hang "
+        "or 500 the connection"
+    )
+
+    _NON_TERMINAL = {
+        "completed",
+        "insufficient_evidence",
+        "refused",
+        "failed",
+        "cancelled",
+    }
+    async with dev_api_context.maker() as session:
+        run = await session.scalar(
+            select(DevRun).where(DevRun.conversation_id == uuid.UUID(conversation_id))
+        )
+        assert run is not None
+        run_id = run.id
+        assert run.state not in _NON_TERMINAL, (
+            "the double failure (runtime crash + failed fallback) must "
+            "leave the run non-terminal -- this is the gap being closed"
+        )
+
+    # Phase 1: a duplicate arriving while the run is still fresh must
+    # still 409 -- this is genuine in-flight concurrency, not a stuck run,
+    # and recover_stale_non_terminal_run must not touch it.
+    fresh_duplicate = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={**payload, "request_id": "request_stale_recovery_fresh_duplicate"},
+    )
+    assert fresh_duplicate.status_code == 409
+    assert fresh_duplicate.json()["code"] == "concurrency_limited"
+
+    async with dev_api_context.maker() as session:
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        assert run.state not in _NON_TERMINAL, (
+            "a 409'd fresh duplicate must not have mutated the run"
+        )
+        assert run.ended_at is None
+
+    # Phase 2: age the run past the recovery threshold -- simulating time
+    # passing with no further attempts, e.g. the DB incident having
+    # ended, but nothing else ever having touched this run.
+    async with dev_api_context.maker() as session:
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        run.started_at = (
+            datetime.now(UTC)
+            - dev_router_module._STALE_NON_TERMINAL_RUN_THRESHOLD
+            - timedelta(seconds=1)
+        )
+        await session.commit()
+
+    aged_duplicate = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={**payload, "request_id": "request_stale_recovery_aged_duplicate"},
+    )
+    assert aged_duplicate.status_code == 200, (
+        "an aged non-terminal run must recover and serve a terminal "
+        "result instead of 409ing forever"
+    )
+
+    async with dev_api_context.maker() as session:
+        run_after = await session.get(DevRun, run_id)
+        assert run_after is not None
+        assert run_after.state == "failed", (
+            "recovery must be visible in the real database's own state, "
+            "not merely in the HTTP response"
+        )
+        assert run_after.safe_error_code == "internal_error"
+        assert run_after.ended_at is not None
+
+    async with dev_api_context.maker() as session:
+        runs = (
+            await session.scalars(
+                select(DevRun).where(
+                    DevRun.conversation_id == uuid.UUID(conversation_id)
+                )
+            )
+        ).all()
+        assert len(runs) == 1, "recovery must not have created a second run"
 
 
 @pytest.mark.asyncio

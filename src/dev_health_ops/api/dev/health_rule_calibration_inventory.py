@@ -295,4 +295,100 @@ CALIBRATION_RECORDS: tuple[CalibrationRecord, ...] = (
         evidence_ref=None,
         notes="Illustrative example rule -- see module docstring. Never launch-authorized.",
     ),
+    # -- CHAOS-3304: team workload pressure / investment-balance rules,
+    #    newly authored with that changeset. Provisional/evidence-free like
+    #    every other entry here -- none of these has run in shadow against
+    #    a representative distribution or been through owner sign-off.
+    CalibrationRecord(
+        schema_version="health_rule_calibration.v1",
+        calibration_id="health_rule_calibration.after_hours_pressure_sustained.v1",
+        rule_id="health_rule.after_hours_pressure_sustained.v1",
+        rule_version="health_rule.after_hours_pressure_sustained.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
+        distribution_summary=(
+            "New CHAOS-3304 rule; threshold=0.25 after_hours_commit_ratio "
+            "is an engineer-chosen round number, not derived from this "
+            "product's own data."
+        ),
+        false_positive_review=_NOT_YET_FP_FN_REVIEWED,
+        false_negative_review=_NOT_YET_FP_FN_REVIEWED,
+        small_cohort_behavior=(
+            "minimum_cohort_size=5 suppresses to unknown below that floor "
+            "(mechanism verified against a test-scoped registry -- see "
+            "test_chaos_3304_workload_health_rules.py)."
+        ),
+        owner=_OWNER,
+        decided_at=_DECIDED_AT,
+        evidence_ref=None,
+        notes=_NOT_YET_REVIEWED,
+    ),
+    CalibrationRecord(
+        schema_version="health_rule_calibration.v1",
+        calibration_id="health_rule_calibration.review_request_load_pressure.v1",
+        rule_id="health_rule.review_request_load_pressure.v1",
+        rule_version="health_rule.review_request_load_pressure.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
+        distribution_summary=(
+            "New CHAOS-3304 rule; threshold=5.0 review requests per active "
+            "contributor over 14 days is an engineer-chosen round number."
+        ),
+        false_positive_review=_NOT_YET_FP_FN_REVIEWED,
+        false_negative_review=_NOT_YET_FP_FN_REVIEWED,
+        small_cohort_behavior=(
+            "minimum_cohort_size=5 suppresses to unknown below that floor."
+        ),
+        owner=_OWNER,
+        decided_at=_DECIDED_AT,
+        evidence_ref=None,
+        notes=_NOT_YET_REVIEWED,
+    ),
+    CalibrationRecord(
+        schema_version="health_rule_calibration.v1",
+        calibration_id="health_rule_calibration.pr_interruption_load_pressure.v1",
+        rule_id="health_rule.pr_interruption_load_pressure.v1",
+        rule_version="health_rule.pr_interruption_load_pressure.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
+        distribution_summary=(
+            "New CHAOS-3304 rule; threshold=5.0 PR interruptions per "
+            "active contributor over 14 days is an engineer-chosen round "
+            "number."
+        ),
+        false_positive_review=_NOT_YET_FP_FN_REVIEWED,
+        false_negative_review=_NOT_YET_FP_FN_REVIEWED,
+        small_cohort_behavior=(
+            "minimum_cohort_size=5 suppresses to unknown below that floor."
+        ),
+        owner=_OWNER,
+        decided_at=_DECIDED_AT,
+        evidence_ref=None,
+        notes=_NOT_YET_REVIEWED,
+    ),
+    CalibrationRecord(
+        schema_version="health_rule_calibration.v1",
+        calibration_id="health_rule_calibration.investment_allocation_shift.v1",
+        rule_id="health_rule.investment_allocation_shift.v1",
+        rule_version="health_rule.investment_allocation_shift.v1",
+        calibration_state=CalibrationState.PROVISIONAL,
+        sample_size=0,
+        distribution_summary=(
+            "New CHAOS-3304 rule; threshold=0.25 (25 percentage points of "
+            "new-value share) between the current and prior 14-day window "
+            "is an engineer-chosen round number. Deliberately magnitude-"
+            "only (a shift toward OR away from new-value work triggers "
+            "identically) -- see investment_allocation_shift_observation's "
+            "docstring for the 'no feature-work value judgment' rationale."
+        ),
+        false_positive_review=_NOT_YET_FP_FN_REVIEWED,
+        false_negative_review=_NOT_YET_FP_FN_REVIEWED,
+        small_cohort_behavior=(
+            "minimum_cohort_size=5 suppresses to unknown below that floor."
+        ),
+        owner=_OWNER,
+        decided_at=_DECIDED_AT,
+        evidence_ref=None,
+        notes=_NOT_YET_REVIEWED,
+    ),
 )

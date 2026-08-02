@@ -2,6 +2,20 @@
   "rules": [
     {
       "applicability": [
+        "team"
+      ],
+      "calibration_state": "provisional",
+      "dimension": "cognitive_workload_pressure",
+      "fingerprint": "hrf1_a19bae223d54cd78028d54a2cee5ccf56eefbb4d",
+      "minimum_cohort_size": 5,
+      "minimum_sample": 1,
+      "owner": "ask-dev-governance",
+      "rule_id": "health_rule.after_hours_pressure_sustained.v1",
+      "rule_version": "health_rule.after_hours_pressure_sustained.v1",
+      "severity_mapping": "watch"
+    },
+    {
+      "applicability": [
         "project",
         "team"
       ],
@@ -93,6 +107,34 @@
     },
     {
       "applicability": [
+        "team"
+      ],
+      "calibration_state": "provisional",
+      "dimension": "investment_balance",
+      "fingerprint": "hrf1_156bc77878434a86f10d9feb6e3b82a14b9bcd9b",
+      "minimum_cohort_size": 5,
+      "minimum_sample": 1,
+      "owner": "ask-dev-governance",
+      "rule_id": "health_rule.investment_allocation_shift.v1",
+      "rule_version": "health_rule.investment_allocation_shift.v1",
+      "severity_mapping": "watch"
+    },
+    {
+      "applicability": [
+        "team"
+      ],
+      "calibration_state": "provisional",
+      "dimension": "cognitive_workload_pressure",
+      "fingerprint": "hrf1_47909a7eba40af1e1eea1ba38d92fcfa8b85fa8f",
+      "minimum_cohort_size": 5,
+      "minimum_sample": 1,
+      "owner": "ask-dev-governance",
+      "rule_id": "health_rule.pr_interruption_load_pressure.v1",
+      "rule_version": "health_rule.pr_interruption_load_pressure.v1",
+      "severity_mapping": "watch"
+    },
+    {
+      "applicability": [
         "project",
         "team"
       ],
@@ -120,6 +162,20 @@
       "rule_id": "health_rule.review_latency_sustained.v1",
       "rule_version": "health_rule.review_latency_sustained.v1",
       "severity_mapping": "at_risk"
+    },
+    {
+      "applicability": [
+        "team"
+      ],
+      "calibration_state": "provisional",
+      "dimension": "cognitive_workload_pressure",
+      "fingerprint": "hrf1_83158907a1fa20df66db9b7426a6bab76cbd3afe",
+      "minimum_cohort_size": 5,
+      "minimum_sample": 1,
+      "owner": "ask-dev-governance",
+      "rule_id": "health_rule.review_request_load_pressure.v1",
+      "rule_version": "health_rule.review_request_load_pressure.v1",
+      "severity_mapping": "watch"
     },
     {
       "applicability": [

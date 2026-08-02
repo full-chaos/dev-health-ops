@@ -101,7 +101,10 @@ from .evidence_service import (
     EvidenceReferenceSigner,
     EvidenceService,
 )
-from .investigation_plans import PlanExecutor, build_default_registry
+from .investigation_plans import (
+    PlanExecutor,
+    build_default_registry,
+)
 from .investigation_plans.plan_documents import CORE_PLANS_BY_INTENT
 from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
@@ -1210,6 +1213,41 @@ class _ProductionPlanExecutorRuntime:
     metric_service: MetricQueryService
     work_graph_service: WorkGraphNeighborsService
     data_health_service: DataHealthService
+    #: CHAOS-3296: the same signer the proven v1 tool-call evidence-minting
+    #: path (``mint_status_evidence``/``mint_delivery_evidence`` below) uses
+    #: -- never a second, parallel evidence-issuing mechanism.
+    evidence_signer: EvidenceReferenceSigner
+
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
+        ref = _mint_evidence(
+            self.evidence_signer,
+            org_id,
+            source_system=source_system,
+            source_version=source_version,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            display_label=display_label,
+            observed_at=observed_at,
+            freshness=freshness,
+            confidence=confidence,
+            valid_entity_ids=valid_entity_ids,
+            repository_ids=repository_ids,
+        )
+        return ref.evidence_ref_id
 
     async def status_snapshot(self, *, org_id, permission_fingerprint, scope):
         return await self.status_service.status_snapshot(
@@ -2097,14 +2135,24 @@ async def _assemble_production_runtime(
     # is committed, and only the preflight commits one.
     plan_executor = (
         PlanExecutor(
+            # CHAOS-3296 round 5 (structural inversion, 2026-08-02): passing
+            # the exact ``EvidenceReferenceSigner`` every builtin step's
+            # ``mint_evidence`` already signs through is what turns on
+            # executor-side evidence-provenance checking -- the executor
+            # recomputes the real signature itself (see
+            # ``investigation_plans.executor._evidence_signature_failures``)
+            # rather than trusting a receipt of what this run minted, so no
+            # runtime-wrapping step is needed here anymore.
             registry=build_default_registry(
                 _ProductionPlanExecutorRuntime(
                     status_service=status_service,
                     metric_service=metric_service,
                     work_graph_service=work_graph_service,
                     data_health_service=data_health_service,
+                    evidence_signer=evidence_signer,
                 )
-            )
+            ),
+            evidence_signer=evidence_signer,
         )
         if wave_3_1_enabled
         else None

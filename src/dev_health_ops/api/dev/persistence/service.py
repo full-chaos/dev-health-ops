@@ -208,7 +208,25 @@ _STAGE_STATUSES = frozenset({"started", "completed", "failed", "skipped"})
 _INTENT_PAYLOAD_MAX_BYTES = 16 * 1024
 _RESOLUTION_PAYLOAD_MAX_BYTES = 8 * 1024
 _SUBJECT_SET_PAYLOAD_MAX_BYTES = 16 * 1024
-_SOURCE_OBSERVATION_PAYLOAD_MAX_BYTES = 16 * 1024
+# Codex finding (HIGH, 2026-08-01): a dense-but-valid `status.entity.v2`
+# observation (status_facts + up to 100 required_children + pull_requests +
+# ci_checks + deployments + incidents, each fact carrying its own
+# evidence_ref_ids/observed_at/display_label) observed ~19.6KB serialized --
+# comfortably past the prior 16KB bound, which raised
+# DevPersistenceValidationError at persist time and turned a real, already-
+# validated answer into an internal_error. The content-bearing collections
+# are already hard-capped at the contract layer (DevSourceContent's own
+# max_length=25/100 per field, contracts_v2/result.py) and every string
+# field is itself bounded (OpaqueID/Label/ShortText/EvidenceHandle), so
+# raising this envelope does not make the payload unbounded -- it aligns the
+# persistence-layer defense-in-depth check with what the contract already
+# allows to be legitimately dense, rather than truncating real evidence-
+# linked facts (which would either fabricate a shorter-than-real answer or
+# require a second, undisclosed truncation notion on top of the contract's
+# own TRUNCATED state). 64KB keeps meaningful headroom above the observed
+# dense case while staying well under the 128KB frame-payload envelope this
+# same module already trusts for the strictly larger synthesized answer.
+_SOURCE_OBSERVATION_PAYLOAD_MAX_BYTES = 64 * 1024
 _PLAN_STEP_PARTITION_MAX_BYTES = 8 * 1024
 _PLAN_STEP_LIST_MAX_ITEMS = 25
 _FRAME_PAYLOAD_MAX_BYTES = 128 * 1024

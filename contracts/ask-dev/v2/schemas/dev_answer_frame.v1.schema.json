@@ -875,6 +875,13 @@
           "title": "Confidence",
           "type": "number"
         },
+        "edge_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Edge Id",
+          "type": "string"
+        },
         "evidence_ref_ids": {
           "items": {
             "maxLength": 128,
@@ -925,7 +932,8 @@
         "target_entity_id",
         "provenance",
         "confidence",
-        "observed_at"
+        "observed_at",
+        "edge_id"
       ],
       "title": "DevGraphEdgeV2",
       "type": "object"

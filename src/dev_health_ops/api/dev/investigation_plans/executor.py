@@ -12,14 +12,37 @@ entirely the plan document plus each step's own ``applicable`` predicate
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
+from ..contracts import DirectScope
 from ..contracts_v2.base import SourceClass, SourceRequirementState
 from ..contracts_v2.plan import DevInvestigationPlan, DevSourceRequirement
-from ..contracts_v2.result import DevInvestigationResult, DevSourceObservation
+from ..contracts_v2.result import (
+    DevInvestigationResult,
+    DevRelationshipPath,
+    DevSourceContent,
+    DevSourceObservation,
+)
+from ..evidence_service import EvidenceReferenceSigner
+from .builtin_steps import (
+    _authorization_scope_digest,
+    _AuthorizationScope,
+    _snapshot_authorization_scope,
+)
+from .relationship_matrix import (
+    CONTENT_SLOT_FIELDS,
+    EVIDENCE_IDENTITY_TABLE,
+    MAX_RELATIONSHIP_PATHS,
+    MIN_RELATIONSHIP_CONFIDENCE,
+    approved_relationship,
+    content_slot_violations,
+)
+from .state_mapping import queried_semantics
 from .steps import (
     PlanRegistryError,
     PlanStepDefinition,
@@ -29,6 +52,128 @@ from .steps import (
 )
 
 __all__ = ["PlanExecutionError", "PlanExecutor"]
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidateIdentity:
+    """CHAOS-3296 round-5 structural inversion (Codex findings, HIGH, round
+    4, 2026-08-02): rounds 1-4 all verified a cited evidence handle by
+    comparing a re-derived SUBSET of its identity against a per-run RECEIPT
+    this executor maintained itself -- an adversary only had to vary
+    whatever the receipt didn't carry. Round 4's receipt bound
+    (source_system, source_version, entity_type, entity_id) but not the
+    tenant/repository scope the real signer's HMAC also binds, so a handle
+    honestly minted for a DIFFERENT org verified clean as long as those four
+    fields happened to match (finding 1); and no round bound the fact's own
+    asserted CONTENT at all, so a genuine handle for a failing CI check
+    verified a fabricated fact claiming it passed (finding 2, closed instead
+    by folding a content digest into ``source_version`` at mint -- see
+    ``builtin_steps._ci_check_source_version``).
+
+    This type carries exactly the fields
+    :class:`~..evidence_service.EvidenceReferenceSigner` (``_payload``/
+    ``verify``) binds into the real HMAC, reconstructed independently at
+    verification time rather than looked up from anything a step could
+    shape:
+
+    - ``source_system``/``source_version``/``entity_type``/``entity_id``
+      come from :data:`EVIDENCE_IDENTITY_TABLE`'s per-category ``derive``,
+      applied to the fact being verified -- never trusted from the fact's
+      own citation.
+    - ``repository_ids`` comes from the CURRENT ``StepContext``'s own
+      already-authorized scope (``context.scope.repositories`` -- the exact
+      value ``builtin_steps._scope_evidence_binding`` used at mint), never
+      from the fact or the cited handle.
+    - ``org_id`` is not a field here at all: it is supplied directly to
+      ``signer.verify`` from ``context.org_id``, for the same reason.
+
+    Because ``signer.verify`` recomputes the actual signature via the exact
+    code every real mint call already goes through (never reimplemented
+    here), a handle can only verify against a candidate if ``signer.issue``
+    was genuinely called, for THIS org, with THIS exact tuple -- there is no
+    receipt to be silently missing a field from, because there is no
+    receipt. See :func:`_evidence_signature_failures`.
+    """
+
+    evidence_ref_id: str
+    source_system: str
+    source_version: str
+    entity_type: str
+    entity_id: str
+    repository_ids: Sequence[str]
+
+
+#: Codex finding (HIGH, 2026-08-02, round 2): raising the persistence
+#: envelope (``persistence/service.py``'s ``_SOURCE_OBSERVATION_PAYLOAD_
+#: MAX_BYTES``) from 16KiB to 64KiB only moved the failure -- a genuinely
+#: contract-valid observation (every category at its own ``max_length``,
+#: every string at its own bound) still serializes past 64KiB by an order
+#: of magnitude (~615KiB at the true maximum), and a legal metric
+#: observation with dense 366-point series alone cleared 64KiB in
+#: isolation. Bounding the CONTRACT does not bound the WIRE PAYLOAD --
+#: the fix has to happen at construction, before persistence ever sees it,
+#: so the persisted object is exactly the presented object (never a
+#: silent divergence between "what we showed" and "what we stored").
+#: Kept as a literal duplicate of the numeric relationship to the
+#: persistence envelope (64KiB), not an import -- this domain-layer module
+#: has no dependency on the storage layer (see ``_STATUS_ENTITY_SOURCE_
+#: SYSTEM`` in ``builtin_steps.py`` for the same by-value-not-import
+#: posture); the two constants must be changed together.
+_CONTENT_BYTE_BUDGET_DEFAULT = 56 * 1024
+
+
+def _observation_json_bytes(observation: DevSourceObservation) -> int:
+    """Byte-for-byte the same encoding ``persistence.service._bounded_json``
+    measures the persisted payload with -- so a budget check here is the
+    exact same measurement the persistence backstop would otherwise apply,
+    just performed before construction commits to a shape that might not
+    fit."""
+
+    encoded = json.dumps(
+        observation.model_dump(mode="json"), separators=(",", ":"), sort_keys=True
+    )
+    return len(encoded.encode("utf-8"))
+
+
+def _total_content_facts(content: DevSourceContent) -> int:
+    return sum(len(getattr(content, slot)) for slot in CONTENT_SLOT_FIELDS)
+
+
+def _drop_lowest_priority_item(
+    content: DevSourceContent, dropped: dict[str, int]
+) -> DevSourceContent | None:
+    """Remove exactly one item from the lowest-priority non-empty
+    ``DevSourceContent`` field (tail-drop -- fields are already tuples in
+    stable, service-determined order, so this never touches dict/set
+    iteration order). ``CONTENT_SLOT_FIELDS`` is walked in reverse: the
+    last field in that priority list is the first ever dropped. Returns
+    ``None`` once every field is empty -- nothing left to drop."""
+
+    for slot in reversed(CONTENT_SLOT_FIELDS):
+        items = getattr(content, slot)
+        if items:
+            dropped[slot] = dropped.get(slot, 0) + 1
+            return content.model_copy(update={slot: items[:-1]})
+    return None
+
+
+def _dropped_summary(dropped: dict[str, int]) -> str:
+    return ",".join(
+        f"{field}:{count}" for field, count in sorted(dropped.items()) if count
+    )
+
+
+def _downgrade_for_truncation(state: SourceRequirementState) -> SourceRequirementState:
+    """A truncated result can never claim to be fully current -- downgrade
+    exactly once, never re-upgrade an already-imperfect state. Mirrors
+    ``state_mapping.work_graph_result_state_to_requirement_state``'s own
+    "truncated but real facts survive" reasoning: PARTIAL/STALE, never
+    the zero-fact TRUNCATED state, as long as at least one fact remains."""
+
+    if state is SourceRequirementState.AVAILABLE_CURRENT:
+        return SourceRequirementState.AVAILABLE_STALE
+    return state
+
 
 #: Fixed namespace for every CHAOS-3295-minted id. A constant, not a secret --
 #: it exists only so ``uuid5`` output cannot collide with a UUID minted by an
@@ -60,15 +205,316 @@ class _Attempt:
     failed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _PathCandidate:
+    """One un-verified hop extracted from a step's ``DevSourceContent``,
+    before relationship-matrix/confidence/self-loop/touching-root checks.
+
+    ``source_entity_id`` is ``None`` for every fact category except
+    ``graph_edges``: a status/PR/CI/deployment/incident/change/metric fact
+    has no orientation of its own (the canonical service that produced it
+    already scoped the query to the committed subject, so it is always
+    read as subject -> fact). A work-graph edge is bidirectional by
+    construction (``GraphDirection.BOTH``), so its own recorded
+    ``source_entity_id``/``target_entity_id`` must be checked against the
+    committed root explicitly.
+    """
+
+    relationship: str
+    target_entity_id: str
+    source_entity_id: str | None
+    provenance: str
+    confidence: float
+    observed_at: datetime
+    evidence_ref_ids: tuple[str, ...]
+
+
+def _root_entity_id(auth_scope: _AuthorizationScope) -> str | None:
+    """The committed single subject a relationship path closes over, or
+    ``None`` when there is none to close over (organization/repository
+    scope legitimately shows broad facts -- PRD v2 §3.2/§7).
+
+    CHAOS-3296 round 6 (Codex finding, HIGH): this previously took the raw
+    ``StepContext.scope`` and read it directly INSIDE ``_mint_relationship_
+    paths``, which runs AFTER every step has already executed -- a step
+    that mutated ``context.scope.entity_refs`` in place mid-run (swapping
+    in a foreign project's entity after minting its own evidence) caused
+    every relationship path to be rooted at, and closed over, an entity the
+    caller was never authorized to see, with ``relationship_closure_
+    verified`` reporting True throughout (``result.subject_entity_id``,
+    passed in from outside and never re-derived from ``context.scope``,
+    still showed the real committed subject -- only the paths themselves
+    were mis-rooted). Taking the SAME pre-step ``_AuthorizationScope``
+    snapshot used for evidence-signature verification closes this: there
+    is no ``context.scope`` read left anywhere on the relationship-path
+    construction path, live or otherwise.
+    """
+
+    if auth_scope.direct_scope in (
+        DirectScope.ORGANIZATION.value,
+        DirectScope.REPOSITORY.value,
+    ):
+        return None
+    if not auth_scope.entity_ids:
+        return None
+    return auth_scope.entity_ids[0]
+
+
+def _content_candidates(
+    content: DevSourceContent, *, now: datetime
+) -> list[_PathCandidate]:
+    """Every fact in ``content``, projected to one un-verified path candidate
+    each. Only the slot(s) matching the observation's own ``source_class``
+    are ever non-empty (CHAOS-3295's own invariant), so this always iterates
+    a small, single-category list in practice.
+    """
+
+    candidates: list[_PathCandidate] = []
+    for status_fact in content.status_facts:
+        candidates.append(
+            _PathCandidate(
+                "status_assessment",
+                status_fact.fact_id,
+                None,
+                "status_change_service",
+                1.0,
+                now,
+                status_fact.evidence_ref_ids,
+            )
+        )
+    for child_fact in content.required_children:
+        candidates.append(
+            _PathCandidate(
+                "required_child",
+                child_fact.fact_id,
+                None,
+                "status_change_service",
+                1.0,
+                now,
+                child_fact.evidence_ref_ids,
+            )
+        )
+    for pr_fact in content.pull_requests:
+        candidates.append(
+            _PathCandidate(
+                "linked_pull_request",
+                pr_fact.entity_id,
+                None,
+                "status_change_service:pull_requests",
+                1.0,
+                pr_fact.observed_at,
+                pr_fact.evidence_ref_ids,
+            )
+        )
+    for ci_fact in content.ci_checks:
+        candidates.append(
+            _PathCandidate(
+                "linked_ci_run",
+                ci_fact.entity_id,
+                None,
+                "status_change_service:ci_runs",
+                1.0,
+                ci_fact.observed_at,
+                ci_fact.evidence_ref_ids,
+            )
+        )
+    for deployment_fact in content.deployments:
+        candidates.append(
+            _PathCandidate(
+                "linked_deployment",
+                deployment_fact.entity_id,
+                None,
+                "status_change_service:deployments",
+                1.0,
+                deployment_fact.observed_at,
+                deployment_fact.evidence_ref_ids,
+            )
+        )
+    for incident_fact in content.incidents:
+        candidates.append(
+            _PathCandidate(
+                "linked_incident",
+                incident_fact.entity_id,
+                None,
+                "status_change_service:incidents",
+                1.0,
+                incident_fact.observed_at,
+                incident_fact.evidence_ref_ids,
+            )
+        )
+    for edge in content.graph_edges:
+        candidates.append(
+            _PathCandidate(
+                edge.relationship,
+                edge.target_entity_id,
+                edge.source_entity_id,
+                edge.provenance,
+                edge.confidence,
+                edge.observed_at,
+                edge.evidence_ref_ids,
+            )
+        )
+    for change in content.observed_changes:
+        candidates.append(
+            _PathCandidate(
+                "observed_change",
+                change.entity_id,
+                None,
+                "status_change_service:change_summary",
+                1.0,
+                change.observed_at,
+                change.evidence_ref_ids,
+            )
+        )
+    for ref in content.metric_refs:
+        candidates.append(
+            _PathCandidate(
+                "metric_scoped_to_subject",
+                ref.metric_ref_id,
+                None,
+                "metrics_service",
+                1.0,
+                now,
+                ref.evidence_ref_ids,
+            )
+        )
+    return candidates
+
+
+def _content_field_facts(content: DevSourceContent) -> list[tuple[str, Any]]:
+    """``(field_name, fact)`` for every fact in every ``CONTENT_SLOT_FIELDS``
+    category, in stable declared field order and each field's own tuple
+    order -- never dict/set iteration."""
+
+    return [
+        (slot, item) for slot in CONTENT_SLOT_FIELDS for item in getattr(content, slot)
+    ]
+
+
+def _missing_evidence_facts(content: DevSourceContent) -> tuple[str, ...]:
+    """CHAOS-3296 round-4 (Codex finding, HIGH, 2026-08-02): every
+    ``"required"``-cell fact citing ZERO evidence handles -- the
+    "evidence-free forgery" class. Rounds 1-2 only ever inspected handles a
+    fact actually cited; a fact citing none skipped every check (unminted
+    existence, identity match) entirely, so a step needed no mint call at
+    all to fabricate a fully-believed fact. ``evidence_ref_ids`` has no
+    ``min_length`` on any of these nine embedded types at the contract
+    layer (only ``status_facts`` requires >=1 there), so this is a real,
+    structurally-reachable gap, not a hypothetical one. Sorted field names,
+    deterministic.
+    """
+
+    return tuple(
+        sorted(
+            {
+                slot
+                for slot, fact in _content_field_facts(content)
+                if EVIDENCE_IDENTITY_TABLE[slot].mode == "required"
+                and not fact.evidence_ref_ids
+            }
+        )
+    )
+
+
+def _evidence_signature_failures(
+    content: DevSourceContent,
+    context: StepContext,
+    signer: EvidenceReferenceSigner,
+    authorization_scope: _AuthorizationScope,
+) -> tuple[str, ...]:
+    """Every claimed ``entity_id`` from a fact citing a handle that does not
+    cryptographically verify -- CHAOS-3296 round-5 structural inversion (see
+    :class:`_CandidateIdentity` for the full history this replaces). A fact
+    with no handles at all is :func:`_missing_evidence_facts`'s concern,
+    checked first and separately; here every cited handle is checked
+    against ``signer.verify`` directly, so "the handle was never minted at
+    all" and "the handle was minted, but for a different identity/tenant/
+    content" collapse into the SAME failure mode -- there is no longer a
+    distinct "existence" check, because a signature that does not verify is
+    exactly as invalid whether or not it happens to resemble a real one.
+
+    ``authorization_scope`` -- NEVER a fresh read of ``context.scope`` here
+    -- is the SAME :class:`_AuthorizationScope` snapshot :meth:`PlanExecutor.
+    run` captured before any step ran (round-6 finding, HIGH: a step that
+    mutated ``context.scope.repositories`` in place mid-run, then minted
+    against its own self-chosen value, previously verified clean, because
+    verification ALSO re-read the SAME mutated list AFTER the step had
+    already run). Its ``repositories`` supplies ``_CandidateIdentity``'s
+    natively-signer-bound field; its ``team_ids``/``direct_scope``/
+    ``entity_ids`` digest (:func:`~.builtin_steps._authorization_scope_digest`)
+    is appended to every derived ``source_version``, mirroring exactly what
+    ``builtin_steps._scope_bound_mint`` folded in at mint time (round-6
+    finding, HIGH: a TEAM-scoped investigation has empty ``repositories``,
+    and nothing previously bound ``team_ids`` at all, so two DIFFERENT
+    teams' investigations minted identical handles for identical content).
+    """
+
+    invalid: set[str] = set()
+    scope_digest = _authorization_scope_digest(authorization_scope)
+    for slot, fact in _content_field_facts(content):
+        cell = EVIDENCE_IDENTITY_TABLE[slot]
+        if cell.mode != "required" or cell.derive is None:
+            continue
+        source_system, source_version, entity_type, entity_id = cell.derive(fact)
+        for handle in fact.evidence_ref_ids:
+            candidate = _CandidateIdentity(
+                evidence_ref_id=handle,
+                source_system=source_system,
+                source_version=f"{source_version}#scope:{scope_digest}",
+                entity_type=entity_type,
+                entity_id=entity_id,
+                repository_ids=authorization_scope.repositories,
+            )
+            if not signer.verify(context.org_id, candidate):
+                invalid.add(entity_id)
+                break
+    return tuple(sorted(invalid))
+
+
+def _resolve_target(candidate: _PathCandidate, root_entity_id: str) -> str | None:
+    """The candidate's "other end" relative to ``root_entity_id``, or
+    ``None`` when the candidate does not actually touch the root at all
+    (cross-tenant/forged-ID acceptance criterion) -- never a fabricated
+    orientation."""
+
+    if candidate.source_entity_id is None:
+        return candidate.target_entity_id
+    if candidate.source_entity_id == root_entity_id:
+        return candidate.target_entity_id
+    if candidate.target_entity_id == root_entity_id:
+        return candidate.source_entity_id
+    return None
+
+
 class PlanExecutor:
     def __init__(
         self,
         *,
         registry: StepRegistry,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        evidence_signer: EvidenceReferenceSigner | None = None,
+        content_byte_budget: int = _CONTENT_BYTE_BUDGET_DEFAULT,
     ) -> None:
         self._registry = registry
         self._now = now
+        #: CHAOS-3296 Codex finding (HIGH, round 2): the deterministic,
+        #: disclosed-truncation byte budget every constructed observation is
+        #: held to (see :meth:`_budgeted_observation`). Overridable so tests
+        #: can pin an exact, small budget and construct boundary fixtures at
+        #: precisely-at-budget / one-item-over without needing to reverse
+        #: engineer the real ~56KiB target's byte arithmetic.
+        self._content_byte_budget = content_byte_budget
+        #: CHAOS-3296 Codex finding (MEDIUM, 2026-08-01; superseded by the
+        #: round-5 structural inversion, 2026-08-02): ``None`` by default so
+        #: every pre-3296 test/harness that hand-builds ``StepOutcome.content``
+        #: (bypassing ``register_builtin_steps``/real minting entirely) is
+        #: completely unaffected. ``production_runtime.py`` is the one caller
+        #: that passes the real ``EvidenceReferenceSigner`` here -- the exact
+        #: instance every builtin step's ``mint_evidence`` already signs
+        #: through, never a second parallel signer. With no signer, every
+        #: evidence-provenance check in :meth:`_to_observation` is skipped
+        #: and content is accepted unverified, exactly today's behavior.
+        self._evidence_signer = evidence_signer
 
     async def run(
         self,
@@ -79,6 +525,12 @@ class PlanExecutor:
         subject_entity_id: str | None = None,
         subject_set_fingerprint: str | None = None,
     ) -> DevInvestigationResult:
+        # CHAOS-3296 round 6: captured BEFORE any step (this executor's
+        # threat model's adversary) gets to run at all -- see
+        # _AuthorizationScope's own docstring for why this must never be a
+        # fresh read of context.scope taken later, after a step has already
+        # had the chance to mutate it.
+        authorization_scope = _snapshot_authorization_scope(context.scope)
         registered = self._registry.for_plan(plan.plan_id)
         known_steps = set(plan.mandatory_steps) | set(plan.conditional_steps)
         missing = known_steps - registered.keys()
@@ -148,11 +600,15 @@ class PlanExecutor:
                 ),
                 return_exceptions=True,
             )
-            for step_id, outcome in zip(runnable_now, outcomes, strict=True):
-                if isinstance(outcome, BaseException):
+            for step_id, attempt_result in zip(runnable_now, outcomes, strict=True):
+                if isinstance(attempt_result, BaseException):
                     failed.add(step_id)
                     continue
-                completed[step_id] = _Attempt(step_id, outcome, failed=False)
+                completed[step_id] = _Attempt(
+                    step_id,
+                    attempt_result,
+                    failed=False,
+                )
             for step_id in ready:
                 remaining.pop(step_id, None)
 
@@ -169,7 +625,7 @@ class PlanExecutor:
                 (definition.source_class, definition.adapter_id), []
             ).append(step_id)
 
-        observations = tuple(
+        observation_results = [
             self._observation_for_requirement(
                 requirement,
                 sorted(
@@ -183,8 +639,23 @@ class PlanExecutor:
                 blocked=blocked,
                 run_id=run_id,
                 plan_id=plan.plan_id,
+                context=context,
+                authorization_scope=authorization_scope,
             )
             for requirement in plan.source_requirements
+        ]
+        observations = tuple(
+            observation for observation, _closed in observation_results
+        )
+        # CHAOS-3296: true only when every content-bearing observation's
+        # facts all minted a verified relationship path back to the
+        # committed subject -- one rejected/unrelated/self-referential/
+        # unapproved/low-confidence candidate anywhere is enough to flip
+        # this False. Never claims a check that did not run: an unmeasured
+        # observation (no content) and a broad org/repository scope (no
+        # single subject to close over) both contribute a vacuous True.
+        relationship_closure_verified = all(
+            closed for _observation, closed in observation_results
         )
 
         return DevInvestigationResult(
@@ -206,10 +677,7 @@ class PlanExecutor:
             completed_steps=tuple(sorted(completed)),
             skipped_steps=tuple(sorted(not_applicable | blocked)),
             failed_steps=tuple(sorted(failed)),
-            # 3296 populates DevSourceObservation.relationship_paths and owns
-            # the actual closure check; this executor never claims a check it
-            # did not run.
-            relationship_closure_verified=False,
+            relationship_closure_verified=relationship_closure_verified,
             completed_at=self._now(),
         )
 
@@ -234,7 +702,9 @@ class PlanExecutor:
         blocked: set[str],
         run_id: str,
         plan_id: str,
-    ) -> DevSourceObservation:
+        context: StepContext,
+        authorization_scope: _AuthorizationScope,
+    ) -> tuple[DevSourceObservation, bool]:
         # A deterministic representative step_id for this requirement, used
         # only to seed the observation's minted id -- ``step_ids`` is already
         # sorted by the caller, so this is stable across runs regardless of
@@ -254,9 +724,16 @@ class PlanExecutor:
 
         completed_step = next((s for s in step_ids if s in completed), None)
         if completed_step is not None:
-            outcome = completed[completed_step].outcome
+            attempt = completed[completed_step]
+            outcome = attempt.outcome
             assert outcome is not None
-            return self._to_observation(requirement, outcome, observation_id)
+            return self._to_observation(
+                requirement,
+                outcome,
+                observation_id,
+                context,
+                authorization_scope,
+            )
         if step_ids and all(step_id in not_applicable for step_id in step_ids):
             return self._unmeasured_observation(
                 requirement,
@@ -293,26 +770,167 @@ class PlanExecutor:
         requirement: DevSourceRequirement,
         outcome: StepOutcome,
         observation_id: str,
-    ) -> DevSourceObservation:
-        return DevSourceObservation(
-            schema_version="dev_source_observation.v1",
-            observation_id=observation_id,
-            source_class=requirement.source_class,
-            adapter_id=requirement.adapter_id,
-            requirement_level=requirement.requirement_level,
-            observed_state=outcome.observed_state,
-            data_semantics=outcome.data_semantics,
-            watermark=outcome.watermark,
-            subject_coverage=outcome.subject_coverage,
-            usable_fact_count=outcome.usable_fact_count,
-            sample_count=outcome.sample_count,
-            relationship_paths=(),
-            evidence_ref_ids=(),
-            limitation=outcome.limitation,
-            observed_at=self._now(),
-            query_version=outcome.query_version,
-            content=outcome.content,
+        context: StepContext,
+        authorization_scope: _AuthorizationScope,
+    ) -> tuple[DevSourceObservation, bool]:
+        content = outcome.content
+        if content is not None:
+            # Codex finding (MEDIUM, 2026-08-01): a step registered under one
+            # source_class returning content shaped for a different one (e.g.
+            # STATUS_CHANGE content carrying graph_edges) previously reached
+            # relationship-path minting and persistence unfiltered -- the
+            # matrix is a closed, code-owned vocabulary of what a source
+            # class may ever claim, same posture as ``approved_relationship``
+            # below. Reject structurally: demote to unmeasured rather than
+            # pass mismatched content through, and disclose the failure via
+            # ``closed=False`` rather than a vacuous True.
+            slot_violations = content_slot_violations(requirement.source_class, content)
+            if slot_violations:
+                return self._unmeasured_observation(
+                    requirement,
+                    SourceRequirementState.UNAVAILABLE,
+                    "content_source_class_mismatch:" + ",".join(slot_violations),
+                    observation_id,
+                    closed=False,
+                )
+            if self._evidence_signer is not None:
+                # Codex finding (HIGH, round 3, 2026-08-02): every check below
+                # only ever inspects handles a fact actually cites -- a fact
+                # citing NONE skipped every one of them, so a step needed no
+                # mint call at all to fabricate a fully-believed fact (a
+                # forged CI conclusion with evidence_ref_ids=() was accepted
+                # as available_current with a minted "verified" relationship
+                # path). Require-known-good, not reject-known-bad: every
+                # evidence-capable fact MUST cite >=1 handle before its
+                # identity is even considered.
+                missing = _missing_evidence_facts(content)
+                if missing:
+                    return self._unmeasured_observation(
+                        requirement,
+                        SourceRequirementState.UNAVAILABLE,
+                        "evidence_required:" + ",".join(missing),
+                        observation_id,
+                        closed=False,
+                    )
+                # CHAOS-3296 round 5 (structural inversion, superseding
+                # rounds 1-4's per-run receipt comparison -- see
+                # :class:`_CandidateIdentity`): every cited handle must
+                # cryptographically verify against the CURRENT tenant's
+                # re-derived identity via the real signer, not merely exist
+                # in something this executor tracked itself.
+                invalid = _evidence_signature_failures(
+                    content, context, self._evidence_signer, authorization_scope
+                )
+                if invalid:
+                    return self._unmeasured_observation(
+                        requirement,
+                        SourceRequirementState.UNAVAILABLE,
+                        "evidence_signature_invalid:" + ",".join(invalid),
+                        observation_id,
+                        closed=False,
+                    )
+        return self._budgeted_observation(
+            requirement, outcome, content, observation_id, context, authorization_scope
         )
+
+    def _budgeted_observation(
+        self,
+        requirement: DevSourceRequirement,
+        outcome: StepOutcome,
+        content: DevSourceContent | None,
+        observation_id: str,
+        context: StepContext,
+        authorization_scope: _AuthorizationScope,
+    ) -> tuple[DevSourceObservation, bool]:
+        """Construct the final observation, then -- before returning it to
+        persistence or presentation -- shrink ``content`` deterministically
+        until the *exact* payload persistence will store fits
+        ``self._content_byte_budget``.
+
+        Codex finding (HIGH, 2026-08-02, round 2): raising the persistence
+        envelope only moved the "valid run becomes internal_error" bug to a
+        higher threshold -- the true contract-legal maximum is far larger
+        than any envelope this layer could reasonably hold. The fix has to
+        cap what gets CONSTRUCTED, using the contract's own disclosed
+        mechanisms (a downgraded ``observed_state``/``TRUNCATED`` plus a
+        bounded ``limitation``), never a second silent truncation notion and
+        never converting a legitimate answer into an opaque platform error.
+
+        Every iteration re-derives ``relationship_paths`` from the CURRENT
+        (possibly already-shrunk) ``content`` -- never the original -- so a
+        dropped fact can never leave behind an orphaned relationship path
+        that cites content no longer present on the wire.
+        """
+
+        dropped: dict[str, int] = {}
+        working_content = content
+        while True:
+            relationship_paths, paths_closed = self._mint_relationship_paths(
+                source_class=requirement.source_class,
+                content=working_content,
+                context=context,
+                authorization_scope=authorization_scope,
+                observation_id=observation_id,
+            )
+            usable_fact_count = outcome.usable_fact_count
+            observed_state = outcome.observed_state
+            data_semantics = outcome.data_semantics
+            limitation = outcome.limitation
+            if dropped:
+                # Recomputed from what actually survived -- never the
+                # step's original count, which may describe facts this
+                # observation no longer carries.
+                usable_fact_count = (
+                    _total_content_facts(working_content)
+                    if working_content is not None
+                    else 0
+                )
+                if usable_fact_count == 0:
+                    return self._unmeasured_observation(
+                        requirement,
+                        SourceRequirementState.TRUNCATED,
+                        "budget_truncated_to_empty:" + _dropped_summary(dropped),
+                        observation_id,
+                        closed=False,
+                    )
+                observed_state = _downgrade_for_truncation(observed_state)
+                data_semantics = queried_semantics(usable_fact_count)
+                limitation = "budget_truncated:" + _dropped_summary(dropped)
+            observation = DevSourceObservation(
+                schema_version="dev_source_observation.v1",
+                observation_id=observation_id,
+                source_class=requirement.source_class,
+                adapter_id=requirement.adapter_id,
+                requirement_level=requirement.requirement_level,
+                observed_state=observed_state,
+                data_semantics=data_semantics,
+                watermark=outcome.watermark,
+                subject_coverage=outcome.subject_coverage,
+                usable_fact_count=usable_fact_count,
+                sample_count=outcome.sample_count,
+                relationship_paths=relationship_paths,
+                evidence_ref_ids=(),
+                limitation=limitation,
+                observed_at=self._now(),
+                query_version=outcome.query_version,
+                content=working_content,
+            )
+            if _observation_json_bytes(observation) <= self._content_byte_budget:
+                return observation, paths_closed and not dropped
+            if working_content is None:
+                # Nothing left to drop yet still over budget: the non-content
+                # fields alone (e.g. an extreme ``provenance``/handle set on
+                # relationship_paths) exceed the budget. Fail closed exactly
+                # like the empty-after-truncation case above rather than
+                # persisting an oversized payload.
+                return self._unmeasured_observation(
+                    requirement,
+                    SourceRequirementState.TRUNCATED,
+                    "budget_truncated_to_empty:" + _dropped_summary(dropped),
+                    observation_id,
+                    closed=False,
+                )
+            working_content = _drop_lowest_priority_item(working_content, dropped)
 
     def _unmeasured_observation(
         self,
@@ -320,8 +938,10 @@ class PlanExecutor:
         state: SourceRequirementState,
         limitation: str,
         observation_id: str,
-    ) -> DevSourceObservation:
-        return DevSourceObservation(
+        *,
+        closed: bool = True,
+    ) -> tuple[DevSourceObservation, bool]:
+        observation = DevSourceObservation(
             schema_version="dev_source_observation.v1",
             observation_id=observation_id,
             source_class=requirement.source_class,
@@ -340,3 +960,72 @@ class PlanExecutor:
             query_version="unversioned",
             content=None,
         )
+        # An unmeasured source never ran -- nothing to close over -- so
+        # ``closed`` stays True by default. ``_to_observation`` overrides it
+        # to False for the two content-integrity guards above: those *did*
+        # run a check, and it failed, which must never present as the
+        # vacuous "nothing to verify" case.
+        return observation, closed
+
+    def _mint_relationship_paths(
+        self,
+        *,
+        source_class: SourceClass,
+        content: DevSourceContent | None,
+        context: StepContext,
+        authorization_scope: _AuthorizationScope,
+        observation_id: str,
+    ) -> tuple[tuple[DevRelationshipPath, ...], bool]:
+        if content is None:
+            return (), True
+        root_entity_id = _root_entity_id(authorization_scope)
+        if root_entity_id is None:
+            return (), True
+        accepted: dict[tuple[str, str], tuple[_PathCandidate, str]] = {}
+        rejected = 0
+        for candidate in _content_candidates(content, now=context.now):
+            resolved_target = _resolve_target(candidate, root_entity_id)
+            if (
+                resolved_target is None
+                or resolved_target == root_entity_id
+                or candidate.confidence < MIN_RELATIONSHIP_CONFIDENCE
+                or not approved_relationship(source_class, candidate.relationship)
+            ):
+                rejected += 1
+                continue
+            key = (candidate.relationship, resolved_target)
+            existing = accepted.get(key)
+            if existing is None or candidate.confidence > existing[0].confidence:
+                accepted[key] = (candidate, resolved_target)
+        # Codex finding (HIGH, 2026-08-01): ``DevSourceObservation.
+        # relationship_paths`` is bounded to ``MAX_RELATIONSHIP_PATHS`` at
+        # the contract layer (``max_length=25``) -- a dense-but-legitimate
+        # result that accepted more than that previously reached
+        # ``DevRelationshipPath``/``DevSourceObservation`` construction
+        # unbudgeted, raising ``too_long`` deep inside pydantic and turning
+        # the whole run into an ``internal_error`` instead of a disclosed,
+        # partial answer. Apply the budget here, deterministically --
+        # ``sorted(accepted.items())`` is already keyed on
+        # ``(relationship, target_entity_id)``, so truncation always drops
+        # the same tail regardless of dict/candidate-discovery order -- and
+        # flip closure False whenever the budget actually bites, exactly
+        # like any other dropped candidate.
+        sorted_accepted = sorted(accepted.items())
+        truncated = len(sorted_accepted) > MAX_RELATIONSHIP_PATHS
+        budgeted = sorted_accepted[:MAX_RELATIONSHIP_PATHS]
+        paths = tuple(
+            DevRelationshipPath(
+                path_id=_mint(
+                    "relationship_path", context.run_id, observation_id, str(index)
+                ),
+                source_entity_id=root_entity_id,
+                relationship=candidate.relationship,
+                target_entity_id=resolved_target,
+                provenance=candidate.provenance[:2_048],
+                confidence=max(0.0, min(1.0, candidate.confidence)),
+                observed_at=candidate.observed_at,
+                evidence_ref_ids=candidate.evidence_ref_ids[:25],
+            )
+            for index, (_key, (candidate, resolved_target)) in enumerate(budgeted)
+        )
+        return paths, rejected == 0 and not truncated

@@ -16,6 +16,10 @@ from dev_health_ops.api.dev.data_health_service import (
     DataHealthSource,
     DataHealthState,
 )
+from dev_health_ops.api.dev.evidence_service import (
+    EvidenceRecord,
+    EvidenceReferenceSigner,
+)
 from dev_health_ops.api.dev.investigation_plans import (
     PlanExecutor,
     StepContext,
@@ -24,8 +28,10 @@ from dev_health_ops.api.dev.investigation_plans import (
 )
 from dev_health_ops.api.dev.metrics.definitions import MetricDefinition
 from dev_health_ops.api.dev.status_change_service import (
+    ActualCompletion,
     ChangeSummaryResult,
     ChangeWindow,
+    CompletionState,
     StatusResultState,
     StatusSnapshotResult,
 )
@@ -44,13 +50,96 @@ from tests._chaos_3292_preflight import Recorder
 __all__ = [
     "FakePlanExecutorRuntime",
     "InvestigationRecorder",
+    "TEST_EVIDENCE_SIGNER",
     "executor_for",
     "fixed_now",
     "project_scope",
+    "sign_evidence",
+    "sign_evidence_for_scope",
     "step_context_for",
 ]
 
 ORG_ID = "org_fullchaos"
+
+#: A fixed, valid (>=32 byte) test secret. CHAOS-3296 round 5's
+#: signature-verification tests need a REAL ``EvidenceReferenceSigner`` --
+#: the exact class ``production_runtime.py`` wires into
+#: ``PlanExecutor(evidence_signer=...)`` -- rather than a fabricated handle
+#: string, so a forged/reused/cross-tenant/wrong-content handle genuinely
+#: fails ``signer.verify`` the same way it would in production, and a
+#: genuine handle genuinely passes.
+TEST_EVIDENCE_SIGNER = EvidenceReferenceSigner(
+    b"chaos-3296-round5-signature-test-secret"
+)
+
+
+def sign_evidence(
+    *,
+    org_id: str,
+    source_system: str,
+    source_version: str,
+    entity_type: str,
+    entity_id: str,
+    display_label: str,
+    observed_at: datetime,
+    freshness,
+    confidence: float = 1.0,
+    repository_ids=(),
+) -> str:
+    """Mint a real, :data:`TEST_EVIDENCE_SIGNER`-verifiable handle -- the
+    exact ``EvidenceRecord``/``issue`` call
+    ``production_runtime._mint_evidence`` makes for every real evidence
+    handle in production -- so a test double's ``mint_evidence`` hands back
+    a handle that genuinely passes ``PlanExecutor``'s round-5 signature
+    check, rather than an opaque counter string no verifier would ever
+    accept."""
+
+    record = EvidenceRecord(
+        source_system=source_system,
+        source_version=source_version,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        display_label=display_label,
+        observed_at=observed_at,
+        freshness=freshness,
+        provenance=source_system,
+        confidence=confidence,
+        repository_ids=tuple(repository_ids),
+    )
+    return TEST_EVIDENCE_SIGNER.issue(org_id, record)
+
+
+def sign_evidence_for_scope(
+    *, scope: DevScope, org_id: str = ORG_ID, source_version: str, **mint_kwargs
+) -> str:
+    """Like :func:`sign_evidence`, but routes through the exact same
+    ``builtin_steps._scope_bound_mint`` wrap every real ``wire_*_content``
+    call applies (CHAOS-3296 round 6) -- appends the SAME authorization-
+    scope digest suffix to ``source_version`` that a genuine mint call
+    under this ``scope`` would, so a test-constructed handle is genuinely
+    indistinguishable from a production one and verifies under
+    ``PlanExecutor``'s round-6 scope-fingerprint check. Callers pass the
+    CONTENT-bound (but not yet scope-bound) ``source_version`` -- e.g. the
+    output of ``_bind_content``/``_ci_check_source_version`` -- exactly as
+    they would to a raw ``mint_evidence`` call inside a ``wire_*`` helper.
+
+    ``repository_ids`` defaults to ``tuple(scope.repositories)`` -- exactly
+    what every real ``builtin_steps.py`` mint call derives via
+    ``_scope_evidence_binding(scope)`` -- unless the caller passes an
+    explicit override (e.g. to construct a deliberately cross-repository
+    forged handle in a RED test)."""
+
+    from dev_health_ops.api.dev.investigation_plans.builtin_steps import (
+        _scope_bound_mint,
+    )
+
+    mint_kwargs.setdefault("repository_ids", tuple(scope.repositories))
+
+    def _raw_mint(**kwargs: object) -> str:
+        return sign_evidence(org_id=org_id, **kwargs)  # type: ignore[arg-type]
+
+    wrapped = _scope_bound_mint(_raw_mint, scope)
+    return wrapped(source_version=source_version, **mint_kwargs)
 
 
 def project_scope(*, entity_id: str = "project-ask-dev") -> DevScope:
@@ -105,7 +194,22 @@ def _status_result(
         scope=None,  # type: ignore[arg-type]  # never read by any registered step
         as_of=fixed_now(),
         declared=None,
-        actual=None,  # type: ignore[arg-type]
+        # CHAOS-3296: content-minting reads ``actual.required_children`` on
+        # every queried status_snapshot outcome, so this can no longer be
+        # ``None`` (that was always a fixture shortcut -- production's
+        # ``StatusChangeService._assess`` never returns one) -- an
+        # intentionally empty, real ``ActualCompletion``, still "nothing to
+        # wire" for this shared empty-facts fixture.
+        actual=ActualCompletion(
+            state=CompletionState.NOT_READY,
+            rule_id="actual-completion",
+            rule_version="unversioned",
+            reason_codes=(),
+            required_children=(),
+            conflicts=(),
+            source_ref_ids=(),
+            evidence_ref_ids=(),
+        ),
         children=(),
         blockers=(),
         pull_requests=(),
@@ -221,6 +325,32 @@ class FakePlanExecutorRuntime:
     async def data_health(self, *, org_id, permission_fingerprint, scope):
         self.data_health_calls += 1
         return _data_health(self._data_health_state)
+
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
+        # Every fixture this shared double serves returns all-empty
+        # canonical results (no declared fact, no children, no edges), so no
+        # registered step's content-wiring loop ever actually reaches this --
+        # it exists only so ``runtime.mint_evidence`` is a valid attribute
+        # access (Protocol conformance). Suites that need real minted
+        # evidence build their own richer double (see
+        # ``test_chaos_3296_evidence_minting.py``).
+        raise AssertionError(
+            "mint_evidence should not be reachable from an all-empty fixture result"
+        )
 
 
 class InvestigationRecorder(Recorder):

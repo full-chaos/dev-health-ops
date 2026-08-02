@@ -203,6 +203,20 @@ class DevIncidentFactV2(ContractModelV2, DevIncidentFact):
 
 
 class DevGraphEdgeV2(ContractModelV2, DevGraphEdge):
+    #: CHAOS-3296 round-4 closure: v1's ``DevGraphEdge`` never carried the
+    #: work-graph edge's own canonical identity -- only its endpoints
+    #: (``source_entity_id``/``target_entity_id``) and relationship token
+    #: survived to the wire. ``_wire_work_graph_content`` (builtin_steps.py)
+    #: always mints each edge's evidence handle against ``item.edge_id``
+    #: (``WorkGraphNeighborEdge.edge_id``), but that identity was previously
+    #: DISCARDED before construction, so no verifier could ever check a
+    #: handle against the edge it actually claims to back -- Codex round 3
+    #: (2026-08-02, [HIGH]) confirmed this let one legitimately-minted edge
+    #: handle "verify" an arbitrary second, fabricated edge. A v2-only
+    #: addition (v1 stays untouched, additive per this module's own
+    #: mirror-not-reimplement posture) -- required, not defaulted, so every
+    #: construction site must be deliberate about identity.
+    edge_id: OpaqueID
     evidence_ref_ids: tuple[OpaqueID, ...] = Field(  # type: ignore[assignment]
         default_factory=tuple, max_length=25
     )

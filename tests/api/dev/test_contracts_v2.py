@@ -853,6 +853,7 @@ _NON_HANDLE_IDENTIFIER_REASONS: dict[str, str] = {
     # DevSourceObservation.content's docstring).
     "DevCIFactV2.entity_id": "provider entity key",
     "DevDeploymentFactV2.entity_id": "provider entity key",
+    "DevGraphEdgeV2.edge_id": "provider entity key",
     "DevGraphEdgeV2.source_entity_id": "provider entity key",
     "DevGraphEdgeV2.target_entity_id": "provider entity key",
     "DevIncidentFactV2.entity_id": "provider entity key",

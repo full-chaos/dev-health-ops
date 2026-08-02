@@ -1,5 +1,688 @@
 {
   "$defs": {
+    "AskDevSurfaceRouteID": {
+      "enum": [
+        "diagnose_overview",
+        "flow_metrics",
+        "investment",
+        "work_graph",
+        "complexity",
+        "cognitive_load",
+        "bottlenecks",
+        "repository_detail",
+        "project_detail",
+        "work_unit_detail",
+        "issue_detail",
+        "pull_request_detail",
+        "data_health"
+      ],
+      "title": "AskDevSurfaceRouteID",
+      "type": "string"
+    },
+    "DevCIFactV2": {
+      "additionalProperties": false,
+      "properties": {
+        "conclusion": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Conclusion",
+          "type": "string"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required"
+        },
+        "skipped_required_work": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skipped Required Work"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "conclusion",
+        "observed_at"
+      ],
+      "title": "DevCIFactV2",
+      "type": "object"
+    },
+    "DevDeploymentFactV2": {
+      "additionalProperties": false,
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Environment"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "status": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "status",
+        "required",
+        "observed_at"
+      ],
+      "title": "DevDeploymentFactV2",
+      "type": "object"
+    },
+    "DevEntityRef": {
+      "additionalProperties": false,
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_type": {
+          "$ref": "#/$defs/EntityType"
+        },
+        "repository_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Id"
+        }
+      },
+      "required": [
+        "entity_type",
+        "entity_id",
+        "display_label"
+      ],
+      "title": "DevEntityRef",
+      "type": "object"
+    },
+    "DevGraphEdgeV2": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provenance": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        },
+        "relationship": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Relationship",
+          "type": "string"
+        },
+        "source_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Source Entity Id",
+          "type": "string"
+        },
+        "target_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Target Entity Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_entity_id",
+        "relationship",
+        "target_entity_id",
+        "provenance",
+        "confidence",
+        "observed_at"
+      ],
+      "title": "DevGraphEdgeV2",
+      "type": "object"
+    },
+    "DevIncidentFactV2": {
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "title": "Active",
+          "type": "boolean"
+        },
+        "blocking": {
+          "title": "Blocking",
+          "type": "boolean"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "status": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "status",
+        "active",
+        "blocking",
+        "observed_at"
+      ],
+      "title": "DevIncidentFactV2",
+      "type": "object"
+    },
+    "DevMetricPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "timestamp",
+        "value"
+      ],
+      "title": "DevMetricPoint",
+      "type": "object"
+    },
+    "DevMetricRefV2": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregation": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Aggregation",
+          "type": "string"
+        },
+        "comparison_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comparison Value"
+        },
+        "comparison_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevTimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "coverage": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Coverage",
+          "type": "number"
+        },
+        "current_window": {
+          "$ref": "#/$defs/DevTimeRange"
+        },
+        "definition_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Definition Version",
+          "type": "string"
+        },
+        "dimensions": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Dimensions",
+          "type": "array"
+        },
+        "display_precision": {
+          "maximum": 8,
+          "minimum": 0,
+          "title": "Display Precision",
+          "type": "integer"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "freshness": {
+          "$ref": "#/$defs/FreshnessState"
+        },
+        "label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "metric_id": {
+          "$ref": "#/$defs/MetricID"
+        },
+        "metric_ref_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Metric Ref Id",
+          "type": "string"
+        },
+        "query_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Query Version",
+          "type": "string"
+        },
+        "resolved_scope": {
+          "$ref": "#/$defs/DevScopeV2"
+        },
+        "schema_version": {
+          "const": "dev_metric_ref.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "series": {
+          "items": {
+            "$ref": "#/$defs/DevMetricPoint"
+          },
+          "maxItems": 366,
+          "title": "Series",
+          "type": "array"
+        },
+        "source_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source Version",
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Unit",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "schema_version",
+        "metric_ref_id",
+        "metric_id",
+        "label",
+        "definition_version",
+        "unit",
+        "aggregation",
+        "display_precision",
+        "resolved_scope",
+        "current_window",
+        "query_version",
+        "source_version",
+        "freshness",
+        "coverage"
+      ],
+      "title": "DevMetricRefV2",
+      "type": "object"
+    },
+    "DevObservedChangeV2": {
+      "additionalProperties": false,
+      "description": "One ``change.observed.v1`` fact -- no v1 wire mirror exists to inherit.",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before"
+        },
+        "category": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Category",
+          "type": "string"
+        },
+        "change_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Change Id",
+          "type": "string"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Type",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "change_id",
+        "category",
+        "entity_type",
+        "entity_id",
+        "display_label",
+        "observed_at"
+      ],
+      "title": "DevObservedChangeV2",
+      "type": "object"
+    },
+    "DevPullRequestFactV2": {
+      "additionalProperties": false,
+      "properties": {
+        "changes_requested": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Changes Requested",
+          "type": "integer"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "merged": {
+          "title": "Merged",
+          "type": "boolean"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "review_state": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Review State"
+        },
+        "state": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "state",
+        "changes_requested",
+        "merged",
+        "required",
+        "observed_at"
+      ],
+      "title": "DevPullRequestFactV2",
+      "type": "object"
+    },
     "DevRelationshipPath": {
       "additionalProperties": false,
       "description": "One verifiable hop chain from a committed subject to supporting data.",
@@ -73,6 +756,220 @@
       "title": "DevRelationshipPath",
       "type": "object"
     },
+    "DevRequiredChildFactV2": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "fact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "status": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Status",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "text",
+        "status"
+      ],
+      "title": "DevRequiredChildFactV2",
+      "type": "object"
+    },
+    "DevScopeV2": {
+      "additionalProperties": false,
+      "properties": {
+        "comparison_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevTimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "direct_scope": {
+          "$ref": "#/$defs/DirectScope"
+        },
+        "entity_refs": {
+          "items": {
+            "$ref": "#/$defs/DevEntityRef"
+          },
+          "maxItems": 20,
+          "title": "Entity Refs",
+          "type": "array"
+        },
+        "organization_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "repositories": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Repositories",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_scope.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "surface_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevSurfaceContextV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "team_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Team Ids",
+          "type": "array"
+        },
+        "time_range": {
+          "$ref": "#/$defs/DevTimeRange"
+        }
+      },
+      "required": [
+        "schema_version",
+        "organization_id",
+        "direct_scope",
+        "time_range"
+      ],
+      "title": "DevScopeV2",
+      "type": "object"
+    },
+    "DevSourceContent": {
+      "additionalProperties": false,
+      "description": "CHAOS-3295: the typed per-step domain content a frame builder consumes.\n\nDistinct from the observation's own accounting fields\n(``usable_fact_count`` etc.): a count is not a fact. Only the slot(s)\nmatching the observation's own ``source_class`` are ever populated by the\nexecutor -- every other slot stays empty, never omitted, so a builder can\nalways address ``content.status_facts`` etc. without a hasattr check.\nNever present when ``observed_state`` is unmeasured -- see\n``DevSourceObservation.validate_content_semantics``.",
+      "properties": {
+        "ci_checks": {
+          "items": {
+            "$ref": "#/$defs/DevCIFactV2"
+          },
+          "maxItems": 25,
+          "title": "Ci Checks",
+          "type": "array"
+        },
+        "deployments": {
+          "items": {
+            "$ref": "#/$defs/DevDeploymentFactV2"
+          },
+          "maxItems": 25,
+          "title": "Deployments",
+          "type": "array"
+        },
+        "graph_edges": {
+          "items": {
+            "$ref": "#/$defs/DevGraphEdgeV2"
+          },
+          "maxItems": 25,
+          "title": "Graph Edges",
+          "type": "array"
+        },
+        "incidents": {
+          "items": {
+            "$ref": "#/$defs/DevIncidentFactV2"
+          },
+          "maxItems": 25,
+          "title": "Incidents",
+          "type": "array"
+        },
+        "metric_refs": {
+          "items": {
+            "$ref": "#/$defs/DevMetricRefV2"
+          },
+          "maxItems": 25,
+          "title": "Metric Refs",
+          "type": "array"
+        },
+        "observed_changes": {
+          "items": {
+            "$ref": "#/$defs/DevObservedChangeV2"
+          },
+          "maxItems": 25,
+          "title": "Observed Changes",
+          "type": "array"
+        },
+        "pull_requests": {
+          "items": {
+            "$ref": "#/$defs/DevPullRequestFactV2"
+          },
+          "maxItems": 25,
+          "title": "Pull Requests",
+          "type": "array"
+        },
+        "required_children": {
+          "items": {
+            "$ref": "#/$defs/DevRequiredChildFactV2"
+          },
+          "maxItems": 100,
+          "title": "Required Children",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_source_content.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status_facts": {
+          "items": {
+            "$ref": "#/$defs/DevStatusFactV2"
+          },
+          "maxItems": 25,
+          "title": "Status Facts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version"
+      ],
+      "title": "DevSourceContent",
+      "type": "object"
+    },
     "DevSourceObservation": {
       "additionalProperties": false,
       "properties": {
@@ -82,6 +979,17 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Adapter Id",
           "type": "string"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevSourceContent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "data_semantics": {
           "enum": [
@@ -219,6 +1127,157 @@
       ],
       "title": "DevSourceObservation",
       "type": "object"
+    },
+    "DevStatusFactV2": {
+      "additionalProperties": false,
+      "description": "Mirrors ``DevStatusFact`` for CHAOS-3295's per-step content payload.",
+      "properties": {
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "minItems": 1,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "fact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "text",
+        "evidence_ref_ids"
+      ],
+      "title": "DevStatusFactV2",
+      "type": "object"
+    },
+    "DevSurfaceContextV2": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_refs": {
+          "items": {
+            "$ref": "#/$defs/DevEntityRef"
+          },
+          "maxItems": 20,
+          "title": "Entity Refs",
+          "type": "array"
+        },
+        "filter_fingerprint": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filter Fingerprint"
+        },
+        "route_id": {
+          "$ref": "#/$defs/AskDevSurfaceRouteID"
+        }
+      },
+      "required": [
+        "route_id"
+      ],
+      "title": "DevSurfaceContextV2",
+      "type": "object"
+    },
+    "DevTimeRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "timezone": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "timezone"
+      ],
+      "title": "DevTimeRange",
+      "type": "object"
+    },
+    "DirectScope": {
+      "enum": [
+        "organization",
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "team"
+      ],
+      "title": "DirectScope",
+      "type": "string"
+    },
+    "EntityType": {
+      "enum": [
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "team"
+      ],
+      "title": "EntityType",
+      "type": "string"
+    },
+    "FreshnessState": {
+      "enum": [
+        "fresh",
+        "stale",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "FreshnessState",
+      "type": "string"
+    },
+    "MetricID": {
+      "enum": [
+        "items_completed",
+        "cycle_time_p50_hours",
+        "avg_wip",
+        "deployments_count",
+        "change_failure_rate",
+        "investment_allocation_pct",
+        "cyclomatic_per_kloc",
+        "compounding_risk_score"
+      ],
+      "title": "MetricID",
+      "type": "string"
     },
     "SourceClass": {
       "description": "The closed platform vocabulary of investigable source classes.\n\nA *source class* names a kind of platform data an investigation step can\ndraw on. It is deliberately a closed enum rather than an ``OpaqueID``,\nbecause the same token is what ``dev_coverage``'s\n``unavailable_required_sources``/``stale_required_sources`` disclose on a\n**denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):\nadversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle\na subject-derived identifier (``\"private/Nightfall\"``) out through a frame\nwhose every other field was correctly empty. A closed vocabulary means the\ncoverage counts stay answerable for a denial while carrying nothing a\nproducer chose.\n\nAdding a source class is therefore a deliberate contract change, not an\nincidental string: a new adapter must add its member here (and regenerate\nthe exported schemas) before it can appear on the wire.",

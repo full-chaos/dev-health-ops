@@ -36,7 +36,7 @@ from dev_health_ops.api.dev.contracts import (
     QuestionClass,
     ToolID,
 )
-from dev_health_ops.api.dev.contracts_v2 import DevSubjectSet
+from dev_health_ops.api.dev.contracts_v2 import DevInvestigationResult, DevSubjectSet
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator, OrchestratorResult
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
@@ -357,6 +357,10 @@ class Recorder:
     async def rollback(self) -> None:
         pass
 
+    async def record_investigation_result(self, result: DevInvestigationResult) -> None:
+        """No-op here; CHAOS-3295's InvestigationRecorder subclass captures this."""
+        del result
+
     async def terminal(self, **values: Any) -> None:
         self.terminals.append(values["state"])
 
@@ -461,6 +465,8 @@ async def run_preflight_orchestrator(
     fail_search: bool = False,
     preflight_enabled: bool = True,
     recorder_factory: Callable[[], Recorder] = Recorder,
+    plan_registry: Any = None,
+    plan_executor: Any = None,
 ) -> RunOutput:
     """One full orchestrator run with the preflight wired the way production wires it.
 
@@ -509,6 +515,8 @@ async def run_preflight_orchestrator(
         versions=versions(),
         recorder=recorder,
         preflight=preflight,
+        plan_registry=plan_registry,
+        plan_executor=plan_executor,
     )
     result = await orchestrator.run(
         request=request,

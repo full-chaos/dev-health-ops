@@ -345,6 +345,79 @@
       "title": "DevAnswerSection",
       "type": "object"
     },
+    "DevCIFactV2": {
+      "additionalProperties": false,
+      "properties": {
+        "conclusion": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Conclusion",
+          "type": "string"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required"
+        },
+        "skipped_required_work": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skipped Required Work"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "conclusion",
+        "observed_at"
+      ],
+      "title": "DevCIFactV2",
+      "type": "object"
+    },
     "DevCitationLink": {
       "additionalProperties": false,
       "properties": {
@@ -553,6 +626,75 @@
         "as_of"
       ],
       "title": "DevCoverageV2",
+      "type": "object"
+    },
+    "DevDeploymentFactV2": {
+      "additionalProperties": false,
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Environment"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "status": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "status",
+        "required",
+        "observed_at"
+      ],
+      "title": "DevDeploymentFactV2",
       "type": "object"
     },
     "DevEntityRef": {
@@ -952,6 +1094,129 @@
       "title": "DevFrameVersions",
       "type": "object"
     },
+    "DevGraphEdgeV2": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provenance": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        },
+        "relationship": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Relationship",
+          "type": "string"
+        },
+        "source_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Source Entity Id",
+          "type": "string"
+        },
+        "target_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Target Entity Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_entity_id",
+        "relationship",
+        "target_entity_id",
+        "provenance",
+        "confidence",
+        "observed_at"
+      ],
+      "title": "DevGraphEdgeV2",
+      "type": "object"
+    },
+    "DevIncidentFactV2": {
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "title": "Active",
+          "type": "boolean"
+        },
+        "blocking": {
+          "title": "Blocking",
+          "type": "boolean"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "status": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "status",
+        "active",
+        "blocking",
+        "observed_at"
+      ],
+      "title": "DevIncidentFactV2",
+      "type": "object"
+    },
     "DevMetricPoint": {
       "additionalProperties": false,
       "properties": {
@@ -1271,6 +1536,181 @@
       "title": "DevNarrative",
       "type": "object"
     },
+    "DevObservedChangeV2": {
+      "additionalProperties": false,
+      "description": "One ``change.observed.v1`` fact -- no v1 wire mirror exists to inherit.",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before"
+        },
+        "category": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Category",
+          "type": "string"
+        },
+        "change_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Change Id",
+          "type": "string"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Type",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "change_id",
+        "category",
+        "entity_type",
+        "entity_id",
+        "display_label",
+        "observed_at"
+      ],
+      "title": "DevObservedChangeV2",
+      "type": "object"
+    },
+    "DevPullRequestFactV2": {
+      "additionalProperties": false,
+      "properties": {
+        "changes_requested": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Changes Requested",
+          "type": "integer"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "merged": {
+          "title": "Merged",
+          "type": "boolean"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "review_state": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Review State"
+        },
+        "state": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "state",
+        "changes_requested",
+        "merged",
+        "required",
+        "observed_at"
+      ],
+      "title": "DevPullRequestFactV2",
+      "type": "object"
+    },
     "DevReadinessBlock": {
       "additionalProperties": false,
       "description": "Readiness is a distinct concept from completion (per TRD v2 \u00a74.5).",
@@ -1401,6 +1841,49 @@
       "title": "DevRelationshipPath",
       "type": "object"
     },
+    "DevRequiredChildFactV2": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "fact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "status": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Status",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "text",
+        "status"
+      ],
+      "title": "DevRequiredChildFactV2",
+      "type": "object"
+    },
     "DevScopeV2": {
       "additionalProperties": false,
       "properties": {
@@ -1484,6 +1967,94 @@
       "title": "DevScopeV2",
       "type": "object"
     },
+    "DevSourceContent": {
+      "additionalProperties": false,
+      "description": "CHAOS-3295: the typed per-step domain content a frame builder consumes.\n\nDistinct from the observation's own accounting fields\n(``usable_fact_count`` etc.): a count is not a fact. Only the slot(s)\nmatching the observation's own ``source_class`` are ever populated by the\nexecutor -- every other slot stays empty, never omitted, so a builder can\nalways address ``content.status_facts`` etc. without a hasattr check.\nNever present when ``observed_state`` is unmeasured -- see\n``DevSourceObservation.validate_content_semantics``.",
+      "properties": {
+        "ci_checks": {
+          "items": {
+            "$ref": "#/$defs/DevCIFactV2"
+          },
+          "maxItems": 25,
+          "title": "Ci Checks",
+          "type": "array"
+        },
+        "deployments": {
+          "items": {
+            "$ref": "#/$defs/DevDeploymentFactV2"
+          },
+          "maxItems": 25,
+          "title": "Deployments",
+          "type": "array"
+        },
+        "graph_edges": {
+          "items": {
+            "$ref": "#/$defs/DevGraphEdgeV2"
+          },
+          "maxItems": 25,
+          "title": "Graph Edges",
+          "type": "array"
+        },
+        "incidents": {
+          "items": {
+            "$ref": "#/$defs/DevIncidentFactV2"
+          },
+          "maxItems": 25,
+          "title": "Incidents",
+          "type": "array"
+        },
+        "metric_refs": {
+          "items": {
+            "$ref": "#/$defs/DevMetricRefV2"
+          },
+          "maxItems": 25,
+          "title": "Metric Refs",
+          "type": "array"
+        },
+        "observed_changes": {
+          "items": {
+            "$ref": "#/$defs/DevObservedChangeV2"
+          },
+          "maxItems": 25,
+          "title": "Observed Changes",
+          "type": "array"
+        },
+        "pull_requests": {
+          "items": {
+            "$ref": "#/$defs/DevPullRequestFactV2"
+          },
+          "maxItems": 25,
+          "title": "Pull Requests",
+          "type": "array"
+        },
+        "required_children": {
+          "items": {
+            "$ref": "#/$defs/DevRequiredChildFactV2"
+          },
+          "maxItems": 100,
+          "title": "Required Children",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_source_content.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status_facts": {
+          "items": {
+            "$ref": "#/$defs/DevStatusFactV2"
+          },
+          "maxItems": 25,
+          "title": "Status Facts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version"
+      ],
+      "title": "DevSourceContent",
+      "type": "object"
+    },
     "DevSourceObservation": {
       "additionalProperties": false,
       "properties": {
@@ -1493,6 +2064,17 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Adapter Id",
           "type": "string"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevSourceContent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "data_semantics": {
           "enum": [
@@ -1629,6 +2211,44 @@
         "query_version"
       ],
       "title": "DevSourceObservation",
+      "type": "object"
+    },
+    "DevStatusFactV2": {
+      "additionalProperties": false,
+      "description": "Mirrors ``DevStatusFact`` for CHAOS-3295's per-step content payload.",
+      "properties": {
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "minItems": 1,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "fact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "text",
+        "evidence_ref_ids"
+      ],
+      "title": "DevStatusFactV2",
       "type": "object"
     },
     "DevSurfaceContextV2": {

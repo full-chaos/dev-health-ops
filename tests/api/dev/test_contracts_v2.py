@@ -847,12 +847,33 @@ _NON_HANDLE_IDENTIFIER_REASONS: dict[str, str] = {
     "DevRelationshipPath.target_entity_id": "provider entity key",
     "DevScopeV2.organization_id": "provider entity key",
     "DevScopeV2.team_ids": "provider entity key",
+    # CHAOS-3295: DevSourceContent's per-source-class fact mirrors. Entity ids
+    # name real platform records (PRs, CI runs, deployments, incidents, graph
+    # nodes); the field is unreachable from a no-answer frame regardless (see
+    # DevSourceObservation.content's docstring).
+    "DevCIFactV2.entity_id": "provider entity key",
+    "DevDeploymentFactV2.entity_id": "provider entity key",
+    "DevGraphEdgeV2.source_entity_id": "provider entity key",
+    "DevGraphEdgeV2.target_entity_id": "provider entity key",
+    "DevIncidentFactV2.entity_id": "provider entity key",
+    "DevObservedChangeV2.entity_id": "provider entity key",
+    "DevPullRequestFactV2.entity_id": "provider entity key",
     # Intra-document reference keys: scoped to one document, meaningless
     # outside it, and ABSENT on a no-answer outcome.
     "DevAnswerFact.fact_id": "intra-document key",
     "DevAnswerFact.evidence_ref_ids": "intra-document key",
     "DevAnswerFact.relationship_path_ids": "intra-document key",
     "DevRelationshipPath.path_id": "intra-document key",
+    "DevCIFactV2.evidence_ref_ids": "intra-document key",
+    "DevDeploymentFactV2.evidence_ref_ids": "intra-document key",
+    "DevGraphEdgeV2.evidence_ref_ids": "intra-document key",
+    "DevIncidentFactV2.evidence_ref_ids": "intra-document key",
+    "DevObservedChangeV2.change_id": "intra-document key",
+    "DevPullRequestFactV2.evidence_ref_ids": "intra-document key",
+    "DevRequiredChildFactV2.fact_id": "intra-document key",
+    "DevRequiredChildFactV2.evidence_ref_ids": "intra-document key",
+    "DevStatusFactV2.fact_id": "intra-document key",
+    "DevStatusFactV2.evidence_ref_ids": "intra-document key",
     # Client-supplied at the request boundary. The server folds an arbitrary
     # string to a UUID5 (`router._storage_uuid`, applied to exactly these two
     # at router.py:1031/1038), and `DevError.request_id` echoes the same

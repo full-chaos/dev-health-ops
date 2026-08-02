@@ -33,17 +33,6 @@ from dev_health_ops.llm.agent.readiness import (
 )
 from dev_health_ops.llm.agent.roles import RoleCertificationState
 
-# A model whose per-byte reasoning-token cost is high enough that the
-# production-sized legacy_agent request (full 9-tool registry + fixed policy
-# sections + full DevAnswer grammar -- measured ~51-65 KB serialized wire
-# request for this probe's fixtures) exceeds the 4,096-token flat envelope
-# (TRD Option B -- this PR does not change that cap), while the ~0.5-1.5 KB
-# transport-echo probe's own request stays comfortably under its own
-# 512-token cap. 0.15 tokens/byte gives ~7.8K reasoning tokens for the
-# production request (1.9x over the 4,096 cap) and ~230 for the echo
-# request (2.2x under its 512 cap) -- wide margins in both directions, not a
-# knife-edge calibration.
-_NONCOMPLIANT_TOKENS_PER_BYTE = 0.15
 # A model whose per-byte cost is low enough that even the full
 # production-sized request (~65 KB) stays well inside the 4,096-token
 # envelope (~1.3K reasoning tokens at this rate).
@@ -96,6 +85,15 @@ class _RequestSizeDrivenClient:
         self.requests: list[dict[str, Any]] = []
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
 
+    def reasoning_tokens_for(self, kwargs: dict[str, Any]) -> int:
+        """The deterministic function under test: reasoning cost as a
+        function of the REAL serialized request. Exposed so counterfactual
+        tests can evaluate it against a modified copy of a captured request
+        without needing a second live round-trip."""
+
+        serialized = json.dumps(kwargs, sort_keys=True, default=str).encode("utf-8")
+        return round(len(serialized) * self._tokens_per_byte)
+
     async def _create(self, **kwargs: Any) -> Any:
         self.requests.append(kwargs)
         tools = kwargs.get("tools") or []
@@ -104,7 +102,7 @@ class _RequestSizeDrivenClient:
             self._echo_mode = "readiness_echo_v1" in tool_names
 
         serialized = json.dumps(kwargs, sort_keys=True, default=str).encode("utf-8")
-        reasoning_tokens = round(len(serialized) * self._tokens_per_byte)
+        reasoning_tokens = self.reasoning_tokens_for(kwargs)
         max_completion = int(kwargs["max_completion_tokens"])
         if reasoning_tokens >= max_completion:
             return _stub_response(
@@ -161,33 +159,126 @@ class _Store:
         self.record = record
 
 
+async def _uncalibrated_round_requests() -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run the real probe against a client that never exhausts (rate 0), to
+    observe the two real request shapes it sends without inducing exhaustion.
+    Calibration is derived from these -- never a hand-guessed rate."""
+
+    provider, client = _provider(tokens_per_byte=0.0)
+    result = await certify_legacy_agent(provider, timeout_seconds=30)
+    assert result.state is RoleCertificationState.COMPATIBLE, (
+        "calibration precondition failed: a rate of 0 must never exhaust"
+    )
+    assert len(client.requests) == 2
+    return client.requests[0], client.requests[1]
+
+
+def _without_grammar(round_2: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in round_2.items() if key != "response_format"}
+
+
+def _without_history(
+    round_1: dict[str, Any], round_2: dict[str, Any]
+) -> dict[str, Any]:
+    """Round 2's shape (tool_choice=auto, the strict grammar) with round 1's
+    own tool-result-free messages -- isolates the grammar dimension from the
+    accumulated tool-result history dimension."""
+
+    without_history = dict(round_2)
+    without_history["messages"] = round_1["messages"]
+    return without_history
+
+
+def _calibrate_noncompliant_rate(
+    round_1: dict[str, Any], round_2: dict[str, Any], *, cap: int
+) -> float:
+    """Find a tokens-per-byte rate where round 1 alone stays under the cap,
+    EITHER of round 2's two structural additions (the strict grammar,
+    the tool-result history) alone also stays under the cap, and only their
+    COMBINATION -- round 2 as actually sent -- reaches it. This is what
+    "round 2 alone exhausts, and both dimensions are required" means as a
+    falsifiable, calibrated claim rather than "the request is big."
+    """
+
+    client = _RequestSizeDrivenClient(tokens_per_byte=1.0)
+    insufficient_alone = max(
+        client.reasoning_tokens_for(round_1),
+        client.reasoning_tokens_for(_without_grammar(round_2)),
+        client.reasoning_tokens_for(_without_history(round_1, round_2)),
+    )
+    full_combination = client.reasoning_tokens_for(round_2)
+    lower = cap / full_combination
+    upper = cap / insufficient_alone
+    assert lower < upper, (
+        "no rate exists where round 1 and each single dimension of round 2 "
+        "stay under the cap while their combination exceeds it -- the "
+        "production request shape changed enough that this calibration "
+        "needs to be revisited, not silently forced"
+    )
+    return (lower + upper) / 2
+
+
 @pytest.mark.asyncio
 async def test_production_sized_legacy_probe_reproduces_exhaustion() -> None:
-    """The new probe (RED): reproduces OUTPUT_EXHAUSTED for a provider whose
-    reasoning cost, applied to the real production request shape, exceeds
-    the 4,096-token envelope."""
+    """The new probe (RED): round 1 (tools offered, no grammar, no tool
+    result yet) succeeds; round 2 alone -- the combined tool_choice="auto"
+    AND strict DevAnswer grammar AND accumulated tool-result history shape
+    every real round >= 2 sends -- is what exhausts the 4,096-token envelope
+    (TRD Option B; this PR does not change that cap)."""
 
-    provider, client = _provider(tokens_per_byte=_NONCOMPLIANT_TOKENS_PER_BYTE)
+    round_1_shape, round_2_shape = await _uncalibrated_round_requests()
+    rate = _calibrate_noncompliant_rate(round_1_shape, round_2_shape, cap=4096)
+
+    provider, client = _provider(tokens_per_byte=rate)
     result = await certify_legacy_agent(provider, timeout_seconds=30)
 
     assert result.state is RoleCertificationState.INCOMPATIBLE
     assert result.safe_error_code == "output_exhausted"
+    assert len(client.requests) == 2
+
+    round_1, round_2 = client.requests
+    # Round 1 genuinely succeeded (did not itself exhaust) -- the defect is
+    # specifically in round 2, not "any request this size fails."
+    assert round_1.get("tool_choice") == "required"
+    assert "response_format" not in round_1
+    assert client.reasoning_tokens_for(round_1) < round_1["max_completion_tokens"]
+
+    # Round 2 is the one that exhausted, and carries exactly the claimed
+    # combined shape.
+    assert round_2.get("tool_choice") == "auto"
+    response_format = round_2.get("response_format")
+    assert response_format is not None
+    assert response_format["json_schema"]["strict"] is True
+    max_completion = round_2["max_completion_tokens"]
+    assert client.reasoning_tokens_for(round_2) >= max_completion
+
+    # Counterfactuals: removing EITHER dimension alone -- the grammar, or
+    # the accumulated tool-result history -- avoids exhaustion at this same
+    # rate. Only their combination does.
+    assert client.reasoning_tokens_for(_without_grammar(round_2)) < max_completion
+    assert (
+        client.reasoning_tokens_for(_without_history(round_1, round_2)) < max_completion
+    )
+
     # Sanity: the request that triggered exhaustion really was
     # production-sized, not a shrunk stand-in (Rule 4).
-    assert len(client.requests) >= 1
-    round_1_request = client.requests[0]
-    round_1_bytes = len(json.dumps(round_1_request, sort_keys=True, default=str))
-    assert round_1_bytes >= _PRODUCTION_FLOOR_BYTES
+    assert (
+        len(json.dumps(round_2, sort_keys=True, default=str)) >= _PRODUCTION_FLOOR_BYTES
+    )
 
 
 @pytest.mark.asyncio
 async def test_transport_echo_probe_does_not_reproduce_exhaustion() -> None:
     """The OLD probe (fail-before pair): the exact same non-compliant
-    provider certifies READY under the pre-existing 512-token echo probe,
-    because that probe's request is never production-sized. This is what
-    makes the new probe an actual gap-closer, not a redundant check."""
+    provider (calibrated against the production request shape) certifies
+    READY under the pre-existing 512-token echo probe, because that probe's
+    request is never production-sized. This is what makes the new probe an
+    actual gap-closer, not a redundant check."""
 
-    provider, client = _provider(tokens_per_byte=_NONCOMPLIANT_TOKENS_PER_BYTE)
+    round_1_shape, round_2_shape = await _uncalibrated_round_requests()
+    rate = _calibrate_noncompliant_rate(round_1_shape, round_2_shape, cap=4096)
+
+    provider, client = _provider(tokens_per_byte=rate)
     store = _Store()
     record = await AgentReadinessService(store).certify(
         provider,
@@ -253,6 +344,9 @@ class _InMemoryRoleStore:
 
     async def save(self, profile) -> None:
         self.profile = profile
+
+    async def save_record(self, record) -> None:
+        self.profile = self.profile.with_record(record)
 
 
 @pytest.mark.asyncio

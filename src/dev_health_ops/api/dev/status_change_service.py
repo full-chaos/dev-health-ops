@@ -155,6 +155,15 @@ class ActualCompletion:
     rule_version: str
     reason_codes: tuple[str, ...]
     required_children: tuple[StatusFact, ...]
+    # Captured in ``_assess`` from the UNBOUNDED assessment set, before
+    # ``status_snapshot`` replaces ``required_children`` with the
+    # bounded display list -- these are the complete denominator/numerator,
+    # never the truncated-for-display counterparts. See
+    # ``docs`` note on CHAOS-3297 stack #2: the display bound must never
+    # silently become the completion denominator.
+    required_child_total: int
+    required_child_complete: int
+    display_truncated: bool
     conflicts: tuple[StatusConflict, ...]
     source_ref_ids: tuple[str, ...]
     evidence_ref_ids: tuple[str, ...]
@@ -377,6 +386,11 @@ class StatusChangeService:
         )
         actual = replace(
             actual,
+            # Read from the still-unbounded ``actual.required_children``
+            # (set by ``_assess``) before it is overwritten below with the
+            # bounded display list -- both keyword arguments are evaluated
+            # against the pre-replace object.
+            display_truncated=len(actual.required_children) > request.max_items,
             required_children=self._bounded(
                 actual.required_children, request.max_items
             ),
@@ -728,12 +742,20 @@ class StatusChangeService:
             else CompletionState.READY
         )
         used_source_ids = tuple(sorted(required_source_ids & source_by_id.keys()))
+        # The complete denominator/numerator: computed here, against the
+        # UNBOUNDED ``raw.children`` (``required_children`` above), before
+        # any display truncation is applied by the caller.
+        required_child_total = len(required_children)
+        required_child_complete = required_child_total - len(incomplete_children)
         return ActualCompletion(
             state=state,
             rule_id=STATUS_RULE_ID,
             rule_version=STATUS_RULE_VERSION,
             reason_codes=tuple(sorted(reasons)),
             required_children=required_children,
+            required_child_total=required_child_total,
+            required_child_complete=required_child_complete,
+            display_truncated=False,
             conflicts=tuple(conflicts),
             source_ref_ids=used_source_ids,
             evidence_ref_ids=self._fact_evidence(raw),

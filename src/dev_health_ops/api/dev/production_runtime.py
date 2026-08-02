@@ -1795,6 +1795,9 @@ async def _assemble_production_runtime(
             rule_version=result.actual.rule_version,
             reason_codes=list(result.actual.reason_codes)[:25],
             required_children=required_children,
+            required_child_total=result.actual.required_child_total,
+            required_child_complete=result.actual.required_child_complete,
+            display_truncated=result.actual.display_truncated,
             conflicts=conflicts,
             evidence_ref_ids=aggregate_evidence_ids,
         )

@@ -894,8 +894,28 @@ class DevActualCompletion(ContractModel):
     required_children: list[DevRequiredChildFact] = Field(
         default_factory=list, max_length=100
     )
+    # The complete denominator/numerator from the server's UNBOUNDED
+    # required-work assessment set (CHAOS-3297 stack #2) -- never derived
+    # from ``len(required_children)``, which is truncated to the display
+    # bound above and would silently undercount once a parent has more
+    # than 100 required children.
+    required_child_total: int = Field(default=0, ge=0, le=100_000)
+    required_child_complete: int = Field(default=0, ge=0, le=100_000)
+    display_truncated: bool = False
     conflicts: list[DevStatusConflict] = Field(default_factory=list, max_length=20)
     evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+
+    @model_validator(mode="after")
+    def validate_required_child_counts(self) -> Self:
+        if self.required_child_complete > self.required_child_total:
+            raise ValueError(
+                "required_child_complete cannot exceed required_child_total"
+            )
+        if len(self.required_children) > self.required_child_total:
+            raise ValueError(
+                "displayed required_children cannot exceed required_child_total"
+            )
+        return self
 
 
 class DevSourceHealth(ContractModel):

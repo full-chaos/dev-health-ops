@@ -307,6 +307,12 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 				Profile: "sync", WorkerGithubSecurityEnabled: true,
 			},
 		},
+		{
+			name: "github files",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubFilesEnabled: true,
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			family, err := buildProviderSyncWorker(
@@ -361,6 +367,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 		"github_security": {
 			cfg:  config.Config{WorkerGithubSecurityEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubSecurity: true},
+		},
+		"github_files": {
+			cfg:  config.Config{WorkerGithubFilesEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubFiles: true},
 		},
 		"linear": {
 			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},
@@ -462,5 +472,40 @@ func TestBuildProviderSyncHandlerConstructsGitHubSecurityCapability(t *testing.T
 	}
 	if _, ok := executor.Committer.Sink.(providersync.GitHubSecurityClickHouseEffects); !ok {
 		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsGitHubFilesCapability(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubFiles: true}, nil, nil, nil, nil, nil, slog.Default())
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{Claim: providersync.Claim{Unit: providersync.Unit{Provider: "github", Dataset: "files"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := executor.Handler.(providersync.GitHubFilesRouteHandler); !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.GitHubFilesClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+}
+
+func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
+	for name, cfg := range map[string]config.Config{
+		"launchdarkly":         {WorkerLaunchDarklyFeatureFlagsEnabled: true},
+		"github_repo_metadata": {WorkerGithubRepoMetadataEnabled: true},
+		"github_cicd":          {WorkerGithubCICDEnabled: true},
+		"github_commits":       {WorkerGithubCommitsEnabled: true},
+		"github_deployments":   {WorkerGithubDeploymentsEnabled: true},
+		"github_security":      {WorkerGithubSecurityEnabled: true},
+		"github_files":         {WorkerGithubFilesEnabled: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !providerSyncWorkerEnabled(cfg) {
+				t.Fatal("route-ready switch leaves the provider worker family dormant")
+			}
+		})
 	}
 }

@@ -141,11 +141,13 @@
         "sync_files": true,
         "sync_git": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "files",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "git_files"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"

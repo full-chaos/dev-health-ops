@@ -35,6 +35,11 @@ const RouteReconciliationCategory = "route_reconciliation_required"
 // first attempt because retrying a deterministic fault cannot change it.
 const RepositoryIdentityCategory = "repository_identity_ambiguous"
 
+// GitHubFilesInventoryFailureCategory marks an exhausted file-inventory sync;
+// unlike a successful empty repository, it says inventory completeness was
+// never established.
+const GitHubFilesInventoryFailureCategory = "github_files_inventory_failed"
+
 // deterministicTerminalCategory maps executor failures that no retry can clear
 // onto their own durable category. Anything not listed keeps the ordinary
 // bounded-retry path.
@@ -43,6 +48,13 @@ func deterministicTerminalCategory(err error) (string, bool) {
 		return RepositoryIdentityCategory, true
 	}
 	return "", false
+}
+
+func exhaustedFailureCategory(claim providersync.Claim) string {
+	if claim.Provider == "github" && claim.Dataset == "files" {
+		return GitHubFilesInventoryFailureCategory
+	}
+	return "provider_unit_exhausted"
 }
 
 // RouteFault describes a producer/consumer capability disagreement for
@@ -260,7 +272,7 @@ func (handler *Handler) Work(
 		// only adds the ability to gate the metric on true success; it does
 		// not change the existing best-effort, always-retryable behavior.
 		failErr := handler.Repository.Fail(
-			context.WithoutCancel(ctx), session.Claim, "provider_unit_exhausted",
+			context.WithoutCancel(ctx), session.Claim, exhaustedFailureCategory(session.Claim),
 			startedAt, completedAt,
 		)
 		if failErr == nil {

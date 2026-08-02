@@ -162,7 +162,10 @@ def _provider_error_codes() -> set[str]:
     # Verified empirically (`list(AgentProviderErrorCode)` succeeds) and this
     # is the same established pattern already used unflagged elsewhere in
     # this codebase (`for tool_id in ToolID`, `for role in AgentRole`).
-    for member in AgentProviderErrorCode:  # lgtm[py/non-iterable-in-for-loop]
+    # Dismissed at the GitHub code-scanning API level with this same
+    # justification -- inline `# lgtm[...]` comments do not suppress
+    # GitHub CodeQL (that syntax is a legacy LGTM.com-only mechanism).
+    for member in AgentProviderErrorCode:
         result = _orchestrator_module.DevOrchestrator._provider_error(
             "request_totality_probe", AgentProviderError(member)
         )

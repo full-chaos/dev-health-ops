@@ -61,8 +61,11 @@ from tests.api.dev.test_router import (  # noqa: F401,E501
     # imported into this module's namespace; the same established
     # pattern already used unflagged elsewhere in this codebase
     # (test_chaos_3301_controls.py). CodeQL's unused-import check does
-    # not model pytest's fixture-injection mechanism.
-    dev_api_context,  # lgtm[py/unused-import]
+    # not model pytest's fixture-injection mechanism -- a genuine false
+    # positive, dismissable at the GitHub code-scanning API level with
+    # this justification (inline `# lgtm[...]` comments do not suppress
+    # GitHub CodeQL).
+    dev_api_context,
 )
 
 #: The v1 evidence-handle grammar (`evidence_service.EvidenceHandleService.issue`).

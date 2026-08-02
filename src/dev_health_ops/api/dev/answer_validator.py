@@ -40,31 +40,36 @@ _NUMBER = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:[.,]\d+)*(?:%|\b)")
 # finished", "Nothing remains", "fully complete", and spelled-out
 # fractions ("three of five items are complete") all state exactly the
 # same withheld total/complete claim without ever matching a
-# percentage/fraction regex. Detecting "some number" is not enough (a
-# deployment count or a cycle-time value is a legitimate, differently-
-# grounded number) -- but once the denominator is withheld, ANY
-# completion-vocabulary sentence that also asserts either a QUANTITY
-# (digit, spelled-out number, percentage, fraction) or TOTALIZING
-# vocabulary (all/none/every/nothing/fully/entirely/completely) is a
-# completion-total assertion, deliberately erring toward over-rejection
-# here: the failure mode this guards is silent fabrication of trust,
-# and a false rejection only costs one bounded repair pass (see the
-# repairable=True below), never a hard failure.
+# percentage/fraction regex.
+#
+# Round 6 (codex HIGH): a quantity-or-totalizer gate is STILL not enough
+# -- "The required work is done." states the identical claim with
+# neither a number nor a totalizing word, and that's the single most
+# likely phrasing ordinary production model prose actually uses (a
+# model narrating a status answer says "it's done", not "100% done" or
+# "all of it is done"). Once the denominator is withheld, a bare,
+# unhedged completion predicate is ITSELF the fabricated claim -- no
+# second token required to trigger. The only thing that rescues a
+# completion-language sentence now is explicit HEDGE language
+# (unknown/unclear/appears/some/possibly/...) that honestly signals the
+# claim is uncertain rather than a flat assertion -- that's the line:
+# hedge words rescue, bare assertions don't. Erring toward
+# over-rejection is deliberate: the failure mode this guards is silent
+# fabrication of trust, and a false rejection only costs one bounded
+# repair pass (see repairable=True below), never a hard failure.
 _COMPLETION_LANGUAGE = re.compile(
-    r"\bcomplet(?:e|ed|ion)\b|\bdone\b|\bfinished\b|\bremain(?:s|ing)?\b|\boutstanding\b",
+    r"\bcomplet(?:e|ed|ion)\b|\bdone\b|\bfinished\b|\bremain(?:s|ing)?\b|"
+    r"\boutstanding\b|\bwrapped up\b|\bclosed out\b|\bleft\b",
     re.IGNORECASE,
 )
-_TOTALIZING_LANGUAGE = re.compile(
-    r"\ball\b|\bnone\b|\bevery\b|\bnothing\b|\bfully\b|\bentirely\b|\bcompletely\b",
+_HEDGE_LANGUAGE = re.compile(
+    r"\bunknown\b|\bunclear\b|\buncertain\b|\bunverified\b|\bnot verified\b|"
+    r"\bcould not be verified\b|\bcannot be verified\b|\bappears?\b|"
+    r"\bbased on available data\b|\bsome\b|\bpartial(?:ly)?\b|\bpossibly\b|"
+    r"\blikely\b|\bbelieved?\b|\bmay be\b|\bmight be\b|\bincomplete data\b|"
+    r"\bnot confirmed\b|\bcould not be determined\b|\bcannot be determined\b",
     re.IGNORECASE,
 )
-_NUMBER_WORD = re.compile(
-    r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
-    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
-    r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)\b",
-    re.IGNORECASE,
-)
-_ANY_QUANTITY = re.compile(r"\d|" + _NUMBER_WORD.pattern, re.IGNORECASE)
 _NON_REPAIRABLE_VALIDATION_MARKERS = (
     "unknown evidence",
     "unknown metric",
@@ -147,15 +152,18 @@ def _claim_has_grounding_reference(claim: DevClaim) -> bool:
 
 
 def _states_a_completion_ratio(text: str) -> bool:
-    """Whether `text` asserts a completion total (a count, fraction,
-    percentage, ratio, or a totalizing claim like "all"/"nothing"/"fully")
-    -- e.g. "100% complete", "3 of 5 done", "All 500 required items are
-    finished", "Nothing remains", "fully complete", "three of five
-    complete". See the module-level comment above ``_COMPLETION_LANGUAGE``.
+    """Whether `text` asserts required-work completion in a way that
+    isn't honestly hedged -- e.g. "100% complete", "3 of 5 done", "All
+    500 required items are finished", "Nothing remains", "The required
+    work is done", "wrapped up", "closed out", "no required work is
+    left". No number or totalizing word is required to trigger (see the
+    module-level comment above ``_COMPLETION_LANGUAGE``); only explicit
+    hedge language (unknown/unclear/appears/some/...) rescues a
+    completion-language sentence from rejection.
     """
     if not _COMPLETION_LANGUAGE.search(text):
         return False
-    return bool(_ANY_QUANTITY.search(text)) or bool(_TOTALIZING_LANGUAGE.search(text))
+    return not _HEDGE_LANGUAGE.search(text)
 
 
 def _any_tool_result_withheld_its_completion_denominator(

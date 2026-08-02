@@ -94,20 +94,41 @@ _SCOPE_AMBIGUOUS_COPY = (
 )
 
 #: The exact v1 error codes ``orchestrator.run()``'s own ``error(...)``
-#: closure constructs (verified by ``test_terminal_frames.py`` against the
-#: live source of ``orchestrator.py`` -- P2 totality). Never the preflight's
-#: codes (``source_unavailable``, ``feature_not_enabled``, ``forbidden``):
-#: those are built by ``preflight_outcomes.project_preflight_error`` and
-#: recorded through the frame *before* ``finish()`` is called
-#: (``frame_already_recorded=True``), so they never reach
-#: ``build_error_frame``.
+#: closure constructs, **plus** every code ``DevOrchestrator._provider_error``
+#: can produce (verified by ``test_terminal_frames.py`` against the live
+#: source of ``orchestrator.py`` -- P2 totality). Both producers feed the
+#: same ``finish()`` call (CHAOS-3297 Codex review HIGH #2): a provider
+#: failure classified by ``_provider_error`` reaches ``finish()`` exactly
+#: like a local ``error(...)`` call, and before this registry covered its
+#: codes too, a routine provider failure (e.g. ``OUTPUT_EXHAUSTED`` ->
+#: ``model_not_supported``) made ``build_error_frame`` raise on an
+#: "unregistered code", which ``finish()``'s broad exception handler
+#: silently swallowed -- committing a FAILED terminal run with zero frames,
+#: violating the frame-mandatory invariant on an unexceptional failure mode.
+#:
+#: Never the preflight's *own* codes when they originate from
+#: ``preflight_outcomes.project_preflight_error`` (``source_unavailable``,
+#: ``forbidden``): that termination records its frame *before* ``finish()``
+#: is called (``frame_already_recorded=True``), so it never reaches
+#: ``build_error_frame`` regardless of this registry. ``feature_not_enabled``
+#: is the one code both producers can emit -- from the preflight (frame
+#: already recorded, never reaches here) and from ``_provider_error`` via
+#: ``AgentProviderErrorCode.DISABLED`` (frame *not* already recorded, does
+#: reach here) -- registered for the latter origin.
 ORCHESTRATOR_ERROR_CODES = frozenset(
     {
         "answer_validation_failed",
         "cancelled",
         "cost_limit_reached",
+        "feature_not_enabled",
         "insufficient_evidence",
         "internal_error",
+        "invalid_request",
+        "model_not_supported",
+        "provider_contract_violation",
+        "provider_not_configured",
+        "provider_unavailable",
+        "rate_limited",
         "scope_ambiguous",
         "scope_forbidden",
         "scope_not_found",
@@ -127,11 +148,18 @@ PUBLIC_OUTCOME_BY_ERROR_CODE: Mapping[str, PublicOutcome] = {
     "insufficient_evidence": PublicOutcome.NOT_FOUND,
     "scope_forbidden": PublicOutcome.DENIED,
     "tool_unavailable": PublicOutcome.TEMPORARILY_UNAVAILABLE,
+    "provider_unavailable": PublicOutcome.TEMPORARILY_UNAVAILABLE,
+    "provider_not_configured": PublicOutcome.TEMPORARILY_UNAVAILABLE,
+    "rate_limited": PublicOutcome.TEMPORARILY_UNAVAILABLE,
+    "feature_not_enabled": PublicOutcome.UNSUPPORTED,
+    "model_not_supported": PublicOutcome.UNSUPPORTED,
     "cancelled": PublicOutcome.FAILED,
     "cost_limit_reached": PublicOutcome.FAILED,
     "tool_limit_reached": PublicOutcome.FAILED,
     "answer_validation_failed": PublicOutcome.FAILED,
     "internal_error": PublicOutcome.FAILED,
+    "invalid_request": PublicOutcome.FAILED,
+    "provider_contract_violation": PublicOutcome.FAILED,
 }
 
 _missing_codes = ORCHESTRATOR_ERROR_CODES - set(PUBLIC_OUTCOME_BY_ERROR_CODE)

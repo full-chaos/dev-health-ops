@@ -664,6 +664,28 @@ class DevOrchestrator:
                             versions=self._versions,
                         )
                     )
+                except ValueError:
+                    # CHAOS-3297 Codex review HIGH #2: a code reached here
+                    # that terminal_frames.ORCHESTRATOR_ERROR_CODES does not
+                    # recognize -- a closed-registry gap (a producer added a
+                    # new code without updating that registry), not a
+                    # transient failure. The broad `except Exception` below
+                    # is for *database*-layer failures and must stay generic
+                    # for those; a construction-time registry gap is a
+                    # different failure class and must never resolve the
+                    # same way (silently proceeding frame-less), or the
+                    # frame-mandatory invariant is defeated on every future
+                    # code this registry falls behind on, not just today's.
+                    # Fall back to the one bucket every producer's error
+                    # always maps to -- "internal_error" is always
+                    # registered -- so the run still gets a frame.
+                    frame = terminal_frames.build_error_frame(
+                        code="internal_error",
+                        run_id=run_id,
+                        generated_at=datetime.now(UTC),
+                        versions=self._versions,
+                    )
+                try:
                     await self._recorder.record_frame(frame)
                 except Exception:
                     # A frame-construction or database-layer failure here must

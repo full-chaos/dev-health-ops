@@ -78,15 +78,34 @@ def _legacy_answer(*, claims: list[dict[str, Any]] | None = None) -> DevAnswer:
 # ---------------------------------------------------------------------------
 
 
+#: ``_provider_error``'s own ``code_map`` -- a second producer of the exact
+#: codes ``finish()`` passes to ``build_error_frame`` (CHAOS-3297 Codex
+#: review HIGH #2). The original version of this test only parsed the local
+#: ``error(...)`` closure's call sites, which is why a provider failure's
+#: code (e.g. ``model_not_supported`` from ``OUTPUT_EXHAUSTED``) could reach
+#: ``finish()`` unregistered without this totality guard ever catching it.
+_PROVIDER_ERROR_CODE_MAP_RE = re.compile(
+    r'AgentProviderErrorCode\.[A-Z_]+:\s*\(?\s*"([a-z_]+)"'
+)
+
+
 def test_orchestrator_error_codes_matches_the_live_source() -> None:
     source = open(_ORCHESTRATOR_SOURCE, encoding="utf-8").read()
     extracted = set(re.findall(r'error\(\s*\n?\s*"([a-z_]+)"', source))
+    provider_codes = set(_PROVIDER_ERROR_CODE_MAP_RE.findall(source))
     assert extracted, "sanity: orchestrator.py must call error(...) at least once"
-    assert extracted == tf.ORCHESTRATOR_ERROR_CODES, (
+    assert provider_codes, (
+        "sanity: _provider_error's code_map must map at least one code -- "
+        "if this fails, the regex has drifted from the live source shape, "
+        "not that the producer disappeared"
+    )
+    combined = extracted | provider_codes
+    assert combined == tf.ORCHESTRATOR_ERROR_CODES, (
         "a code was added to (or removed from) orchestrator.run()'s error() "
-        "closure without updating terminal_frames.ORCHESTRATOR_ERROR_CODES -- "
-        f"missing={extracted - tf.ORCHESTRATOR_ERROR_CODES} "
-        f"stale={tf.ORCHESTRATOR_ERROR_CODES - extracted}"
+        "closure or DevOrchestrator._provider_error's code_map without "
+        "updating terminal_frames.ORCHESTRATOR_ERROR_CODES -- "
+        f"missing={combined - tf.ORCHESTRATOR_ERROR_CODES} "
+        f"stale={tf.ORCHESTRATOR_ERROR_CODES - combined}"
     )
 
 

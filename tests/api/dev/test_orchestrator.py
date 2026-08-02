@@ -660,6 +660,91 @@ async def test_output_exhausted_is_a_safe_error_not_internal_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_output_exhausted_provider_failure_still_persists_a_frame() -> None:
+    """CHAOS-3297 Codex review HIGH #2 -- finish()'s frame-mandatory totality
+    must also hold for a provider failure, not only the local error() closure.
+
+    Reproduces the exact live symptom: OUTPUT_EXHAUSTED classifies to the v1
+    code "model_not_supported" (``DevOrchestrator._provider_error``), which
+    -- before ``terminal_frames.ORCHESTRATOR_ERROR_CODES`` was extended to
+    cover every ``_provider_error`` output, not only the codes the local
+    ``error()`` closure builds -- was not a registered code.
+    ``build_error_frame`` raised ``ValueError`` on the unregistered code,
+    ``finish()``'s (then-)broad exception handler silently swallowed it,
+    rolled back, and committed a FAILED terminal run with zero frames --
+    violating the frame-mandatory invariant on a routine provider failure,
+    not an edge case. A frame must exist for this run.
+    """
+    recorder = Recorder()
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    error=AgentProviderError(
+                        AgentProviderErrorCode.OUTPUT_EXHAUSTED,
+                        retryable=False,
+                    )
+                )
+            ],
+            script_id="output-exhausted-frame",
+            recorder=recorder,
+        )
+    )
+    assert result.state is RunState.FAILED
+    assert result.error is not None and result.error.code == "model_not_supported"
+    assert len(recorder.frames) == 1, (
+        "finish() must never commit a terminal run with zero frames, even "
+        "when the terminating code came from _provider_error rather than "
+        "the local error() closure"
+    )
+    assert recorder.frames[0].public_outcome.value == "unsupported"
+    assert recorder.rollbacks == 0
+
+
+@pytest.mark.asyncio
+async def test_finish_falls_back_to_a_registered_bucket_for_an_unregistered_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3297 Codex review HIGH #2, defense in depth.
+
+    Simulates a registry-drift bug directly: even if a future producer code
+    slips past ``terminal_frames.ORCHESTRATOR_ERROR_CODES`` /
+    ``PUBLIC_OUTCOME_BY_ERROR_CODE`` (the totality test that would normally
+    catch this at CI time is deliberately bypassed here, via monkeypatch, to
+    exercise the runtime fallback itself), ``finish()`` must still persist a
+    frame -- falling back to the always-registered "internal_error" bucket
+    -- rather than silently committing an unbucketed, frame-less terminal
+    run the way it did before this fix.
+    """
+    from dev_health_ops.api.dev import terminal_frames as tf
+
+    mutated_codes = frozenset(tf.ORCHESTRATOR_ERROR_CODES - {"cancelled"})
+    mutated_buckets = {
+        code: outcome
+        for code, outcome in tf.PUBLIC_OUTCOME_BY_ERROR_CODE.items()
+        if code != "cancelled"
+    }
+    monkeypatch.setattr(tf, "ORCHESTRATOR_ERROR_CODES", mutated_codes)
+    monkeypatch.setattr(tf, "PUBLIC_OUTCOME_BY_ERROR_CODE", mutated_buckets)
+
+    recorder = Recorder()
+    cancellation = asyncio.Event()
+    cancellation.set()
+    result = await _run(
+        _orchestrator([], script_id="registry-drift", recorder=recorder),
+        cancellation,
+    )
+    assert result.state is RunState.CANCELLED
+    assert result.error is not None and result.error.code == "cancelled"
+    assert len(recorder.frames) == 1, (
+        "a registry gap must fall back to a registered bucket, never a "
+        "frame-less commit"
+    )
+    assert recorder.frames[0].public_outcome.value == "failed"
+    assert recorder.rollbacks == 0
+
+
+@pytest.mark.asyncio
 async def test_multi_metric_question_completes_through_sequential_tool_rounds() -> None:
     """CHAOS-3254 acceptance: a naturally multi-metric question completes
     through one tool request per round -- through a final answer -- and

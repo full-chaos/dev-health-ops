@@ -5,6 +5,19 @@ turn smoke requires an already configured authenticated Dev Health deployment:
 ``ASK_DEV_LIVE_API_BASE_URL``, ``ASK_DEV_LIVE_API_TOKEN``, and
 ``ASK_DEV_LIVE_ORG_ID``. Neither test prints credentials, prompts, or provider
 payloads. They are intentionally outside the deterministic release gate.
+
+Missing-credential behavior (CHAOS-3285 acceptance: "missing credentials
+clearly leave the live gate non-passing rather than silently skipped"):
+
+* By default (``ASK_DEV_LIVE_GATE`` unset) -- an ordinary local run without
+  live credentials configured -- missing env vars still ``pytest.skip``.
+  This is the only mode where skipping is legitimate: nobody asked for the
+  live gate to run here.
+* When ``ASK_DEV_LIVE_GATE=1`` is set -- the explicit signal that this run
+  IS the live convergence gate, not an incidental local pass -- missing env
+  vars ``pytest.fail`` instead. A gate that silently skips its own
+  measurement reads as passing coverage it never actually took (verification
+  Rule 4); the whole point of the flag is to make that failure loud instead.
 """
 
 from __future__ import annotations
@@ -24,6 +37,11 @@ from dev_health_ops.llm.agent.readiness import (
     AgentReadinessService,
 )
 
+#: Set to "1" to mark this run as the Wave 3.1 live convergence gate: missing
+#: credentials become a hard failure instead of a skip. Unset (or any other
+#: value) preserves today's default local-run behavior.
+LIVE_GATE_ENV_VAR = "ASK_DEV_LIVE_GATE"
+
 
 class _ReadinessStore:
     record: AgentReadinessRecord | None = None
@@ -35,12 +53,63 @@ class _ReadinessStore:
         self.record = record
 
 
+def _live_gate_required() -> bool:
+    return os.getenv(LIVE_GATE_ENV_VAR, "").strip() == "1"
+
+
 def _required_environment(*names: str) -> dict[str, str]:
     values = {name: os.getenv(name, "").strip() for name in names}
     missing = [name for name, value in values.items() if not value]
     if missing:
-        pytest.skip("live OpenAI smoke is not configured")
+        reason = f"live OpenAI smoke is not configured (missing: {', '.join(missing)})"
+        if _live_gate_required():
+            pytest.fail(
+                f"{reason}. {LIVE_GATE_ENV_VAR}=1 requires these credentials to be "
+                "present -- the live gate must fail, not skip, when it cannot take "
+                "its measurement."
+            )
+        pytest.skip(reason)
     return values
+
+
+def test_missing_credentials_skip_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ordinary local-run case: no live gate requested, so a missing
+    credential is a legitimate skip, unchanged from before CHAOS-3285."""
+
+    monkeypatch.delenv(LIVE_GATE_ENV_VAR, raising=False)
+    monkeypatch.delenv("_ASK_DEV_LIVE_SMOKE_TEST_VAR", raising=False)
+
+    with pytest.raises(pytest.skip.Exception):
+        _required_environment("_ASK_DEV_LIVE_SMOKE_TEST_VAR")
+
+
+def test_missing_credentials_fail_loudly_when_gate_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 acceptance: with the live gate explicitly requested, a
+    missing credential must FAIL (non-passing), never silently skip -- the
+    exact defect class verification Rule 4 exists to catch (a measurement
+    that did not happen must not read as coverage)."""
+
+    monkeypatch.setenv(LIVE_GATE_ENV_VAR, "1")
+    monkeypatch.delenv("_ASK_DEV_LIVE_SMOKE_TEST_VAR", raising=False)
+
+    with pytest.raises(pytest.fail.Exception):
+        _required_environment("_ASK_DEV_LIVE_SMOKE_TEST_VAR")
+
+
+def test_present_credentials_are_returned_regardless_of_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate flag only changes missing-credential behavior; a fully
+    configured run is unaffected either way."""
+
+    monkeypatch.setenv(LIVE_GATE_ENV_VAR, "1")
+    monkeypatch.setenv("_ASK_DEV_LIVE_SMOKE_TEST_VAR", "configured-value")
+
+    assert _required_environment("_ASK_DEV_LIVE_SMOKE_TEST_VAR") == {
+        "_ASK_DEV_LIVE_SMOKE_TEST_VAR": "configured-value"
+    }
 
 
 @pytest.mark.asyncio

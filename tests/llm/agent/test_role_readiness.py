@@ -239,6 +239,20 @@ def _without_history(
     return without_history
 
 
+# CHAOS-3285 round 2 (Codex MEDIUM): the calibration window
+# (cap/full_combination, cap/insufficient_alone) is non-empty for ANY
+# strictly-positive byte difference, even one byte -- that alone proves
+# nothing about whether the grammar/history dimensions meaningfully drive
+# exhaustion, only that they are non-identical. These margins require the
+# combined shape to be substantively larger than the largest single
+# dimension, in both absolute and relative terms, before trusting the
+# calibration at all. Measured against the real production shapes this
+# probe currently sends: absolute margin ~3.7 KB, relative margin ~6% --
+# both comfortably clear these floors with room for prompt-text drift.
+_MIN_CALIBRATION_ABSOLUTE_MARGIN_BYTES = 1_500
+_MIN_CALIBRATION_RELATIVE_MARGIN = 1.03
+
+
 def _calibrate_noncompliant_rate(
     round_1: dict[str, Any], round_2: dict[str, Any], *, cap: int
 ) -> float:
@@ -248,6 +262,13 @@ def _calibrate_noncompliant_rate(
     COMBINATION -- round 2 as actually sent -- reaches it. This is what
     "round 2 alone exhausts, and both dimensions are required" means as a
     falsifiable, calibrated claim rather than "the request is big."
+
+    Rule 4 (a measurement that did not happen must fail loudly): a
+    calibration window that exists only because of a trivial byte
+    difference is not a real proof that the grammar or the history
+    dimension matters -- it means the probe's production shape has become
+    degenerate (round 1 and round 2 barely differ) and this calibration
+    must refuse to silently produce a knife-edge rate.
     """
 
     client = _RequestSizeDrivenClient(tokens_per_byte=1.0)
@@ -258,6 +279,23 @@ def _calibrate_noncompliant_rate(
     )
     full_combination = client.reasoning_tokens_for(round_2)
 
+    absolute_margin = full_combination - insufficient_alone
+    relative_margin = (
+        full_combination / insufficient_alone if insufficient_alone else float("inf")
+    )
+    assert absolute_margin >= _MIN_CALIBRATION_ABSOLUTE_MARGIN_BYTES, (
+        f"calibration margin too small ({absolute_margin} bytes < "
+        f"{_MIN_CALIBRATION_ABSOLUTE_MARGIN_BYTES}) -- the probe's production "
+        "shape is degenerate: neither the grammar nor the accumulated "
+        "tool-result history contributes enough size to isolate the "
+        "combined-shape claim from noise, not just calibrate a valid rate"
+    )
+    assert relative_margin >= _MIN_CALIBRATION_RELATIVE_MARGIN, (
+        f"calibration margin too small ({relative_margin:.3f}x < "
+        f"{_MIN_CALIBRATION_RELATIVE_MARGIN}x) -- same degenerate-shape failure "
+        "as the absolute margin check, expressed relatively"
+    )
+
     lower = cap / full_combination
     upper = cap / insufficient_alone
     assert lower < upper, (
@@ -267,6 +305,39 @@ def _calibrate_noncompliant_rate(
         "needs to be revisited, not silently forced"
     )
     return (lower + upper) / 2
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_when_the_grammar_degenerates() -> None:
+    """Mutation test (Rule 3/4): if the DevAnswer grammar's contribution to
+    round 2's size were to collapse to near-nothing -- simulating a future
+    regression that degenerates the combined-shape claim -- calibration
+    must refuse to proceed with a knife-edge rate, not silently pick one
+    that no longer proves the grammar dimension matters."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    degenerate_grammar = dict(round_2)
+    degenerate_grammar["response_format"] = {
+        "json_schema": {"strict": True, "schema": {}}
+    }
+
+    with pytest.raises(AssertionError, match="calibration margin too small"):
+        _calibrate_noncompliant_rate(round_1, degenerate_grammar, cap=4096)
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_when_the_history_degenerates() -> None:
+    """Same guard, for the accumulated tool-result history dimension: if
+    round 2's messages collapsed to be identical to round 1's (the
+    synthetic tool result contributing nothing), calibration must refuse
+    to proceed."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    degenerate_history = dict(round_2)
+    degenerate_history["messages"] = round_1["messages"]
+
+    with pytest.raises(AssertionError, match="calibration margin too small"):
+        _calibrate_noncompliant_rate(round_1, degenerate_history, cap=4096)
 
 
 @pytest.mark.asyncio

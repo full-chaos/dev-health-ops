@@ -31,11 +31,13 @@ import httpx
 import pytest
 
 from dev_health_ops.llm.agent.openai_compatible import OpenAICompatibleAgentProvider
+from dev_health_ops.llm.agent.probes.legacy_agent import certify_legacy_agent
 from dev_health_ops.llm.agent.readiness import (
     AgentReadinessOutcome,
     AgentReadinessRecord,
     AgentReadinessService,
 )
+from dev_health_ops.llm.agent.roles import RoleCertificationState
 
 #: Set to "1" to mark this run as the Wave 3.1 live convergence gate: missing
 #: credentials become a hard failure instead of a skip. Unset (or any other
@@ -130,11 +132,38 @@ async def test_live_openai_gpt5_readiness() -> None:
             model=model,
             fingerprint=provider.model_fingerprint,
         )
+        assert record.outcome is AgentReadinessOutcome.READY
+        assert record.safe_error_code is None
+
+        # CHAOS-3285 round 2 (Codex MEDIUM): the live gate must also run the
+        # REAL production-sized legacy_agent probe against the real API --
+        # not just the old 512-token echo probe above, which cannot observe
+        # output/reasoning exhaustion at all. This is exactly the empirical
+        # measurement the CHAOS-3285 plan's live-verification phase calls
+        # for: does the configured model actually pass the production
+        # request shape, against the real provider, right now.
+        #
+        # legacy_agent is deliberately NOT asserted COMPATIBLE
+        # unconditionally: per the ratified TRD Option B, this role may
+        # legitimately exhaust the existing 4,096-token envelope -- THAT is
+        # the measurement this run is taking, not a test failure. Only a
+        # genuinely unclassified outcome (an exception certify_legacy_agent
+        # itself does not already turn into a state) fails this test.
+        probe_result = await certify_legacy_agent(provider, timeout_seconds=60)
+        print(
+            "[ASK_DEV_LIVE_GATE] legacy_agent role vs "
+            f"{model}: state={probe_result.state.value} "
+            f"safe_error_code={probe_result.safe_error_code} "
+            f"reasoning_tokens={probe_result.usage.reasoning_tokens} "
+            f"output_tokens={probe_result.usage.output_tokens}"
+        )
+        assert probe_result.state in (
+            RoleCertificationState.COMPATIBLE,
+            RoleCertificationState.INCOMPATIBLE,
+            RoleCertificationState.FAILED,
+        )
     finally:
         await provider.aclose()
-
-    assert record.outcome is AgentReadinessOutcome.READY
-    assert record.safe_error_code is None
 
 
 @pytest.mark.asyncio

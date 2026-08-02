@@ -354,8 +354,18 @@ async def test_evaluate_workload_zero_attribution_suppresses_even_with_real_fact
     """Codex finding (HIGH, 2026-08-02), the exact repro shape reproduced
     for the workload service: an unattributed team must stay suppressed
     even when the workload source itself returns otherwise-complete, real
-    facts -- cohort_size is genuinely derived from the attribution source,
-    never inferable from "the sources look fine".
+    facts -- cohort_size is genuinely derived from the attribution source
+    (0, not fabricated), never inferable from "the sources look fine".
+
+    Every finding here actually suppresses as ``missing_attribution``
+    rather than ``insufficient_cohort`` (Codex-confirmed finding, round 2,
+    2026-08-02): attribution is now the CONTROLLING guard, checked before
+    cohort, and every CHAOS-3304 adapter reports ``attribution_present=
+    False`` unconditionally (CHAOS-3331) -- so it always fires first,
+    regardless of cohort_size. ``cohort_size`` is still asserted directly
+    on the observation (never on which specific guard fired) to preserve
+    the "genuinely derived, not fabricated" property this test exists to
+    prove.
     """
 
     source = FakeMeasuredWorkloadSource(calls=[])
@@ -367,13 +377,18 @@ async def test_evaluate_workload_zero_attribution_suppresses_even_with_real_fact
         team_id="team-1",
         now=_NOW,
     )
+    after_hours_observation = next(
+        o for o in profile.observations if o.current_value == 0.4
+    )
+    assert after_hours_observation.cohort_size == 0
+
     after_hours = next(
         f
-        for f in profile.shadow_findings
+        for f in profile.shadow_findings + profile.suppressed_findings
         if f.rule_id == "health_rule.after_hours_pressure_sustained.v1"
     )
     assert after_hours.state is DimensionState.UNKNOWN
-    assert after_hours.suppressed_reason == "insufficient_cohort"
+    assert after_hours.suppressed_reason == "missing_attribution"
 
 
 @pytest.mark.asyncio
@@ -401,15 +416,22 @@ async def test_evaluate_workload_unmeasured_source_reports_unknown_not_healthy()
 
 
 @pytest.mark.asyncio
-async def test_evaluate_workload_with_attribution_and_real_facts_reports_measured_findings() -> (
+async def test_evaluate_workload_with_attribution_and_real_facts_still_gates_on_chaos_3331() -> (
     None
 ):
-    """Positive control: real, attributed team facts and an attribution
-    source reporting real owned repositories clearing every applicable
-    rule's minimum cohort produce genuinely measured dimensions where
-    nothing else gates them -- and honestly suppressed findings where a
-    guardrail (denominator, or CHAOS-3331 attribution provenance) still
-    applies, never a fabricated measured result.
+    """Even with COMPLETE, well-attributed data -- a full cohort, genuinely
+    measured cognitive-load and investment facts, both current and
+    comparison windows fetched -- all four CHAOS-3304 findings still
+    suppress as ``UNKNOWN``/``missing_attribution``, never a fabricated
+    measured result (Codex-confirmed finding, round 2, 2026-08-02): every
+    adapter unconditionally reports ``attribution_present=False``
+    (CHAOS-3331), and attribution is now the CONTROLLING guard, checked
+    before cohort/sample/coverage/denominator -- so it fires first
+    regardless of how complete everything else is. This positive-control
+    test's ORIGINAL premise (that investment_allocation_shift.v1 was
+    CHAOS-3331-exempt and could reach a genuine HEALTHY finding) was
+    itself the round-2 Codex finding: that exemption failed open and is
+    corrected here, not merely in the source module.
     """
 
     source = FakeMeasuredWorkloadSource(calls=[])
@@ -421,44 +443,23 @@ async def test_evaluate_workload_with_attribution_and_real_facts_reports_measure
         team_id="team-1",
         now=_NOW,
     )
-    after_hours = next(
-        f
-        for f in profile.shadow_findings
-        if f.rule_id == "health_rule.after_hours_pressure_sustained.v1"
-    )
-    # 0.4 >= threshold 0.25 would trigger WATCH, but CHAOS-3331
-    # (attribution_present=False from team_metrics_daily's legacy
-    # resolver) suppresses it to UNKNOWN/missing_attribution first --
-    # never a fabricated finding on attribution this service cannot
-    # actually vouch for.
-    assert after_hours.state is DimensionState.UNKNOWN
-    assert after_hours.suppressed_reason == "missing_attribution"
+    assert profile.launch_findings == ()
+    for rule_id in (
+        "health_rule.after_hours_pressure_sustained.v1",
+        "health_rule.review_request_load_pressure.v1",
+        "health_rule.pr_interruption_load_pressure.v1",
+        "health_rule.investment_allocation_shift.v1",
+    ):
+        finding = next(f for f in profile.suppressed_findings if f.rule_id == rule_id)
+        assert finding.state is DimensionState.UNKNOWN
+        assert finding.suppressed_reason == "missing_attribution"
 
-    # No active-contributor count resolved -> burden is not calculable, but
-    # the raw pressure was still genuinely measured (never dropped). The
-    # denominator guardrail fires before the attribution guardrail would
-    # (evaluate_rule's fixed check order), so this stays missing_denominator.
-    review_load = next(
-        f
-        for f in profile.shadow_findings
-        if f.rule_id == "health_rule.review_request_load_pressure.v1"
-    )
-    assert review_load.state is DimensionState.UNKNOWN
-    assert review_load.suppressed_reason == "missing_denominator"
+    # The cohort itself is still genuinely resolved (25, not fabricated) --
+    # attribution is what gates the finding, not a missing cohort.
+    assert all(observation.cohort_size == 25 for observation in profile.observations)
 
-    investment_shift = next(
-        f
-        for f in profile.shadow_findings
-        if f.rule_id == "health_rule.investment_allocation_shift.v1"
-    )
-    # Stable mix across both fetched windows in this fixture -> genuinely
-    # measured zero shift, not a value judgment about the mix's
-    # composition. Not subject to CHAOS-3331 (investment_metrics_daily is
-    # canonically attributed) -- a real, measured HEALTHY finding.
-    assert investment_shift.state is DimensionState.HEALTHY
-    assert investment_shift.suppressed_reason is None
-
-    # Both current and comparison windows were fetched, sequentially.
+    # Both current and comparison windows were still fetched, sequentially
+    # -- CHAOS-3331 gates the FINDING, not the data collection itself.
     assert len(source.calls) == 2
 
 
@@ -512,14 +513,24 @@ async def test_evaluate_workload_attribution_failure_is_unmeasured_not_insuffici
     None
 ):
     """A genuine attribution-lookup FAILURE (``measured=False``) must never
-    collapse into the ``insufficient_cohort`` shape a genuinely empty,
-    successfully resolved cohort produces -- see the module docstring's
-    attribution-snapshot discipline. Proven both ways: the failure path
-    carries no ``suppressed_reason`` and ``cohort_size=None`` throughout,
+    collapse into the shape a genuinely empty, successfully resolved cohort
+    produces -- see the module docstring's attribution-snapshot discipline.
+    Proven both ways at the ``cohort_size`` level (the honest signal,
+    checked directly on each observation rather than via a finding's
+    ``suppressed_reason`` -- see below for why): the failure path carries
+    no ``suppressed_reason`` at all and ``cohort_size=None`` throughout,
     AND never even calls the runtime/workload source (nothing meaningful
     could be reported regardless of what they'd return); the empty-cohort
-    path carries ``suppressed_reason="insufficient_cohort"`` and a real
-    ``cohort_size=0``.
+    path carries a genuinely resolved ``cohort_size=0``.
+
+    The empty-cohort path's FINDING itself reports
+    ``missing_attribution``, not ``insufficient_cohort`` (Codex-confirmed
+    finding, round 2, 2026-08-02): attribution is now the CONTROLLING
+    guard, checked before cohort, and every CHAOS-3304 adapter reports
+    ``attribution_present=False`` unconditionally (CHAOS-3331) -- so it
+    always fires first regardless of cohort_size. This is why the
+    cohort_size=0-vs-None distinction is asserted on the raw observation,
+    not inferred from which reason string a finding happens to carry.
     """
 
     failing_service = TeamWorkloadService(
@@ -553,11 +564,11 @@ async def test_evaluate_workload_attribution_failure_is_unmeasured_not_insuffici
     )
     after_hours = next(
         f
-        for f in empty_cohort_profile.shadow_findings
+        for f in empty_cohort_profile.suppressed_findings
         if f.rule_id == "health_rule.after_hours_pressure_sustained.v1"
     )
     assert after_hours.state is DimensionState.UNKNOWN
-    assert after_hours.suppressed_reason == "insufficient_cohort"
+    assert after_hours.suppressed_reason == "missing_attribution"
     assert any(
         observation.cohort_size == 0
         for observation in empty_cohort_profile.observations

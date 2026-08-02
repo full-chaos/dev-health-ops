@@ -298,21 +298,24 @@ def change_failure_rate_observation(
 # ingest time (unlike status/change facts, which re-derive an owned-
 # repository set from ``team_repo_ownership``). But "scoped by the column"
 # is not "attributed by the canonical resolver" -- see
-# ``native_team_workload``'s module docstring for the CHAOS-3331 finding:
-# ``investment_metrics_daily`` IS canonically attributed
-# (``resolve_team_attribution`` + ``attribution_context``), so
-# ``investment_allocation_shift_observation`` below reports
-# ``attribution_present=True`` for a measured result. ``user_metrics_daily``/
-# ``team_metrics_daily`` are NOT -- their writers (``compute.py``,
-# ``compute_wellbeing.py``) use a legacy repo-pattern/identity-map resolver
-# that never consults canonical attribution -- so ``after_hours_pressure_
-# observation`` and ``_per_active_contributor_observation`` (shared by
-# ``review_request_load_observation``/``pr_interruption_load_observation``)
-# report ``attribution_present=False`` even for a genuinely measured
-# result. Each of those three rules already carries
+# ``native_team_workload``'s module docstring for the CHAOS-3331 finding.
+#
+# ALL FOUR adapters below report ``attribution_present=False`` for a
+# genuinely measured result (Codex-confirmed finding, round 2, 2026-08-02,
+# corrects this module's earlier claim that ``investment_allocation_shift_
+# observation`` was exempt): ``user_metrics_daily``/``team_metrics_daily``
+# writers (``compute.py``, ``compute_wellbeing.py``) use a legacy repo-
+# pattern/identity-map resolver that never consults canonical attribution
+# at all; ``investment_metrics_daily``'s writer (``job_work_items.py``)
+# resolves via the canonical ``resolve_team_attribution`` +
+# ``attribution_context`` path in the common case, but that path's
+# ``attribution_context`` load can itself fail and fall open to the SAME
+# legacy resolver chain -- and no field anywhere records which path
+# produced a given row, so this module cannot tell them apart on the read
+# side. Each of the four rules already carries
 # ``attribution_required=True`` (``health_rule_registry.py``), so this
 # disclosure alone -- no new field, no protocol change -- correctly
-# suppresses every finding from these three rules to
+# suppresses every finding from all four rules to
 # ``UNKNOWN``/``missing_attribution`` via ``evaluate_rule``'s existing
 # guardrail, until CHAOS-3331 lands and this module is updated to match.
 # ---------------------------------------------------------------------------
@@ -532,11 +535,26 @@ def investment_allocation_shift_observation(
     "no baseline to compare against" into "no shift observed" would be
     exactly the "missing data as zero" the platform-wide contract forbids.
 
-    ``attribution_present=True`` (unlike the three cognitive-load adapters
-    above): ``investment_metrics_daily``'s writer resolves ``team_id`` via
-    the canonical ``resolve_team_attribution`` + ``attribution_context``
-    path, not the legacy resolver CHAOS-3331 flags -- see
-    ``native_team_workload``'s module docstring for the file:line evidence.
+    ``attribution_present=False`` unconditionally (Codex-confirmed finding,
+    round 2, 2026-08-02, corrects this adapter's own earlier claim of
+    exemption): ``investment_metrics_daily``'s writer
+    (``metrics/job_work_items.py``) resolves ``team_id`` via
+    ``resolve_team_attribution`` + ``attribution_context`` in the common
+    case, but the ``attribution_context`` load itself is wrapped in a
+    ``try/except`` that FAILS OPEN -- a load failure continues with
+    ``attribution_context=None``, and ``resolve_team_attribution`` then
+    falls back through its legacy/native/project/assignee candidate chain
+    and still writes a row. There is no field on ``TeamInvestmentMixResult``
+    (or anywhere in ``investment_metrics_daily`` itself) recording which
+    path produced a given row, so this adapter cannot distinguish a
+    canonically-attributed row from a fail-open one on the read side. This
+    rule is therefore CHAOS-3331-blocked exactly like the three
+    cognitive-load adapters above (ratified team-lead decision,
+    2026-08-02: the writer-side provenance fix belongs to CHAOS-3331, not
+    this branch) -- see
+    ``health_rule_registry.CHAOS_3331_BLOCKED_SOURCE_CLASSES``. The
+    exemption returns once CHAOS-3331 persists which attribution path
+    produced each row on the writer path itself.
     """
 
     if not current.measured or current.total_units <= 0:
@@ -574,7 +592,8 @@ def investment_allocation_shift_observation(
             current_value=None,
             comparison_value=None,
             denominator_present=False,
-            attribution_present=True,
+            # CHAOS-3331: fail-open writer path, see docstring above.
+            attribution_present=False,
             window_index=window_index,
             observed_at=observed_at,
         )
@@ -591,7 +610,8 @@ def investment_allocation_shift_observation(
         current_value=current_value,
         comparison_value=comparison_share,
         denominator_present=True,
-        attribution_present=True,
+        # CHAOS-3331: fail-open writer path, see docstring above.
+        attribution_present=False,
         window_index=window_index,
         observed_at=observed_at,
     )

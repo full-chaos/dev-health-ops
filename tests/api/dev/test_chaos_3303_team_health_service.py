@@ -253,9 +253,13 @@ async def test_evaluate_team_zero_attribution_suppresses_even_with_real_facts() 
         team_id="team-1",
         now=_NOW,
     )
+    # health_rule_registry._evaluate_with_registry partitions
+    # suppressed_reason before shadow_only (Codex-confirmed finding, round
+    # 2, 2026-08-02) -- a genuinely suppressed provisional finding lands in
+    # suppressed_findings, not shadow_findings.
     incident_finding = next(
         f
-        for f in profile.shadow_findings
+        for f in profile.suppressed_findings
         if f.rule_id == "health_rule.incident_load.v1"
     )
     assert incident_finding.state == DimensionState.UNKNOWN

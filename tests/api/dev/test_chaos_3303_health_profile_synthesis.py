@@ -218,9 +218,19 @@ def test_change_failure_rate_not_applicable_flag_is_honored() -> None:
 
 def test_team_profile_without_cohort_suppresses_every_applicable_rule() -> None:
     """A team subject with no resolved attribution (cohort_size=None) must
-    never surface a healthy/at-risk finding -- every applicable rule
-    requires minimum_cohort_size, so every one suppresses as
-    insufficient_cohort -> unknown.
+    never surface a healthy/at-risk finding -- every applicable rule with
+    real (though cohort-insufficient) input suppresses as
+    insufficient_cohort -> unknown; every rule with no canonical source
+    bound yet (health_profile_synthesis's own _UNBOUND_RULE_LIMITATIONS)
+    short-circuits at the earlier no-data check instead, before the cohort
+    guard even runs, and reports plain unknown with no suppressed_reason.
+
+    Bucket split (health_rule_registry._evaluate_with_registry partitions
+    suppressed_reason BEFORE shadow_only, Codex-confirmed finding, round 2,
+    2026-08-02): a genuinely suppressed provisional finding now lands in
+    ``suppressed_findings``, not ``shadow_findings`` -- the invariant this
+    test actually cares about (no healthy/at-risk finding) must therefore
+    be checked across BOTH buckets, never just one.
     """
 
     sources = HealthEvaluationSources(
@@ -238,10 +248,17 @@ def test_team_profile_without_cohort_suppresses_every_applicable_rule() -> None:
         observed_at=_NOW,
     )
     assert profile.launch_findings == ()
-    assert profile.suppressed_findings == ()
-    assert profile.shadow_findings
-    for finding in profile.shadow_findings:
+    all_findings = profile.shadow_findings + profile.suppressed_findings
+    assert all_findings
+    for finding in all_findings:
         assert finding.state in (DimensionState.UNKNOWN, DimensionState.NOT_APPLICABLE)
+    # At least one rule (a source genuinely present, cohort genuinely
+    # insufficient) reaches the specific insufficient_cohort suppression.
+    assert profile.suppressed_findings
+    assert all(
+        finding.suppressed_reason == "insufficient_cohort"
+        for finding in profile.suppressed_findings
+    )
 
 
 def test_findings_are_deterministically_ordered() -> None:
@@ -277,11 +294,24 @@ def test_findings_are_deterministically_ordered() -> None:
 
 def test_every_shipped_finding_is_shadow_only_today() -> None:
     """Every HEALTH_RULE_REGISTRY rule is provisional (CHAOS-3302's own
-    totality test) -- every finding this synthesis produces today must land
-    in ``shadow_findings`` (never ``launch_findings``/``suppressed_findings``,
-    both of which require a non-provisional rule per ``health_rule_
-    registry._evaluate_with_registry``), and every one of those findings
-    must itself report ``shadow_only=True``.
+    totality test) -- ``launch_findings`` (which requires a non-provisional
+    rule per ``health_rule_registry._evaluate_with_registry``) must stay
+    empty, and EVERY finding this synthesis produces today -- whether it
+    lands in ``shadow_findings`` or ``suppressed_findings`` -- must itself
+    report ``shadow_only=True``.
+
+    ``suppressed_findings`` is no longer necessarily empty (Codex-confirmed
+    finding, round 2, 2026-08-02): ``_evaluate_with_registry`` now
+    partitions ``suppressed_reason`` before ``shadow_only``, so a
+    provisional rule that genuinely triggers a guardrail (e.g.
+    ``incident_load.v1``'s ``insufficient_sample`` here, since 0 incidents
+    is below its ``minimum_sample``) correctly lands in
+    ``suppressed_findings`` -- ``shadow_only=True`` still holds for it,
+    because it is still a provisional-rule finding; it is just no longer
+    conflated with the OTHER provisional findings that were never
+    suppressed by any guardrail at all (this synthesis's six
+    canonically-unbound rules, which short-circuit at the earlier no-data
+    check with no suppressed_reason).
     """
 
     sources = HealthEvaluationSources(
@@ -297,6 +327,11 @@ def test_every_shipped_finding_is_shadow_only_today() -> None:
         observed_at=_NOW,
     )
     assert profile.launch_findings == ()
-    assert profile.suppressed_findings == ()
-    assert profile.shadow_findings
-    assert all(finding.shadow_only for finding in profile.shadow_findings)
+    all_findings = profile.shadow_findings + profile.suppressed_findings
+    assert all_findings
+    assert all(finding.shadow_only for finding in all_findings)
+    assert profile.suppressed_findings
+    assert all(
+        finding.suppressed_reason is not None for finding in profile.suppressed_findings
+    )
+    assert all(finding.suppressed_reason is None for finding in profile.shadow_findings)

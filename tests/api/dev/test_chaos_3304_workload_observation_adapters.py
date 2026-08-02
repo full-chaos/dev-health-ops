@@ -240,18 +240,27 @@ def test_investment_shift_stable_high_ktlo_mix_reports_neutral_measured_zero() -
     assert obs.data_semantics == "measured_zero"
 
 
-def test_investment_shift_is_not_subject_to_chaos_3331_unlike_cognitive_load() -> None:
-    """Asymmetry lock: ``investment_metrics_daily``'s writer resolves
-    ``team_id`` via the canonical ``resolve_team_attribution`` +
-    ``attribution_context`` path (``metrics/job_work_items.py``), unlike
-    the three cognitive-load adapters above -- ``attribution_present`` is
-    genuinely ``True`` here, not gated by CHAOS-3331.
+def test_investment_shift_is_also_subject_to_chaos_3331() -> None:
+    """Codex-confirmed finding (round 2, 2026-08-02), correcting this
+    module's own earlier claim of an asymmetry/exemption here:
+    ``investment_metrics_daily``'s writer (``metrics/job_work_items.py``)
+    resolves ``team_id`` via the canonical ``resolve_team_attribution`` +
+    ``attribution_context`` path in the common case, but that path's own
+    ``attribution_context`` load is wrapped in a ``try/except`` that FAILS
+    OPEN -- a load failure continues with ``attribution_context=None``,
+    and ``resolve_team_attribution`` then falls back through its legacy
+    candidate chain and still writes a row. No field on
+    ``TeamInvestmentMixResult`` records which path produced a given row,
+    so this adapter cannot verify canonical attribution on the read side
+    and must fail closed exactly like the three cognitive-load adapters
+    above: ``attribution_present=False`` even for a genuinely measured,
+    stable-mix result.
     """
 
     current = _investment_mix(new_value=10.0, ktlo=60.0, security=20.0, infra=10.0)
     comparison = _investment_mix(new_value=10.0, ktlo=60.0, security=20.0, infra=10.0)
     obs = investment_allocation_shift_observation(current, comparison, **_COMMON)
-    assert obs.attribution_present is True
+    assert obs.attribution_present is False
 
 
 def test_investment_shift_large_swing_reports_magnitude_only() -> None:

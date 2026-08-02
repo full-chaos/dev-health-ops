@@ -30,10 +30,11 @@ Required test cases from the CHAOS-3304 ticket, and where each is proven:
 * high KTLO/security/infra rendered neutrally -> proven at the adapter layer
   (``test_investment_shift_stable_high_ktlo_mix_reports_neutral_measured_zero``)
 * missing vs measured zero -> ``test_negative_unmeasured_reports_unknown_never_healthy``
-* CHAOS-3331 promotion guard (team-lead ruling, 2026-08-02: legacy
-  repo-pattern/identity-map resolver, not canonical primary attribution,
-  writes ``user_metrics_daily``/``team_metrics_daily``) ->
-  ``test_chaos_3331_blocked_rules_stay_provisional``
+* CHAOS-3331 promotion guard (team-lead ruling, 2026-08-02, corrected
+  round 2: all four rules blocked, not three -- see module comment before
+  ``_AUTHORIZED_TEST_WORKLOAD_REGISTRY``) ->
+  ``test_chaos_3331_blocked_rules_stay_provisional``,
+  ``test_workload_dimensions_cannot_be_constructed_as_product_approved``
 
 Provider-fallback, persisted-replay, and both-surfaces cases are CHAOS-3300
 proof-gate scope, not this ticket's service layer -- not reproduced here.
@@ -212,81 +213,103 @@ def test_every_new_rule_is_provisional_shadow_only() -> None:
 # ---------------------------------------------------------------------------
 # Qualification-reaching-launch-findings: test-scoped ``product_approved``
 # copies, exactly like CHAOS-3302's own positive controls.
+#
+# Codex-confirmed finding (round 2, 2026-08-02): every rule reading
+# ``SourceClass.COGNITIVE_LOAD``/``INVESTMENT_ALLOCATION`` is now blocked
+# from ANY non-provisional ``calibration_state`` at ``HealthRuleRegistry``
+# CONSTRUCTION time (``health_rule_registry.CHAOS_3331_BLOCKED_SOURCE_
+# CLASSES``, enforced on every construction, not only the production
+# singleton) -- so a test-scoped ``product_approved`` copy of a CHAOS-3304
+# workload rule can no longer even be CONSTRUCTED, let alone reach launch.
+# That is the intended, structural consequence of CHAOS-3331: this
+# changeset cannot honestly demonstrate "two workload dimensions qualify a
+# team" as a going-forward capability, because no workload rule can be
+# promoted to prove it against until CHAOS-3331 closes.
+#
+# The tests below therefore prove the qualification MECHANISM generically
+# -- two independent dimensions, from two test-scoped rules sourced from
+# NON-blocked classes (mirroring test_chaos_3302_health_rule_e2e_controls.py's
+# own _TEST_COMPLETION_STALLED/_TEST_REVIEW_LATENCY_SUSTAINED shapes) -- not
+# the CHAOS-3304-specific claim. The mechanism itself
+# (qualify_team_needs_attention's multi_dimension basis) does not
+# distinguish which dimensions are involved; CHAOS-3304's own workload
+# rules will exercise the identical code path the moment CHAOS-3331 closes
+# and a real calibration review promotes one.
 # ---------------------------------------------------------------------------
 
-_TEST_AFTER_HOURS_PRESSURE = HealthRuleDefinition(
+_TEST_EXECUTION_COMPLETION_STALLED = HealthRuleDefinition(
     schema_version="health_rule_definition.v1",
-    rule_id="health_rule.test_after_hours_pressure.v1",
-    rule_version="health_rule.test_after_hours_pressure.v1",
+    rule_id="health_rule.test_workload_execution_completion.v1",
+    rule_version="health_rule.test_workload_execution_completion.v1",
     owner="test-scoped-fixture",
     applicability=(RuleApplicability.TEAM,),
-    dimension=HealthDimension.COGNITIVE_WORKLOAD_PRESSURE,
-    required_source_classes=(SourceClass.COGNITIVE_LOAD,),
+    dimension=HealthDimension.EXECUTION_COMPLETION,
+    required_source_classes=(SourceClass.STATUS_CHANGE, SourceClass.WORK_ITEM),
     required_observed_states=(SourceRequirementState.AVAILABLE_CURRENT,),
     direction=RuleDirection.HIGHER_IS_WORSE,
     threshold=0.25,
-    comparison_unit="after_hours_commit_ratio",
+    comparison_unit="stalled_work_item_ratio",
     minimum_sample=1,
     minimum_coverage=0.0,
     current_window_days=14,
     comparison_window_days=None,
     sustained_periods_required=1,
     denominator_required=False,
-    attribution_required=True,
+    attribution_required=False,
     minimum_cohort_size=5,
     triggered_state=DimensionState.AT_RISK,
-    evidence_source_classes=(SourceClass.COGNITIVE_LOAD,),
+    evidence_source_classes=(SourceClass.STATUS_CHANGE, SourceClass.WORK_ITEM),
     fact_kind="observed",
-    remediation_template="Review after-hours commit activity with the team.",
+    remediation_template="Review stalled work items with the team.",
     calibration_state=CalibrationState.PRODUCT_APPROVED,
-    calibration_evidence_ref="test.calibration.test_after_hours_pressure.v1",
+    calibration_evidence_ref="test.calibration.test_workload_execution_completion.v1",
 )
 
-_TEST_INVESTMENT_ALLOCATION_SHIFT = HealthRuleDefinition(
+_TEST_REVIEW_CI_PRESSURE = HealthRuleDefinition(
     schema_version="health_rule_definition.v1",
-    rule_id="health_rule.test_investment_allocation_shift.v1",
-    rule_version="health_rule.test_investment_allocation_shift.v1",
+    rule_id="health_rule.test_workload_review_ci_pressure.v1",
+    rule_version="health_rule.test_workload_review_ci_pressure.v1",
     owner="test-scoped-fixture",
     applicability=(RuleApplicability.TEAM,),
-    dimension=HealthDimension.INVESTMENT_BALANCE,
-    required_source_classes=(SourceClass.INVESTMENT_ALLOCATION,),
+    dimension=HealthDimension.REVIEW_CI_PRESSURE,
+    required_source_classes=(SourceClass.PULL_REQUEST, SourceClass.REVIEW),
     required_observed_states=(SourceRequirementState.AVAILABLE_CURRENT,),
     direction=RuleDirection.HIGHER_IS_WORSE,
     threshold=0.25,
-    comparison_unit="new_value_share_shift",
+    comparison_unit="p50_review_latency_hours",
     minimum_sample=1,
-    minimum_coverage=0.5,
+    minimum_coverage=0.0,
     current_window_days=14,
-    comparison_window_days=14,
+    comparison_window_days=None,
     sustained_periods_required=1,
-    denominator_required=True,
-    attribution_required=True,
+    denominator_required=False,
+    attribution_required=False,
     minimum_cohort_size=5,
     triggered_state=DimensionState.AT_RISK,
-    evidence_source_classes=(SourceClass.INVESTMENT_ALLOCATION,),
+    evidence_source_classes=(SourceClass.PULL_REQUEST, SourceClass.REVIEW),
     fact_kind="observed",
-    remediation_template="Review the team's investment mix shift with planning.",
+    remediation_template="Review open pull requests aging past usual latency.",
     calibration_state=CalibrationState.PRODUCT_APPROVED,
-    calibration_evidence_ref="test.calibration.test_investment_allocation_shift.v1",
+    calibration_evidence_ref="test.calibration.test_workload_review_ci_pressure.v1",
 )
 
 _AUTHORIZED_TEST_WORKLOAD_REGISTRY = HealthRuleRegistry(
-    (_TEST_AFTER_HOURS_PRESSURE, _TEST_INVESTMENT_ALLOCATION_SHIFT)
+    (_TEST_EXECUTION_COMPLETION_STALLED, _TEST_REVIEW_CI_PRESSURE)
 )
 
 
 def test_positive_two_independent_workload_dimensions_qualify() -> None:
-    """The valid overburdened/needs-attention multi-signal case: two
-    INDEPENDENT dimensions (cognitive workload pressure + investment
-    balance) both at_risk qualifies the team, through the
-    ``multi_dimension`` basis.
+    """The valid overburdened/needs-attention multi-signal case, proven
+    generically (see the block comment above for why CHAOS-3304's own
+    workload dimensions cannot be used here): two INDEPENDENT dimensions
+    both at_risk qualifies the team, through the ``multi_dimension`` basis.
     """
 
     observations = {
-        "health_rule.test_after_hours_pressure.v1": [
+        "health_rule.test_workload_execution_completion.v1": [
             _observation(current_value=0.4, coverage=1.0)
         ],
-        "health_rule.test_investment_allocation_shift.v1": [
+        "health_rule.test_workload_review_ci_pressure.v1": [
             _observation(current_value=0.5, coverage=0.9)
         ],
     }
@@ -294,8 +317,8 @@ def test_positive_two_independent_workload_dimensions_qualify() -> None:
         _AUTHORIZED_TEST_WORKLOAD_REGISTRY, observations, org_id="org-1"
     )
     launch_dimensions = {finding.dimension for finding in result.launch_findings}
-    assert HealthDimension.COGNITIVE_WORKLOAD_PRESSURE in launch_dimensions
-    assert HealthDimension.INVESTMENT_BALANCE in launch_dimensions
+    assert HealthDimension.EXECUTION_COMPLETION in launch_dimensions
+    assert HealthDimension.REVIEW_CI_PRESSURE in launch_dimensions
 
     qualification = _qualify_team_needs_attention_against_registry(
         result.launch_findings,
@@ -306,19 +329,19 @@ def test_positive_two_independent_workload_dimensions_qualify() -> None:
     assert qualification.basis is not None
     assert qualification.basis.value == "multi_dimension"
     assert set(qualification.contributing_dimensions) == {
-        HealthDimension.COGNITIVE_WORKLOAD_PRESSURE,
-        HealthDimension.INVESTMENT_BALANCE,
+        HealthDimension.EXECUTION_COMPLETION,
+        HealthDimension.REVIEW_CI_PRESSURE,
     }
 
 
 def test_negative_single_at_risk_dimension_does_not_qualify() -> None:
-    """One signal only (after-hours pressure alone) must NOT produce a
-    struggling/overburdened qualification -- PRD 6.5's "A single bad week
-    ... or one metric is insufficient".
+    """One signal only must NOT produce a struggling/overburdened
+    qualification -- PRD 6.5's "A single bad week ... or one metric is
+    insufficient".
     """
 
     observations = {
-        "health_rule.test_after_hours_pressure.v1": [
+        "health_rule.test_workload_execution_completion.v1": [
             _observation(current_value=0.4, coverage=1.0)
         ],
     }
@@ -334,41 +357,99 @@ def test_negative_single_at_risk_dimension_does_not_qualify() -> None:
     assert qualification.basis is None
 
 
+def test_workload_dimensions_cannot_be_constructed_as_product_approved() -> None:
+    """Codex-confirmed finding (round 2, 2026-08-02), the structural
+    consequence documented above, proven directly: attempting to construct
+    a ``product_approved`` copy of a COGNITIVE_LOAD- or
+    INVESTMENT_ALLOCATION-sourced rule -- under ANY rule id, not just the
+    four CHAOS-3304 ships -- fails at ``HealthRuleRegistry`` construction,
+    not at qualification or launch time.
+    """
+
+    from dev_health_ops.api.dev.health_rule_registry import (
+        AttributionProvenanceBlockedError,
+    )
+
+    for source_class, dimension in (
+        (SourceClass.COGNITIVE_LOAD, HealthDimension.COGNITIVE_WORKLOAD_PRESSURE),
+        (SourceClass.INVESTMENT_ALLOCATION, HealthDimension.INVESTMENT_BALANCE),
+    ):
+        forged = HealthRuleDefinition(
+            schema_version="health_rule_definition.v1",
+            rule_id="health_rule.test_forged_workload_rule.v1",
+            rule_version="health_rule.test_forged_workload_rule.v1",
+            owner="adversarial-test-fixture",
+            applicability=(RuleApplicability.TEAM,),
+            dimension=dimension,
+            required_source_classes=(source_class,),
+            required_observed_states=(SourceRequirementState.AVAILABLE_CURRENT,),
+            direction=RuleDirection.HIGHER_IS_WORSE,
+            threshold=0.1,
+            comparison_unit="forged_unit",
+            minimum_sample=1,
+            minimum_coverage=0.0,
+            current_window_days=14,
+            comparison_window_days=None,
+            sustained_periods_required=1,
+            denominator_required=False,
+            attribution_required=True,
+            minimum_cohort_size=5,
+            triggered_state=DimensionState.AT_RISK,
+            evidence_source_classes=(source_class,),
+            fact_kind="observed",
+            remediation_template="n/a",
+            calibration_state=CalibrationState.PRODUCT_APPROVED,
+            calibration_evidence_ref="test.calibration.test_forged_workload_rule.v1",
+        )
+        try:
+            HealthRuleRegistry((forged,))
+        except AttributionProvenanceBlockedError:
+            pass
+        else:
+            raise AssertionError(
+                f"HealthRuleRegistry accepted a product_approved rule reading "
+                f"blocked source class {source_class.value!r}"
+            )
+
+
 # ---------------------------------------------------------------------------
 # CHAOS-3331 promotion guard.
 # ---------------------------------------------------------------------------
 
 
 def test_chaos_3331_blocked_rules_stay_provisional() -> None:
-    """Team-lead ruling (2026-08-02, disclose-and-defer): the three
-    cognitive-load-sourced rules cannot be promoted out of provisional
-    until CHAOS-3331 closes (their sole source table's team_id is a legacy
-    repo-pattern/identity-map resolver, not canonical primary attribution).
+    """Team-lead ruling (2026-08-02, disclose-and-defer; corrected round 2,
+    2026-08-02): all FOUR CHAOS-3304 rules cannot be promoted out of
+    provisional until CHAOS-3331 closes -- none can be verified as
+    canonically attributed on the read side (three from a legacy repo-
+    pattern/identity-map resolver; the fourth from a canonical path whose
+    own attribution-context load fails open to the same legacy resolver).
 
     This test is deliberately a WEAKER, redundant backstop -- the load-
-    bearing guard is ``health_rule_registry.py``'s import-time check, which
-    raises ``RuntimeError`` the instant the module loads if any blocked
-    rule id's ``calibration_state`` is promoted, so a promotion can never
-    reach this test (or any other) in the first place. This test exists so
-    a reader auditing test files, not import-time guards, still finds the
-    invariant documented and exercised.
+    bearing guard is ``health_rule_registry.py``'s CONSTRUCTION-time check
+    (``CHAOS_3331_BLOCKED_SOURCE_CLASSES``, enforced on every
+    ``HealthRuleRegistry`` construction, not only the production singleton
+    -- see ``test_workload_dimensions_cannot_be_constructed_as_product_
+    approved`` for the direct proof), which raises
+    ``AttributionProvenanceBlockedError`` the instant ANY registry
+    construction promotes a blocked-source-class rule, so a promotion can
+    never reach this test (or any other) in the first place. This test
+    exists so a reader auditing test files, not registry-construction
+    guards, still finds the invariant documented and exercised for the
+    exact four rules this ticket ships today.
     """
 
     assert CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS == {
         "health_rule.after_hours_pressure_sustained.v1",
         "health_rule.review_request_load_pressure.v1",
         "health_rule.pr_interruption_load_pressure.v1",
+        "health_rule.investment_allocation_shift.v1",
     }
     for rule_id in CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS:
         rule = HEALTH_RULE_REGISTRY.rule(rule_id)
         assert rule.calibration_state == CalibrationState.PROVISIONAL
         assert rule.calibration_evidence_ref is None
-
-    # The asymmetry is deliberate: investment_allocation_shift.v1 is NOT
-    # blocked -- its source table (investment_metrics_daily) is canonically
-    # attributed (metrics/job_work_items.py's resolve_team_attribution +
-    # attribution_context), unlike the three above.
-    assert (
-        "health_rule.investment_allocation_shift.v1"
-        not in CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS
-    )
+        assert rule.required_source_classes[0] in {
+            SourceClass.COGNITIVE_LOAD,
+            SourceClass.INVESTMENT_ALLOCATION,
+        }

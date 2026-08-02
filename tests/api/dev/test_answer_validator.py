@@ -215,6 +215,11 @@ def test_direct_summary_cannot_state_a_completion_ratio_the_server_withheld() ->
 # withheld completion total via a different surface form -- a percentage,
 # a digit fraction, a bare count + totalizing word, pure totalizing
 # vocabulary with no number at all, and a spelled-out fraction.
+#
+# Round 6 (codex HIGH): a quantity-or-totalizer gate is STILL not enough
+# -- ordinary production model prose most often narrates a bare,
+# unquantified predicate ("it's done"), never a number or a totalizing
+# word at all. These five have neither.
 _WITHHELD_COMPLETION_TOTAL_PARAPHRASES = [
     "Required work is 100% complete.",
     "3 of 5 required items are done.",
@@ -224,6 +229,11 @@ _WITHHELD_COMPLETION_TOTAL_PARAPHRASES = [
     "Three of five required items are complete.",
     "All required items are complete.",
     "None of the required work is outstanding.",
+    "The required work is done.",
+    "The required work is finished.",
+    "The required work is wrapped up.",
+    "The required work is closed out.",
+    "No required work is left.",
 ]
 
 
@@ -248,12 +258,21 @@ def test_every_paraphrase_of_a_withheld_completion_total_is_rejected(
 # language about something else entirely (an unrelated throughput number,
 # no completion vocabulary at all) must all still pass, even though the
 # tool result withheld its denominator.
+#
+# Round 6 (codex HIGH): the line is hedge words rescue, bare assertions
+# don't -- these three take the SAME predicate word rejected above
+# ("done"/"finished") and add explicit hedge language, proving the
+# broadened bare-predicate check doesn't also start rejecting honestly
+# uncertain phrasing that happens to use the identical verb.
 _LEGITIMATE_PHRASING_EVEN_WHEN_WITHHELD = [
     "The completion status of required work is unknown because the data "
     "source was truncated.",
     "Some required items appear complete based on available data, but "
     "the full set could not be verified.",
     "Twelve work items were touched in the selected period.",
+    "The required work is likely done, though this could not be fully verified.",
+    "It is unclear whether the required work is finished.",
+    "Some of the required work appears done, but full verification was not possible.",
 ]
 
 

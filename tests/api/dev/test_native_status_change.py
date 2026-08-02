@@ -14,6 +14,7 @@ from dev_health_ops.api.dev.contracts import (
 )
 from dev_health_ops.api.dev.native_status_change import ClickHouseStatusChangeSource
 from dev_health_ops.api.dev.status_change_service import (
+    MAX_STATUS_ASSESSMENT_ITEMS,
     ChangeCategory,
     ChangeSummaryRequest,
     CompletionState,
@@ -1267,6 +1268,212 @@ async def test_native_high_churn_ci_never_hides_another_prs_failing_latest_run(
     # fetched at all.
     assert result.actual.state is not CompletionState.READY
     assert result.state is not StatusResultState.COMPLETE
+    assert "assessment_source_limit_reached" in result.actual.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_bounded_read_sentinel_boundary_is_a_strict_greater_than(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3297 s2 round 6 (codex MEDIUM): the round-5 parametrized
+    service-level test (test_status_change_service.py) built
+    RawStatusSnapshot objects with the truncation flag set BY HAND,
+    which tests service propagation only -- it never actually calls
+    _bounded_read, so codex mutated its `>` to `>=` and every one of
+    those tests stayed green while exactly-1,000 rows false-positived
+    again. _bounded_read is the SHARED mechanism behind
+    pull_requests/ci/ci_acceptance/deployments/incidents -- pin its
+    comparison directly here, independent of any caller's scope/wiring,
+    so that class of regression can never hide behind downstream test
+    setup again.
+    """
+    source = ClickHouseStatusChangeSource(object(), now=NOW)
+    scope = _scope()
+
+    async def fake_query_source_has_exactly_the_requested_count(
+        _client: object, _sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        # The source has exactly 1,000 real rows -- even though we asked
+        # for the sentinel (1,001), that's all that comes back.
+        return [{"row": i} for i in range(min(int(params["limit"]), 1_000))]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts",
+        fake_query_source_has_exactly_the_requested_count,
+    )
+    rows, _ref, _warning, truncated = await source._bounded_read(
+        "pull_requests", "SELECT 1", {"limit": 1}, scope, requested=1_000
+    )
+    assert len(rows) == 1_000
+    assert truncated is False
+
+    async def fake_query_source_has_more_than_requested(
+        _client: object, _sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        # The source genuinely has MORE than requested; it honors the
+        # sentinel limit and returns exactly that many.
+        return [{"row": i} for i in range(int(params["limit"]))]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts",
+        fake_query_source_has_more_than_requested,
+    )
+    rows, _ref, _warning, truncated = await source._bounded_read(
+        "pull_requests", "SELECT 1", {"limit": 1}, scope, requested=1_000
+    )
+    assert len(rows) == 1_000  # trimmed back down to `requested`
+    assert truncated is True
+
+
+def _pr_row(number: int) -> dict[str, Any]:
+    return {
+        "repository_id": "repo-a",
+        "number": number,
+        "entity_id": f"repo-a#pr{number}",
+        "display_label": f"PR {number}",
+        "state": "merged",
+        "review_state": "APPROVED",
+        "changes_requested": 0,
+        "merged": 1,
+        "observed_at": NOW,
+        "last_synced": NOW,
+    }
+
+
+def _declared_issue_row() -> dict[str, Any]:
+    return {
+        "repository_id": "repo-a",
+        "work_item_id": "issue-1",
+        "title": "Issue 1",
+        "status": "done",
+        "parent_id": "",
+        "updated_at": NOW,
+        "last_synced": NOW,
+    }
+
+
+@pytest.mark.asyncio
+async def test_native_pull_requests_exact_cap_vs_sentinel_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3297 s2 round 6 (codex MEDIUM): the unit test above pins the
+    shared comparison in isolation; this proves it's correctly WIRED for
+    a real _bounded_read caller end to end -- exactly 1,000 real pull
+    requests must never truncate (no reason code), and 1,001 must, both
+    at the RawStatusSnapshot boundary (row count + flag) and in the
+    final StatusChangeService assessment.
+    """
+    pr_rows_at_cap = [_pr_row(index) for index in range(1_000)]
+    pr_rows_over_cap = pr_rows_at_cap + [_pr_row(1_000)]
+
+    def _fake_query_for(pr_rows: list[dict[str, Any]]):
+        async def fake_query(
+            _client: object, sql: str, params: dict[str, Any]
+        ) -> list[dict[str, Any]]:
+            if "FROM work_items FINAL" in sql and "parent_id" in sql:
+                return [_declared_issue_row()]
+            if "FROM git_pull_requests AS pr" in sql:
+                return pr_rows[: int(params["limit"])]
+            return []
+
+        return fake_query
+
+    source = ClickHouseStatusChangeSource(object(), now=NOW)
+    scope = _scope()
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts",
+        _fake_query_for(pr_rows_at_cap),
+    )
+    raw_at_cap = await source.status_snapshot(
+        org_id="org-a", scope=scope, as_of=NOW, limit=MAX_STATUS_ASSESSMENT_ITEMS
+    )
+    assert len(raw_at_cap.pull_requests) == 1_000
+    assert raw_at_cap.pull_requests_source_truncated is False
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts",
+        _fake_query_for(pr_rows_over_cap),
+    )
+    raw_over_cap = await source.status_snapshot(
+        org_id="org-a", scope=scope, as_of=NOW, limit=MAX_STATUS_ASSESSMENT_ITEMS
+    )
+    assert len(raw_over_cap.pull_requests) == 1_000
+    assert raw_over_cap.pull_requests_source_truncated is True
+
+    # Final assessment: the still-monkeypatched over-cap source drives
+    # the real StatusChangeService end to end.
+    result = await StatusChangeService(source).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(scope, max_items=100)
+    )
+    assert "assessment_source_limit_reached" in result.actual.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_native_blockers_manual_sentinel_path_exact_cap_vs_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3297 s2 round 6 (codex MEDIUM): blockers has its OWN
+    hand-rolled sentinel check (its try/except around a raw query_dicts
+    call, needed to distinguish a genuine source failure from an empty
+    result, means it can't share _bounded_read) -- a bug in the shared
+    helper's comparison would never touch this path, and a bug here
+    would never be caught by the _bounded_read unit test above, so it
+    needs an independent pin.
+    """
+
+    def _blocker_row(index: int) -> dict[str, Any]:
+        return {
+            "entity_id": f"blocker-{index:04d}",
+            "display_label": f"Blocker {index}",
+            "status": "resolved",
+            "observed_at": NOW,
+            "last_synced": NOW,
+        }
+
+    blocker_rows_at_cap = [_blocker_row(index) for index in range(1_000)]
+    blocker_rows_over_cap = blocker_rows_at_cap + [_blocker_row(1_000)]
+
+    def _fake_query_for(blocker_rows: list[dict[str, Any]]):
+        async def fake_query(
+            _client: object, sql: str, params: dict[str, Any]
+        ) -> list[dict[str, Any]]:
+            if "FROM work_items FINAL" in sql and "parent_id" in sql:
+                return [_declared_issue_row()]
+            if "FROM work_graph_projection_runs" in sql:
+                return [{"last_synced": NOW}]
+            if "INNER JOIN work_items AS blocker FINAL" in sql:
+                return blocker_rows[: int(params["limit"])]
+            return []
+
+        return fake_query
+
+    source = ClickHouseStatusChangeSource(object(), now=NOW)
+    scope = _scope()
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts",
+        _fake_query_for(blocker_rows_at_cap),
+    )
+    raw_at_cap = await source.status_snapshot(
+        org_id="org-a", scope=scope, as_of=NOW, limit=MAX_STATUS_ASSESSMENT_ITEMS
+    )
+    assert len(raw_at_cap.blockers) == 1_000
+    assert raw_at_cap.blockers_source_truncated is False
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts",
+        _fake_query_for(blocker_rows_over_cap),
+    )
+    raw_over_cap = await source.status_snapshot(
+        org_id="org-a", scope=scope, as_of=NOW, limit=MAX_STATUS_ASSESSMENT_ITEMS
+    )
+    assert len(raw_over_cap.blockers) == 1_000
+    assert raw_over_cap.blockers_source_truncated is True
+
+    result = await StatusChangeService(source).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(scope, max_items=100)
+    )
     assert "assessment_source_limit_reached" in result.actual.reason_codes
 
 

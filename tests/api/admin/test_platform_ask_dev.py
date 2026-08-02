@@ -83,12 +83,19 @@ class FakeReadinessProvider:
     async def decide(self, *_args: Any, **_kwargs: Any) -> AgentDecisionResult:
         # CHAOS-3285: the platform POST route now runs the OLD binary
         # transport-echo probe (calls 1-2) AND the NEW production-sized
-        # legacy_agent role probe (calls 3-4) against the same resolved
-        # provider. Odd calls request a tool; even calls answer. Call 1 must
-        # echo READINESS_ECHO_TOOL_ID exactly (readiness.py's own strict
-        # match) -- every later tool_request round names a real registered
-        # tool instead, since certify_legacy_agent validates its synthetic
-        # tool result against the real DevToolResult/ToolID contract.
+        # legacy_agent role probe (calls 3-6: two independent 2-call chains,
+        # committed-subject then uncommitted-subject -- CHAOS-3285 round 4,
+        # Codex HIGH) against the same resolved provider, 6 calls total. Odd
+        # calls request a tool; even calls answer. Call 1 must echo
+        # READINESS_ECHO_TOOL_ID exactly (readiness.py's own strict match)
+        # -- every later tool_request round names a real registered tool
+        # instead, since certify_legacy_agent validates its synthetic tool
+        # result against the real DevToolResult/ToolID contract. This fake
+        # is round-aware by parity (odd/even), not call-count-specific, so
+        # it transparently supports however many role-probe rounds the real
+        # probe currently makes -- but see the pinned provider.calls == 6
+        # assertion in the success test below, which fails loudly if a
+        # chain silently vanishes.
         self.calls += 1
         if self.calls % 2 == 1:
             tool_id = READINESS_ECHO_TOOL_ID if self.calls == 1 else "query_metric.v1"
@@ -627,6 +634,11 @@ async def test_post_certifies_legacy_agent_role_and_projects_it(
         "/api/v1/admin/platform/ask-dev/readiness"
     )
     assert posted.status_code == 200
+    # CHAOS-3285 round 5 (Codex LOW): pin the full preflight call count (2
+    # binary transport-echo + 4 legacy_agent role-probe calls, two
+    # independent 2-call chains) so a chain silently vanishing in a future
+    # refactor fails loudly here rather than passing unnoticed.
+    assert provider.calls == 6
     posted_roles = {entry["role"]: entry for entry in posted.json()["role_readiness"]}
     assert posted_roles["legacy_agent"]["state"] == "ready"
     assert posted_roles["legacy_agent"]["safe_remediation"] is None

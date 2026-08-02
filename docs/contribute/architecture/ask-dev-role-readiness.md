@@ -8,9 +8,11 @@ source_of_truth:
   - src/dev_health_ops/llm/agent/role_readiness.py
   - src/dev_health_ops/llm/agent/probes/legacy_agent.py
   - src/dev_health_ops/llm/agent/readiness.py
+  - src/dev_health_ops/llm/agent/openai_compatible.py
   - src/dev_health_ops/api/dev/production_runtime.py
   - src/dev_health_ops/api/admin/routers/ask_dev.py
   - src/dev_health_ops/api/admin/routers/platform_ask_dev.py
+  - src/dev_health_ops/api/admin/routers/settings.py
   - tests/api/dev/test_live_openai_smoke.py
   - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
 applicability: current
@@ -91,14 +93,39 @@ one of these states live in `llm/agent/roles.py` and
 A certification is keyed by a **certification key**, not just a provider/model
 pair. `production_runtime.py::_readiness_fingerprint` folds every capability
 input that can flip a verdict: the provider's source, identity, and base URL;
-the adapter's wire-contract version (`READINESS_VERSION`); the composed
-prompt's version (`PROMPT_VERSION`); the tool registry's contract version
+a non-reversible fingerprint of the credential material actually used on the
+wire (`_credential_fingerprint` -- the raw key is never stored, logged, or
+otherwise exposed; see "Credential rotation" below); the adapter's
+wire-contract version (`READINESS_VERSION`); the composed prompt's version
+(`PROMPT_VERSION`); the tool registry's contract version
 (`TOOL_CONTRACT_VERSION`); the per-family token budget policy's version
-(`BUDGET_POLICY_VERSION`); and the role being certified. Changing any of
-these -- a prompt-section edit, a new tool, a budget policy change, asking
-about a different role -- produces a different key, and a stored record under
-the old key simply stops being read as current. Nothing has to notice and
-manually invalidate anything.
+(`BUDGET_POLICY_VERSION`); the role being certified; a canonical contract
+digest folding both prompt shapes, the real response grammar, the real tool
+manifest, and the real run limits (`_canonical_contract_digest`); and a
+wire-request digest folding the COMPLETE non-secret request the adapter would
+send at both probe round shapes -- tool_choice, parallel_tool_calls,
+temperature, reasoning_effort, the full `response_format` wrapper and schema
+body, serialized tool payloads, and the resolved `max_completion_tokens`
+(`_wire_request_digest`). Both digests are computed by calling the same
+producer functions the adapter's `decide()` call itself consumes
+(`build_completion_request` in `openai_compatible.py`), so nothing about the
+request can be assembled independently of what gets fingerprinted. Changing
+any of these -- a prompt-section edit, a new tool, a budget policy change, a
+capability-policy change (e.g. which models get `temperature` or
+`parallel_tool_calls`), a rotated credential, asking about a different role
+-- produces a different key, and a stored record under the old key simply
+stops being read as current. Nothing has to notice and manually invalidate
+anything.
+
+### Credential rotation
+
+The certification key depends on WHICH credential was actually tested, not
+just the provider/model/base URL triple. Certifying provider key A, then
+saving key B for the exact same provider/model/base URL, produces a
+different key for B -- so a stored certification for A can never be found
+under B's key, and live selection fails closed until B is re-certified. This
+is enforced by construction (folding `_credential_fingerprint` into the key),
+not by any save/rotation code path remembering to invalidate anything.
 
 This also gives certification an explicit migration story. The fingerprint
 formula changed when this role model landed, which means every certification
@@ -138,21 +165,43 @@ the composed request or the tool count ever silently shrinks below what a
 real round sends -- a probe that got smaller without anyone noticing would
 otherwise read as coverage it no longer provides.
 
-The probe runs two rounds that mirror the worst production shape:
+The probe runs **two fully independent, complete two-round chains** -- four
+provider calls total -- because `PromptComposer` composes two distinct
+prompt shapes (`PROMPT_VERSION`, committed subject; `LEGACY_PROMPT_VERSION`,
+uncommitted subject / the Wave 3.1 flag off) and a real run can select
+either one. Each chain's own round one produces the tool request/result its
+own round two uses -- never borrowed from the other chain -- so a provider
+that fails only on one specific shape (e.g. the uncommitted-subject prompt
+combined with round one's `tool_choice: "required"`) cannot silently pass by
+having that exact combination never sent to it. Both chains must
+independently certify `compatible` for the role to certify `compatible`
+overall.
+
+Each chain's two rounds mirror the worst production shape:
 
 1. **Round one** -- tools offered, no tool result yet. The wire sends
-   `tool_choice: "required"` with no structured-output grammar.
-2. **Round two** -- tools still offered, and a synthetic, schema-valid,
-   non-tenant tool result is now in the conversation. The wire sends
-   `tool_choice: "auto"` **and** the full `DevAnswer` grammar at the same
-   time -- the combined shape every real round two and later actually sends,
-   and the one the original echo probe never sent at all (its second call
-   dropped tools entirely).
+   `tool_choice: "required"` with no structured-output grammar, under this
+   chain's own prompt shape.
+2. **Round two** -- built from round one's own tool request/result: tools
+   still offered, and a synthetic, schema-valid, non-tenant tool result is
+   now in the conversation. The wire sends `tool_choice: "auto"` **and** the
+   full `DevAnswer` grammar at the same time -- the combined shape every
+   real round two and later actually sends, and the one the original echo
+   probe never sent at all (its second call dropped tools entirely).
 
 The synthetic tool result comes from the checked-in contract fixtures
 (`contract_fixtures.positive_fixtures()`), never a live tool call and never
 tenant data, satisfying the guardrail that readiness must not touch real
 source data.
+
+### Full preflight call count
+
+A complete preflight run makes **6 provider calls**: 2 for the original
+binary transport-echo probe (`AgentReadinessService.certify`, unchanged),
+plus 4 for the `legacy_agent` role probe above (2 independent chains x 2
+rounds each). Both the platform and BYO readiness routes' tests pin this
+count (`provider.calls == 6`) so a chain silently vanishing in a future
+refactor fails loudly rather than passing unnoticed.
 
 ## Admin surfaces
 
@@ -172,18 +221,27 @@ identity) but never the platform's specific remediation text, which is
 replaced with the same generic message the single-readiness field already
 uses.
 
-Platform preflight (`POST /admin/platform/ask-dev/readiness`) now also
-certifies the `legacy_agent` role in the new per-role store, on the same
-already-resolved provider, immediately after the existing certification call
--- so the projection reflects a real result instead of staying
-`not_yet_certified` forever. That call is best-effort: a failure in it can
-never regress the original, already-relied-upon certification result.
+Both platform preflight (`POST /admin/platform/ask-dev/readiness`) and BYO
+preflight (`POST /llm-settings/readiness`, `api/admin/routers/settings.py`)
+certify the `legacy_agent` role in the new per-role store, on the same
+already-resolved provider, immediately after the existing binary certify
+call -- so the projection reflects a real result instead of staying
+`not_yet_certified` forever. That call runs inside a `session.begin_nested()`
+SAVEPOINT and is best-effort: a failure in it can never regress the original,
+already-relied-upon binary certification result, and cannot poison the
+session or roll back that earlier write.
 
-An organization's own BYO provider is not yet certified through this new
-model -- that requires wiring `POST /llm-settings/readiness`
-(`api/admin/routers/settings.py`), which is a separate, not-yet-scheduled
-change. Until then a BYO-sourced organization's `role_readiness` honestly
-reports `not_yet_certified` for every role.
+All three admin readiness surfaces (org `GET /admin/ask-dev`, platform
+`GET /admin/platform/ask-dev/readiness`, BYO `GET /admin/llm-settings/status`)
+derive their **effective** `readiness`/availability from the binary
+transport check AND a current, `compatible` `legacy_agent` role certification
+together -- never the binary check alone. The prior binary-only result is
+still surfaced, under its own name, as a separate diagnostic field
+(`binary_transport_readiness`): a provider can read
+`binary_transport_readiness: "ready"` while the effective `readiness` is
+unavailable, if the transport works but the role has never been certified
+(or was certified `incompatible`/`failed`) against the real production
+request shape.
 
 ## The live convergence gate
 
@@ -194,17 +252,20 @@ without live credentials configured is not an error. Setting
 `ASK_DEV_LIVE_GATE=1` marks the run as the actual convergence gate: under
 that flag, a missing credential becomes a `pytest.fail` instead. A gate that
 can silently skip its own measurement reads as passing coverage it never
-took; the flag exists so that failure is loud rather than invisible. Whether
-CI sets that flag for the Wave 3.1 convergence gate is a separate workflow
-change, not implemented here.
+took; the flag exists so that failure is loud rather than invisible. Under
+that flag the gate also runs the real `certify_legacy_agent` probe against
+the live provider, not only the transport echo -- previously the explicit
+live gate exercised the echo alone. The resulting state is not forced to
+`compatible`: a live provider genuinely hitting the 4,096-token envelope is
+an expected, not a failing, outcome. Whether CI sets `ASK_DEV_LIVE_GATE=1`
+for the Wave 3.1 convergence gate is a separate workflow change, not
+implemented here.
 
 ## What is not built yet
 
 - `intent_classification` and `answer_frame_narrative` have no probes. Their
   enum members and store slots exist so the store's shape does not need to
   change again when the probes land.
-- The BYO `POST /llm-settings/readiness` route does not yet certify the new
-  per-role store.
 - The 4,096-token output envelope is unchanged. Whether it needs amending
   (and how) is a decision gated on the live per-role probe's real numbers
   against `gpt-5-nano`, not decided by this page.

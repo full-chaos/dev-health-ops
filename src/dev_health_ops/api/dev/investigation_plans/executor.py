@@ -17,9 +17,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from ..contracts import DevScope, DirectScope
 from ..contracts_v2.base import SourceClass, SourceRequirementState
 from ..contracts_v2.plan import DevInvestigationPlan, DevSourceRequirement
-from ..contracts_v2.result import DevInvestigationResult, DevSourceObservation
+from ..contracts_v2.result import (
+    DevInvestigationResult,
+    DevRelationshipPath,
+    DevSourceContent,
+    DevSourceObservation,
+)
+from .relationship_matrix import MIN_RELATIONSHIP_CONFIDENCE, approved_relationship
 from .steps import (
     PlanRegistryError,
     PlanStepDefinition,
@@ -58,6 +65,178 @@ class _Attempt:
     step_id: str
     outcome: StepOutcome | None
     failed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PathCandidate:
+    """One un-verified hop extracted from a step's ``DevSourceContent``,
+    before relationship-matrix/confidence/self-loop/touching-root checks.
+
+    ``source_entity_id`` is ``None`` for every fact category except
+    ``graph_edges``: a status/PR/CI/deployment/incident/change/metric fact
+    has no orientation of its own (the canonical service that produced it
+    already scoped the query to the committed subject, so it is always
+    read as subject -> fact). A work-graph edge is bidirectional by
+    construction (``GraphDirection.BOTH``), so its own recorded
+    ``source_entity_id``/``target_entity_id`` must be checked against the
+    committed root explicitly.
+    """
+
+    relationship: str
+    target_entity_id: str
+    source_entity_id: str | None
+    provenance: str
+    confidence: float
+    observed_at: datetime
+    evidence_ref_ids: tuple[str, ...]
+
+
+def _root_entity_id(scope: DevScope) -> str | None:
+    """The committed single subject a relationship path closes over, or
+    ``None`` when there is none to close over (organization/repository
+    scope legitimately shows broad facts -- PRD v2 §3.2/§7)."""
+
+    if scope.direct_scope in (DirectScope.ORGANIZATION, DirectScope.REPOSITORY):
+        return None
+    if not scope.entity_refs:
+        return None
+    return scope.entity_refs[0].entity_id
+
+
+def _content_candidates(
+    content: DevSourceContent, *, now: datetime
+) -> list[_PathCandidate]:
+    """Every fact in ``content``, projected to one un-verified path candidate
+    each. Only the slot(s) matching the observation's own ``source_class``
+    are ever non-empty (CHAOS-3295's own invariant), so this always iterates
+    a small, single-category list in practice.
+    """
+
+    candidates: list[_PathCandidate] = []
+    for status_fact in content.status_facts:
+        candidates.append(
+            _PathCandidate(
+                "status_assessment",
+                status_fact.fact_id,
+                None,
+                "status_change_service",
+                1.0,
+                now,
+                status_fact.evidence_ref_ids,
+            )
+        )
+    for child_fact in content.required_children:
+        candidates.append(
+            _PathCandidate(
+                "required_child",
+                child_fact.fact_id,
+                None,
+                "status_change_service",
+                1.0,
+                now,
+                child_fact.evidence_ref_ids,
+            )
+        )
+    for pr_fact in content.pull_requests:
+        candidates.append(
+            _PathCandidate(
+                "linked_pull_request",
+                pr_fact.entity_id,
+                None,
+                "status_change_service:pull_requests",
+                1.0,
+                pr_fact.observed_at,
+                pr_fact.evidence_ref_ids,
+            )
+        )
+    for ci_fact in content.ci_checks:
+        candidates.append(
+            _PathCandidate(
+                "linked_ci_run",
+                ci_fact.entity_id,
+                None,
+                "status_change_service:ci_runs",
+                1.0,
+                ci_fact.observed_at,
+                ci_fact.evidence_ref_ids,
+            )
+        )
+    for deployment_fact in content.deployments:
+        candidates.append(
+            _PathCandidate(
+                "linked_deployment",
+                deployment_fact.entity_id,
+                None,
+                "status_change_service:deployments",
+                1.0,
+                deployment_fact.observed_at,
+                deployment_fact.evidence_ref_ids,
+            )
+        )
+    for incident_fact in content.incidents:
+        candidates.append(
+            _PathCandidate(
+                "linked_incident",
+                incident_fact.entity_id,
+                None,
+                "status_change_service:incidents",
+                1.0,
+                incident_fact.observed_at,
+                incident_fact.evidence_ref_ids,
+            )
+        )
+    for edge in content.graph_edges:
+        candidates.append(
+            _PathCandidate(
+                edge.relationship,
+                edge.target_entity_id,
+                edge.source_entity_id,
+                edge.provenance,
+                edge.confidence,
+                edge.observed_at,
+                edge.evidence_ref_ids,
+            )
+        )
+    for change in content.observed_changes:
+        candidates.append(
+            _PathCandidate(
+                "observed_change",
+                change.entity_id,
+                None,
+                "status_change_service:change_summary",
+                1.0,
+                change.observed_at,
+                change.evidence_ref_ids,
+            )
+        )
+    for ref in content.metric_refs:
+        candidates.append(
+            _PathCandidate(
+                "metric_scoped_to_subject",
+                ref.metric_ref_id,
+                None,
+                "metrics_service",
+                1.0,
+                now,
+                ref.evidence_ref_ids,
+            )
+        )
+    return candidates
+
+
+def _resolve_target(candidate: _PathCandidate, root_entity_id: str) -> str | None:
+    """The candidate's "other end" relative to ``root_entity_id``, or
+    ``None`` when the candidate does not actually touch the root at all
+    (cross-tenant/forged-ID acceptance criterion) -- never a fabricated
+    orientation."""
+
+    if candidate.source_entity_id is None:
+        return candidate.target_entity_id
+    if candidate.source_entity_id == root_entity_id:
+        return candidate.target_entity_id
+    if candidate.target_entity_id == root_entity_id:
+        return candidate.source_entity_id
+    return None
 
 
 class PlanExecutor:
@@ -169,7 +348,7 @@ class PlanExecutor:
                 (definition.source_class, definition.adapter_id), []
             ).append(step_id)
 
-        observations = tuple(
+        observation_results = [
             self._observation_for_requirement(
                 requirement,
                 sorted(
@@ -183,8 +362,22 @@ class PlanExecutor:
                 blocked=blocked,
                 run_id=run_id,
                 plan_id=plan.plan_id,
+                context=context,
             )
             for requirement in plan.source_requirements
+        ]
+        observations = tuple(
+            observation for observation, _closed in observation_results
+        )
+        # CHAOS-3296: true only when every content-bearing observation's
+        # facts all minted a verified relationship path back to the
+        # committed subject -- one rejected/unrelated/self-referential/
+        # unapproved/low-confidence candidate anywhere is enough to flip
+        # this False. Never claims a check that did not run: an unmeasured
+        # observation (no content) and a broad org/repository scope (no
+        # single subject to close over) both contribute a vacuous True.
+        relationship_closure_verified = all(
+            closed for _observation, closed in observation_results
         )
 
         return DevInvestigationResult(
@@ -206,10 +399,7 @@ class PlanExecutor:
             completed_steps=tuple(sorted(completed)),
             skipped_steps=tuple(sorted(not_applicable | blocked)),
             failed_steps=tuple(sorted(failed)),
-            # 3296 populates DevSourceObservation.relationship_paths and owns
-            # the actual closure check; this executor never claims a check it
-            # did not run.
-            relationship_closure_verified=False,
+            relationship_closure_verified=relationship_closure_verified,
             completed_at=self._now(),
         )
 
@@ -234,7 +424,8 @@ class PlanExecutor:
         blocked: set[str],
         run_id: str,
         plan_id: str,
-    ) -> DevSourceObservation:
+        context: StepContext,
+    ) -> tuple[DevSourceObservation, bool]:
         # A deterministic representative step_id for this requirement, used
         # only to seed the observation's minted id -- ``step_ids`` is already
         # sorted by the caller, so this is stable across runs regardless of
@@ -256,7 +447,7 @@ class PlanExecutor:
         if completed_step is not None:
             outcome = completed[completed_step].outcome
             assert outcome is not None
-            return self._to_observation(requirement, outcome, observation_id)
+            return self._to_observation(requirement, outcome, observation_id, context)
         if step_ids and all(step_id in not_applicable for step_id in step_ids):
             return self._unmeasured_observation(
                 requirement,
@@ -293,8 +484,15 @@ class PlanExecutor:
         requirement: DevSourceRequirement,
         outcome: StepOutcome,
         observation_id: str,
-    ) -> DevSourceObservation:
-        return DevSourceObservation(
+        context: StepContext,
+    ) -> tuple[DevSourceObservation, bool]:
+        relationship_paths, closed = self._mint_relationship_paths(
+            source_class=requirement.source_class,
+            content=outcome.content,
+            context=context,
+            observation_id=observation_id,
+        )
+        observation = DevSourceObservation(
             schema_version="dev_source_observation.v1",
             observation_id=observation_id,
             source_class=requirement.source_class,
@@ -306,13 +504,14 @@ class PlanExecutor:
             subject_coverage=outcome.subject_coverage,
             usable_fact_count=outcome.usable_fact_count,
             sample_count=outcome.sample_count,
-            relationship_paths=(),
+            relationship_paths=relationship_paths,
             evidence_ref_ids=(),
             limitation=outcome.limitation,
             observed_at=self._now(),
             query_version=outcome.query_version,
             content=outcome.content,
         )
+        return observation, closed
 
     def _unmeasured_observation(
         self,
@@ -320,8 +519,8 @@ class PlanExecutor:
         state: SourceRequirementState,
         limitation: str,
         observation_id: str,
-    ) -> DevSourceObservation:
-        return DevSourceObservation(
+    ) -> tuple[DevSourceObservation, bool]:
+        observation = DevSourceObservation(
             schema_version="dev_source_observation.v1",
             observation_id=observation_id,
             source_class=requirement.source_class,
@@ -340,3 +539,55 @@ class PlanExecutor:
             query_version="unversioned",
             content=None,
         )
+        # An unmeasured source never ran -- nothing to close over. That gap
+        # is disclosed separately (subject_coverage/limitation on this same
+        # observation), not folded into relationship_closure_verified.
+        return observation, True
+
+    def _mint_relationship_paths(
+        self,
+        *,
+        source_class: SourceClass,
+        content: DevSourceContent | None,
+        context: StepContext,
+        observation_id: str,
+    ) -> tuple[tuple[DevRelationshipPath, ...], bool]:
+        if content is None:
+            return (), True
+        root_entity_id = _root_entity_id(context.scope)
+        if root_entity_id is None:
+            return (), True
+        accepted: dict[tuple[str, str], tuple[_PathCandidate, str]] = {}
+        rejected = 0
+        for candidate in _content_candidates(content, now=context.now):
+            resolved_target = _resolve_target(candidate, root_entity_id)
+            if (
+                resolved_target is None
+                or resolved_target == root_entity_id
+                or candidate.confidence < MIN_RELATIONSHIP_CONFIDENCE
+                or not approved_relationship(source_class, candidate.relationship)
+            ):
+                rejected += 1
+                continue
+            key = (candidate.relationship, resolved_target)
+            existing = accepted.get(key)
+            if existing is None or candidate.confidence > existing[0].confidence:
+                accepted[key] = (candidate, resolved_target)
+        paths = tuple(
+            DevRelationshipPath(
+                path_id=_mint(
+                    "relationship_path", context.run_id, observation_id, str(index)
+                ),
+                source_entity_id=root_entity_id,
+                relationship=candidate.relationship,
+                target_entity_id=resolved_target,
+                provenance=candidate.provenance[:2_048],
+                confidence=max(0.0, min(1.0, candidate.confidence)),
+                observed_at=candidate.observed_at,
+                evidence_ref_ids=candidate.evidence_ref_ids[:25],
+            )
+            for index, (_key, (candidate, resolved_target)) in enumerate(
+                sorted(accepted.items())
+            )
+        )
+        return paths, rejected == 0

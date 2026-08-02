@@ -490,29 +490,146 @@ class _KnownUnvalidatedPayloadGap:
 
 _KNOWN_UNVALIDATED_PAYLOAD_GAP = _KnownUnvalidatedPayloadGap()
 
+#: Sentinel distinguishing "this column is part of the write, and its
+#: value is None" from "this column is not part of the write at all" --
+#: only the bulk-DML shim (``_BulkDmlPayloadTarget``) can ever produce
+#: this; a real, fully-formed ORM instance always has every mapped
+#: column, so ``getattr(target, name, _MISSING)`` never returns it there
+#: (CHAOS-3297 Codex review round 8 HIGH: cross-checks must refuse to
+#: validate against a column a bulk statement never touches, not treat
+#: its absence as ``None``).
+_MISSING = object()
+
+
+def _require_field_matches(
+    target: Any, *, column: str, expected: str, contract_field: str
+) -> None:
+    """Binds a validated payload to the ROW it is being written to, not
+    merely to itself (CHAOS-3297 Codex review round 8 HIGH: a fully
+    self-consistent, contract-valid payload for a DIFFERENT run/frame/
+    narrative is not a valid write to THIS row). Mirrors the cross-checks
+    ``record_frame``/``record_narrative`` already make between the
+    validated payload and the service method's own arguments -- here,
+    between the validated payload and the OTHER columns this same write
+    sets ``column`` to.
+
+    Refuses outright (deny by default) if ``column`` is not part of this
+    write at all -- a bulk statement's WHERE clause can leave an existing
+    row's identity columns unstated, and reading the pre-existing row to
+    "fill in" a comparison would compare the new payload against a value
+    this write is not actually asserting.
+    """
+
+    actual = getattr(target, column, _MISSING)
+    if actual is _MISSING:
+        raise DevPersistenceValidationError(
+            f"payload cross-check for `{contract_field}` requires the "
+            f"`{column}` column to be part of the same write -- refusing "
+            f"to validate a payload write that does not also state the "
+            f"row identity columns it must agree with"
+        )
+    if actual is None or str(actual) != expected:
+        raise DevPersistenceValidationError(
+            f"payload's `{contract_field}` does not match this write's `{column}`"
+        )
+
 
 def _validate_answer_frame_payload(target: Any) -> None:
     try:
-        DevAnswerFrameContract.model_validate(target.payload)
+        validated = DevAnswerFrameContract.model_validate(target.payload)
     except PydanticValidationError as exc:
         raise DevPersistenceValidationError(
             f"dev_answer_frames.payload is not a valid dev_answer_frame.v1: {exc}"
         ) from exc
+    # Mirrors record_frame's own cross-checks (frame_id/run_id/
+    # public_outcome against the caller's own arguments) -- here, against
+    # the same columns this write itself sets.
+    _require_field_matches(
+        target,
+        column="frame_id",
+        expected=validated.frame_id,
+        contract_field="frame_id",
+    )
+    _require_field_matches(
+        target, column="run_id", expected=validated.run_id, contract_field="run_id"
+    )
+    _require_field_matches(
+        target,
+        column="public_outcome",
+        expected=validated.public_outcome.value,
+        contract_field="public_outcome",
+    )
 
 
 def _validate_run_narrative_payload(target: Any) -> None:
     # payload excludes `body` -- narrative_text is the separate
     # authoritative copy (see record_narrative's own docstring); the full
     # contract object must be reconstructed before validating, exactly as
-    # record_narrative already does at the service layer.
+    # record_narrative already does at the service layer. narrative_text
+    # must be part of THIS write (not read from a possibly-stale
+    # pre-existing row) or there is nothing safe to reconstruct `body`
+    # from.
+    narrative_text = getattr(target, "narrative_text", _MISSING)
+    if narrative_text is _MISSING:
+        raise DevPersistenceValidationError(
+            "dev_run_narratives payload validation requires "
+            "`narrative_text` to be part of the same write -- refusing "
+            "to reconstruct `body` from a column this write does not set"
+        )
     reconstructed = dict(target.payload)
-    reconstructed["body"] = target.narrative_text
+    reconstructed["body"] = narrative_text
     try:
-        DevNarrativeContract.model_validate(reconstructed)
+        validated = DevNarrativeContract.model_validate(reconstructed)
     except PydanticValidationError as exc:
         raise DevPersistenceValidationError(
             f"dev_run_narratives.payload is not a valid dev_narrative.v1: {exc}"
         ) from exc
+    # Mirrors record_narrative's own cross-checks (narrative_id/run_id/
+    # frame_id/mode/provider_fingerprint against the caller's own
+    # arguments) -- here, against the same columns this write itself
+    # sets. This is exactly what closes CHAOS-3297 Codex review round 8
+    # HIGH: a fully valid dev_narrative.v1 payload for a DIFFERENT
+    # run/frame/narrative_id must not silently attach to this row.
+    _require_field_matches(
+        target,
+        column="narrative_id",
+        expected=validated.narrative_id,
+        contract_field="narrative_id",
+    )
+    _require_field_matches(
+        target, column="run_id", expected=validated.run_id, contract_field="run_id"
+    )
+    _require_field_matches(
+        target,
+        column="frame_id",
+        expected=validated.frame_id,
+        contract_field="frame_id",
+    )
+    _require_field_matches(
+        target, column="mode", expected=validated.mode, contract_field="mode"
+    )
+    expected_provider_fingerprint = (
+        _sha256_digest(validated.provider_metadata.model_fingerprint)
+        if validated.provider_metadata is not None
+        else None
+    )
+    actual_provider_fingerprint: Any = getattr(target, "provider_fingerprint", _MISSING)
+    if actual_provider_fingerprint is _MISSING:
+        raise DevPersistenceValidationError(
+            "dev_run_narratives payload validation requires "
+            "`provider_fingerprint` to be part of the same write"
+        )
+    # The column already stores the pre-hashed shape record_narrative
+    # writes; _digest validates that shape (or passes None through), the
+    # same way record_narrative's own cross-check does.
+    safe_actual_provider_fingerprint = _digest(
+        actual_provider_fingerprint, field="provider_fingerprint"
+    )
+    if safe_actual_provider_fingerprint != expected_provider_fingerprint:
+        raise DevPersistenceValidationError(
+            "payload's provider_metadata does not match this write's "
+            "provider_fingerprint"
+        )
 
 
 #: Total registry: every payload-bearing ORM model (see
@@ -535,6 +652,55 @@ _PAYLOAD_MODEL_VALIDATORS: dict[type, Any] = {
 }
 
 
+# -- CHAOS-3297 Codex review round 8: closure argument over the complete
+# partition of session-mediated write paths, verified empirically against
+# SQLAlchemy 2.0.49 (probed directly, not assumed from docs) rather than
+# patched a fourth time against one more example:
+#
+#   a) unit-of-work flush of ORM instances (attribute assignment, kwargs
+#      construction, merge, cascades) -> before_insert/before_update
+#      mapper events. Covered below.
+#   b) ORM-enabled DML, single .values(...) -> do_orm_execute reading the
+#      statement's own `_values`. Covered below.
+#   c) ORM-enabled DML, multi-row .values([...]) -> do_orm_execute
+#      reading `_multi_values` (confirmed: `_values` is None here, the
+#      row dicts live in `_multi_values` instead). Covered below.
+#   d) executemany-style parameter lists -- `session.execute(insert(M),
+#      [params, ...])` and ORM bulk-update-by-primary-key
+#      (`session.execute(update(M), [{"id": ..., ...}, ...])`) ->
+#      do_orm_execute reading `orm_execute_state.parameters` (confirmed:
+#      both `_values` and `_multi_values` are empty here, the row dicts
+#      arrive as `.parameters` instead, keyed by column NAME not
+#      `Column` object). Covered below.
+#   e) legacy bulk APIs (`Session.bulk_save_objects`/
+#      `bulk_insert_mappings`/`bulk_update_mappings`) -- confirmed
+#      empirically to fire NEITHER `before_insert`/`before_update` NOR
+#      `do_orm_execute` at all (a probe listener on both never fires).
+#      `AsyncSession` does not expose these directly, but they remain
+#      reachable via `await session.run_sync(lambda s:
+#      s.bulk_save_objects(...))`, which is exactly how this was
+#      reproduced. No event covers this path in SQLAlchemy 2.x -- it is
+#      structurally prohibited below instead (Session methods wrapped to
+#      raise for a payload-bearing model), proven by a mutation test that
+#      the prohibition itself fires.
+#   f) raw Core execution against a Connection obtained via
+#      `session.connection()`, entirely outside the Session -- confirmed
+#      empirically that `do_orm_execute` never fires there either. Out of
+#      scope by construction (this is not a "session-mediated" write path
+#      at all -- there is no Session-level event surface to hook), and
+#      documented as the legitimate escape hatch
+#      test_chaos_3297_frame_reachability.py uses to simulate genuinely
+#      out-of-band data. Kept as a documented, tested boundary, not
+#      silently assumed safe.
+#
+# (c) and (d) are both read through `_bulk_dml_row_dicts` below, which
+# returns `None` -- not an empty list -- when a DML statement against a
+# payload-bearing model carries its row data in NONE of `_values`/
+# `_multi_values`/`parameters`: an unrecognized shape this module was not
+# written against. The caller treats that as deny-by-default, not
+# "nothing to validate" -- see `_enforce_payload_contract_on_bulk_dml`.
+
+
 def _enforce_payload_contract_at_flush(
     _mapper: Any, _connection: Any, target: Any
 ) -> None:
@@ -550,50 +716,74 @@ for _payload_model in _PAYLOAD_MODEL_VALIDATORS:
 del _payload_model
 
 
-def _bulk_dml_column_values(statement: Any) -> dict[str, Any]:
-    """Column name -> Python value for a Core-style ``update()``/
-    ``insert()`` construct's own ``.values(...)`` clause, unwrapping a
-    bound parameter to its literal value where present."""
+def _decode_column_keyed_row(values: Mapping[Any, Any]) -> dict[str, Any]:
+    """Column name -> Python value for one row's worth of a Core-style
+    statement's own column-keyed value mapping (`_values`, or one row
+    group of `_multi_values`), unwrapping a bound parameter to its
+    literal value where present."""
 
-    values = getattr(statement, "_values", None) or {}
     decoded: dict[str, Any] = {}
     for column, value in values.items():
-        decoded[column.name] = value.value if hasattr(value, "value") else value
+        name = column.name if hasattr(column, "name") else str(column)
+        decoded[name] = value.value if hasattr(value, "value") else value
     return decoded
 
 
-class _BulkDmlPayloadTarget:
-    """Throwaway shim exposing just the attributes
-    ``_validate_answer_frame_payload``/``_validate_run_narrative_payload``
-    read, so a bulk DML statement's raw column values can be validated
-    with the exact same validator functions a real ORM instance is."""
+def _bulk_dml_row_dicts(orm_execute_state: Any) -> list[dict[str, Any]] | None:
+    """Every row's own column-name -> value dict a Core-style ORM DML
+    statement could be carrying its data in, across all three shapes (b),
+    (c), and (d) above. Returns `None` -- not `[]` -- if the statement
+    uses none of the three: an unrecognized internal representation this
+    boundary does not know how to inspect, which the caller must treat
+    as deny-by-default rather than silently allow through."""
 
-    def __init__(self, values: Mapping[str, Any]) -> None:
-        self.payload = values.get("payload")
-        self.narrative_text = values.get("narrative_text")
+    statement = orm_execute_state.statement
+    values = getattr(statement, "_values", None)
+    multi_values = getattr(statement, "_multi_values", None)
+    parameters = orm_execute_state.parameters
+    if not values and not multi_values and not parameters:
+        return None
+
+    rows: list[dict[str, Any]] = []
+    if values:
+        rows.append(_decode_column_keyed_row(values))
+    if multi_values:
+        for row_group in multi_values:
+            for row in row_group:
+                rows.append(_decode_column_keyed_row(row))
+    if parameters:
+        parameter_rows = parameters if isinstance(parameters, list) else [parameters]
+        for row in parameter_rows:
+            rows.append(dict(row))
+    return rows
+
+
+class _BulkDmlPayloadTarget:
+    """Throwaway shim exposing one bulk-DML row's own column values with
+    the same attribute-access shape a real ORM instance has, so a bulk
+    statement's raw row dict can be validated with the exact same
+    validator functions a real ORM instance is -- and so that a column
+    genuinely absent from this specific write (as opposed to present and
+    ``None``) reads as ``_MISSING``, not ``None``."""
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self._row = dict(row)
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self._row[name]
+        except KeyError:
+            raise AttributeError(name) from None
 
 
 def _enforce_payload_contract_on_bulk_dml(orm_execute_state: Any) -> None:
-    """Catches the write form ``before_insert``/``before_update`` mapper
-    events structurally cannot see at all: a Core-style
-    ``update(Model).values(...)`` or ``insert(Model).values(...)``
+    """Catches every write form ``before_insert``/``before_update``
+    mapper events structurally cannot see at all: any Core-style ORM DML
     statement executed via ``session.execute(...)`` runs as a bulk
     statement, never through the ORM unit-of-work flush those events fire
-    from (CHAOS-3297 Codex review round 7 MEDIUM --
-    ``update().values(payload=...)`` is exactly the bypass form that
-    motivated closing this gap here too, not only at
-    before_insert/before_update; confirmed empirically -- a probe
-    ``before_update`` listener never fires for a bulk ``update().values()``
-    call against a real engine).
-
-    A bulk statement has no live ORM instance to hang cross-checks on: if
-    it sets ``payload`` without ALSO setting every column a validator
-    needs (e.g. ``DevRunNarrative``'s ``narrative_text``, which
-    ``_validate_run_narrative_payload`` reconstructs ``body`` from), the
-    missing column reads as ``None`` here and fails contract validation
-    on its own -- deny by default, not "fetch the current row and hope
-    it's still valid", which a bulk statement's own WHERE clause might
-    match many rows for anyway.
+    from (confirmed empirically -- a probe ``before_update`` listener
+    never fires for any of shapes (b)/(c)/(d) above against a real
+    engine).
     """
 
     if not (orm_execute_state.is_update or orm_execute_state.is_insert):
@@ -604,13 +794,91 @@ def _enforce_payload_contract_on_bulk_dml(orm_execute_state: Any) -> None:
     validator = _PAYLOAD_MODEL_VALIDATORS.get(mapper.class_)
     if validator is None or validator is _KNOWN_UNVALIDATED_PAYLOAD_GAP:
         return
-    values = _bulk_dml_column_values(orm_execute_state.statement)
-    if "payload" not in values:
-        return
-    validator(_BulkDmlPayloadTarget(values))
+    rows = _bulk_dml_row_dicts(orm_execute_state)
+    if rows is None:
+        raise DevPersistenceValidationError(
+            f"unrecognized bulk DML write shape against payload-bearing "
+            f"model {mapper.class_.__name__} -- this statement carries "
+            f"no `_values`, `_multi_values`, or `parameters` this "
+            f"boundary knows how to inspect; deny by default rather than "
+            f"risk an unvalidated payload write"
+        )
+    for row in rows:
+        if "payload" not in row:
+            continue
+        validator(_BulkDmlPayloadTarget(row))
 
 
 event.listen(Session, "do_orm_execute", _enforce_payload_contract_on_bulk_dml)
+
+
+# -- (e) above: legacy bulk APIs structurally prohibited for
+# payload-bearing models. Confirmed empirically that
+# `Session.bulk_save_objects`/`bulk_insert_mappings`/`bulk_update_mappings`
+# fire neither the mapper events nor `do_orm_execute` -- there is no event
+# hook in SQLAlchemy 2.x that sees these at all, so unlike (a)-(d) this
+# cannot be validated, only refused. `AsyncSession` does not expose these
+# methods directly (only the underlying sync `Session` does, reachable via
+# `session.run_sync(...)`), but wrapping the sync `Session` class methods
+# themselves covers that path too, and every other way these might be
+# reached in-process.
+
+_ORIGINAL_BULK_SAVE_OBJECTS = Session.bulk_save_objects
+_ORIGINAL_BULK_INSERT_MAPPINGS = Session.bulk_insert_mappings
+_ORIGINAL_BULK_UPDATE_MAPPINGS = Session.bulk_update_mappings
+
+
+def _mapped_class(mapper_or_class: Any) -> Any:
+    return getattr(mapper_or_class, "class_", mapper_or_class)
+
+
+def _guarded_bulk_save_objects(
+    self: Session, objects: Any, *args: Any, **kwargs: Any
+) -> Any:
+    materialized = list(objects)
+    for obj in materialized:
+        if type(obj) in _PAYLOAD_MODEL_VALIDATORS:
+            raise DevPersistenceValidationError(
+                f"bulk_save_objects is prohibited for payload-bearing "
+                f"model {type(obj).__name__} (CHAOS-3297 Codex review "
+                f"round 8) -- it bypasses the ORM payload-contract "
+                f"boundary entirely; use the normal "
+                f"Session.add()/flush() path instead"
+            )
+    return _ORIGINAL_BULK_SAVE_OBJECTS(self, materialized, *args, **kwargs)
+
+
+def _guarded_bulk_insert_mappings(
+    self: Session, mapper: Any, mappings: Any, *args: Any, **kwargs: Any
+) -> Any:
+    if _mapped_class(mapper) in _PAYLOAD_MODEL_VALIDATORS:
+        raise DevPersistenceValidationError(
+            f"bulk_insert_mappings is prohibited for payload-bearing "
+            f"model {_mapped_class(mapper).__name__} (CHAOS-3297 Codex "
+            f"review round 8) -- it bypasses the ORM payload-contract "
+            f"boundary entirely; use the normal "
+            f"Session.add()/flush() path instead"
+        )
+    return _ORIGINAL_BULK_INSERT_MAPPINGS(self, mapper, mappings, *args, **kwargs)
+
+
+def _guarded_bulk_update_mappings(
+    self: Session, mapper: Any, mappings: Any, *args: Any, **kwargs: Any
+) -> Any:
+    if _mapped_class(mapper) in _PAYLOAD_MODEL_VALIDATORS:
+        raise DevPersistenceValidationError(
+            f"bulk_update_mappings is prohibited for payload-bearing "
+            f"model {_mapped_class(mapper).__name__} (CHAOS-3297 Codex "
+            f"review round 8) -- it bypasses the ORM payload-contract "
+            f"boundary entirely; use the normal "
+            f"Session.add()/flush() path instead"
+        )
+    return _ORIGINAL_BULK_UPDATE_MAPPINGS(self, mapper, mappings, *args, **kwargs)
+
+
+Session.bulk_save_objects = _guarded_bulk_save_objects  # type: ignore[method-assign]
+Session.bulk_insert_mappings = _guarded_bulk_insert_mappings  # type: ignore[method-assign]
+Session.bulk_update_mappings = _guarded_bulk_update_mappings  # type: ignore[method-assign]
 
 
 class DevPersistenceService:

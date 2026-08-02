@@ -36,11 +36,15 @@ from dev_health_ops.api.dev.contract_fixtures_v2 import (
     positive_fixtures as positive_fixtures_v2,
 )
 from dev_health_ops.api.dev.contracts import DevAnswer, DevError
+from dev_health_ops.api.dev.contracts_v2.narrative import (
+    DevNarrative as DevNarrativeContract,
+)
 from dev_health_ops.api.dev.persistence import (
     DevPersistenceNotFound,
     DevPersistenceService,
     DevPersistenceValidationError,
 )
+from dev_health_ops.api.dev.persistence import service as dev_persistence_service
 from dev_health_ops.api.dev.persistence.service import (
     _KNOWN_UNVALIDATED_PAYLOAD_GAP as _ORM_BOUNDARY_KNOWN_GAP,
 )
@@ -2256,10 +2260,12 @@ async def test_orm_boundary_narrative_bulk_update_requires_narrative_text_too(
 async def test_orm_boundary_permits_a_valid_bulk_update_when_every_needed_column_is_set(
     persistence,
 ) -> None:
-    """Control: the ORM-boundary guard rejects an invalid or
-    under-specified bulk write, not bulk writes to these tables in
-    general -- a bulk update setting BOTH ``payload`` and
-    ``narrative_text`` together, to a genuinely valid pair, must
+    """Control: the ORM-boundary guard rejects an invalid,
+    under-specified, or row-mismatched bulk write -- not bulk writes to
+    these tables in general. A bulk update setting every column its
+    cross-checks need (``payload``, ``narrative_text``, ``narrative_id``,
+    ``run_id``, ``frame_id``, ``mode``, ``provider_fingerprint``), all
+    genuinely agreeing with each other and with the payload, must
     succeed."""
 
     maker, org_id, _other_org, user_id, _other_user = persistence
@@ -2300,7 +2306,15 @@ async def test_orm_boundary_permits_a_valid_bulk_update_when_every_needed_column
         await session.execute(
             update(DevRunNarrative)
             .where(DevRunNarrative.id == narrative_pk)
-            .values(payload=payload, narrative_text=new_text)
+            .values(
+                payload=payload,
+                narrative_text=new_text,
+                narrative_id=narrative_id,
+                run_id=run_id,
+                frame_id=frame.frame_id,
+                mode="deterministic_fallback",
+                provider_fingerprint=None,
+            )
         )
         await session.commit()
 
@@ -2337,3 +2351,484 @@ async def test_orm_boundary_known_unvalidated_gap_sinks_are_not_blocked(
             payload={"not_a_real_contract_field": "anything at all"},
         )
         assert record.id is not None
+
+
+# -- CHAOS-3297 Codex review round 8: closure argument over the complete
+# partition of session-mediated write paths (see the partition comment
+# in persistence/service.py directly above `_enforce_payload_contract_at_flush`
+# for the full a-f enumeration, verified empirically against SQLAlchemy
+# 2.0.49). Round 5's AST scanner caught (a)'s Name-call form only; round 7
+# closed (a) fully and (b); round 8 closes (c), (d), and (e), and proves
+# (f) is a documented, deliberate non-goal rather than an unnoticed gap.
+
+
+@pytest.mark.asyncio
+async def test_orm_boundary_rejects_a_multi_values_insert_bypass(persistence) -> None:
+    """Partition cell (c): ``insert(Model).values([row1, row2])`` -- a
+    single multi-row INSERT statement. Confirmed empirically that this
+    stores its row data in the statement's own ``_multi_values``, never
+    ``_values`` (which is ``None`` here) -- the round-7 boundary only
+    read ``_values`` and would have silently allowed this whole shape
+    through."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        valid_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        good_id, bad_id = uuid.uuid4(), uuid.uuid4()
+        with pytest.raises(DevPersistenceValidationError):
+            await session.execute(
+                insert(DevAnswerFrame).values(
+                    [
+                        dict(
+                            id=good_id,
+                            run_id=run_id,
+                            org_id=org_id,
+                            user_id=user_id,
+                            frame_id=uuid.UUID(valid_payload["frame_id"]),
+                            public_outcome="not_found",
+                            payload=valid_payload,
+                            created_at=datetime.now(UTC),
+                        ),
+                        dict(
+                            id=bad_id,
+                            run_id=run_id,
+                            org_id=org_id,
+                            user_id=user_id,
+                            frame_id=uuid.uuid4(),
+                            public_outcome="answered",
+                            payload={"schema_version": "dev_answer_frame.v1"},
+                            created_at=datetime.now(UTC),
+                        ),
+                    ]
+                )
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        count = await session.scalar(
+            select(func.count(DevAnswerFrame.id)).where(DevAnswerFrame.run_id == run_id)
+        )
+        assert count == 0, (
+            "a multi-values insert with even one invalid row must reject "
+            "the whole statement -- neither row may persist"
+        )
+
+
+@pytest.mark.asyncio
+async def test_orm_boundary_rejects_an_executemany_insert_bypass(persistence) -> None:
+    """Partition cell (d): ``session.execute(insert(Model), [params, ...])``
+    -- SQLAlchemy 2.0's executemany-style bulk insert. Confirmed
+    empirically that both ``_values`` and ``_multi_values`` are empty
+    here; the row dicts arrive as ``orm_execute_state.parameters``
+    instead, keyed by column NAME rather than ``Column`` object."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        new_id = uuid.uuid4()
+        with pytest.raises(DevPersistenceValidationError):
+            await session.execute(
+                insert(DevAnswerFrame),
+                [
+                    dict(
+                        id=new_id,
+                        run_id=run_id,
+                        org_id=org_id,
+                        user_id=user_id,
+                        frame_id=uuid.uuid4(),
+                        public_outcome="answered",
+                        payload={"schema_version": "dev_answer_frame.v1"},
+                        created_at=datetime.now(UTC),
+                    )
+                ],
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevAnswerFrame, new_id)
+        assert reloaded is None, "the executemany-insert bypass must not create a row"
+
+
+@pytest.mark.asyncio
+async def test_orm_boundary_rejects_an_orm_bulk_update_by_primary_key_bypass(
+    persistence,
+) -> None:
+    """Partition cell (d), the UPDATE half: ``session.execute(update(Model),
+    [{"id": pk, ...}, ...])`` -- SQLAlchemy 2.0's ORM bulk
+    update-by-primary-key. Also arrives via ``orm_execute_state.parameters``,
+    and (same as the single-row bulk update) has no live ORM instance to
+    hang the frame_id/run_id/public_outcome cross-check on -- omitting
+    those columns is rejected on its own, same as omitting them entirely."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        valid_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(valid_payload["frame_id"]),
+            public_outcome="not_found",
+            payload=valid_payload,
+        )
+        await session.commit()
+        frame_id = frame.id
+
+        with pytest.raises(DevPersistenceValidationError):
+            await session.execute(
+                update(DevAnswerFrame),
+                [
+                    {
+                        "id": frame_id,
+                        "payload": {"schema_version": "dev_answer_frame.v1"},
+                    }
+                ],
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevAnswerFrame, frame_id)
+        assert reloaded is not None
+        assert reloaded.payload == valid_payload, (
+            "the ORM bulk update-by-primary-key bypass must leave the "
+            "original, valid payload completely untouched"
+        )
+
+
+@pytest.mark.asyncio
+async def test_orm_boundary_prohibits_legacy_bulk_save_objects(persistence) -> None:
+    """Partition cell (e): ``Session.bulk_save_objects`` fires NEITHER
+    the mapper events NOR ``do_orm_execute`` at all (confirmed
+    empirically -- probe listeners on both never fire for it), so unlike
+    (a)-(d) this cannot be validated at the ORM boundary, only refused
+    outright. ``AsyncSession`` does not expose it directly, but it
+    remains reachable via ``session.run_sync(...)`` against the
+    underlying sync ``Session`` -- exactly how this is reproduced here,
+    and exactly how Codex's round-8 repro reached it."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        row = DevAnswerFrame(
+            run_id=run_id,
+            org_id=org_id,
+            user_id=user_id,
+            frame_id=uuid.uuid4(),
+            public_outcome="answered",
+            payload={"schema_version": "dev_answer_frame.v1"},
+        )
+
+        def _do_bulk_save(sync_session: Any) -> None:
+            sync_session.bulk_save_objects([row])
+
+        with pytest.raises(DevPersistenceValidationError, match="bulk_save_objects"):
+            await session.run_sync(_do_bulk_save)
+        await session.rollback()
+
+    async with maker() as session:
+        count = await session.scalar(
+            select(func.count(DevAnswerFrame.id)).where(DevAnswerFrame.run_id == run_id)
+        )
+        assert count == 0, "bulk_save_objects must not have created a row"
+
+
+@pytest.mark.asyncio
+async def test_orm_boundary_prohibits_legacy_bulk_insert_and_update_mappings(
+    persistence,
+) -> None:
+    """Partition cell (e), the other two legacy bulk APIs:
+    ``bulk_insert_mappings``/``bulk_update_mappings`` -- same
+    unreachable-by-event shape as ``bulk_save_objects``, prohibited the
+    same way."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await session.commit()
+
+        def _do_bulk_insert_mappings(sync_session: Any) -> None:
+            sync_session.bulk_insert_mappings(
+                DevAnswerFrame,
+                [
+                    dict(
+                        id=uuid.uuid4(),
+                        run_id=run_id,
+                        org_id=org_id,
+                        user_id=user_id,
+                        frame_id=uuid.uuid4(),
+                        public_outcome="answered",
+                        payload={"schema_version": "dev_answer_frame.v1"},
+                    )
+                ],
+            )
+
+        with pytest.raises(DevPersistenceValidationError, match="bulk_insert_mappings"):
+            await session.run_sync(_do_bulk_insert_mappings)
+        await session.rollback()
+
+        valid_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(valid_payload["frame_id"]),
+            public_outcome="not_found",
+            payload=valid_payload,
+        )
+        await session.commit()
+        frame_id = frame.id
+
+        def _do_bulk_update_mappings(sync_session: Any) -> None:
+            sync_session.bulk_update_mappings(
+                DevAnswerFrame,
+                [
+                    {
+                        "id": frame_id,
+                        "payload": {"schema_version": "dev_answer_frame.v1"},
+                    }
+                ],
+            )
+
+        with pytest.raises(DevPersistenceValidationError, match="bulk_update_mappings"):
+            await session.run_sync(_do_bulk_update_mappings)
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevAnswerFrame, frame_id)
+        assert reloaded is not None
+        assert reloaded.payload == valid_payload, (
+            "bulk_update_mappings must not have touched the original payload"
+        )
+        count = await session.scalar(
+            select(func.count(DevAnswerFrame.id)).where(
+                DevAnswerFrame.run_id == run_id, DevAnswerFrame.id != frame_id
+            )
+        )
+        assert count == 0, "bulk_insert_mappings must not have created a row"
+
+
+@pytest.mark.asyncio
+async def test_orm_boundary_permits_legacy_bulk_apis_for_a_non_payload_bearing_model(
+    persistence,
+) -> None:
+    """Control: the legacy-bulk-API prohibition is scoped to
+    payload-bearing models specifically, not bulk APIs on this Session in
+    general."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        def _do_bulk_save(sync_session: Any) -> None:
+            sync_session.bulk_save_objects(
+                [
+                    DevRunStageDiagnostic(
+                        run_id=run_id,
+                        org_id=org_id,
+                        user_id=user_id,
+                        ordinal=0,
+                        stage_id="interpreting",
+                        status="completed",
+                        latency_ms=None,
+                        counts={},
+                    )
+                ]
+            )
+
+        await session.run_sync(_do_bulk_save)
+        await session.commit()
+
+    async with maker() as session:
+        count = await session.scalar(
+            select(func.count(DevRunStageDiagnostic.id)).where(
+                DevRunStageDiagnostic.run_id == run_id
+            )
+        )
+        assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_orm_boundary_rejects_an_alien_payload_bound_to_the_wrong_row(
+    persistence,
+) -> None:
+    """CHAOS-3297 Codex review round 8 HIGH: the boundary validated the
+    payload in isolation but never bound it to the ROW. Codex's repro --
+    ``update(DevRunNarrative).values(payload=<a fully valid
+    dev_narrative.v1 payload for a DIFFERENT run/frame/narrative>,
+    narrative_text=...)``, with narrative_id/run_id/frame_id all
+    disagreeing with the target row -- must be rejected even though the
+    payload alone passes ``DevNarrativeContract.model_validate`` on its
+    own merits. It is caught here because those identity columns are
+    absent from the write entirely (deny on an absent cross-check
+    column); the round-7 boundary had no cross-check at all and would
+    have accepted this verbatim.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(frame_payload["frame_id"]),
+            public_outcome="answered",
+            payload=frame_payload,
+        )
+        narrative_id = uuid.uuid4()
+        payload, narrative_text, _fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=frame.frame_id,
+            narrative_id=narrative_id,
+            mode="deterministic_fallback",
+        )
+        narrative = await service.record_narrative(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            narrative_id=narrative_id,
+            frame_id=frame.frame_id,
+            mode="deterministic_fallback",
+            provider_fingerprint=None,
+            narrative_text=narrative_text,
+            payload=payload,
+        )
+        await session.commit()
+        narrative_pk = narrative.id
+
+        # A fully valid dev_narrative.v1 payload -- just for an entirely
+        # different run/frame/narrative_id than the row being written to.
+        alien_run_id, alien_frame_id, alien_narrative_id = (
+            uuid.uuid4(),
+            uuid.uuid4(),
+            uuid.uuid4(),
+        )
+        alien_payload, alien_text, _alien_fp = _narrative_payload(
+            run_id=alien_run_id,
+            frame_id=alien_frame_id,
+            narrative_id=alien_narrative_id,
+            mode="deterministic_fallback",
+        )
+        DevNarrativeContract.model_validate({**alien_payload, "body": alien_text})
+
+        with pytest.raises(DevPersistenceValidationError):
+            await session.execute(
+                update(DevRunNarrative)
+                .where(DevRunNarrative.id == narrative_pk)
+                .values(payload=alien_payload, narrative_text=alien_text)
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevRunNarrative, narrative_pk)
+        assert reloaded is not None
+        # Compare identity, not exact dict equality: the persisted payload
+        # is the pydantic canonical dump (record_narrative round-trips
+        # through DevNarrativeContract), which can format a field like
+        # `generated_at` differently than this test's raw input dict did
+        # (e.g. "Z" vs "+00:00") without that being a bug.
+        assert reloaded.payload["narrative_id"] == str(narrative_id), (
+            "the alien-payload bypass must leave the row's real payload "
+            "completely untouched"
+        )
+        assert reloaded.payload["run_id"] == str(run_id)
+        assert reloaded.payload["frame_id"] == str(frame.frame_id)
+        assert reloaded.narrative_text == narrative_text
+
+
+def test_orm_boundary_bulk_dml_denies_an_unrecognized_write_shape() -> None:
+    """Partition-totality guard: if an ORM DML statement against a
+    payload-bearing model carries its row data in NONE of ``_values``,
+    ``_multi_values``, or ``parameters`` -- a shape this boundary was not
+    written against, whether from a future SQLAlchemy version or
+    anything else -- the write must be denied by default. The round-7
+    boundary's equivalent function returned an empty dict for this case
+    and the caller silently allowed the write through because no
+    ``"payload"`` key was found in it; this is the same failure mode
+    ``_KNOWN_UNVALIDATED_PAYLOAD_GAP`` exists to make explicit rather
+    than silent, applied to "an unrecognized write shape" instead of "a
+    known filed gap".
+    """
+
+    class _FakeStatement:
+        _values = None
+        _multi_values = ()
+
+    class _FakeMapper:
+        class_ = DevAnswerFrame
+
+    class _FakeOrmExecuteState:
+        is_update = True
+        is_insert = False
+        bind_mapper = _FakeMapper()
+        statement = _FakeStatement()
+        parameters = None
+
+    with pytest.raises(DevPersistenceValidationError, match="unrecognized"):
+        dev_persistence_service._enforce_payload_contract_on_bulk_dml(
+            _FakeOrmExecuteState()
+        )
+
+
+@pytest.mark.asyncio
+async def test_raw_connection_execution_is_a_documented_out_of_scope_escape_hatch(
+    persistence,
+) -> None:
+    """Partition cell (f): Core execution against a ``Connection``
+    obtained via ``session.connection()``, entirely outside the Session,
+    is confirmed empirically to fire neither the mapper events nor
+    ``do_orm_execute`` -- there is no Session-level event surface to hook
+    for it at all, since it is not a session-mediated write in the first
+    place. This is a documented, deliberate non-goal, not an unnoticed
+    gap: it is the exact mechanism
+    test_chaos_3297_frame_reachability.py's corrupted/mismatched-frame
+    tests use to simulate genuinely out-of-band data (a damaged row,
+    data from before a schema/contract change, manual DB surgery) that
+    the application's own ORM writes could never produce. This test
+    exists so that guarantee stays intentional and visible, not an
+    accident nobody wrote down."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        valid_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(valid_payload["frame_id"]),
+            public_outcome="not_found",
+            payload=valid_payload,
+        )
+        await session.commit()
+        frame_id = frame.id
+
+        connection = await session.connection()
+        await connection.execute(
+            update(DevAnswerFrame)
+            .where(DevAnswerFrame.id == frame_id)
+            .values(payload={"schema_version": "dev_answer_frame.v1"})
+        )
+        await session.commit()
+
+    async with maker() as session:
+        reloaded = await session.get(DevAnswerFrame, frame_id)
+        assert reloaded is not None
+        assert reloaded.payload == {"schema_version": "dev_answer_frame.v1"}, (
+            "raw Connection execution outside the Session is a documented "
+            "escape hatch, not validated by this boundary"
+        )

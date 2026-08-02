@@ -556,7 +556,19 @@ async def test_replay_with_mismatched_frame_outcome_falls_back_safely(
         # not be masked by an unrelated run_id mismatch.
         denied_frame["run_id"] = str(run.id)
         FrameContract.model_validate(denied_frame)  # sanity: valid on its own
-        frame_row.payload = denied_frame
+        # CHAOS-3297 Codex review round 8: the ORM boundary now cross-checks
+        # a payload write's frame_id/run_id/public_outcome against the same
+        # write's own columns -- exactly so a self-consistent-but-wrong-row
+        # frame like this one can no longer be written by the application.
+        # This test's premise is a row that predates or otherwise bypassed
+        # that guarantee -- simulate it on the raw connection, outside the
+        # ORM Session entirely, same as the corrupted-payload test above.
+        connection = await session.connection()
+        await connection.execute(
+            update(DevAnswerFrame)
+            .where(DevAnswerFrame.id == frame_row.id)
+            .values(payload=denied_frame)
+        )
         await session.commit()
 
     replay = await client.post(
@@ -643,7 +655,16 @@ async def test_replay_with_answered_frame_falls_back_safely(
         # totality gap) fails on its own merits.
         answered_frame["run_id"] = str(run.id)
         FrameContract.model_validate(answered_frame)  # sanity: valid on its own
-        frame_row.payload = answered_frame
+        # CHAOS-3297 Codex review round 8: see the mismatched-outcome test
+        # above -- the ORM boundary now cross-checks frame_id/run_id/
+        # public_outcome against the same write's own columns, so this must
+        # be simulated on the raw connection, outside the ORM Session.
+        connection = await session.connection()
+        await connection.execute(
+            update(DevAnswerFrame)
+            .where(DevAnswerFrame.id == frame_row.id)
+            .values(payload=answered_frame)
+        )
         await session.commit()
 
     replay = await client.post(

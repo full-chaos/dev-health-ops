@@ -681,7 +681,31 @@ class DevOrchestrator:
             if answer is not None:
                 try:
                     await self._recorder.record_answer(answer)
-                except Exception:
+                except Exception as answer_write_fault:
+                    # CHAOS-3332 Codex review (MED): this rewrite is the same
+                    # invisible-failure class the rest of this ticket removes,
+                    # and it is the one instance the new catch-all cannot
+                    # cover -- the exception is handled *locally* and never
+                    # propagates to the bottom of run(), so without this log a
+                    # validated answer being lost to a database failure is
+                    # indistinguishable from any other internal_error, with no
+                    # exception type and no traceback anywhere.
+                    #
+                    # It shares ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL with the
+                    # catch-all deliberately: both mean "a run terminated
+                    # internal_error for a reason no branch anticipated", which
+                    # is the alert an operator actually wants, and the distinct
+                    # log message keeps the two separable when triaging.
+                    logger.exception(
+                        "ask_dev.orchestrator.answer_write_fault",
+                        extra={
+                            "run_id": run_id,
+                            "exception_type": type(answer_write_fault).__name__,
+                        },
+                    )
+                    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                        exception_type=type(answer_write_fault).__name__
+                    ).inc()
                     state = RunState.FAILED
                     answer = None
                     error = DevError(

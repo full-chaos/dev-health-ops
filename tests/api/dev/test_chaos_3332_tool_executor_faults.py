@@ -30,6 +30,7 @@ import pytest
 
 from dev_health_ops.api.dev.contracts import (
     AnswerStatus,
+    DevAnswer,
     DevScope,
     DevToolRequest,
     ToolID,
@@ -583,6 +584,77 @@ async def test_catch_all_internal_error_is_never_silent(
 
     after = _counter(
         ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL, exception_type="PersistenceBoom"
+    )
+    if after == after:  # False only for the no-op-counter build (NaN)
+        assert after == before + 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_answer_write_is_never_silent(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """CHAOS-3332 Codex review (MED): the one rewrite the catch-all cannot see.
+
+    ``finish()`` handles a failing ``record_answer`` *locally* -- it rewrites
+    the run to FAILED/internal_error and carries on -- so the exception never
+    reaches ``run()``'s catch-all and picked up none of its logging. A
+    validated answer lost to a database failure was therefore
+    indistinguishable from every other ``internal_error``, with no exception
+    type and no traceback anywhere: the exact invisible-failure class this
+    ticket exists to remove, sitting inside the fix for it.
+
+    Deliberately faults ``record_answer`` rather than ``record_tool``: the
+    latter propagates and is already covered by the catch-all control above,
+    so reusing it here would prove nothing about this branch.
+
+    Mutation kill site: removing the new ``logger.exception`` fails this at
+    ``len(faults) == 1`` (observed 0) while the terminal assertions still
+    pass -- which is precisely why the terminal alone was never enough
+    evidence.
+    """
+
+    class AnswerWriteBoom(Exception):
+        pass
+
+    class AnswerRejectingRecorder(Recorder):
+        async def record_answer(self, answer: DevAnswer) -> None:
+            del answer
+            raise AnswerWriteBoom("dev_answers insert failed")
+
+    before = _counter(
+        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL, exception_type="AnswerWriteBoom"
+    )
+    with caplog.at_level(logging.ERROR):
+        output = await run_preflight_orchestrator(
+            question=TEAM_QUESTION,
+            entities=TEAM_ENTITIES,
+            script_id="chaos3332-answer-write",
+            script=_script(ToolID.STATUS_SNAPSHOT),
+            recorder_factory=AnswerRejectingRecorder,
+        )
+
+    result = output.result
+    # The run must still terminate coherently -- the point is that it does so
+    # *visibly*, not that the rewrite goes away.
+    assert result.state is RunState.FAILED
+    assert result.error is not None
+    assert result.error.code == "internal_error"
+    assert result.error.retryable is True
+    assert result.answer is None
+
+    faults = _records(caplog, "ask_dev.orchestrator.answer_write_fault")
+    assert len(faults) == 1
+    assert faults[0].levelno == logging.ERROR
+    assert _extra(faults[0], "run_id") == result.run_id
+    assert _extra(faults[0], "exception_type") == "AnswerWriteBoom"
+    assert faults[0].exc_info is not None
+    assert faults[0].exc_info[0] is AnswerWriteBoom
+
+    # The local handler swallows the exception by design, so the catch-all
+    # must NOT also fire -- one fault, one signal, no double count.
+    assert _records(caplog, "ask_dev.orchestrator.unhandled_run_fault") == []
+    after = _counter(
+        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL, exception_type="AnswerWriteBoom"
     )
     if after == after:  # False only for the no-op-counter build (NaN)
         assert after == before + 1

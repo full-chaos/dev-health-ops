@@ -45,7 +45,10 @@ from .contracts_v2.health_rules import (
     TeamQualificationBasis,
     TeamQualificationResult,
 )
-from .health_rule_calibration_inventory import CALIBRATION_RECORDS
+from .health_rule_calibration_inventory import (
+    CALIBRATION_RECORDS,
+    CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS,
+)
 
 __all__ = [
     "HEALTH_RULE_REGISTRY",
@@ -1141,3 +1144,34 @@ HEALTH_RULE_REGISTRY = HealthRuleRegistry(
         record.calibration_id: record for record in CALIBRATION_RECORDS
     },
 )
+
+# ---------------------------------------------------------------------------
+# CHAOS-3331 promotion guard (disclose-and-defer ruling, 2026-08-02): the
+# three cognitive-load-sourced CHAOS-3304 rules cannot be promoted out of
+# provisional -- their sole source table's team_id comes from a legacy
+# resolver, never canonical primary attribution (see
+# native_team_workload.py's module docstring and
+# health_rule_calibration_inventory.CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS).
+# A future editor who flips ONE rule's calibration_state to promote it
+# (e.g. product_approved, with a real CalibrationRecord to back it) breaks
+# this import loudly, everywhere, the instant the module loads -- not only
+# when a specific test happens to run. Mirrors this module's own
+# _undocumented_rule_ids totality-check pattern above (health_profile_
+# synthesis.py) and CHAOS-3302's test_no_shipped_rule_is_launch_authorized.
+# ---------------------------------------------------------------------------
+_chaos_3331_promoted_rule_ids = sorted(
+    rule_id
+    for rule_id in CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS
+    if HEALTH_RULE_REGISTRY.rule(rule_id).calibration_state
+    != CalibrationState.PROVISIONAL
+)
+if _chaos_3331_promoted_rule_ids:
+    raise RuntimeError(
+        "CHAOS-3331 blocks promotion of the following rule(s) out of "
+        f"provisional: {_chaos_3331_promoted_rule_ids} -- their source "
+        "table's team_id is not canonically attributed yet (see "
+        "native_team_workload.py's module docstring). Revert "
+        "calibration_state to provisional, or close CHAOS-3331 first and "
+        "remove the affected rule id(s) from "
+        "health_rule_calibration_inventory.CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS."
+    )

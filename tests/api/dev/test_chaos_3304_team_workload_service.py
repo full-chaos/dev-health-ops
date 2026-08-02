@@ -364,8 +364,10 @@ async def test_evaluate_workload_with_attribution_and_real_facts_reports_measure
 ):
     """Positive control: real, attributed team facts and an attribution
     source reporting real owned repositories clearing every applicable
-    rule's minimum cohort produce genuinely measured dimensions -- not
-    honestly-unknown-by-construction.
+    rule's minimum cohort produce genuinely measured dimensions where
+    nothing else gates them -- and honestly suppressed findings where a
+    guardrail (denominator, or CHAOS-3331 attribution provenance) still
+    applies, never a fabricated measured result.
     """
 
     source = FakeMeasuredWorkloadSource(calls=[])
@@ -382,10 +384,18 @@ async def test_evaluate_workload_with_attribution_and_real_facts_reports_measure
         for f in profile.shadow_findings
         if f.rule_id == "health_rule.after_hours_pressure_sustained.v1"
     )
-    assert after_hours.state is DimensionState.WATCH  # 0.4 >= threshold 0.25
+    # 0.4 >= threshold 0.25 would trigger WATCH, but CHAOS-3331
+    # (attribution_present=False from team_metrics_daily's legacy
+    # resolver) suppresses it to UNKNOWN/missing_attribution first --
+    # never a fabricated finding on attribution this service cannot
+    # actually vouch for.
+    assert after_hours.state is DimensionState.UNKNOWN
+    assert after_hours.suppressed_reason == "missing_attribution"
 
     # No active-contributor count resolved -> burden is not calculable, but
-    # the raw pressure was still genuinely measured (never dropped).
+    # the raw pressure was still genuinely measured (never dropped). The
+    # denominator guardrail fires before the attribution guardrail would
+    # (evaluate_rule's fixed check order), so this stays missing_denominator.
     review_load = next(
         f
         for f in profile.shadow_findings
@@ -400,8 +410,11 @@ async def test_evaluate_workload_with_attribution_and_real_facts_reports_measure
         if f.rule_id == "health_rule.investment_allocation_shift.v1"
     )
     # Stable mix across both fetched windows in this fixture -> genuinely
-    # measured zero shift, not a value judgment about the mix's composition.
+    # measured zero shift, not a value judgment about the mix's
+    # composition. Not subject to CHAOS-3331 (investment_metrics_daily is
+    # canonically attributed) -- a real, measured HEALTHY finding.
     assert investment_shift.state is DimensionState.HEALTHY
+    assert investment_shift.suppressed_reason is None
 
     # Both current and comparison windows were fetched, sequentially.
     assert len(source.calls) == 2

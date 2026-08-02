@@ -296,10 +296,25 @@ def change_failure_rate_observation(
 # ``native_team_workload.py``) are already team-scoped by construction: every
 # underlying query filters ``team_id`` directly on tables that carry it at
 # ingest time (unlike status/change facts, which re-derive an owned-
-# repository set from ``team_repo_ownership``). ``attribution_present`` is
-# therefore ``True`` whenever the source reports ``measured=True`` -- a
-# measured row is, by construction, a row this team was actually attributed
-# in the source table, never an org-wide or unrelated fact riding along.
+# repository set from ``team_repo_ownership``). But "scoped by the column"
+# is not "attributed by the canonical resolver" -- see
+# ``native_team_workload``'s module docstring for the CHAOS-3331 finding:
+# ``investment_metrics_daily`` IS canonically attributed
+# (``resolve_team_attribution`` + ``attribution_context``), so
+# ``investment_allocation_shift_observation`` below reports
+# ``attribution_present=True`` for a measured result. ``user_metrics_daily``/
+# ``team_metrics_daily`` are NOT -- their writers (``compute.py``,
+# ``compute_wellbeing.py``) use a legacy repo-pattern/identity-map resolver
+# that never consults canonical attribution -- so ``after_hours_pressure_
+# observation`` and ``_per_active_contributor_observation`` (shared by
+# ``review_request_load_observation``/``pr_interruption_load_observation``)
+# report ``attribution_present=False`` even for a genuinely measured
+# result. Each of those three rules already carries
+# ``attribution_required=True`` (``health_rule_registry.py``), so this
+# disclosure alone -- no new field, no protocol change -- correctly
+# suppresses every finding from these three rules to
+# ``UNKNOWN``/``missing_attribution`` via ``evaluate_rule``'s existing
+# guardrail, until CHAOS-3331 lands and this module is updated to match.
 # ---------------------------------------------------------------------------
 
 
@@ -326,6 +341,15 @@ def after_hours_pressure_observation(
     alone as a burden/overburdened conclusion (enforced structurally by
     ``qualify_team_needs_attention``'s two-independent-dimension
     requirement, not by this adapter).
+
+    ``attribution_present=False`` unconditionally (CHAOS-3331, module
+    docstring): ``team_metrics_daily``'s writer resolves ``team_id`` via a
+    legacy repo-pattern/identity-map resolver, never the canonical
+    ``resolve_team_attribution``. Paired with this rule's own
+    ``attribution_required=True``, every finding here is honestly
+    suppressed to ``UNKNOWN``/``missing_attribution`` until that gap
+    closes -- never a fabricated ``watch``/``at_risk`` on team attribution
+    this module cannot actually vouch for.
     """
 
     if not result.measured or result.after_hours_commit_ratio is None:
@@ -349,7 +373,9 @@ def after_hours_pressure_observation(
         current_value=current_value,
         comparison_value=comparison_value,
         denominator_present=True,
-        attribution_present=True,
+        # CHAOS-3331: legacy resolver, not canonical primary attribution --
+        # see native_team_workload.COGNITIVE_LOAD_ATTRIBUTION_PROVENANCE_LIMITATION.
+        attribution_present=False,
         window_index=window_index,
         observed_at=observed_at,
     )
@@ -380,6 +406,14 @@ def _per_active_contributor_observation(
     all), but ``denominator_present=False`` -- the rule's own
     ``denominator_required=True`` then suppresses any burden conclusion to
     ``UNKNOWN``/``missing_denominator`` (PRD 8.1's "not calculable").
+
+    ``attribution_present=False`` unconditionally (CHAOS-3331): shared by
+    both callers of this helper (``review_request_load_observation``,
+    ``pr_interruption_load_observation``), both sourced from
+    ``user_metrics_daily``, whose writer uses the same legacy repo-pattern/
+    identity-map resolver as ``team_metrics_daily`` -- see
+    ``after_hours_pressure_observation``'s docstring for the full
+    rationale.
     """
 
     if not measured or raw_value is None:
@@ -410,7 +444,9 @@ def _per_active_contributor_observation(
         current_value=current_value,
         comparison_value=comparison_value,
         denominator_present=denominator_present,
-        attribution_present=True,
+        # CHAOS-3331: legacy resolver, not canonical primary attribution --
+        # see native_team_workload.COGNITIVE_LOAD_ATTRIBUTION_PROVENANCE_LIMITATION.
+        attribution_present=False,
         window_index=window_index,
         observed_at=observed_at,
     )
@@ -495,6 +531,12 @@ def investment_allocation_shift_observation(
     (``current_value=None``), never coerced to ``0.0`` -- collapsing
     "no baseline to compare against" into "no shift observed" would be
     exactly the "missing data as zero" the platform-wide contract forbids.
+
+    ``attribution_present=True`` (unlike the three cognitive-load adapters
+    above): ``investment_metrics_daily``'s writer resolves ``team_id`` via
+    the canonical ``resolve_team_attribution`` + ``attribution_context``
+    path, not the legacy resolver CHAOS-3331 flags -- see
+    ``native_team_workload``'s module docstring for the file:line evidence.
     """
 
     if not current.measured or current.total_units <= 0:

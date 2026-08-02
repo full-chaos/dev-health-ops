@@ -96,7 +96,6 @@ def test_after_hours_pressure_ratio_needs_no_external_denominator() -> None:
     obs = after_hours_pressure_observation(result, comparison_value=None, **_COMMON)
     assert obs.current_value == 0.3
     assert obs.denominator_present is True
-    assert obs.attribution_present is True
     assert obs.data_semantics == "measured_zero"
 
 
@@ -104,6 +103,23 @@ def test_after_hours_pressure_carries_own_history_comparison_value() -> None:
     result = _cognitive_load(after_hours_commit_ratio=0.3)
     obs = after_hours_pressure_observation(result, comparison_value=0.1, **_COMMON)
     assert obs.comparison_value == 0.1
+
+
+def test_after_hours_pressure_discloses_chaos_3331_attribution_gap() -> None:
+    """CHAOS-3331 (disclose-and-defer ruling, 2026-08-02):
+    ``team_metrics_daily``'s writer (``compute_wellbeing.py``) resolves
+    ``team_id`` via a legacy repo-pattern/identity-map resolver, not
+    canonical primary attribution -- so ``attribution_present`` is
+    ``False`` even for a genuinely measured result, which -- paired with
+    this rule's own ``attribution_required=True``
+    (``health_rule_registry.py``) -- honestly suppresses every finding to
+    ``UNKNOWN``/``missing_attribution`` rather than a fabricated
+    ``watch``/``at_risk``.
+    """
+
+    result = _cognitive_load(after_hours_commit_ratio=0.9)  # would trigger if not gated
+    obs = after_hours_pressure_observation(result, comparison_value=None, **_COMMON)
+    assert obs.attribution_present is False
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +135,22 @@ def test_review_request_load_with_denominator_reports_per_contributor_rate() -> 
     )
     assert obs.current_value == 4.0  # 20 / 5
     assert obs.denominator_present is True
+
+
+def test_review_request_load_discloses_chaos_3331_attribution_gap_even_with_denominator() -> (
+    None
+):
+    """CHAOS-3331: ``user_metrics_daily``'s writer uses the same legacy
+    resolver as ``team_metrics_daily`` -- ``attribution_present`` is
+    ``False`` regardless of whether the denominator is present, since the
+    two guardrails are independent.
+    """
+
+    result = _cognitive_load(review_request_load=20.0)
+    obs = review_request_load_observation(
+        result, active_contributor_count=5, comparison_value=None, **_COMMON
+    )
+    assert obs.attribution_present is False
 
 
 def test_review_request_load_without_denominator_reports_raw_value_not_calculable() -> (
@@ -168,6 +200,14 @@ def test_pr_interruption_load_unmeasured_reports_unavailable() -> None:
     assert obs.current_value is None
 
 
+def test_pr_interruption_load_discloses_chaos_3331_attribution_gap() -> None:
+    result = _cognitive_load(pr_interruption_load=16.0)
+    obs = pr_interruption_load_observation(
+        result, active_contributor_count=4, comparison_value=None, **_COMMON
+    )
+    assert obs.attribution_present is False
+
+
 # ---------------------------------------------------------------------------
 # investment_allocation_shift_observation
 # ---------------------------------------------------------------------------
@@ -198,6 +238,20 @@ def test_investment_shift_stable_high_ktlo_mix_reports_neutral_measured_zero() -
     obs = investment_allocation_shift_observation(current, comparison, **_COMMON)
     assert obs.current_value == 0.0
     assert obs.data_semantics == "measured_zero"
+
+
+def test_investment_shift_is_not_subject_to_chaos_3331_unlike_cognitive_load() -> None:
+    """Asymmetry lock: ``investment_metrics_daily``'s writer resolves
+    ``team_id`` via the canonical ``resolve_team_attribution`` +
+    ``attribution_context`` path (``metrics/job_work_items.py``), unlike
+    the three cognitive-load adapters above -- ``attribution_present`` is
+    genuinely ``True`` here, not gated by CHAOS-3331.
+    """
+
+    current = _investment_mix(new_value=10.0, ktlo=60.0, security=20.0, infra=10.0)
+    comparison = _investment_mix(new_value=10.0, ktlo=60.0, security=20.0, infra=10.0)
+    obs = investment_allocation_shift_observation(current, comparison, **_COMMON)
+    assert obs.attribution_present is True
 
 
 def test_investment_shift_large_swing_reports_magnitude_only() -> None:

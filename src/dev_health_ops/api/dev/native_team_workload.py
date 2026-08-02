@@ -4,9 +4,33 @@ Every query here is scoped by ``org_id`` AND ``team_id`` directly against a
 table that carries ``team_id`` at ingest time (``user_metrics_daily``,
 ``team_metrics_daily``, ``investment_metrics_daily``) -- unlike
 ``native_status_change.py``'s status/change facts, this reader never needs to
-re-derive an owned-repository set from ``team_repo_ownership`` first. A
-measured row is therefore genuinely team-attributed by construction, not a
-broader org/repo fact riding along under a team label.
+re-derive an owned-repository set from ``team_repo_ownership`` first. Every
+row read here is genuinely SCOPED to the team it claims (never a broader
+org/repo fact riding along under a team label) -- but "scoped by the column
+value" is not the same claim as "attributed by the canonical resolver", and
+the two tables this module reads disagree on which one they are:
+
+* ``investment_metrics_daily`` (``investment_mix``) is written by
+  ``metrics/job_work_items.py``'s per-item loop, which calls
+  ``compute_work_items.resolve_team_attribution`` WITH the canonical
+  ``attribution_context`` loaded via
+  ``metrics.loaders.clickhouse.ClickHouseDataLoader.load_team_attribution_context``
+  (``job_work_items.py`` around the ``team_attribution_context =
+  asyncio.run(...)`` assignment feeding the investment-metrics loop's
+  ``_get_team``/``resolve_team_attribution`` call). ``resolve_team_attribution``
+  is the exact function that marks ``is_primary=1`` -- this is genuinely
+  canonical primary attribution.
+* ``user_metrics_daily``/``team_metrics_daily`` (``cognitive_load``,
+  ``active_contributor_count``) are written by ``metrics/compute.py``
+  (around lines 399-411) and ``metrics/compute_wellbeing.py`` (around lines
+  82-91) respectively, via ``repo_team_resolver.resolve(repo_name)`` then
+  ``team_resolver.resolve(identity)`` -- a legacy repo-pattern/identity-map
+  resolver that never consults ``attribution_context`` at all. This is
+  CHAOS-3331 (filed 2026-08-02, disclose-and-defer ruling): migrating these
+  two writers onto the canonical resolver is pipeline-scope, its own
+  ticket, deliberately NOT done in this changeset. See
+  :data:`COGNITIVE_LOAD_ATTRIBUTION_PROVENANCE_LIMITATION` for how this
+  module discloses the gap instead of silently trusting the column.
 
 Denominator-contract note (CHAOS-3304, Amendment TRD v2 section 8.1): the
 approved preference order is (1) configured team membership/active
@@ -31,6 +55,7 @@ from typing import Any
 from dev_health_ops.api.queries.client import query_dicts
 
 __all__ = [
+    "COGNITIVE_LOAD_ATTRIBUTION_PROVENANCE_LIMITATION",
     "NATIVE_TEAM_WORKLOAD_QUERY_VERSION",
     "ClickHouseTeamWorkloadSource",
     "TeamCognitiveLoadResult",
@@ -39,6 +64,22 @@ __all__ = [
 
 NATIVE_TEAM_WORKLOAD_QUERY_VERSION = "native-team-workload-query.v1"
 QUERY_TIMEOUT_SECONDS = 15
+
+#: Closed-vocabulary disclosure token (CHAOS-3331): the reason
+#: ``dimension_observation_adapters.py``'s three cognitive-load-sourced
+#: adapters (``after_hours_pressure_observation``,
+#: ``review_request_load_observation``, ``pr_interruption_load_observation``)
+#: report ``attribution_present=False`` even for a genuinely ``measured``
+#: result -- see module docstring. NOT applied to
+#: ``investment_allocation_shift_observation``, whose source table IS
+#: canonically attributed (see module docstring). A single module-owned
+#: constant (not a free-form string built ad hoc at each call site) so a
+#: promotion-guard test can pin against it by identity, not by matching
+#: prose (see ``health_rule_calibration_inventory.py``'s
+#: ``CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS``).
+COGNITIVE_LOAD_ATTRIBUTION_PROVENANCE_LIMITATION = (
+    "team_attribution_legacy_resolver_not_canonical_primary_chaos_3331"
+)
 
 #: Canonical investment-area string -> the four buckets already recognized by
 #: ``metrics/operating_review.py``'s own ``_investment_key``. Mirrored here

@@ -91,6 +91,43 @@ _NOT_YET_COHORT_REVIEWED = (
     "minimum-cohort floor."
 )
 
+_CHAOS_3331_PROMOTION_BLOCKED_NOTE = (
+    "Promotion out of provisional is BLOCKED by CHAOS-3331 (disclose-and-"
+    "defer ruling, 2026-08-02): this rule's sole source table resolves "
+    "team_id via a legacy repo-pattern/identity-map resolver, not "
+    "canonical primary attribution (resolve_team_attribution + "
+    "attribution_context) -- see native_team_workload.py's module "
+    "docstring for the file:line evidence and "
+    "COGNITIVE_LOAD_ATTRIBUTION_PROVENANCE_LIMITATION for the disclosure "
+    "token dimension_observation_adapters.py's adapter emits. Do not "
+    "change this rule's calibration_state until CHAOS-3331 lands -- "
+    "health_rule_registry.py's import-time guard (CHAOS_3331_ATTRIBUTION_"
+    "BLOCKED_RULE_IDS) and test_chaos_3304_workload_health_rules.py's "
+    "test_chaos_3331_blocked_rules_stay_provisional both fail loudly if "
+    "you do."
+)
+
+#: Rules whose provisional calibration_state is blocked from promotion by
+#: CHAOS-3331 (disclose-and-defer ruling, 2026-08-02): their sole source
+#: table's team_id is resolved via a legacy repo-pattern/identity-map
+#: resolver, not canonical primary attribution -- see
+#: ``native_team_workload``'s module docstring for the file:line evidence.
+#: ``health_rule_registry.py`` asserts, at import time, that every rule id
+#: here still reports ``calibration_state=PROVISIONAL`` -- promoting one by
+#: editing a single field on its ``HealthRuleDefinition`` fails the whole
+#: module import, not just a test someone could skip running.
+#: ``health_rule.investment_allocation_shift.v1`` is deliberately absent --
+#: its source table (``investment_metrics_daily``) IS canonically
+#: attributed (see ``dimension_observation_adapters.investment_allocation_
+#: shift_observation``'s docstring).
+CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS: frozenset[str] = frozenset(
+    {
+        "health_rule.after_hours_pressure_sustained.v1",
+        "health_rule.review_request_load_pressure.v1",
+        "health_rule.pr_interruption_load_pressure.v1",
+    }
+)
+
 CALIBRATION_RECORDS: tuple[CalibrationRecord, ...] = (
     CalibrationRecord(
         schema_version="health_rule_calibration.v1",
@@ -321,7 +358,7 @@ CALIBRATION_RECORDS: tuple[CalibrationRecord, ...] = (
         owner=_OWNER,
         decided_at=_DECIDED_AT,
         evidence_ref=None,
-        notes=_NOT_YET_REVIEWED,
+        notes=f"{_NOT_YET_REVIEWED} {_CHAOS_3331_PROMOTION_BLOCKED_NOTE}",
     ),
     CalibrationRecord(
         schema_version="health_rule_calibration.v1",
@@ -342,7 +379,7 @@ CALIBRATION_RECORDS: tuple[CalibrationRecord, ...] = (
         owner=_OWNER,
         decided_at=_DECIDED_AT,
         evidence_ref=None,
-        notes=_NOT_YET_REVIEWED,
+        notes=f"{_NOT_YET_REVIEWED} {_CHAOS_3331_PROMOTION_BLOCKED_NOTE}",
     ),
     CalibrationRecord(
         schema_version="health_rule_calibration.v1",
@@ -364,7 +401,7 @@ CALIBRATION_RECORDS: tuple[CalibrationRecord, ...] = (
         owner=_OWNER,
         decided_at=_DECIDED_AT,
         evidence_ref=None,
-        notes=_NOT_YET_REVIEWED,
+        notes=f"{_NOT_YET_REVIEWED} {_CHAOS_3331_PROMOTION_BLOCKED_NOTE}",
     ),
     CalibrationRecord(
         schema_version="health_rule_calibration.v1",

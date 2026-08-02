@@ -30,6 +30,10 @@ Required test cases from the CHAOS-3304 ticket, and where each is proven:
 * high KTLO/security/infra rendered neutrally -> proven at the adapter layer
   (``test_investment_shift_stable_high_ktlo_mix_reports_neutral_measured_zero``)
 * missing vs measured zero -> ``test_negative_unmeasured_reports_unknown_never_healthy``
+* CHAOS-3331 promotion guard (team-lead ruling, 2026-08-02: legacy
+  repo-pattern/identity-map resolver, not canonical primary attribution,
+  writes ``user_metrics_daily``/``team_metrics_daily``) ->
+  ``test_chaos_3331_blocked_rules_stay_provisional``
 
 Provider-fallback, persisted-replay, and both-surfaces cases are CHAOS-3300
 proof-gate scope, not this ticket's service layer -- not reproduced here.
@@ -48,6 +52,9 @@ from dev_health_ops.api.dev.contracts_v2.health_rules import (
     HealthRuleDefinition,
     RuleApplicability,
     RuleDirection,
+)
+from dev_health_ops.api.dev.health_rule_calibration_inventory import (
+    CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS,
 )
 from dev_health_ops.api.dev.health_rule_registry import (
     HEALTH_RULE_REGISTRY,
@@ -325,3 +332,43 @@ def test_negative_single_at_risk_dimension_does_not_qualify() -> None:
     )
     assert qualification.qualifies is False
     assert qualification.basis is None
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3331 promotion guard.
+# ---------------------------------------------------------------------------
+
+
+def test_chaos_3331_blocked_rules_stay_provisional() -> None:
+    """Team-lead ruling (2026-08-02, disclose-and-defer): the three
+    cognitive-load-sourced rules cannot be promoted out of provisional
+    until CHAOS-3331 closes (their sole source table's team_id is a legacy
+    repo-pattern/identity-map resolver, not canonical primary attribution).
+
+    This test is deliberately a WEAKER, redundant backstop -- the load-
+    bearing guard is ``health_rule_registry.py``'s import-time check, which
+    raises ``RuntimeError`` the instant the module loads if any blocked
+    rule id's ``calibration_state`` is promoted, so a promotion can never
+    reach this test (or any other) in the first place. This test exists so
+    a reader auditing test files, not import-time guards, still finds the
+    invariant documented and exercised.
+    """
+
+    assert CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS == {
+        "health_rule.after_hours_pressure_sustained.v1",
+        "health_rule.review_request_load_pressure.v1",
+        "health_rule.pr_interruption_load_pressure.v1",
+    }
+    for rule_id in CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS:
+        rule = HEALTH_RULE_REGISTRY.rule(rule_id)
+        assert rule.calibration_state == CalibrationState.PROVISIONAL
+        assert rule.calibration_evidence_ref is None
+
+    # The asymmetry is deliberate: investment_allocation_shift.v1 is NOT
+    # blocked -- its source table (investment_metrics_daily) is canonically
+    # attributed (metrics/job_work_items.py's resolve_team_attribution +
+    # attribution_context), unlike the three above.
+    assert (
+        "health_rule.investment_allocation_shift.v1"
+        not in CHAOS_3331_ATTRIBUTION_BLOCKED_RULE_IDS
+    )

@@ -703,9 +703,10 @@ async def test_output_exhausted_provider_failure_still_persists_a_frame() -> Non
 
 @pytest.mark.asyncio
 async def test_finish_falls_back_to_a_registered_bucket_for_an_unregistered_code(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """CHAOS-3297 Codex review HIGH #2, defense in depth.
+    """CHAOS-3297 Codex review HIGH #2, defense in depth (round 2 MEDIUM #2
+    extends this same reproduction with operational visibility).
 
     Simulates a registry-drift bug directly: even if a future producer code
     slips past ``terminal_frames.ORCHESTRATOR_ERROR_CODES`` /
@@ -714,9 +715,17 @@ async def test_finish_falls_back_to_a_registered_bucket_for_an_unregistered_code
     exercise the runtime fallback itself), ``finish()`` must still persist a
     frame -- falling back to the always-registered "internal_error" bucket
     -- rather than silently committing an unbucketed, frame-less terminal
-    run the way it did before this fix.
+    run the way it did before this fix. Round 2: that fallback must also be
+    operationally visible -- a structured ERROR log record and a Prometheus
+    counter increment -- not a silent downgrade an operator would never see
+    (Codex review round 2 MEDIUM #2).
     """
+    import logging
+
     from dev_health_ops.api.dev import terminal_frames as tf
+    from dev_health_ops.metrics.prometheus import (
+        ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL,
+    )
 
     mutated_codes = frozenset(tf.ORCHESTRATOR_ERROR_CODES - {"cancelled"})
     mutated_buckets = {
@@ -727,13 +736,18 @@ async def test_finish_falls_back_to_a_registered_bucket_for_an_unregistered_code
     monkeypatch.setattr(tf, "ORCHESTRATOR_ERROR_CODES", mutated_codes)
     monkeypatch.setattr(tf, "PUBLIC_OUTCOME_BY_ERROR_CODE", mutated_buckets)
 
+    before = ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL.labels(
+        code="cancelled"
+    )._value.get()
+
     recorder = Recorder()
     cancellation = asyncio.Event()
     cancellation.set()
-    result = await _run(
-        _orchestrator([], script_id="registry-drift", recorder=recorder),
-        cancellation,
-    )
+    with caplog.at_level(logging.ERROR, logger="dev_health_ops.api.dev.orchestrator"):
+        result = await _run(
+            _orchestrator([], script_id="registry-drift", recorder=recorder),
+            cancellation,
+        )
     assert result.state is RunState.CANCELLED
     assert result.error is not None and result.error.code == "cancelled"
     assert len(recorder.frames) == 1, (
@@ -742,6 +756,20 @@ async def test_finish_falls_back_to_a_registered_bucket_for_an_unregistered_code
     )
     assert recorder.frames[0].public_outcome.value == "failed"
     assert recorder.rollbacks == 0
+
+    assert any(
+        record.levelno == logging.ERROR
+        and "unregistered_terminal_code" in record.message
+        for record in caplog.records
+    ), "the registry-gap fallback must log an ERROR record, not fail silently"
+
+    after = ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL.labels(
+        code="cancelled"
+    )._value.get()
+    assert after == before + 1, (
+        "the registry-gap fallback must increment "
+        "ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL"
+    )
 
 
 @pytest.mark.asyncio

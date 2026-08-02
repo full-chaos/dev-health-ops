@@ -72,9 +72,26 @@ __all__ = [
     "ORCHESTRATOR_ERROR_CODES",
     "PUBLIC_OUTCOME_BY_ERROR_CODE",
     "SOURCE_CLASS_BY_TOOL_ID",
+    "UnregisteredTerminalCode",
     "build_error_frame",
     "wrap_legacy_answer_as_frame",
 ]
+
+
+class UnregisteredTerminalCode(ValueError):
+    """A terminal error code outside ``ORCHESTRATOR_ERROR_CODES`` (CHAOS-3297
+    Codex review round 2 MEDIUM #2).
+
+    Deliberately a distinct type from a bare ``ValueError``, raised only by
+    ``build_error_frame``'s own registry check: ``orchestrator.finish()``
+    catches exactly this to fall back to the always-registered
+    ``"internal_error"`` bucket. Catching a bare ``ValueError`` there would
+    also silently swallow an unrelated construction failure (e.g. a genuine
+    data problem inside ``wrap_legacy_answer_as_frame``) into the same
+    fallback, masking a different bug behind the same safe-looking
+    degradation.
+    """
+
 
 #: Stable namespace for every UUID5 this module mints -- distinct from
 #: ``preflight_outcomes._HANDLE_NAMESPACE`` so a frame/section/fact id
@@ -306,7 +323,9 @@ def build_error_frame(
     """
 
     if code not in PUBLIC_OUTCOME_BY_ERROR_CODE:
-        raise ValueError(f"unregistered orchestrator error code: {code!r}")
+        raise UnregisteredTerminalCode(
+            f"unregistered orchestrator error code: {code!r}"
+        )
     outcome = PUBLIC_OUTCOME_BY_ERROR_CODE[code]
     is_no_answer = outcome.value in NO_ANSWER_OUTCOMES
     frame_versions = None

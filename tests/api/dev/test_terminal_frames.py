@@ -22,8 +22,10 @@ Property manifest cross-references (see
 
 from __future__ import annotations
 
+import ast
 import inspect
 import re
+import textwrap
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -46,6 +48,7 @@ from dev_health_ops.api.dev.contracts_v2.frame import DevAnswerFrame as _FrameV2
 from dev_health_ops.api.dev.contracts_v2.plan import PLAN_REGISTRY
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.router import _replayed_result
+from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErrorCode
 
 _TIME_RANGE = DevTimeRange(
     start=datetime(2026, 7, 1, tzinfo=UTC),
@@ -54,13 +57,6 @@ _TIME_RANGE = DevTimeRange(
 )
 
 
-def _source_file(module: Any) -> str:
-    path = inspect.getsourcefile(module)
-    assert path is not None, "sanity: module must have a source file"
-    return path
-
-
-_ORCHESTRATOR_SOURCE = _source_file(_orchestrator_module)
 #: The v1 evidence-handle grammar (`evidence_service.EvidenceHandleService.issue`).
 _REAL_EVIDENCE_HANDLE = "ev1_" + ("a1b2c3d4e5" * 4)
 
@@ -81,38 +77,169 @@ def _legacy_answer(*, claims: list[dict[str, Any]] | None = None) -> DevAnswer:
 # ---------------------------------------------------------------------------
 # F-CODES -- ORCHESTRATOR_ERROR_CODES matches the live source, not a
 # hand-duplicated list (feedback_generate_fixtures_from_the_producer).
+#
+# CHAOS-3297 Codex review round 2 MEDIUM #2: the original version of this
+# test regex-scraped literal ``error("...")`` call sites plus
+# ``_provider_error``'s ``code_map`` dict literal's source text. That missed
+# ``_LEGACY_GUARD_TERMINALS`` entirely -- its call site (``error(code,
+# message)``) passes a *variable*, invisible to any source-text/regex/AST
+# scrape of the call site itself -- and the gap was silent only because the
+# table's three values today happen to coincide with codes registered
+# elsewhere. Replaced with AST parsing for the one genuinely
+# literal-only producer (the local closure's call sites), and true runtime
+# enumeration -- reading the live ``_LEGACY_GUARD_TERMINALS`` dict object
+# directly, and actually driving ``_provider_error`` for every
+# ``AgentProviderErrorCode`` member -- for the two producers that have a
+# real object/function to enumerate instead of scraping.
 # ---------------------------------------------------------------------------
 
 
-#: ``_provider_error``'s own ``code_map`` -- a second producer of the exact
-#: codes ``finish()`` passes to ``build_error_frame`` (CHAOS-3297 Codex
-#: review HIGH #2). The original version of this test only parsed the local
-#: ``error(...)`` closure's call sites, which is why a provider failure's
-#: code (e.g. ``model_not_supported`` from ``OUTPUT_EXHAUSTED``) could reach
-#: ``finish()`` unregistered without this totality guard ever catching it.
-_PROVIDER_ERROR_CODE_MAP_RE = re.compile(
-    r'AgentProviderErrorCode\.[A-Z_]+:\s*\(?\s*"([a-z_]+)"'
-)
+def _local_error_closure_codes() -> set[str]:
+    """Every literal code ``orchestrator.run()``'s local ``error(...)``
+    closure constructs, by walking the AST of ``DevOrchestrator.run``'s own
+    source -- robust to reformatting in a way regex is not, and it is the
+    same source ``inspect`` and Python's own compiler agree on.
+
+    A call site that passes a *variable* for the code (the
+    ``_LEGACY_GUARD_TERMINALS`` lookup) has no literal to extract here by
+    construction -- see ``_legacy_guard_terminal_codes`` for that table's
+    own runtime enumeration.
+    """
+
+    source = textwrap.dedent(
+        inspect.getsource(_orchestrator_module.DevOrchestrator.run)
+    )
+    tree = ast.parse(source)
+    codes: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "error"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            codes.add(node.args[0].value)
+    return codes
+
+
+def _legacy_guard_terminal_codes() -> set[str]:
+    """Runtime enumeration (not source scraping) of
+    ``_LEGACY_GUARD_TERMINALS``'s own values.
+
+    Codex round 2 repro: this table's call site (``error(code, message)``)
+    passes a variable, so no scrape of the call site itself can see which
+    code it carries -- only reading the table's live values does. Before
+    this, the totality test never read this table at all; it passed only
+    by coincidence (its three values today match codes registered via
+    other, literal call sites), so swapping one value (e.g.
+    ``resolve_scope_not_found`` -> ``"conversation_not_found"``) went
+    completely undetected. See
+    ``test_legacy_guard_terminal_value_drift_is_caught_by_the_totality_assertion``
+    for the reproduction, made permanent.
+    """
+
+    return {
+        code for code, _message in _orchestrator_module._LEGACY_GUARD_TERMINALS.values()
+    }
+
+
+def _provider_error_codes() -> set[str]:
+    """Runtime enumeration of every code ``DevOrchestrator._provider_error``
+    can produce -- drives the real function for every
+    ``AgentProviderErrorCode`` member, rather than scraping its
+    ``code_map`` dict literal's source text. Any future member added to
+    ``AgentProviderErrorCode`` (or a remapped value) is picked up
+    automatically, with zero regex to keep in sync.
+    """
+
+    codes: set[str] = set()
+    for member in AgentProviderErrorCode:
+        result = _orchestrator_module.DevOrchestrator._provider_error(
+            "request_totality_probe", AgentProviderError(member)
+        )
+        codes.add(result.code)
+    return codes
 
 
 def test_orchestrator_error_codes_matches_the_live_source() -> None:
-    source = open(_ORCHESTRATOR_SOURCE, encoding="utf-8").read()
-    extracted = set(re.findall(r'error\(\s*\n?\s*"([a-z_]+)"', source))
-    provider_codes = set(_PROVIDER_ERROR_CODE_MAP_RE.findall(source))
-    assert extracted, "sanity: orchestrator.py must call error(...) at least once"
-    assert provider_codes, (
-        "sanity: _provider_error's code_map must map at least one code -- "
-        "if this fails, the regex has drifted from the live source shape, "
-        "not that the producer disappeared"
-    )
-    combined = extracted | provider_codes
+    local_codes = _local_error_closure_codes()
+    legacy_guard_codes = _legacy_guard_terminal_codes()
+    provider_codes = _provider_error_codes()
+    assert local_codes, "sanity: orchestrator.run() must call error(...) at least once"
+    assert legacy_guard_codes, "sanity: _LEGACY_GUARD_TERMINALS must have entries"
+    assert provider_codes, "sanity: _provider_error must map at least one code"
+    combined = local_codes | legacy_guard_codes | provider_codes
     assert combined == tf.ORCHESTRATOR_ERROR_CODES, (
         "a code was added to (or removed from) orchestrator.run()'s error() "
-        "closure or DevOrchestrator._provider_error's code_map without "
-        "updating terminal_frames.ORCHESTRATOR_ERROR_CODES -- "
+        "closure, _LEGACY_GUARD_TERMINALS, or "
+        "DevOrchestrator._provider_error's code_map without updating "
+        "terminal_frames.ORCHESTRATOR_ERROR_CODES -- "
         f"missing={combined - tf.ORCHESTRATOR_ERROR_CODES} "
         f"stale={tf.ORCHESTRATOR_ERROR_CODES - combined}"
     )
+
+
+def test_legacy_guard_terminal_value_drift_is_caught_by_the_totality_assertion() -> (
+    None
+):
+    """Rule 2: reproduce codex's exact mutation (a guard-table value swap)
+    and show the totality computation now catches it.
+
+    Mutates a *copy* of ``_LEGACY_GUARD_TERMINALS`` (never the live module
+    dict -- this must not leak into other tests) so
+    ``resolve_scope_not_found`` maps to an unregistered code, exactly
+    codex's repro, and shows the combined-codes computation now includes
+    that unregistered value -- the observable gap the old regex-only test
+    could never have caught, because it never read this table at all.
+    """
+
+    mutated = dict(_orchestrator_module._LEGACY_GUARD_TERMINALS)
+    original_message = mutated["resolve_scope_not_found"][1]
+    mutated["resolve_scope_not_found"] = ("conversation_not_found", original_message)
+    mutated_legacy_guard_codes = {code for code, _message in mutated.values()}
+
+    combined = (
+        _local_error_closure_codes()
+        | mutated_legacy_guard_codes
+        | _provider_error_codes()
+    )
+    assert "conversation_not_found" not in tf.ORCHESTRATOR_ERROR_CODES, (
+        "sanity: the mutation must introduce a code the registry genuinely "
+        "does not recognize"
+    )
+    assert combined != tf.ORCHESTRATOR_ERROR_CODES
+    assert "conversation_not_found" in (combined - tf.ORCHESTRATOR_ERROR_CODES), (
+        "the mutated guard-table value must be observable as a gap -- this "
+        "is what makes the totality assertion load-bearing for this table, "
+        "not merely present"
+    )
+
+
+# ---------------------------------------------------------------------------
+# UnregisteredTerminalCode -- finish()'s fallback is dedicated, logged, and
+# counted (CHAOS-3297 Codex review round 2 MEDIUM #2).
+# ---------------------------------------------------------------------------
+
+
+def test_build_error_frame_raises_the_dedicated_unregistered_exception() -> None:
+    """A bare ValueError is not what orchestrator.finish() catches for this
+    -- it must be exactly UnregisteredTerminalCode, so an unrelated
+    ValueError from frame construction elsewhere is never silently folded
+    into the same fallback."""
+
+    with pytest.raises(tf.UnregisteredTerminalCode):
+        tf.build_error_frame(
+            code="not_a_real_code", run_id="run_01", generated_at=datetime.now(UTC)
+        )
+
+
+# The log-record + counter-increment coverage for finish()'s registry-gap
+# fallback lives in test_orchestrator.py (see
+# test_finish_falls_back_to_a_registered_bucket_for_an_unregistered_code),
+# which already drives the real DevOrchestrator.run() through this branch
+# and has the async test harness for it -- not duplicated here.
 
 
 # ---------------------------------------------------------------------------

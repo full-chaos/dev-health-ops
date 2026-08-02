@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import time
 from collections import Counter
@@ -39,6 +40,7 @@ from dev_health_ops.llm.agent.errors import (
     safe_agent_provider_error,
 )
 from dev_health_ops.llm.budget import budget_idempotency_scope
+from dev_health_ops.metrics.prometheus import ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL
 
 from . import terminal_frames
 from .answer_validator import (
@@ -96,6 +98,8 @@ from .tool_registry import (
     ToolRegistryError,
     ToolRequestRejected,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _dev_tool_request_limit_maximum() -> int:
@@ -649,6 +653,7 @@ class DevOrchestrator:
             # other direction (frame -> v1): see terminal_frames.py's module
             # docstring for why that would silently rewrite v1 error codes.
             if not frame_already_recorded:
+                terminal_code = error.code if error is not None else "internal_error"
                 try:
                     frame = (
                         terminal_frames.wrap_legacy_answer_as_frame(
@@ -656,29 +661,59 @@ class DevOrchestrator:
                         )
                         if answer is not None
                         else terminal_frames.build_error_frame(
-                            code=(
-                                error.code if error is not None else "internal_error"
-                            ),
+                            code=terminal_code,
                             run_id=run_id,
                             generated_at=datetime.now(UTC),
                             versions=self._versions,
                         )
                     )
-                except ValueError:
-                    # CHAOS-3297 Codex review HIGH #2: a code reached here
-                    # that terminal_frames.ORCHESTRATOR_ERROR_CODES does not
-                    # recognize -- a closed-registry gap (a producer added a
-                    # new code without updating that registry), not a
-                    # transient failure. The broad `except Exception` below
-                    # is for *database*-layer failures and must stay generic
-                    # for those; a construction-time registry gap is a
-                    # different failure class and must never resolve the
-                    # same way (silently proceeding frame-less), or the
-                    # frame-mandatory invariant is defeated on every future
-                    # code this registry falls behind on, not just today's.
-                    # Fall back to the one bucket every producer's error
-                    # always maps to -- "internal_error" is always
-                    # registered -- so the run still gets a frame.
+                except Exception as frame_construction_exc:
+                    # CHAOS-3297 Codex review HIGH #2 / round 2 MEDIUM #2:
+                    # frame *construction* failing must never crash or
+                    # discard an otherwise-successful run -- the v1
+                    # answer/error above is already recorded and remains
+                    # authoritative regardless of whether this compatibility
+                    # frame builds cleanly (see the module docstring). But
+                    # the two ways construction can fail are different
+                    # failure classes and must be distinguishable, not
+                    # folded into one silent, unlabeled downgrade:
+                    #
+                    # * UnregisteredTerminalCode: a closed-registry gap (a
+                    #   producer added a new code without updating
+                    #   terminal_frames.ORCHESTRATOR_ERROR_CODES) -- a
+                    #   structural bug in *this* package, logged and counted
+                    #   under its own signal so it is never silently
+                    #   invisible to an operator (round 2 finding: the
+                    #   original bare `except ValueError` conflated this
+                    #   with everything else below and logged nothing).
+                    # * anything else (e.g. wrap_legacy_answer_as_frame
+                    #   rejecting a validated v1 answer's evidence shape) --
+                    #   a genuine, unrelated construction problem, logged
+                    #   under its own distinct signal rather than being
+                    #   misreported as a registry gap.
+                    #
+                    # Both fall back to the same always-registered
+                    # "internal_error" bucket so the run still gets a frame
+                    # either way -- the fallback behavior is identical, only
+                    # the operational signal differs.
+                    if isinstance(
+                        frame_construction_exc, terminal_frames.UnregisteredTerminalCode
+                    ):
+                        logger.error(
+                            "ask_dev.orchestrator.unregistered_terminal_code",
+                            extra={"run_id": run_id, "terminal_code": terminal_code},
+                        )
+                        ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL.labels(
+                            code=terminal_code
+                        ).inc()
+                    else:
+                        logger.error(
+                            "ask_dev.orchestrator.frame_construction_failed",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(frame_construction_exc).__name__,
+                            },
+                        )
                     frame = terminal_frames.build_error_frame(
                         code="internal_error",
                         run_id=run_id,

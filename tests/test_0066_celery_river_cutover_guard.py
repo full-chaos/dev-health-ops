@@ -75,7 +75,55 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
         if step.get("name") == "Run parallel unit test contract"
     )
     assert unit_step["env"]["PYTEST_ADDOPTS"] == (
-        "--ignore=tests/test_0066_celery_river_cutover_postgres.py"
+        "--ignore=tests/test_0066_celery_river_cutover_postgres.py "
+        "--deselect=tests/test_dispatch_outbox.py::"
+        "test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible "
+        "--deselect=tests/test_sync_planner.py::"
+        "test_postgres_missing_tier_limits_stays_inside_planner_savepoint"
+    )
+    assert unit_step["env"][_POSTGRES_TEST_URI_ENV] == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
+    )
+    assert "./ci/run_tests.sh unit" in unit_step["run"]
+
+    coverage_step = next(
+        step
+        for step in workflow["jobs"]["coverage"]["steps"]
+        if step.get("name") == "Run coverage-gated test contract"
+    )
+    assert coverage_step["env"][_POSTGRES_TEST_URI_ENV] == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
+    )
+    assert coverage_step["env"]["PYTEST_ADDOPTS"] == unit_step["env"]["PYTEST_ADDOPTS"]
+    assert "./ci/run_tests.sh ci" in coverage_step["run"]
+
+    quarantine_step = next(
+        step
+        for step in workflow["jobs"]["test-matrix"]["steps"]
+        if step.get("name")
+        == "Run quarantined PostgreSQL legacy dispatch test (CHAOS-3179)"
+    )
+    assert quarantine_step["continue-on-error"] is True
+    assert quarantine_step["env"][_POSTGRES_TEST_URI_ENV] == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
+    )
+    assert quarantine_step["run"] == (
+        "pytest -q tests/test_dispatch_outbox.py::"
+        "test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible"
+    )
+
+    planner_quarantine_step = next(
+        step
+        for step in workflow["jobs"]["test-matrix"]["steps"]
+        if step.get("name") == "Run quarantined PostgreSQL planner test (CHAOS-3180)"
+    )
+    assert planner_quarantine_step["continue-on-error"] is True
+    assert planner_quarantine_step["env"][_POSTGRES_TEST_URI_ENV] == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
+    )
+    assert planner_quarantine_step["run"] == (
+        "pytest -q tests/test_sync_planner.py::"
+        "test_postgres_missing_tier_limits_stays_inside_planner_savepoint"
     )
 
     coverage_step = next(
@@ -108,6 +156,27 @@ def test_missing_postgres_test_uri_fails_in_ci(
     postgres_tests = importlib.import_module(
         "tests.test_0066_celery_river_cutover_postgres"
     )
+    monkeypatch.delenv(_POSTGRES_TEST_URI_ENV, raising=False)
+    monkeypatch.setenv("CI", "true")
+
+    with pytest.raises(pytest.fail.Exception, match=_POSTGRES_TEST_URI_ENV):
+        postgres_tests._require_postgres_test_uri()
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    (
+        "tests.test_dispatch_outbox",
+        "tests.test_sync_reconciler",
+        "tests.test_sync_planner",
+        "tests.test_service_credentials_cli",
+    ),
+)
+def test_known_postgres_tests_fail_in_ci_without_uri(
+    monkeypatch: pytest.MonkeyPatch,
+    module_name: str,
+) -> None:
+    postgres_tests = importlib.import_module(module_name)
     monkeypatch.delenv(_POSTGRES_TEST_URI_ENV, raising=False)
     monkeypatch.setenv("CI", "true")
 

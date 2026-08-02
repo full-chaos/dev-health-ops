@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
+from dev_health_ops.db import normalize_sync_postgres_uri
 from dev_health_ops.models import (
     BackfillJob,
     Base,
@@ -35,6 +36,21 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_STATUS_PENDING,
     upsert_outbox_wakeup,
 )
+
+_POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
+
+
+def _require_postgres_test_uri() -> None:
+    if os.getenv(_POSTGRES_TEST_URI_ENV):
+        return
+    if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+        pytest.fail(f"{_POSTGRES_TEST_URI_ENV} must be configured for PostgreSQL tests")
+    pytest.skip(f"requires {_POSTGRES_TEST_URI_ENV}")
+
+
+@pytest.fixture(scope="module")
+def require_postgres_test_uri() -> None:
+    _require_postgres_test_uri()
 
 
 @pytest.fixture
@@ -233,16 +249,15 @@ def test_reconciler_parity_logging_failure_does_not_change_claims(
     assert dispatches == [((str(run.id),), "sync")]
 
 
-@pytest.mark.skipif(
-    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
-    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
-)
+@pytest.mark.usefixtures("require_postgres_test_uri")
 def test_parity_capture_recovery_clears_real_postgres_statement_failure():
     from dev_health_ops.workers.sync_reconciler import (
         _recover_sync_dispatch_parity_capture_transaction,
     )
 
-    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(
+        normalize_sync_postgres_uri(os.environ[_POSTGRES_TEST_URI_ENV])
+    )
     try:
         with Session(engine) as session:
             with pytest.raises(DBAPIError):

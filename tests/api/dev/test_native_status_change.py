@@ -2395,10 +2395,12 @@ async def test_partial_unlinked_activity_alongside_linked_facts_stays_clean(
     """
 
     repo_attributed, repo_unlinked_only = "repo-attributed", "repo-unlinked-only"
+    probe_calls = 0
 
     async def fake_query(
         _client: object, sql: str, _params: dict[str, Any]
     ) -> list[dict[str, Any]]:
+        nonlocal probe_calls
         if "FROM team_repo_ownership" in sql:
             return [
                 {"repository_id": repo_attributed},
@@ -2419,7 +2421,9 @@ async def test_partial_unlinked_activity_alongside_linked_facts_stays_clean(
                     "last_synced": NOW,
                 }
             ]
-        return []  # deployments empty; probe never invoked (guard is False)
+        if "SELECT 1 AS found" in sql:
+            probe_calls += 1
+        return []  # deployments empty; probe must never be invoked (guard is False)
 
     monkeypatch.setattr(
         "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
@@ -2430,6 +2434,18 @@ async def test_partial_unlinked_activity_alongside_linked_facts_stays_clean(
         "org-a", "permission-v1", StatusSnapshotRequest(_team_scope_for("team-mixed"))
     )
 
+    # Codex round 5 (MEDIUM): a fake probe that unconditionally returns []
+    # cannot distinguish "the probe was never invoked" (the policy this
+    # test claims to pin) from "the probe was invoked and happened to find
+    # nothing" -- only an invocation count can. This is the actual pin;
+    # the warnings assertion below is necessary but not sufficient on its
+    # own.
+    assert probe_calls == 0, (
+        "the coverage-gap probe must not be invoked at all when the team "
+        "already has attributed facts -- the all-empty-only guard must "
+        "short-circuit before the probe query, not merely produce no "
+        "warning from it"
+    )
     assert not any(
         "attribution coverage" in warning or "could not be canonically" in warning
         for warning in result.warnings

@@ -31,6 +31,17 @@ from .base import (
     SourceRequirementState,
 )
 from .compat import project_answer_v2_to_v1
+from .deficiency import (
+    DEFICIENCY_CATEGORIES,
+    DeficiencyCategory,
+    DeficiencyCategoryStatus,
+    DeficiencyEvidenceClassification,
+    DeficiencyFinding,
+    DeficiencyRemediation,
+    DeficiencySeverity,
+    OperationalDeficiencyInventory,
+    finding_sort_key,
+)
 from .embedded import (
     DevCIFactV2,
     DevCoverageV2,
@@ -126,17 +137,38 @@ from .validators import (
 #:
 #: The CHAOS-3302 health-rule governance contracts
 #: (``HealthRuleDefinition``/``DimensionObservation``/``HealthRuleFinding``/
-#: ``TeamQualificationResult``/``CalibrationRecord``) are deliberately NOT
-#: registered here. This registry backs the Ask Dev answer-frame contract
-#: family specifically: ``export_contracts_v2``'s checked-in schema/fixture
-#: export, and the no-answer-projection totality check
-#: (``no_answer_policy.assert_no_answer_policy_is_total`` /
+#: ``TeamQualificationResult``/``CalibrationRecord``) and the CHAOS-3305
+#: operational-deficiency-inventory contracts
+#: (``DeficiencyFinding``/``DeficiencyCategoryStatus``/
+#: ``OperationalDeficiencyInventory``/``DeficiencyRemediation``) are
+#: deliberately NOT registered here. This registry backs the Ask Dev
+#: answer-frame contract family specifically: ``export_contracts_v2``'s
+#: checked-in schema/fixture export, and the no-answer-projection totality
+#: check (``no_answer_policy.assert_no_answer_policy_is_total`` /
 #: ``test_round4_every_v2_identifier_is_classified``) that walks every
 #: member of this dict looking for the answer frame's own disclosure
-#: surface. Health rules are a separate, code-owned governance contract
-#: family with their own manifest (``health_rule_manifest.v1``, see
-#: ``health_rule_manifest.py``) and are never embedded in, or projected
-#: through, a no-answer outcome -- they do not belong in this dict.
+#: surface. Health rules and deficiency findings are separate, code-owned
+#: governance contract families (health rules have their own manifest,
+#: ``health_rule_manifest.v1`` — see ``health_rule_manifest.py``) and are
+#: never embedded in, or projected through, a no-answer outcome directly
+#: -- the frame only ever carries them as opaque ``OpaqueID`` pointers
+#: (``finding_refs``/``deficiency_refs``, ``frame.py``), so they do not
+#: belong in this dict.
+#:
+#: They ARE imported directly above (mirroring the ``health_rules`` import
+#: a few lines up), which is the load-bearing half of "registered": the
+#: reflection sweeps in ``test_contracts_v2.py`` (``_all_v2_contract_models``,
+#: which walks ``ContractModelV2.__subclasses__()``) only discover a model
+#: once *something* has imported its module into the process. Importing
+#: these types here — at ``contracts_v2`` package-init time, which every
+#: consumer (including every test file that does ``import
+#: dev_health_ops.api.dev.contracts_v2 as v2``) already triggers — makes
+#: that discovery unconditional rather than an accident of test collection
+#: order (Codex finding, 2026-08-02: without this import,
+#: ``test_round4_every_v2_identifier_is_classified`` silently skipped every
+#: deficiency contract field when run in isolation, passing only because
+#: some *other* test file happened to import ``contracts_v2.deficiency``
+#: first during full-suite collection).
 CONTRACT_MODELS_V2: dict[str, type[ContractModelV2]] = {
     "dev_message_request.v2": DevMessageRequestV2,
     "dev_question_intent.v1": DevQuestionIntent,
@@ -157,12 +189,19 @@ __all__ = [
     "ANSWERED_OUTCOMES",
     "CANONICAL_NO_ANSWER_COPY",
     "CONTRACT_MODELS_V2",
+    "DEFICIENCY_CATEGORIES",
     "PLAN_REGISTRY",
     "SOURCE_CLASS_VOCABULARY",
     "CalibrationRecord",
     "CalibrationState",
     "Cardinality",
     "ContractModelV2",
+    "DeficiencyCategory",
+    "DeficiencyCategoryStatus",
+    "DeficiencyEvidenceClassification",
+    "DeficiencyFinding",
+    "DeficiencyRemediation",
+    "DeficiencySeverity",
     "DimensionObservation",
     "DimensionState",
     "DevAnswerFact",
@@ -215,6 +254,7 @@ __all__ = [
     "NO_ANSWER_FRAME_FIELD_POLICY",
     "NO_ANSWER_OUTCOMES",
     "NoAnswerFieldPolicy",
+    "OperationalDeficiencyInventory",
     "PlanRegistryID",
     "ProgressStateV2",
     "PublicOutcome",
@@ -228,6 +268,7 @@ __all__ = [
     "StreamEventTypeV2",
     "TeamQualificationBasis",
     "TeamQualificationResult",
+    "finding_sort_key",
     "project_answer_v2_to_v1",
     "scan_public_text",
     "validate_completion_denominator",

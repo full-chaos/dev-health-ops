@@ -204,15 +204,17 @@ if _missing_tools:  # pragma: no cover - import-time totality guard
 #: cross-cutting tools rather than raising on an unmapped token.
 _LEGACY_COVERAGE_FALLBACK = SourceClass.SOURCE_HEALTH
 
-#: A deliberately unregistered plan id (grammar-valid ``PlatformVersionToken``,
-#: but NOT a member of ``contracts_v2.plan.PLAN_REGISTRY``): no real
-#: investigation plan governed the legacy model-tool-choice loop, and
-#: ``DevFrameVersions.plan_id`` has no validator enforcing registry
-#: membership on a content-bearing frame (only preflight's own no-answer
-#: projection totality checks do). Asserted by
-#: ``test_terminal_frames.py::test_legacy_plan_id_is_deliberately_unregistered``
-#: so this choice stays visible rather than silently relying on the absence
-#: of a check.
+#: A registered *compatibility* plan id (CHAOS-3297 Codex review MEDIUM #3),
+#: not a governed ``DevInvestigationPlan``: no real investigation plan runs
+#: the legacy model-tool-choice loop, and ``DevFrameVersions.plan_id`` is
+#: enforced against ``contracts_v2.plan.PLAN_REGISTRY`` membership on *every*
+#: content-bearing frame (``validators.validate_plan_registry_membership``),
+#: not only the no-answer path's own totality checks. Registering this id is
+#: the truthful choice: it says "the legacy loop produced this, not a
+#: plan-executor investigation" rather than borrowing a real plan's identity
+#: to pass an unrelated check. See ``contracts_v2.plan.PLAN_REGISTRY``'s own
+#: comment on this entry, and
+#: ``test_terminal_frames.py::test_legacy_plan_id_is_a_registered_compatibility_entry``.
 LEGACY_ANSWER_PLAN_ID: PlatformVersionToken = "legacy.tool_choice.v1"
 _LEGACY_PLAN_VERSION: PlatformVersionToken = "legacy_tool_choice.v1"
 _LEGACY_INTERPRETER_VERSION: PlatformVersionToken = "legacy_tool_choice_interpreter.v1"

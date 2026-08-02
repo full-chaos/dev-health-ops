@@ -265,6 +265,7 @@ from .no_answer_policy import (
     validate_no_answer_content_leaks,
     validate_no_answer_projection,
 )
+from .plan import PLAN_REGISTRY
 
 if TYPE_CHECKING:
     from . import frame as _frame
@@ -296,6 +297,7 @@ __all__ = [
     "validate_no_answer_projection",
     "validate_no_internal_leakage",
     "validate_outcome_consistency",
+    "validate_plan_registry_membership",
     "validate_relationship_refs_within_frame",
     "validate_structural_closure",
     "validate_versions_presence",
@@ -445,6 +447,33 @@ def validate_versions_presence(frame: _frame.DevAnswerFrame) -> None:
         raise ValueError(
             f"public outcome {frame.public_outcome.value!r} requires a versions "
             "provenance block; only a no-answer outcome may omit it"
+        )
+
+
+def validate_plan_registry_membership(frame: _frame.DevAnswerFrame) -> None:
+    """Every ``versions`` block names a real, registered plan (CHAOS-3297 Codex
+    review MEDIUM #3).
+
+    ``DevFrameVersions.plan_id``'s type (``PlanRegistryID`` =
+    ``PlatformVersionToken``) only enforces the dotted, versioned *grammar* --
+    membership of ``contracts_v2.plan.PLAN_REGISTRY`` is the stronger, closed
+    *semantic* check (see ``plan.py``'s own docstring on the distinction), and
+    before this guard it was applied only inside the no-answer projection's
+    own totality checks, never here. A frame reaches this check whenever
+    ``versions`` is present at all -- every outcome that is not a no-answer
+    outcome (``validate_versions_presence`` already requires the block there),
+    including ``needs_clarification`` -- so a caller cannot attach provenance
+    naming a plan that never ran, whether by typo or by reusing an
+    unregistered compatibility marker.
+    """
+
+    versions = frame.versions
+    if versions is None:
+        return
+    if versions.plan_id not in PLAN_REGISTRY:
+        raise ValueError(
+            f"plan id {versions.plan_id!r} is not a member of "
+            "contracts_v2.plan.PLAN_REGISTRY"
         )
 
 

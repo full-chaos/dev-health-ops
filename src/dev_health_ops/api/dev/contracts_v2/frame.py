@@ -210,6 +210,7 @@ class DevAnswerFrame(ContractModelV2):
         _validators.validate_no_internal_leakage(self)
         _validators.validate_outcome_consistency(self)
         _validators.validate_versions_presence(self)
+        _validators.validate_plan_registry_membership(self)
         _validators.validate_no_answer_projection(self)
         _validators.validate_completion_denominator(self)
         _validators.validate_relationship_refs_within_frame(self)

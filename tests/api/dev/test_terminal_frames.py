@@ -31,12 +31,18 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from dev_health_ops.api.dev import orchestrator as _orchestrator_module
 from dev_health_ops.api.dev import terminal_frames as tf
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
+from dev_health_ops.api.dev.contract_fixtures_v2 import (
+    positive_fixtures as positive_fixtures_v2,
+)
 from dev_health_ops.api.dev.contracts import DevAnswer, DevTimeRange, ToolID
+from dev_health_ops.api.dev.contracts_v2 import validators as validators_module
 from dev_health_ops.api.dev.contracts_v2.base import PublicOutcome, SourceClass
+from dev_health_ops.api.dev.contracts_v2.frame import DevAnswerFrame as _FrameV2
 from dev_health_ops.api.dev.contracts_v2.plan import PLAN_REGISTRY
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.router import _replayed_result
@@ -177,12 +183,75 @@ def test_budget_answer_tool_results_sentinel_falls_to_source_health() -> None:
 
 
 # ---------------------------------------------------------------------------
-# F-PLANID -- deliberately unregistered plan id.
+# F-PLANID -- a registered compatibility plan id, enforced by
+# validate_plan_registry_membership on every content-bearing frame
+# (CHAOS-3297 Codex review MEDIUM #3).
 # ---------------------------------------------------------------------------
 
 
-def test_legacy_plan_id_is_deliberately_unregistered() -> None:
-    assert tf.LEGACY_ANSWER_PLAN_ID not in PLAN_REGISTRY
+def test_legacy_plan_id_is_a_registered_compatibility_entry() -> None:
+    assert tf.LEGACY_ANSWER_PLAN_ID in PLAN_REGISTRY
+
+
+def test_content_bearing_frame_rejects_an_unregistered_plan_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validator-level coverage for the legacy-answer shape
+    (``wrap_legacy_answer_as_frame``'s ``answered``/``answered_with_gaps``
+    content-bearing path).
+
+    ``versions.plan_id``'s type only enforces the dotted-token *grammar*
+    (``PlatformVersionToken``) -- a grammar-valid but unregistered token
+    (unlike ``"private/Nightfall"``, which the grammar itself already
+    rejects) would have passed every validator that existed before this
+    guard. Rule 2: the mutation pair below proves that -- disabling only
+    ``validate_plan_registry_membership`` (the old validator set) lets the
+    identical bad payload through; the guard is what changed.
+    """
+
+    payload = deepcopy(positive_fixtures_v2()["dev_answer_frame.v1"])
+    assert payload["public_outcome"] == "answered"
+    payload["versions"]["plan_id"] = "unregistered.plan.v1"
+
+    with pytest.raises(ValidationError, match="PLAN_REGISTRY"):
+        _FrameV2.model_validate(payload)
+
+    monkeypatch.setattr(
+        validators_module,
+        "validate_plan_registry_membership",
+        lambda *_a, **_k: None,
+    )
+    _FrameV2.model_validate(payload)  # old validator set: passes the bad frame
+
+
+def test_scope_ambiguous_frame_rejects_an_unregistered_plan_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validator-level coverage for ``build_error_frame``'s ``scope_ambiguous``
+    path.
+
+    ``needs_clarification`` is not a no-answer outcome (see
+    ``NO_ANSWER_OUTCOMES``), so this frame carries a ``versions`` block too
+    -- and, before this guard, its ``plan_id`` was equally unchecked against
+    ``PLAN_REGISTRY``. Same mutation pair as the legacy-answer case above,
+    against the ``scope_ambiguous`` frame shape specifically.
+    """
+
+    payload = tf.build_error_frame(
+        code="scope_ambiguous", run_id="run_01", generated_at=datetime.now(UTC)
+    ).model_dump(mode="json")
+    assert payload["versions"] is not None
+    payload["versions"]["plan_id"] = "unregistered.plan.v1"
+
+    with pytest.raises(ValidationError, match="PLAN_REGISTRY"):
+        _FrameV2.model_validate(payload)
+
+    monkeypatch.setattr(
+        validators_module,
+        "validate_plan_registry_membership",
+        lambda *_a, **_k: None,
+    )
+    _FrameV2.model_validate(payload)  # old validator set: passes the bad frame
 
 
 # ---------------------------------------------------------------------------

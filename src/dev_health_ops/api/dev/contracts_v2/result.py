@@ -27,7 +27,7 @@ from .base import (
     SourceRequirementState,
     Version,
 )
-from .deficiency import DeficiencyFinding, DeficiencySeverity
+from .deficiency import DeficiencyFinding, finding_sort_key
 from .embedded import (
     DevCIFactV2,
     DevDeploymentFactV2,
@@ -165,6 +165,20 @@ class DevSourceContent(ContractModelV2):
         identical, larger underlying finding set could keep a different
         50 -- this closes that as a construction-time error rather than a
         wiring convention a future call site could silently violate.
+
+        ``deficiency_findings`` reuses ``deficiency.finding_sort_key`` BY
+        REFERENCE rather than a second, hand-written severity table:
+        ``OperationalDeficiencyInventory.findings`` is already validated
+        against that exact key (severity, category, finding_id) at its own
+        contract layer, so importing it is the only way this check and
+        that one can be PROVEN to agree rather than merely described as
+        agreeing (mirrors ``relationship_matrix.py``'s own "imported by
+        reference, not duplicated by value" rationale). ``health_findings``
+        has no equivalent existing convention to import --
+        ``health_profile_synthesis._ordered`` sorts by
+        ``(dimension, rule_id)``, not severity -- so this validator defines
+        the canonical health order itself, matching
+        ``portfolio_status_service._DIMENSION_STATE_SEVERITY``.
         """
 
         health_keys = [
@@ -176,13 +190,12 @@ class DevSourceContent(ContractModelV2):
                 "health_findings must be ordered worst-severity-first, then finding_id"
             )
         deficiency_keys = [
-            (_DEFICIENCY_SEVERITY_RANK[finding.severity], finding.finding_id)
-            for finding in self.deficiency_findings
+            finding_sort_key(finding) for finding in self.deficiency_findings
         ]
         if deficiency_keys != sorted(deficiency_keys):
             raise ValueError(
-                "deficiency_findings must be ordered worst-severity-first, "
-                "then finding_id"
+                "deficiency_findings must be ordered per deficiency.finding_sort_key "
+                "(severity, category, finding_id)"
             )
         return self
 
@@ -204,24 +217,6 @@ if _missing_health_states:
     raise RuntimeError(
         f"health_findings severity rank is missing DimensionState member(s): "
         f"{sorted(state.value for state in _missing_health_states)}"
-    )
-
-#: Worst-first severity rank for ``deficiency_findings`` ordering.
-#: ``DeficiencySeverity`` is scoped to the three genuinely triggerable
-#: states (see that enum's own docstring) -- no healthy/unknown/
-#: not_applicable member exists to omit here.
-_DEFICIENCY_SEVERITY_RANK: dict[DeficiencySeverity, int] = {
-    DeficiencySeverity.CRITICAL: 0,
-    DeficiencySeverity.AT_RISK: 1,
-    DeficiencySeverity.WATCH: 2,
-}
-_missing_deficiency_severities = set(DeficiencySeverity) - set(
-    _DEFICIENCY_SEVERITY_RANK
-)
-if _missing_deficiency_severities:
-    raise RuntimeError(
-        f"deficiency_findings severity rank is missing DeficiencySeverity "
-        f"member(s): {sorted(sev.value for sev in _missing_deficiency_severities)}"
     )
 
 

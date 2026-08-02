@@ -136,9 +136,15 @@ class OpenAICompatibleAgentProvider:
         client: Any | None = None,
         disclosure_key: str = "openai_compatible",
         context_window_tokens: int | None = None,
+        organization: str = "",
+        project: str = "",
+        custom_headers: tuple[tuple[str, str], ...] = (),
     ) -> None:
         self.model = model
         self.base_url = base_url or ""
+        self.organization = organization
+        self.project = project
+        self.custom_headers = custom_headers
         self._http_client: Any | None = None
         if client is None:
             from openai import AsyncOpenAI
@@ -151,11 +157,45 @@ class OpenAICompatibleAgentProvider:
             pin_content_carrying_client_loggers()
 
             self._http_client = make_hardened_async_httpx_client()
+            # CHAOS-3285 round 6 (Codex HIGH): AsyncOpenAI reads
+            # OPENAI_ORG_ID/OPENAI_PROJECT_ID/OPENAI_CUSTOM_HEADERS from the
+            # process environment AMBIENTLY whenever organization/project
+            # are left as Python None or default_headers is left unset --
+            # a change to any of those env vars silently changes the wire
+            # identity headers without ever touching this constructor's
+            # inputs, and without changing certification.
+            #
+            # Empirically verified (openai==2.36.0 _client.py): the SDK's
+            # env fallback is gated on `if organization is None:` /
+            # `if project is None:` -- passing ANY non-None value (including
+            # "") suppresses it. But passing "" also SENDS an empty
+            # `OpenAI-Organization: ` header rather than omitting it, which
+            # is not the same as "not configured". So: pass explicit
+            # (possibly empty) strings to suppress the env read during
+            # __init__, then reset back to None afterward when genuinely
+            # not configured, so the header is correctly OMITTED
+            # (`default_headers` treats `None` as "send Omit()", verified
+            # against the same source) rather than sent empty.
+            #
+            # OPENAI_CUSTOM_HEADERS has no such `is None` gate at all -- the
+            # SDK unconditionally merges it into `_custom_headers` whenever
+            # the env var is set, regardless of what `default_headers` this
+            # constructor passes. The only way to suppress it is to
+            # overwrite `_custom_headers` post-construction with exactly
+            # our own explicitly-resolved set (also empirically verified).
             client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url or None,
+                organization=organization,
+                project=project,
+                default_headers=dict(custom_headers) if custom_headers else None,
                 http_client=self._http_client,
             )
+            if not organization:
+                client.organization = None
+            if not project:
+                client.project = None
+            client._custom_headers = dict(custom_headers)
         self._client = client
         self._capabilities = AgentProviderCapabilities(
             structured_output=StructuredOutputMode.JSON_SCHEMA,
@@ -203,46 +243,23 @@ class OpenAICompatibleAgentProvider:
         wire_tool_ids = build_wire_tool_name_map(item.tool_id for item in tools)
         started = time.monotonic()
         create_completion = cast(Any, self._client.chat.completions.create)
-        allow_final_answer = not tools or any(
-            message.role is AgentMessageRole.TOOL for message in messages
+        # CHAOS-3285 round 5 (Codex HIGH): the ENTIRE request -- not just the
+        # capability-gated controls round 4 extracted -- is assembled by
+        # build_completion_request, the single producer the readiness
+        # fingerprint's wire-request digest also consumes directly (see
+        # production_runtime._wire_request_digest). Round 4's narrower
+        # extraction still left max_completion_tokens, the response_format
+        # wrapper's literal name/strict values, and the full generated
+        # schema body assembled independently right here, invisible to the
+        # fingerprint; nothing about the request is assembled anywhere else
+        # now, so nothing here can drift from what gets fingerprinted again.
+        completion_kwargs = build_completion_request(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            response_schema=response_schema,
+            max_output_tokens=max_output_tokens,
         )
-        budget = model_family_budget(self.model)
-        completion_kwargs: dict[str, Any] = {
-            "model": self.model,
-            "messages": [self._message_payload(item) for item in messages],
-            "tools": [self._tool_payload(item) for item in tools] or None,
-            "tool_choice": (
-                ("auto" if allow_final_answer else "required") if tools else None
-            ),
-            "max_completion_tokens": budget.request_max_completion_tokens(
-                max_output_tokens
-            ),
-        }
-        if tools and supports_parallel_tool_calls(self.model):
-            # Ask Dev's runtime is a sequential one-decision-per-round state
-            # machine (TRD 11-12, 20.4). Explicitly disabling native parallel
-            # tool calls keeps a standards-compliant OpenAI-compatible model
-            # from returning multiple tool calls in one response, which the
-            # normalizer must otherwise reject (CHAOS-3254).
-            completion_kwargs["parallel_tool_calls"] = False
-        if supports_temperature(self.model):
-            completion_kwargs["temperature"] = 0
-        reasoning_effort = chat_completion_reasoning_effort(self.model)
-        if reasoning_effort is not None:
-            completion_kwargs["reasoning_effort"] = reasoning_effort
-        if allow_final_answer:
-            completion_kwargs["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "ask_dev_decision",
-                    "strict": True,
-                    "schema": self._decision_response_schema(
-                        self._answer_draft_schema(response_schema),
-                        tools,
-                        allow_final_answer=True,
-                    ),
-                },
-            }
         provider_task = asyncio.create_task(create_completion(**completion_kwargs))
         cancel_task = asyncio.create_task(signal.wait()) if signal is not None else None
         try:
@@ -726,3 +743,84 @@ class OpenAICompatibleAgentProvider:
             await close()
         if self._http_client is not None:
             await self._http_client.aclose()
+
+
+def build_completion_request(
+    *,
+    model: str,
+    messages: Sequence[AgentMessage],
+    tools: Sequence[AgentToolDefinition],
+    response_schema: Mapping[str, Any],
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    """The COMPLETE request ``OpenAICompatibleAgentProvider.decide()`` sends
+    to the wire for one call -- every keyword argument passed to
+    ``client.chat.completions.create(**...)``. ``decide()`` calls this
+    directly and dispatches its return value wholesale; nothing about the
+    request is assembled anywhere else.
+
+    This is the single producer the readiness fingerprint's wire-request
+    digest also consumes (``production_runtime._wire_request_digest``), so
+    every field assembled here -- the capability-gated wire controls
+    (tool_choice, parallel_tool_calls, temperature, reasoning_effort), the
+    model-resolved ``max_completion_tokens`` budget, the full
+    ``response_format`` (both the wrapper's name/strict literals AND the
+    generated schema body), the serialized tool definitions, and the
+    message scaffold shape -- can never independently drift between what
+    actually gets sent and what gets fingerprinted.
+
+    CHAOS-3285 round 5 (Codex HIGH): round 4's narrower
+    ``wire_policy_kwargs`` covered only the capability-gated controls, plus
+    a HAND-DUPLICATED copy of the response_format wrapper's name/strict
+    literals -- ``decide()`` itself still independently assembled
+    ``max_completion_tokens`` (via ``model_family_budget``), the full
+    generated schema body, and the serialized tool payloads, none of which
+    the fingerprint ever hashed. Changing any of those (e.g. the wrapper's
+    literal ``"name"``/``"strict"`` values) left the fingerprint unchanged.
+    This function replaces that narrower extraction entirely.
+    """
+
+    allow_final_answer = not tools or any(
+        message.role is AgentMessageRole.TOOL for message in messages
+    )
+    budget = model_family_budget(model)
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            OpenAICompatibleAgentProvider._message_payload(item) for item in messages
+        ],
+        "tools": [OpenAICompatibleAgentProvider._tool_payload(item) for item in tools]
+        or None,
+        "tool_choice": (
+            ("auto" if allow_final_answer else "required") if tools else None
+        ),
+        "max_completion_tokens": budget.request_max_completion_tokens(
+            max_output_tokens
+        ),
+    }
+    if tools and supports_parallel_tool_calls(model):
+        # Ask Dev's runtime is a sequential one-decision-per-round state
+        # machine (TRD 11-12, 20.4). Explicitly disabling native parallel
+        # tool calls keeps a standards-compliant OpenAI-compatible model
+        # from returning multiple tool calls in one response, which the
+        # normalizer must otherwise reject (CHAOS-3254).
+        request["parallel_tool_calls"] = False
+    if supports_temperature(model):
+        request["temperature"] = 0
+    reasoning_effort = chat_completion_reasoning_effort(model)
+    if reasoning_effort is not None:
+        request["reasoning_effort"] = reasoning_effort
+    if allow_final_answer:
+        request["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "ask_dev_decision",
+                "strict": True,
+                "schema": OpenAICompatibleAgentProvider._decision_response_schema(
+                    OpenAICompatibleAgentProvider._answer_draft_schema(response_schema),
+                    tools,
+                    allow_final_answer=True,
+                ),
+            },
+        }
+    return request

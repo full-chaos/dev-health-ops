@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import json
 import os
 import uuid
 from collections.abc import Mapping, Sequence
@@ -16,11 +18,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.api.services.configuration.generic import SettingsService
 from dev_health_ops.licensing import evaluate_org_feature_async
 from dev_health_ops.licensing.registry import ASK_DEV_WAVE_3_1_FEATURE
-from dev_health_ops.llm.agent.contracts import AgentLLMProvider
+from dev_health_ops.llm.agent.budget_policy import BUDGET_POLICY_VERSION
+from dev_health_ops.llm.agent.contracts import (
+    AgentLLMProvider,
+    AgentMessage,
+    AgentMessageRole,
+    AgentToolRequest,
+)
 from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErrorCode
 from dev_health_ops.llm.agent.openai_compatible import (
     READINESS_VERSION,
     OpenAICompatibleAgentProvider,
+    build_completion_request,
 )
 from dev_health_ops.llm.agent.policy import (
     CERTIFIED_PLATFORM_AGENT_PROVIDERS,
@@ -30,10 +39,17 @@ from dev_health_ops.llm.agent.policy import (
     AgentProviderSource,
     resolve_agent_provider_selection,
 )
+from dev_health_ops.llm.agent.probes.legacy_agent import _probe_registry, _probe_tools
 from dev_health_ops.llm.agent.readiness import (
     PLATFORM_READINESS_SETTING_KEY,
     PLATFORM_SETTINGS_ORG_ID,
     SettingsAgentReadinessStore,
+)
+from dev_health_ops.llm.agent.roles import (
+    PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    AgentRole,
+    RoleCertificationProfile,
+    SettingsRoleCertificationStore,
 )
 from dev_health_ops.llm.agent.scripted_openai_service import SCRIPTED_OPENAI_MODEL
 from dev_health_ops.llm.budget import attach_agent_budget_guard
@@ -48,6 +64,7 @@ from dev_health_ops.models.settings import SettingCategory
 
 from .contracts import (
     DevActualCompletion,
+    DevAnswer,
     DevCIFact,
     DevContractVersions,
     DevDataHealth,
@@ -90,8 +107,9 @@ from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
 from .native_evidence import native_evidence_adapters
 from .native_status_change import ClickHouseStatusChangeSource
+from .orchestrator import DevRunLimits
 from .org_policy import load_ask_dev_org_policy
-from .prompts import PROMPT_VERSION
+from .prompts import LEGACY_PROMPT_VERSION, PROMPT_VERSION
 from .question_interpreter import QuestionInterpreter
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .scope_catalog import ClickHouseAuthorizedEntityCatalog
@@ -251,17 +269,35 @@ def _platform_readiness_store(session: AsyncSession) -> SettingsAgentReadinessSt
     )
 
 
+def _platform_role_store(session: AsyncSession) -> SettingsRoleCertificationStore:
+    """Per-role certification store for the platform-owned provider -- same
+    ``org_id=""`` sentinel scoping and dedicated-key rationale as
+    ``_platform_readiness_store`` (CHAOS-3265)."""
+
+    return SettingsRoleCertificationStore(
+        SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+        key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    )
+
+
 async def resolve_production_provider(
     session: AsyncSession, *, org_id: str
 ) -> ProductionProviderResolution:
     settings = SettingsService(session, org_id)
     byo_readiness = await SettingsAgentReadinessStore(settings).load()
     platform_readiness = await _platform_readiness_store(session).load()
+    # CHAOS-3285: live selection additionally requires a CURRENT, COMPATIBLE
+    # legacy_agent role certification -- see _candidate()'s docstring for why
+    # the old binary AgentReadinessRecord alone is not sufficient here.
+    byo_role_profile = await SettingsRoleCertificationStore(settings).load()
+    platform_role_profile = await _platform_role_store(session).load()
 
     byo, platform, policy = await _provider_candidates(
         settings,
         byo_readiness=byo_readiness,
         platform_readiness=platform_readiness,
+        byo_role_profile=byo_role_profile,
+        platform_role_profile=platform_role_profile,
     )
     return _resolve_provider_selection(
         byo=byo,
@@ -377,6 +413,7 @@ async def _byo_candidate(
     *,
     readiness: Any,
     certification: bool = False,
+    role_profile: RoleCertificationProfile | None = None,
 ) -> AgentProviderCandidate | None:
     byo_provider_name = (await settings.get("provider", _LLM_CATEGORY) or "").strip()
     byo_model = (await settings.get("model", _LLM_CATEGORY) or "").strip()
@@ -393,6 +430,7 @@ async def _byo_candidate(
         source=AgentProviderSource.BYO,
         readiness=readiness,
         certification=certification,
+        role_profile=role_profile,
     )
 
 
@@ -400,6 +438,7 @@ def _platform_candidate(
     *,
     readiness: Any,
     certification: bool = False,
+    role_profile: RoleCertificationProfile | None = None,
 ) -> tuple[AgentProviderCandidate | None, str]:
     """Build the platform candidate purely from operator environment state.
 
@@ -440,6 +479,7 @@ def _platform_candidate(
         readiness=readiness,
         certification=certification,
         acceptance=acceptance is not None,
+        role_profile=role_profile,
     )
     return platform, platform_provider_name
 
@@ -450,16 +490,23 @@ async def _provider_candidates(
     byo_readiness: Any,
     platform_readiness: Any,
     certification: bool = False,
+    byo_role_profile: RoleCertificationProfile | None = None,
+    platform_role_profile: RoleCertificationProfile | None = None,
 ) -> tuple[
     AgentProviderCandidate | None,
     AgentProviderCandidate | None,
     AgentProviderPolicy,
 ]:
     byo = await _byo_candidate(
-        settings, readiness=byo_readiness, certification=certification
+        settings,
+        readiness=byo_readiness,
+        certification=certification,
+        role_profile=byo_role_profile,
     )
     platform, platform_provider_name = _platform_candidate(
-        readiness=platform_readiness, certification=certification
+        readiness=platform_readiness,
+        certification=certification,
+        role_profile=platform_role_profile,
     )
     org_policy = await load_ask_dev_org_policy(settings)
     policy = AgentProviderPolicy(
@@ -529,6 +576,7 @@ def _candidate(
     readiness: Any,
     certification: bool = False,
     acceptance: bool = False,
+    role_profile: RoleCertificationProfile | None = None,
 ) -> AgentProviderCandidate | None:
     if (
         not provider_name
@@ -551,6 +599,28 @@ def _candidate(
         readiness_current=certification,
     )
     provider_fingerprint = _readiness_fingerprint(candidate)
+    # CHAOS-3285: live selection (certification=False) additionally requires
+    # a CURRENT, COMPATIBLE legacy_agent role certification -- not just the
+    # old binary AgentReadinessRecord. Without this, an operator could
+    # re-certify through a route that only ever runs the old 512-token echo
+    # probe (or the new role probe could simply never have run), the binary
+    # store would read "current", and this candidate would become
+    # selectable for live traffic having never demonstrated it can handle
+    # the real production request shape at all -- the exact gap the role
+    # model exists to close (Codex CHAOS-3285 review). `role_profile is
+    # None` fails closed (never current), the same direction as every other
+    # missing-input default in this function; only ``certification=True``
+    # (the "give me a candidate to certify" preflight paths) bypasses this,
+    # exactly as it already bypasses the binary check below.
+    legacy_agent_record = (
+        role_profile.for_role(AgentRole.LEGACY_AGENT)
+        if role_profile is not None
+        else None
+    )
+    legacy_agent_current = bool(
+        legacy_agent_record is not None
+        and legacy_agent_record.is_current(certification_key=provider_fingerprint)
+    )
     current = bool(
         certification
         or (
@@ -559,6 +629,7 @@ def _candidate(
                 fingerprint=provider_fingerprint,
                 readiness_version=READINESS_VERSION,
             )
+            and legacy_agent_current
         )
     )
     return candidate_type(
@@ -570,8 +641,226 @@ def _candidate(
     )
 
 
-def _readiness_fingerprint(candidate: AgentProviderCandidate) -> str:
-    """Fingerprint every capability input that invalidates certification."""
+@functools.lru_cache(maxsize=1)
+def _canonical_contract_digest() -> str:
+    """Content digest of every capability input a role certification must
+    invalidate on, beyond the coarse version-string constants already
+    folded into ``_readiness_fingerprint``.
+
+    CHAOS-3285 round 2 (Codex HIGH): the fingerprint previously hashed only
+    ``PROMPT_VERSION`` -- the committed-subject prompt shape
+    (``subject_committed=True``). ``PromptComposer`` actually selects
+    between that and ``LEGACY_PROMPT_VERSION`` (the uncommitted-subject /
+    flag-off shape) per run, and the ``legacy_agent`` probe forces
+    ``subject_committed=True`` unconditionally -- so the uncommitted-subject
+    prompt shape was never probed, and a text-only change to ONLY that
+    shape's section (with no version bump, since it was never folded at
+    all) never invalidated anything either.
+
+    Rather than track more bare version-string constants (each one an
+    opportunity to forget folding the next thing that can change the wire
+    shape), this folds actual CONTENT: both prompt version constants, the
+    real ``DevAnswer`` response grammar the adapter sends on the wire, the
+    real tool registry manifest (every tool's real schema, not just the
+    registry's own version string), and the real ``DevRunLimits`` values (a
+    limit changing without anyone bumping a version string must still
+    invalidate). Computed from the real producers -- ``AskDevToolRegistry``,
+    ``DevAnswer.model_json_schema()``, ``DevRunLimits`` -- never hand-
+    maintained, and never touches a database or executes a tool.
+    Memoized: every input here is fixed at import time by the running code,
+    never per-request data, so recomputing per call would be pure overhead
+    on the request hot path.
+    """
+
+    async def _unused_executor(_context: object, _request: object) -> Any:
+        raise AssertionError(  # pragma: no cover - never invoked
+            "contract digest must never execute a tool"
+        )
+
+    registry = AskDevToolRegistry({tool_id: _unused_executor for tool_id in ToolID})
+    manifest = registry.manifest(allowed_tool_ids=None)
+    limits = DevRunLimits()
+    payload = {
+        "prompt_version": PROMPT_VERSION,
+        "legacy_prompt_version": LEGACY_PROMPT_VERSION,
+        "response_schema": DevAnswer.model_json_schema(mode="validation"),
+        "tool_manifest": manifest,
+        "limits": {
+            "max_output_tokens_per_call": limits.max_output_tokens_per_call,
+            "max_total_input_tokens": limits.max_total_input_tokens,
+            "max_total_output_tokens": limits.max_total_output_tokens,
+            "model_rounds": limits.model_rounds,
+            "tool_calls": limits.tool_calls,
+        },
+    }
+    canonical = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:24]
+
+
+def _wire_request_probe_messages(*, round_1: bool) -> tuple[AgentMessage, ...]:
+    """Fixed, deterministic placeholder messages matching one probe round's
+    STRUCTURAL shape (which roles appear, whether a ``tool_calls``/
+    ``tool_call_id`` key is present in the built request) -- never real
+    conversation content, which varies per call and is neither needed nor
+    safe to fingerprint. Prompt CONTENT is separately invalidated via
+    ``_canonical_contract_digest``'s ``PROMPT_VERSION``/
+    ``LEGACY_PROMPT_VERSION`` folding; this is only about the request's
+    mechanical shape. Content is always this exact placeholder so the
+    digest is stable across runs and never varies with real conversation
+    text."""
+
+    system = AgentMessage(AgentMessageRole.SYSTEM, "")
+    user = AgentMessage(AgentMessageRole.USER, "")
+    if round_1:
+        return (system, user)
+    tool_request = AgentToolRequest(
+        tool_id="wire_request_digest_scaffold", arguments={}, call_id="scaffold"
+    )
+    assistant = AgentMessage(AgentMessageRole.ASSISTANT, "", tool_request=tool_request)
+    tool_result_message = AgentMessage(
+        AgentMessageRole.TOOL, "{}", tool_call_id="scaffold"
+    )
+    return (system, user, assistant, tool_result_message)
+
+
+@functools.cache
+def _wire_request_digest(model: str) -> str:
+    """Content digest of the COMPLETE non-secret wire request
+    ``OpenAICompatibleAgentProvider.decide()`` would send for ``model``, at
+    both probe round shapes -- built by calling
+    ``openai_compatible.build_completion_request`` directly, the SAME
+    producer ``decide()`` itself consumes to build its actual request.
+
+    CHAOS-3285 round 5 (Codex HIGH): round 4's ``_wire_policy_digest``
+    covered only the capability-gated controls extracted into the narrower
+    ``wire_policy_kwargs`` -- ``decide()`` itself still independently
+    assembled ``max_completion_tokens`` (via ``model_family_budget``), the
+    full generated response_format schema body, and the serialized tool
+    payloads, none of which the fingerprint ever hashed; changing the
+    response_format wrapper's literal ``"name"``/``"strict"`` values left
+    the fingerprint unchanged. This replaces that narrower digest by
+    calling the SAME single producer ``decide()`` calls, so no field
+    assembled inside it can independently drift from what gets
+    fingerprinted again.
+
+    Tools and the response schema are the same real producers
+    ``_canonical_contract_digest`` uses (the full 9-tool registry via
+    ``_probe_registry``/``_probe_tools``, the real ``DevAnswer`` schema);
+    ``max_output_tokens`` is the real ``DevRunLimits`` per-call cap. Cached
+    per model (not a single shared cache like ``_canonical_contract_digest``)
+    since this genuinely varies by candidate, and models seen per process
+    are a small, bounded set.
+    """
+
+    registry = _probe_registry()
+    tools = _probe_tools(registry)
+    response_schema = DevAnswer.model_json_schema(mode="validation")
+    max_output_tokens = DevRunLimits().max_output_tokens_per_call
+    round_1 = build_completion_request(
+        model=model,
+        messages=_wire_request_probe_messages(round_1=True),
+        tools=tools,
+        response_schema=response_schema,
+        max_output_tokens=max_output_tokens,
+    )
+    round_2 = build_completion_request(
+        model=model,
+        messages=_wire_request_probe_messages(round_1=False),
+        tools=tools,
+        response_schema=response_schema,
+        max_output_tokens=max_output_tokens,
+    )
+    canonical = json.dumps(
+        {"round_1": round_1, "round_2": round_2},
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()[:24]
+
+
+def _credential_fingerprint(credentials: LLMCredentials) -> str:
+    """Non-reversible fingerprint of ALL identity-bearing credential material
+    actually used on the wire -- api_key, organization, project, and
+    custom_headers. The raw ``api_key`` and any header value are NEVER
+    stored, logged, or included in any return value anywhere; only this
+    function's SHA-256 digest is.
+
+    CHAOS-3285 round 5 (Codex HIGH, ratified design): certifying provider
+    key A, then saving key B for the exact same provider/model/base_url,
+    left the stored certification (keyed only on provider/model/base_url)
+    reading as still current -- so live selection kept using it while every
+    real request actually carried B's Authorization header, never having
+    demonstrated B can handle the production request shape at all. Folding
+    this fingerprint into the certification key makes a rotated credential
+    unfindable by construction: a prior certification's key can never equal
+    the new credential's key, so ``is_current()`` reads False and selection
+    fails closed until the NEW credential is re-certified. This does not
+    rely on any save/rotation code path remembering to invalidate anything.
+
+    CHAOS-3285 round 6 (Codex HIGH): api_key alone was not the whole
+    identity. The OpenAI SDK reads organization/project/custom headers
+    AMBIENTLY from OPENAI_ORG_ID/OPENAI_PROJECT_ID/OPENAI_CUSTOM_HEADERS
+    when a client is constructed without them -- codex's exact repro:
+    flipping OPENAI_PROJECT_ID from one project to another changed the real
+    OpenAI-Project wire header while this fingerprint stayed byte-for-byte
+    identical, since it never referenced organization/project/headers at
+    all. ``LLMCredentials`` now resolves these explicitly (see
+    ``credentials.py``) instead of leaving them for the SDK to infer, which
+    makes them representable here. Folded via a canonical JSON structure
+    (sorted keys, a sorted list of [name, value] header pairs) rather than
+    naive string concatenation, so there is no ambiguity between e.g.
+    organization="ab" + project="c" and organization="a" + project="bc".
+    """
+
+    canonical = json.dumps(
+        {
+            "api_key": credentials.api_key,
+            "organization": credentials.organization,
+            "project": credentials.project,
+            "custom_headers": [list(pair) for pair in credentials.custom_headers],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()[:24]
+
+
+def _readiness_fingerprint(
+    candidate: AgentProviderCandidate, *, role: AgentRole = AgentRole.LEGACY_AGENT
+) -> str:
+    """Fingerprint every capability input that invalidates certification.
+
+    CHAOS-3285: extended to fold ``TOOL_CONTRACT_VERSION``,
+    ``BUDGET_POLICY_VERSION``, and ``_canonical_contract_digest()`` (which
+    itself folds both prompt shapes, the real response grammar, the real
+    tool manifest, and the real run limits -- see its docstring) --
+    previously only a manual ``READINESS_VERSION`` bump invalidated a stale
+    certification, even though the composed prompt, tool registry, or
+    per-family token-budget policy can each independently change the wire
+    shape a certified provider was actually tested against. Also folds
+    ``role`` now that certification is per-role rather than a single binary
+    verdict (see ``llm.agent.roles``), (round 5) ``_wire_request_digest``
+    -- the COMPLETE non-secret wire request the adapter would send for this
+    model at both probe round shapes (tool_choice, parallel_tool_calls,
+    temperature, reasoning_effort, the full response_format wrapper AND
+    schema body, serialized tool payloads, max_completion_tokens), see its
+    docstring -- and (round 5) ``_credential_fingerprint`` -- see its
+    docstring for the credential-rotation gap this closes.
+
+    Migration/invalidation semantics (explicit): this changes the computed
+    fingerprint value for the existing single-role (legacy binary) selection
+    path too, since every call site below defaults ``role`` to
+    ``AgentRole.LEGACY_AGENT`` -- the role today's production runtime
+    actually exercises (full tool registry, full ``DevAnswer`` grammar).
+    Every previously stored ``AgentReadinessRecord.fingerprint`` was computed
+    without these folded inputs, so it no longer equals the newly computed
+    value here and ``AgentReadinessRecord.is_current`` returns ``False``:
+    existing certifications become stale and the runtime fails closed until
+    re-certified -- exactly the same self-invalidating pattern already
+    established for the ``READINESS_VERSION`` bump (CHAOS-3254). No stored
+    record is silently reinterpreted as still current.
+    """
 
     return hashlib.sha256(
         "\0".join(
@@ -580,7 +869,13 @@ def _readiness_fingerprint(candidate: AgentProviderCandidate) -> str:
                 candidate.provider,
                 candidate.model,
                 candidate.credentials.base_url,
+                _credential_fingerprint(candidate.credentials),
                 READINESS_VERSION,
+                TOOL_CONTRACT_VERSION,
+                BUDGET_POLICY_VERSION,
+                role.value,
+                _canonical_contract_digest(),
+                _wire_request_digest(candidate.model),
             )
         ).encode()
     ).hexdigest()[:24]
@@ -600,6 +895,14 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
             if isinstance(candidate, _AcceptanceOpenAICandidate)
             else "openai_compatible"
         ),
+        # CHAOS-3285 round 6 (Codex HIGH): passed explicitly so the
+        # AsyncOpenAI client never falls back to ambient
+        # OPENAI_ORG_ID/OPENAI_PROJECT_ID/OPENAI_CUSTOM_HEADERS -- see
+        # OpenAICompatibleAgentProvider.__init__ and
+        # LLMCredentials/_credential_fingerprint.
+        organization=candidate.credentials.organization,
+        project=candidate.credentials.project,
+        custom_headers=candidate.credentials.custom_headers,
     )
 
 

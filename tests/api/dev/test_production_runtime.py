@@ -13,10 +13,18 @@ from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevScope, DevToolRequest, ToolID
 from dev_health_ops.api.dev.production_runtime import ProductionProviderResolution
 from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
-from dev_health_ops.api.dev.tool_registry import ToolExecutionContext
+from dev_health_ops.api.dev.tool_registry import (
+    TOOL_CONTRACT_VERSION,
+    ToolExecutionContext,
+)
+from dev_health_ops.llm.agent.budget_policy import BUDGET_POLICY_VERSION
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
 from dev_health_ops.llm.agent.policy import AgentProviderCandidate, AgentProviderSource
 from dev_health_ops.llm.agent.readiness import PLATFORM_READINESS_SETTING_KEY
+from dev_health_ops.llm.agent.roles import (
+    PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    AgentRole,
+)
 from dev_health_ops.llm.credentials import LLMCredentials
 
 
@@ -43,11 +51,85 @@ class FakeSettingsService:
 
 
 def _fingerprint(
-    base_url: str = "", model: str = "certified-model", provider: str = "openai"
+    base_url: str = "",
+    model: str = "certified-model",
+    provider: str = "openai",
+    role: AgentRole = AgentRole.LEGACY_AGENT,
+    api_key: str = "test-key",
+    organization: str = "",
+    project: str = "",
+    custom_headers: tuple[tuple[str, str], ...] = (),
 ) -> str:
+    # CHAOS-3285: mirrors production_runtime._readiness_fingerprint's
+    # extended formula. Every fixture in this file that builds a "current"
+    # stored AgentReadinessRecord by hand must fold the same inputs the
+    # real function now folds, or it would exercise a fingerprint formula
+    # that no longer matches production and every "certification is
+    # current" assertion below would be testing nothing. The canonical
+    # contract digest (CHAOS-3285 round 2) is reused directly from the real
+    # producer rather than re-derived here -- hand-duplicating a digest
+    # computation is exactly the kind of drift that got the bare
+    # PROMPT_VERSION constant caught in the first place. ``api_key``
+    # defaults to "test-key" -- most fixtures in this file monkeypatch
+    # OPENAI_API_KEY to that value; the "local" provider fixtures (whose
+    # resolved credentials.api_key is genuinely "") pass api_key="" instead
+    # (CHAOS-3285 round 5). organization/project/custom_headers default to
+    # "empty" -- most fixtures never configure them; CHAOS-3285 round 6's
+    # own tests pass real values. _credential_fingerprint (the real
+    # producer) is reused directly here, not re-derived, for the same
+    # anti-drift reason.
     return hashlib.sha256(
-        "\0".join(("platform", provider, model, base_url, READINESS_VERSION)).encode()
+        "\0".join(
+            (
+                "platform",
+                provider,
+                model,
+                base_url,
+                production_runtime._credential_fingerprint(
+                    LLMCredentials(
+                        api_key=api_key,
+                        organization=organization,
+                        project=project,
+                        custom_headers=custom_headers,
+                    )
+                ),
+                READINESS_VERSION,
+                TOOL_CONTRACT_VERSION,
+                BUDGET_POLICY_VERSION,
+                role.value,
+                production_runtime._canonical_contract_digest(),
+                production_runtime._wire_request_digest(model),
+            )
+        ).encode()
     ).hexdigest()[:24]
+
+
+def _role_certification_setting(
+    *,
+    key_prefix: str = PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    role: AgentRole = AgentRole.LEGACY_AGENT,
+    certification_key: str,
+    state: str = "compatible",
+) -> tuple[str, str]:
+    """(settings_key, json_value) for one role's row under
+    SettingsRoleCertificationStore's per-role key format (CHAOS-3285)."""
+
+    return (
+        f"{key_prefix}:{role.value}",
+        json.dumps(
+            {
+                "version": "ask-dev-role-certification.v1",
+                "record": {
+                    "role": role.value,
+                    "certification_key": certification_key,
+                    "readiness_version": READINESS_VERSION,
+                    "checked_at": "2026-07-29T12:00:00+00:00",
+                    "state": state,
+                    "safe_error_code": None,
+                },
+            }
+        ),
+    )
 
 
 def test_readiness_fingerprint_changes_when_source_changes() -> None:
@@ -70,6 +152,646 @@ def test_readiness_fingerprint_changes_when_source_changes() -> None:
     ) != production_runtime._readiness_fingerprint(byo)
 
 
+def test_readiness_fingerprint_changes_when_role_changes() -> None:
+    """CHAOS-3285: certification is now per-role -- a fingerprint computed
+    for one role must never collide with another role's fingerprint for the
+    otherwise-identical candidate, or a legacy_agent certification could be
+    misread as covering intent_classification/answer_frame_narrative too."""
+
+    credentials = LLMCredentials(base_url="https://models.example.com/v1")
+    candidate = AgentProviderCandidate(
+        provider="openai",
+        model="certified-model",
+        credentials=credentials,
+        source=AgentProviderSource.PLATFORM,
+    )
+
+    fingerprints = {
+        role: production_runtime._readiness_fingerprint(candidate, role=role)
+        for role in AgentRole
+    }
+    assert len(set(fingerprints.values())) == len(AgentRole)
+    # The default (no explicit role) must be legacy_agent -- production's
+    # existing single-role selection path calls _readiness_fingerprint
+    # without a role argument, and it is exactly the legacy_agent shape
+    # (full tool registry, full DevAnswer grammar) that path exercises.
+    assert (
+        production_runtime._readiness_fingerprint(candidate)
+        == fingerprints[AgentRole.LEGACY_AGENT]
+    )
+
+
+def test_readiness_fingerprint_invalidates_pre_chaos_3285_stored_records() -> None:
+    """CHAOS-3285 migration semantics: a fingerprint computed under the old
+    (pre-PR3) formula -- which folded only source/provider/model/base_url/
+    READINESS_VERSION -- must never equal the new formula's output. This is
+    the mechanism that makes every previously stored AgentReadinessRecord
+    read as stale rather than silently still-current after this change
+    (see the docstring on _readiness_fingerprint)."""
+
+    credentials = LLMCredentials(base_url="https://models.example.com/v1")
+    candidate = AgentProviderCandidate(
+        provider="openai",
+        model="certified-model",
+        credentials=credentials,
+        source=AgentProviderSource.PLATFORM,
+    )
+    pre_change_fingerprint = hashlib.sha256(
+        "\0".join(
+            (
+                candidate.source.value,
+                candidate.provider,
+                candidate.model,
+                candidate.credentials.base_url,
+                READINESS_VERSION,
+            )
+        ).encode()
+    ).hexdigest()[:24]
+
+    assert pre_change_fingerprint != production_runtime._readiness_fingerprint(
+        candidate
+    )
+
+
+def test_canonical_contract_digest_folds_the_legacy_prompt_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 round 2 (Codex HIGH): the fingerprint previously folded
+    only PROMPT_VERSION -- the committed-subject prompt shape
+    (subject_committed=True). PromptComposer also produces
+    LEGACY_PROMPT_VERSION's shape (uncommitted subject / the flag-off
+    path), which the legacy_agent probe never exercises (it forces
+    subject_committed=True unconditionally) -- so a text-only change to
+    ONLY that prompt shape never invalidated any certification at all,
+    since LEGACY_PROMPT_VERSION was never folded anywhere. Prove the
+    canonical contract digest now folds it."""
+
+    production_runtime._canonical_contract_digest.cache_clear()
+    try:
+        baseline = production_runtime._canonical_contract_digest()
+
+        monkeypatch.setattr(
+            production_runtime, "LEGACY_PROMPT_VERSION", "changed-legacy-version"
+        )
+        production_runtime._canonical_contract_digest.cache_clear()
+        changed = production_runtime._canonical_contract_digest()
+
+        assert baseline != changed
+    finally:
+        production_runtime._canonical_contract_digest.cache_clear()
+
+
+def test_canonical_contract_digest_folds_the_real_run_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DevRunLimits value changing (e.g. the per-call output cap) must
+    invalidate certification even if nobody remembers to bump a version
+    string for it."""
+    from dev_health_ops.api.dev.orchestrator import DevRunLimits
+
+    production_runtime._canonical_contract_digest.cache_clear()
+    try:
+        baseline = production_runtime._canonical_contract_digest()
+
+        smaller_limits = DevRunLimits(max_output_tokens_per_call=2_048)
+        monkeypatch.setattr(production_runtime, "DevRunLimits", lambda: smaller_limits)
+        production_runtime._canonical_contract_digest.cache_clear()
+        changed = production_runtime._canonical_contract_digest()
+
+        assert baseline != changed
+    finally:
+        production_runtime._canonical_contract_digest.cache_clear()
+
+
+def test_build_completion_request_differs_between_probe_round_shapes() -> None:
+    """Round 1 (tools offered, no grammar yet) and round 2 (tools offered,
+    grammar) are genuinely distinct wire request shapes -- tool_choice
+    switches from "required" to "auto", and response_format only appears
+    once a final answer is allowed."""
+
+    from dev_health_ops.llm.agent.openai_compatible import build_completion_request
+
+    round_1 = build_completion_request(
+        model="certified-model",
+        messages=production_runtime._wire_request_probe_messages(round_1=True),
+        tools=production_runtime._probe_tools(production_runtime._probe_registry()),
+        response_schema={"type": "object"},
+        max_output_tokens=4096,
+    )
+    round_2 = build_completion_request(
+        model="certified-model",
+        messages=production_runtime._wire_request_probe_messages(round_1=False),
+        tools=production_runtime._probe_tools(production_runtime._probe_registry()),
+        response_schema={"type": "object"},
+        max_output_tokens=4096,
+    )
+
+    assert round_1["tool_choice"] == "required"
+    assert round_2["tool_choice"] == "auto"
+    assert "response_format" not in round_1
+    assert "response_format" in round_2
+
+
+def test_wire_request_digest_changes_when_supports_temperature_toggles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 round 4 (Codex HIGH): before that fix, the readiness
+    fingerprint never called any adapter capability-policy function at all
+    -- only the bare candidate.model string, which does not change when a
+    policy FUNCTION's behavior changes for an already-certified model (e.g.
+    supports_temperature gaining a new excluded family on a future deploy).
+    Prove the digest reacts to the policy itself, holding the model string
+    fixed."""
+
+    from dev_health_ops.llm.agent import openai_compatible
+
+    production_runtime._wire_request_digest.cache_clear()
+    try:
+        baseline = production_runtime._wire_request_digest("certified-model")
+
+        monkeypatch.setattr(
+            openai_compatible, "supports_temperature", lambda _model: False
+        )
+        production_runtime._wire_request_digest.cache_clear()
+        changed = production_runtime._wire_request_digest("certified-model")
+
+        assert baseline != changed
+    finally:
+        production_runtime._wire_request_digest.cache_clear()
+
+
+def test_wire_request_digest_changes_when_parallel_tool_calls_support_toggles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev_health_ops.llm.agent import openai_compatible
+
+    production_runtime._wire_request_digest.cache_clear()
+    try:
+        baseline = production_runtime._wire_request_digest("certified-model")
+
+        monkeypatch.setattr(
+            openai_compatible, "supports_parallel_tool_calls", lambda _model: False
+        )
+        production_runtime._wire_request_digest.cache_clear()
+        changed = production_runtime._wire_request_digest("certified-model")
+
+        assert baseline != changed
+    finally:
+        production_runtime._wire_request_digest.cache_clear()
+
+
+def test_wire_request_digest_changes_when_reasoning_effort_toggles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev_health_ops.llm.agent import openai_compatible
+
+    production_runtime._wire_request_digest.cache_clear()
+    try:
+        baseline = production_runtime._wire_request_digest("certified-model")
+
+        monkeypatch.setattr(
+            openai_compatible,
+            "chat_completion_reasoning_effort",
+            lambda _model: "minimal",
+        )
+        production_runtime._wire_request_digest.cache_clear()
+        changed = production_runtime._wire_request_digest("certified-model")
+
+        assert baseline != changed
+    finally:
+        production_runtime._wire_request_digest.cache_clear()
+
+
+def test_wire_request_digest_changes_when_the_max_token_policy_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 round 5 (Codex HIGH): decide() independently resolved
+    max_completion_tokens via model_family_budget -- a field round 4's
+    narrower wire_policy_kwargs never covered at all. build_completion_request
+    now assembles it, so a DevRunLimits change (which flows into the
+    max_output_tokens argument) must change the digest."""
+
+    from dev_health_ops.api.dev.orchestrator import DevRunLimits
+
+    production_runtime._wire_request_digest.cache_clear()
+    try:
+        baseline = production_runtime._wire_request_digest("certified-model")
+
+        smaller_limits = DevRunLimits(max_output_tokens_per_call=2_048)
+        monkeypatch.setattr(production_runtime, "DevRunLimits", lambda: smaller_limits)
+        production_runtime._wire_request_digest.cache_clear()
+        changed = production_runtime._wire_request_digest("certified-model")
+
+        assert baseline != changed
+    finally:
+        production_runtime._wire_request_digest.cache_clear()
+
+
+def test_wire_request_digest_is_sensitive_to_the_response_wrapper_and_tool_fields() -> (
+    None
+):
+    """CHAOS-3285 round 5 (Codex HIGH): round 4's wire_policy_kwargs
+    hand-duplicated the response_format wrapper's name/strict literals
+    separately from decide()'s own assembly of them -- so a change to
+    EITHER decide()'s real literals OR the full generated schema body, or
+    to how a tool gets serialized, could drift from the hand-duplicated
+    copy without the digest ever knowing. Now that build_completion_request
+    is the single producer both decide() and the digest consume, there is
+    no hand-duplicated copy left to drift -- but the digest's own
+    serialize-then-hash step must still not silently drop any of these
+    fields. Prove each one, mutating the SAME real producer's own output,
+    changes what gets hashed."""
+
+    from dev_health_ops.llm.agent.openai_compatible import build_completion_request
+
+    registry = production_runtime._probe_registry()
+    tools = production_runtime._probe_tools(registry)
+    response_schema = {"type": "object", "properties": {"status": {"type": "string"}}}
+    round_1 = build_completion_request(
+        model="certified-model",
+        messages=production_runtime._wire_request_probe_messages(round_1=True),
+        tools=tools,
+        response_schema=response_schema,
+        max_output_tokens=4096,
+    )
+    round_2 = build_completion_request(
+        model="certified-model",
+        messages=production_runtime._wire_request_probe_messages(round_1=False),
+        tools=tools,
+        response_schema=response_schema,
+        max_output_tokens=4096,
+    )
+
+    def _digest(
+        round_1_payload: dict[str, Any], round_2_payload: dict[str, Any]
+    ) -> str:
+        canonical = json.dumps(
+            {"round_1": round_1_payload, "round_2": round_2_payload},
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode()).hexdigest()[:24]
+
+    baseline = _digest(round_1, round_2)
+
+    mutated_name = json.loads(json.dumps(round_2))
+    mutated_name["response_format"]["json_schema"]["name"] = "a_different_name"
+    assert _digest(round_1, mutated_name) != baseline, "wrapper name change not hashed"
+
+    mutated_strict = json.loads(json.dumps(round_2))
+    mutated_strict["response_format"]["json_schema"]["strict"] = False
+    assert _digest(round_1, mutated_strict) != baseline, "strict flag change not hashed"
+
+    mutated_max_tokens = json.loads(json.dumps(round_2))
+    mutated_max_tokens["max_completion_tokens"] = (
+        mutated_max_tokens["max_completion_tokens"] + 1
+    )
+    assert _digest(round_1, mutated_max_tokens) != baseline, (
+        "max_completion_tokens change not hashed"
+    )
+
+    mutated_tools = json.loads(json.dumps(round_2))
+    mutated_tools["tools"][0]["function"]["description"] = "a different description"
+    assert _digest(round_1, mutated_tools) != baseline, (
+        "tool serialization change not hashed"
+    )
+
+
+def test_readiness_fingerprint_changes_when_wire_policy_toggles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The full fingerprint formula (not just the digest in isolation)
+    reacts to a wire-policy change -- the exact codex repro: toggling
+    supports_temperature changed the emitted request while
+    _readiness_fingerprint stayed identical."""
+
+    from dev_health_ops.llm.agent import openai_compatible
+
+    credentials = LLMCredentials(base_url="https://models.example.com/v1")
+    candidate = AgentProviderCandidate(
+        provider="openai",
+        model="certified-model",
+        credentials=credentials,
+        source=AgentProviderSource.PLATFORM,
+    )
+
+    production_runtime._wire_request_digest.cache_clear()
+    try:
+        baseline = production_runtime._readiness_fingerprint(candidate)
+
+        monkeypatch.setattr(
+            openai_compatible, "supports_temperature", lambda _model: False
+        )
+        production_runtime._wire_request_digest.cache_clear()
+        changed = production_runtime._readiness_fingerprint(candidate)
+
+        assert baseline != changed
+    finally:
+        production_runtime._wire_request_digest.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_wire_policy_change_invalidates_stored_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: a certification stored under today's wire policy must be
+    invalidated -- selection fails closed -- once the policy changes for
+    this model, even though the candidate itself (model/provider/base_url)
+    never changed. Closes the loop codex asked for: fingerprint changes ->
+    stored certification invalidated, not just a digest changing in
+    isolation."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    stored_fingerprint = _fingerprint()
+    role_key, role_value = _role_certification_setting(
+        certification_key=stored_fingerprint
+    )
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": stored_fingerprint,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+    session = cast(Any, object())
+
+    # Sanity: certified under today's real wire policy, selection succeeds.
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.model == "certified-model"
+
+    from dev_health_ops.llm.agent import openai_compatible
+
+    monkeypatch.setattr(openai_compatible, "supports_temperature", lambda _model: False)
+    production_runtime._wire_request_digest.cache_clear()
+    try:
+        with pytest.raises(DevRuntimeUnavailable) as exc_info:
+            await production_runtime.resolve_production_provider(
+                session, org_id="org_01"
+            )
+        assert exc_info.value.code == "provider_not_configured"
+    finally:
+        production_runtime._wire_request_digest.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_credential_rotation_invalidates_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 round 5 (Codex HIGH), codex's exact repro: certify
+    provider key A, then rotate to key B for the exact same
+    provider/model/base_url -- selection must fail closed until B is
+    re-certified. Before this fix, the certification key never depended on
+    WHICH credential was actually tested, so B's rotation silently
+    inherited A's certification while every real request already carried
+    B's Authorization header, never having demonstrated B can handle the
+    production request shape at all."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "key-a")
+    fingerprint_a = _fingerprint(api_key="key-a")
+    role_key, role_value = _role_certification_setting(certification_key=fingerprint_a)
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": fingerprint_a,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+    session = cast(Any, object())
+
+    # Sanity: certified under key A, selection succeeds.
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.model == "certified-model"
+
+    # Rotate to key B -- same provider/model/base_url, a different
+    # credential -- without re-running preflight.
+    monkeypatch.setenv("OPENAI_API_KEY", "key-b")
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_organization_rotation_invalidates_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same guard as credential (api_key) rotation, for organization:
+    certify under org A, flip OPENAI_ORG_ID to org B for the exact same
+    provider/model/base_url/api_key -- selection must fail closed until B
+    is re-certified."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_ORG_ID", "org-a")
+    fingerprint_a = _fingerprint(organization="org-a")
+    role_key, role_value = _role_certification_setting(certification_key=fingerprint_a)
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": fingerprint_a,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+    session = cast(Any, object())
+
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.model == "certified-model"
+
+    monkeypatch.setenv("OPENAI_ORG_ID", "org-b")
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_project_rotation_invalidates_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex's exact repro: flipping OPENAI_PROJECT_ID from one project to
+    another for the exact same provider/model/base_url/api_key must
+    invalidate certification -- previously this left the fingerprint
+    byte-for-byte identical while the real OpenAI-Project wire header
+    changed."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "project-a")
+    fingerprint_a = _fingerprint(project="project-a")
+    role_key, role_value = _role_certification_setting(certification_key=fingerprint_a)
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": fingerprint_a,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+    session = cast(Any, object())
+
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.model == "certified-model"
+
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "project-b")
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_custom_header_rotation_invalidates_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same guard, for custom identity headers: changing
+    OPENAI_CUSTOM_HEADERS for the exact same provider/model/base_url/
+    api_key must invalidate certification."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "X-Tenant: tenant-a")
+    fingerprint_a = _fingerprint(custom_headers=(("X-Tenant", "tenant-a"),))
+    role_key, role_value = _role_certification_setting(certification_key=fingerprint_a)
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": fingerprint_a,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+    session = cast(Any, object())
+
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.model == "certified-model"
+
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "X-Tenant: tenant-b")
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+def test_credential_fingerprint_never_leaks_the_raw_api_key() -> None:
+    """The credential fingerprint folded into the certification key must be
+    non-reversible: the raw api_key string itself must never appear in the
+    fingerprint's output."""
+
+    fingerprint = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="super-secret-key-value")
+    )
+
+    assert "super-secret-key-value" not in fingerprint
+    assert len(fingerprint) == 24
+
+
+def test_credential_fingerprint_changes_with_organization() -> None:
+    baseline = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", organization="org-a")
+    )
+    changed = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", organization="org-b")
+    )
+    assert baseline != changed
+
+
+def test_credential_fingerprint_changes_with_project() -> None:
+    baseline = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", project="project-a")
+    )
+    changed = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", project="project-b")
+    )
+    assert baseline != changed
+
+
+def test_credential_fingerprint_changes_with_custom_headers() -> None:
+    baseline = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", custom_headers=(("X-Tenant", "a"),))
+    )
+    changed = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", custom_headers=(("X-Tenant", "b"),))
+    )
+    assert baseline != changed
+
+
+def test_credential_fingerprint_has_no_concatenation_ambiguity() -> None:
+    """CHAOS-3285 round 6 (Codex HIGH): folding identity fields via naive
+    string concatenation (or a `\\0`-joined tuple, this function's own
+    OUTER formula) can collide across different field boundaries -- e.g.
+    organization="ab" + project="c" naively concatenates to the same
+    string as organization="a" + project="bc". _credential_fingerprint
+    uses a JSON-canonical structure internally (sort_keys, one key per
+    field) specifically to avoid this; prove two genuinely different
+    (organization, project) splits that share a naive concatenation do NOT
+    collide."""
+
+    split_one = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", organization="ab", project="c")
+    )
+    split_two = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", organization="a", project="bc")
+    )
+    assert split_one != split_two
+
+
 @pytest.mark.asyncio
 async def test_provider_resolution_requires_current_certification(
     monkeypatch: pytest.MonkeyPatch,
@@ -83,6 +805,7 @@ async def test_provider_resolution_requires_current_certification(
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_MODEL", "certified-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    role_key, role_value = _role_certification_setting(certification_key=_fingerprint())
     FakeSettingsService.values = {
         PLATFORM_READINESS_SETTING_KEY: json.dumps(
             {
@@ -92,7 +815,8 @@ async def test_provider_resolution_requires_current_certification(
                 "outcome": "ready",
                 "safe_error_code": None,
             }
-        )
+        ),
+        role_key: role_value,
     }
 
     session = cast(Any, object())
@@ -124,6 +848,84 @@ async def test_provider_resolution_requires_current_certification(
 
 
 @pytest.mark.asyncio
+async def test_echo_only_certification_does_not_restore_live_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 (Codex HIGH): the old binary AgentReadinessRecord being
+    "ready" must NOT be sufficient for live selection on its own. Before the
+    role-gate fix, an operator could re-certify through a route that only
+    ever runs the old 512-token echo probe (or the new role probe simply
+    never having run at all), the binary store would read current, and this
+    candidate would become selectable for real traffic having never
+    demonstrated it can handle the production request shape. This is the RED
+    half: binary readiness alone, with NO legacy_agent role certification on
+    record, must fail closed."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": _fingerprint(),
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        # Deliberately NO role-certification row at all.
+    }
+
+    session = cast(Any, object())
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_incompatible_legacy_agent_role_does_not_restore_live_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same gate, with a role record present but INCOMPATIBLE (e.g. the
+    production-sized probe reproduced output exhaustion) rather than absent
+    -- an INCOMPATIBLE verdict must never be silently treated as good
+    enough for live selection either."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    role_key, role_value = _role_certification_setting(
+        certification_key=_fingerprint(), state="incompatible"
+    )
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": _fingerprint(),
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+
+    session = cast(Any, object())
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
 async def test_platform_local_provider_uses_only_operator_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -148,20 +950,26 @@ async def test_platform_local_provider_uses_only_operator_environment(
     monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://host.docker.internal:1234/v1")
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
+    local_fingerprint = _fingerprint(
+        provider="local",
+        model="google/gemma-4-e4b",
+        base_url="http://host.docker.internal:1234/v1",
+        api_key="",
+    )
+    role_key, role_value = _role_certification_setting(
+        certification_key=local_fingerprint
+    )
     FakeSettingsService.values = {
         PLATFORM_READINESS_SETTING_KEY: json.dumps(
             {
-                "fingerprint": _fingerprint(
-                    provider="local",
-                    model="google/gemma-4-e4b",
-                    base_url="http://host.docker.internal:1234/v1",
-                ),
+                "fingerprint": local_fingerprint,
                 "readiness_version": READINESS_VERSION,
                 "checked_at": "2026-07-29T12:00:00+00:00",
                 "outcome": "ready",
                 "safe_error_code": None,
             }
         ),
+        role_key: role_value,
         # A complete organization BYO bundle remains database-owned and does
         # not overwrite the independently resolved platform candidate.
         "provider": "openai",
@@ -201,6 +1009,7 @@ async def test_explicit_fail_closed_prevents_platform_fallback(
                     provider="local",
                     model="local-agent-model",
                     base_url="http://host.docker.internal:1234/v1",
+                    api_key="",
                 ),
                 "readiness_version": READINESS_VERSION,
                 "checked_at": "2026-07-29T12:00:00+00:00",

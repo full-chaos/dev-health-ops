@@ -16,7 +16,10 @@ from dev_health_ops.llm.agent.contracts import (
     AgentToolRequest,
 )
 from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErrorCode
-from dev_health_ops.llm.agent.openai_compatible import OpenAICompatibleAgentProvider
+from dev_health_ops.llm.agent.openai_compatible import (
+    OpenAICompatibleAgentProvider,
+    build_completion_request,
+)
 
 
 class Completions:
@@ -76,6 +79,141 @@ def response(
             ),
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_decide_sends_exactly_what_build_completion_request_produces() -> None:
+    """CHAOS-3285 round 5 (Codex HIGH): the readiness fingerprint's
+    wire-request digest calls build_completion_request directly and hashes
+    its output; that is only a meaningful guarantee if decide() actually
+    dispatches EXACTLY that output, not an independently-assembled
+    approximation of it (round 4's gap: decide() still built
+    max_completion_tokens, the response_format wrapper's literal name/
+    strict, and the full schema body itself). Prove it differentially: the
+    real kwargs decide() sends to the wire must equal what
+    build_completion_request returns for the identical inputs."""
+
+    call = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(name="lookup", arguments="{}"),
+    )
+    client = Client([response(tool_call=call)])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-mini", client=client
+    )
+    messages = [
+        AgentMessage(AgentMessageRole.SYSTEM, "sys"),
+        AgentMessage(AgentMessageRole.USER, "question"),
+    ]
+    tools = [
+        AgentToolDefinition(
+            "lookup",
+            "Lookup a work unit",
+            {"type": "object", "properties": {"id": {"type": "string"}}},
+        )
+    ]
+    response_schema = {"type": "object", "properties": {"status": {"type": "string"}}}
+
+    await provider.decide(messages, tools, response_schema, 1, 256)
+
+    sent = client.chat.completions.calls[0]
+    expected = build_completion_request(
+        model="gpt-5-mini",
+        messages=messages,
+        tools=tools,
+        response_schema=response_schema,
+        max_output_tokens=256,
+    )
+    assert sent == expected
+
+
+@pytest.mark.asyncio
+async def test_real_client_construction_suppresses_ambient_organization_and_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 round 6 (Codex HIGH), codex's exact repro mechanism: the
+    AsyncOpenAI SDK reads OPENAI_ORG_ID/OPENAI_PROJECT_ID from the process
+    environment whenever organization/project are left as Python None.
+    Constructing the REAL client (client=None, the production path -- every
+    existing test in this file injects a fake and so never exercised this
+    branch at all) must never leak ambient env identity when organization/
+    project are explicitly "not configured" (empty string)."""
+
+    monkeypatch.setenv("OPENAI_ORG_ID", "ambient-org-from-env")
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "ambient-project-from-env")
+
+    provider = OpenAICompatibleAgentProvider(
+        api_key="test-key", model="gpt-5-mini", organization="", project=""
+    )
+    try:
+        assert provider._client.organization is None
+        assert provider._client.project is None
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_real_client_construction_uses_explicit_organization_and_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The inverse: when organization/project ARE explicitly configured,
+    the real client uses exactly those values -- not whatever the ambient
+    environment happens to hold, even when it differs (proving this is a
+    genuine override, not merely "env happens to agree")."""
+
+    monkeypatch.setenv("OPENAI_ORG_ID", "ambient-org-from-env")
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "ambient-project-from-env")
+
+    provider = OpenAICompatibleAgentProvider(
+        api_key="test-key",
+        model="gpt-5-mini",
+        organization="configured-org",
+        project="configured-project",
+    )
+    try:
+        assert provider._client.organization == "configured-org"
+        assert provider._client.project == "configured-project"
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_real_client_construction_suppresses_ambient_custom_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 round 6 (Codex HIGH): OPENAI_CUSTOM_HEADERS has no `is
+    None` gate at all in the SDK -- it unconditionally merges into the
+    client's headers whenever the env var is set, regardless of what
+    default_headers this constructor passes. The real client's header set
+    must never include an ambient env header we did not explicitly
+    configure."""
+
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "X-Ambient-Leak: leaked-value")
+
+    provider = OpenAICompatibleAgentProvider(
+        api_key="test-key", model="gpt-5-mini", custom_headers=()
+    )
+    try:
+        assert "X-Ambient-Leak" not in provider._client.default_headers
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_real_client_construction_uses_explicit_custom_headers_only() -> None:
+    """When custom_headers ARE configured, the real client's headers
+    reflect exactly that set -- nothing more, nothing silently added from
+    the environment."""
+
+    provider = OpenAICompatibleAgentProvider(
+        api_key="test-key",
+        model="gpt-5-mini",
+        custom_headers=(("X-Configured", "configured-value"),),
+    )
+    try:
+        assert provider._client.default_headers["X-Configured"] == "configured-value"
+    finally:
+        await provider.aclose()
 
 
 @pytest.mark.asyncio

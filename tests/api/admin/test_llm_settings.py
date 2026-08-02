@@ -97,19 +97,41 @@ class FakeReadinessProvider:
         )
 
     async def decide(self, *_args: Any, **_kwargs: Any) -> AgentDecisionResult:
+        # CHAOS-3285: BYO preflight now runs the OLD binary transport-echo
+        # probe (calls 1-2) AND the NEW production-sized legacy_agent role
+        # probe (calls 3-6: two independent 2-call chains, committed-subject
+        # then uncommitted-subject -- CHAOS-3285 round 4, Codex HIGH)
+        # against the same resolved provider, 6 calls total. Odd calls
+        # request a tool; even calls answer. Call 1 must echo
+        # READINESS_ECHO_TOOL_ID exactly (readiness.py's own strict match);
+        # every later tool_request round names a real registered tool
+        # instead, since certify_legacy_agent validates its synthetic tool
+        # result against the real DevToolResult/ToolID contract. This fake
+        # is round-aware by parity (odd/even), not call-count-specific, so
+        # it transparently supports however many role-probe rounds the real
+        # probe currently makes -- but see the pinned provider.calls == 6
+        # assertion in the success test below, which fails loudly if a
+        # chain silently vanishes.
         self.calls += 1
-        if self.calls == 1:
+        if self.calls % 2 == 1:
+            tool_id = READINESS_ECHO_TOOL_ID if self.calls == 1 else "query_metric.v1"
+            arguments = (
+                {"nonce": "ready-v1"} if tool_id == READINESS_ECHO_TOOL_ID else {}
+            )
             return AgentDecisionResult(
-                decision=AgentToolRequest(
-                    READINESS_ECHO_TOOL_ID, {"nonce": "ready-v1"}, "call-1"
-                ),
+                decision=AgentToolRequest(tool_id, arguments, f"call-{self.calls}"),
                 usage=AgentUsage(input_tokens=3, output_tokens=2),
                 latency_ms=1,
                 provider_fingerprint="provider",
                 model_fingerprint="model",
             )
+        value = (
+            {"nonce": "ready-v1"}
+            if self.calls == 2
+            else {"status": "complete", "direct_summary": "Stub role probe answer."}
+        )
         return AgentDecisionResult(
-            decision=AgentFinalAnswer(value={"nonce": "ready-v1"}),
+            decision=AgentFinalAnswer(value=value),
             usage=AgentUsage(input_tokens=4, output_tokens=1),
             latency_ms=1,
             provider_fingerprint="provider",
@@ -405,6 +427,7 @@ async def test_admin_llm_settings_status_reports_unconfigured_valid_and_invalid_
             "reason_code": "not_configured",
             "last_fallback_at": None,
             "readiness": "never_checked",
+            "binary_transport_readiness": "never_checked",
             "readiness_checked_at": None,
             "readiness_safe_failure_reason": None,
         }
@@ -420,6 +443,7 @@ async def test_admin_llm_settings_status_reports_unconfigured_valid_and_invalid_
             "reason_code": "active",
             "last_fallback_at": None,
             "readiness": "never_checked",
+            "binary_transport_readiness": "never_checked",
             "readiness_checked_at": None,
             "readiness_safe_failure_reason": None,
         }
@@ -519,6 +543,7 @@ async def test_admin_llm_settings_status_ignores_stale_or_cross_org_fallback_row
         "reason_code": "active",
         "last_fallback_at": None,
         "readiness": "never_checked",
+        "binary_transport_readiness": "never_checked",
         "readiness_checked_at": None,
         "readiness_safe_failure_reason": None,
     }
@@ -530,9 +555,58 @@ async def test_admin_llm_settings_status_ignores_stale_or_cross_org_fallback_row
         "reason_code": "invalid_base_url",
         "last_fallback_at": None,
         "readiness": "never_checked",
+        "binary_transport_readiness": "never_checked",
         "readiness_checked_at": None,
         "readiness_safe_failure_reason": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_binary_ready_role_absent_reports_unavailable_not_ready(session_maker):
+    """CHAOS-3285 round 2 (Codex HIGH): the BYO status endpoint must agree
+    with live selection -- a binary-ready record with no legacy_agent role
+    certification at all must never report "ready" here either."""
+
+    from dev_health_ops.llm.agent.readiness import (
+        AgentReadinessOutcome,
+        AgentReadinessRecord,
+        SettingsAgentReadinessStore,
+    )
+
+    state = await _seed_org(session_maker, "team")
+    await _set_llm_settings(
+        session_maker,
+        state["org_id"],
+        provider="openai",
+        api_key="sk-org",
+        base_url="https://api.openai.com/v1",
+    )
+    fingerprint = await _real_byo_fingerprint(session_maker, state["org_id"])
+
+    async with session_maker() as session:
+        await SettingsAgentReadinessStore(
+            SettingsService(session, state["org_id"])
+        ).save(
+            AgentReadinessRecord(
+                fingerprint=fingerprint,
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        # Deliberately NO role-certification row at all.
+        await session.commit()
+
+    app = _make_app(session_maker, state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.get("/api/v1/admin/llm-settings/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["readiness"] != "ready"
+    assert body["binary_transport_readiness"] == "ready"
 
 
 # Removed: test_byo_llm_status_reason_codes_match_documented_contract.
@@ -939,6 +1013,11 @@ async def test_llm_settings_readiness_succeeds_independent_of_ask_dev_selection(
         assert body["readiness_checked_at"] is not None
         assert body["readiness_safe_failure_reason"] is None
         assert provider.closed is True
+        # CHAOS-3285 round 5 (Codex LOW): pin the full preflight call count
+        # (2 binary transport-echo + 4 legacy_agent role-probe calls, two
+        # independent 2-call chains) so a chain silently vanishing in a
+        # future refactor fails loudly here rather than passing unnoticed.
+        assert provider.calls == 6
 
         after_dev_run_count = await _dev_run_count(session_maker, state["org_id"])
         assert before_dev_run_count == 0
@@ -1152,6 +1231,13 @@ async def test_llm_settings_readiness_can_flip_ask_dev_selection_to_byo(
         AgentReadinessRecord,
         SettingsAgentReadinessStore,
     )
+    from dev_health_ops.llm.agent.roles import (
+        PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+        AgentRole,
+        RoleCertificationRecord,
+        RoleCertificationState,
+        SettingsRoleCertificationStore,
+    )
 
     state = await _seed_org(session_maker, "team")
     await _set_llm_settings(
@@ -1188,6 +1274,21 @@ async def test_llm_settings_readiness_can_flip_ask_dev_selection_to_byo(
                 readiness_version=READINESS_VERSION,
                 checked_at=datetime.now(timezone.utc).isoformat(),
                 outcome=AgentReadinessOutcome.READY,
+            )
+        )
+        # CHAOS-3285: live selection also requires a current, COMPATIBLE
+        # legacy_agent role certification -- mirror what a real
+        # POST /platform/ask-dev/readiness run now also writes.
+        await SettingsRoleCertificationStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+        ).save_record(
+            RoleCertificationRecord(
+                role=AgentRole.LEGACY_AGENT,
+                certification_key=platform_fingerprint,
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                state=RoleCertificationState.COMPATIBLE,
             )
         )
         await session.commit()

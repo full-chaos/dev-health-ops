@@ -53,6 +53,14 @@ from dev_health_ops.llm.agent.readiness import (
     SettingsAgentReadinessStore,
     readiness_failure_state,
 )
+from dev_health_ops.llm.agent.roles import (
+    PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    AgentRole,
+    RoleCertificationProfile,
+    RoleCertificationRecord,
+    RoleCertificationState,
+    SettingsRoleCertificationStore,
+)
 from dev_health_ops.models.dev_persistence import DevRun
 from dev_health_ops.models.settings import SettingCategory
 
@@ -73,9 +81,119 @@ EntitlementState = Literal[
     "enabled", "not_entitled", "globally_disabled", "org_disabled", "unavailable"
 ]
 
+# CHAOS-3285: the safe, wire-stable vocabulary for a per-role certification
+# projection. This is deliberately NOT RoleCertificationState (that enum is
+# an internal capability-model detail -- COMPATIBLE/INCOMPATIBLE/FAILED/
+# STALE/UNCHECKED -- and must never leak onto the admin wire). It extends the
+# existing ReadinessState vocabulary with exactly one new value,
+# "not_yet_certified", so a role nothing has ever certified reads as visibly
+# distinct from "stale_readiness" (was certified, now invalidated) and from
+# every FAILED-derived state (a certification attempt that did not pass).
+RoleReadinessState = Literal[
+    "ready",
+    "unsupported_model",
+    "missing_credentials",
+    "disabled",
+    "degraded",
+    "stale_readiness",
+    "not_yet_certified",
+]
+
+_ROLE_ORDER: tuple[AgentRole, ...] = (
+    AgentRole.LEGACY_AGENT,
+    AgentRole.INTENT_CLASSIFICATION,
+    AgentRole.ANSWER_FRAME_NARRATIVE,
+)
+
 
 class StrictAdminModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class AskDevRoleReadiness(StrictAdminModel):
+    schema_version: Literal["ask_dev_role_readiness.v1"] = "ask_dev_role_readiness.v1"
+    role: Literal["legacy_agent", "intent_classification", "answer_frame_narrative"]
+    state: RoleReadinessState
+    checked_at: AwareDatetime | None = None
+    safe_remediation: str | None = Field(default=None, max_length=2_048)
+
+
+def _role_readiness_entry(
+    role: AgentRole,
+    record: RoleCertificationRecord | None,
+    *,
+    certification_key: str | None,
+) -> AskDevRoleReadiness:
+    """Project one role's stored certification record into the safe wire
+    vocabulary. ``certification_key`` is the CURRENT capability-input
+    fingerprint for that role (e.g. from ``_readiness_fingerprint``); when
+    unavailable (a role with no probe yet) a stored record's state is
+    reported as-is, without a staleness check against a key we cannot
+    compute here.
+    """
+
+    if record is None:
+        return AskDevRoleReadiness(
+            role=role.value,
+            state="not_yet_certified",
+            checked_at=None,
+            safe_remediation="This Ask Dev role has not been certified yet.",
+        )
+    # Deliberately NOT record.is_current() -- that method also requires
+    # state is COMPATIBLE, which is right for runtime *selection* but wrong
+    # for admin *display*: a FAILED/INCOMPATIBLE record whose capability
+    # inputs still match the current configuration must show its actual
+    # failure reason (e.g. unsupported_model), not be recolored as merely
+    # "stale" just because it never became COMPATIBLE. Staleness here means
+    # only one thing: the record was computed against a DIFFERENT
+    # certification_key than the one in effect now.
+    if certification_key is not None and record.certification_key != certification_key:
+        return AskDevRoleReadiness(
+            role=role.value,
+            state="stale_readiness",
+            checked_at=_checked_at(record.checked_at),
+            safe_remediation=(
+                "This role's certification is stale for the current "
+                "configuration. Run preflight again."
+            ),
+        )
+    if record.state is RoleCertificationState.COMPATIBLE:
+        return AskDevRoleReadiness(
+            role=role.value,
+            state="ready",
+            checked_at=_checked_at(record.checked_at),
+            safe_remediation=None,
+        )
+    state, remediation = readiness_failure_state(record.safe_error_code)
+    return AskDevRoleReadiness(
+        role=role.value,
+        state=state,
+        checked_at=_checked_at(record.checked_at),
+        safe_remediation=remediation,
+    )
+
+
+def _role_readiness_list(
+    profile: RoleCertificationProfile,
+    *,
+    legacy_agent_certification_key: str | None,
+) -> list[AskDevRoleReadiness]:
+    """Build the full three-role projection. Only ``legacy_agent`` has a
+    live certification_key today (CHAOS-3285 PR3's probe); intent/narrative
+    have no probe yet (PR4) so their entries fall back to reporting whatever
+    is stored (ordinarily nothing -> not_yet_certified)."""
+
+    certification_keys: dict[AgentRole, str | None] = {
+        AgentRole.LEGACY_AGENT: legacy_agent_certification_key,
+        AgentRole.INTENT_CLASSIFICATION: None,
+        AgentRole.ANSWER_FRAME_NARRATIVE: None,
+    }
+    return [
+        _role_readiness_entry(
+            role, profile.for_role(role), certification_key=certification_keys[role]
+        )
+        for role in _ROLE_ORDER
+    ]
 
 
 class AskDevAdminSettings(StrictAdminModel):
@@ -157,7 +275,14 @@ class AskDevAdminResponse(StrictAdminModel):
     effective_provider_label: str | None = Field(default=None, max_length=256)
     effective_model_label: str | None = Field(default=None, max_length=256)
     provider_source: Literal["platform", "byo"] | None = None
+    # CHAOS-3285 round 2 (Codex HIGH): this is now the EFFECTIVE readiness --
+    # combining the transport-echo binary check AND the legacy_agent role
+    # certification live selection actually requires. A binary-ready-but-
+    # role-incompatible provider must never report "ready" here (it would
+    # contradict live selection, which already rejects it). The raw,
+    # binary-only result is kept separately below as a named diagnostic.
     readiness: ReadinessState
+    binary_transport_readiness: ReadinessState
     readiness_checked_at: AwareDatetime | None = None
     readiness_version: str | None = Field(default=None, max_length=128)
     administrator_safe_failure_reason: str | None = Field(
@@ -171,6 +296,13 @@ class AskDevAdminResponse(StrictAdminModel):
     request_limits: AskDevAdminRequestLimits
     platform_allowance_bounds: AskDevPlatformAllowanceBounds
     no_training_by_default: Literal[True] = True
+    # CHAOS-3285: additive field. A single generic readiness badge cannot
+    # represent "certified for narrative but not for the legacy full-agent
+    # role" -- see AskDevRoleReadiness. Deliberately NOT a schema_version
+    # bump: dev-health-web has not yet been updated to read this field, and
+    # bumping schema_version on an already-deployed contract is a
+    # coordinated, separate change (plan risk R6).
+    role_readiness: list[AskDevRoleReadiness] = Field(default_factory=list)
 
 
 class AskDevAdminUsageResponse(StrictAdminModel):
@@ -272,6 +404,15 @@ def _platform_readiness_store(session: AsyncSession) -> SettingsAgentReadinessSt
     )
 
 
+def _platform_role_store(session: AsyncSession) -> SettingsRoleCertificationStore:
+    """The platform-owned provider's per-role certification store."""
+
+    return SettingsRoleCertificationStore(
+        SettingsService(session, _PLATFORM_SETTINGS_ORG_ID),
+        key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    )
+
+
 async def _feature_state(
     session: AsyncSession, org_id: str
 ) -> tuple[EntitlementState, bool, str | None]:
@@ -324,6 +465,11 @@ async def _admin_response(
     readiness: ReadinessState = "missing_credentials"
     failure_reason: str | None = None
     resolution = None
+    # CHAOS-3285: only populated when a candidate actually resolves below --
+    # entitlement-disabled/org-disabled runs never attempted a certification
+    # check at all, so an empty list (no data) is more honest here than a
+    # fabricated "not_yet_certified" landscape for a feature that is off.
+    role_readiness: list[AskDevRoleReadiness] = []
 
     if not entitled:
         readiness = "disabled"
@@ -346,6 +492,14 @@ async def _admin_response(
                 # stale/absent org-scoped record this org can no longer
                 # produce.
                 readiness_record = await _platform_readiness_store(session).load()
+                role_store = _platform_role_store(session)
+            else:
+                role_store = SettingsRoleCertificationStore(settings_service)
+            role_profile = await role_store.load()
+            role_readiness = _role_readiness_list(
+                role_profile,
+                legacy_agent_certification_key=resolution.readiness_fingerprint,
+            )
             if readiness_record is None:
                 readiness = "stale_readiness"
                 failure_reason = "The configured Ask Dev model has not been certified."
@@ -396,6 +550,36 @@ async def _admin_response(
                         exc_info=True,
                     )
 
+    # CHAOS-3285 round 2 (Codex HIGH): the binary transport check alone is
+    # never sufficient for "ready" -- live selection (production_runtime.py
+    # _candidate()) also requires a current, COMPATIBLE legacy_agent role
+    # certification. Combine them here so this response can never claim
+    # availability that selection would reject. Only override when the
+    # binary check itself passed: a binary failure (missing credentials,
+    # unsupported model, ...) already explains why nothing is available and
+    # must keep its own specific reason rather than being masked by a role
+    # state that was never meaningfully evaluated against a failing binary
+    # candidate in the first place.
+    binary_transport_readiness: ReadinessState = readiness
+    legacy_role_entry = next(
+        (entry for entry in role_readiness if entry.role == "legacy_agent"), None
+    )
+    if (
+        readiness == "ready"
+        and legacy_role_entry is not None
+        and legacy_role_entry.state != "ready"
+    ):
+        # "not_yet_certified" has no ReadinessState counterpart (it exists
+        # only to distinguish "never certified" from "stale" in the per-role
+        # array); both mean the same thing for this combined top-level
+        # field -- run preflight -- so it collapses to stale_readiness here.
+        readiness = (
+            "stale_readiness"
+            if legacy_role_entry.state == "not_yet_certified"
+            else legacy_role_entry.state
+        )
+        failure_reason = legacy_role_entry.safe_remediation
+
     if provider_source == "platform":
         # This organization's admin surface must never expose the
         # platform-owned provider's identity or its platform-specific
@@ -405,6 +589,22 @@ async def _admin_response(
         provider_source = None
         if readiness != "ready":
             failure_reason = _PLATFORM_GENERIC_UNAVAILABLE_MESSAGE
+        # Same boundary (CHAOS-3265): a per-role remediation string must not
+        # carry platform-specific diagnostic text into an org's response
+        # either. The role/state landscape itself is safe to show (it
+        # carries no identity), only the free-text remediation is redacted.
+        role_readiness = [
+            entry.model_copy(
+                update={
+                    "safe_remediation": (
+                        None
+                        if entry.state == "ready"
+                        else _PLATFORM_GENERIC_UNAVAILABLE_MESSAGE
+                    )
+                }
+            )
+            for entry in role_readiness
+        ]
 
     available = entitled and not policy.emergency_disabled and readiness == "ready"
     limits = DevAdmissionLimits()
@@ -417,6 +617,7 @@ async def _admin_response(
         effective_model_label=model_label,
         provider_source=provider_source,
         readiness=readiness,
+        binary_transport_readiness=binary_transport_readiness,
         readiness_checked_at=(
             _checked_at(readiness_record.checked_at) if readiness_record else None
         ),
@@ -447,6 +648,7 @@ async def _admin_response(
             cost_minimum_microusd=PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD,
             cost_maximum_microusd=platform_operator_cost_limit_microusd(),
         ),
+        role_readiness=role_readiness,
     )
 
 

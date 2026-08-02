@@ -37,8 +37,19 @@ from dev_health_ops.llm.agent.readiness import (
     SettingsAgentReadinessStore,
     readiness_failure_state,
 )
+from dev_health_ops.llm.agent.role_readiness import RoleReadinessService
+from dev_health_ops.llm.agent.roles import (
+    PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    AgentRole,
+    SettingsRoleCertificationStore,
+)
 
-from .ask_dev import StrictAdminModel, _checked_at
+from .ask_dev import (
+    AskDevRoleReadiness,
+    StrictAdminModel,
+    _checked_at,
+    _role_readiness_list,
+)
 from .common import get_session
 
 router = APIRouter()
@@ -52,10 +63,19 @@ class PlatformAskDevReadinessResponse(StrictAdminModel):
     configured: bool
     provider_label: str | None = Field(default=None, max_length=256)
     model_label: str | None = Field(default=None, max_length=256)
+    # CHAOS-3285 round 2 (Codex HIGH): the EFFECTIVE readiness -- binary
+    # transport check AND legacy_agent role certification combined. See
+    # AskDevAdminResponse's identical field for the full rationale.
     readiness: ReadinessState
+    binary_transport_readiness: ReadinessState
     readiness_checked_at: AwareDatetime | None = None
     readiness_version: str | None = Field(default=None, max_length=128)
     safe_remediation: str | None = Field(default=None, max_length=2_048)
+    # CHAOS-3285: additive field, same rationale as AskDevAdminResponse's
+    # role_readiness -- a single generic badge cannot represent per-role
+    # certification. No schema_version bump here either (plan risk R6: web
+    # is a separate, coordinated change).
+    role_readiness: list[AskDevRoleReadiness] = Field(default_factory=list)
 
 
 def _platform_store(session: AsyncSession) -> SettingsAgentReadinessStore:
@@ -78,6 +98,18 @@ def _platform_store(session: AsyncSession) -> SettingsAgentReadinessStore:
     )
 
 
+def _platform_role_store(session: AsyncSession) -> SettingsRoleCertificationStore:
+    """The platform-owned provider's per-role certification store -- same
+    ``org_id=""`` sentinel scoping and dedicated-key rationale as
+    ``_platform_store`` above (CHAOS-3265), under a key distinct from both
+    the ordinary per-org role store AND the legacy binary platform key."""
+
+    return SettingsRoleCertificationStore(
+        SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+        key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    )
+
+
 async def _platform_readiness_response(
     session: AsyncSession,
 ) -> PlatformAskDevReadinessResponse:
@@ -96,6 +128,7 @@ async def _platform_readiness_response(
             provider_label=None,
             model_label=None,
             readiness=readiness,
+            binary_transport_readiness=readiness,
             readiness_checked_at=(
                 _checked_at(readiness_record.checked_at) if readiness_record else None
             ),
@@ -105,6 +138,10 @@ async def _platform_readiness_response(
                 else READINESS_VERSION
             ),
             safe_remediation=exc.safe_message,
+            # No candidate resolved -- there is nothing to project a
+            # per-role certification_key against (same reasoning as
+            # ask_dev.py's empty-list-when-unresolvable choice).
+            role_readiness=[],
         )
     try:
         readiness_state: ReadinessState
@@ -142,11 +179,34 @@ async def _platform_readiness_response(
                 "This configuration has not been certified under the current "
                 "readiness requirements. Run preflight again."
             )
+        role_profile = await _platform_role_store(session).load()
+        role_readiness = _role_readiness_list(
+            role_profile,
+            legacy_agent_certification_key=resolution.readiness_fingerprint,
+        )
+        # CHAOS-3285 round 2 (Codex HIGH): combine binary + role, same as
+        # ask_dev.py -- only override when the binary check itself passed.
+        binary_transport_readiness = readiness_state
+        legacy_role_entry = next(
+            (entry for entry in role_readiness if entry.role == "legacy_agent"), None
+        )
+        if (
+            readiness_state == "ready"
+            and legacy_role_entry is not None
+            and legacy_role_entry.state != "ready"
+        ):
+            readiness_state = (
+                "stale_readiness"
+                if legacy_role_entry.state == "not_yet_certified"
+                else legacy_role_entry.state
+            )
+            safe_remediation = legacy_role_entry.safe_remediation
         return PlatformAskDevReadinessResponse(
             configured=True,
             provider_label=resolution.provider_label,
             model_label=resolution.model_label,
             readiness=readiness_state,
+            binary_transport_readiness=binary_transport_readiness,
             readiness_checked_at=(
                 _checked_at(readiness_record.checked_at) if readiness_record else None
             ),
@@ -156,6 +216,7 @@ async def _platform_readiness_response(
                 else READINESS_VERSION
             ),
             safe_remediation=safe_remediation,
+            role_readiness=role_readiness,
         )
     finally:
         try:
@@ -204,6 +265,41 @@ async def run_platform_ask_dev_readiness(
             model=resolution.model,
             fingerprint=resolution.readiness_fingerprint,
         )
+        try:
+            # CHAOS-3285: certify the legacy_agent role in the new per-role
+            # store too, on the same already-resolved provider, so the
+            # per-role projection reflects real preflight results rather
+            # than staying "not_yet_certified" forever. Best-effort: a bug
+            # here must never regress the existing (tested, relied-upon)
+            # binary certify() call above -- certify_legacy_agent already
+            # turns every AgentProviderError into a FAILED/INCOMPATIBLE
+            # record internally, so only a genuinely unexpected failure
+            # (e.g. store I/O) reaches this except.
+            #
+            # CHAOS-3285 round 2 (Codex MEDIUM): the whole attempt runs
+            # inside a SAVEPOINT (begin_nested), never bare. A DB error
+            # caught by a plain except -- without a rollback or savepoint --
+            # leaves the session's transaction unable to accept further
+            # operations; the NEXT query on it raises PendingRollbackError,
+            # and when the request's own session dependency later tries to
+            # commit, THAT failure rolls back the whole transaction --
+            # silently discarding the binary certify() write just above,
+            # despite this being "caught". begin_nested()'s __aexit__ rolls
+            # back only to the savepoint on an exception, leaving the outer
+            # transaction (and the binary write already flushed into it)
+            # intact and the session usable for the rest of this request.
+            async with session.begin_nested():
+                await RoleReadinessService(_platform_role_store(session)).certify_role(
+                    AgentRole.LEGACY_AGENT,
+                    resolution.provider,
+                    certification_key=resolution.readiness_fingerprint,
+                )
+        except Exception:
+            logger.warning(
+                "Failed to certify the legacy_agent role during platform "
+                "Ask Dev preflight",
+                exc_info=True,
+            )
     finally:
         try:
             await resolution.provider.aclose()

@@ -77,9 +77,7 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
     assert unit_step["env"]["PYTEST_ADDOPTS"] == (
         "--ignore=tests/test_0066_celery_river_cutover_postgres.py "
         "--deselect=tests/test_dispatch_outbox.py::"
-        "test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible "
-        "--deselect=tests/test_sync_planner.py::"
-        "test_postgres_missing_tier_limits_stays_inside_planner_savepoint"
+        "test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible"
     )
     assert unit_step["env"][_POSTGRES_TEST_URI_ENV] == (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
@@ -112,19 +110,11 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
         "test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible"
     )
 
-    planner_quarantine_step = next(
-        step
-        for step in workflow["jobs"]["test-matrix"]["steps"]
-        if step.get("name") == "Run quarantined PostgreSQL planner test (CHAOS-3180)"
-    )
-    assert planner_quarantine_step["continue-on-error"] is True
-    assert planner_quarantine_step["env"][_POSTGRES_TEST_URI_ENV] == (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
-    )
-    assert planner_quarantine_step["run"] == (
-        "pytest -q tests/test_sync_planner.py::"
-        "test_postgres_missing_tier_limits_stays_inside_planner_savepoint"
-    )
+    for job_name in ("test-matrix", "coverage"):
+        assert all(
+            step.get("name") != "Run quarantined PostgreSQL planner test (CHAOS-3180)"
+            for step in workflow["jobs"][job_name]["steps"]
+        )
 
     coverage_step = next(
         step

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import jwt
 from jwt.exceptions import InvalidTokenError
+from sqlalchemy.exc import SQLAlchemyError
 
 from dev_health_ops.licensing.feature_decisions import evaluate_org_feature_sync
 from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
@@ -367,17 +368,21 @@ class TierLimitService:
 
     def _get_db_tier_limits(self, tier: str) -> dict[str, int | float | None]:
         """Read tier limits from the tier_limits table."""
-        try:
+        if self.session.in_nested_transaction():
+            # Let the caller-owned SAVEPOINT roll back before the fallback
+            # consumes a missing-table error.
             rows = self.session.query(TierLimit).filter(TierLimit.tier == tier).all()
             return {str(row.limit_key): row.typed_value for row in rows}
-        except Exception:
+        try:
+            with self.session.begin_nested():
+                rows = (
+                    self.session.query(TierLimit).filter(TierLimit.tier == tier).all()
+                )
+        except SQLAlchemyError:
             # Table may not exist yet (pre-migration) — fall through to
-            # hardcoded defaults. Must NOT call session.rollback() here: this
-            # service is invoked from async callers via run_sync, and a sync
-            # rollback in that path breaks the greenlet context
-            # (sqlalchemy MissingGreenlet). Pre-migration planner transaction
-            # recovery is handled in the planner's own sync context.
+            # hardcoded defaults without rolling back the caller's transaction.
             return {}
+        return {str(row.limit_key): row.typed_value for row in rows}
 
     def _resolve_tier_limits(
         self, org_tier: LicenseTier

@@ -77,6 +77,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, text
+from sqlalchemy.exc import SQLAlchemyError
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -281,10 +282,11 @@ def _resolve_total_unit_cap(session: Session, org_id: str) -> int:
     try:
         from dev_health_ops.api.services.licensing import TierLimitService
 
-        tier_cap = TierLimitService(session).get_limit(
-            uuid.UUID(org_id), "max_sync_units"
-        )
-    except Exception:
+        with session.begin_nested():
+            tier_cap = TierLimitService(session).get_limit(
+                uuid.UUID(org_id), "max_sync_units"
+            )
+    except (SQLAlchemyError, ValueError):
         return default_cap
     if tier_cap is None:
         return default_cap

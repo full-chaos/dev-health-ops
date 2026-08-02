@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from dev_health_ops.api.dev.contracts import DevAnswer, DevToolResult
 from dev_health_ops.api.dev.prompts.composer import (
     LEGACY_PROMPT_VERSION,
     PROMPT_VERSION,
@@ -32,6 +33,8 @@ from dev_health_ops.llm.agent.openai_compatible import (
 from dev_health_ops.llm.agent.probes.legacy_agent import (
     _PRODUCTION_FLOOR_BYTES,
     _assert_production_shape,
+    _probe_registry,
+    _probe_tools,
     certify_legacy_agent,
 )
 from dev_health_ops.llm.agent.readiness import (
@@ -372,6 +375,25 @@ _MIN_CALIBRATION_ABSOLUTE_MARGIN_BYTES = 1_500
 _MIN_CALIBRATION_RELATIVE_MARGIN = 1.03
 
 
+def _real_decision_schema() -> dict[str, Any]:
+    """The real generated decision-envelope schema the legacy_agent probe's
+    round 2 actually sends -- built from the SAME real producers the probe
+    uses (the full 9-tool registry, the real ``DevAnswer`` schema), never
+    hand-authored. Used to compare the grammar's actual FIELD-LEVEL
+    structure, not just field presence (CHAOS-3285 round 5, Codex
+    MEDIUM)."""
+
+    registry = _probe_registry()
+    tools = _probe_tools(registry)
+    return OpenAICompatibleAgentProvider._decision_response_schema(
+        OpenAICompatibleAgentProvider._answer_draft_schema(
+            DevAnswer.model_json_schema(mode="validation")
+        ),
+        tools,
+        allow_final_answer=True,
+    )
+
+
 def _assert_structurally_real_grammar(round_2: dict[str, Any]) -> None:
     """CHAOS-3285 round 4 (Codex MEDIUM): byte-size margins ALONE can be
     satisfied by PADDING -- a large ``description`` string stuffed into an
@@ -381,7 +403,15 @@ def _assert_structurally_real_grammar(round_2: dict[str, Any]) -> None:
     decision-schema shape is present BEFORE trusting any byte margin:
     non-empty ``properties``, and a ``required`` set matching the real
     decision envelope (``_DECISION_FIELDS``, the actual producer -- never a
-    hand-guessed field list)."""
+    hand-guessed field list).
+
+    CHAOS-3285 round 5 (Codex MEDIUM): field PRESENCE alone is still not
+    enough -- an all-null grammar (every property typed ``{"type": "null"}``)
+    satisfies "non-empty properties, matching required keys" while carrying
+    no real structure at all. Compare the ``kind`` property -- the field
+    every decision variant depends on -- against the REAL generated schema
+    field-for-field, not just its presence.
+    """
 
     response_format = round_2.get("response_format")
     assert isinstance(response_format, dict), "round 2 must carry a response_format"
@@ -401,11 +431,31 @@ def _assert_structurally_real_grammar(round_2: dict[str, Any]) -> None:
         "-- padding does not substitute for the actual schema shape"
     )
 
+    real_kind_property = _real_decision_schema()["properties"]["kind"]
+    assert properties.get("kind") == real_kind_property, (
+        "grammar's 'kind' property does not match the real generated "
+        "schema's non-null decision-kind enum -- an inert (e.g. all-null) "
+        "grammar does not substitute for the actual decision-kind field"
+    )
+
 
 def _assert_structurally_real_history(round_2: dict[str, Any]) -> None:
     """Same guard for the accumulated tool-result history dimension: a
     large padded content string in the assistant/tool messages is not the
-    same as a real tool request followed by a schema-shaped tool result."""
+    same as a real tool request followed by a schema-shaped tool result.
+
+    CHAOS-3285 round 5 (Codex MEDIUM): a ``tool_calls`` list containing a
+    single empty dict (``[{}]``) satisfies "non-empty list" without
+    describing a real tool call, and a tool-result payload of
+    ``{"run_id": null, "tool_id": null, "tool_call_id": null}`` satisfies a
+    bare key-presence check without being usable at all. Validate the FULL
+    OpenAI wire shape a real tool call requires (nonempty id, type, a real
+    function name/arguments), that the tool result's ``tool_call_id``
+    genuinely matches the assistant's call id, and parse the tool result
+    content through the REAL ``DevToolResult`` model -- whose ``run_id``/
+    ``tool_id``/``tool_call_id`` fields are constrained to nonempty strings
+    -- rather than a bare dict-subset check.
+    """
 
     messages = round_2.get("messages")
     assert isinstance(messages, list) and len(messages) >= 4, (
@@ -419,21 +469,48 @@ def _assert_structurally_real_history(round_2: dict[str, Any]) -> None:
         "history's assistant message has no real tool_calls -- padding "
         "content does not substitute for a real tool request"
     )
+    tool_call = tool_calls[0]
+    assert isinstance(tool_call, dict), "tool call entry must be an object"
+    call_id = tool_call.get("id")
+    assert isinstance(call_id, str) and call_id, (
+        "tool call has no real (nonempty) id -- an empty tool_calls entry "
+        "does not substitute for a real tool request"
+    )
+    assert tool_call.get("type") == "function", "tool call must be type=function"
+    function = tool_call.get("function")
+    assert isinstance(function, dict), "tool call must carry a function object"
+    assert isinstance(function.get("name"), str) and function["name"], (
+        "tool call's function.name must be a real (nonempty) value"
+    )
+    assert isinstance(function.get("arguments"), str), (
+        "tool call's function.arguments must be a serialized string"
+    )
+
     tool_message = messages[3]
     assert tool_message.get("role") == "tool"
+    tool_call_id = tool_message.get("tool_call_id")
+    assert isinstance(tool_call_id, str) and tool_call_id, (
+        "tool result has no real (nonempty) tool_call_id"
+    )
+    assert tool_call_id == call_id, (
+        "tool result's tool_call_id does not match the assistant's tool "
+        "call id -- history is not a real request/result exchange"
+    )
     content = tool_message.get("content")
     assert isinstance(content, str)
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
         parsed = None
-    assert isinstance(parsed, dict) and {"run_id", "tool_id", "tool_call_id"} <= set(
-        parsed
-    ), (
-        "history's tool message content is not a schema-shaped tool "
-        "result -- padding does not substitute for real tool-result "
-        "structure"
-    )
+    assert isinstance(parsed, dict), "tool result content must be a JSON object"
+    try:
+        DevToolResult.model_validate(parsed)
+    except Exception as exc:  # pydantic.ValidationError
+        raise AssertionError(
+            "history's tool message content does not validate as a real "
+            f"DevToolResult -- padding/all-null fields do not substitute "
+            f"for a real tool-result payload: {exc}"
+        ) from exc
 
 
 def _calibrate_noncompliant_rate(
@@ -584,6 +661,84 @@ async def test_calibration_fails_loudly_on_padded_but_structurally_empty_history
 
     with pytest.raises(AssertionError, match="no real tool_calls"):
         _calibrate_noncompliant_rate(round_1, padded_empty_history, cap=4096)
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_on_an_all_null_grammar() -> None:
+    """CHAOS-3285 round 5 (Codex MEDIUM), codex's exact repro: a grammar
+    where every property is retyped ``{"type": "null"}`` satisfies "non-
+    empty properties, matching required keys" -- the round 4 checks --
+    while carrying no real structure at all (every field can only ever be
+    null). The per-field kind-property comparison against the real
+    generated schema must catch this."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    real_properties = round_2["response_format"]["json_schema"]["schema"]["properties"]
+    all_null_grammar = dict(round_2)
+    all_null_grammar["response_format"] = {
+        "json_schema": {
+            "strict": True,
+            "schema": {
+                "properties": {key: {"type": "null"} for key in real_properties},
+                "required": sorted(real_properties),
+            },
+        }
+    }
+
+    with pytest.raises(
+        AssertionError, match="does not match the real generated schema"
+    ):
+        _calibrate_noncompliant_rate(round_1, all_null_grammar, cap=4096)
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_on_an_empty_tool_call() -> None:
+    """CHAOS-3285 round 5 (Codex MEDIUM), codex's exact repro:
+    ``tool_calls=[{}]`` (a list containing one empty dict) satisfies the
+    round 4 "non-empty list" check without describing a real tool call at
+    all."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    empty_tool_call = dict(round_2)
+    empty_tool_call["messages"] = [
+        round_2["messages"][0],
+        round_2["messages"][1],
+        {"role": "assistant", "tool_calls": [{}]},
+        round_2["messages"][3],
+    ]
+
+    with pytest.raises(AssertionError, match=r"no real \(nonempty\) id"):
+        _calibrate_noncompliant_rate(round_1, empty_tool_call, cap=4096)
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_on_a_null_tool_result() -> None:
+    """CHAOS-3285 round 5 (Codex MEDIUM), codex's exact repro: a tool
+    result of ``{"run_id": null, "tool_id": null, "tool_call_id": null}``
+    satisfies the round 4 bare key-presence check while being entirely
+    unusable. Parsing through the real ``DevToolResult`` model (whose
+    fields require nonempty values) must catch it."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    real_call_id = round_2["messages"][2]["tool_calls"][0]["id"]
+    null_tool_result = dict(round_2)
+    null_tool_result["messages"] = [
+        round_2["messages"][0],
+        round_2["messages"][1],
+        round_2["messages"][2],
+        {
+            "role": "tool",
+            "tool_call_id": real_call_id,
+            "content": json.dumps(
+                {"run_id": None, "tool_id": None, "tool_call_id": None}
+            ),
+        },
+    ]
+
+    with pytest.raises(
+        AssertionError, match="does not validate as a real DevToolResult"
+    ):
+        _calibrate_noncompliant_rate(round_1, null_tool_result, cap=4096)
 
 
 @pytest.mark.asyncio

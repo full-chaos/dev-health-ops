@@ -73,8 +73,10 @@ _DEV_NARRATIVE_SCHEMA_VERSION = "dev_narrative.v1"
 
 
 def upgrade() -> None:
+    # DDL identifiers/bodies are module-level literals; DDL cannot take bound parameters.
     op.execute(
-        text(f"""
+        text(  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+            f"""
         CREATE OR REPLACE FUNCTION dev_answer_frames_validate_payload() RETURNS trigger AS $$
         BEGIN
             IF NEW.payload IS NULL THEN
@@ -95,7 +97,8 @@ def upgrade() -> None:
             RETURN NEW;
         END;
         $$ LANGUAGE plpgsql;
-        """)
+        """
+        )
     )
     # Two separate op.execute() calls, not one multi-statement string:
     # asyncpg (this project's async Postgres driver) rejects multiple SQL
@@ -113,8 +116,10 @@ def upgrade() -> None:
             FOR EACH ROW EXECUTE FUNCTION dev_answer_frames_validate_payload();
         """)
     )
+    # DDL identifiers/bodies are module-level literals; DDL cannot take bound parameters.
     op.execute(
-        text(f"""
+        text(  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+            f"""
         CREATE OR REPLACE FUNCTION dev_run_narratives_validate_payload() RETURNS trigger AS $$
         BEGIN
             IF NEW.payload IS NULL THEN
@@ -138,7 +143,8 @@ def upgrade() -> None:
             RETURN NEW;
         END;
         $$ LANGUAGE plpgsql;
-        """)
+        """
+        )
     )
     op.execute(
         text(

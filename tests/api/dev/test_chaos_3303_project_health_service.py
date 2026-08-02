@@ -145,6 +145,26 @@ class FakeRuntime:
     async def data_health(self, *, org_id, permission_fingerprint, scope):
         return _data_health()
 
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
+        # CHAOS-3296's PlanExecutorRuntime protocol member --
+        # ProjectHealthService never mints evidence itself, so this is here
+        # only for structural conformance.
+        raise AssertionError("not exercised by this suite")
+
 
 @pytest.mark.asyncio
 async def test_evaluate_project_rejects_non_project_scope() -> None:

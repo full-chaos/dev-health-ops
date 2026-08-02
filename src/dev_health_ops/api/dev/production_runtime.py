@@ -104,7 +104,6 @@ from .evidence_service import (
 from .investigation_plans import (
     PlanExecutor,
     build_default_registry,
-    wrap_runtime_with_mint_receipts,
 )
 from .investigation_plans.plan_documents import CORE_PLANS_BY_INTENT
 from .metrics.clickhouse import ClickHouseMetricSource
@@ -2136,24 +2135,24 @@ async def _assemble_production_runtime(
     # is committed, and only the preflight commits one.
     plan_executor = (
         PlanExecutor(
-            # CHAOS-3296 Codex finding (MEDIUM, 2026-08-01): wrapping the
-            # runtime here -- the one place it is baked into every builtin
-            # step closure -- plus ``verify_mint_receipts=True`` is what
-            # actually turns on executor-side evidence-handle provenance
-            # checking; either half alone verifies nothing. See
-            # ``investigation_plans.executor.wrap_runtime_with_mint_receipts``.
+            # CHAOS-3296 round 5 (structural inversion, 2026-08-02): passing
+            # the exact ``EvidenceReferenceSigner`` every builtin step's
+            # ``mint_evidence`` already signs through is what turns on
+            # executor-side evidence-provenance checking -- the executor
+            # recomputes the real signature itself (see
+            # ``investigation_plans.executor._evidence_signature_failures``)
+            # rather than trusting a receipt of what this run minted, so no
+            # runtime-wrapping step is needed here anymore.
             registry=build_default_registry(
-                wrap_runtime_with_mint_receipts(
-                    _ProductionPlanExecutorRuntime(
-                        status_service=status_service,
-                        metric_service=metric_service,
-                        work_graph_service=work_graph_service,
-                        data_health_service=data_health_service,
-                        evidence_signer=evidence_signer,
-                    )
+                _ProductionPlanExecutorRuntime(
+                    status_service=status_service,
+                    metric_service=metric_service,
+                    work_graph_service=work_graph_service,
+                    data_health_service=data_health_service,
+                    evidence_signer=evidence_signer,
                 )
             ),
-            verify_mint_receipts=True,
+            evidence_signer=evidence_signer,
         )
         if wave_3_1_enabled
         else None

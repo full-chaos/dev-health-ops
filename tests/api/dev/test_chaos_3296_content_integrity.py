@@ -20,11 +20,12 @@ Fix (``investigation_plans/executor.py`` + ``relationship_matrix.py``):
   may ever populate; ``_to_observation`` rejects a mismatch structurally
   (demotes to an unmeasured observation, drops the content, flips closure
   False) rather than passing it through.
-* ``wrap_runtime_with_mint_receipts`` + ``PlanExecutor(verify_mint_receipts=
-  True)`` (opt-in -- off by default, so every pre-3296 test/harness that
-  hand-builds content is unaffected) let the executor verify every evidence
-  handle in a step's content was actually minted during that exact step's
-  own run, never merely shape-valid.
+* ``PlanExecutor(evidence_signer=...)`` (opt-in -- ``None`` by default, so
+  every pre-3296 test/harness that hand-builds content is unaffected) lets
+  the executor verify every evidence handle in a step's content by
+  recomputing the real signature (CHAOS-3296 round 5 -- see
+  ``executor._evidence_signature_failures``), never merely trusting that a
+  string is shaped like ``ev1_...``.
 """
 
 from __future__ import annotations
@@ -58,8 +59,12 @@ from dev_health_ops.api.dev.investigation_plans import (
     StepContext,
     StepOutcome,
     StepRegistry,
-    wrap_runtime_with_mint_receipts,
 )
+from dev_health_ops.api.dev.investigation_plans.builtin_steps import (
+    _STATUS_EVIDENCE_SOURCE_VERSION,
+    _bind_content,
+)
+from tests._chaos_3295_plan_executor import TEST_EVIDENCE_SIGNER, sign_evidence
 
 ORG_ID = "org_fullchaos"
 ROOT_ENTITY_ID = "project-1"
@@ -151,7 +156,9 @@ async def _run_single_step(
         )
     )
     executor = PlanExecutor(
-        registry=registry, now=_now, verify_mint_receipts=verify_mint_receipts
+        registry=registry,
+        now=_now,
+        evidence_signer=TEST_EVIDENCE_SIGNER if verify_mint_receipts else None,
     )
     result = await executor.run(
         plan=plan, context=_context(), run_id="run-1", subject_entity_id=ROOT_ENTITY_ID
@@ -279,7 +286,18 @@ class _MintOnlyRuntime:
         repository_ids=(),
     ):
         self.mint_calls += 1
-        return "ev1_" + f"{self.mint_calls:040x}"
+        return sign_evidence(
+            org_id=org_id,
+            source_system=source_system,
+            source_version=source_version,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            display_label=display_label,
+            observed_at=observed_at,
+            freshness=freshness,
+            confidence=confidence,
+            repository_ids=repository_ids,
+        )
 
 
 @pytest.mark.asyncio
@@ -311,13 +329,13 @@ async def test_verify_mint_receipts_off_by_default_accepts_a_forged_handle_unver
 @pytest.mark.asyncio
 async def test_verify_mint_receipts_accepts_a_genuinely_minted_handle():
     runtime = _MintOnlyRuntime()
-    wrapped = wrap_runtime_with_mint_receipts(runtime)
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        handle = wrapped.mint_evidence(
+        text = "Issue one is in_progress"
+        handle = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version="status-snapshot-evidence.v1",
+            source_version=_bind_content(_STATUS_EVIDENCE_SOURCE_VERSION, claim=text),
             entity_type="issue",
             entity_id="issue-1",
             display_label="Issue One",
@@ -327,10 +345,13 @@ async def test_verify_mint_receipts_accepts_a_genuinely_minted_handle():
         # fact_id follows the real convention builtin_steps.py wires
         # (``f"{entity_type}:{entity_id}"``) so the identity a genuine
         # verification check derives from the fact matches exactly what
-        # was minted -- see ``executor._content_fact_claims``.
+        # was minted -- see ``executor._evidence_signature_failures``.
+        # ``text`` must match the ``claim`` bound above verbatim (round 5):
+        # ``_identity_status_fact`` recomputes the content digest straight
+        # from this same field.
         fact = DevStatusFactV2(
             fact_id="issue:issue-1",
-            text="Issue one is in_progress",
+            text=text,
             evidence_ref_ids=(handle,),
         )
         return _queried_outcome(
@@ -354,16 +375,21 @@ async def test_verify_mint_receipts_rejects_a_handle_this_step_never_minted():
     """The forgery this finding names: a step embeds a syntactically valid
     ``ev1_...`` handle it fabricated inline rather than obtaining through
     ``mint_evidence`` -- with verification on, this must never reach
-    persistence, and the run must still terminate cleanly (never raise)."""
+    persistence, and the run must still terminate cleanly (never raise).
+    CHAOS-3296 round 5: a handle that was never genuinely signed for ANY
+    identity fails ``signer.verify`` the same way a handle signed for the
+    WRONG identity does -- both report ``evidence_signature_invalid``."""
 
     runtime = _MintOnlyRuntime()
-    wrapped = wrap_runtime_with_mint_receipts(runtime)
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        genuine = wrapped.mint_evidence(
+        genuine_text = "Issue one is in_progress"
+        genuine = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version="status-snapshot-evidence.v1",
+            source_version=_bind_content(
+                _STATUS_EVIDENCE_SOURCE_VERSION, claim=genuine_text
+            ),
             entity_type="issue",
             entity_id="issue-1",
             display_label="Issue One",
@@ -372,7 +398,7 @@ async def test_verify_mint_receipts_rejects_a_handle_this_step_never_minted():
         )
         genuine_fact = DevStatusFactV2(
             fact_id="issue:issue-1",
-            text="Issue one is in_progress",
+            text=genuine_text,
             evidence_ref_ids=(genuine,),
         )
         forged_fact = DevStatusFactV2(
@@ -394,5 +420,5 @@ async def test_verify_mint_receipts_rejects_a_handle_this_step_never_minted():
     assert runtime.mint_calls == 1
     assert observation.content is None
     assert observation.observed_state is SourceRequirementState.UNAVAILABLE
-    assert observation.limitation == "unminted_evidence_handle"
+    assert observation.limitation == "evidence_signature_invalid:2"
     assert result.relationship_closure_verified is False

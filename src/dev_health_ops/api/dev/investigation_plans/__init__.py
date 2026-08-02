@@ -17,7 +17,7 @@ Public surface:
 from __future__ import annotations
 
 from .builtin_steps import PlanExecutorRuntime, register_builtin_steps
-from .executor import PlanExecutionError, PlanExecutor, wrap_runtime_with_mint_receipts
+from .executor import PlanExecutionError, PlanExecutor
 from .plan_documents import CORE_PLANS_BY_INTENT, CORE_QUESTION_INTENT_IDS
 from .registry_validation import validate_registry
 from .steps import (
@@ -45,7 +45,6 @@ __all__ = [
     "plan_registry_manifest",
     "register_builtin_steps",
     "validate_registry",
-    "wrap_runtime_with_mint_receipts",
 ]
 
 

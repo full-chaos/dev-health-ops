@@ -142,6 +142,26 @@ class FakeRuntime:
     async def data_health(self, *, org_id, permission_fingerprint, scope):
         return DataHealthResult(sources=(), complete_eligible=False)
 
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
+        # CHAOS-3296's PlanExecutorRuntime protocol member --
+        # TeamWorkloadService never mints evidence itself, so this is here
+        # only for structural conformance.
+        raise AssertionError("not exercised by this suite")
+
 
 @dataclass
 class FakeAttributionSource:
@@ -275,6 +295,23 @@ class _UncallableRuntime:
         raise AssertionError("unexpected call")
 
     async def data_health(self, *, org_id, permission_fingerprint, scope):
+        raise AssertionError("unexpected call")
+
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
         raise AssertionError("unexpected call")
 
 

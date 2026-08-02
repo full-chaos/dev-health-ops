@@ -12,16 +12,15 @@ entirely the plan document plus each step's own ``applicable`` predicate
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import json
 import uuid
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from ..contracts import DevScope, DirectScope, FreshnessState
-from ..contracts_v2.base import EvidenceHandle, SourceClass, SourceRequirementState
+from ..contracts import DevScope, DirectScope
+from ..contracts_v2.base import SourceClass, SourceRequirementState
 from ..contracts_v2.plan import DevInvestigationPlan, DevSourceRequirement
 from ..contracts_v2.result import (
     DevInvestigationResult,
@@ -29,7 +28,7 @@ from ..contracts_v2.result import (
     DevSourceContent,
     DevSourceObservation,
 )
-from .builtin_steps import PlanExecutorRuntime
+from ..evidence_service import EvidenceReferenceSigner
 from .relationship_matrix import (
     CONTENT_SLOT_FIELDS,
     EVIDENCE_IDENTITY_TABLE,
@@ -47,59 +46,57 @@ from .steps import (
     StepRegistry,
 )
 
-__all__ = ["PlanExecutionError", "PlanExecutor", "wrap_runtime_with_mint_receipts"]
+__all__ = ["PlanExecutionError", "PlanExecutor"]
 
 
 @dataclass(frozen=True, slots=True)
-class _MintedReceipt:
-    """The identity a ``mint_evidence`` call actually issued a handle
-    against -- the same four fields ``EvidenceReferenceSigner._payload``
-    binds into its HMAC (``evidence_service.py``), captured directly from
-    the mint call's own keyword arguments rather than re-derived from
-    anything a step could shape afterward.
+class _CandidateIdentity:
+    """CHAOS-3296 round-5 structural inversion (Codex findings, HIGH, round
+    4, 2026-08-02): rounds 1-4 all verified a cited evidence handle by
+    comparing a re-derived SUBSET of its identity against a per-run RECEIPT
+    this executor maintained itself -- an adversary only had to vary
+    whatever the receipt didn't carry. Round 4's receipt bound
+    (source_system, source_version, entity_type, entity_id) but not the
+    tenant/repository scope the real signer's HMAC also binds, so a handle
+    honestly minted for a DIFFERENT org verified clean as long as those four
+    fields happened to match (finding 1); and no round bound the fact's own
+    asserted CONTENT at all, so a genuine handle for a failing CI check
+    verified a fabricated fact claiming it passed (finding 2, closed instead
+    by folding a content digest into ``source_version`` at mint -- see
+    ``builtin_steps._ci_check_source_version``).
 
-    Codex finding (MEDIUM, round 2, 2026-08-02): recording only the bare
-    handle string (round 1's fix) proved merely that *some* handle was
-    minted during this step -- a step could mint once for a real entity and
-    reuse that same string on an arbitrary number of fabricated facts, and
-    the round-1 check could not tell the difference. Binding identity here
-    closes that: verification compares each fact's own claimed identity
-    against the receipt of every handle it cites (see
-    ``_evidence_identity_mismatches``).
+    This type carries exactly the fields
+    :class:`~..evidence_service.EvidenceReferenceSigner` (``_payload``/
+    ``verify``) binds into the real HMAC, reconstructed independently at
+    verification time rather than looked up from anything a step could
+    shape:
 
-    ``source_version`` added in round 4 (Codex [MEDIUM], 2026-08-02): CI
-    checks mint against the coarsened run-level ``entity_id`` but embed the
-    check-specific discriminator into ``source_version`` -- dropping that
-    field let one check's handle "verify" a fabricated fact for a different
-    check on the same run.
+    - ``source_system``/``source_version``/``entity_type``/``entity_id``
+      come from :data:`EVIDENCE_IDENTITY_TABLE`'s per-category ``derive``,
+      applied to the fact being verified -- never trusted from the fact's
+      own citation.
+    - ``repository_ids`` comes from the CURRENT ``StepContext``'s own
+      already-authorized scope (``context.scope.repositories`` -- the exact
+      value ``builtin_steps._scope_evidence_binding`` used at mint), never
+      from the fact or the cited handle.
+    - ``org_id`` is not a field here at all: it is supplied directly to
+      ``signer.verify`` from ``context.org_id``, for the same reason.
+
+    Because ``signer.verify`` recomputes the actual signature via the exact
+    code every real mint call already goes through (never reimplemented
+    here), a handle can only verify against a candidate if ``signer.issue``
+    was genuinely called, for THIS org, with THIS exact tuple -- there is no
+    receipt to be silently missing a field from, because there is no
+    receipt. See :func:`_evidence_signature_failures`.
     """
 
+    evidence_ref_id: str
     source_system: str
     source_version: str
     entity_type: str
     entity_id: str
+    repository_ids: Sequence[str]
 
-
-#: Per-step-invocation scope (CHAOS-3296 Codex finding, MEDIUM 2026-08-01):
-#: every evidence handle a ``PlanExecutorRuntime`` actually issues during one
-#: step's own ``run()`` call is recorded here, keyed by the handle and
-#: mapped to the identity it was minted against (see
-#: :class:`_MintReceiptRuntime`), isolated per ``asyncio`` task -- concurrent
-#: sibling steps (``asyncio.gather`` in :meth:`PlanExecutor.run`) each run in
-#: their own task with their own copy of this context var, so one step's
-#: receipts can never leak into another's. ``None`` (the default, and the
-#: only value any pre-3296 test or ``verify_mint_receipts=False`` run ever
-#: sees) means "no receipt tracking is active" -- content is accepted
-#: unverified, exactly today's behavior.
-_MINTED_EVIDENCE_HANDLES: contextvars.ContextVar[dict[str, _MintedReceipt] | None] = (
-    contextvars.ContextVar("chaos_3296_minted_evidence_handles", default=None)
-)
-
-#: A shared, never-mutated empty receipt map -- used as ``_to_observation``'s
-#: default so an ordinary mutable-default pitfall never applies (nothing
-#: ever writes into it; every real receipt map is its own fresh ``dict``
-#: from :meth:`PlanExecutor._run_one`).
-_EMPTY_RECEIPTS: Mapping[str, _MintedReceipt] = {}
 
 #: Codex finding (HIGH, 2026-08-02, round 2): raising the persistence
 #: envelope (``persistence/service.py``'s ``_SOURCE_OBSERVATION_PAYLOAD_
@@ -197,125 +194,10 @@ class PlanExecutionError(RuntimeError):
 
 
 @dataclass(slots=True)
-class _MintReceiptRuntime:
-    """A ``PlanExecutorRuntime`` pass-through that records every evidence
-    handle it actually issues -- and the identity it issued that handle
-    against -- into whichever step-scoped receipt map
-    :data:`_MINTED_EVIDENCE_HANDLES` names for the calling ``asyncio`` task.
-
-    CHAOS-3296 Codex finding (MEDIUM, 2026-08-01; sharpened round 2,
-    2026-08-02): a step's own ``StepOutcome.content`` is entirely
-    producer-controlled -- nothing previously stopped a step from embedding
-    a syntactically-valid-looking ``ev1_...`` string it fabricated inline
-    rather than one this exact ``mint_evidence`` call actually signed, and
-    round 1's existence-only receipt set could not stop a step from minting
-    once for a real entity and reusing that same handle on an arbitrary
-    number of fabricated facts. Wrapping the runtime here, once, at
-    registration (see :func:`wrap_runtime_with_mint_receipts`), means every
-    builtin step's ``mint=runtime.mint_evidence`` (``builtin_steps.py``)
-    transparently goes through this recorder with no change to that module --
-    the executor, not any individual step, becomes the sole authority on
-    which handles a step's own run genuinely minted, and what each one was
-    minted to prove.
-    """
-
-    _inner: PlanExecutorRuntime
-
-    async def status_snapshot(self, *, org_id, permission_fingerprint, scope):
-        return await self._inner.status_snapshot(
-            org_id=org_id, permission_fingerprint=permission_fingerprint, scope=scope
-        )
-
-    async def change_summary(self, *, org_id, permission_fingerprint, scope):
-        return await self._inner.change_summary(
-            org_id=org_id, permission_fingerprint=permission_fingerprint, scope=scope
-        )
-
-    def list_metrics(self, scope):
-        return self._inner.list_metrics(scope)
-
-    async def query_metric(self, *, org_id, permission_fingerprint, metric_id, scope):
-        return await self._inner.query_metric(
-            org_id=org_id,
-            permission_fingerprint=permission_fingerprint,
-            metric_id=metric_id,
-            scope=scope,
-        )
-
-    async def work_graph_neighbors(self, *, org_id, permission_fingerprint, scope):
-        return await self._inner.work_graph_neighbors(
-            org_id=org_id, permission_fingerprint=permission_fingerprint, scope=scope
-        )
-
-    async def data_health(self, *, org_id, permission_fingerprint, scope):
-        return await self._inner.data_health(
-            org_id=org_id, permission_fingerprint=permission_fingerprint, scope=scope
-        )
-
-    def mint_evidence(
-        self,
-        *,
-        org_id: str,
-        source_system: str,
-        source_version: str,
-        entity_type: str,
-        entity_id: str,
-        display_label: str,
-        observed_at: datetime,
-        freshness: FreshnessState,
-        confidence: float = 1.0,
-        valid_entity_ids=(),
-        repository_ids=(),
-    ) -> EvidenceHandle:
-        handle = self._inner.mint_evidence(
-            org_id=org_id,
-            source_system=source_system,
-            source_version=source_version,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            display_label=display_label,
-            observed_at=observed_at,
-            freshness=freshness,
-            confidence=confidence,
-            valid_entity_ids=valid_entity_ids,
-            repository_ids=repository_ids,
-        )
-        receipts = _MINTED_EVIDENCE_HANDLES.get()
-        if receipts is not None:
-            receipts[handle] = _MintedReceipt(
-                source_system=source_system,
-                source_version=source_version,
-                entity_type=entity_type,
-                entity_id=entity_id,
-            )
-        return handle
-
-
-def wrap_runtime_with_mint_receipts(
-    runtime: PlanExecutorRuntime,
-) -> PlanExecutorRuntime:
-    """Wrap ``runtime`` so :class:`PlanExecutor` can verify -- not merely
-    trust -- which evidence handles a step's own execution actually minted.
-
-    Call this exactly once, before ``register_builtin_steps``/
-    ``build_default_registry`` bakes ``runtime`` into every step closure
-    (``production_runtime.py``'s only call site). Has no effect unless the
-    owning :class:`PlanExecutor` was also constructed with
-    ``verify_mint_receipts=True`` -- with that flag off (every pre-3296 test
-    fixture, and any caller that has not opted in), :data:`
-    _MINTED_EVIDENCE_HANDLES` is never set, so this wrapper degrades to a
-    plain pass-through.
-    """
-
-    return _MintReceiptRuntime(runtime)
-
-
-@dataclass(slots=True)
 class _Attempt:
     step_id: str
     outcome: StepOutcome | None
     failed: bool
-    minted_evidence_handles: Mapping[str, _MintedReceipt] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,31 +357,6 @@ def _content_candidates(
     return candidates
 
 
-def _unminted_evidence_handles(
-    content: DevSourceContent,
-    minted_evidence_handles: Mapping[str, _MintedReceipt],
-    *,
-    now: datetime,
-) -> frozenset[str]:
-    """Every evidence handle ``content`` claims that this step's own receipt
-    map (:data:`_MINTED_EVIDENCE_HANDLES`, captured per-step in
-    :meth:`PlanExecutor._run_one`) never actually recorded -- i.e. a handle
-    that is not proven to have come from this exact step's
-    ``runtime.mint_evidence`` calls. Reuses :func:`_content_candidates`
-    (already a total per-fact-category walk) rather than a second, parallel
-    traversal of ``DevSourceContent``'s nine fields. Existence-only: a
-    handle that *was* minted, but for a different entity, passes this check
-    and is instead caught by :func:`_evidence_identity_mismatches`.
-    """
-
-    claimed = {
-        handle
-        for candidate in _content_candidates(content, now=now)
-        for handle in candidate.evidence_ref_ids
-    }
-    return frozenset(claimed - minted_evidence_handles.keys())
-
-
 def _content_field_facts(content: DevSourceContent) -> list[tuple[str, Any]]:
     """``(field_name, fact)`` for every fact in every ``CONTENT_SLOT_FIELDS``
     category, in stable declared field order and each field's own tuple
@@ -535,40 +392,51 @@ def _missing_evidence_facts(content: DevSourceContent) -> tuple[str, ...]:
     )
 
 
-def _evidence_identity_mismatches(
-    content: DevSourceContent, minted_evidence_handles: Mapping[str, _MintedReceipt]
+def _evidence_signature_failures(
+    content: DevSourceContent,
+    context: StepContext,
+    signer: EvidenceReferenceSigner,
 ) -> tuple[str, ...]:
-    """Every claimed ``entity_id`` from a fact citing a handle that WAS
-    minted this step -- just not for that fact's own identity. A handle
-    absent from ``minted_evidence_handles`` entirely is
-    :func:`_unminted_evidence_handles`'s concern; a fact with no handles at
-    all is :func:`_missing_evidence_facts`'s. Here a receipt exists, it is
-    simply bound to a different identity (source_system, source_version,
-    entity_type, entity_id -- the exact four the real signer's HMAC binds)
-    than the fact citing it claims, per :data:`EVIDENCE_IDENTITY_TABLE`'s
-    per-category derivation -- exactly the "mint once for issue-1, reuse on
-    a fabricated issue-999 fact" forgery this finding closes, now complete
-    across every evidence-capable category including graph_edges and
-    check-specific CI identity (round-3 Codex findings 2 and 3).
+    """Every claimed ``entity_id`` from a fact citing a handle that does not
+    cryptographically verify -- CHAOS-3296 round-5 structural inversion (see
+    :class:`_CandidateIdentity` for the full history this replaces). A fact
+    with no handles at all is :func:`_missing_evidence_facts`'s concern,
+    checked first and separately; here every cited handle is checked
+    against ``signer.verify`` directly, so "the handle was never minted at
+    all" and "the handle was minted, but for a different identity/tenant/
+    content" collapse into the SAME failure mode -- there is no longer a
+    distinct "existence" check, because a signature that does not verify is
+    exactly as invalid whether or not it happens to resemble a real one.
+
+    ``context.org_id``/``context.scope.repositories`` -- the caller's own
+    already-authorized scope, mirroring exactly what
+    ``builtin_steps._scope_evidence_binding`` bound at mint -- are supplied
+    fresh for every candidate, never read from the fact or the handle being
+    checked (round-4 finding 1: a per-run receipt that omitted these let a
+    handle honestly minted for a DIFFERENT tenant/repository scope verify
+    clean whenever the remaining fields happened to match).
     """
 
-    mismatched: set[str] = set()
+    invalid: set[str] = set()
+    repository_ids = tuple(context.scope.repositories)
     for slot, fact in _content_field_facts(content):
         cell = EVIDENCE_IDENTITY_TABLE[slot]
         if cell.mode != "required" or cell.derive is None:
             continue
         source_system, source_version, entity_type, entity_id = cell.derive(fact)
         for handle in fact.evidence_ref_ids:
-            receipt = minted_evidence_handles.get(handle)
-            if receipt is not None and (
-                receipt.source_system != source_system
-                or receipt.source_version != source_version
-                or receipt.entity_type != entity_type
-                or receipt.entity_id != entity_id
-            ):
-                mismatched.add(entity_id)
+            candidate = _CandidateIdentity(
+                evidence_ref_id=handle,
+                source_system=source_system,
+                source_version=source_version,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                repository_ids=repository_ids,
+            )
+            if not signer.verify(context.org_id, candidate):
+                invalid.add(entity_id)
                 break
-    return tuple(sorted(mismatched))
+    return tuple(sorted(invalid))
 
 
 def _resolve_target(candidate: _PathCandidate, root_entity_id: str) -> str | None:
@@ -592,7 +460,7 @@ class PlanExecutor:
         *,
         registry: StepRegistry,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
-        verify_mint_receipts: bool = False,
+        evidence_signer: EvidenceReferenceSigner | None = None,
         content_byte_budget: int = _CONTENT_BYTE_BUDGET_DEFAULT,
     ) -> None:
         self._registry = registry
@@ -604,15 +472,17 @@ class PlanExecutor:
         #: precisely-at-budget / one-item-over without needing to reverse
         #: engineer the real ~56KiB target's byte arithmetic.
         self._content_byte_budget = content_byte_budget
-        #: CHAOS-3296 Codex finding (MEDIUM, 2026-08-01): off by default so
+        #: CHAOS-3296 Codex finding (MEDIUM, 2026-08-01; superseded by the
+        #: round-5 structural inversion, 2026-08-02): ``None`` by default so
         #: every pre-3296 test/harness that hand-builds ``StepOutcome.content``
         #: (bypassing ``register_builtin_steps``/real minting entirely) is
         #: completely unaffected. ``production_runtime.py`` is the one caller
-        #: that turns this on, paired with ``wrap_runtime_with_mint_receipts``
-        #: wrapping the runtime it registers steps against -- without both
-        #: halves, this flag alone has nothing to verify against and would
-        #: reject every real fact's evidence citation.
-        self._verify_mint_receipts = verify_mint_receipts
+        #: that passes the real ``EvidenceReferenceSigner`` here -- the exact
+        #: instance every builtin step's ``mint_evidence`` already signs
+        #: through, never a second parallel signer. With no signer, every
+        #: evidence-provenance check in :meth:`_to_observation` is skipped
+        #: and content is accepted unverified, exactly today's behavior.
+        self._evidence_signer = evidence_signer
 
     async def run(
         self,
@@ -696,12 +566,10 @@ class PlanExecutor:
                 if isinstance(attempt_result, BaseException):
                     failed.add(step_id)
                     continue
-                step_outcome, minted = attempt_result
                 completed[step_id] = _Attempt(
                     step_id,
-                    step_outcome,
+                    attempt_result,
                     failed=False,
-                    minted_evidence_handles=minted,
                 )
             for step_id in ready:
                 remaining.pop(step_id, None)
@@ -779,21 +647,10 @@ class PlanExecutor:
         definition: PlanStepDefinition,
         context: StepContext,
         plan: DevInvestigationPlan,
-    ) -> tuple[StepOutcome, Mapping[str, _MintedReceipt]]:
-        # Each ``_run_one`` call is its own ``asyncio`` task (``run``'s
-        # ``asyncio.gather`` wraps each coroutine passed to it), so setting
-        # this context var here is isolated from every concurrent sibling
-        # step by construction -- no cross-step leakage, no locking needed.
-        token = _MINTED_EVIDENCE_HANDLES.set({}) if self._verify_mint_receipts else None
-        try:
-            outcome = await asyncio.wait_for(
-                definition.run(context), timeout=plan.per_step_timeout_seconds
-            )
-            minted = dict(_MINTED_EVIDENCE_HANDLES.get() or {})
-            return outcome, minted
-        finally:
-            if token is not None:
-                _MINTED_EVIDENCE_HANDLES.reset(token)
+    ) -> StepOutcome:
+        return await asyncio.wait_for(
+            definition.run(context), timeout=plan.per_step_timeout_seconds
+        )
 
     def _observation_for_requirement(
         self,
@@ -835,7 +692,6 @@ class PlanExecutor:
                 outcome,
                 observation_id,
                 context,
-                minted_evidence_handles=attempt.minted_evidence_handles,
             )
         if step_ids and all(step_id in not_applicable for step_id in step_ids):
             return self._unmeasured_observation(
@@ -874,8 +730,6 @@ class PlanExecutor:
         outcome: StepOutcome,
         observation_id: str,
         context: StepContext,
-        *,
-        minted_evidence_handles: Mapping[str, _MintedReceipt] = _EMPTY_RECEIPTS,
     ) -> tuple[DevSourceObservation, bool]:
         content = outcome.content
         if content is not None:
@@ -897,7 +751,7 @@ class PlanExecutor:
                     observation_id,
                     closed=False,
                 )
-            if self._verify_mint_receipts:
+            if self._evidence_signer is not None:
                 # Codex finding (HIGH, round 3, 2026-08-02): every check below
                 # only ever inspects handles a fact actually cites -- a fact
                 # citing NONE skipped every one of them, so a step needed no
@@ -916,42 +770,20 @@ class PlanExecutor:
                         observation_id,
                         closed=False,
                     )
-                # Codex finding (MEDIUM, 2026-08-01): pydantic's ``EvidenceHandle``
-                # pattern only proves a string is *shaped* like ``ev1_...`` --
-                # never that this exact step run actually minted it through
-                # the signer. A step that fabricated a plausible-looking
-                # handle inline (bug or forged adapter) would otherwise pass
-                # through unnoticed; every real handle a builtin step embeds
-                # came from ``runtime.mint_evidence`` via
-                # ``wrap_runtime_with_mint_receipts``, so any evidence_ref_id
-                # in ``content`` that this step's own receipt map never
-                # recorded is a handle this run did not actually mint.
-                unminted = _unminted_evidence_handles(
-                    content, minted_evidence_handles, now=context.now
+                # CHAOS-3296 round 5 (structural inversion, superseding
+                # rounds 1-4's per-run receipt comparison -- see
+                # :class:`_CandidateIdentity`): every cited handle must
+                # cryptographically verify against the CURRENT tenant's
+                # re-derived identity via the real signer, not merely exist
+                # in something this executor tracked itself.
+                invalid = _evidence_signature_failures(
+                    content, context, self._evidence_signer
                 )
-                if unminted:
+                if invalid:
                     return self._unmeasured_observation(
                         requirement,
                         SourceRequirementState.UNAVAILABLE,
-                        "unminted_evidence_handle",
-                        observation_id,
-                        closed=False,
-                    )
-                # Codex finding (MEDIUM, round 2, 2026-08-02): a handle
-                # existing in the receipt map is not enough -- round 1's
-                # check could not stop a step minting once for a real
-                # entity and reusing that exact handle to "prove" an
-                # arbitrary, fabricated second fact. Every fact's own
-                # claimed identity must match the identity its cited
-                # handle(s) were actually minted against.
-                mismatched = _evidence_identity_mismatches(
-                    content, minted_evidence_handles
-                )
-                if mismatched:
-                    return self._unmeasured_observation(
-                        requirement,
-                        SourceRequirementState.UNAVAILABLE,
-                        "evidence_entity_mismatch:" + ",".join(mismatched),
+                        "evidence_signature_invalid:" + ",".join(invalid),
                         observation_id,
                         closed=False,
                     )

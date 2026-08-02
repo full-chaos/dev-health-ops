@@ -77,7 +77,11 @@ from dev_health_ops.api.dev.investigation_plans import (
     StepContext,
     StepOutcome,
     StepRegistry,
-    wrap_runtime_with_mint_receipts,
+)
+from dev_health_ops.api.dev.investigation_plans.builtin_steps import (
+    _GRAPH_EVIDENCE_SOURCE_VERSION,
+    _STATUS_EVIDENCE_SOURCE_VERSION,
+    _bind_content,
 )
 from dev_health_ops.api.dev.investigation_plans.relationship_matrix import (
     CONTENT_SLOT_FIELDS,
@@ -101,6 +105,7 @@ from dev_health_ops.models.dev_persistence import (
 )
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization, User
+from tests._chaos_3295_plan_executor import TEST_EVIDENCE_SIGNER, sign_evidence
 from tests._helpers import tables_of
 
 ORG_ID = "org_fullchaos"
@@ -297,17 +302,16 @@ async def _run_single_step(
             run=run,
         )
     )
+    evidence_signer = TEST_EVIDENCE_SIGNER if verify_mint_receipts else None
     executor = (
         PlanExecutor(
             registry=registry,
             now=_now,
-            verify_mint_receipts=verify_mint_receipts,
+            evidence_signer=evidence_signer,
             content_byte_budget=content_byte_budget,
         )
         if content_byte_budget is not None
-        else PlanExecutor(
-            registry=registry, now=_now, verify_mint_receipts=verify_mint_receipts
-        )
+        else PlanExecutor(registry=registry, now=_now, evidence_signer=evidence_signer)
     )
     result = await executor.run(
         plan=plan, context=_context(), run_id="run-1", subject_entity_id=ROOT_ENTITY_ID
@@ -778,7 +782,18 @@ class _MintOnlyRuntime:
         repository_ids=(),
     ):
         self.mint_calls += 1
-        return "ev1_" + f"{self.mint_calls:040x}"
+        return sign_evidence(
+            org_id=org_id,
+            source_system=source_system,
+            source_version=source_version,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            display_label=display_label,
+            observed_at=observed_at,
+            freshness=freshness,
+            confidence=confidence,
+            repository_ids=repository_ids,
+        )
 
 
 @pytest.mark.asyncio
@@ -788,13 +803,15 @@ async def test_reused_handle_across_unrelated_facts_is_rejected():
     fact about issue-999. Must be rejected -- never raise, closure False."""
 
     runtime = _MintOnlyRuntime()
-    wrapped = wrap_runtime_with_mint_receipts(runtime)
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        real_handle = wrapped.mint_evidence(
+        real_text = "Issue one really is in_progress"
+        real_handle = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version="status-snapshot-evidence.v1",
+            source_version=_bind_content(
+                _STATUS_EVIDENCE_SOURCE_VERSION, claim=real_text
+            ),
             entity_type="issue",
             entity_id="issue-1",
             display_label="Issue One",
@@ -803,7 +820,7 @@ async def test_reused_handle_across_unrelated_facts_is_rejected():
         )
         real_fact = DevStatusFactV2(
             fact_id="issue:issue-1",
-            text="Issue one really is in_progress",
+            text=real_text,
             evidence_ref_ids=(real_handle,),
         )
         forged_fact = DevStatusFactV2(
@@ -826,7 +843,7 @@ async def test_reused_handle_across_unrelated_facts_is_rejected():
     assert observation.content is None
     assert observation.observed_state is SourceRequirementState.UNAVAILABLE
     assert observation.limitation is not None
-    assert observation.limitation.startswith("evidence_entity_mismatch:")
+    assert observation.limitation.startswith("evidence_signature_invalid:")
     assert "issue-999-fabricated" in observation.limitation
     assert result.relationship_closure_verified is False
 
@@ -837,13 +854,13 @@ async def test_correct_handle_on_correct_fact_is_accepted():
     passes identity verification."""
 
     runtime = _MintOnlyRuntime()
-    wrapped = wrap_runtime_with_mint_receipts(runtime)
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        handle = wrapped.mint_evidence(
+        text = "Issue one is in_progress"
+        handle = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version="status-snapshot-evidence.v1",
+            source_version=_bind_content(_STATUS_EVIDENCE_SOURCE_VERSION, claim=text),
             entity_type="issue",
             entity_id="issue-1",
             display_label="Issue One",
@@ -852,7 +869,7 @@ async def test_correct_handle_on_correct_fact_is_accepted():
         )
         fact = DevStatusFactV2(
             fact_id="issue:issue-1",
-            text="Issue one is in_progress",
+            text=text,
             evidence_ref_ids=(handle,),
         )
         return _queried_outcome(
@@ -877,23 +894,24 @@ async def test_two_facts_each_citing_their_own_handle_are_both_accepted():
     the other's handle, so both must be accepted."""
 
     runtime = _MintOnlyRuntime()
-    wrapped = wrap_runtime_with_mint_receipts(runtime)
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        handle_a = wrapped.mint_evidence(
+        text_a = "Issue one is in_progress"
+        text_b = "Issue two is done"
+        handle_a = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version="status-snapshot-evidence.v1",
+            source_version=_bind_content(_STATUS_EVIDENCE_SOURCE_VERSION, claim=text_a),
             entity_type="issue",
             entity_id="issue-1",
             display_label="Issue One",
             observed_at=OBSERVED_AT,
             freshness=FreshnessState.FRESH,
         )
-        handle_b = wrapped.mint_evidence(
+        handle_b = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_items",
-            source_version="status-snapshot-evidence.v1",
+            source_version=_bind_content(_STATUS_EVIDENCE_SOURCE_VERSION, claim=text_b),
             entity_type="issue",
             entity_id="issue-2",
             display_label="Issue Two",
@@ -902,12 +920,12 @@ async def test_two_facts_each_citing_their_own_handle_are_both_accepted():
         )
         fact_a = DevStatusFactV2(
             fact_id="issue:issue-1",
-            text="Issue one is in_progress",
+            text=text_a,
             evidence_ref_ids=(handle_a,),
         )
         fact_b = DevStatusFactV2(
             fact_id="issue:issue-2",
-            text="Issue two is done",
+            text=text_b,
             evidence_ref_ids=(handle_b,),
         )
         return _queried_outcome(
@@ -941,13 +959,17 @@ async def test_graph_edge_handle_reuse_is_rejected():
     from dev_health_ops.api.dev.contracts_v2.embedded import DevGraphEdgeV2
 
     runtime = _MintOnlyRuntime()
-    wrapped = wrap_runtime_with_mint_receipts(runtime)
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        handle = wrapped.mint_evidence(
+        handle = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_graph",
-            source_version="work-graph-evidence.v1",
+            source_version=_bind_content(
+                _GRAPH_EVIDENCE_SOURCE_VERSION,
+                relationship="references",
+                source_entity_id=ROOT_ENTITY_ID,
+                target_entity_id="pr-1",
+            ),
             entity_type="work_graph_edge",
             entity_id="edge-1",
             display_label="issue-1 references pr-1",
@@ -989,7 +1011,7 @@ async def test_graph_edge_handle_reuse_is_rejected():
     assert observation.content is None
     assert observation.observed_state is SourceRequirementState.UNAVAILABLE
     assert observation.limitation is not None
-    assert observation.limitation.startswith("evidence_entity_mismatch:")
+    assert observation.limitation.startswith("evidence_signature_invalid:")
     assert "edge-2-fabricated" in observation.limitation
     assert result.relationship_closure_verified is False
 
@@ -1001,23 +1023,32 @@ async def test_two_graph_edges_each_citing_their_own_handle_are_both_accepted():
     from dev_health_ops.api.dev.contracts_v2.embedded import DevGraphEdgeV2
 
     runtime = _MintOnlyRuntime()
-    wrapped = wrap_runtime_with_mint_receipts(runtime)
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        handle_a = wrapped.mint_evidence(
+        handle_a = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_graph",
-            source_version="work-graph-evidence.v1",
+            source_version=_bind_content(
+                _GRAPH_EVIDENCE_SOURCE_VERSION,
+                relationship="references",
+                source_entity_id=ROOT_ENTITY_ID,
+                target_entity_id="pr-1",
+            ),
             entity_type="work_graph_edge",
             entity_id="edge-1",
             display_label="issue-1 references pr-1",
             observed_at=OBSERVED_AT,
             freshness=FreshnessState.FRESH,
         )
-        handle_b = wrapped.mint_evidence(
+        handle_b = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="work_graph",
-            source_version="work-graph-evidence.v1",
+            source_version=_bind_content(
+                _GRAPH_EVIDENCE_SOURCE_VERSION,
+                relationship="references",
+                source_entity_id=ROOT_ENTITY_ID,
+                target_entity_id="pr-2",
+            ),
             entity_type="work_graph_edge",
             entity_id="edge-2",
             display_label="issue-1 references pr-2",

@@ -16,6 +16,10 @@ from dev_health_ops.api.dev.data_health_service import (
     DataHealthSource,
     DataHealthState,
 )
+from dev_health_ops.api.dev.evidence_service import (
+    EvidenceRecord,
+    EvidenceReferenceSigner,
+)
 from dev_health_ops.api.dev.investigation_plans import (
     PlanExecutor,
     StepContext,
@@ -46,13 +50,62 @@ from tests._chaos_3292_preflight import Recorder
 __all__ = [
     "FakePlanExecutorRuntime",
     "InvestigationRecorder",
+    "TEST_EVIDENCE_SIGNER",
     "executor_for",
     "fixed_now",
     "project_scope",
+    "sign_evidence",
     "step_context_for",
 ]
 
 ORG_ID = "org_fullchaos"
+
+#: A fixed, valid (>=32 byte) test secret. CHAOS-3296 round 5's
+#: signature-verification tests need a REAL ``EvidenceReferenceSigner`` --
+#: the exact class ``production_runtime.py`` wires into
+#: ``PlanExecutor(evidence_signer=...)`` -- rather than a fabricated handle
+#: string, so a forged/reused/cross-tenant/wrong-content handle genuinely
+#: fails ``signer.verify`` the same way it would in production, and a
+#: genuine handle genuinely passes.
+TEST_EVIDENCE_SIGNER = EvidenceReferenceSigner(
+    b"chaos-3296-round5-signature-test-secret"
+)
+
+
+def sign_evidence(
+    *,
+    org_id: str,
+    source_system: str,
+    source_version: str,
+    entity_type: str,
+    entity_id: str,
+    display_label: str,
+    observed_at: datetime,
+    freshness,
+    confidence: float = 1.0,
+    repository_ids=(),
+) -> str:
+    """Mint a real, :data:`TEST_EVIDENCE_SIGNER`-verifiable handle -- the
+    exact ``EvidenceRecord``/``issue`` call
+    ``production_runtime._mint_evidence`` makes for every real evidence
+    handle in production -- so a test double's ``mint_evidence`` hands back
+    a handle that genuinely passes ``PlanExecutor``'s round-5 signature
+    check, rather than an opaque counter string no verifier would ever
+    accept."""
+
+    record = EvidenceRecord(
+        source_system=source_system,
+        source_version=source_version,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        display_label=display_label,
+        observed_at=observed_at,
+        freshness=freshness,
+        provenance=source_system,
+        confidence=confidence,
+        repository_ids=tuple(repository_ids),
+    )
+    return TEST_EVIDENCE_SIGNER.issue(org_id, record)
 
 
 def project_scope(*, entity_id: str = "project-ask-dev") -> DevScope:

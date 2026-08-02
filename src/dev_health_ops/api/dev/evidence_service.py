@@ -250,6 +250,47 @@ def _authorized_entity_ids(resolution: ScopeResolution) -> set[str]:
     }
 
 
+class IdentityPayload(Protocol):
+    """CHAOS-3296 round 5: exactly the fields
+    :meth:`EvidenceReferenceSigner._payload` binds into its HMAC, and
+    nothing else -- ``DevEvidenceRef``, ``EvidenceRecord``, and a
+    verifier-only candidate a caller reconstructs from a re-derived
+    identity plus its own already-authorized ambient scope (never from the
+    fact or handle being checked; see ``investigation_plans.executor.
+    _CandidateIdentity``) are all structurally this shape. Widening
+    ``_payload`` to this protocol -- rather than the ``DevEvidenceRef |
+    EvidenceRecord`` union it used before -- is what lets a caller
+    recompute the actual signature via THIS code (never a parallel
+    reimplementation) without constructing a full contract object it has
+    no other use for.
+    """
+
+    # Read-only (``@property``, not plain annotations): every real
+    # implementer -- ``DevEvidenceRef`` (pydantic, frozen), ``EvidenceRecord``
+    # (frozen dataclass), ``_CandidateIdentity`` (frozen dataclass) -- exposes
+    # these as immutable attributes; a plain Protocol annotation requires a
+    # SETTABLE attribute for structural matching, which none of them are.
+    @property
+    def source_system(self) -> str: ...
+    @property
+    def source_version(self) -> str: ...
+    @property
+    def entity_type(self) -> str: ...
+    @property
+    def entity_id(self) -> str: ...
+    @property
+    def repository_ids(self) -> Sequence[str]: ...
+
+
+class SignedIdentity(IdentityPayload, Protocol):
+    """:class:`IdentityPayload` plus the claimed handle itself -- what
+    :meth:`EvidenceReferenceSigner.verify` needs on top of what
+    ``_payload`` needs, to compare the recomputed signature against."""
+
+    @property
+    def evidence_ref_id(self) -> str: ...
+
+
 class EvidenceReferenceSigner:
     """Issue and verify stable non-enumerable evidence handles."""
 
@@ -262,7 +303,7 @@ class EvidenceReferenceSigner:
         self._key = hashlib.sha256(b"ask-dev-evidence-v1\0" + key).digest()
 
     @staticmethod
-    def _payload(org_id: str, evidence: DevEvidenceRef | EvidenceRecord) -> bytes:
+    def _payload(org_id: str, evidence: IdentityPayload) -> bytes:
         repository_ids = sorted(evidence.repository_ids)
         payload = {
             "org": org_id,
@@ -278,7 +319,7 @@ class EvidenceReferenceSigner:
         digest = hmac.new(self._key, self._payload(org_id, record), hashlib.sha256)
         return f"ev1_{digest.hexdigest()[:40]}"
 
-    def verify(self, org_id: str, evidence: DevEvidenceRef) -> bool:
+    def verify(self, org_id: str, evidence: SignedIdentity) -> bool:
         expected = hmac.new(
             self._key, self._payload(org_id, evidence), hashlib.sha256
         ).hexdigest()[:40]

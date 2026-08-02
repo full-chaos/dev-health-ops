@@ -84,7 +84,12 @@ from dev_health_ops.api.dev.work_graph_neighbors_service import (
     WorkGraphNeighborsResult,
     WorkGraphResultState,
 )
-from tests._chaos_3295_plan_executor import project_scope, step_context_for
+from tests._chaos_3295_plan_executor import (
+    TEST_EVIDENCE_SIGNER,
+    project_scope,
+    sign_evidence,
+    step_context_for,
+)
 
 OBSERVED_AT = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 ORG_ID = "org_fullchaos"
@@ -145,7 +150,22 @@ class _SpyRuntime:
         repository_ids=(),
     ):
         self._counter += 1
-        handle = "ev1_" + f"{self._counter:040x}"
+        # CHAOS-3296 round 5: a REAL, ``TEST_EVIDENCE_SIGNER``-verifiable
+        # handle -- not an opaque counter string -- so this spy's minted
+        # handles genuinely pass ``PlanExecutor``'s signature check wherever
+        # a test in this file exercises it (see ``_run_single_step``).
+        handle = sign_evidence(
+            org_id=org_id,
+            source_system=source_system,
+            source_version=source_version,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            display_label=display_label,
+            observed_at=observed_at,
+            freshness=freshness,
+            confidence=confidence,
+            repository_ids=repository_ids,
+        )
         self.mint_calls[handle] = {
             "source_system": source_system,
             "source_version": source_version,
@@ -324,13 +344,14 @@ async def test_ci_checks_identity_cell_matches_real_minting_including_check_disc
     assert len(outcome.content.ci_checks) == 1
     fact = outcome.content.ci_checks[0]
     _assert_cell_matches_minting("ci_checks", fact, spy)
-    # The discriminator itself, spelled out: source_version must embed the
-    # FULL check-specific id, not just the coarsened run id.
+    # The discriminators themselves, spelled out: source_version must embed
+    # the FULL check-specific id (round 4), not just the coarsened run id,
+    # AND a digest of the check's own asserted content (round 5).
     ci_derive = EVIDENCE_IDENTITY_TABLE["ci_checks"].derive
     assert ci_derive is not None
     _source_system, source_version, _entity_type, entity_id = ci_derive(fact)
     assert entity_id == "repo#ci7"
-    assert source_version.endswith("repo#ci7#checkA")
+    assert ":repo#ci7#checkA#content:" in source_version
 
 
 @pytest.mark.asyncio
@@ -629,7 +650,9 @@ from dev_health_ops.api.dev.investigation_plans import (  # noqa: E402
     PlanStepDefinition,
     StepContext,
     StepOutcome,
-    wrap_runtime_with_mint_receipts,
+)
+from dev_health_ops.api.dev.investigation_plans.builtin_steps import (  # noqa: E402
+    _ci_check_source_version,
 )
 
 ROOT_ENTITY_ID = "project-1"
@@ -717,7 +740,9 @@ async def _run_single_step(
         )
     )
     executor = PlanExecutor(
-        registry=registry, now=_now, verify_mint_receipts=verify_mint_receipts
+        registry=registry,
+        now=_now,
+        evidence_signer=TEST_EVIDENCE_SIGNER if verify_mint_receipts else None,
     )
     result = await executor.run(
         plan=plan, context=_context(), run_id="run-1", subject_entity_id=ROOT_ENTITY_ID
@@ -845,26 +870,43 @@ class _MintOnlyRuntime:
         repository_ids=(),
     ):
         self.mint_calls += 1
-        return "ev1_" + f"{self.mint_calls:040x}"
+        return sign_evidence(
+            org_id=org_id,
+            source_system=source_system,
+            source_version=source_version,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            display_label=display_label,
+            observed_at=observed_at,
+            freshness=freshness,
+            confidence=confidence,
+            repository_ids=repository_ids,
+        )
 
 
 @pytest.mark.asyncio
 async def test_red_ci_check_a_handle_reused_on_check_b_is_rejected():
     """RED (Codex round 3, [MEDIUM]): a handle genuinely minted for
     repo#ci7/checkA -- coarsened to entity_id "repo#ci7", source_version
-    embedding the full check-specific id -- reused verbatim on a fabricated
-    fact for repo#ci7/checkB. Round 2's entity_type/entity_id-only
-    comparison could not distinguish them (both coarsen to the same
-    entity_id); comparing source_version too must now catch it."""
+    embedding the full check-specific id (round 4) plus a digest of checkA's
+    own asserted content (round 5) -- reused verbatim on a fabricated fact
+    for repo#ci7/checkB. Round 2's entity_type/entity_id-only comparison
+    could not distinguish them (both coarsen to the same entity_id);
+    recomputing the real signature from each fact's own derived identity
+    must now catch it."""
 
     runtime = _MintOnlyRuntime()
-    wrapped = wrap_runtime_with_mint_receipts(runtime)
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        handle = wrapped.mint_evidence(
+        handle = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="ci_runs",
-            source_version="status-snapshot-evidence.v1:repo#ci7#checkA",
+            source_version=_ci_check_source_version(
+                "repo#ci7#checkA",
+                conclusion="success",
+                required=True,
+                skipped_required_work=False,
+            ),
             entity_type="ci_run",
             entity_id="repo#ci7",
             display_label="checkA",
@@ -904,7 +946,7 @@ async def test_red_ci_check_a_handle_reused_on_check_b_is_rejected():
     assert observation.content is None
     assert observation.observed_state is SourceRequirementState.UNAVAILABLE
     assert observation.limitation is not None
-    assert observation.limitation.startswith("evidence_entity_mismatch:")
+    assert observation.limitation.startswith("evidence_signature_invalid:")
     assert "repo#ci7" in observation.limitation
     assert result.relationship_closure_verified is False
 
@@ -916,23 +958,32 @@ async def test_ci_check_a_and_check_b_each_with_their_own_handle_are_both_accept
     must both be accepted."""
 
     runtime = _MintOnlyRuntime()
-    wrapped = wrap_runtime_with_mint_receipts(runtime)
 
     async def run(_ctx: StepContext) -> StepOutcome:
-        handle_a = wrapped.mint_evidence(
+        handle_a = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="ci_runs",
-            source_version="status-snapshot-evidence.v1:repo#ci7#checkA",
+            source_version=_ci_check_source_version(
+                "repo#ci7#checkA",
+                conclusion="success",
+                required=True,
+                skipped_required_work=False,
+            ),
             entity_type="ci_run",
             entity_id="repo#ci7",
             display_label="checkA",
             observed_at=OBSERVED_AT,
             freshness=FreshnessState.FRESH,
         )
-        handle_b = wrapped.mint_evidence(
+        handle_b = runtime.mint_evidence(
             org_id=ORG_ID,
             source_system="ci_runs",
-            source_version="status-snapshot-evidence.v1:repo#ci7#checkB",
+            source_version=_ci_check_source_version(
+                "repo#ci7#checkB",
+                conclusion="failure",
+                required=True,
+                skipped_required_work=False,
+            ),
             entity_type="ci_run",
             entity_id="repo#ci7",
             display_label="checkB",

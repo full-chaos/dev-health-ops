@@ -42,11 +42,13 @@ from .builtin_steps import (
     _CHANGE_CATEGORY_SOURCE_SYSTEM,
     _CHANGE_COLLISION_PRONE_CATEGORIES,
     _CHANGE_EVIDENCE_SOURCE_VERSION,
-    _CI_ACCEPTANCE_CHECK_MARKER,
     _GRAPH_EVIDENCE_SOURCE_VERSION,
     _METRIC_EVIDENCE_SOURCE_VERSION,
     _STATUS_ENTITY_SOURCE_SYSTEM,
     _STATUS_EVIDENCE_SOURCE_VERSION,
+    _bind_content,
+    _ci_check_source_version,
+    _ci_evidence_identity,
 )
 
 __all__ = [
@@ -251,6 +253,30 @@ RELATIONSHIP_MATRIX: dict[SourceClass, RelationshipMatrixEntry] = {
             freshness_policy="unversioned",
             evidence_expansion_capability=False,
         ),
+        # CHAOS-3304 merge reconciliation (SourceClass reconciliation,
+        # 2026-08-02): COGNITIVE_LOAD/INVESTMENT_ALLOCATION landed on
+        # ``contracts_v2.base.SourceClass`` via #1374, which never touched
+        # this module -- 3304's health rules/adapters are wired directly
+        # against ``user_metrics_daily``/``team_metrics_daily``/
+        # ``investment_metrics_daily``, not through PLAN_REGISTRY/this
+        # investigation-plan executor. Same "not yet landed here, honest
+        # empty vocabulary" posture as CODE_CHANGE/REVIEW/TEST_REPORT/
+        # OPERATIONAL_CONTROL above -- amend when a plan step actually
+        # mints content under one of these classes.
+        _entry(
+            SourceClass.COGNITIVE_LOAD,
+            role="supporting",
+            requirement="not_applicable",
+            freshness_policy="unversioned",
+            evidence_expansion_capability=False,
+        ),
+        _entry(
+            SourceClass.INVESTMENT_ALLOCATION,
+            role="supporting",
+            requirement="not_applicable",
+            freshness_policy="unversioned",
+            evidence_expansion_capability=False,
+        ),
     )
 }
 
@@ -342,6 +368,10 @@ APPROVED_CONTENT_SLOTS: dict[SourceClass, frozenset[str]] = {
     SourceClass.REVIEW: frozenset(),
     SourceClass.TEST_REPORT: frozenset(),
     SourceClass.OPERATIONAL_CONTROL: frozenset(),
+    # CHAOS-3304 merge reconciliation -- see the matching RELATIONSHIP_MATRIX
+    # entries above for the full rationale.
+    SourceClass.COGNITIVE_LOAD: frozenset(),
+    SourceClass.INVESTMENT_ALLOCATION: frozenset(),
 }
 
 _missing_content_slots = set(SourceClass) - set(APPROVED_CONTENT_SLOTS)
@@ -418,54 +448,105 @@ class EvidenceIdentityCell:
     rationale: str | None = None
 
 
-def _identity_status_like(fact: Any) -> tuple[str, str, str, str]:
-    """``status_facts`` / ``required_children`` -- both wired by
-    ``_wire_status_snapshot_content``'s ``mint_status``, which mints against
-    the raw ``StatusFact.entity_type``/``entity_id`` pair the wire fact's own
-    ``fact_id`` encodes as ``f"{entity_type}:{entity_id}"``."""
-
+def _status_entity(fact: Any) -> tuple[str, str]:
     entity_type, _sep, entity_id = fact.fact_id.partition(":")
+    return entity_type, entity_id
+
+
+def _identity_status_fact(fact: Any) -> tuple[str, str, str, str]:
+    """``status_facts`` -- wired by ``_wire_status_snapshot_content``'s
+    ``mint_status``/``wire_status_fact``, which mints against the raw
+    ``StatusFact.entity_type``/``entity_id`` pair the wire fact's own
+    ``fact_id`` encodes as ``f"{entity_type}:{entity_id}"``, with
+    ``source_version`` binding the SAME composed ``"{label}: {status}"``
+    string ``wire_status_fact`` writes verbatim onto ``DevStatusFactV2.text``
+    (round 5) -- recovered here with no parsing, since that field already
+    IS the bound claim."""
+
+    entity_type, entity_id = _status_entity(fact)
     source_system = _STATUS_ENTITY_SOURCE_SYSTEM.get(entity_type, "work_items")
-    return source_system, _STATUS_EVIDENCE_SOURCE_VERSION, entity_type, entity_id
+    source_version = _bind_content(_STATUS_EVIDENCE_SOURCE_VERSION, claim=fact.text)
+    return source_system, source_version, entity_type, entity_id
+
+
+def _identity_required_child(fact: Any) -> tuple[str, str, str, str]:
+    """``required_children`` -- the same ``mint_status`` as ``status_facts``,
+    but ``wire_required_child`` splits the composed claim across TWO wire
+    fields instead of one (``text`` = ``display_label`` alone,
+    ``status`` separate) -- reconstruct the identical
+    ``"{label}: {status}"`` string ``mint_status`` bound from the two."""
+
+    entity_type, entity_id = _status_entity(fact)
+    source_system = _STATUS_ENTITY_SOURCE_SYSTEM.get(entity_type, "work_items")
+    source_version = _bind_content(
+        _STATUS_EVIDENCE_SOURCE_VERSION, claim=f"{fact.text}: {fact.status}"
+    )
+    return source_system, source_version, entity_type, entity_id
 
 
 def _identity_pull_request(fact: Any) -> tuple[str, str, str, str]:
     """``wire_pull_request`` -> ``mint_delivery(source_system="pull_requests",
-    entity_type="pull_request", entity_id=fact.entity_id)`` with the default
-    (unoverridden) ``source_version``."""
+    entity_type="pull_request", entity_id=fact.entity_id)``, ``source_version``
+    binding ``DevPullRequestFactV2``'s own claim fields (round 5)."""
 
-    return (
-        "pull_requests",
+    source_version = _bind_content(
         _STATUS_EVIDENCE_SOURCE_VERSION,
-        "pull_request",
-        fact.entity_id,
+        state=fact.state,
+        review_state=fact.review_state,
+        changes_requested=fact.changes_requested,
+        merged=fact.merged,
+        required=fact.required,
     )
+    return "pull_requests", source_version, "pull_request", fact.entity_id
 
 
 def _identity_ci_check(fact: Any) -> tuple[str, str, str, str]:
-    """``wire_ci`` coarsens ``fact.entity_id`` (strip the
-    ``#check...`` acceptance-check suffix) for the minted ``entity_id``, but
-    -- when coarsening actually changed anything -- embeds the FULL,
-    uncoarsened id into ``source_version`` specifically so two checks on the
-    same run mint distinct, non-interchangeable handles. Losing that
-    discriminator (round 2's gap) let one check's handle verify another's
-    fabricated fact; comparing ``source_version`` too closes it."""
+    """``wire_ci`` coarsens ``fact.entity_id`` (strip the ``#check...``
+    acceptance-check suffix) for the minted ``entity_id``, and mints against
+    a ``source_version`` built by the exact same
+    ``builtin_steps._ci_check_source_version`` this cell calls -- never a
+    parallel reimplementation. That shared function embeds the FULL,
+    uncoarsened id (round 4: distinguishes two checks on the same run) and a
+    canonical digest of the fact's own asserted claim (round 5: distinguishes
+    two different CLAIMS about the SAME check -- a genuine handle for a
+    failing check can no longer verify a fabricated passing claim for that
+    same check, because the two claims mint different, non-interchangeable
+    handles in the first place)."""
 
-    lookup_entity_id = fact.entity_id.split(_CI_ACCEPTANCE_CHECK_MARKER, 1)[0]
-    source_version = (
-        f"{_STATUS_EVIDENCE_SOURCE_VERSION}:{fact.entity_id}"
-        if lookup_entity_id != fact.entity_id
-        else _STATUS_EVIDENCE_SOURCE_VERSION
+    lookup_entity_id = _ci_evidence_identity(fact.entity_id)
+    source_version = _ci_check_source_version(
+        fact.entity_id,
+        conclusion=fact.conclusion,
+        required=fact.required,
+        skipped_required_work=fact.skipped_required_work,
     )
     return "ci_runs", source_version, "ci_run", lookup_entity_id
 
 
 def _identity_deployment(fact: Any) -> tuple[str, str, str, str]:
-    return "deployments", _STATUS_EVIDENCE_SOURCE_VERSION, "deployment", fact.entity_id
+    """``source_version`` binds ``DevDeploymentFactV2``'s own claim fields
+    (round 5)."""
+
+    source_version = _bind_content(
+        _STATUS_EVIDENCE_SOURCE_VERSION,
+        status=fact.status,
+        environment=fact.environment,
+        required=fact.required,
+    )
+    return "deployments", source_version, "deployment", fact.entity_id
 
 
 def _identity_incident(fact: Any) -> tuple[str, str, str, str]:
-    return "incidents", _STATUS_EVIDENCE_SOURCE_VERSION, "incident", fact.entity_id
+    """``source_version`` binds ``DevIncidentFactV2``'s own claim fields
+    (round 5)."""
+
+    source_version = _bind_content(
+        _STATUS_EVIDENCE_SOURCE_VERSION,
+        status=fact.status,
+        active=fact.active,
+        blocking=fact.blocking,
+    )
+    return "incidents", source_version, "incident", fact.entity_id
 
 
 def _identity_observed_change(change: Any) -> tuple[str, str, str, str]:
@@ -474,51 +555,65 @@ def _identity_observed_change(change: Any) -> tuple[str, str, str, str]:
     own ``change_id`` (never ``entity_id``); a collision-prone category
     (``status``/``metric``) embeds ``change_id`` into ``source_version`` on
     top of minting against ``entity_id``; every other category mints
-    straight against ``entity_id`` with the base source_version. Every input
-    (``category``, ``change_id``, ``entity_id``, ``entity_type``) survives
-    unchanged onto ``DevObservedChangeV2``, so this is fully reconstructible
-    from the wire fact alone."""
+    straight against ``entity_id`` with the base source_version -- THEN
+    (round 5) every branch binds ``before``/``after``, the only
+    ``ObservedChange`` claim fields that survive onto ``DevObservedChangeV2``
+    at all. Every input (``category``, ``change_id``, ``entity_id``,
+    ``entity_type``, ``before``, ``after``) survives unchanged onto the wire
+    type, so this is fully reconstructible from the wire fact alone."""
 
     category = change.category
     source_system = _CHANGE_CATEGORY_SOURCE_SYSTEM.get(category, "work_items")
     if category == "relationship":
-        return (
-            source_system,
-            _CHANGE_EVIDENCE_SOURCE_VERSION,
-            change.entity_type,
-            change.change_id,
-        )
-    if category in _CHANGE_COLLISION_PRONE_CATEGORIES:
-        return (
-            source_system,
-            f"{_CHANGE_EVIDENCE_SOURCE_VERSION}:{change.change_id}",
-            change.entity_type,
-            change.entity_id,
-        )
-    return (
-        source_system,
-        _CHANGE_EVIDENCE_SOURCE_VERSION,
-        change.entity_type,
-        change.entity_id,
+        base_source_version = _CHANGE_EVIDENCE_SOURCE_VERSION
+        entity_id = change.change_id
+    elif category in _CHANGE_COLLISION_PRONE_CATEGORIES:
+        base_source_version = f"{_CHANGE_EVIDENCE_SOURCE_VERSION}:{change.change_id}"
+        entity_id = change.entity_id
+    else:
+        base_source_version = _CHANGE_EVIDENCE_SOURCE_VERSION
+        entity_id = change.entity_id
+    source_version = _bind_content(
+        base_source_version, before=change.before, after=change.after
     )
+    return source_system, source_version, change.entity_type, entity_id
 
 
 def _identity_graph_edge(edge: Any) -> tuple[str, str, str, str]:
     """``wire_edge`` mints against ``item.edge_id`` -- CHAOS-3296 round-4
     adds ``DevGraphEdgeV2.edge_id`` specifically so this identity survives
-    to the wire; round 1-3 could not implement this cell at all."""
+    to the wire; round 1-3 could not implement this cell at all.
+    ``source_version`` binds ``DevGraphEdgeV2``'s own claim fields (round
+    5): a genuine handle for edge_id X must never authenticate a fabricated
+    relationship/orientation for that same edge_id."""
 
-    return "work_graph", _GRAPH_EVIDENCE_SOURCE_VERSION, "work_graph_edge", edge.edge_id
+    source_version = _bind_content(
+        _GRAPH_EVIDENCE_SOURCE_VERSION,
+        relationship=edge.relationship,
+        source_entity_id=edge.source_entity_id,
+        target_entity_id=edge.target_entity_id,
+    )
+    return "work_graph", source_version, "work_graph_edge", edge.edge_id
 
 
 def _identity_metric_ref(ref: Any) -> tuple[str, str, str, str]:
-    return "metrics", _METRIC_EVIDENCE_SOURCE_VERSION, "metric", ref.metric_ref_id
+    """``source_version`` binds ``DevMetricRefV2``'s own claim fields
+    (round 5): a genuine handle for one metric value must never
+    authenticate a fabricated different value for the same
+    ``metric_ref_id``."""
+
+    source_version = _bind_content(
+        _METRIC_EVIDENCE_SOURCE_VERSION,
+        value=ref.value,
+        comparison_value=ref.comparison_value,
+    )
+    return "metrics", source_version, "metric", ref.metric_ref_id
 
 
 EVIDENCE_IDENTITY_TABLE: dict[str, EvidenceIdentityCell] = {
-    "status_facts": EvidenceIdentityCell(mode="required", derive=_identity_status_like),
+    "status_facts": EvidenceIdentityCell(mode="required", derive=_identity_status_fact),
     "required_children": EvidenceIdentityCell(
-        mode="required", derive=_identity_status_like
+        mode="required", derive=_identity_required_child
     ),
     "pull_requests": EvidenceIdentityCell(
         mode="required", derive=_identity_pull_request

@@ -119,6 +119,27 @@ class FakeTeamRuntime:
     async def data_health(self, *, org_id, permission_fingerprint, scope):
         return DataHealthResult(sources=(), complete_eligible=False)
 
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
+        # CHAOS-3296's PlanExecutorRuntime protocol member -- TeamHealthService
+        # (CHAOS-3302/3303) never mints evidence itself, so this is here only
+        # for structural conformance, same posture as the sibling
+        # never-called methods above.
+        raise AssertionError("not exercised by this suite")
+
 
 @dataclass
 class FakeAttributionSource:
@@ -363,6 +384,23 @@ class FakeAttributedTeamRuntime:
     async def data_health(self, *, org_id, permission_fingerprint, scope):
         return DataHealthResult(sources=(), complete_eligible=True)
 
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
+        raise AssertionError("not exercised by this suite")
+
 
 @pytest.mark.asyncio
 async def test_evaluate_team_with_attribution_and_real_facts_reports_real_findings() -> (
@@ -422,6 +460,23 @@ class _UncallableRuntime:
         raise AssertionError("unexpected call")
 
     async def data_health(self, *, org_id, permission_fingerprint, scope):
+        raise AssertionError("unexpected call")
+
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
         raise AssertionError("unexpected call")
 
 

@@ -1210,6 +1210,41 @@ class _ProductionPlanExecutorRuntime:
     metric_service: MetricQueryService
     work_graph_service: WorkGraphNeighborsService
     data_health_service: DataHealthService
+    #: CHAOS-3296: the same signer the proven v1 tool-call evidence-minting
+    #: path (``mint_status_evidence``/``mint_delivery_evidence`` below) uses
+    #: -- never a second, parallel evidence-issuing mechanism.
+    evidence_signer: EvidenceReferenceSigner
+
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
+        ref = _mint_evidence(
+            self.evidence_signer,
+            org_id,
+            source_system=source_system,
+            source_version=source_version,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            display_label=display_label,
+            observed_at=observed_at,
+            freshness=freshness,
+            confidence=confidence,
+            valid_entity_ids=valid_entity_ids,
+            repository_ids=repository_ids,
+        )
+        return ref.evidence_ref_id
 
     async def status_snapshot(self, *, org_id, permission_fingerprint, scope):
         return await self.status_service.status_snapshot(
@@ -2103,6 +2138,7 @@ async def _assemble_production_runtime(
                     metric_service=metric_service,
                     work_graph_service=work_graph_service,
                     data_health_service=data_health_service,
+                    evidence_signer=evidence_signer,
                 )
             )
         )

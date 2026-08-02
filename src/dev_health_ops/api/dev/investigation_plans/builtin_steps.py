@@ -12,16 +12,42 @@ implements the port over the exact service instances
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+import hashlib
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from typing import Protocol
 
-from ..contracts import DevScope, MetricID
-from ..contracts_v2.base import SourceClass, SourceRequirementState
+from ..contracts import DevMetricPoint, DevScope, FreshnessState, MetricID
+from ..contracts_v2.base import EvidenceHandle, SourceClass, SourceRequirementState
+from ..contracts_v2.embedded import (
+    DevCIFactV2,
+    DevDeploymentFactV2,
+    DevGraphEdgeV2,
+    DevIncidentFactV2,
+    DevMetricRefV2,
+    DevPullRequestFactV2,
+    DevRequiredChildFactV2,
+    DevScopeV2,
+    DevStatusFactV2,
+)
+from ..contracts_v2.result import DevObservedChangeV2, DevSourceContent
 from ..data_health_service import DataHealthResult
 from ..metrics.definitions import MetricDefinition
 from ..metrics.service import MetricQueryResult
-from ..status_change_service import ChangeSummaryResult, StatusSnapshotResult
-from ..work_graph_neighbors_service import WorkGraphNeighborsResult
+from ..status_change_service import (
+    ChangeSummaryResult,
+    CIFact,
+    DeploymentFact,
+    IncidentFact,
+    ObservedChange,
+    PullRequestFact,
+    StatusFact,
+    StatusSnapshotResult,
+)
+from ..work_graph_neighbors_service import (
+    WorkGraphNeighborEdge,
+    WorkGraphNeighborsResult,
+)
 from .state_mapping import (
     UNMEASURED_REQUIREMENT_STATES,
     data_health_state_to_requirement_state,
@@ -40,6 +66,422 @@ __all__ = ["PlanExecutorRuntime", "register_builtin_steps"]
 #: No dedicated field carries this signal, so it is recognized here by its
 #: pinned warning string.
 _ASSESSMENT_SOURCE_BOUND_WARNING = "status assessment source bound reached"
+
+#: A signer-issued evidence handle minted for one fact.
+_Mint = Callable[..., EvidenceHandle]
+
+#: CHAOS-3296 evidence-minting identity conventions. These mirror
+#: ``production_runtime.py``'s proven v1 tool-call wiring
+#: (``_STATUS_ENTITY_SOURCE_SYSTEM`` et al.) *by value*, not by import:
+#: ``production_runtime.py`` already imports this package
+#: (``build_default_registry``), so importing back would be circular. A
+#: drift between the two surfaces as an evidence-expansion ``NO_MATCHES``,
+#: never a type error -- keep in sync deliberately.
+_STATUS_ENTITY_SOURCE_SYSTEM: Mapping[str, str] = {
+    "issue": "work_items",
+    "pull_request": "pull_requests",
+    "work_unit": "work_units",
+    "project": "work_items",
+}
+_CHANGE_CATEGORY_SOURCE_SYSTEM: Mapping[str, str] = {
+    "entity": "work_items",
+    "status": "work_items",
+    "relationship": "work_graph",
+    "blocker": "work_items",
+    "dependency": "work_items",
+    "pull_request": "pull_requests",
+    "review": "reviews",
+    "ci": "ci_runs",
+    "deployment": "deployments",
+    "incident": "incidents",
+    "metric": "metrics",
+}
+_CHANGE_COLLISION_PRONE_CATEGORIES = frozenset({"status", "metric"})
+_CI_ACCEPTANCE_CHECK_MARKER = "#check"
+_STATUS_EVIDENCE_SOURCE_VERSION = "status-snapshot-evidence.v1"
+_CHANGE_EVIDENCE_SOURCE_VERSION = "change-summary-evidence.v1"
+_GRAPH_EVIDENCE_SOURCE_VERSION = "work-graph-evidence.v1"
+_METRIC_EVIDENCE_SOURCE_VERSION = "metric-query-evidence.v1"
+#: Every ``DevSourceContent`` field caps at 25 except ``required_children``
+#: (100, matching ``StatusSnapshotRequest``'s own assessment bound). A
+#: category over this limit is capped here, deterministically (encounter
+#: order) -- priority-ordered truncation is explicitly a later "Evidence
+#: prioritization and bounds" concern (issue body), not this deliverable's.
+_CONTENT_CATEGORY_LIMIT = 25
+_REQUIRED_CHILDREN_LIMIT = 100
+
+
+def _ci_evidence_identity(entity_id: str) -> str:
+    # ci_acceptance_checks rows carry a "{repo}#ci{run}#check{key}" entity_id;
+    # the "ci_runs" adapter only indexes "{repo}#ci{run}". Coarsen to the run
+    # so expansion resolves the underlying CI run instead of NO_MATCHES.
+    return entity_id.split(_CI_ACCEPTANCE_CHECK_MARKER, 1)[0]
+
+
+def _scope_evidence_binding(scope: DevScope) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(valid_entity_ids, repository_ids) bound to the caller's own
+    already-authorized scope -- never to a supporting fact's own id."""
+
+    return (
+        tuple(item.entity_id for item in scope.entity_refs),
+        tuple(scope.repositories),
+    )
+
+
+def _capped(items: object, limit: int = _CONTENT_CATEGORY_LIMIT) -> tuple:
+    return tuple(items)[:limit]  # type: ignore[arg-type]
+
+
+def _wire_status_snapshot_content(
+    result: StatusSnapshotResult,
+    *,
+    mint: _Mint,
+    org_id: str,
+    scope: DevScope,
+) -> DevSourceContent:
+    freshness_by_ref: dict[str, FreshnessState] = {
+        ref.ref_id: ref.freshness for ref in result.source_refs
+    }
+    valid_entity_ids, repository_ids = _scope_evidence_binding(scope)
+
+    def status_source_system(entity_type: str) -> str:
+        return _STATUS_ENTITY_SOURCE_SYSTEM.get(entity_type, "work_items")
+
+    def mint_status(fact: StatusFact) -> str:
+        return mint(
+            org_id=org_id,
+            source_system=status_source_system(fact.entity_type),
+            source_version=_STATUS_EVIDENCE_SOURCE_VERSION,
+            entity_type=fact.entity_type,
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            observed_at=fact.observed_at,
+            freshness=freshness_by_ref.get(fact.source_ref_id, FreshnessState.UNKNOWN),
+            valid_entity_ids=valid_entity_ids,
+            repository_ids=repository_ids,
+        )
+
+    def wire_status_fact(fact: StatusFact) -> DevStatusFactV2:
+        evidence_id = mint_status(fact)
+        return DevStatusFactV2(
+            fact_id=f"{fact.entity_type}:{fact.entity_id}",
+            text=f"{fact.display_label}: {fact.status}",
+            evidence_ref_ids=(evidence_id,),
+        )
+
+    def wire_required_child(fact: StatusFact) -> DevRequiredChildFactV2:
+        evidence_id = mint_status(fact)
+        return DevRequiredChildFactV2(
+            fact_id=f"{fact.entity_type}:{fact.entity_id}",
+            text=fact.display_label,
+            status=fact.status,
+            evidence_ref_ids=(evidence_id,),
+        )
+
+    def mint_delivery(
+        *,
+        source_system: str,
+        entity_type: str,
+        entity_id: str,
+        display_label: str,
+        observed_at: datetime,
+        source_ref_id: str,
+        source_version: str = _STATUS_EVIDENCE_SOURCE_VERSION,
+    ) -> str:
+        return mint(
+            org_id=org_id,
+            source_system=source_system,
+            source_version=source_version,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            display_label=display_label,
+            observed_at=observed_at,
+            freshness=freshness_by_ref.get(source_ref_id, FreshnessState.UNKNOWN),
+            valid_entity_ids=valid_entity_ids,
+            repository_ids=repository_ids,
+        )
+
+    def wire_pull_request(fact: PullRequestFact) -> DevPullRequestFactV2:
+        evidence_id = mint_delivery(
+            source_system="pull_requests",
+            entity_type="pull_request",
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            observed_at=fact.observed_at,
+            source_ref_id=fact.source_ref_id,
+        )
+        return DevPullRequestFactV2(
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            state=fact.state,
+            review_state=fact.review_state,
+            changes_requested=fact.changes_requested,
+            merged=fact.merged,
+            required=fact.required,
+            observed_at=fact.observed_at,
+            evidence_ref_ids=(evidence_id,),
+        )
+
+    def wire_ci(fact: CIFact) -> DevCIFactV2:
+        lookup_entity_id = _ci_evidence_identity(fact.entity_id)
+        source_version = (
+            f"{_STATUS_EVIDENCE_SOURCE_VERSION}:{fact.entity_id}"
+            if lookup_entity_id != fact.entity_id
+            else _STATUS_EVIDENCE_SOURCE_VERSION
+        )
+        evidence_id = mint_delivery(
+            source_system="ci_runs",
+            entity_type="ci_run",
+            entity_id=lookup_entity_id,
+            display_label=fact.display_label,
+            observed_at=fact.observed_at,
+            source_ref_id=fact.source_ref_id,
+            source_version=source_version,
+        )
+        return DevCIFactV2(
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            conclusion=fact.conclusion,
+            required=fact.required,
+            skipped_required_work=fact.skipped_required_work,
+            observed_at=fact.observed_at,
+            evidence_ref_ids=(evidence_id,),
+        )
+
+    def wire_deployment(fact: DeploymentFact) -> DevDeploymentFactV2:
+        evidence_id = mint_delivery(
+            source_system="deployments",
+            entity_type="deployment",
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            observed_at=fact.observed_at,
+            source_ref_id=fact.source_ref_id,
+        )
+        return DevDeploymentFactV2(
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            status=fact.status,
+            environment=fact.environment,
+            required=fact.required,
+            observed_at=fact.observed_at,
+            evidence_ref_ids=(evidence_id,),
+        )
+
+    def wire_incident(fact: IncidentFact) -> DevIncidentFactV2:
+        evidence_id = mint_delivery(
+            source_system="incidents",
+            entity_type="incident",
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            observed_at=fact.observed_at,
+            source_ref_id=fact.source_ref_id,
+        )
+        return DevIncidentFactV2(
+            entity_id=fact.entity_id,
+            display_label=fact.display_label,
+            status=fact.status,
+            active=fact.active,
+            blocking=fact.blocking,
+            observed_at=fact.observed_at,
+            evidence_ref_ids=(evidence_id,),
+        )
+
+    status_facts = _capped(
+        wire_status_fact(fact)
+        for fact in (
+            ([result.declared] if result.declared else [])
+            + list(result.children)
+            + list(result.blockers)
+        )
+    )
+    return DevSourceContent(
+        schema_version="dev_source_content.v1",
+        status_facts=status_facts,
+        required_children=_capped(
+            (wire_required_child(fact) for fact in result.actual.required_children),
+            limit=_REQUIRED_CHILDREN_LIMIT,
+        ),
+        pull_requests=_capped(wire_pull_request(fact) for fact in result.pull_requests),
+        ci_checks=_capped(wire_ci(fact) for fact in result.ci),
+        deployments=_capped(wire_deployment(fact) for fact in result.deployments),
+        incidents=_capped(wire_incident(fact) for fact in result.incidents),
+    )
+
+
+def _wire_change_summary_content(
+    result: ChangeSummaryResult,
+    *,
+    mint: _Mint,
+    org_id: str,
+    scope: DevScope,
+) -> DevSourceContent:
+    freshness_by_ref: dict[str, FreshnessState] = {
+        ref.ref_id: ref.freshness for ref in result.source_refs
+    }
+    valid_entity_ids, repository_ids = _scope_evidence_binding(scope)
+
+    def change_freshness(item: ObservedChange) -> FreshnessState:
+        for ref_id in item.source_ref_ids:
+            freshness = freshness_by_ref.get(ref_id)
+            if freshness is not None:
+                return freshness
+        return FreshnessState.UNKNOWN
+
+    def change_evidence_identity(item: ObservedChange) -> tuple[str, str, str]:
+        category = item.category.value
+        source_system = _CHANGE_CATEGORY_SOURCE_SYSTEM.get(category, "work_items")
+        if category == "relationship":
+            return source_system, item.change_id, _CHANGE_EVIDENCE_SOURCE_VERSION
+        if category in _CHANGE_COLLISION_PRONE_CATEGORIES:
+            return (
+                source_system,
+                item.entity_id,
+                f"{_CHANGE_EVIDENCE_SOURCE_VERSION}:{item.change_id}",
+            )
+        return source_system, item.entity_id, _CHANGE_EVIDENCE_SOURCE_VERSION
+
+    def wire_change(item: ObservedChange) -> DevObservedChangeV2:
+        source_system, lookup_entity_id, source_version = change_evidence_identity(item)
+        evidence_id = mint(
+            org_id=org_id,
+            source_system=source_system,
+            source_version=source_version,
+            entity_type=item.entity_type,
+            entity_id=lookup_entity_id,
+            display_label=item.display_label,
+            observed_at=item.observed_at,
+            freshness=change_freshness(item),
+            confidence=item.confidence if item.confidence is not None else 1.0,
+            valid_entity_ids=valid_entity_ids,
+            repository_ids=repository_ids,
+        )
+        return DevObservedChangeV2(
+            change_id=item.change_id,
+            category=item.category.value,
+            entity_type=item.entity_type,
+            entity_id=item.entity_id,
+            display_label=item.display_label,
+            before=item.before,
+            after=item.after,
+            observed_at=item.observed_at,
+            evidence_ref_ids=(evidence_id,),
+        )
+
+    return DevSourceContent(
+        schema_version="dev_source_content.v1",
+        observed_changes=_capped(wire_change(item) for item in result.changes),
+    )
+
+
+def _wire_work_graph_content(
+    result: WorkGraphNeighborsResult,
+    *,
+    mint: _Mint,
+    org_id: str,
+    scope: DevScope,
+) -> DevSourceContent:
+    valid_entity_ids, repository_ids = _scope_evidence_binding(scope)
+
+    def wire_edge(item: WorkGraphNeighborEdge) -> DevGraphEdgeV2:
+        evidence_id = mint(
+            org_id=org_id,
+            source_system="work_graph",
+            source_version=_GRAPH_EVIDENCE_SOURCE_VERSION,
+            entity_type="work_graph_edge",
+            entity_id=item.edge_id,
+            display_label=(
+                f"{item.source_type}:{item.source_id} {item.relationship_type} "
+                f"{item.target_type}:{item.target_id}"
+            ),
+            observed_at=item.observed_at,
+            freshness=FreshnessState.UNKNOWN,
+            confidence=item.confidence,
+            valid_entity_ids=valid_entity_ids,
+            repository_ids=repository_ids,
+        )
+        return DevGraphEdgeV2(
+            source_entity_id=item.source_id,
+            relationship=item.relationship_type,
+            target_entity_id=item.target_id,
+            provenance=(item.provenance.strip() or "persisted")[:2_048],
+            confidence=max(0.0, min(1.0, item.confidence)),
+            observed_at=item.observed_at,
+            evidence_ref_ids=(evidence_id,),
+        )
+
+    return DevSourceContent(
+        schema_version="dev_source_content.v1",
+        graph_edges=_capped(wire_edge(item) for item in result.edges),
+    )
+
+
+def _wire_metric_content(
+    results: Sequence[MetricQueryResult],
+    *,
+    mint: _Mint,
+    org_id: str,
+    scope: DevScope,
+) -> DevSourceContent:
+    valid_entity_ids, repository_ids = _scope_evidence_binding(scope)
+    scope_v2 = DevScopeV2.model_validate(scope.model_dump(mode="json"))
+    refs: list[DevMetricRefV2] = []
+    for result in results:
+        for value in result.values:
+            dimensions = tuple(f"{key}={item}" for key, item in value.dimensions)
+            digest_seed = (
+                f"{result.definition.metric_id.value}:{value.dimensions}:"
+                f"{scope.time_range.start.isoformat()}:{scope.time_range.end.isoformat()}"
+            )
+            metric_ref_id = (
+                f"metric:{hashlib.sha256(digest_seed.encode()).hexdigest()[:32]}"
+            )
+            evidence_id = mint(
+                org_id=org_id,
+                source_system="metrics",
+                source_version=_METRIC_EVIDENCE_SOURCE_VERSION,
+                entity_type="metric",
+                entity_id=metric_ref_id,
+                display_label=result.definition.label,
+                observed_at=result.watermark or scope.time_range.end,
+                freshness=result.freshness,
+                valid_entity_ids=valid_entity_ids,
+                repository_ids=repository_ids,
+            )
+            refs.append(
+                DevMetricRefV2(
+                    schema_version="dev_metric_ref.v1",
+                    metric_ref_id=metric_ref_id,
+                    metric_id=result.definition.metric_id,
+                    label=result.definition.label,
+                    definition_version=result.definition.definition_version,
+                    unit=result.definition.unit,
+                    aggregation=result.definition.aggregation,
+                    display_precision=result.definition.display_precision,
+                    resolved_scope=scope_v2,
+                    dimensions=dimensions,
+                    current_window=scope.time_range,
+                    comparison_window=(
+                        scope.comparison_range
+                        if value.comparison_value is not None
+                        else None
+                    ),
+                    value=value.value,
+                    comparison_value=value.comparison_value,
+                    series=tuple(
+                        DevMetricPoint(timestamp=point.timestamp, value=point.value)
+                        for point in value.series
+                    ),
+                    query_version=result.definition.query_version,
+                    source_version=result.definition.source_version,
+                    freshness=result.freshness,
+                    coverage=result.coverage,
+                    evidence_ref_ids=(evidence_id,),
+                )
+            )
+    return DevSourceContent(
+        schema_version="dev_source_content.v1",
+        metric_refs=_capped(refs),
+    )
 
 
 class PlanExecutorRuntime(Protocol):
@@ -72,6 +514,31 @@ class PlanExecutorRuntime(Protocol):
         self, *, org_id: str, permission_fingerprint: str, scope: DevScope
     ) -> DataHealthResult:
         """Enumerate required source health for ``scope`` (trust.data.v1 core call)."""
+        ...
+
+    def mint_evidence(
+        self,
+        *,
+        org_id: str,
+        source_system: str,
+        source_version: str,
+        entity_type: str,
+        entity_id: str,
+        display_label: str,
+        observed_at: datetime,
+        freshness: FreshnessState,
+        confidence: float = 1.0,
+        valid_entity_ids: Sequence[str] = (),
+        repository_ids: Sequence[str] = (),
+    ) -> EvidenceHandle:
+        """CHAOS-3296: issue one signer-backed, ``get_evidence.v1``-expandable
+        evidence handle for a fact a step already fetched.
+
+        ``valid_entity_ids``/``repository_ids`` must be bound to the
+        caller's own already-authorized scope, never to the supporting
+        fact's own entity id -- see ``production_runtime._mint_evidence``,
+        the concrete production implementation of this method.
+        """
         ...
 
 
@@ -159,6 +626,7 @@ def _status_mapped_outcome(
     limitation: str,
     watermark=None,
     query_version: str = "unversioned",
+    content: DevSourceContent | None = None,
 ) -> StepOutcome:
     """Build a ``StepOutcome`` from a state already mapped through this
     module's ``state_mapping`` functions.
@@ -176,6 +644,10 @@ def _status_mapped_outcome(
     """
 
     if state in UNMEASURED_REQUIREMENT_STATES:
+        # DevSourceObservation.validate_content_semantics rejects content on
+        # an unmeasured state -- never forward it here even if a caller
+        # passed one (defense in depth; every caller below already only
+        # builds content on the queried branch).
         return StepOutcome(
             observed_state=state,
             data_semantics="not_measured",
@@ -190,6 +662,7 @@ def _status_mapped_outcome(
         usable_fact_count=usable_fact_count,
         watermark=watermark,
         query_version=query_version,
+        content=content,
     )
 
 
@@ -222,6 +695,16 @@ def register_builtin_steps(
             (1 if result.declared else 0) + len(result.children) + len(result.blockers)
         )
         state = status_result_state_to_requirement_state(result.state)
+        content = (
+            None
+            if state in UNMEASURED_REQUIREMENT_STATES
+            else _wire_status_snapshot_content(
+                result,
+                mint=runtime.mint_evidence,
+                org_id=ctx.org_id,
+                scope=ctx.scope,
+            )
+        )
         return _status_mapped_outcome(
             state,
             usable_fact_count=usable,
@@ -231,6 +714,7 @@ def register_builtin_steps(
                 default=None,
             ),
             query_version="status-snapshot.v1",
+            content=content,
         )
 
     async def change_summary_run(ctx: StepContext) -> StepOutcome:
@@ -247,11 +731,23 @@ def register_builtin_steps(
             scope=ctx.scope,
         )
         usable = len(result.changes)
+        state = status_result_state_to_requirement_state(result.state)
+        content = (
+            None
+            if state in UNMEASURED_REQUIREMENT_STATES
+            else _wire_change_summary_content(
+                result,
+                mint=runtime.mint_evidence,
+                org_id=ctx.org_id,
+                scope=ctx.scope,
+            )
+        )
         return _status_mapped_outcome(
-            status_result_state_to_requirement_state(result.state),
+            state,
             usable_fact_count=usable,
             limitation="change_summary_insufficient_evidence",
             query_version="change-summary.v1",
+            content=content,
         )
 
     async def required_source_health_run(ctx: StepContext) -> StepOutcome:
@@ -288,6 +784,12 @@ def register_builtin_steps(
             usable_fact_count=usable,
             watermark=result.watermark,
             query_version=result.query_version,
+            content=_wire_work_graph_content(
+                result,
+                mint=runtime.mint_evidence,
+                org_id=ctx.org_id,
+                scope=ctx.scope,
+            ),
         )
 
     async def list_metrics_run(ctx: StepContext) -> StepOutcome:
@@ -334,7 +836,13 @@ def register_builtin_steps(
             ),
             return_exceptions=True,
         )
-        return _combined_metric_outcome(results, query_version="query-metric.v1")
+        return _combined_metric_outcome(
+            results,
+            query_version="query-metric.v1",
+            mint=runtime.mint_evidence,
+            org_id=ctx.org_id,
+            scope=ctx.scope,
+        )
 
     async def registered_metric_query_run(ctx: StepContext) -> StepOutcome:
         metric_ids = ctx.requested_metric_ids or tuple(
@@ -353,7 +861,13 @@ def register_builtin_steps(
             ),
             return_exceptions=True,
         )
-        return _combined_metric_outcome(results, query_version="query-metric.v1")
+        return _combined_metric_outcome(
+            results,
+            query_version="query-metric.v1",
+            mint=runtime.mint_evidence,
+            org_id=ctx.org_id,
+            scope=ctx.scope,
+        )
 
     registry.register(
         PlanStepDefinition(
@@ -498,7 +1012,12 @@ def register_builtin_steps(
 
 
 def _combined_metric_outcome(
-    results: Sequence[MetricQueryResult | BaseException], *, query_version: str
+    results: Sequence[MetricQueryResult | BaseException],
+    *,
+    query_version: str,
+    mint: _Mint,
+    org_id: str,
+    scope: DevScope,
 ) -> StepOutcome:
     """One combined observation across every requested metric (batched_fan_out)."""
 
@@ -537,6 +1056,7 @@ def _combined_metric_outcome(
         data_semantics=queried_semantics(usable),
         usable_fact_count=usable,
         query_version=query_version,
+        content=_wire_metric_content(successful, mint=mint, org_id=org_id, scope=scope),
     )
 
 

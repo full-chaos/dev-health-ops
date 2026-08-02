@@ -24,8 +24,10 @@ from dev_health_ops.api.dev.investigation_plans import (
 )
 from dev_health_ops.api.dev.metrics.definitions import MetricDefinition
 from dev_health_ops.api.dev.status_change_service import (
+    ActualCompletion,
     ChangeSummaryResult,
     ChangeWindow,
+    CompletionState,
     StatusResultState,
     StatusSnapshotResult,
 )
@@ -105,7 +107,22 @@ def _status_result(
         scope=None,  # type: ignore[arg-type]  # never read by any registered step
         as_of=fixed_now(),
         declared=None,
-        actual=None,  # type: ignore[arg-type]
+        # CHAOS-3296: content-minting reads ``actual.required_children`` on
+        # every queried status_snapshot outcome, so this can no longer be
+        # ``None`` (that was always a fixture shortcut -- production's
+        # ``StatusChangeService._assess`` never returns one) -- an
+        # intentionally empty, real ``ActualCompletion``, still "nothing to
+        # wire" for this shared empty-facts fixture.
+        actual=ActualCompletion(
+            state=CompletionState.NOT_READY,
+            rule_id="actual-completion",
+            rule_version="unversioned",
+            reason_codes=(),
+            required_children=(),
+            conflicts=(),
+            source_ref_ids=(),
+            evidence_ref_ids=(),
+        ),
         children=(),
         blockers=(),
         pull_requests=(),
@@ -221,6 +238,32 @@ class FakePlanExecutorRuntime:
     async def data_health(self, *, org_id, permission_fingerprint, scope):
         self.data_health_calls += 1
         return _data_health(self._data_health_state)
+
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
+        # Every fixture this shared double serves returns all-empty
+        # canonical results (no declared fact, no children, no edges), so no
+        # registered step's content-wiring loop ever actually reaches this --
+        # it exists only so ``runtime.mint_evidence`` is a valid attribute
+        # access (Protocol conformance). Suites that need real minted
+        # evidence build their own richer double (see
+        # ``test_chaos_3296_evidence_minting.py``).
+        raise AssertionError(
+            "mint_evidence should not be reachable from an all-empty fixture result"
+        )
 
 
 class InvestigationRecorder(Recorder):

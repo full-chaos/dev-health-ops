@@ -225,6 +225,12 @@ async def test_completed_parent_with_incomplete_required_child_is_not_ready() ->
         "ev-issue-1",
         "ev-issue-child",
     )
+    # CHAOS-3297 s2, case 5: one incomplete required child under a Done
+    # parent -- the complete denominator/numerator (1 total, 0 complete)
+    # must be reported, not just the presence of the incomplete child.
+    assert result.actual.required_child_total == 1
+    assert result.actual.required_child_complete == 0
+    assert result.actual.display_truncated is False
 
 
 @pytest.mark.asyncio
@@ -274,6 +280,13 @@ async def test_completed_parent_with_unknown_child_requirement_is_indeterminate(
     assert result.actual.required_children == ()
     assert result.children[0].required is None
     assert result.actual.conflicts == ()
+    # CHAOS-3297 s2, case 2: the requirement itself is unknown, so the
+    # denominator is honestly zero -- never fabricated as "0 required, so
+    # vacuously complete". Callers must gate on reason_codes/state, not on
+    # a bare 0/0 count.
+    assert result.actual.required_child_total == 0
+    assert result.actual.required_child_complete == 0
+    assert result.actual.display_truncated is False
 
 
 @pytest.mark.asyncio
@@ -470,6 +483,13 @@ async def test_completion_assesses_required_children_beyond_display_bound() -> N
     assert result.actual.state is CompletionState.NOT_READY
     assert "required_child_incomplete" in result.actual.reason_codes
     assert len(result.actual.required_children) == 100
+    # CHAOS-3297 s2, case 4a: the display list is bounded to 100, but the
+    # denominator/numerator must reflect the full 101-child assessment set
+    # -- this is the exact defect this stack fixes (the denominator was
+    # previously discarded along with the truncated display list).
+    assert result.actual.required_child_total == 101
+    assert result.actual.required_child_complete == 100
+    assert result.actual.display_truncated is True
 
 
 @pytest.mark.asyncio
@@ -496,6 +516,13 @@ async def test_assessment_source_bound_never_false_passes_completion() -> None:
     assert result.actual.state is CompletionState.INDETERMINATE
     assert "assessment_source_limit_reached" in result.actual.reason_codes
     assert result.warnings == ("status assessment source bound reached",)
+    # CHAOS-3297 s2, case 4b: even when the SOURCE itself hit its bound
+    # (1,000 items), the denominator counts every child the source did
+    # return -- reaching the source limit must not corrupt or suppress the
+    # counts, only the reason code + state gate trust in them.
+    assert result.actual.required_child_total == 1_000
+    assert result.actual.required_child_complete == 1_000
+    assert result.actual.display_truncated is True
 
 
 def test_rejects_naive_as_of_and_out_of_bounds() -> None:
@@ -550,3 +577,64 @@ async def test_unsuccessful_required_release_is_not_ready() -> None:
 
     assert result.actual.state is CompletionState.NOT_READY
     assert result.actual.reason_codes == ("required_deployment_not_succeeded",)
+
+
+@pytest.mark.asyncio
+async def test_known_denominator_reports_total_and_complete_counts() -> None:
+    """CHAOS-3297 s2, case 1: a straightforward, well-below-bound required
+    child set -- the complete/total counts must match what a human counting
+    the raw facts would get."""
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=(
+                    _fact("child-a", "done", required=True),
+                    _fact("child-b", "done", required=True),
+                    _fact("child-c", "in_progress", required=True),
+                ),
+                deployments=(_deployment(),),
+                source_refs=(_source_ref(),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+
+    assert result.actual.required_child_total == 3
+    assert result.actual.required_child_complete == 2
+    assert result.actual.display_truncated is False
+    assert "required_child_incomplete" in result.actual.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_stale_denominator_counts_are_honest_but_state_withholds_trust() -> None:
+    """CHAOS-3297 s2, case 3: a stale source can still yield a
+    complete-looking 1/1 count. The count itself must stay honest (not
+    zeroed out just because the source is stale), but the result state
+    must never present that count as COMPLETE -- callers gate on
+    ``state``/``reason_codes``, never on the ratio alone."""
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=(_fact("issue-child", "done", required=True),),
+                deployments=(_deployment(),),
+                source_refs=(_source_ref(FreshnessState.STALE),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+
+    assert result.actual.required_child_total == 1
+    assert result.actual.required_child_complete == 1
+    assert result.actual.display_truncated is False
+    assert "required_source_not_fresh" in result.actual.reason_codes
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert result.state is StatusResultState.PARTIAL
+    assert result.state is not StatusResultState.COMPLETE

@@ -56,6 +56,9 @@ def _fingerprint(
     provider: str = "openai",
     role: AgentRole = AgentRole.LEGACY_AGENT,
     api_key: str = "test-key",
+    organization: str = "",
+    project: str = "",
+    custom_headers: tuple[tuple[str, str], ...] = (),
 ) -> str:
     # CHAOS-3285: mirrors production_runtime._readiness_fingerprint's
     # extended formula. Every fixture in this file that builds a "current"
@@ -70,7 +73,11 @@ def _fingerprint(
     # defaults to "test-key" -- most fixtures in this file monkeypatch
     # OPENAI_API_KEY to that value; the "local" provider fixtures (whose
     # resolved credentials.api_key is genuinely "") pass api_key="" instead
-    # (CHAOS-3285 round 5).
+    # (CHAOS-3285 round 5). organization/project/custom_headers default to
+    # "empty" -- most fixtures never configure them; CHAOS-3285 round 6's
+    # own tests pass real values. _credential_fingerprint (the real
+    # producer) is reused directly here, not re-derived, for the same
+    # anti-drift reason.
     return hashlib.sha256(
         "\0".join(
             (
@@ -78,7 +85,14 @@ def _fingerprint(
                 provider,
                 model,
                 base_url,
-                hashlib.sha256(api_key.encode()).hexdigest()[:24],
+                production_runtime._credential_fingerprint(
+                    LLMCredentials(
+                        api_key=api_key,
+                        organization=organization,
+                        project=project,
+                        custom_headers=custom_headers,
+                    )
+                ),
                 READINESS_VERSION,
                 TOOL_CONTRACT_VERSION,
                 BUDGET_POLICY_VERSION,
@@ -583,6 +597,138 @@ async def test_credential_rotation_invalidates_certification(
     assert exc_info.value.code == "provider_not_configured"
 
 
+@pytest.mark.asyncio
+async def test_organization_rotation_invalidates_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same guard as credential (api_key) rotation, for organization:
+    certify under org A, flip OPENAI_ORG_ID to org B for the exact same
+    provider/model/base_url/api_key -- selection must fail closed until B
+    is re-certified."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_ORG_ID", "org-a")
+    fingerprint_a = _fingerprint(organization="org-a")
+    role_key, role_value = _role_certification_setting(certification_key=fingerprint_a)
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": fingerprint_a,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+    session = cast(Any, object())
+
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.model == "certified-model"
+
+    monkeypatch.setenv("OPENAI_ORG_ID", "org-b")
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_project_rotation_invalidates_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex's exact repro: flipping OPENAI_PROJECT_ID from one project to
+    another for the exact same provider/model/base_url/api_key must
+    invalidate certification -- previously this left the fingerprint
+    byte-for-byte identical while the real OpenAI-Project wire header
+    changed."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "project-a")
+    fingerprint_a = _fingerprint(project="project-a")
+    role_key, role_value = _role_certification_setting(certification_key=fingerprint_a)
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": fingerprint_a,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+    session = cast(Any, object())
+
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.model == "certified-model"
+
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "project-b")
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_custom_header_rotation_invalidates_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same guard, for custom identity headers: changing
+    OPENAI_CUSTOM_HEADERS for the exact same provider/model/base_url/
+    api_key must invalidate certification."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "X-Tenant: tenant-a")
+    fingerprint_a = _fingerprint(custom_headers=(("X-Tenant", "tenant-a"),))
+    role_key, role_value = _role_certification_setting(certification_key=fingerprint_a)
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": fingerprint_a,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+    session = cast(Any, object())
+
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.model == "certified-model"
+
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "X-Tenant: tenant-b")
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
 def test_credential_fingerprint_never_leaks_the_raw_api_key() -> None:
     """The credential fingerprint folded into the certification key must be
     non-reversible: the raw api_key string itself must never appear in the
@@ -594,6 +740,56 @@ def test_credential_fingerprint_never_leaks_the_raw_api_key() -> None:
 
     assert "super-secret-key-value" not in fingerprint
     assert len(fingerprint) == 24
+
+
+def test_credential_fingerprint_changes_with_organization() -> None:
+    baseline = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", organization="org-a")
+    )
+    changed = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", organization="org-b")
+    )
+    assert baseline != changed
+
+
+def test_credential_fingerprint_changes_with_project() -> None:
+    baseline = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", project="project-a")
+    )
+    changed = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", project="project-b")
+    )
+    assert baseline != changed
+
+
+def test_credential_fingerprint_changes_with_custom_headers() -> None:
+    baseline = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", custom_headers=(("X-Tenant", "a"),))
+    )
+    changed = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", custom_headers=(("X-Tenant", "b"),))
+    )
+    assert baseline != changed
+
+
+def test_credential_fingerprint_has_no_concatenation_ambiguity() -> None:
+    """CHAOS-3285 round 6 (Codex HIGH): folding identity fields via naive
+    string concatenation (or a `\\0`-joined tuple, this function's own
+    OUTER formula) can collide across different field boundaries -- e.g.
+    organization="ab" + project="c" naively concatenates to the same
+    string as organization="a" + project="bc". _credential_fingerprint
+    uses a JSON-canonical structure internally (sort_keys, one key per
+    field) specifically to avoid this; prove two genuinely different
+    (organization, project) splits that share a naive concatenation do NOT
+    collide."""
+
+    split_one = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", organization="ab", project="c")
+    )
+    split_two = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="k", organization="a", project="bc")
+    )
+    assert split_one != split_two
 
 
 @pytest.mark.asyncio

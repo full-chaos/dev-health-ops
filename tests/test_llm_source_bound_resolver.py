@@ -415,3 +415,63 @@ def test_org_provider_without_credential_material_falls_back_consistently():
     assert isinstance(provider, OpenAIProvider)
     assert provider._impl.cfg.api_key == "sk-platform"
     assert provider._impl.cfg.base_url == "https://platform.invalid/v1"
+
+
+def test_env_platform_credentials_resolve_organization_project_and_custom_headers():
+    """CHAOS-3285 round 6 (Codex HIGH): the OpenAI SDK reads
+    OPENAI_ORG_ID/OPENAI_PROJECT_ID/OPENAI_CUSTOM_HEADERS AMBIENTLY when a
+    client is constructed without them -- codex's exact repro flipped
+    OPENAI_PROJECT_ID with an identical certification fingerprint.
+    LLMCredentials now resolves these explicitly, from the SAME env vars,
+    so they become part of the credential bundle instead of invisible to
+    it."""
+
+    with patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "sk-platform",
+            "OPENAI_ORG_ID": "org-abc",
+            "OPENAI_PROJECT_ID": "proj-abc",
+            "OPENAI_CUSTOM_HEADERS": "X-Custom: header-value\nX-Other: other-value",
+        },
+        clear=True,
+    ):
+        credentials = creds.resolve_llm_credentials("openai", org_id=None)
+
+    assert credentials.organization == "org-abc"
+    assert credentials.project == "proj-abc"
+    assert credentials.custom_headers == (
+        ("X-Custom", "header-value"),
+        ("X-Other", "other-value"),
+    )
+
+
+def test_org_byo_credentials_never_pick_up_platform_organization_or_project():
+    """Source-bound resolution (CHAOS-2550) extends to organization/project/
+    custom_headers too: an org's own BYO credentials must never inherit the
+    PLATFORM operator's OpenAI org/project, even when the platform operator
+    has them configured via env."""
+
+    org = {
+        "org-1": {
+            "provider": "openai",
+            "api_key": "sk-org",
+            "base_url": "https://api.openai.com/v1",
+        }
+    }
+    with patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "sk-platform",
+            "OPENAI_ORG_ID": "platform-org",
+            "OPENAI_PROJECT_ID": "platform-project",
+        },
+        clear=True,
+    ):
+        with _patch_org(org):
+            credentials = creds.resolve_llm_credentials("openai", org_id="org-1")
+
+    assert credentials.api_key == "sk-org"
+    assert credentials.organization == ""
+    assert credentials.project == ""
+    assert credentials.custom_headers == ()

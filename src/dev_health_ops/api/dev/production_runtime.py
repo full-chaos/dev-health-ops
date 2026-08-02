@@ -780,10 +780,11 @@ def _wire_request_digest(model: str) -> str:
 
 
 def _credential_fingerprint(credentials: LLMCredentials) -> str:
-    """Non-reversible fingerprint of the credential material actually used
-    on the wire -- the raw ``api_key`` is NEVER stored, logged, or included
-    in any return value anywhere; only its SHA-256 digest is, and only
-    inside this function.
+    """Non-reversible fingerprint of ALL identity-bearing credential material
+    actually used on the wire -- api_key, organization, project, and
+    custom_headers. The raw ``api_key`` and any header value are NEVER
+    stored, logged, or included in any return value anywhere; only this
+    function's SHA-256 digest is.
 
     CHAOS-3285 round 5 (Codex HIGH, ratified design): certifying provider
     key A, then saving key B for the exact same provider/model/base_url,
@@ -796,9 +797,33 @@ def _credential_fingerprint(credentials: LLMCredentials) -> str:
     the new credential's key, so ``is_current()`` reads False and selection
     fails closed until the NEW credential is re-certified. This does not
     rely on any save/rotation code path remembering to invalidate anything.
+
+    CHAOS-3285 round 6 (Codex HIGH): api_key alone was not the whole
+    identity. The OpenAI SDK reads organization/project/custom headers
+    AMBIENTLY from OPENAI_ORG_ID/OPENAI_PROJECT_ID/OPENAI_CUSTOM_HEADERS
+    when a client is constructed without them -- codex's exact repro:
+    flipping OPENAI_PROJECT_ID from one project to another changed the real
+    OpenAI-Project wire header while this fingerprint stayed byte-for-byte
+    identical, since it never referenced organization/project/headers at
+    all. ``LLMCredentials`` now resolves these explicitly (see
+    ``credentials.py``) instead of leaving them for the SDK to infer, which
+    makes them representable here. Folded via a canonical JSON structure
+    (sorted keys, a sorted list of [name, value] header pairs) rather than
+    naive string concatenation, so there is no ambiguity between e.g.
+    organization="ab" + project="c" and organization="a" + project="bc".
     """
 
-    return hashlib.sha256(credentials.api_key.encode()).hexdigest()[:24]
+    canonical = json.dumps(
+        {
+            "api_key": credentials.api_key,
+            "organization": credentials.organization,
+            "project": credentials.project,
+            "custom_headers": [list(pair) for pair in credentials.custom_headers],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()[:24]
 
 
 def _readiness_fingerprint(
@@ -870,6 +895,14 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
             if isinstance(candidate, _AcceptanceOpenAICandidate)
             else "openai_compatible"
         ),
+        # CHAOS-3285 round 6 (Codex HIGH): passed explicitly so the
+        # AsyncOpenAI client never falls back to ambient
+        # OPENAI_ORG_ID/OPENAI_PROJECT_ID/OPENAI_CUSTOM_HEADERS -- see
+        # OpenAICompatibleAgentProvider.__init__ and
+        # LLMCredentials/_credential_fingerprint.
+        organization=candidate.credentials.organization,
+        project=candidate.credentials.project,
+        custom_headers=candidate.credentials.custom_headers,
     )
 
 

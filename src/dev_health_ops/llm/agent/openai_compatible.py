@@ -136,9 +136,15 @@ class OpenAICompatibleAgentProvider:
         client: Any | None = None,
         disclosure_key: str = "openai_compatible",
         context_window_tokens: int | None = None,
+        organization: str = "",
+        project: str = "",
+        custom_headers: tuple[tuple[str, str], ...] = (),
     ) -> None:
         self.model = model
         self.base_url = base_url or ""
+        self.organization = organization
+        self.project = project
+        self.custom_headers = custom_headers
         self._http_client: Any | None = None
         if client is None:
             from openai import AsyncOpenAI
@@ -151,11 +157,45 @@ class OpenAICompatibleAgentProvider:
             pin_content_carrying_client_loggers()
 
             self._http_client = make_hardened_async_httpx_client()
+            # CHAOS-3285 round 6 (Codex HIGH): AsyncOpenAI reads
+            # OPENAI_ORG_ID/OPENAI_PROJECT_ID/OPENAI_CUSTOM_HEADERS from the
+            # process environment AMBIENTLY whenever organization/project
+            # are left as Python None or default_headers is left unset --
+            # a change to any of those env vars silently changes the wire
+            # identity headers without ever touching this constructor's
+            # inputs, and without changing certification.
+            #
+            # Empirically verified (openai==2.36.0 _client.py): the SDK's
+            # env fallback is gated on `if organization is None:` /
+            # `if project is None:` -- passing ANY non-None value (including
+            # "") suppresses it. But passing "" also SENDS an empty
+            # `OpenAI-Organization: ` header rather than omitting it, which
+            # is not the same as "not configured". So: pass explicit
+            # (possibly empty) strings to suppress the env read during
+            # __init__, then reset back to None afterward when genuinely
+            # not configured, so the header is correctly OMITTED
+            # (`default_headers` treats `None` as "send Omit()", verified
+            # against the same source) rather than sent empty.
+            #
+            # OPENAI_CUSTOM_HEADERS has no such `is None` gate at all -- the
+            # SDK unconditionally merges it into `_custom_headers` whenever
+            # the env var is set, regardless of what `default_headers` this
+            # constructor passes. The only way to suppress it is to
+            # overwrite `_custom_headers` post-construction with exactly
+            # our own explicitly-resolved set (also empirically verified).
             client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url or None,
+                organization=organization,
+                project=project,
+                default_headers=dict(custom_headers) if custom_headers else None,
                 http_client=self._http_client,
             )
+            if not organization:
+                client.organization = None
+            if not project:
+                client.project = None
+            client._custom_headers = dict(custom_headers)
         self._client = client
         self._capabilities = AgentProviderCapabilities(
             structured_output=StructuredOutputMode.JSON_SCHEMA,

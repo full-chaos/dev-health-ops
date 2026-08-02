@@ -29,6 +29,20 @@ logger = logging.getLogger(__name__)
 class LLMCredentials:
     api_key: str = field(default="", repr=False)
     base_url: str = ""
+    # CHAOS-3285 round 6 (Codex HIGH): organization/project/custom_headers are
+    # identity-bearing material the OpenAI SDK will read AMBIENTLY from
+    # OPENAI_ORG_ID/OPENAI_PROJECT_ID/OPENAI_CUSTOM_HEADERS when the client is
+    # constructed without them -- so a provider certified against one org/
+    # project/header set could silently start sending a DIFFERENT one on the
+    # wire without the certification key ever changing. Resolved explicitly
+    # here (never left for the SDK to infer) so they are both representable
+    # in the certification key and suppressible at the client (see
+    # OpenAICompatibleAgentProvider.__init__). custom_headers is a sorted
+    # tuple of (name, value) pairs, not a dict, so this stays hashable and
+    # has one canonical ordering for the fingerprint.
+    organization: str = ""
+    project: str = ""
+    custom_headers: tuple[tuple[str, str], ...] = ()
 
 
 _API_KEY_ENV_BY_PROVIDER: dict[str, tuple[str, ...]] = {
@@ -53,6 +67,23 @@ _BASE_URL_ENV_BY_PROVIDER: dict[str, tuple[str, ...]] = {
     "lmstudio": ("LLM_BASE_URL", "LMSTUDIO_BASE_URL"),
     "qwen-local": ("LLM_BASE_URL", "OLLAMA_BASE_URL"),
     "qwen-lmstudio": ("LLM_BASE_URL", "LMSTUDIO_BASE_URL"),
+}
+
+# CHAOS-3285 round 6: only the OpenAI wire protocol has an
+# organization/project/custom-headers concept at all -- these are
+# deliberately absent for every other provider (an empty tuple from
+# `.get(provider_name, ())` resolves to "" / no headers, never an
+# accidental cross-provider leak of an OpenAI-scoped env var).
+_ORGANIZATION_ENV_BY_PROVIDER: dict[str, tuple[str, ...]] = {
+    "openai": ("LLM_ORGANIZATION", "OPENAI_ORG_ID"),
+}
+
+_PROJECT_ENV_BY_PROVIDER: dict[str, tuple[str, ...]] = {
+    "openai": ("LLM_PROJECT", "OPENAI_PROJECT_ID"),
+}
+
+_CUSTOM_HEADERS_ENV_BY_PROVIDER: dict[str, tuple[str, ...]] = {
+    "openai": ("LLM_CUSTOM_HEADERS", "OPENAI_CUSTOM_HEADERS"),
 }
 
 _API_KEY_REQUIRED_PROVIDERS = {"openai", "anthropic", "gemini", "qwen"}
@@ -343,6 +374,22 @@ def _first_env(names: tuple[str, ...]) -> str:
     return ""
 
 
+def _parse_custom_headers(raw: str) -> tuple[tuple[str, str], ...]:
+    """Mirror the OpenAI SDK's own OPENAI_CUSTOM_HEADERS parsing exactly
+    (colon-split, one header per line) so resolving it ourselves stays
+    behavior-preserving for an operator's existing configuration -- but
+    returns a SORTED tuple of pairs, never a dict, so there is one
+    canonical order to fold into the certification key regardless of the
+    line order in the raw value."""
+
+    parsed: dict[str, str] = {}
+    for line in raw.split("\n"):
+        colon = line.find(":")
+        if colon >= 0:
+            parsed[line[:colon].strip()] = line[colon + 1 :].strip()
+    return tuple(sorted(parsed.items()))
+
+
 def _normalize_provider(provider: str) -> str:
     return (provider or "auto").strip().lower()
 
@@ -611,13 +658,24 @@ def resolve_llm_org_settings_credentials(
 def _env_llm_credentials(provider_name: str) -> LLMCredentials:
     """Platform/default credentials sourced *only* from environment variables.
 
-    Source-bound: both api_key and base_url come from the environment, never
-    mixed with org-scoped or per-call values (CHAOS-2550 credential-isolation
-    invariant).
+    Source-bound: api_key, base_url, organization, project, and
+    custom_headers all come from the environment, never mixed with
+    org-scoped or per-call values (CHAOS-2550 credential-isolation
+    invariant). organization/project/custom_headers are resolved explicitly
+    HERE, from the same env vars the OpenAI SDK would otherwise read
+    ambiently on its own, so they become representable in the certification
+    key and suppressible at the client construction site (CHAOS-3285 round
+    6, Codex HIGH) instead of silently varying the wire identity underneath
+    an unchanged certification.
     """
     return LLMCredentials(
         api_key=_first_env(_API_KEY_ENV_BY_PROVIDER.get(provider_name, ())),
         base_url=_first_env(_BASE_URL_ENV_BY_PROVIDER.get(provider_name, ())),
+        organization=_first_env(_ORGANIZATION_ENV_BY_PROVIDER.get(provider_name, ())),
+        project=_first_env(_PROJECT_ENV_BY_PROVIDER.get(provider_name, ())),
+        custom_headers=_parse_custom_headers(
+            _first_env(_CUSTOM_HEADERS_ENV_BY_PROVIDER.get(provider_name, ()))
+        ),
     )
 
 

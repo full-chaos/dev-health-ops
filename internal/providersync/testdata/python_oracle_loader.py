@@ -197,7 +197,14 @@ def _target_github_code_client() -> None:
     _install_module("httpx", {"Response": object, "AsyncBaseTransport": object})
     _install_module(
         "dev_health_ops.connectors.models",
-        {"FileBlame": object, "SecurityAlertData": object},
+        {
+            "FileBlame": object,
+            "SecurityAlertData": type(
+                "SecurityAlertData",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            ),
+        },
     )
     _install_module(
         "dev_health_ops.exceptions",

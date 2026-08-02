@@ -26,7 +26,7 @@ import uuid
 from typing import Any, cast
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.dev import router as dev_router_module
@@ -454,7 +454,23 @@ async def test_replay_with_corrupted_frame_payload_falls_back_safely(
         assert frame_row is not None
         # Missing every field DevAnswerFrame.model_validate requires beyond
         # schema_version -- a damaged/legacy row, not a well-formed one.
-        frame_row.payload = {"schema_version": "dev_answer_frame.v1"}
+        #
+        # CHAOS-3297 Codex review round 7 MEDIUM: the ORM boundary now
+        # enforces contract validity on every payload write through the
+        # session (attribute assignment AND bulk update()/insert()
+        # alike) -- exactly so this shape can no longer be written by the
+        # application. This test's whole premise is a row that predates
+        # or otherwise bypassed that guarantee (a damaged row, data from
+        # before a schema/contract change, manual DB surgery) -- so it
+        # must simulate the corruption the same way that data would
+        # really arrive: on the raw connection, outside the ORM Session
+        # entirely, never through session.execute()/attribute assignment.
+        connection = await session.connection()
+        await connection.execute(
+            update(DevAnswerFrame)
+            .where(DevAnswerFrame.id == frame_row.id)
+            .values(payload={"schema_version": "dev_answer_frame.v1"})
+        )
         await session.commit()
 
     replay = await client.post(

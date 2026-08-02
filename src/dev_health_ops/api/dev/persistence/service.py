@@ -19,9 +19,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, TypeAlias
 
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, event, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from dev_health_ops.api.dev.contracts import DevError
 from dev_health_ops.api.dev.contracts_v2.frame import (
@@ -465,6 +466,151 @@ def _safe_count_summary(value: Mapping[str, Any], *, field: str) -> dict[str, An
         if isinstance(item, int | float) and not isinstance(item, bool) and item < 0:
             raise DevPersistenceValidationError(f"{field} counts must be nonnegative")
     return copied
+
+
+# -- ORM-boundary payload validation (CHAOS-3297 Codex review round 7
+# MEDIUM). The AST scanner (test_persistence_v2.py) is a syntax-level
+# tripwire -- it can only ever recognize the write *shapes* it was taught
+# to look for, and it only sees this module's own source. This is the
+# load-bearing guard instead: a SQLAlchemy mapper event fires for every
+# INSERT/UPDATE of a payload-bearing row, however it was constructed --
+# attribute assignment, kwargs-splat, ``update().values(...)``, a bulk
+# helper in a completely different module, anything -- and validates the
+# payload actually on its way to the database, not the syntax that
+# produced it. -------------------------------------------------------
+
+
+class _KnownUnvalidatedPayloadGap:
+    """Sentinel marking a payload-bearing model whose ``payload`` is not
+    yet validated against its wire contract, at either the service-method
+    layer (see ``_KNOWN_UNVALIDATED_PAYLOAD_SINKS``) or this ORM
+    boundary -- the same explicit, filed gap, not a silent pass.
+    CHAOS-3330 tracks closing both together, model by model."""
+
+
+_KNOWN_UNVALIDATED_PAYLOAD_GAP = _KnownUnvalidatedPayloadGap()
+
+
+def _validate_answer_frame_payload(target: Any) -> None:
+    try:
+        DevAnswerFrameContract.model_validate(target.payload)
+    except PydanticValidationError as exc:
+        raise DevPersistenceValidationError(
+            f"dev_answer_frames.payload is not a valid dev_answer_frame.v1: {exc}"
+        ) from exc
+
+
+def _validate_run_narrative_payload(target: Any) -> None:
+    # payload excludes `body` -- narrative_text is the separate
+    # authoritative copy (see record_narrative's own docstring); the full
+    # contract object must be reconstructed before validating, exactly as
+    # record_narrative already does at the service layer.
+    reconstructed = dict(target.payload)
+    reconstructed["body"] = target.narrative_text
+    try:
+        DevNarrativeContract.model_validate(reconstructed)
+    except PydanticValidationError as exc:
+        raise DevPersistenceValidationError(
+            f"dev_run_narratives.payload is not a valid dev_narrative.v1: {exc}"
+        ) from exc
+
+
+#: Total registry: every payload-bearing ORM model (see
+#: ``test_persistence_v2.py::_payload_bearing_orm_model_names``, which
+#: discovers the set from live column metadata, never a hand-typed list)
+#: must have an entry here -- either a validator function enforcing its
+#: wire contract, or explicitly ``_KNOWN_UNVALIDATED_PAYLOAD_GAP``
+#: (CHAOS-3330's four sinks, the same honest gap
+#: ``_KNOWN_UNVALIDATED_PAYLOAD_SINKS`` already names at the
+#: service-method level). Totality against the live model set is asserted
+#: by ``test_orm_boundary_payload_validator_registry_matches_the_live_schema``
+#: in ``test_persistence_v2.py``.
+_PAYLOAD_MODEL_VALIDATORS: dict[type, Any] = {
+    DevAnswerFrame: _validate_answer_frame_payload,
+    DevRunNarrative: _validate_run_narrative_payload,
+    DevRunIntent: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
+    DevRunResolution: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
+    DevRunSubjectSet: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
+    DevRunSourceObservation: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
+}
+
+
+def _enforce_payload_contract_at_flush(
+    _mapper: Any, _connection: Any, target: Any
+) -> None:
+    validator = _PAYLOAD_MODEL_VALIDATORS.get(type(target))
+    if validator is None or validator is _KNOWN_UNVALIDATED_PAYLOAD_GAP:
+        return
+    validator(target)
+
+
+for _payload_model in _PAYLOAD_MODEL_VALIDATORS:
+    event.listen(_payload_model, "before_insert", _enforce_payload_contract_at_flush)
+    event.listen(_payload_model, "before_update", _enforce_payload_contract_at_flush)
+del _payload_model
+
+
+def _bulk_dml_column_values(statement: Any) -> dict[str, Any]:
+    """Column name -> Python value for a Core-style ``update()``/
+    ``insert()`` construct's own ``.values(...)`` clause, unwrapping a
+    bound parameter to its literal value where present."""
+
+    values = getattr(statement, "_values", None) or {}
+    decoded: dict[str, Any] = {}
+    for column, value in values.items():
+        decoded[column.name] = value.value if hasattr(value, "value") else value
+    return decoded
+
+
+class _BulkDmlPayloadTarget:
+    """Throwaway shim exposing just the attributes
+    ``_validate_answer_frame_payload``/``_validate_run_narrative_payload``
+    read, so a bulk DML statement's raw column values can be validated
+    with the exact same validator functions a real ORM instance is."""
+
+    def __init__(self, values: Mapping[str, Any]) -> None:
+        self.payload = values.get("payload")
+        self.narrative_text = values.get("narrative_text")
+
+
+def _enforce_payload_contract_on_bulk_dml(orm_execute_state: Any) -> None:
+    """Catches the write form ``before_insert``/``before_update`` mapper
+    events structurally cannot see at all: a Core-style
+    ``update(Model).values(...)`` or ``insert(Model).values(...)``
+    statement executed via ``session.execute(...)`` runs as a bulk
+    statement, never through the ORM unit-of-work flush those events fire
+    from (CHAOS-3297 Codex review round 7 MEDIUM --
+    ``update().values(payload=...)`` is exactly the bypass form that
+    motivated closing this gap here too, not only at
+    before_insert/before_update; confirmed empirically -- a probe
+    ``before_update`` listener never fires for a bulk ``update().values()``
+    call against a real engine).
+
+    A bulk statement has no live ORM instance to hang cross-checks on: if
+    it sets ``payload`` without ALSO setting every column a validator
+    needs (e.g. ``DevRunNarrative``'s ``narrative_text``, which
+    ``_validate_run_narrative_payload`` reconstructs ``body`` from), the
+    missing column reads as ``None`` here and fails contract validation
+    on its own -- deny by default, not "fetch the current row and hope
+    it's still valid", which a bulk statement's own WHERE clause might
+    match many rows for anyway.
+    """
+
+    if not (orm_execute_state.is_update or orm_execute_state.is_insert):
+        return
+    mapper = orm_execute_state.bind_mapper
+    if mapper is None:
+        return
+    validator = _PAYLOAD_MODEL_VALIDATORS.get(mapper.class_)
+    if validator is None or validator is _KNOWN_UNVALIDATED_PAYLOAD_GAP:
+        return
+    values = _bulk_dml_column_values(orm_execute_state.statement)
+    if "payload" not in values:
+        return
+    validator(_BulkDmlPayloadTarget(values))
+
+
+event.listen(Session, "do_orm_execute", _enforce_payload_contract_on_bulk_dml)
 
 
 class DevPersistenceService:

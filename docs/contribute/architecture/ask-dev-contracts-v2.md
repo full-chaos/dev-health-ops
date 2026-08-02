@@ -117,6 +117,46 @@ block can never carry a `rate`. Readiness (`DevReadinessBlock`) is a
 separate, independently validated concept -- an answer can be complete about
 a subject that is itself `not_ready`.
 
+## Fact disclosures
+
+`DevAnswerFact.disclosures` (`FactDisclosure`, `contracts_v2/base.py`) is the
+v2-native, closed-vocabulary equivalent of v1 `DevClaimFlags`
+(`stale | uncertain | conflicting | untrusted_source`), ratified on
+CHAOS-3297 ("DevAnswerFact flags gap -- design ratified 2026-08-02"). It is
+per-fact rather than per-frame or per-evidence because that is what v1's
+flags are: `DevAnswerFrame.limitations` is per-frame prose and
+`DevEvidenceRefV2`'s inherited `DevEvidenceFlags` is per-evidence, so neither
+channel could represent "this specific fact is stale" without conflating it
+with something else.
+
+A `disclosures` tuple must be declared in strictly ascending `FactDisclosure`
+enum order with no duplicates -- the canonical form of a 4-bit set, checked
+by `DevAnswerFact.validate_disclosures_canonical_order` so two producers
+disclosing the same facts always emit byte-identical frames. `FactDisclosure`
+is deliberately declared in `base.py`, not `frame.py`: `no_answer_policy`
+imports only `base` (the leaf that broke the cyclic-import graph -- see that
+module's docstring), and `contracts_v2/compat.py` asserts a **name-level**
+import-time bijection between `FactDisclosure` and v1
+`DevClaimFlags.model_fields`, raising `RuntimeError` on drift.
+
+`validate_outcome_consistency` additionally rejects a fact disclosure on an
+`answered` frame: a disclosure is a defect that bars `answered` but does not,
+by itself, satisfy `answered_with_gaps` -- a builder emitting a disclosure
+must also emit the limitation (or non-calculable completion block) that
+explains it. Deriving a disclosure from `DevEvidenceRefV2`'s inherited
+`DevEvidenceFlags.untrusted_content` (which defaults `True` on every
+evidence ref) would be wrong and is explicitly not done -- see
+`FactDisclosure`'s docstring.
+
+The round trip is two-way: `compat.py`'s `_project_answered` projects a
+fact's `disclosures` into a v1 `DevClaimFlags` instance
+(`{disclosure.value: True for disclosure in fact.disclosures}`), and
+`terminal_frames.wrap_legacy_answer_as_frame` folds a v1 claim's
+`DevClaimFlags` into its fact's `disclosures` in canonical (`FactDisclosure`
+declaration) order via `_disclosures_from_claim_flags`, so a v1 claim
+carrying `stale`/`uncertain`/`conflicting`/`untrusted_source` is no longer
+silently dropped when embedded into a frame.
+
 ## Public outcome vocabulary and the five semantic validators
 
 `dev_answer.v2`'s `public_outcome` is exactly: `answered`,
@@ -136,8 +176,10 @@ why the indirection matters for mutation testing:
   reasons) may never contain internal codes like `forbidden_or_not_found`,
   `scope_forbidden`, or a versioned rule/plan ID pattern.
 - `validate_outcome_consistency` -- a "no content" outcome cannot carry
-  sections/facts; an "answered" outcome cannot carry limitations or a
-  non-calculable completion; `answered_with_gaps` requires one of the two.
+  sections/facts; an "answered" outcome cannot carry limitations, a
+  non-calculable completion, or a fact disclosure (see "Fact disclosures"
+  above); `answered_with_gaps` requires disclosed limitations or a
+  non-calculable completion.
 - `validate_completion_denominator` -- a calculable completion requires a
   full numerator/denominator/rule; a non-calculable one can never carry a
   rate.

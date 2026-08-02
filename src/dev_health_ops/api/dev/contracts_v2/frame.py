@@ -35,6 +35,7 @@ from . import validators as _validators
 from .base import (
     ContractModelV2,
     EvidenceHandle,
+    FactDisclosure,
     Label,
     LongText,
     OpaqueID,
@@ -100,6 +101,14 @@ class DevReadinessBlock(ContractModelV2):
         return self
 
 
+#: Canonical declaration order — ``FactDisclosure``'s own enum member order,
+#: read off the type rather than hand-duplicated, so a member added to the
+#: enum is automatically part of the order this validator enforces.
+_FACT_DISCLOSURE_ORDER: dict[FactDisclosure, int] = {
+    member: index for index, member in enumerate(FactDisclosure)
+}
+
+
 class DevAnswerFact(ContractModelV2):
     fact_id: OpaqueID
     text: ShortText
@@ -111,6 +120,27 @@ class DevAnswerFact(ContractModelV2):
         default_factory=tuple, max_length=25
     )
     confidence: FiniteFloat = Field(ge=0, le=1)
+    #: Per-fact disclosures (CHAOS-3297 flags gap, ratified 2026-08-02) — the
+    #: v2-native equivalent of v1 ``DevClaimFlags``. Must be declared in
+    #: strictly ascending ``FactDisclosure`` order with no duplicates (see
+    #: ``validate_disclosures_canonical_order``): the tuple is isomorphic to
+    #: a 4-bit set, so this is the canonical form rather than one of several
+    #: representations of the same disclosure set.
+    disclosures: tuple[FactDisclosure, ...] = Field(default_factory=tuple, max_length=4)
+
+    @model_validator(mode="after")
+    def validate_disclosures_canonical_order(self) -> Self:
+        indices = [
+            _FACT_DISCLOSURE_ORDER[disclosure] for disclosure in self.disclosures
+        ]
+        for previous, current in zip(indices, indices[1:]):
+            if current <= previous:
+                raise ValueError(
+                    "fact disclosures must be declared in strictly ascending "
+                    "order with no duplicates (the canonical form of a "
+                    f"4-bit disclosure set); got {[d.value for d in self.disclosures]!r}"
+                )
+        return self
 
 
 class DevAnswerSection(ContractModelV2):

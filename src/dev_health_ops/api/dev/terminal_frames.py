@@ -32,14 +32,12 @@ side of the same fidelity requirement: an orchestrator-native error code must
 keep replaying via ``run.safe_error_code`` (today's exact mechanism), never
 via this module's frame, or live and replay would diverge on retry.
 
-Known contract gap (filed on CHAOS-3297, referenced from the PR): ``DevAnswerFact``
-has no flags-bearing field, so a v1 claim's ``DevClaimFlags``
-(stale/uncertain/conflicting/untrusted_source) cannot round-trip through
-``wrap_legacy_answer_as_frame``. That is acceptable for this transitional
-compatibility shim (the frame is not the source of truth here; the v1
-answer passed to ``terminal()`` unchanged is), but it is a blocking
-precondition for CHAOS-3297 stack #3's real builders, which have no such
-fallback -- see the docstring cross-reference on the Linear issue.
+``DevClaimFlags`` (stale/uncertain/conflicting/untrusted_source) round-trips
+through ``wrap_legacy_answer_as_frame`` via ``DevAnswerFact.disclosures``
+(CHAOS-3297 flags gap, ratified 2026-08-02): each claim's set flags are
+folded into the fact's disclosure tuple in canonical (enum) order. See
+``contracts_v2.base.FactDisclosure`` and ``contracts_v2.compat``'s
+import-time bijection assertion against ``DevClaimFlags.model_fields``.
 """
 
 from __future__ import annotations
@@ -52,10 +50,16 @@ from datetime import datetime
 from .contracts import (
     ClaimKind,
     DevAnswer,
+    DevClaimFlags,
     DevContractVersions,
 )
 from .contracts import ToolID as _ToolID
-from .contracts_v2.base import PlatformVersionToken, PublicOutcome, SourceClass
+from .contracts_v2.base import (
+    FactDisclosure,
+    PlatformVersionToken,
+    PublicOutcome,
+    SourceClass,
+)
 from .contracts_v2.embedded import DevCoverageV2, DevEvidenceRefV2, DevMetricRefV2
 from .contracts_v2.frame import (
     DevAnswerFact,
@@ -268,6 +272,20 @@ def _canonical_run_id(run_id: str) -> str:
     return str(uuid.uuid5(_NAMESPACE, run_id))
 
 
+def _disclosures_from_claim_flags(flags: DevClaimFlags) -> tuple[FactDisclosure, ...]:
+    """Fold a v1 ``DevClaimFlags`` into the canonically-ordered disclosure tuple.
+
+    Iterates ``FactDisclosure`` in its own enum declaration order (not the
+    order the flags happen to be set), so the result already satisfies
+    ``DevAnswerFact.validate_disclosures_canonical_order`` without a separate
+    sort step -- the canonical form falls out of the iteration order.
+    """
+
+    return tuple(
+        disclosure for disclosure in FactDisclosure if getattr(flags, disclosure.value)
+    )
+
+
 def _source_class_for_legacy_token(token: str) -> SourceClass:
     try:
         tool_id = _ToolID(token)
@@ -384,10 +402,11 @@ def wrap_legacy_answer_as_frame(answer: DevAnswer, *, run_id: str) -> DevAnswerF
     list, e.g. ``orchestrator._budget_answer``'s metrics-only partial
     answer).
 
-    Known gap: v1 ``DevClaim.flags`` (stale/uncertain/conflicting/
-    untrusted_source) has no home on ``DevAnswerFact`` and is dropped here.
-    Filed on CHAOS-3297 as a blocking precondition for stack #3's real
-    builders (see module docstring).
+    Each claim's ``DevClaimFlags`` are folded into its fact's
+    ``disclosures`` in canonical order (see ``_disclosures_from_claim_flags``
+    and ``contracts_v2.base.FactDisclosure``), so a v1 claim carrying
+    stale/uncertain/conflicting/untrusted_source is no longer silently
+    dropped when embedded into a frame.
     """
 
     facts = tuple(
@@ -397,6 +416,7 @@ def wrap_legacy_answer_as_frame(answer: DevAnswer, *, run_id: str) -> DevAnswerF
             kind=_CLAIM_KIND_TO_FACT_KIND[claim.kind],
             evidence_ref_ids=tuple(claim.evidence_ref_ids),
             confidence=claim.confidence,
+            disclosures=_disclosures_from_claim_flags(claim.flags),
         )
         for claim in answer.claims
     )

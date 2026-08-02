@@ -225,6 +225,7 @@ def _fact() -> dict[str, Any]:
         "evidence_ref_ids": ["ev1_a2bc440cf82f6979884d6d486dacdc900744d04b"],
         "relationship_path_ids": ["path_01"],
         "confidence": 1.0,
+        "disclosures": [],
     }
 
 
@@ -749,6 +750,26 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
         "dev_answer_frame.v1",
         lambda value: value.__setitem__("versions", None),
     )
+    # CHAOS-3297 flags gap (ratified 2026-08-02): an 'answered' frame whose
+    # only defect is a fact disclosure -- validate_outcome_consistency's new
+    # clause, isolated from the pre-existing limitations/completion checks.
+    frame_answered_with_disclosure = changed(
+        "dev_answer_frame.v1",
+        lambda value: value["facts"][0].__setitem__("disclosures", ["stale"]),
+    )
+    # DevAnswerFact.validate_disclosures_canonical_order: declared out of
+    # ascending FactDisclosure order.
+    frame_disclosures_out_of_order = changed(
+        "dev_answer_frame.v1",
+        lambda value: value["facts"][0].__setitem__(
+            "disclosures", ["conflicting", "stale"]
+        ),
+    )
+    # Same validator: a duplicated disclosure is also not strictly ascending.
+    frame_disclosures_duplicated = changed(
+        "dev_answer_frame.v1",
+        lambda value: value["facts"][0].__setitem__("disclosures", ["stale", "stale"]),
+    )
     answer_frame_run_id_mismatch = changed(
         "dev_answer.v2",
         lambda value: value["frame"].__setitem__(
@@ -975,6 +996,9 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             ("completion_without_denominator", frame_completion_without_denominator),
             ("relationship_outside_frame", frame_relationship_outside_frame),
             ("answered_without_versions", frame_answered_without_versions),
+            ("answered_with_disclosure", frame_answered_with_disclosure),
+            ("disclosures_out_of_order", frame_disclosures_out_of_order),
+            ("disclosures_duplicated", frame_disclosures_duplicated),
             *_no_answer_outcome_prohibited_field_cases(),
             *_coverage_source_vocabulary_cases(),
         ],

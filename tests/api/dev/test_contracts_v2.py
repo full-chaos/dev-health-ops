@@ -16,6 +16,7 @@ fails the contract suite" acceptance clause, made attributable per-guard.
 
 from __future__ import annotations
 
+import itertools
 import re
 from copy import deepcopy
 from enum import StrEnum
@@ -38,6 +39,7 @@ from dev_health_ops.api.dev.contract_fixtures_v2 import (
 from dev_health_ops.api.dev.contracts import (
     CONTRACT_MODELS,
     AnswerStatus,
+    DevClaimFlags,
     DevCoverage,
     DevEvidenceRef,
     DevScope,
@@ -261,6 +263,16 @@ _FRAME_VALIDATOR_CASES: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: A validator can reject more than one negative fixture. CHAOS-3297 flags
+#: gap: ``answered_with_disclosure`` is a second case
+#: ``validate_outcome_consistency`` alone rejects (its new fact-disclosure
+#: clause), alongside ``outcome_content_mismatch`` (the pre-existing
+#: has_content clause) -- both must flip when the validator is disabled, and
+#: neither should count as "a different guardrail" in the isolation loop below.
+_ADDITIONAL_CASES_SAME_VALIDATOR: dict[str, tuple[str, ...]] = {
+    "validate_outcome_consistency": ("answered_with_disclosure",),
+}
+
 
 @pytest.mark.parametrize("validator_name", sorted(_FRAME_VALIDATOR_CASES))
 def test_disabling_one_frame_validator_flips_only_its_own_fixture(
@@ -269,6 +281,10 @@ def test_disabling_one_frame_validator_flips_only_its_own_fixture(
     schema_version, target_case = _FRAME_VALIDATOR_CASES[validator_name]
     all_cases = negative_fixtures()[schema_version]
     target_payload = dict(all_cases)[target_case]
+    same_validator_cases = {
+        target_case,
+        *_ADDITIONAL_CASES_SAME_VALIDATOR.get(validator_name, ()),
+    }
 
     # Baseline: rejected with every validator active.
     with pytest.raises(ValidationError):
@@ -276,15 +292,16 @@ def test_disabling_one_frame_validator_flips_only_its_own_fixture(
 
     monkeypatch.setattr(validators_module, validator_name, lambda *_a, **_k: None)
 
-    # The targeted fixture now passes: the disabled guard was the only thing
-    # rejecting it.
-    v2.DevAnswerFrame.model_validate(target_payload)
+    # Every fixture attributable to this validator now passes: the disabled
+    # guard was the only thing rejecting each of them.
+    for same_case in same_validator_cases:
+        v2.DevAnswerFrame.model_validate(dict(all_cases)[same_case])
 
     # Every other case for this schema is a different guardrail and must
-    # still be rejected — proves the mutation is attributable to exactly one
-    # validator, not a global bypass.
+    # still be rejected — proves the mutation is attributable to exactly this
+    # validator's cases, not a global bypass.
     for other_case, other_payload in all_cases:
-        if other_case == target_case:
+        if other_case in same_validator_cases:
             continue
         with pytest.raises(ValidationError):
             v2.DevAnswerFrame.model_validate(other_payload)
@@ -342,6 +359,176 @@ def test_narrative_section_reference_must_exist_in_frame() -> None:
     answer_payload["narrative"]["referenced_section_ids"] = ["section_unknown"]
     with pytest.raises(ValidationError, match="unknown section"):
         v2.DevAnswerV2.model_validate(answer_payload)
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3297 flags gap ("DevAnswerFact flags gap — design ratified
+# 2026-08-02"): DevAnswerFact.disclosures, its canonical-order validator, the
+# answered/disclosure clause on validate_outcome_consistency, and the
+# exhaustive v2-to-v1 half of the round-trip oracle. The v1-to-v2 half
+# (wrap_legacy_answer_as_frame) lives in test_terminal_frames.py.
+# ---------------------------------------------------------------------------
+
+
+def test_disclosures_out_of_order_is_rejected() -> None:
+    payload = dict(negative_fixtures()["dev_answer_frame.v1"])[
+        "disclosures_out_of_order"
+    ]
+    with pytest.raises(ValidationError, match="ascending"):
+        v2.DevAnswerFrame.model_validate(payload)
+
+
+def test_disclosures_duplicated_is_rejected() -> None:
+    payload = dict(negative_fixtures()["dev_answer_frame.v1"])["disclosures_duplicated"]
+    with pytest.raises(ValidationError, match="ascending"):
+        v2.DevAnswerFrame.model_validate(payload)
+
+
+def test_disclosures_canonical_order_accepts_the_full_ascending_tuple() -> None:
+    payload = deepcopy(positive_fixtures()["dev_answer_frame.v1"])
+    payload["facts"][0]["disclosures"] = [member.value for member in v2.FactDisclosure]
+    payload["public_outcome"] = "answered_with_gaps"
+    payload["limitations"] = ["Some facts on this answer carry disclosures."]
+    payload["completion"] = None
+    payload["readiness"] = None
+    frame = v2.DevAnswerFrame.model_validate(payload)
+    assert frame.facts[0].disclosures == tuple(v2.FactDisclosure)
+
+
+def test_answered_disclosure_clause_is_new_not_preexisting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED/GREEN pair for the CHAOS-3297 flags-gap 'answered' clause.
+
+    An 'answered' frame whose only defect is one fact disclosure passed
+    ``validate_outcome_consistency`` before this changeset (the function had
+    no knowledge of ``DevAnswerFact.disclosures`` at all) and is rejected
+    after it. The "old" body below is byte-identical to
+    ``validators.validate_outcome_consistency`` minus the new disclosure
+    clause -- copied rather than imported from git history so the RED half
+    is self-contained and does not depend on checking out a prior commit.
+    """
+
+    payload = dict(negative_fixtures()["dev_answer_frame.v1"])[
+        "answered_with_disclosure"
+    ]
+    original_validator = validators_module.validate_outcome_consistency
+
+    def _pre_flags_gap_validate_outcome_consistency(frame: Any) -> None:
+        outcome = frame.public_outcome.value
+        has_content = bool(frame.sections) or bool(frame.facts)
+        if outcome in validators_module._EMPTY_CONTENT_OUTCOMES and has_content:
+            raise ValueError(
+                f"public outcome {outcome!r} cannot carry answer sections/facts"
+            )
+        if outcome in validators_module.ANSWERED_CONTENT_OUTCOMES and not has_content:
+            raise ValueError(
+                f"public outcome {outcome!r} requires answer sections and facts"
+            )
+        if outcome == "answered":
+            if frame.limitations:
+                raise ValueError(
+                    "'answered' cannot carry limitations; use answered_with_gaps"
+                )
+            if frame.completion is not None and frame.completion.calculable is False:
+                raise ValueError(
+                    "'answered' cannot carry a non-calculable completion block; "
+                    "use answered_with_gaps"
+                )
+        if outcome == "answered_with_gaps" and not frame.limitations:
+            if frame.completion is None or frame.completion.calculable is not False:
+                raise ValueError(
+                    "'answered_with_gaps' requires disclosed limitations or a "
+                    "non-calculable completion block"
+                )
+
+    # RED: the pre-changeset validator body has no disclosure clause and
+    # accepts this fixture.
+    monkeypatch.setattr(
+        validators_module,
+        "validate_outcome_consistency",
+        _pre_flags_gap_validate_outcome_consistency,
+    )
+    v2.DevAnswerFrame.model_validate(payload)  # must not raise
+
+    # Every other frame negative fixture is a different guardrail (internal
+    # leakage, outcome/content mismatch, completion denominator, ...) and
+    # must still be rejected under the RED replacement -- proving it is a
+    # faithful full reproduction of the pre-changeset validator, not a stub
+    # that happens to also let the disclosure fixture through by disabling
+    # everything.
+    for other_case, other_payload in negative_fixtures()["dev_answer_frame.v1"]:
+        if other_case == "answered_with_disclosure":
+            continue
+        with pytest.raises(ValidationError):
+            v2.DevAnswerFrame.model_validate(other_payload)
+
+    # GREEN: restore the real, current validator -- it rejects the same payload.
+    monkeypatch.setattr(
+        validators_module, "validate_outcome_consistency", original_validator
+    )
+    with pytest.raises(ValidationError, match="disclosure"):
+        v2.DevAnswerFrame.model_validate(payload)
+
+
+def _all_disclosure_subsets() -> list[tuple[v2.FactDisclosure, ...]]:
+    """Every one of the 2**4 canonically-ordered disclosure subsets.
+
+    ``itertools.combinations`` over an already enum-ordered sequence
+    preserves that order, so every subset it yields is already the
+    canonical form ``DevAnswerFact`` requires.
+    """
+
+    members = list(v2.FactDisclosure)
+    return [
+        combo
+        for size in range(len(members) + 1)
+        for combo in itertools.combinations(members, size)
+    ]
+
+
+@pytest.mark.parametrize(
+    "subset",
+    _all_disclosure_subsets(),
+    ids=lambda s: "+".join(d.value for d in s) or "empty",
+)
+def test_compat_projects_fact_disclosures_to_claim_flags_exhaustively(
+    subset: tuple[Any, ...],
+) -> None:
+    """Exhaustive 2**4 oracle, v2-to-v1 half: every disclosure subset on a
+    frame's one fact round-trips to exactly the matching v1 ``DevClaimFlags``
+    bits, with everything else False. The v1-to-v2 half
+    (``wrap_legacy_answer_as_frame``) is
+    ``test_wrap_legacy_answer_round_trips_claim_flags_exhaustively`` in
+    test_terminal_frames.py.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v2"])
+    payload["frame"]["facts"][0]["disclosures"] = [d.value for d in subset]
+    if subset:
+        # A non-empty disclosure set is forbidden on 'answered' (the new
+        # clause under test above); use 'answered_with_gaps' with a
+        # disclosed limitation for every non-empty subset so this test
+        # exercises the projector, not the outcome-consistency guard.
+        payload["public_outcome"] = "answered_with_gaps"
+        payload["outcome_display_label"] = "Answered with some gaps"
+        payload["frame"]["public_outcome"] = "answered_with_gaps"
+        payload["frame"]["limitations"] = [
+            "One or more facts on this answer carry a disclosure."
+        ]
+    # The scripted narrative only narrates the empty-disclosure body; drop it
+    # so this test stays focused on the frame/claim projection, not narrative
+    # consistency (covered elsewhere).
+    payload["narrative"] = None
+    answer = v2.DevAnswerV2.model_validate(payload)
+
+    projected = v2.project_answer_v2_to_v1(
+        answer, organization_id="org_fullchaos", time_range=_time_range_for_scope()
+    )
+    assert isinstance(projected, DevAnswerV1)
+    claim = projected.claims[0]
+    expected_flags = DevClaimFlags(**{d.value: True for d in subset})
+    assert claim.flags == expected_flags
 
 
 # ---------------------------------------------------------------------------

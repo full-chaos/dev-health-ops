@@ -21,16 +21,23 @@ to each (``facts`` is ``ABSENT`` under the no-answer policy but
 that carry no facts at all, and the narrative brief is only ever built for
 a frame that already has content).
 
-CHAOS-3297 plan (e), "Frame shape and the 3298 freeze point": stack #3 is
-expected to add embedded ``health_findings``/``deficiency_findings`` blocks
-alongside (or replacing) today's opaque ``health_profile_refs``/
-``finding_refs``/``deficiency_refs`` pointers. When that lands, the two new
-fields will fail this module's import until classified here, exactly like
-they will fail ``no_answer_policy``'s import until classified there. Until
-then, the three existing ref fields are ``EXCLUDED``: they are opaque
-identifiers with no narratable content, unlike the entity/fact/metric
-blocks that do carry a display label or text the provider needs to write
-correct prose.
+CHAOS-3297 plan (e), "Frame shape and the 3298 freeze point": stack #3
+landed embedded ``health_findings``/``deficiency_findings`` blocks
+(``HealthRuleFinding``/``DeficiencyFinding``) alongside the pre-existing
+opaque ``health_profile_refs``/``finding_refs``/``deficiency_refs``
+pointers. All three ref fields stay ``EXCLUDED`` (opaque identifiers, no
+narratable content). The two new embedded blocks are **also** ``EXCLUDED``,
+deliberately more conservative than ``facts``/``metrics``/``conflicts``:
+unlike those, no ``validators.validate_narrative_*`` function grounds a
+narrative claim against finding content today (``grep health_findings
+deficiency_findings contracts_v2/validators.py`` returns nothing) -- P5's
+"the provider cannot author independent scope, outcome, numbers, evidence,
+completion, readiness, or source coverage" guardrail is exactly the
+category ``blast_radius``/``remediation``/``remediation_template`` fall
+into, and admitting them to the brief without a corresponding grounding
+check would let an unvalidated narrative describe a finding no check
+verifies it got right. Revisit to ``INCLUDED`` only alongside a finding-
+grounding validator, not before.
 
 Sub-field note (orchestrator ruling, 2026-08-02): stack #3 is adding
 ``DevMetricRefV2.evidence_classification`` (closed vocabulary,
@@ -126,12 +133,17 @@ NARRATIVE_BRIEF_FIELD_POLICY: dict[str, NarrativeFieldDisposition] = {
     # value -- excluded to keep the brief bounded (P5: "not the full tool
     # registry").
     "relationship_paths": _EXCLUDED,
-    # Opaque pointer IDs with no narratable content -- see the module
-    # docstring's note on the pending health_findings/deficiency_findings
-    # blocks.
+    # Opaque pointer IDs with no narratable content.
     "health_profile_refs": _EXCLUDED,
     "finding_refs": _EXCLUDED,
     "deficiency_refs": _EXCLUDED,
+    # CHAOS-3297 stack #3's embedded findings blocks -- EXCLUDED because no
+    # narrative validator grounds a claim against them yet; see the module
+    # docstring's "Frame shape and the 3298 freeze point" note.
+    "health_findings": _EXCLUDED,
+    "health_findings_truncated": _EXCLUDED,
+    "deficiency_findings": _EXCLUDED,
+    "deficiency_findings_truncated": _EXCLUDED,
     # Producer-authored conflict summaries the narrative may need to
     # reflect faithfully.
     "conflicts": _INCLUDED,

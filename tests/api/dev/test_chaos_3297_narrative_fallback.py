@@ -140,6 +140,26 @@ def test_brief_excludes_internal_correlation_and_provenance():
         assert excluded_field not in brief
 
 
+def test_brief_excludes_ungrounded_findings_blocks():
+    """health_findings/deficiency_findings (CHAOS-3297 stack #3) stay
+    EXCLUDED until a narrative validator grounds a claim against them --
+    see the module docstring. Regression fence: a future change that
+    flips these to INCLUDED without adding that validator should be a
+    deliberate edit to this test, not a silent gap."""
+
+    brief = build_narrative_brief(_frame())
+    for excluded_field in (
+        "health_profile_refs",
+        "finding_refs",
+        "deficiency_refs",
+        "health_findings",
+        "health_findings_truncated",
+        "deficiency_findings",
+        "deficiency_findings_truncated",
+    ):
+        assert excluded_field not in brief
+
+
 def test_brief_carries_the_content_needed_for_grounding():
     brief = build_narrative_brief(_frame())
     assert brief["facts"], "narrative cannot cite a fact it never saw"

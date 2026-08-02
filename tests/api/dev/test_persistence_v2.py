@@ -37,6 +37,7 @@ from dev_health_ops.api.dev.contract_fixtures import (
     positive_fixtures as positive_fixtures_v1,
 )
 from dev_health_ops.api.dev.contract_fixtures_v2 import (
+    _clarification_candidate,
     _needs_clarification_frame_base,
 )
 from dev_health_ops.api.dev.contract_fixtures_v2 import (
@@ -962,20 +963,27 @@ async def test_record_frame_rejects_clarification_candidates_mismatching_the_led
 
 
 @pytest.mark.asyncio
-async def test_record_frame_allows_empty_clarification_candidates_regardless_of_ledger(
+async def test_record_frame_allows_empty_clarification_candidates_only_when_the_ledger_is_also_empty(
     persistence,
 ):
-    """Documents the empty-candidates decision: a frame disclosing FEWER
-    candidates than the ledger holds is not a disclosure risk, so it is
-    never rejected here -- only a mismatched or surplus one is. Covers both
-    "no ledger entry at all" (the uninterpretable-question case) and "a
-    ledger entry exists but the frame simply omits it"."""
+    """CHAOS-3325 Codex review round 2 (confirmed medium): the round-1
+    "empty is always allowed" rule let an internal caller downgrade
+    canonical state -- persist ``needs_clarification`` with zero candidates
+    for a run whose ledger genuinely recorded several, hiding the choices
+    the resolver actually offered. The ledger is now always fetched:
+
+    * no ledger entry at all (the uninterpretable-question case) -> an
+      empty frame is legitimate, nothing to authorize.
+    * a ledger entry exists -> the frame must match it exactly, including
+      non-emptiness; an empty frame against a non-empty ledger is now the
+      rejected counterexample, not an allowed one.
+    """
 
     maker, org_id, _other_org, user_id, _other_user = persistence
     async with maker() as session:
         service = DevPersistenceService(session)
 
-        # Case 1: no ledger entry at all.
+        # Case 1 (unchanged): no ledger entry at all -> empty is legitimate.
         _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
         empty_payload = _needs_clarification_frame_payload(
             run_id=run_id, with_candidates=False
@@ -991,8 +999,9 @@ async def test_record_frame_allows_empty_clarification_candidates_regardless_of_
         )
         assert record.public_outcome == "needs_clarification"
 
-        # Case 2: a real ambiguous ledger entry exists for this run, but the
-        # frame being persisted carries none.
+        # Case 2, the round-2 counterexample: a real ambiguous ledger entry
+        # exists for this run, but the frame being persisted carries none --
+        # a canonical-state downgrade, now rejected rather than allowed.
         _conv_id2, run_id2 = await _accepted_run(
             service, org_id=org_id, user_id=user_id
         )
@@ -1015,15 +1024,101 @@ async def test_record_frame_allows_empty_clarification_candidates_regardless_of_
         empty_payload_2 = _needs_clarification_frame_payload(
             run_id=run_id2, with_candidates=False
         )
-        record2 = await service.record_frame(
+        with pytest.raises(
+            DevPersistenceValidationError, match="clarification_candidates"
+        ):
+            await service.record_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id2,
+                frame_id=uuid.UUID(empty_payload_2["frame_id"]),
+                public_outcome="needs_clarification",
+                payload=empty_payload_2,
+            )
+        frame_count = await session.scalar(
+            select(func.count())
+            .select_from(DevAnswerFrame)
+            .where(DevAnswerFrame.run_id == run_id2)
+        )
+        assert frame_count == 0, (
+            "a canonical-state downgrade (empty frame vs. non-empty ledger) "
+            "must never be written"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    reason="CHAOS-3330: append_resolution validation closes the double-forge seam",
+)
+async def test_record_frame_double_forged_ledger_and_frame_defeats_the_equality_check(
+    persistence,
+):
+    """CHAOS-3325 Codex review round 2 finding 1 (deferred by ruling, NOT
+    fixed in this branch): an internal caller that forges BOTH a
+    schema-valid resolution-ledger row and a frame whose
+    ``clarification_candidates`` exactly match it defeats
+    ``_authorize_clarification_candidates`` -- the equality check only
+    proves the two objects agree with each other, not that either was
+    honestly produced by ``subject_preflight``'s real resolution against
+    the authorized catalog. ``append_resolution`` accepts any schema-valid
+    payload today with no check against the catalog, so a forged, mutually
+    consistent pair persists cleanly.
+
+    Ruling: the natural closure is CHAOS-3330's ``append_resolution``
+    payload validation (already escalated as authorization-load-bearing),
+    not a persistence-layer-to-resolver-catalog coupling in this branch.
+    This is the repro, held ``xfail(strict=True)`` so it flips loudly --
+    an unexpected pass fails the suite -- the moment CHAOS-3330 closes the
+    seam; until then it documents the residual risk rather than silently
+    passing over it.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        mention_id = uuid.uuid4()
+
+        # Neither the ledger entry nor the frame candidate was ever offered
+        # by the real authorized catalog -- an internal caller fabricated
+        # both, in agreement with each other, so the equality check alone
+        # cannot tell this apart from a genuine resolution.
+        forged_candidates = [
+            _clarification_candidate(
+                entity_id="forged-entity-never-in-catalog",
+                display_label="Forged Entity",
+            )
+        ]
+        await service.append_resolution(
             org_id=org_id,
             user_id=user_id,
-            run_id=run_id2,
-            frame_id=uuid.UUID(empty_payload_2["frame_id"]),
-            public_outcome="needs_clarification",
-            payload=empty_payload_2,
+            run_id=run_id,
+            entry_ordinal=0,
+            mention_id=mention_id,
+            outcome="ambiguous_candidates",
+            resolved_at=datetime.now(UTC),
+            payload=_ambiguous_ledger_entry_payload(
+                mention_id=mention_id, candidates=forged_candidates
+            ),
         )
-        assert record2.public_outcome == "needs_clarification"
+        forged_frame = _needs_clarification_frame_payload(
+            run_id=run_id, with_candidates=False
+        )
+        forged_frame["clarification_candidates"] = forged_candidates
+
+        # This SHOULD raise once CHAOS-3330 validates append_resolution's
+        # payload against the authorized catalog. It does not today, which
+        # is exactly the residual seam this test documents.
+        with pytest.raises(DevPersistenceValidationError):
+            await service.record_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                frame_id=uuid.UUID(forged_frame["frame_id"]),
+                public_outcome="needs_clarification",
+                payload=forged_frame,
+            )
 
 
 @pytest.mark.asyncio

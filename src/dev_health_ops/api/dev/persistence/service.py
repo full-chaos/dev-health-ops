@@ -989,24 +989,48 @@ async def _authorize_clarification_candidates(
     test pair can prove this specific check, not the whole of
     ``record_frame``, is what rejects an unauthorized candidate.
 
-    Non-empty ``clarification_candidates`` must equal, exactly and in the
-    same order, the owned run's persisted ``ambiguous_candidates``
-    resolution-ledger entry (``orchestrator.run`` persists it via
-    ``append_resolution`` immediately before calling ``record_frame`` for
-    this outcome -- see ``SubjectPreflightResult.terminating_resolution_
-    entry``); a missing ledger entry is rejected exactly like a mismatched
-    one, never treated as "nothing to check".
+    The run's ``ambiguous_candidates`` resolution-ledger entry is **always**
+    fetched, regardless of whether the frame's own
+    ``clarification_candidates`` is empty (Codex review round 2, confirmed
+    medium: the round-1 early return on an empty frame tuple let an internal
+    caller silently *downgrade* canonical state -- persist ``needs_
+    clarification`` with zero candidates for a run whose ledger genuinely
+    recorded several, hiding the real choices the resolver offered from
+    every future reader of this "canonical" v2 row):
 
-    Empty candidates are never rejected here, regardless of what the ledger
-    holds for this run: a frame disclosing FEWER candidates than were
-    authorized is not a disclosure risk, only a mismatched or surplus one
-    is -- so this is a no-op whenever ``validated.clarification_candidates``
-    is empty (the honest "uninterpretable question" case CHAOS-3325 already
-    decided not to fabricate a placeholder for).
+    * **No ledger entry recorded at all** (e.g. the question could not be
+      interpreted -- ``build_preflight_answer`` never calls
+      ``append_resolution`` for that case): the frame's candidates must be
+      empty too. Non-empty here means the frame is claiming candidates
+      nothing authorized, and is rejected exactly like a mismatch below.
+    * **A ledger entry exists**: the frame's candidates must equal it
+      exactly, in the same order, element for element -- including
+      non-emptiness. An empty frame against a non-empty ledger entry is now
+      rejected (the round-2 fix): under-disclosure is no longer assumed
+      safe once a real ledger row exists to compare against, because that
+      row is exactly the canonical-state-downgrade signal above.
+
+    ``orchestrator.run`` persists the ledger entry via ``append_resolution``
+    immediately before calling ``record_frame`` for this outcome (see
+    ``SubjectPreflightResult.terminating_resolution_entry``), so both fetch
+    outcomes above correspond to a real caller state, never an artifact of
+    query timing.
+
+    Residual risk (CHAOS-3325 Codex review round 2 finding 1, deferred by
+    ruling -- not fixed in this branch): a caller *inside* the trust
+    boundary that forges both a schema-valid ledger row (via
+    ``append_resolution``, itself unvalidated against the actual scope
+    catalog today) and a frame whose candidates happen to equal it defeats
+    this equality check -- it only proves the two objects agree with each
+    other, not that either was honestly produced by ``subject_preflight``'s
+    real resolution. Closing that "double-forge" seam requires validating
+    ``append_resolution``'s own payload against the authorized catalog,
+    which is CHAOS-3330's scope, not a persistence-layer-to-resolver-catalog
+    coupling here. See
+    ``test_record_frame_double_forged_ledger_and_frame_defeats_the_equality_check``
+    (``xfail(strict=True)``, flips loudly once CHAOS-3330 lands).
     """
 
-    if not validated.clarification_candidates:
-        return
     ledger_row = await session.scalar(
         select(DevRunResolution)
         .where(
@@ -1018,11 +1042,13 @@ async def _authorize_clarification_candidates(
         .order_by(DevRunResolution.entry_ordinal.desc())
     )
     if ledger_row is None:
-        raise DevPersistenceValidationError(
-            "frame_payload.clarification_candidates is non-empty but this "
-            "run has no recorded ambiguous_candidates resolution ledger "
-            "entry to authorize it"
-        )
+        if validated.clarification_candidates:
+            raise DevPersistenceValidationError(
+                "frame_payload.clarification_candidates is non-empty but this "
+                "run has no recorded ambiguous_candidates resolution ledger "
+                "entry to authorize it"
+            )
+        return
     try:
         ledger_entry = DevResolutionEntryContract.model_validate(ledger_row.payload)
     except PydanticValidationError as exc:

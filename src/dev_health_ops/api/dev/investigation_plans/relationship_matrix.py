@@ -22,13 +22,18 @@ from dataclasses import dataclass
 from typing import Literal
 
 from ..contracts_v2.base import SourceClass
+from ..contracts_v2.result import DevSourceContent
 from ..work_graph_neighbors_service import ALLOWED_RELATIONSHIP_TYPES
 
 __all__ = [
+    "APPROVED_CONTENT_SLOTS",
+    "CONTENT_SLOT_FIELDS",
+    "MAX_RELATIONSHIP_PATHS",
     "MIN_RELATIONSHIP_CONFIDENCE",
     "RelationshipMatrixEntry",
     "RELATIONSHIP_MATRIX",
     "approved_relationship",
+    "content_slot_violations",
 ]
 
 #: A path minted below this confidence is treated the same as an unapproved
@@ -37,6 +42,16 @@ __all__ = [
 #: still appear in ``content`` (the adapter's own bounded output is
 #: untouched), it simply never contributes a verified relationship path.
 MIN_RELATIONSHIP_CONFIDENCE = 0.3
+
+#: The most relationship paths one observation may carry -- must match
+#: ``DevSourceObservation.relationship_paths``'s own ``max_length=25``
+#: (``contracts_v2/result.py``). Codex finding (HIGH, 2026-08-01): a dense
+#: but otherwise valid result minting more than 25 verified paths raised
+#: ``too_long`` deep inside ``DevSourceObservation`` construction, turning a
+#: real (if partial) answer into a whole-run ``internal_error``. The
+#: executor applies this budget itself, deterministically, before
+#: construction -- see ``executor._mint_relationship_paths``.
+MAX_RELATIONSHIP_PATHS = 25
 
 Role = Literal["direct", "supporting"]
 Requirement = Literal["required", "conditional", "not_applicable"]
@@ -229,3 +244,95 @@ def approved_relationship(source_class: SourceClass, relationship: str) -> bool:
     """
 
     return relationship in RELATIONSHIP_MATRIX[source_class].approved_relationship_types
+
+
+#: Every ``DevSourceContent`` collection field name -- the closed vocabulary
+#: :func:`content_slot_violations` walks. Written out rather than derived
+#: from ``DevSourceContent.model_fields`` so a future field addition there
+#: is a visible, reviewed edit here too (the same posture as
+#: ``PLAN_ID_BY_INTENT``'s written-out mapping), not a silently-included slot
+#: no ``SourceClass`` entry below has judged yet.
+CONTENT_SLOT_FIELDS: tuple[str, ...] = (
+    "status_facts",
+    "required_children",
+    "pull_requests",
+    "ci_checks",
+    "deployments",
+    "incidents",
+    "graph_edges",
+    "observed_changes",
+    "metric_refs",
+)
+
+#: Which ``DevSourceContent`` slot(s) each ``SourceClass``'s own registered
+#: builtin steps (``investigation_plans/builtin_steps.py``) are ever allowed
+#: to populate. Codex finding (MEDIUM, 2026-08-01): nothing previously
+#: enforced this at observation construction -- a step registered under one
+#: source class returning content shaped for a *different* one (e.g.
+#: STATUS_CHANGE content carrying ``graph_edges``) would be minted,
+#: relationship-path-checked, persisted, and presented exactly like
+#: legitimate content. One entry per :class:`SourceClass` -- completeness is
+#: asserted at import time below, the same posture as ``RELATIONSHIP_MATRIX``
+#: itself. Derived from -- and must stay in lockstep with -- which
+#: ``_wire_*_content`` helper each registered step in ``builtin_steps.py``
+#: calls: ``status_snapshot``/``change_summary`` both register under
+#: STATUS_CHANGE (the six flattened status categories plus
+#: ``observed_changes``); ``work_graph_expansion`` under WORK_GRAPH
+#: (``graph_edges`` only); the metric steps under WORK_ITEM (``metric_refs``
+#: only). SOURCE_HEALTH and every not-yet-adapted class mint no content at
+#: all (``StepOutcome.content`` stays ``None`` for those steps), matching
+#: ``RELATIONSHIP_MATRIX``'s own "empty vocabulary, not fabricated" posture
+#: for the same not-yet-landed classes.
+APPROVED_CONTENT_SLOTS: dict[SourceClass, frozenset[str]] = {
+    SourceClass.STATUS_CHANGE: frozenset(
+        {
+            "status_facts",
+            "required_children",
+            "pull_requests",
+            "ci_checks",
+            "deployments",
+            "incidents",
+            "observed_changes",
+        }
+    ),
+    SourceClass.WORK_ITEM: frozenset({"metric_refs"}),
+    SourceClass.WORK_GRAPH: frozenset({"graph_edges"}),
+    SourceClass.PULL_REQUEST: frozenset(),
+    SourceClass.CI_RUN: frozenset(),
+    SourceClass.DEPLOYMENT: frozenset(),
+    SourceClass.INCIDENT: frozenset(),
+    SourceClass.SOURCE_HEALTH: frozenset(),
+    SourceClass.CODE_CHANGE: frozenset(),
+    SourceClass.REVIEW: frozenset(),
+    SourceClass.TEST_REPORT: frozenset(),
+    SourceClass.OPERATIONAL_CONTROL: frozenset(),
+}
+
+_missing_content_slots = set(SourceClass) - set(APPROVED_CONTENT_SLOTS)
+if _missing_content_slots:
+    raise RuntimeError(
+        f"content_slot_matrix.v1 is missing entries for: {sorted(_missing_content_slots)}"
+    )
+_unknown_content_fields = {
+    field for slots in APPROVED_CONTENT_SLOTS.values() for field in slots
+} - set(CONTENT_SLOT_FIELDS)
+if _unknown_content_fields:
+    raise RuntimeError(
+        f"content_slot_matrix.v1 approves unknown DevSourceContent fields: "
+        f"{sorted(_unknown_content_fields)}"
+    )
+
+
+def content_slot_violations(
+    source_class: SourceClass, content: DevSourceContent
+) -> tuple[str, ...]:
+    """Every populated ``DevSourceContent`` field name ``source_class`` is
+    not approved to carry, sorted for a deterministic limitation string.
+
+    Empty for legitimate content -- including an all-empty
+    ``DevSourceContent`` for a queried-but-empty result, which populates no
+    field at all regardless of ``source_class``.
+    """
+
+    populated = {field for field in CONTENT_SLOT_FIELDS if getattr(content, field)}
+    return tuple(sorted(populated - APPROVED_CONTENT_SLOTS[source_class]))

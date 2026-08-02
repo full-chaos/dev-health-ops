@@ -101,7 +101,11 @@ from .evidence_service import (
     EvidenceReferenceSigner,
     EvidenceService,
 )
-from .investigation_plans import PlanExecutor, build_default_registry
+from .investigation_plans import (
+    PlanExecutor,
+    build_default_registry,
+    wrap_runtime_with_mint_receipts,
+)
 from .investigation_plans.plan_documents import CORE_PLANS_BY_INTENT
 from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
@@ -2132,15 +2136,24 @@ async def _assemble_production_runtime(
     # is committed, and only the preflight commits one.
     plan_executor = (
         PlanExecutor(
+            # CHAOS-3296 Codex finding (MEDIUM, 2026-08-01): wrapping the
+            # runtime here -- the one place it is baked into every builtin
+            # step closure -- plus ``verify_mint_receipts=True`` is what
+            # actually turns on executor-side evidence-handle provenance
+            # checking; either half alone verifies nothing. See
+            # ``investigation_plans.executor.wrap_runtime_with_mint_receipts``.
             registry=build_default_registry(
-                _ProductionPlanExecutorRuntime(
-                    status_service=status_service,
-                    metric_service=metric_service,
-                    work_graph_service=work_graph_service,
-                    data_health_service=data_health_service,
-                    evidence_signer=evidence_signer,
+                wrap_runtime_with_mint_receipts(
+                    _ProductionPlanExecutorRuntime(
+                        status_service=status_service,
+                        metric_service=metric_service,
+                        work_graph_service=work_graph_service,
+                        data_health_service=data_health_service,
+                        evidence_signer=evidence_signer,
+                    )
                 )
-            )
+            ),
+            verify_mint_receipts=True,
         )
         if wave_3_1_enabled
         else None

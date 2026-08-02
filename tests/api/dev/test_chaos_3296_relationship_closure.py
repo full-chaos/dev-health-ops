@@ -35,7 +35,11 @@ from dev_health_ops.api.dev.contracts_v2.base import (
     SourceClass,
     SourceRequirementState,
 )
-from dev_health_ops.api.dev.contracts_v2.embedded import DevGraphEdgeV2
+from dev_health_ops.api.dev.contracts_v2.embedded import (
+    DevGraphEdgeV2,
+    DevRequiredChildFactV2,
+    DevStatusFactV2,
+)
 from dev_health_ops.api.dev.contracts_v2.plan import (
     DevInvestigationPlan,
     DevSourceRequirement,
@@ -49,6 +53,7 @@ from dev_health_ops.api.dev.investigation_plans import (
     StepRegistry,
 )
 from dev_health_ops.api.dev.investigation_plans.relationship_matrix import (
+    MAX_RELATIONSHIP_PATHS,
     MIN_RELATIONSHIP_CONFIDENCE,
 )
 
@@ -368,6 +373,95 @@ async def test_a_mixed_batch_with_one_bad_edge_marks_closure_unverified_but_neve
     assert len(observation.relationship_paths) == 1
     assert observation.relationship_paths[0].target_entity_id == "pr-9"
     assert result.relationship_closure_verified is False
+
+
+def _status_fact(index: int) -> DevStatusFactV2:
+    return DevStatusFactV2(
+        fact_id=f"issue:status-{index}",
+        text=f"Status fact {index}",
+        evidence_ref_ids=("ev1_" + f"{index:040x}",),
+    )
+
+
+def _required_child_fact(index: int) -> DevRequiredChildFactV2:
+    return DevRequiredChildFactV2(
+        fact_id=f"issue:child-{index}",
+        text=f"Required child {index}",
+        status="open",
+        evidence_ref_ids=("ev1_" + f"{index:040x}",),
+    )
+
+
+@pytest.mark.asyncio
+async def test_exactly_the_relationship_path_budget_mints_every_path_and_closes():
+    """At the boundary (``MAX_RELATIONSHIP_PATHS`` distinct facts): every one
+    mints a path, nothing is dropped, closure can still be True."""
+
+    assert MAX_RELATIONSHIP_PATHS == 25
+    content = DevSourceContent(
+        schema_version="dev_source_content.v1",
+        status_facts=tuple(_status_fact(i) for i in range(MAX_RELATIONSHIP_PATHS)),
+    )
+    outcome = _queried_outcome(content)
+    result, observation = await _run_single_step(
+        source_class=SourceClass.STATUS_CHANGE, outcome=outcome
+    )
+
+    assert len(observation.relationship_paths) == MAX_RELATIONSHIP_PATHS
+    assert result.relationship_closure_verified is True
+
+
+@pytest.mark.asyncio
+async def test_one_past_the_relationship_path_budget_truncates_deterministically_and_never_raises():
+    """Codex finding (HIGH, 2026-08-01): a dense-but-valid result minting one
+    more than the contract's ``relationship_paths`` bound (25) previously hit
+    a pydantic ``too_long`` deep inside ``DevSourceObservation`` construction
+    -- an uncaught exception that turned the whole run into
+    ``internal_error`` instead of a disclosed, partial answer. The executor
+    must budget deterministically instead: cap at 25, mark closure False,
+    never raise."""
+
+    assert MAX_RELATIONSHIP_PATHS == 25
+    content = DevSourceContent(
+        schema_version="dev_source_content.v1",
+        status_facts=tuple(_status_fact(i) for i in range(MAX_RELATIONSHIP_PATHS)),
+        required_children=(_required_child_fact(0),),
+    )
+    outcome = _queried_outcome(content)
+    result, observation = await _run_single_step(
+        source_class=SourceClass.STATUS_CHANGE, outcome=outcome
+    )
+
+    assert len(observation.relationship_paths) == MAX_RELATIONSHIP_PATHS
+    assert result.relationship_closure_verified is False
+
+
+@pytest.mark.asyncio
+async def test_relationship_path_truncation_is_deterministic_across_runs():
+    """The same over-budget input must select the same 25 paths every time
+    (sorted by ``(relationship, target_entity_id)``), never dict/set order."""
+
+    content = DevSourceContent(
+        schema_version="dev_source_content.v1",
+        status_facts=tuple(_status_fact(i) for i in range(MAX_RELATIONSHIP_PATHS)),
+        required_children=(_required_child_fact(0),),
+    )
+    outcome = _queried_outcome(content)
+    _result_a, observation_a = await _run_single_step(
+        source_class=SourceClass.STATUS_CHANGE, outcome=outcome
+    )
+    _result_b, observation_b = await _run_single_step(
+        source_class=SourceClass.STATUS_CHANGE, outcome=outcome
+    )
+
+    targets_a = [path.target_entity_id for path in observation_a.relationship_paths]
+    targets_b = [path.target_entity_id for path in observation_b.relationship_paths]
+    assert targets_a == targets_b
+    # required_child sorts before status_assessment (lexicographic on
+    # relationship token), so the single required_children fact survives the
+    # budget and one status fact is dropped from the tail.
+    assert "issue:child-0" in targets_a
+    assert len(targets_a) == MAX_RELATIONSHIP_PATHS
 
 
 @pytest.mark.asyncio

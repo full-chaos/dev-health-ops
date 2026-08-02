@@ -414,12 +414,26 @@ async def test_savepoint_wrapped_failure_does_not_lose_an_earlier_write(
         # The session must still be usable here -- a poisoned session (the
         # pre-fix shape) would raise PendingRollbackError on this next query
         # instead of returning the earlier write untouched.
-        reloaded = await store.load()
+        #
+        # CHAOS-3285 round 6: CodeQL py/unreachable-statement false
+        # positives on this line and the `async with session_maker() as
+        # verify_session:` line below -- CodeQL's control-flow analysis
+        # does not model `pytest.raises` (or any context manager) as
+        # capable of suppressing the exception raised inside its `with`
+        # block; it sees the unconditional `raise RuntimeError(...)` above
+        # and marks everything textually after it, within this function, as
+        # unreachable. `pytest.raises` genuinely catches and swallows a
+        # matching exception -- this is the standard idiom for "assert this
+        # raises, then keep asserting postconditions" -- and this code
+        # provably executes: this exact test's RED/GREEN history at
+        # CHAOS-3285 round 2 is what the assertions below verify (dropping
+        # the SAVEPOINT wrap makes them fail).
+        reloaded = await store.load()  # lgtm[py/unreachable-statement]
         assert reloaded.for_role(AgentRole.LEGACY_AGENT) == earlier_write
 
         await session.commit()
 
-    async with session_maker() as verify_session:
+    async with session_maker() as verify_session:  # lgtm[py/unreachable-statement]
         final = await SettingsRoleCertificationStore(
             SettingsService(verify_session, org_id)
         ).load()

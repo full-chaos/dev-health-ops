@@ -124,11 +124,22 @@ def _empty_profile() -> RoleCertificationProfile:
 
 
 class RoleCertificationStore(Protocol):
-    async def load(self) -> RoleCertificationProfile: ...
+    # CHAOS-3285 round 6: `pass`, not `...`, as the stub body -- CodeQL's
+    # py/ineffectual-statement flags a bare `...` (an Ellipsis literal) as
+    # an expression statement whose value is discarded, which is exactly
+    # what it looks like out of context even though it's the conventional
+    # Protocol/stub-method body. `pass` is the statement form purpose-built
+    # for this (not an expression statement at all), carries the identical
+    # "no body" meaning, and is unambiguous to both type checkers and
+    # CodeQL.
+    async def load(self) -> RoleCertificationProfile:
+        pass
 
-    async def save_record(self, record: RoleCertificationRecord) -> None: ...
+    async def save_record(self, record: RoleCertificationRecord) -> None:
+        pass
 
-    async def save(self, profile: RoleCertificationProfile) -> None: ...
+    async def save(self, profile: RoleCertificationProfile) -> None:
+        pass
 
 
 def _role_setting_key(base_key: str, role: AgentRole) -> str:
@@ -243,7 +254,16 @@ class SettingsRoleCertificationStore:
 
     async def load(self) -> RoleCertificationProfile:
         records: dict[AgentRole, RoleCertificationRecord] = {}
-        for role in AgentRole:
+        # CHAOS-3285 round 6: CodeQL py/non-iterable-in-for-loop false
+        # positive -- AgentRole(str, Enum) IS iterable, via its metaclass
+        # (EnumType/EnumMeta provides __iter__ for the class object itself;
+        # the Enum subclass does not define its own __iter__, which is what
+        # a syntactic non-iterable check sees). Verified empirically
+        # (`list(AgentRole)` succeeds) and this is the SAME established
+        # pattern already used unflagged elsewhere in this codebase --
+        # `for tool_id in ToolID` in production_runtime.py,
+        # probes/legacy_agent.py, and tool_registry.py.
+        for role in AgentRole:  # lgtm[py/non-iterable-in-for-loop]
             record = await self._load_role(role)
             if record is not None:
                 records[role] = record

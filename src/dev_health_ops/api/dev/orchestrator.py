@@ -1042,24 +1042,28 @@ class DevOrchestrator:
                 intent = preflight_result.interpretation.intent
                 plan = self._plan_registry.get(intent.intent_id)
                 # CHAOS-3300 finding (2026-08-02): a plan-eligible-by-vocabulary
-                # intent whose plan_registry.get(...) returns None used to
-                # silently fall through to the legacy model-tool-choice loop
-                # below -- a real capability downgrade (a
-                # status_snapshot.v1-only answer instead of a governed
-                # health/deficiency/portfolio evaluation) that produced no
-                # signal anywhere. Distinguish it from BOUNDED_INVESTIGATION,
-                # whose fallthrough is the DESIGNED behavior
-                # (preflight_outcomes.LEGACY_ONLY_QUESTION_INTENTS' own
-                # docstring) -- only the genuine gap terminates loudly and
-                # honestly here (team-lead ratification, 2026-08-02): rather
-                # than let the model answer a question it cannot actually
-                # investigate deterministically, the run terminates
-                # "feature_not_enabled" (-> PublicOutcome.UNSUPPORTED, an
-                # already-registered ORCHESTRATOR_ERROR_CODES member) with
-                # the exact canonical copy
-                # no_answer_policy.CANONICAL_NO_ANSWER_COPY["unsupported"]
-                # already uses -- one product voice for "not supported yet"
-                # regardless of which layer emits it.
+                # intent whose plan_registry.get(...) returns None silently
+                # falls through to the legacy model-tool-choice loop below --
+                # a real capability downgrade (a status_snapshot.v1-only
+                # answer instead of a governed health/deficiency/portfolio
+                # evaluation) that produced no signal anywhere. Distinguish it
+                # from BOUNDED_INVESTIGATION, whose fallthrough is the
+                # DESIGNED behavior (preflight_outcomes.LEGACY_ONLY_QUESTION_INTENTS'
+                # own docstring) -- only the genuine gap is loud.
+                #
+                # Team-lead ratification (2026-08-02, superseding an earlier,
+                # reverted attempt at an honest "feature_not_enabled" early
+                # termination here): the legacy fallback stays the terminal
+                # behavior for BOTH cases -- PORTFOLIO_STATUS recognition is
+                # new this wave; before it, these questions degraded to
+                # BOUNDED_INVESTIGATION and got a legacy answer, so
+                # terminating unsupported now would regress live free-form
+                # traffic to a refusal. That is exactly the behavioral cliff
+                # the epic's own §g sequencing defers to the stack-5 guard
+                # cutover, once frames are proven -- not a side effect stack
+                # 3 introduces alone. One rule until then: a recognized-but-
+                # unwired intent falls back loudly (this log + counter),
+                # never terminally.
                 if (
                     plan is None
                     and intent.intent_id not in LEGACY_ONLY_QUESTION_INTENTS
@@ -1071,12 +1075,6 @@ class DevOrchestrator:
                     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL.labels(
                         intent=intent.intent_id.value
                     ).inc()
-                    return await finish(
-                        RunState.FAILED,
-                        error=error(
-                            "feature_not_enabled", "This question is not supported yet."
-                        ),
-                    )
                 cardinality = intent.cardinality
                 plan_eligible = (
                     plan is not None and cardinality in plan.supported_cardinalities

@@ -24,6 +24,7 @@ from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErr
 from dev_health_ops.llm.agent.openai_compatible import (
     READINESS_VERSION,
     OpenAICompatibleAgentProvider,
+    wire_policy_kwargs,
 )
 from dev_health_ops.llm.agent.policy import (
     CERTIFIED_PLATFORM_AGENT_PROVIDERS,
@@ -690,6 +691,39 @@ def _canonical_contract_digest() -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:24]
 
 
+@functools.cache
+def _wire_policy_digest(model: str) -> str:
+    """Content digest of every capability-gated wire control the adapter
+    conditionally sends for ``model``, at both probe round shapes.
+
+    CHAOS-3285 round 4 (Codex HIGH): toggling ``supports_temperature``
+    changed the real outbound request while ``_readiness_fingerprint``
+    stayed identical -- the fingerprint never referenced any adapter
+    capability-policy function at all, only the bare ``model`` string
+    (which does not change when a policy FUNCTION's behavior changes for an
+    already-certified model, e.g. a future deploy widening an exclusion
+    list). This folds ``wire_policy_kwargs``'s actual output -- the same
+    function ``OpenAICompatibleAgentProvider.decide()`` calls -- for round 1
+    (tools offered, no grammar: ``tool_choice="required"``) and round 2
+    (tools offered, grammar: ``tool_choice="auto"``, response_format
+    present), so a capability policy change for this model invalidates
+    certification even though ``model`` itself never changed. Cached per
+    model (not a single shared cache like ``_canonical_contract_digest``)
+    since this genuinely varies by candidate, and models seen per process
+    are a small, bounded set.
+    """
+
+    round_1 = wire_policy_kwargs(model, tools_present=True, allow_final_answer=False)
+    round_2 = wire_policy_kwargs(model, tools_present=True, allow_final_answer=True)
+    canonical = json.dumps(
+        {"round_1": round_1, "round_2": round_2},
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()[:24]
+
+
 def _readiness_fingerprint(
     candidate: AgentProviderCandidate, *, role: AgentRole = AgentRole.LEGACY_AGENT
 ) -> str:
@@ -704,7 +738,10 @@ def _readiness_fingerprint(
     per-family token-budget policy can each independently change the wire
     shape a certified provider was actually tested against. Also folds
     ``role`` now that certification is per-role rather than a single binary
-    verdict (see ``llm.agent.roles``).
+    verdict (see ``llm.agent.roles``), and (round 4) ``_wire_policy_digest``
+    -- the real per-model wire-policy controls (tool_choice,
+    parallel_tool_calls, temperature, reasoning_effort, response-format
+    wrapper), see its docstring.
 
     Migration/invalidation semantics (explicit): this changes the computed
     fingerprint value for the existing single-role (legacy binary) selection
@@ -732,6 +769,7 @@ def _readiness_fingerprint(
                 BUDGET_POLICY_VERSION,
                 role.value,
                 _canonical_contract_digest(),
+                _wire_policy_digest(candidate.model),
             )
         ).encode()
     ).hexdigest()[:24]

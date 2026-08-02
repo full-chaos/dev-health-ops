@@ -78,6 +78,7 @@ def _fingerprint(
                 BUDGET_POLICY_VERSION,
                 role.value,
                 production_runtime._canonical_contract_digest(),
+                production_runtime._wire_policy_digest(model),
             )
         ).encode()
     ).hexdigest()[:24]
@@ -240,6 +241,184 @@ def test_canonical_contract_digest_folds_the_real_run_limits(
         assert baseline != changed
     finally:
         production_runtime._canonical_contract_digest.cache_clear()
+
+
+def test_wire_policy_kwargs_differs_between_probe_round_shapes() -> None:
+    """Round 1 (tools offered, no grammar yet) and round 2 (tools offered,
+    grammar) are genuinely distinct wire-policy shapes -- tool_choice
+    switches from "required" to "auto", and the response_format wrapper
+    only appears once a final answer is allowed."""
+
+    round_1 = production_runtime.wire_policy_kwargs(
+        "certified-model", tools_present=True, allow_final_answer=False
+    )
+    round_2 = production_runtime.wire_policy_kwargs(
+        "certified-model", tools_present=True, allow_final_answer=True
+    )
+
+    assert round_1["tool_choice"] == "required"
+    assert round_2["tool_choice"] == "auto"
+    assert "response_format_wrapper" not in round_1
+    assert "response_format_wrapper" in round_2
+
+
+def test_wire_policy_digest_changes_when_supports_temperature_toggles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 round 4 (Codex HIGH): before this fix, the readiness
+    fingerprint never called any adapter capability-policy function at all
+    -- only the bare candidate.model string, which does not change when a
+    policy FUNCTION's behavior changes for an already-certified model (e.g.
+    supports_temperature gaining a new excluded family on a future deploy).
+    Prove the digest reacts to the policy itself, holding the model string
+    fixed."""
+
+    from dev_health_ops.llm.agent import openai_compatible
+
+    production_runtime._wire_policy_digest.cache_clear()
+    try:
+        baseline = production_runtime._wire_policy_digest("certified-model")
+
+        monkeypatch.setattr(
+            openai_compatible, "supports_temperature", lambda _model: False
+        )
+        production_runtime._wire_policy_digest.cache_clear()
+        changed = production_runtime._wire_policy_digest("certified-model")
+
+        assert baseline != changed
+    finally:
+        production_runtime._wire_policy_digest.cache_clear()
+
+
+def test_wire_policy_digest_changes_when_parallel_tool_calls_support_toggles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev_health_ops.llm.agent import openai_compatible
+
+    production_runtime._wire_policy_digest.cache_clear()
+    try:
+        baseline = production_runtime._wire_policy_digest("certified-model")
+
+        monkeypatch.setattr(
+            openai_compatible, "supports_parallel_tool_calls", lambda _model: False
+        )
+        production_runtime._wire_policy_digest.cache_clear()
+        changed = production_runtime._wire_policy_digest("certified-model")
+
+        assert baseline != changed
+    finally:
+        production_runtime._wire_policy_digest.cache_clear()
+
+
+def test_wire_policy_digest_changes_when_reasoning_effort_toggles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev_health_ops.llm.agent import openai_compatible
+
+    production_runtime._wire_policy_digest.cache_clear()
+    try:
+        baseline = production_runtime._wire_policy_digest("certified-model")
+
+        monkeypatch.setattr(
+            openai_compatible,
+            "chat_completion_reasoning_effort",
+            lambda _model: "minimal",
+        )
+        production_runtime._wire_policy_digest.cache_clear()
+        changed = production_runtime._wire_policy_digest("certified-model")
+
+        assert baseline != changed
+    finally:
+        production_runtime._wire_policy_digest.cache_clear()
+
+
+def test_readiness_fingerprint_changes_when_wire_policy_toggles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The full fingerprint formula (not just the digest in isolation)
+    reacts to a wire-policy change -- the exact codex repro: toggling
+    supports_temperature changed the emitted request while
+    _readiness_fingerprint stayed identical."""
+
+    from dev_health_ops.llm.agent import openai_compatible
+
+    credentials = LLMCredentials(base_url="https://models.example.com/v1")
+    candidate = AgentProviderCandidate(
+        provider="openai",
+        model="certified-model",
+        credentials=credentials,
+        source=AgentProviderSource.PLATFORM,
+    )
+
+    production_runtime._wire_policy_digest.cache_clear()
+    try:
+        baseline = production_runtime._readiness_fingerprint(candidate)
+
+        monkeypatch.setattr(
+            openai_compatible, "supports_temperature", lambda _model: False
+        )
+        production_runtime._wire_policy_digest.cache_clear()
+        changed = production_runtime._readiness_fingerprint(candidate)
+
+        assert baseline != changed
+    finally:
+        production_runtime._wire_policy_digest.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_wire_policy_change_invalidates_stored_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: a certification stored under today's wire policy must be
+    invalidated -- selection fails closed -- once the policy changes for
+    this model, even though the candidate itself (model/provider/base_url)
+    never changed. Closes the loop codex asked for: fingerprint changes ->
+    stored certification invalidated, not just a digest changing in
+    isolation."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    stored_fingerprint = _fingerprint()
+    role_key, role_value = _role_certification_setting(
+        certification_key=stored_fingerprint
+    )
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": stored_fingerprint,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+    session = cast(Any, object())
+
+    # Sanity: certified under today's real wire policy, selection succeeds.
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.model == "certified-model"
+
+    from dev_health_ops.llm.agent import openai_compatible
+
+    monkeypatch.setattr(openai_compatible, "supports_temperature", lambda _model: False)
+    production_runtime._wire_policy_digest.cache_clear()
+    try:
+        with pytest.raises(DevRuntimeUnavailable) as exc_info:
+            await production_runtime.resolve_production_provider(
+                session, org_id="org_01"
+            )
+        assert exc_info.value.code == "provider_not_configured"
+    finally:
+        production_runtime._wire_policy_digest.cache_clear()
 
 
 @pytest.mark.asyncio

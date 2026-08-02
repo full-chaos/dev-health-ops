@@ -7,28 +7,32 @@ person-level output" requirements:
 
 * ``cohort_size`` is a caller-supplied, already-resolved count of the
   team's attributed repositories/projects (CHAOS-3301's
-  ``team_repo_ownership``/``team_project_ownership`` -- re-deriving that
-  attribution is explicitly CHAOS-3303's still-open SQL-arm work, not this
-  service's). Every CHAOS-3302 rule applicable to ``team`` carries a
+  ``team_repo_ownership``/``team_project_ownership``). This service never
+  computes that count itself -- ``native_status_change.py``'s
+  ``_authorized_repository_ids`` re-derives the *query-time* repository set
+  for the same team independently (never carried on the wire), but a
+  cohort size is a caller-level attribution-quality judgment, not a byproduct
+  of one query. Every CHAOS-3302 rule applicable to ``team`` carries a
   ``minimum_cohort_size`` (``HealthRuleDefinition.validate_cohort_
-  requirement``), so a caller that cannot establish real attribution
-  passes ``cohort_size=0`` (or leaves it unresolved) and every applicable
-  rule is honestly suppressed as ``insufficient_cohort`` -> ``UNKNOWN`` --
-  never a fabricated healthy/zero for a team with no valid attribution.
+  requirement``), so a caller that cannot establish real attribution passes
+  ``cohort_size=0`` (or leaves it unresolved) and every applicable rule is
+  honestly suppressed as ``insufficient_cohort`` -> ``UNKNOWN`` -- never a
+  fabricated healthy/zero for a team with no valid attribution.
 * ``health_rule.change_failure_rate.v1`` is unconditionally reported
   ``not_applicable`` for a team subject: ``MetricID.CHANGE_FAILURE_RATE``'s
   own ``supported_scopes`` (``metrics/definitions.py``) does not include
   ``DirectScope.TEAM`` and ``supports_team_filter`` is ``False`` --
   structurally inapplicable, not merely unqueried.
 
-As of this issue, ``native_status_change.py``'s ``ClickHouseStatusChangeSource``
-takes its existing fail-closed branch for every team direct scope (every
-SQL source it reads is still in ``TEAM_NOT_APPLICABLE_SOURCES`` -- landing
-real team-attributed query arms is separate, tracked work, deliberately not
-done in this changeset). This service therefore honestly reports every
-status/data-health-derived dimension as unmeasured for a team subject
-today; the moment those arms land, this exact code path starts reporting
-real findings with no changes required here.
+``native_status_change.py``'s ``ClickHouseStatusChangeSource`` now re-derives
+a team's owned repositories from ``team_repo_ownership`` at query time and
+executes real team-scoped pull-request/CI/deployment/incident reads (see
+``TEAM_NOT_APPLICABLE_SOURCES``, now limited to the two sources -- declared/
+children work items and their blockers -- that structurally describe a
+single entity's completion tree, not a team cohort). A team with no
+resolved ``team_repo_ownership`` rows (or a genuinely failing lookup) still
+falls back to the same explicit ``FreshnessState.UNAVAILABLE`` observation
+as before -- never a silently empty answer.
 """
 
 from __future__ import annotations

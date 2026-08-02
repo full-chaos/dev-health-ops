@@ -1114,8 +1114,8 @@ async def test_organization_scope_status_snapshot_enumerates_repos_natively(
     # _DEPLOYMENTS_SQL (CHAOS-3255 follow-up — this is the regression the
     # prior HIGH finding actually shipped, and a table-name-only mock
     # cannot detect it re-appearing).
-    assert "IN ('organization', 'repository')" in pull_request_calls[0]["sql"]
-    assert "IN ('organization', 'repository')" in deployment_calls[0]["sql"]
+    assert "IN ('organization', 'repository', 'team')" in pull_request_calls[0]["sql"]
+    assert "IN ('organization', 'repository', 'team')" in deployment_calls[0]["sql"]
     assert result.pull_requests, "organization scope must surface PR facts"
     assert result.deployments, "organization scope must surface deployment facts"
 
@@ -1192,8 +1192,8 @@ async def test_organization_scope_change_summary_enumerates_repos_natively(
     # Assert the SQL text itself, not just the mocked row: a table-name-only
     # mock returns rows regardless of the real WHERE clause and would not
     # catch the 'organization' branch being deleted again.
-    assert "IN ('organization', 'repository')" in transitions_calls[0]["sql"]
-    assert "IN ('organization', 'repository')" in relationship_calls[0]["sql"]
+    assert "IN ('organization', 'repository', 'team')" in transitions_calls[0]["sql"]
+    assert "IN ('organization', 'repository', 'team')" in relationship_calls[0]["sql"]
     change_ids = {change.change_id for change in result.changes}
     assert any(
         change.entity_id == "issue-1" and change.before == "in_progress"
@@ -1264,6 +1264,234 @@ async def test_team_filtered_organization_scope_is_never_widened_to_the_full_org
         StatusSnapshotRequest(_org_scope(team_ids=["team-a"])),
     )
 
+    assert (
+        "Status reads require the complete authorized repository set; "
+        "scope was not widened." in result.warnings
+    )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3303 — a committed team subject re-derives owned repositories from
+# team_repo_ownership at query time and executes real team-scoped reads.
+#
+# N0 (test_chaos_3301_controls.py) already proves the fail-closed floor
+# using a bare ``object()`` client, which raises before any query can run --
+# that control stays valid unchanged (the new team-repo lookup also raises
+# against that fake and is caught the same way). These tests are the
+# positive/negative pair the CHAOS-3303 planning brief calls "must flip
+# GREEN": a team WITH real ownership rows gets real facts, and a team whose
+# ownership query genuinely returns zero rows (as opposed to a client
+# failure) still fails closed, never silently empty.
+# ---------------------------------------------------------------------------
+
+
+def _team_scope(*, team_id: str = "team-platform") -> DevScope:
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id="org-a",
+        direct_scope=DirectScope.TEAM,
+        repositories=[],
+        entity_refs=[
+            DevEntityRef(
+                entity_type=EntityType.TEAM,
+                entity_id=team_id,
+                display_label="Platform",
+            )
+        ],
+        team_ids=[team_id],
+        time_range=DevTimeRange(start=NOW - timedelta(days=7), end=NOW, timezone="UTC"),
+        comparison_range=DevTimeRange(
+            start=NOW - timedelta(days=14),
+            end=NOW - timedelta(days=7),
+            timezone="UTC",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_scope_status_snapshot_re_derives_owned_repos_and_executes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        observed.append({"sql": sql, "params": dict(params)})
+        if "FROM team_repo_ownership" in sql:
+            assert params == {
+                "org_id": "org-a",
+                "team_id": "team-platform",
+                "as_of": NOW,
+            }
+            return [{"repository_id": "repo-x"}, {"repository_id": "repo-y"}]
+        if "FROM git_pull_requests AS pr" in sql:
+            return [_pull_request_row()]
+        if "FROM deployments" in sql:
+            return [_deployment_row()]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_team_scope()),
+    )
+
+    pull_request_calls = [
+        item for item in observed if "FROM git_pull_requests AS pr" in item["sql"]
+    ]
+    deployment_calls = [item for item in observed if "FROM deployments" in item["sql"]]
+    assert pull_request_calls, "expected the pull_requests read to execute"
+    assert deployment_calls, "expected the deployments read to execute"
+    assert pull_request_calls[0]["params"]["repository_ids"] == ["repo-x", "repo-y"]
+    # Assert the SQL text itself carries the team branch, not just that a
+    # mocked row came back -- a table-name-only mock would still pass even
+    # if 'team' were dropped from the disjunction.
+    assert "IN ('organization', 'repository', 'team')" in pull_request_calls[0]["sql"]
+    assert "IN ('organization', 'repository', 'team')" in deployment_calls[0]["sql"]
+    assert result.pull_requests, "team scope must surface pull-request facts"
+    assert result.deployments, "team scope must surface deployment facts"
+    assert (
+        "Status reads require the complete authorized repository set; "
+        "scope was not widened." not in result.warnings
+    )
+    # A team has no single declared/children completion tree; this is
+    # structural (see TEAM_NOT_APPLICABLE_SOURCES), never a data gap.
+    assert result.declared is None
+    assert result.children == ()
+    assert result.blockers == ()
+    # declared_optional now includes TEAM (status_change_service.py), so real
+    # fresh evidence with no declared status is COMPLETE, not
+    # INSUFFICIENT_EVIDENCE -- the end-to-end proof this issue's health
+    # services depend on.
+    assert result.state is StatusResultState.COMPLETE
+
+
+@pytest.mark.asyncio
+async def test_team_scope_never_queries_declared_work_items_or_blockers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structural, not a data gap: _WORK_ITEMS_SQL/_BLOCKERS_SQL must never
+    even be attempted for a team subject, exactly like organization/
+    repository scope already never attempts them.
+    """
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [{"repository_id": "repo-x"}]
+        if "FROM work_items FINAL" in sql:
+            raise AssertionError("_WORK_ITEMS_SQL must not run for a team subject")
+        if "FROM work_graph_edges" in sql and "blocker" in sql:
+            raise AssertionError("_BLOCKERS_SQL must not run for a team subject")
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_team_scope()),
+    )
+    assert result.declared is None
+
+
+@pytest.mark.asyncio
+async def test_team_scope_change_summary_re_derives_owned_repos_and_executes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        observed.append({"sql": sql, "params": dict(params)})
+        if "FROM team_repo_ownership" in sql:
+            assert params == {
+                "org_id": "org-a",
+                "team_id": "team-platform",
+                "as_of": NOW,
+            }
+            return [{"repository_id": "repo-x"}]
+        if "FROM work_item_transitions" in sql:
+            return [
+                {
+                    "entity_id": "issue-1",
+                    "display_label": "Issue 1",
+                    "from_status": "in_progress",
+                    "to_status": "done",
+                    "observed_at": NOW - timedelta(hours=1),
+                    "last_synced": NOW,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    request = ChangeSummaryRequest(
+        scope=_team_scope(),
+        current_start=NOW - timedelta(days=7),
+        current_end=NOW,
+        comparison_start=NOW - timedelta(days=14),
+        comparison_end=NOW - timedelta(days=7),
+    )
+
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).change_summary("org-a", "permission-v1", request)
+
+    transitions_calls = [
+        item for item in observed if "FROM work_item_transitions" in item["sql"]
+    ]
+    assert transitions_calls
+    assert transitions_calls[0]["params"]["repository_ids"] == ["repo-x"]
+    assert "IN ('organization', 'repository', 'team')" in transitions_calls[0]["sql"]
+    assert any(
+        change.entity_id == "issue-1" and change.before == "in_progress"
+        for change in result.changes
+    ), "team scope must surface status transition changes"
+    assert "Observed-change scope was not widened." not in result.warnings
+
+
+@pytest.mark.asyncio
+async def test_team_scope_with_zero_owned_repositories_is_explicit_not_masked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A genuinely empty team_repo_ownership result (not a client failure --
+    see N0 for that case) must still fail closed, never silently empty.
+    """
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return []
+        raise AssertionError(
+            "no fact read may run once the team has zero owned repositories"
+        )
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_team_scope()),
+    )
+
+    assert result.declared is None
     assert (
         "Status reads require the complete authorized repository set; "
         "scope was not widened." in result.warnings

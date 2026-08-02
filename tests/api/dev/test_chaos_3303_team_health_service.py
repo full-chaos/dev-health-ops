@@ -1,12 +1,15 @@
 """Tests for CHAOS-3303's ``TeamHealthService``.
 
-The load-bearing behavior today: ``native_status_change.py`` fails closed
-for every team direct scope (every source it reads is still in
-``TEAM_NOT_APPLICABLE_SOURCES``), so a team health evaluation must never
-fabricate a healthy/zero finding out of that fail-closed response --
-regardless of whether a cohort size is supplied. This is proven with a
-fake runtime that mirrors the real fail-closed shape, not by special-casing
-team scope inside the service.
+Proven against a fake ``PlanExecutorRuntime`` in both directions, not by
+special-casing team scope inside the service itself:
+
+* a runtime that returns real, fresh team-scoped facts (mirroring
+  ``native_status_change.py``'s now-landed ``team_repo_ownership``
+  re-derivation and its real 'team' SQL arms) produces real findings;
+* a runtime that returns the fail-closed shape (a team with no resolved
+  attribution, or a source genuinely unavailable) must never fabricate a
+  healthy/zero finding out of it, regardless of whether a cohort size is
+  supplied.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from dev_health_ops.api.dev.data_health_service import DataHealthResult
 from dev_health_ops.api.dev.status_change_service import (
     ActualCompletion,
     CompletionState,
+    IncidentFact,
     StatusResultState,
     StatusSnapshotResult,
 )
@@ -196,14 +200,14 @@ async def test_evaluate_team_without_attribution_never_reports_healthy() -> None
 
 
 @pytest.mark.asyncio
-async def test_evaluate_team_with_attribution_still_honest_given_fail_closed_status_source() -> (
+async def test_evaluate_team_with_attribution_stays_honest_when_runtime_fails_closed() -> (
     None
 ):
-    """Even with real attribution (cohort_size >= minimum), today's
-    fail-closed team status source means every status-derived dimension
-    stays unknown -- this is the current, honest state (see module
-    docstring), proven so a future SQL-arm change is visible as a real
-    behavior change here, not silently.
+    """Even with real attribution (cohort_size >= minimum), a runtime that
+    hands back the fail-closed shape (e.g. a genuinely unresolved
+    ``team_repo_ownership`` lookup) must keep every status-derived dimension
+    unknown -- the service must never treat "cohort size is fine" as
+    license to assume the underlying facts are too.
     """
 
     service = TeamHealthService(FakeTeamRuntime())
@@ -219,3 +223,103 @@ async def test_evaluate_team_with_attribution_still_honest_given_fail_closed_sta
         f for f in profile.findings if f.rule_id == "health_rule.incident_load.v1"
     )
     assert incident_finding.state == DimensionState.UNKNOWN
+
+
+def _real_snapshot() -> StatusSnapshotResult:
+    """Mirrors what ``native_status_change.py`` now genuinely returns for a
+    team with resolved ``team_repo_ownership`` rows: real incident facts and
+    an overall ``COMPLETE`` state (``declared_optional`` now includes TEAM,
+    so the absent single declared status no longer degrades the result).
+    """
+
+    return StatusSnapshotResult(
+        contract_version="status_snapshot.v1",
+        state=StatusResultState.COMPLETE,
+        scope=None,  # type: ignore[arg-type]
+        as_of=_NOW,
+        declared=None,
+        actual=ActualCompletion(
+            state=CompletionState.READY,
+            rule_id="actual-completion",
+            rule_version="actual-completion.v4",
+            reason_codes=(),
+            required_children=(),
+            conflicts=(),
+            source_ref_ids=(),
+            evidence_ref_ids=(),
+        ),
+        children=(),
+        blockers=(),
+        pull_requests=(),
+        ci=(),
+        deployments=(),
+        incidents=(
+            IncidentFact(
+                entity_id="inc-1",
+                display_label="inc-1",
+                status="open",
+                active=True,
+                blocking=False,
+                observed_at=_NOW,
+                source_ref_id="ref-1",
+                evidence_ref_ids=(),
+            ),
+        ),
+        source_refs=(),
+        warnings=(),
+    )
+
+
+@dataclass
+class FakeAttributedTeamRuntime:
+    """A team WITH resolved team_repo_ownership rows: real facts, no gap."""
+
+    async def status_snapshot(self, *, org_id, permission_fingerprint, scope):
+        return _real_snapshot()
+
+    async def change_summary(self, *, org_id, permission_fingerprint, scope):
+        raise NotImplementedError
+
+    def list_metrics(self, scope):
+        return ()
+
+    async def query_metric(self, *, org_id, permission_fingerprint, metric_id, scope):
+        raise AssertionError(
+            "TeamHealthService must never query CHANGE_FAILURE_RATE for a "
+            "team subject -- the metric does not support DirectScope.TEAM"
+        )
+
+    async def work_graph_neighbors(self, *, org_id, permission_fingerprint, scope):
+        raise NotImplementedError
+
+    async def data_health(self, *, org_id, permission_fingerprint, scope):
+        return DataHealthResult(sources=(), complete_eligible=True)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_team_with_attribution_and_real_facts_reports_real_findings() -> (
+    None
+):
+    """The positive control: once the runtime returns real team-scoped
+    facts (mirroring the now-landed native_status_change.py team arms) and
+    the caller supplies a cohort size that clears every applicable rule's
+    minimum, the incident_load dimension is a genuinely measured finding --
+    not honestly-unknown-by-construction like the fail-closed tests above.
+    """
+
+    service = TeamHealthService(FakeAttributedTeamRuntime())
+    profile = await service.evaluate_team(
+        org_id=_ORG_ID,
+        permission_fingerprint="fp",
+        scope=_team_scope(),
+        team_id="team-1",
+        cohort_size=25,
+        now=_NOW,
+    )
+    incident_finding = next(
+        f for f in profile.findings if f.rule_id == "health_rule.incident_load.v1"
+    )
+    # 1 incident, sample_count=1 clears minimum_sample=1, value 1.0 <
+    # threshold 10.0 -- a real, measured healthy finding.
+    assert incident_finding.state == DimensionState.HEALTHY
+    assert incident_finding.suppressed_reason is None

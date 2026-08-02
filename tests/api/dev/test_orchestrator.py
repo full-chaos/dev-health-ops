@@ -39,14 +39,20 @@ from dev_health_ops.llm.agent.scripted import ScriptedAgentProvider, ScriptedSte
 
 
 class Recorder:
-    def __init__(self, *, fail_answer_write: bool = False) -> None:
+    def __init__(
+        self, *, fail_answer_write: bool = False, fail_frame_write: bool = False
+    ) -> None:
         self.transitions: list[RunState] = []
         self.tools: list[DevToolRequest] = []
         self.executions: list[Any] = []
         self.answers: list[DevAnswer] = []
         self.terminals: list[RunState] = []
+        self.terminal_errors: list[Any] = []
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
+        self.frames: list[Any] = []
+        self.rollbacks = 0
         self.fail_answer_write = fail_answer_write
+        self.fail_frame_write = fail_frame_write
 
     async def transition(self, state: RunState) -> None:
         self.transitions.append(state)
@@ -69,16 +75,19 @@ class Recorder:
         del subject_set
 
     async def record_frame(self, frame: Any) -> None:
-        del frame
+        if self.fail_frame_write:
+            raise RuntimeError("frame storage unavailable")
+        self.frames.append(frame)
 
     async def rollback(self) -> None:
-        pass
+        self.rollbacks += 1
 
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
 
     async def terminal(self, **values) -> None:
         self.terminals.append(values["state"])
+        self.terminal_errors.append(values.get("error"))
 
 
 class RecordingProvider:

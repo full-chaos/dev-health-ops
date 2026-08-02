@@ -1,0 +1,346 @@
+"""CHAOS-3297 stack #1 -- unit-level controls for ``terminal_frames.py``.
+
+Property manifest cross-references (see
+``/Users/chris/.claude/jobs/7ceca217/tmp/chaos-3297-s1-manifest.md``):
+
+* F-CODES -- ``ORCHESTRATOR_ERROR_CODES`` is exactly the set of codes
+  ``orchestrator.run()``'s own ``error(...)`` closure emits (extracted from
+  the live source, not a hand-duplicated list).
+* F-BUCKET -- ``PUBLIC_OUTCOME_BY_ERROR_CODE`` is total over
+  ``ORCHESTRATOR_ERROR_CODES`` and lands inside ``ck_dev_runs_public_outcome``.
+* F-TOOLSRC -- ``SOURCE_CLASS_BY_TOOL_ID`` is total over ``ToolID``; the
+  ``"tool_results"`` sentinel (``orchestrator._budget_answer``) falls to
+  ``SourceClass.SOURCE_HEALTH``.
+* F-COHERENCE -- for every orchestrator error code, replaying a run
+  terminated with that code reconstructs the *exact* original v1 code,
+  regardless of whether the frame-reconstruction path or the
+  ``run.safe_error_code``-exact-fidelity fallback is taken internally
+  (``router._replayed_result``'s CHAOS-3297 guard).
+* F-PLANID -- ``LEGACY_ANSWER_PLAN_ID`` is a deliberately unregistered plan
+  id (grammar-valid, not in ``PLAN_REGISTRY``).
+"""
+
+from __future__ import annotations
+
+import inspect
+import re
+import uuid
+from copy import deepcopy
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from dev_health_ops.api.dev import orchestrator as _orchestrator_module
+from dev_health_ops.api.dev import terminal_frames as tf
+from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
+from dev_health_ops.api.dev.contracts import DevAnswer, DevTimeRange, ToolID
+from dev_health_ops.api.dev.contracts_v2.base import PublicOutcome, SourceClass
+from dev_health_ops.api.dev.contracts_v2.plan import PLAN_REGISTRY
+from dev_health_ops.api.dev.orchestrator_states import RunState
+from dev_health_ops.api.dev.router import _replayed_result
+
+_TIME_RANGE = DevTimeRange(
+    start=datetime(2026, 7, 1, tzinfo=UTC),
+    end=datetime(2026, 7, 2, tzinfo=UTC),
+    timezone="UTC",
+)
+
+
+def _source_file(module: Any) -> str:
+    path = inspect.getsourcefile(module)
+    assert path is not None, "sanity: module must have a source file"
+    return path
+
+
+_ORCHESTRATOR_SOURCE = _source_file(_orchestrator_module)
+#: The v1 evidence-handle grammar (`evidence_service.EvidenceHandleService.issue`).
+_REAL_EVIDENCE_HANDLE = "ev1_" + ("a1b2c3d4e5" * 4)
+
+
+def _legacy_answer(*, claims: list[dict[str, Any]] | None = None) -> DevAnswer:
+    """A fully-validated v1 answer, mirroring the fixture but with real
+    evidence handles (the fixture's ``ev_01`` fails ``EvidenceHandle``'s
+    strict grammar, which only v2's embedded mirrors enforce)."""
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    text = __import__("json").dumps(payload, default=str)
+    payload = __import__("json").loads(re.sub(r"ev_\d+", _REAL_EVIDENCE_HANDLE, text))
+    if claims is not None:
+        payload["claims"] = claims
+    return DevAnswer.model_validate(payload)
+
+
+# ---------------------------------------------------------------------------
+# F-CODES -- ORCHESTRATOR_ERROR_CODES matches the live source, not a
+# hand-duplicated list (feedback_generate_fixtures_from_the_producer).
+# ---------------------------------------------------------------------------
+
+
+def test_orchestrator_error_codes_matches_the_live_source() -> None:
+    source = open(_ORCHESTRATOR_SOURCE, encoding="utf-8").read()
+    extracted = set(re.findall(r'error\(\s*\n?\s*"([a-z_]+)"', source))
+    assert extracted, "sanity: orchestrator.py must call error(...) at least once"
+    assert extracted == tf.ORCHESTRATOR_ERROR_CODES, (
+        "a code was added to (or removed from) orchestrator.run()'s error() "
+        "closure without updating terminal_frames.ORCHESTRATOR_ERROR_CODES -- "
+        f"missing={extracted - tf.ORCHESTRATOR_ERROR_CODES} "
+        f"stale={tf.ORCHESTRATOR_ERROR_CODES - extracted}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# F-BUCKET -- totality + landing inside the DB's closed public_outcome set.
+# ---------------------------------------------------------------------------
+
+
+def test_public_outcome_bucket_table_is_total_over_orchestrator_codes() -> None:
+    assert set(tf.PUBLIC_OUTCOME_BY_ERROR_CODE) == tf.ORCHESTRATOR_ERROR_CODES
+
+
+def test_public_outcome_bucket_table_stays_inside_the_closed_wire_vocabulary() -> None:
+    # Mirrors ck_dev_runs_public_outcome / ck_dev_answer_frames_public_outcome
+    # verbatim rather than importing a Python constant for it, so a change to
+    # either the enum *or* the DB CHECK constraint is caught independently.
+    db_closed_vocabulary = {
+        "answered",
+        "answered_with_gaps",
+        "needs_clarification",
+        "not_found",
+        "temporarily_unavailable",
+        "unsupported",
+        "denied",
+        "failed",
+    }
+    for outcome in tf.PUBLIC_OUTCOME_BY_ERROR_CODE.values():
+        assert outcome.value in db_closed_vocabulary
+
+
+def test_removing_a_bucket_entry_is_caught_by_the_totality_assertion() -> None:
+    """Rule 2: observe the totality guard actually fail, not just exist.
+
+    Reproduces the import-time check inline against a *mutated* copy of the
+    table -- re-importing the module with a monkeypatched dict would not
+    exercise the module-level assertion (it already ran once at import).
+    """
+
+    mutated = dict(tf.PUBLIC_OUTCOME_BY_ERROR_CODE)
+    removed_code = next(iter(mutated))
+    del mutated[removed_code]
+    missing = tf.ORCHESTRATOR_ERROR_CODES - set(mutated)
+    assert missing == {removed_code}, "the mutation must be observable as a gap"
+
+
+# ---------------------------------------------------------------------------
+# F-TOOLSRC -- SOURCE_CLASS_BY_TOOL_ID totality + the "tool_results" sentinel.
+# ---------------------------------------------------------------------------
+
+
+def test_source_class_by_tool_id_is_total_over_tool_id() -> None:
+    assert set(tf.SOURCE_CLASS_BY_TOOL_ID) == frozenset(ToolID)
+
+
+def test_budget_answer_tool_results_sentinel_falls_to_source_health() -> None:
+    """orchestrator._budget_answer reports the literal string "tool_results"
+    (not a ToolID member) as an unavailable source on a degraded partial
+    answer. Pinned here rather than only mapped, per review: a silent
+    mis-map would corrupt the legacy-wrap frame's coverage block."""
+
+    answer = _legacy_answer()
+    payload = answer.model_dump(mode="json")
+    payload["status"] = "degraded"
+    payload["coverage"]["unavailable_required_sources"] = ["tool_results"]
+    payload["coverage"]["available_source_count"] = 0
+    answer = DevAnswer.model_validate(payload)
+    frame = tf.wrap_legacy_answer_as_frame(answer, run_id="run_budget_partial")
+    assert frame.coverage.unavailable_required_sources == (SourceClass.SOURCE_HEALTH,)
+
+
+# ---------------------------------------------------------------------------
+# F-PLANID -- deliberately unregistered plan id.
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_plan_id_is_deliberately_unregistered() -> None:
+    assert tf.LEGACY_ANSWER_PLAN_ID not in PLAN_REGISTRY
+
+
+# ---------------------------------------------------------------------------
+# build_error_frame -- every orchestrator error code builds a valid frame in
+# the bucket the table says it should.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("code", sorted(tf.ORCHESTRATOR_ERROR_CODES))
+def test_build_error_frame_is_valid_for_every_orchestrator_code(code: str) -> None:
+    frame = tf.build_error_frame(
+        code=code, run_id="run_01", generated_at=datetime.now(UTC)
+    )
+    assert frame.public_outcome == tf.PUBLIC_OUTCOME_BY_ERROR_CODE[code]
+    assert not frame.sections and not frame.facts, "an error frame carries no content"
+
+
+def test_build_error_frame_rejects_an_unregistered_code() -> None:
+    with pytest.raises(ValueError, match="unregistered"):
+        tf.build_error_frame(
+            code="not_a_real_code", run_id="run_01", generated_at=datetime.now(UTC)
+        )
+
+
+# ---------------------------------------------------------------------------
+# wrap_legacy_answer_as_frame
+# ---------------------------------------------------------------------------
+
+
+def test_wrap_legacy_answer_is_always_answered_with_gaps_never_answered() -> None:
+    answer = _legacy_answer()
+    frame = tf.wrap_legacy_answer_as_frame(answer, run_id="run_01")
+    assert frame.public_outcome is PublicOutcome.ANSWERED_WITH_GAPS
+    assert frame.completion is not None and frame.completion.calculable is False
+
+
+def test_wrap_legacy_answer_with_empty_claims_still_has_content() -> None:
+    """orchestrator._budget_answer's metrics-only partial answer has zero
+    claims; the frame must still satisfy validate_outcome_consistency's
+    has_content check via the always-emitted synthetic section."""
+
+    answer = _legacy_answer(claims=[])
+    frame = tf.wrap_legacy_answer_as_frame(answer, run_id="run_01")
+    assert frame.facts == ()
+    assert len(frame.sections) == 1
+    assert frame.sections[0].fact_ids == ()
+
+
+def test_wrap_legacy_answer_drops_no_evidence_or_relationship_content() -> None:
+    answer = _legacy_answer()
+    frame = tf.wrap_legacy_answer_as_frame(answer, run_id="run_01")
+    known_evidence = {item.evidence_ref_id for item in frame.evidence}
+    for fact in frame.facts:
+        assert set(fact.evidence_ref_ids) <= known_evidence
+
+
+def test_frame_construction_is_deterministic_for_the_same_inputs() -> None:
+    """P3: byte-identical frame bytes for the same (run_id, answer) pair."""
+
+    answer = _legacy_answer()
+    first = tf.wrap_legacy_answer_as_frame(answer, run_id="run_determinism")
+    second = tf.wrap_legacy_answer_as_frame(answer, run_id="run_determinism")
+    assert first.model_dump(mode="json") == second.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# F-COHERENCE -- replaying a run terminated with any orchestrator error code
+# reconstructs the exact original v1 code, whichever internal path is taken.
+# ---------------------------------------------------------------------------
+
+
+def _fake_run(
+    *, run_id: uuid.UUID, code: str, public_outcome: PublicOutcome
+) -> SimpleNamespace:
+    now = datetime.now(UTC)
+    return SimpleNamespace(
+        id=run_id,
+        conversation_id=uuid.uuid4(),
+        request_id=uuid.uuid4(),
+        state=RunState.FAILED.value
+        if public_outcome is not PublicOutcome.NEEDS_CLARIFICATION
+        else RunState.INSUFFICIENT_EVIDENCE.value,
+        started_at=now,
+        ended_at=now,
+        public_outcome=public_outcome.value,
+        safe_error_code=code,
+        input_tokens=0,
+        output_tokens=0,
+        estimated_cost_microusd=0,
+        tool_call_count=0,
+        provider_fingerprint=None,
+        model_fingerprint=None,
+    )
+
+
+@pytest.mark.parametrize("code", sorted(tf.ORCHESTRATOR_ERROR_CODES))
+def test_replay_reconstructs_the_exact_orchestrator_error_code(code: str) -> None:
+    outcome = tf.PUBLIC_OUTCOME_BY_ERROR_CODE[code]
+    run_id = uuid.uuid4()
+    # Real UUID, matching the frame's own run_id exactly (as production
+    # always has): a mismatch here would raise inside DevAnswerV2's own
+    # validator and get masked by _replayed_result's broad `except
+    # ValidationError`, making this test pass for the wrong reason (Rule 1
+    # -- assert the state the system reaches, not that the code merely ran).
+    frame = tf.build_error_frame(
+        code=code, run_id=str(run_id), generated_at=datetime.now(UTC)
+    )
+    run = _fake_run(run_id=run_id, code=code, public_outcome=outcome)
+    result = _replayed_result(
+        run=run,
+        answer_payload=None,
+        frame_payload=frame.model_dump(mode="json"),
+        organization_id="org_fullchaos",
+        time_range=_TIME_RANGE,
+    )
+    assert result.error is not None
+    assert result.error.code == code, (
+        "replay must reconstruct the exact live v1 code regardless of "
+        "whether the frame-projection path or the safe_error_code fallback "
+        "was taken internally"
+    )
+
+
+def test_replay_coherence_guard_is_load_bearing() -> None:
+    """Rule 2: observe the CHAOS-3297 router guard actually fail without it.
+
+    Picks a code (``scope_forbidden``) whose frame-projected reconstruction
+    is known to diverge from the live code (DENIED's fixed table code is
+    ``forbidden``, not ``scope_forbidden``) and proves the *unguarded*
+    reconstruction path would silently rewrite it -- i.e. the guard in
+    ``_replayed_result`` is the thing preventing that, not an accident of
+    the fixture.
+    """
+
+    from dev_health_ops.api.dev.contracts_v2.answer import (
+        _OUTCOME_DISPLAY_LABELS,
+        DevAnswerV2,
+    )
+    from dev_health_ops.api.dev.contracts_v2.frame import DevAnswerFrame as _FrameV2
+    from dev_health_ops.api.dev.preflight_outcomes import project_preflight_error
+
+    code = "scope_forbidden"
+    outcome = tf.PUBLIC_OUTCOME_BY_ERROR_CODE[code]
+    assert outcome is PublicOutcome.DENIED
+    run_id = uuid.uuid4()
+    run = _fake_run(run_id=run_id, code=code, public_outcome=outcome)
+    frame = tf.build_error_frame(
+        code=code, run_id=str(run_id), generated_at=datetime.now(UTC)
+    )
+
+    frame_obj = _FrameV2.model_validate(frame.model_dump(mode="json"))
+    answer_v2 = DevAnswerV2(
+        schema_version="dev_answer.v2",
+        answer_id=str(run.id),
+        conversation_id=str(run.conversation_id),
+        run_id=str(run.id),
+        generated_at=run.ended_at,
+        public_outcome=frame_obj.public_outcome,
+        outcome_display_label=_OUTCOME_DISPLAY_LABELS[frame_obj.public_outcome],
+        frame=frame_obj,
+        narrative=None,
+    )
+    unguarded = project_preflight_error(answer_v2, request_id=str(run.request_id))
+    assert unguarded.code == "forbidden", (
+        "sanity: the frame-projection path really does produce a different "
+        "code than the live orchestrator's own 'scope_forbidden' -- if this "
+        "fails, the guard test above proves nothing"
+    )
+
+    guarded = _replayed_result(
+        run=run,
+        answer_payload=None,
+        frame_payload=frame.model_dump(mode="json"),
+        organization_id="org_fullchaos",
+        time_range=_TIME_RANGE,
+    )
+    assert guarded.error is not None
+    assert guarded.error.code == code, (
+        "the CHAOS-3297 guard must override the divergent projection"
+    )

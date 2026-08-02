@@ -40,6 +40,7 @@ from dev_health_ops.llm.agent.errors import (
 )
 from dev_health_ops.llm.budget import budget_idempotency_scope
 
+from . import terminal_frames
 from .answer_validator import (
     AnswerValidationContext,
     AnswerValidationError,
@@ -620,6 +621,7 @@ class DevOrchestrator:
             *,
             answer: DevAnswer | None = None,
             error: DevError | None = None,
+            frame_already_recorded: bool = False,
         ) -> OrchestratorResult:
             nonlocal terminal_written
             if terminal_written:
@@ -637,6 +639,50 @@ class DevOrchestrator:
                         safe_message="The validated answer could not be stored.",
                         retryable=True,
                     )
+            # CHAOS-3297 P1: every terminal path persists a dev_answer_frame.v1,
+            # structurally rather than by caller discipline -- the preflight
+            # TERMINATE branch already built and recorded a richer frame ahead
+            # of this call (frame_already_recorded=True); every other path
+            # gets a minimal compatibility frame built here, from exactly the
+            # v1 payload above -- never a second, divergent source of truth.
+            # Deliberately NOT routed through the v2-to-v1 projector in the
+            # other direction (frame -> v1): see terminal_frames.py's module
+            # docstring for why that would silently rewrite v1 error codes.
+            if not frame_already_recorded:
+                try:
+                    frame = (
+                        terminal_frames.wrap_legacy_answer_as_frame(
+                            answer, run_id=run_id
+                        )
+                        if answer is not None
+                        else terminal_frames.build_error_frame(
+                            code=(
+                                error.code if error is not None else "internal_error"
+                            ),
+                            run_id=run_id,
+                            generated_at=datetime.now(UTC),
+                            versions=self._versions,
+                        )
+                    )
+                    await self._recorder.record_frame(frame)
+                except Exception:
+                    # A frame-construction or database-layer failure here must
+                    # never strand or crash an otherwise-successful run -- the
+                    # v1 answer/error above is authoritative and safe to
+                    # terminate on alone.
+                    if answer is None:
+                        # No prior write in this flush to protect, so it is
+                        # safe to roll back a poisoned session -- otherwise
+                        # the terminal() write below could raise
+                        # PendingRollbackError (mirrors the preflight
+                        # TERMINATE branch, CHAOS-3297 Codex review).
+                        await self._recorder.rollback()
+                    # else: record_answer already succeeded in this flush.
+                    # Rolling back here would discard that write over an
+                    # unrelated frame failure -- a dropped frame is
+                    # recoverable, a dropped answer is not, so this path
+                    # deliberately leaves the session as-is and proceeds
+                    # frame-less.
             await self._recorder.terminal(
                 state=state,
                 answer=answer,
@@ -803,6 +849,7 @@ class DevOrchestrator:
                         error=project_preflight_error(
                             preflight_result.answer, request_id=request.request_id
                         ),
+                        frame_already_recorded=True,
                     )
                 if preflight_result.committed_resolution is not None:
                     committed = preflight_result.committed_resolution

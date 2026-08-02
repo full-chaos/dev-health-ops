@@ -688,6 +688,25 @@ def _replayed_result(
                 error = project_preflight_error(
                     answer_v2, request_id=str(run.request_id)
                 )
+                # CHAOS-3297: `project_preflight_error` reconstructs a v1
+                # code from a *fixed*, outcome-keyed table
+                # (`compat._ERROR_OUTCOME_CODES` / the `scope_ambiguous`
+                # special case) -- correct for a genuinely preflight-sourced
+                # frame, but orchestrator.run()'s own ~30 non-preflight
+                # terminal() calls (CHAOS-3297 stack #1) now also persist a
+                # frame for replay-gate reachability, carrying today's
+                # richer v1 code taxonomy verbatim in `run.safe_error_code`
+                # (e.g. "cancelled", "tool_limit_reached", "scope_forbidden").
+                # Trusting the frame reconstruction there would silently
+                # rewrite the replayed code away from what live actually
+                # streamed (a v1 wire-vocabulary change on retry). Whichever
+                # origin produced this frame, `run.safe_error_code` is always
+                # what `terminal()` persisted from the exact live error
+                # object -- so if the frame's fixed reconstruction disagrees
+                # with it, the frame is not authoritative for this run and
+                # the exact-fidelity fallback below wins instead.
+                if run.safe_error_code and error.code != run.safe_error_code:
+                    error = _replay_fallback_error(run)
         except ValidationError:
             error = _replay_fallback_error(run)
     else:

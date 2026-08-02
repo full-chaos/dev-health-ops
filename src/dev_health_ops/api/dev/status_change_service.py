@@ -161,8 +161,14 @@ class ActualCompletion:
     # never the truncated-for-display counterparts. See
     # ``docs`` note on CHAOS-3297 stack #2: the display bound must never
     # silently become the completion denominator.
-    required_child_total: int
-    required_child_complete: int
+    #
+    # Both are ``None`` (never a fabricated count) whenever the required-
+    # child *source* itself was truncated (round 2, codex HIGH): an
+    # undercounted total is worse than an admittedly unknown one, because
+    # it can look deceptively complete (e.g. 999/999) while genuinely
+    # omitting children the source never returned.
+    required_child_total: int | None
+    required_child_complete: int | None
     display_truncated: bool
     conflicts: tuple[StatusConflict, ...]
     source_ref_ids: tuple[str, ...]
@@ -180,6 +186,14 @@ class RawStatusSnapshot:
     incidents: tuple[IncidentFact, ...] = ()
     source_refs: tuple[SourceReference, ...] = ()
     warnings: tuple[str, ...] = ()
+    # True when the required-child *source query itself* returned more
+    # rows than the assessment bound before any parent/child split -- a
+    # signal distinct from ``len(children) >= MAX_STATUS_ASSESSMENT_ITEMS``
+    # because a source that fetches a declared parent and its children in
+    # one limited query (see native_status_change._WORK_ITEMS_SQL) can
+    # undercount children by exactly the parent's slot, letting the plain
+    # length check silently pass while real children were dropped.
+    children_source_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,10 +357,21 @@ class StatusChangeService:
             as_of=as_of,
             limit=MAX_STATUS_ASSESSMENT_ITEMS,
         )
-        assessment_source_limit_reached = any(
+        # CHAOS-3297 s2 round 2 (codex HIGH): a plain ``len(raw.children) >=
+        # MAX_STATUS_ASSESSMENT_ITEMS`` check can never fire for a source
+        # that fetches the declared parent and its children in one
+        # limited query (the parent consumes one row of that budget), so
+        # OR in the source's own truncation signal computed before that
+        # split. Both conditions mean the same thing -- the required-child
+        # set is incomplete -- so both gate the denominator, not just the
+        # reason code.
+        children_source_truncated = (
+            raw.children_source_truncated
+            or len(raw.children) >= MAX_STATUS_ASSESSMENT_ITEMS
+        )
+        assessment_source_limit_reached = children_source_truncated or any(
             len(facts) >= MAX_STATUS_ASSESSMENT_ITEMS
             for facts in (
-                raw.children,
                 raw.blockers,
                 raw.pull_requests,
                 raw.ci,
@@ -366,6 +391,7 @@ class StatusChangeService:
         actual = self._assess(
             raw,
             assessment_source_limit_reached=assessment_source_limit_reached,
+            children_source_truncated=children_source_truncated,
             # CHAOS-3303: a team subject has no single declared/children
             # completion tree (_WORK_ITEMS_SQL is never queried for team
             # scope -- see native_status_change.TEAM_NOT_APPLICABLE_SOURCES),
@@ -616,6 +642,7 @@ class StatusChangeService:
         raw: RawStatusSnapshot,
         *,
         assessment_source_limit_reached: bool = False,
+        children_source_truncated: bool = False,
         declared_optional: bool = False,
         release_evidence_required: bool = False,
     ) -> ActualCompletion:
@@ -744,9 +771,19 @@ class StatusChangeService:
         used_source_ids = tuple(sorted(required_source_ids & source_by_id.keys()))
         # The complete denominator/numerator: computed here, against the
         # UNBOUNDED ``raw.children`` (``required_children`` above), before
-        # any display truncation is applied by the caller.
-        required_child_total = len(required_children)
-        required_child_complete = required_child_total - len(incomplete_children)
+        # any display truncation is applied by the caller. Withheld
+        # (``None``, never a fabricated count) when the required-child
+        # source itself was truncated -- an honest "unknown" beats a
+        # count that looks complete only because the omitted children
+        # were never fetched.
+        required_child_total: int | None
+        required_child_complete: int | None
+        if children_source_truncated:
+            required_child_total = None
+            required_child_complete = None
+        else:
+            required_child_total = len(required_children)
+            required_child_complete = required_child_total - len(incomplete_children)
         return ActualCompletion(
             state=state,
             rule_id=STATUS_RULE_ID,

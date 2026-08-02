@@ -299,7 +299,7 @@
       },
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "959fdfca47b36dfca18bb9c7a35b5620865349bd9c25df22f1548e8c7945d444"
+        "sha256": "984a7b92cc1476b929f895c009c4c7c061d7ad594427777329b7271a9b8a4f1f"
       },
       "schema_version": "dev_tool_result.v1"
     },

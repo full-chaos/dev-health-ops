@@ -899,14 +899,29 @@ class DevActualCompletion(ContractModel):
     # from ``len(required_children)``, which is truncated to the display
     # bound above and would silently undercount once a parent has more
     # than 100 required children.
-    required_child_total: int = Field(default=0, ge=0, le=100_000)
-    required_child_complete: int = Field(default=0, ge=0, le=100_000)
+    #
+    # Both are ``None`` together (round 2, codex HIGH) whenever the
+    # required-child *source* itself was truncated: an honestly unknown
+    # total is not the same claim as a complete one that happens to equal
+    # its numerator, and the wire contract must not let a caller mistake
+    # one for the other.
+    required_child_total: int | None = Field(default=None, ge=0, le=100_000)
+    required_child_complete: int | None = Field(default=None, ge=0, le=100_000)
     display_truncated: bool = False
     conflicts: list[DevStatusConflict] = Field(default_factory=list, max_length=20)
     evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
 
     @model_validator(mode="after")
     def validate_required_child_counts(self) -> Self:
+        if (self.required_child_total is None) != (
+            self.required_child_complete is None
+        ):
+            raise ValueError(
+                "required_child_total and required_child_complete must both be "
+                "known or both be withheld"
+            )
+        if self.required_child_total is None or self.required_child_complete is None:
+            return self
         if self.required_child_complete > self.required_child_total:
             raise ValueError(
                 "required_child_complete cannot exceed required_child_total"

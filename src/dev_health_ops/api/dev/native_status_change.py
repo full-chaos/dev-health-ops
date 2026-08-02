@@ -1053,13 +1053,33 @@ class ClickHouseStatusChangeSource:
                 )
 
         work_item_rows: list[dict[str, Any]] = []
+        children_source_truncated = False
         if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT} or (
             scope.direct_scope is DirectScope.WORK_UNIT
             and bool(common["member_issue_ids"])
         ):
+            # CHAOS-3297 s2 round 2 (codex HIGH): _WORK_ITEMS_SQL fetches
+            # the declared parent AND its children from ONE query sharing a
+            # single LIMIT budget -- the parent consumes one row of that
+            # budget, so a plain post-split ``len(children) >= limit``
+            # check can never fire even when the true child set exceeds
+            # the limit (limit=1000 -> 1000 rows returned -> 999 children
+            # -> 999 < 1000, no truncation detected, though an older,
+            # incomplete child past rank 1000 was silently dropped).
+            # Request one sentinel row beyond the real budget: getting it
+            # back proves the source had more matching rows than we asked
+            # for, independent of how the parent/child split later divides
+            # the (trimmed-back-down) result.
+            work_items_requested = min(limit, MAX_STATUS_ASSESSMENT_ITEMS)
             work_item_rows, ref, warning = await self._read(
-                "work_items", _WORK_ITEMS_SQL, common, scope
+                "work_items",
+                _WORK_ITEMS_SQL,
+                {**common, "limit": work_items_requested + 1},
+                scope,
             )
+            if len(work_item_rows) > work_items_requested:
+                children_source_truncated = True
+                work_item_rows = work_item_rows[:work_items_requested]
             source_refs.append(ref)
             if warning:
                 warnings.append(warning)
@@ -1402,6 +1422,7 @@ class ClickHouseStatusChangeSource:
                 + gap_refs
             ),
             warnings=tuple(warnings),
+            children_source_truncated=children_source_truncated,
         )
 
     async def change_summary(

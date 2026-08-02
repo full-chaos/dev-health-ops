@@ -59,18 +59,32 @@
           "type": "array"
         },
         "required_child_complete": {
-          "default": 0,
-          "maximum": 100000,
-          "minimum": 0,
-          "title": "Required Child Complete",
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Child Complete"
         },
         "required_child_total": {
-          "default": 0,
-          "maximum": 100000,
-          "minimum": 0,
-          "title": "Required Child Total",
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Child Total"
         },
         "required_children": {
           "items": {

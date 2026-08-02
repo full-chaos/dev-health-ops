@@ -12,11 +12,17 @@ from dev_health_ops.api.dev import production_runtime
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevScope, DevToolRequest, ToolID
 from dev_health_ops.api.dev.production_runtime import ProductionProviderResolution
+from dev_health_ops.api.dev.prompts import PROMPT_VERSION
 from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
-from dev_health_ops.api.dev.tool_registry import ToolExecutionContext
+from dev_health_ops.api.dev.tool_registry import (
+    TOOL_CONTRACT_VERSION,
+    ToolExecutionContext,
+)
+from dev_health_ops.llm.agent.budget_policy import BUDGET_POLICY_VERSION
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
 from dev_health_ops.llm.agent.policy import AgentProviderCandidate, AgentProviderSource
 from dev_health_ops.llm.agent.readiness import PLATFORM_READINESS_SETTING_KEY
+from dev_health_ops.llm.agent.roles import AgentRole
 from dev_health_ops.llm.credentials import LLMCredentials
 
 
@@ -43,10 +49,31 @@ class FakeSettingsService:
 
 
 def _fingerprint(
-    base_url: str = "", model: str = "certified-model", provider: str = "openai"
+    base_url: str = "",
+    model: str = "certified-model",
+    provider: str = "openai",
+    role: AgentRole = AgentRole.LEGACY_AGENT,
 ) -> str:
+    # CHAOS-3285: mirrors production_runtime._readiness_fingerprint's
+    # extended formula. Every fixture in this file that builds a "current"
+    # stored AgentReadinessRecord by hand must fold the same inputs the
+    # real function now folds, or it would exercise a fingerprint formula
+    # that no longer matches production and every "certification is
+    # current" assertion below would be testing nothing.
     return hashlib.sha256(
-        "\0".join(("platform", provider, model, base_url, READINESS_VERSION)).encode()
+        "\0".join(
+            (
+                "platform",
+                provider,
+                model,
+                base_url,
+                READINESS_VERSION,
+                PROMPT_VERSION,
+                TOOL_CONTRACT_VERSION,
+                BUDGET_POLICY_VERSION,
+                role.value,
+            )
+        ).encode()
     ).hexdigest()[:24]
 
 
@@ -68,6 +95,67 @@ def test_readiness_fingerprint_changes_when_source_changes() -> None:
     assert production_runtime._readiness_fingerprint(
         platform
     ) != production_runtime._readiness_fingerprint(byo)
+
+
+def test_readiness_fingerprint_changes_when_role_changes() -> None:
+    """CHAOS-3285: certification is now per-role -- a fingerprint computed
+    for one role must never collide with another role's fingerprint for the
+    otherwise-identical candidate, or a legacy_agent certification could be
+    misread as covering intent_classification/answer_frame_narrative too."""
+
+    credentials = LLMCredentials(base_url="https://models.example.com/v1")
+    candidate = AgentProviderCandidate(
+        provider="openai",
+        model="certified-model",
+        credentials=credentials,
+        source=AgentProviderSource.PLATFORM,
+    )
+
+    fingerprints = {
+        role: production_runtime._readiness_fingerprint(candidate, role=role)
+        for role in AgentRole
+    }
+    assert len(set(fingerprints.values())) == len(AgentRole)
+    # The default (no explicit role) must be legacy_agent -- production's
+    # existing single-role selection path calls _readiness_fingerprint
+    # without a role argument, and it is exactly the legacy_agent shape
+    # (full tool registry, full DevAnswer grammar) that path exercises.
+    assert (
+        production_runtime._readiness_fingerprint(candidate)
+        == fingerprints[AgentRole.LEGACY_AGENT]
+    )
+
+
+def test_readiness_fingerprint_invalidates_pre_chaos_3285_stored_records() -> None:
+    """CHAOS-3285 migration semantics: a fingerprint computed under the old
+    (pre-PR3) formula -- which folded only source/provider/model/base_url/
+    READINESS_VERSION -- must never equal the new formula's output. This is
+    the mechanism that makes every previously stored AgentReadinessRecord
+    read as stale rather than silently still-current after this change
+    (see the docstring on _readiness_fingerprint)."""
+
+    credentials = LLMCredentials(base_url="https://models.example.com/v1")
+    candidate = AgentProviderCandidate(
+        provider="openai",
+        model="certified-model",
+        credentials=credentials,
+        source=AgentProviderSource.PLATFORM,
+    )
+    pre_change_fingerprint = hashlib.sha256(
+        "\0".join(
+            (
+                candidate.source.value,
+                candidate.provider,
+                candidate.model,
+                candidate.credentials.base_url,
+                READINESS_VERSION,
+            )
+        ).encode()
+    ).hexdigest()[:24]
+
+    assert pre_change_fingerprint != production_runtime._readiness_fingerprint(
+        candidate
+    )
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.api.services.configuration.generic import SettingsService
 from dev_health_ops.licensing import evaluate_org_feature_async
 from dev_health_ops.licensing.registry import ASK_DEV_WAVE_3_1_FEATURE
+from dev_health_ops.llm.agent.budget_policy import BUDGET_POLICY_VERSION
 from dev_health_ops.llm.agent.contracts import AgentLLMProvider
 from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErrorCode
 from dev_health_ops.llm.agent.openai_compatible import (
@@ -35,6 +36,7 @@ from dev_health_ops.llm.agent.readiness import (
     PLATFORM_SETTINGS_ORG_ID,
     SettingsAgentReadinessStore,
 )
+from dev_health_ops.llm.agent.roles import AgentRole
 from dev_health_ops.llm.agent.scripted_openai_service import SCRIPTED_OPENAI_MODEL
 from dev_health_ops.llm.budget import attach_agent_budget_guard
 from dev_health_ops.llm.credentials import LLMCredentials, resolve_llm_credentials
@@ -570,8 +572,32 @@ def _candidate(
     )
 
 
-def _readiness_fingerprint(candidate: AgentProviderCandidate) -> str:
-    """Fingerprint every capability input that invalidates certification."""
+def _readiness_fingerprint(
+    candidate: AgentProviderCandidate, *, role: AgentRole = AgentRole.LEGACY_AGENT
+) -> str:
+    """Fingerprint every capability input that invalidates certification.
+
+    CHAOS-3285: extended to fold ``PROMPT_VERSION``, ``TOOL_CONTRACT_VERSION``,
+    and ``BUDGET_POLICY_VERSION`` -- previously only a manual
+    ``READINESS_VERSION`` bump invalidated a stale certification, even though
+    the composed prompt, tool registry, or per-family token-budget policy
+    can each independently change the wire shape a certified provider was
+    actually tested against. Also folds ``role`` now that certification is
+    per-role rather than a single binary verdict (see ``llm.agent.roles``).
+
+    Migration/invalidation semantics (explicit): this changes the computed
+    fingerprint value for the existing single-role (legacy binary) selection
+    path too, since every call site below defaults ``role`` to
+    ``AgentRole.LEGACY_AGENT`` -- the role today's production runtime
+    actually exercises (full tool registry, full ``DevAnswer`` grammar).
+    Every previously stored ``AgentReadinessRecord.fingerprint`` was computed
+    without these folded inputs, so it no longer equals the newly computed
+    value here and ``AgentReadinessRecord.is_current`` returns ``False``:
+    existing certifications become stale and the runtime fails closed until
+    re-certified -- exactly the same self-invalidating pattern already
+    established for the ``READINESS_VERSION`` bump (CHAOS-3254). No stored
+    record is silently reinterpreted as still current.
+    """
 
     return hashlib.sha256(
         "\0".join(
@@ -581,6 +607,10 @@ def _readiness_fingerprint(candidate: AgentProviderCandidate) -> str:
                 candidate.model,
                 candidate.credentials.base_url,
                 READINESS_VERSION,
+                PROMPT_VERSION,
+                TOOL_CONTRACT_VERSION,
+                BUDGET_POLICY_VERSION,
+                role.value,
             )
         ).encode()
     ).hexdigest()[:24]

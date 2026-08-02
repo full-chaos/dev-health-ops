@@ -1087,6 +1087,71 @@ async def test_native_parent_inclusive_source_cap_never_fabricates_a_ready_ratio
 
 
 @pytest.mark.asyncio
+async def test_native_mixed_issue_pr_membership_truncation_never_fabricates_a_ready_ratio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3297 s2 round 3 (codex HIGH) regression: _WORK_UNIT_MEMBERS_SQL
+    mixes issue and PR members in ONE query sharing a single LIMIT, then
+    splits them post-fetch by node_type. Simulate 500 issue members + 502
+    PR members (1,002 total rows against the 1,000-item bound) -- neither
+    the resulting ``member_issue_ids`` (500) nor ``member_pr_ids`` (500,
+    after the shared LIMIT truncates to 1,000 total) ever reaches 1,000
+    alone, so before this fix neither downstream arm's own length check
+    could ever detect the drop of the last (oldest, by node_id) PR member.
+    The fix must detect the truncation via the membership sentinel and
+    never present a fabricated denominator or a false READY/COMPLETE.
+    """
+    issue_members = [
+        {
+            "node_type": "issue",
+            "node_id": f"linear:ISSUE-{index:04d}",
+            "last_synced": NOW,
+        }
+        for index in range(500)
+    ]
+    pr_members = [
+        {
+            "node_type": "pr",
+            "node_id": f"repo-a#pr{index:04d}",
+            "last_synced": NOW,
+        }
+        for index in range(502)
+    ]
+    # _WORK_UNIT_MEMBERS_SQL orders by (node_type, node_id) ASC -- issues
+    # ('issue') sort before PRs ('pr'), so a 1,000-row LIMIT keeps every
+    # issue and the first 500 PRs, dropping the last 2 PRs entirely.
+    all_membership_rows = issue_members + pr_members
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "SELECT max(completed_at) AS last_synced" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_unit_membership AS m FINAL" in sql:
+            return all_membership_rows[: int(params["limit"])]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(
+            _scope(DirectScope.WORK_UNIT, entity_id="work-unit-1"), max_items=100
+        ),
+    )
+
+    assert result.actual.state is not CompletionState.READY
+    assert result.state is not StatusResultState.COMPLETE
+    assert "assessment_source_limit_reached" in result.actual.reason_codes
+    assert result.actual.required_child_total is None
+    assert result.actual.required_child_complete is None
+
+
+@pytest.mark.asyncio
 async def test_native_change_reader_returns_only_canonical_observed_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

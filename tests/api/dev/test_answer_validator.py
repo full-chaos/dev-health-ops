@@ -135,6 +135,72 @@ def test_numeric_inference_requires_metric_or_source_reference() -> None:
         validate_answer_candidate(payload, _context())
 
 
+def _context_with_withheld_completion() -> AnswerValidationContext:
+    """A run whose tool result reports a completion assessment with the
+    required-child denominator withheld (CHAOS-3297 s2 round 2/3): the
+    required-child source itself was truncated, so
+    required_child_total/required_child_complete are ``None`` -- an
+    honestly unknown denominator, never a fabricated count.
+    """
+    fixtures = positive_fixtures()
+    answer = DevAnswer.model_validate(fixtures["dev_answer.v1"])
+    tool_result = deepcopy(fixtures["dev_tool_result.v1"])
+    tool_result["actual_completion"] = {
+        "state": "indeterminate",
+        "rule_id": "actual-completion",
+        "rule_version": "actual-completion.v4",
+        "reason_codes": ["assessment_source_limit_reached"],
+        "required_children": [],
+        "required_child_total": None,
+        "required_child_complete": None,
+        "display_truncated": True,
+        "conflicts": [],
+        "evidence_ref_ids": [],
+    }
+    return AnswerValidationContext(
+        conversation_id=answer.conversation_id,
+        answer_id=answer.answer_id,
+        scope_resolution=DevScopeResolution.model_validate(
+            fixtures["dev_scope_resolution.v1"]
+        ),
+        versions=DevContractVersions.model_validate(answer.versions),
+        model=DevModelMetadata.model_validate(answer.model),
+        tool_results=(DevToolResult.model_validate(tool_result),),
+    )
+
+
+def test_claim_cannot_state_a_completion_ratio_the_server_withheld() -> None:
+    """CHAOS-3297 s2 round 3 (codex HIGH) exact repro: a PARTIAL answer
+    claiming 'Required work is 100% complete' must not pass just because
+    the claim happens to cite SOME metric/evidence ref -- the existing
+    numeric-claim check above only requires a citation exists, it never
+    verifies the citation actually grounds the specific number, so a
+    withheld (None) denominator must be caught independently.
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    payload["claims"] = [
+        {
+            **payload["claims"][0],
+            "text": "Required work is 100% complete.",
+        }
+    ]
+    with pytest.raises(AnswerValidationError, match="completion ratio"):
+        validate_answer_candidate(payload, _context_with_withheld_completion())
+
+
+def test_direct_summary_cannot_state_a_completion_ratio_the_server_withheld() -> None:
+    """Same repro, direct_summary variant (codex round 3): direct_summary
+    carries no citation requirement at all, so it needs the identical
+    guard independently of the claims loop.
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    payload["direct_summary"] = "Required work is 100% complete."
+    with pytest.raises(AnswerValidationError, match="completion ratio"):
+        validate_answer_candidate(payload, _context_with_withheld_completion())
+
+
 # --- CHAOS-3290: a complete/substantive answer cannot be an empty shell ---
 
 

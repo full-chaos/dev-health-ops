@@ -493,7 +493,16 @@ async def test_completion_assesses_required_children_beyond_display_bound() -> N
 
 
 @pytest.mark.asyncio
-async def test_assessment_source_bound_never_false_passes_completion() -> None:
+async def test_children_exactly_at_bound_with_no_truncation_signal_keeps_the_denominator() -> (
+    None
+):
+    """CHAOS-3297 s2 round 3 (codex MEDIUM): exactly
+    MAX_STATUS_ASSESSMENT_ITEMS legitimate children, with the source
+    reporting no truncation, is a real, complete denominator -- it must
+    never be confused with a truncated one just because the count happens
+    to equal the bound. Truncation is a claim only the source can make
+    (``children_source_truncated``/``membership_source_truncated``), never
+    a length heuristic."""
     children = tuple(
         _fact(f"child-{index:04d}", "done", required=True) for index in range(1_000)
     )
@@ -502,7 +511,49 @@ async def test_assessment_source_bound_never_false_passes_completion() -> None:
             RawStatusSnapshot(
                 declared=_fact("issue-1", "done"),
                 children=children,
+                deployments=(_deployment(),),
                 source_refs=(_source_ref(),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(), max_items=100),
+    )
+
+    assert result.state is StatusResultState.COMPLETE
+    assert result.actual.state is CompletionState.READY
+    assert "assessment_source_limit_reached" not in result.actual.reason_codes
+    assert result.warnings == ()
+    assert result.actual.required_child_total == 1_000
+    assert result.actual.required_child_complete == 1_000
+    # The display bound is a separate, always-legitimate concern from
+    # source truncation -- 1,000 real children still only display 100.
+    assert result.actual.display_truncated is True
+    assert len(result.actual.required_children) == 100
+
+
+@pytest.mark.asyncio
+async def test_explicit_children_source_truncation_signal_withholds_the_denominator() -> (
+    None
+):
+    """The service test that used to encode the exactly-1,000-children
+    ambiguity (CHAOS-3297 s2 round 3, codex MEDIUM): truncation must be
+    driven by the source's own provenance flag, not inferred from a
+    count. A small, otherwise-unremarkable required-child set with
+    ``children_source_truncated=True`` must still withhold the
+    denominator and force non-READY, exactly like the 1,000-item case
+    used to (incorrectly) via the length heuristic."""
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=(_fact("child-a", "done", required=True),),
+                deployments=(_deployment(),),
+                source_refs=(_source_ref(),),
+                children_source_truncated=True,
             )
         )
     )
@@ -516,14 +567,43 @@ async def test_assessment_source_bound_never_false_passes_completion() -> None:
     assert result.actual.state is CompletionState.INDETERMINATE
     assert "assessment_source_limit_reached" in result.actual.reason_codes
     assert result.warnings == ("status assessment source bound reached",)
-    # CHAOS-3297 s2 round 2 (codex HIGH): when the SOURCE itself hit its
-    # bound (1,000 items), the 1,000 children the source did return could
-    # look deceptively "complete" (1000/1000) even though the true total
-    # is unknown -- withhold the denominator entirely rather than publish
-    # a count that might be an undercount by exactly the omitted rows.
     assert result.actual.required_child_total is None
     assert result.actual.required_child_complete is None
-    assert result.actual.display_truncated is True
+    assert result.actual.display_truncated is False
+
+
+@pytest.mark.asyncio
+async def test_membership_source_truncation_signal_also_withholds_the_denominator() -> (
+    None
+):
+    """CHAOS-3297 s2 round 3 (codex HIGH): membership truncation is a
+    distinct root cause one hop upstream of the children fetch itself
+    (native_status_change._WORK_UNIT_MEMBERS_SQL mixes issue and PR
+    members in one limited query) -- it must gate the denominator exactly
+    like a direct children-source truncation, not just fire a reason code
+    that happens to force INDETERMINATE for unrelated reasons."""
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=(_fact("child-a", "done", required=True),),
+                deployments=(_deployment(),),
+                source_refs=(_source_ref(),),
+                membership_source_truncated=True,
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(), max_items=100),
+    )
+
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert "assessment_source_limit_reached" in result.actual.reason_codes
+    assert result.actual.required_child_total is None
+    assert result.actual.required_child_complete is None
 
 
 def test_rejects_naive_as_of_and_out_of_bounds() -> None:

@@ -44,9 +44,15 @@ from .base import (
     ServerHandle,
     ShortText,
 )
+from .deficiency import DeficiencyFinding, finding_sort_key
 from .embedded import DevCoverageV2, DevEvidenceRefV2, DevMetricRefV2
+from .health_rules import HealthRuleFinding
 from .plan import PlanRegistryID
-from .result import DevRelationshipPath, DevSourceObservation
+from .result import (
+    HEALTH_FINDING_SEVERITY_RANK,
+    DevRelationshipPath,
+    DevSourceObservation,
+)
 from .subject import DevEntityRefV2, DevResolutionCandidate
 
 __all__ = [
@@ -220,6 +226,26 @@ class DevAnswerFrame(ContractModelV2):
     )
     finding_refs: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=50)
     deficiency_refs: tuple[OpaqueID, ...] = Field(default_factory=tuple, max_length=50)
+    #: CHAOS-3297 stack #3: launch-eligible findings only (never
+    #: shadow/suppressed), embedded directly rather than left as opaque
+    #: ``finding_refs`` pointers -- there is no resolution endpoint that
+    #: dereferences a finding by id today, so a ref-only frame would point
+    #: at nothing. Mirrors ``DevSourceContent.health_findings`` exactly:
+    #: same worst-severity-first-then-``finding_id`` canonical order (see
+    #: ``validate_finding_order`` below, which reuses
+    #: ``contracts_v2.result.HEALTH_FINDING_SEVERITY_RANK`` by reference),
+    #: same 50-item cap (matching ``finding_refs``'s own pre-existing
+    #: bound) with an independent truncation-disclosure flag.
+    health_findings: tuple[HealthRuleFinding, ...] = Field(
+        default_factory=tuple, max_length=50
+    )
+    health_findings_truncated: bool = False
+    #: CHAOS-3297 stack #3: same posture as ``health_findings`` above, for
+    #: ``OperationalDeficiencyService`` findings.
+    deficiency_findings: tuple[DeficiencyFinding, ...] = Field(
+        default_factory=tuple, max_length=50
+    )
+    deficiency_findings_truncated: bool = False
     conflicts: tuple[DevFrameConflict, ...] = Field(
         default_factory=tuple, max_length=20
     )
@@ -254,6 +280,26 @@ class DevAnswerFrame(ContractModelV2):
         ]
         if len(candidate_ids) != len(set(candidate_ids)):
             raise ValueError("clarification candidate entity IDs must be unique")
+        # CHAOS-3297 stack #3: same canonical-order requirement as
+        # DevSourceContent.validate_finding_order, reusing the exact same
+        # imported-by-reference tables -- a 50-of-N cap must always keep the
+        # same 50 regardless of caller iteration order.
+        health_keys = [
+            (HEALTH_FINDING_SEVERITY_RANK[finding.state], finding.finding_id)
+            for finding in self.health_findings
+        ]
+        if health_keys != sorted(health_keys):
+            raise ValueError(
+                "health_findings must be ordered worst-severity-first, then finding_id"
+            )
+        deficiency_keys = [
+            finding_sort_key(finding) for finding in self.deficiency_findings
+        ]
+        if deficiency_keys != sorted(deficiency_keys):
+            raise ValueError(
+                "deficiency_findings must be ordered per deficiency.finding_sort_key "
+                "(severity, category, finding_id)"
+            )
         # Structural closure first: the five acceptance-criteria semantic
         # validators below assume a well-formed frame (unique, resolvable
         # fact/section/evidence IDs).

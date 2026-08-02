@@ -390,6 +390,19 @@
         "coverage": {
           "$ref": "#/$defs/DevCoverageV2"
         },
+        "deficiency_findings": {
+          "items": {
+            "$ref": "#/$defs/DeficiencyFinding"
+          },
+          "maxItems": 50,
+          "title": "Deficiency Findings",
+          "type": "array"
+        },
+        "deficiency_findings_truncated": {
+          "default": false,
+          "title": "Deficiency Findings Truncated",
+          "type": "boolean"
+        },
         "deficiency_refs": {
           "items": {
             "maxLength": 128,
@@ -445,6 +458,19 @@
           "format": "date-time",
           "title": "Generated At",
           "type": "string"
+        },
+        "health_findings": {
+          "items": {
+            "$ref": "#/$defs/HealthRuleFinding"
+          },
+          "maxItems": 50,
+          "title": "Health Findings",
+          "type": "array"
+        },
+        "health_findings_truncated": {
+          "default": false,
+          "title": "Health Findings Truncated",
+          "type": "boolean"
         },
         "health_profile_refs": {
           "items": {

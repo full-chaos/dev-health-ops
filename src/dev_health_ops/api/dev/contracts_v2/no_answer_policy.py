@@ -175,6 +175,12 @@ NO_ANSWER_FRAME_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
     "health_profile_refs": NoAnswerFieldPolicy.ABSENT,
     "finding_refs": NoAnswerFieldPolicy.ABSENT,
     "deficiency_refs": NoAnswerFieldPolicy.ABSENT,
+    # CHAOS-3297 stack #3: same posture as every other content-bearing
+    # collection field above -- a no-answer outcome carries no findings.
+    "health_findings": NoAnswerFieldPolicy.ABSENT,
+    "health_findings_truncated": NoAnswerFieldPolicy.NON_TEXT,
+    "deficiency_findings": NoAnswerFieldPolicy.ABSENT,
+    "deficiency_findings_truncated": NoAnswerFieldPolicy.NON_TEXT,
     "conflicts": NoAnswerFieldPolicy.ABSENT,
     "limitations": NoAnswerFieldPolicy.ABSENT,
     "source_observations": NoAnswerFieldPolicy.ABSENT,

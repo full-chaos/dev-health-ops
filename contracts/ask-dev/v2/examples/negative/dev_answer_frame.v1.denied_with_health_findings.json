@@ -1,0 +1,55 @@
+{
+  "clarification_candidates": [],
+  "comparisons": [],
+  "completion": null,
+  "conflicts": [],
+  "coverage": {
+    "as_of": "2026-07-28T12:00:00Z",
+    "available_source_count": 1,
+    "required_source_count": 1,
+    "stale_required_sources": [],
+    "unavailable_required_sources": []
+  },
+  "deficiency_refs": [],
+  "direct_answer": "You do not have access to ask about this.",
+  "evidence": [],
+  "facts": [],
+  "finding_refs": [],
+  "frame_id": "0f1a2b3c-0002-4a00-8000-000000000001",
+  "generated_at": "2026-07-28T12:00:00Z",
+  "health_findings": [
+    {
+      "calibration_state": "provisional",
+      "dimension": "reliability_release",
+      "evaluated_at": "2026-07-28T12:00:00Z",
+      "evidence_source_classes": [
+        "status_change"
+      ],
+      "fact_kind": "observed",
+      "finding_id": "0f1a2b3c-000a-4a00-8000-000000000001",
+      "remediation_template": "Investigate recent deployment failures.",
+      "rule_id": "health_rule.change_failure_rate.v1",
+      "rule_version": "health_rule.change_failure_rate.v1.1",
+      "schema_version": "health_rule_finding.v1",
+      "shadow_only": true,
+      "state": "at_risk",
+      "subject_id": "repo_dev_health",
+      "subject_kind": "project",
+      "suppressed_reason": null
+    }
+  ],
+  "health_profile_refs": [],
+  "limitations": [],
+  "metrics": [],
+  "public_outcome": "denied",
+  "readiness": null,
+  "relationship_paths": [],
+  "run_id": "0f1a2b3c-0001-4a00-8000-000000000001",
+  "safe_follow_up_questions": [],
+  "schema_version": "dev_answer_frame.v1",
+  "sections": [],
+  "source_observations": [],
+  "subject_ref": null,
+  "subject_set_ref": null,
+  "versions": null
+}

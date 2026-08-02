@@ -430,6 +430,61 @@ def _metric_ref() -> dict[str, Any]:
     }
 
 
+def _health_finding() -> dict[str, Any]:
+    """A valid, standalone ``health_rule_finding.v1`` (CHAOS-3297 stack #3)."""
+
+    return {
+        "schema_version": "health_rule_finding.v1",
+        "finding_id": "0f1a2b3c-000a-4a00-8000-000000000001",
+        "rule_id": "health_rule.change_failure_rate.v1",
+        "rule_version": "health_rule.change_failure_rate.v1.1",
+        "dimension": "reliability_release",
+        "subject_kind": "project",
+        "subject_id": "repo_dev_health",
+        "state": "at_risk",
+        "fact_kind": "observed",
+        "shadow_only": True,
+        "evidence_source_classes": ["status_change"],
+        "remediation_template": "Investigate recent deployment failures.",
+        "calibration_state": "provisional",
+        "evaluated_at": NOW,
+        "suppressed_reason": None,
+    }
+
+
+def _deficiency_finding() -> dict[str, Any]:
+    """A valid, standalone ``deficiency_finding.v1`` (CHAOS-3297 stack #3)."""
+
+    return {
+        "schema_version": "deficiency_finding.v1",
+        "finding_id": "0f1a2b3c-000b-4a00-8000-000000000001",
+        "category": "data_integration",
+        "rule_id": "deficiency_rule.unconfigured_required_source.v1",
+        "rule_version": "deficiency_rule.unconfigured_required_source.v1",
+        "subject_kind": "project",
+        "subject_id": "repo_dev_health",
+        "severity": "at_risk",
+        "fact_kind": "observed",
+        "observed_state": "unconfigured",
+        "data_semantics": "not_measured",
+        "sample_count": None,
+        "coverage": 0.0,
+        "current_window_days": 30,
+        "comparison_window_days": None,
+        "relationship_paths": [],
+        "evidence_ref_ids": [],
+        "evidence_classification": "structural_absence",
+        "blast_radius": "Required source is unconfigured for this repository.",
+        "remediation": {
+            "schema_version": "deficiency_remediation.v1",
+            "remediation_template": "Configure the required source.",
+            "verification_condition": "Resolves once re-evaluated healthy.",
+        },
+        "limitations": [],
+        "evaluated_at": NOW,
+    }
+
+
 #: The canonical server copy a ``denied`` frame is allowed to render, taken
 #: from the contract's own table so the fixtures cannot drift from it.
 DENIED_CANONICAL_COPY = CANONICAL_NO_ANSWER_COPY["denied"]
@@ -625,6 +680,14 @@ def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any
         case(
             "denied_with_deficiency_refs",
             lambda v: v.__setitem__("deficiency_refs", ["deficiency_01"]),
+        ),
+        case(
+            "denied_with_health_findings",
+            lambda v: v.__setitem__("health_findings", [_health_finding()]),
+        ),
+        case(
+            "denied_with_deficiency_findings",
+            lambda v: v.__setitem__("deficiency_findings", [_deficiency_finding()]),
         ),
         case(
             "denied_with_subject_identity",

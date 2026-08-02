@@ -31,33 +31,38 @@ peer values itself (constraint: cohort/attribution facts come from canonical
 sources resolved server-side, never caller-supplied numbers -- there is
 structurally no parameter here through which a caller could inject one).
 
-``cohort_size`` itself (CHAOS-3303's post-Codex-fix shape, 03da63aeb):
+``cohort_size`` itself (CHAOS-3303's shape, as of round 2 fix a37caf322):
 resolved by THIS service from :class:`~.team_health_service.TeamAttributionSource`
--- the same ``team_repo_ownership`` re-derivation
-``TeamHealthService`` uses -- never a caller-asserted naked int. There is no
-``cohort_size`` parameter on :meth:`TeamWorkloadService.evaluate_workload`
-for a caller to inject one through.
+-- the same ``team_repo_ownership`` re-derivation, filtered through
+canonical-primary work-item attribution, ``TeamHealthService`` uses --
+never a caller-asserted naked int. There is no ``cohort_size`` parameter on
+:meth:`TeamWorkloadService.evaluate_workload` for a caller to inject one
+through.
 
-Attribution-snapshot discipline (pre-staged ahead of 3303's in-flight fix
-for the same defect class, per team-lead 2026-08-02): the attribution
+Attribution-snapshot discipline (matches ``TeamHealthService``'s own
+identical logic exactly, CHAOS-3303 round 2, a37caf322): the attribution
 lookup is resolved exactly ONCE, at ``as_of=scope.time_range.end`` -- the
-end of the window every fact this evaluation reads is itself bounded by --
-never at wall-clock ``now``. Evaluating a two-week-old scope days after the
-fact must not silently attribute against today's team roster instead of the
-roster that was true when the evaluated facts were produced.
+SAME instant the wrapped runtime's own internal ``team_repository_ids``
+call uses (via ``_authorized_repository_ids``) -- never wall-clock ``now``.
+Evaluating a two-week-old scope days after the fact must not silently
+attribute against today's team roster instead of the roster that was true
+when the evaluated facts were produced. When this service and the wrapped
+runtime share one ``ClickHouseStatusChangeSource`` instance (the natural
+production wiring), that source's own ``(org_id, team_id, as_of)`` cache
+turns the second lookup into a hit rather than a second round trip.
 
-A lookup FAILURE (``team_repository_ids`` raising) is never collapsed into
-an empty cohort. This service catches the exception at its own call site
-(no protocol change required -- Python's exception channel already
-distinguishes "the query never returned an answer" from "the query
-answered zero") and short-circuits to an explicit unavailable profile:
-every source is left unread (``HealthEvaluationSources()`` all-default, so
-every bound rule reports ``unavailable_observation`` honestly) and
-``cohort_size=None`` throughout -- never ``0``. The two are deliberately
-distinguishable in the finding: an empty, successfully-resolved cohort
-reports ``UNKNOWN``/``insufficient_cohort`` (we know the cohort and it is
-too small); a failed lookup reports plain ``UNKNOWN`` with no suppressed
-reason and no cohort_size at all (we do not know the cohort). See
+``team_repository_ids`` returns :class:`~.native_status_change.TeamAttributionResult`
+(``measured: bool``, ``repository_ids: tuple[str, ...]``), not a bare list
+-- a genuine lookup FAILURE (``measured=False``) is structurally distinct
+from a genuinely empty, successfully-resolved cohort (``measured=True``,
+``repository_ids=()``), never collapsed into each other. ``measured=False``
+short-circuits to an explicit unavailable profile (every source left
+unread, ``cohort_size=None`` throughout) without even calling the runtime
+or workload source -- nothing meaningful could be reported regardless of
+what they would return. ``measured=True`` with an empty cohort proceeds
+normally with ``cohort_size=0``, correctly suppressing every applicable
+rule as ``insufficient_cohort`` (a real, measured answer: "we know this
+team owns zero repositories"). See
 :meth:`TeamWorkloadService._unavailable_profile`.
 """
 
@@ -135,16 +140,17 @@ class TeamWorkloadService:
         # and TeamHealthService's own identical discipline. Resolved ONCE,
         # as_of the end of the window every fact below is itself bounded
         # by (never wall-clock `now`) -- see module docstring.
-        attribution_as_of = scope.time_range.end
-        try:
-            owned_repository_ids = await self._attribution.team_repository_ids(
-                org_id, team_id, as_of=attribution_as_of
-            )
-        except Exception:
-            # A failed lookup is never silently treated as an empty cohort
-            # -- see module docstring's attribution-snapshot discipline.
+        attribution = await self._attribution.team_repository_ids(
+            org_id, team_id, as_of=scope.time_range.end
+        )
+        if not attribution.measured:
+            # The lookup itself failed -- cohort_size is unknowable, not a
+            # measured zero. Never silently treated as an empty cohort --
+            # see module docstring's attribution-snapshot discipline. The
+            # runtime/workload source are not even called: nothing
+            # meaningful could be reported regardless of what they return.
             return self._unavailable_profile(team_id=team_id, org_id=org_id, now=now)
-        cohort_size = len(owned_repository_ids)
+        cohort_size = len(attribution.repository_ids)
 
         # Sequential awaits throughout -- never asyncio.gather over these
         # calls. Several share a ClickHouse client the same way an
@@ -217,7 +223,7 @@ class TeamWorkloadService:
     def _unavailable_profile(
         self, *, team_id: str, org_id: str, now: datetime
     ) -> HealthProfileResult:
-        """The failed-attribution-lookup path -- see module docstring.
+        """The ``measured=False`` attribution-lookup path -- see module docstring.
 
         Every source is left unread (an all-default ``HealthEvaluationSources``),
         so every bound rule reports an honest ``unavailable_observation``

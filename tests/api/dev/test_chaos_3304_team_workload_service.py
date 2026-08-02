@@ -1,12 +1,15 @@
 """Tests for CHAOS-3304's ``TeamWorkloadService``.
 
-Mirrors ``test_chaos_3303_team_health_service.py``'s post-03da63aeb
+Mirrors ``test_chaos_3303_team_health_service.py``'s post-a37caf322
 discipline exactly: proven against a fake ``PlanExecutorRuntime``, a fake
-``TeamAttributionSource``, and a fake ``TeamWorkloadDataSource``
-independently -- cohort_size is always ``len(team_repository_ids(...))``,
+``TeamAttributionSource`` (returning ``TeamAttributionResult``), and a fake
+``TeamWorkloadDataSource`` independently -- cohort_size is always
+``len(team_repository_ids(...).repository_ids)`` when the lookup succeeded,
 never a caller-supplied int, so an unattributed team (zero owned
 repositories) suppresses every applicable rule even when every other source
-returns otherwise-complete facts.
+returns otherwise-complete facts. A genuine lookup FAILURE
+(``measured=False``) is structurally distinct from a measured-empty cohort
+-- see ``TeamAttributionResult``'s own docstring.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from dev_health_ops.api.dev.contracts import (
 )
 from dev_health_ops.api.dev.contracts_v2.health_rules import DimensionState
 from dev_health_ops.api.dev.data_health_service import DataHealthResult
+from dev_health_ops.api.dev.native_status_change import TeamAttributionResult
 from dev_health_ops.api.dev.native_team_workload import (
     TeamCognitiveLoadResult,
     TeamInvestmentMixResult,
@@ -144,36 +148,30 @@ class FakeAttributionSource:
     """A configurable ``TeamAttributionSource`` double -- ``repository_ids``
     is the ONLY thing that determines ``cohort_size`` (see
     ``TeamWorkloadService.evaluate_workload``); there is no other lever a
-    test (or a caller) has to influence it.
+    test (or a caller) has to influence it. ``measured=False`` simulates a
+    genuine lookup failure, distinct from a measured-empty cohort (matches
+    ``TeamAttributionResult``'s own contract, CHAOS-3303 round 2).
     """
 
     repository_ids: tuple[str, ...] = ()
+    measured: bool = True
     as_of_calls: list[datetime] | None = None
 
     async def team_repository_ids(
         self, org_id: str, team_id: str, *, as_of: datetime
-    ) -> list[str]:
+    ) -> TeamAttributionResult:
         if self.as_of_calls is not None:
             self.as_of_calls.append(as_of)
-        return list(self.repository_ids)
-
-
-@dataclass
-class FakeFailingAttributionSource:
-    """A ``TeamAttributionSource`` double whose lookup genuinely fails --
-    distinct from ``FakeAttributionSource(repository_ids=())``, which
-    succeeds with a real, empty answer."""
-
-    async def team_repository_ids(
-        self, org_id: str, team_id: str, *, as_of: datetime
-    ) -> list[str]:
-        raise RuntimeError("attribution lookup failed")
+        return TeamAttributionResult(
+            measured=self.measured, repository_ids=self.repository_ids
+        )
 
 
 _NO_ATTRIBUTION = FakeAttributionSource(repository_ids=())
 _FULL_ATTRIBUTION = FakeAttributionSource(
     repository_ids=tuple(f"repo-{i}" for i in range(25))
 )
+_FAILED_ATTRIBUTION = FakeAttributionSource(measured=False)
 
 
 @dataclass
@@ -249,6 +247,50 @@ def _project_scope() -> DevScope:
             start=_NOW - timedelta(days=14), end=_NOW, timezone="UTC"
         ),
     )
+
+
+class _UncallableRuntime:
+    """A ``PlanExecutorRuntime`` double that fails loudly if called -- proves
+    a ``measured=False`` attribution lookup short-circuits before the
+    runtime is ever reached (mirrors ``test_chaos_3303_team_health_service.py``'s
+    own ``_UncallableRuntime``).
+    """
+
+    async def status_snapshot(self, *, org_id, permission_fingerprint, scope):
+        raise AssertionError(
+            "the runtime must never be called when attribution measurement "
+            "itself failed -- cohort_size is unknowable, not merely small"
+        )
+
+    async def change_summary(self, *, org_id, permission_fingerprint, scope):
+        raise AssertionError("unexpected call")
+
+    def list_metrics(self, scope):
+        raise AssertionError("unexpected call")
+
+    async def query_metric(self, *, org_id, permission_fingerprint, metric_id, scope):
+        raise AssertionError("unexpected call")
+
+    async def work_graph_neighbors(self, *, org_id, permission_fingerprint, scope):
+        raise AssertionError("unexpected call")
+
+    async def data_health(self, *, org_id, permission_fingerprint, scope):
+        raise AssertionError("unexpected call")
+
+
+class _UncallableWorkloadSource:
+    """A ``TeamWorkloadDataSource`` double that fails loudly if called --
+    same proof as ``_UncallableRuntime``, for the workload-specific port.
+    """
+
+    async def cognitive_load(self, *, org_id, team_id, start, end):
+        raise AssertionError("unexpected call")
+
+    async def active_contributor_count(self, *, org_id, team_id, start, end):
+        raise AssertionError("unexpected call")
+
+    async def investment_mix(self, *, org_id, team_id, start, end):
+        raise AssertionError("unexpected call")
 
 
 @pytest.mark.asyncio
@@ -466,22 +508,22 @@ async def test_evaluate_workload_resolves_attribution_at_scope_window_end_not_no
 
 
 @pytest.mark.asyncio
-async def test_evaluate_workload_attribution_lookup_failure_is_distinct_from_empty_cohort() -> (
+async def test_evaluate_workload_attribution_failure_is_unmeasured_not_insufficient_cohort() -> (
     None
 ):
-    """A failed attribution lookup must never collapse into the
-    ``insufficient_cohort`` shape a genuinely empty, successfully resolved
-    cohort produces -- see the module docstring's attribution-snapshot
-    discipline. Proven both ways: the failure path carries no
-    ``suppressed_reason`` and ``cohort_size=None``; the empty-cohort path
-    carries ``suppressed_reason="insufficient_cohort"`` and a real
+    """A genuine attribution-lookup FAILURE (``measured=False``) must never
+    collapse into the ``insufficient_cohort`` shape a genuinely empty,
+    successfully resolved cohort produces -- see the module docstring's
+    attribution-snapshot discipline. Proven both ways: the failure path
+    carries no ``suppressed_reason`` and ``cohort_size=None`` throughout,
+    AND never even calls the runtime/workload source (nothing meaningful
+    could be reported regardless of what they'd return); the empty-cohort
+    path carries ``suppressed_reason="insufficient_cohort"`` and a real
     ``cohort_size=0``.
     """
 
     failing_service = TeamWorkloadService(
-        FakeRuntime(),
-        FakeFailingAttributionSource(),
-        FakeMeasuredWorkloadSource(calls=[]),
+        _UncallableRuntime(), _FAILED_ATTRIBUTION, _UncallableWorkloadSource()
     )
     failure_profile = await failing_service.evaluate_workload(
         org_id=_ORG_ID,
@@ -495,7 +537,7 @@ async def test_evaluate_workload_attribution_lookup_failure_is_distinct_from_emp
     assert failure_profile.shadow_findings
     for finding in failure_profile.shadow_findings:
         assert finding.state is DimensionState.UNKNOWN
-        assert finding.suppressed_reason is None
+        assert finding.suppressed_reason != "insufficient_cohort"
     for observation in failure_profile.observations:
         assert observation.cohort_size is None
 

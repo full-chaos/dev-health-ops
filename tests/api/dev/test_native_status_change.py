@@ -60,8 +60,11 @@ def _scope(
     )
 
 
-def _deployment_row(status: str = "success", *, pr_number: int = 7) -> dict[str, Any]:
+def _deployment_row(
+    status: str = "success", *, pr_number: int = 7, repository_id: str = "repo-a"
+) -> dict[str, Any]:
     return {
+        "repository_id": repository_id,
         "entity_id": "deployment-1",
         "display_label": "Production deployment",
         "status": status,
@@ -480,8 +483,16 @@ async def test_native_open_incoming_blocker_is_not_ready(
                     "last_synced": NOW,
                 }
             ]
+        if "FROM git_pull_requests AS pr" in sql:
+            return [
+                _pull_request_row(
+                    number=7, state="merged", review_state="APPROVED", merged=1
+                )
+            ]
         if "FROM deployments" in sql:
-            return [_deployment_row()]
+            # Same (repository_id, pr_number) pair as the PR row above --
+            # the round-3 pair-admission fix requires this.
+            return [_deployment_row(repository_id="repo-x", pr_number=7)]
         return []
 
     monkeypatch.setattr(
@@ -523,8 +534,16 @@ async def test_native_done_issue_is_ready_after_fresh_zero_blocker_projection(
                     "last_synced": NOW,
                 }
             ]
+        if "FROM git_pull_requests AS pr" in sql:
+            return [
+                _pull_request_row(
+                    number=7, state="merged", review_state="APPROVED", merged=1
+                )
+            ]
         if "FROM deployments" in sql:
-            return [_deployment_row()]
+            # Same (repository_id, pr_number) pair as the PR row above --
+            # the round-3 pair-admission fix requires this.
+            return [_deployment_row(repository_id="repo-x", pr_number=7)]
         return []
 
     monkeypatch.setattr(
@@ -910,6 +929,7 @@ async def test_native_pr_assesses_only_the_latest_ci_run_as_a_unit(
         if "FROM deployments" in sql:
             return [
                 {
+                    "repository_id": "repo-a",
                     "entity_id": "deployment-1",
                     "status": "success",
                     "environment": "production",
@@ -1335,7 +1355,11 @@ async def test_team_scope_status_snapshot_re_derives_owned_repos_and_executes(
         if "FROM git_pull_requests AS pr" in sql:
             return [_pull_request_row()]
         if "FROM deployments" in sql:
-            return [_deployment_row()]
+            # Same (repository_id, pr_number) pair as the PR row above --
+            # the round-3 pair-admission fix requires deployments to
+            # genuinely trace through an admitted PR, not merely share a
+            # bare PR number.
+            return [_deployment_row(repository_id="repo-x", pr_number=3)]
         return []
 
     monkeypatch.setattr(
@@ -1819,7 +1843,12 @@ async def test_team_arm_excludes_child_owned_facts_deployments(
             return []
         if "FROM deployments FINAL" in sql:
             if child_pr_number in (params.get("pr_numbers") or []):
-                return [_deployment_row(pr_number=child_pr_number)]
+                # _pull_request_row's repository_id is hardcoded "repo-x"
+                # (not parametrized) -- match it here so the round-3
+                # pair-admission fix sees a genuinely matching pair.
+                return [
+                    _deployment_row(repository_id="repo-x", pr_number=child_pr_number)
+                ]
             return []
         return []
 
@@ -1849,16 +1878,303 @@ async def test_team_arm_excludes_child_owned_facts_deployments(
     )
 
 
-def _pull_request_row(*, number: int = 3) -> dict[str, Any]:
+def _pull_request_row(
+    *,
+    number: int = 3,
+    state: str = "open",
+    review_state: str | None = None,
+    changes_requested: int = 0,
+    merged: int = 0,
+) -> dict[str, Any]:
     return {
         "repository_id": "repo-x",
         "number": number,
         "entity_id": f"repo-x#pr{number}",
         "display_label": f"PR {number}",
-        "state": "open",
-        "review_state": None,
-        "changes_requested": 0,
-        "merged": 0,
+        "state": state,
+        "review_state": review_state,
+        "changes_requested": changes_requested,
+        "merged": merged,
         "observed_at": NOW,
         "last_synced": NOW,
     }
+
+
+@pytest.mark.asyncio
+async def test_deployment_admission_uses_repo_pr_pairs_not_flattened_numbers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round 3 (HIGH): _DEPLOYMENTS_SQL's ``ifNull(pull_request_number,
+    0) IN {pr_numbers}`` arm matches a bare, cross-repository-flattened PR
+    NUMBER -- with two repos in the team's accessible set, repo A's
+    team-owned PR #77 must not admit repo B's UNRELATED, differently-owned
+    PR #77 deployment, nor any incident reachable only through it.
+    """
+
+    repo_a, repo_b = "repo-a-owned", "repo-b-other"
+    collision_number = 77
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [{"repository_id": repo_a}, {"repository_id": repo_b}]
+        if "SELECT 1 AS found" in sql:
+            return []
+        if "reviews.review_state AS review_state" in sql:
+            # Only repo A's PR is canonically team-owned; repo B's
+            # same-numbered PR is a genuinely different, unrelated pull
+            # request this team never owned (round 2's canonical-attribution
+            # join already excludes it -- exercised by the parent/child
+            # tests above).
+            return [
+                {
+                    "repository_id": repo_a,
+                    "number": collision_number,
+                    "entity_id": f"{repo_a}#pr{collision_number}",
+                    "display_label": f"PR {collision_number}",
+                    "state": "merged",
+                    "review_state": "APPROVED",
+                    "changes_requested": 0,
+                    "merged": 1,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM deployments FINAL" in sql:
+            # Simulates the SQL's own (repository-agnostic) admission: with
+            # pr_numbers=[77], ifNull(pull_request_number, 0) IN {77}
+            # matches BOTH repos' deployments -- the collision this fix
+            # must resolve on the Python side, by (repository_id,
+            # pr_number) PAIR rather than bare number.
+            return [
+                {
+                    "repository_id": repo_a,
+                    "entity_id": "deploy-a",
+                    "display_label": "Deploy A",
+                    "status": "success",
+                    "environment": "production",
+                    "pr_number": collision_number,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                },
+                {
+                    "repository_id": repo_b,
+                    "entity_id": "deploy-b",
+                    "display_label": "Deploy B (unrelated PR, same number)",
+                    "status": "success",
+                    "environment": "production",
+                    "pr_number": collision_number,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                },
+            ]
+        if "FROM operational_incidents" in sql:
+            deployment_ids = params.get("deployment_ids") or []
+            rows: list[dict[str, Any]] = []
+            if "deploy-a" in deployment_ids:
+                rows.append(
+                    {
+                        "entity_id": "incident-a",
+                        "display_label": "Incident A",
+                        "status": "resolved",
+                        "active": False,
+                        "observed_at": NOW,
+                        "last_synced": NOW,
+                    }
+                )
+            if "deploy-b" in deployment_ids:
+                rows.append(
+                    {
+                        "entity_id": "incident-b",
+                        "display_label": (
+                            "Incident reachable only via the wrongly-"
+                            "admitted deployment"
+                        ),
+                        "status": "resolved",
+                        "active": False,
+                        "observed_at": NOW,
+                        "last_synced": NOW,
+                    }
+                )
+            return rows
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_team_scope_for("team-1"))
+    )
+
+    deployment_ids_seen = {d.entity_id for d in result.deployments}
+    assert deployment_ids_seen == {"deploy-a"}, (
+        "repo B's unrelated same-numbered-PR deployment must be excluded "
+        "by the (repository_id, pr_number) pair check"
+    )
+    incident_ids_seen = {i.entity_id for i in result.incidents}
+    assert incident_ids_seen == {"incident-a"}, (
+        "an incident reachable ONLY through the wrongly-admitted deployment "
+        "must never propagate to the wrong team"
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_attribution_subquery_bounds_reassignment_by_as_of(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round 3 (HIGH): the canonical-attribution subquery's
+    max(computed_at) must be bounded by as_of -- a work item reassigned
+    from team A to team B at t2 must not rewrite a t1 query's result in
+    either direction: team A's t1 snapshot must keep the in-window facts,
+    and team B's t1 snapshot must not retroactively gain them.
+    """
+
+    t1 = NOW - timedelta(days=3)
+    t2 = NOW
+
+    def _admit(team_id: str | None, as_of: datetime | None) -> bool:
+        if as_of is None or team_id is None:
+            return False
+        if as_of < t2:
+            return team_id == "team-a"
+        return team_id == "team-b"
+
+    observed_sql: list[str] = []
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [{"repository_id": "repo-1"}]
+        if "FROM work_item_transitions AS transition FINAL" in sql:
+            observed_sql.append(sql)
+            if _admit(params.get("team_id"), params.get("as_of")):
+                return [
+                    {
+                        "entity_id": "wi-reassigned",
+                        "display_label": "Reassigned item",
+                        "from_status": "in_progress",
+                        "to_status": "done",
+                        "observed_at": NOW - timedelta(hours=1),
+                        "last_synced": NOW,
+                    }
+                ]
+            return []
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+
+    async def _status_changes(team_id: str, *, current_end: datetime) -> list[Any]:
+        request = ChangeSummaryRequest(
+            scope=_team_scope_for(team_id),
+            current_start=current_end - timedelta(days=1),
+            current_end=current_end,
+            comparison_start=current_end - timedelta(days=2),
+            comparison_end=current_end - timedelta(days=1),
+        )
+        result = await StatusChangeService(
+            ClickHouseStatusChangeSource(object(), now=NOW)
+        ).change_summary("org-a", "permission-v1", request)
+        return [c for c in result.changes if c.category is ChangeCategory.STATUS]
+
+    team_a_at_t1 = await _status_changes("team-a", current_end=t1)
+    team_b_at_t1 = await _status_changes("team-b", current_end=t1)
+    team_a_at_t2 = await _status_changes("team-a", current_end=t2)
+    team_b_at_t2 = await _status_changes("team-b", current_end=t2)
+
+    assert team_a_at_t1, "team A's t1 snapshot must keep the item's in-window facts"
+    assert not team_b_at_t1, (
+        "team B must not retroactively gain facts it did not own at t1"
+    )
+    assert not team_a_at_t2, (
+        "team A must not keep the item's facts after a real reassignment at t2"
+    )
+    assert team_b_at_t2, (
+        "team B must see the item once genuinely reassigned to it at t2"
+    )
+
+    assert observed_sql, "the transitions arm must have actually been queried"
+    assert all("computed_at <=" in sql for sql in observed_sql), (
+        "the canonical-attribution subquery must bound max(computed_at) by "
+        "as_of, not take a global maximum"
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_with_only_unlinked_repo_activity_discloses_coverage_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex round 3 (MEDIUM): a team whose accessible repos contain ONLY
+    unlinked delivery facts (standalone PR/deployment activity with no
+    canonical work-item chain) must not resolve a clean READY/COMPLETE with
+    zero attributed facts and no disclosure -- the exclusion itself (repo
+    access != ownership) is correct, but the silent completeness is not.
+    """
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [{"repository_id": "repo-unlinked-only"}]
+        if "SELECT 1 AS found" in sql:
+            return [{"found": 1}]
+        return []  # every canonically-scoped read finds nothing
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_team_scope_for("team-solo"))
+    )
+
+    assert result.pull_requests == ()
+    assert result.deployments == ()
+    assert result.actual.state is CompletionState.INDETERMINATE, (
+        "a coverage gap must never resolve as READY"
+    )
+    assert result.state is StatusResultState.DEGRADED, (
+        "a coverage gap must never resolve as a clean COMPLETE"
+    )
+    assert any(
+        "attribution coverage" in warning or "could not be canonically" in warning
+        for warning in result.warnings
+    ), "the coverage gap must be disclosed in warnings, not silently absorbed"
+
+
+@pytest.mark.asyncio
+async def test_team_with_genuinely_no_repo_activity_stays_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative control for the coverage-gap disclosure above: a team whose
+    accessible repos have NO activity at all (not even unlinked) must not
+    be forced into a false coverage-gap disclosure -- the existence check
+    itself must discriminate, not fire unconditionally for every empty team.
+    """
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in sql:
+            return [{"repository_id": "repo-genuinely-empty"}]
+        return []  # including "SELECT 1 AS found": nothing exists at all
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_team_scope_for("team-quiet"))
+    )
+
+    assert not any(
+        "attribution coverage" in warning or "could not be canonically" in warning
+        for warning in result.warnings
+    ), "a genuinely empty team must not be wrongly flagged with a coverage gap"

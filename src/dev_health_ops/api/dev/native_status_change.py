@@ -125,6 +125,7 @@ _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY = """
           SELECT work_item_id, max(computed_at)
           FROM work_item_team_attributions
           WHERE org_id = {org_id:String}
+            AND computed_at <= {as_of:DateTime64(3, 'UTC')}
           GROUP BY work_item_id
       )
 """
@@ -388,6 +389,33 @@ _ORGANIZATION_AUTHORIZED_REPOSITORIES_SQL = """
 SELECT toString(id) AS repository_id
 FROM repos FINAL
 WHERE org_id = {org_id:String}
+"""
+
+#: CHAOS-3303 round 3 (Codex MEDIUM, 2026-08-02): a bare repository-level
+#: existence check -- deliberately bypasses canonical work-item attribution
+#: entirely (unlike every fact-level team arm above). Used ONLY to detect
+#: "this team's accessible repositories are not actually empty" when every
+#: canonically-attributed team read came back with nothing, so
+#: status_snapshot can tell "insufficient attribution coverage" (repo-level
+#: activity exists, none of it canonically assignable to this team) apart
+#: from "this team genuinely has no activity in scope" -- the exclusion
+#: itself (repo co-location != ownership) stays correct either way; only the
+#: silent-completeness gap is being closed. Checks pull requests and
+#: deployments only (the two root categories every other delivery fact --
+#: CI, reviews, incidents -- derives from), so a genuinely empty root
+#: category set implies the derived categories are empty too.
+_TEAM_REPO_HAS_UNLINKED_ACTIVITY_SQL = """
+SELECT 1 AS found
+FROM git_pull_requests FINAL
+WHERE org_id = {org_id:String}
+  AND toString(repo_id) IN {repository_ids:Array(String)}
+LIMIT 1
+UNION ALL
+SELECT 1 AS found
+FROM deployments FINAL
+WHERE org_id = {org_id:String}
+  AND toString(repo_id) IN {repository_ids:Array(String)}
+LIMIT 1
 """
 
 #: CHAOS-3303: re-derive a committed team subject's authorized repositories
@@ -1108,6 +1136,37 @@ class ClickHouseStatusChangeSource:
         source_refs.append(deployment_ref)
         if warning:
             warnings.append(warning)
+        if (
+            scope.direct_scope not in {DirectScope.ORGANIZATION, DirectScope.REPOSITORY}
+            and pr_ref.freshness is not FreshnessState.UNAVAILABLE
+        ):
+            # Codex finding (HIGH, 2026-08-02): _DEPLOYMENTS_SQL's
+            # ifNull(pull_request_number, 0) IN {pr_numbers} arm matches on
+            # a bare, cross-repository-flattened PR NUMBER list -- with
+            # multiple repositories in scope (team, and in principle
+            # organization/repository), a deployment in repo B for its own
+            # unrelated PR #77 is wrongly admitted merely because repo A's
+            # PR #77 (a genuinely different pull request) was. Re-derive
+            # admission by the exact (repository_id, pr_number) PAIR,
+            # mirroring the pair-filter ci_rows/ci_acceptance_rows already
+            # apply just above. Organization/repository scope is exempt: its
+            # own SQL arm legitimately admits every deployment regardless of
+            # PR linkage (an unlinked scheduled/manual deploy has
+            # pr_number=0, which would never match a real pair) -- for every
+            # other scope, admission is entirely through PR linkage already,
+            # so the pair check only ever tightens a real collision, never
+            # excludes a legitimately-unlinked deployment. Also exempt when
+            # the pull-request read itself failed (pr_ref UNAVAILABLE): an
+            # empty pr_pairs from a genuine failure is not the same claim as
+            # "this scope has zero pull requests", and applying the stricter
+            # pair check there would wrongly strip deployments the SQL's own
+            # (already-executed) pr_numbers filter had legitimately admitted.
+            deployment_rows = [
+                row
+                for row in deployment_rows
+                if (str(row.get("repository_id") or ""), int(row.get("pr_number") or 0))
+                in pr_pairs
+            ]
         deployment_ids = [str(row.get("entity_id") or "") for row in deployment_rows]
 
         incident_rows: list[dict[str, Any]] = []
@@ -1159,6 +1218,39 @@ class ClickHouseStatusChangeSource:
             )
 
         gap_refs: list[SourceReference] = []
+        if (
+            scope.direct_scope is DirectScope.TEAM
+            and not pull_requests
+            and not deployment_rows
+        ):
+            # Codex finding (MEDIUM, 2026-08-02): the exclusion of
+            # repository-co-located-but-not-canonically-owned facts is
+            # correct (see the round-2 fix above), but a team whose
+            # accessible repositories contain ONLY such unlinked activity
+            # would otherwise resolve a clean READY/COMPLETE with zero
+            # attributed facts and no disclosure -- indistinguishable from
+            # a team with genuinely nothing happening. Distinguish the two:
+            # if the team's repos have ANY pull-request or deployment
+            # activity at all (checked here with NO attribution join, only
+            # bare repository membership), the coverage gap must be
+            # disclosed and the result must not read as a clean pass.
+            try:
+                async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+                    unlinked_activity_rows = await query_dicts(
+                        self._client, _TEAM_REPO_HAS_UNLINKED_ACTIVITY_SQL, common
+                    )
+            except Exception:
+                unlinked_activity_rows = []
+            if unlinked_activity_rows:
+                gap_refs.append(
+                    self._unavailable_ref("team_attribution_coverage", scope)
+                )
+                warnings.append(
+                    "team-accessible repositories contain pull-request or "
+                    "deployment activity that could not be canonically "
+                    "attributed to this team; reporting insufficient "
+                    "attribution coverage rather than a genuinely empty team"
+                )
         acceptance_run_ids = {
             (str(row.get("repository_id") or ""), str(row.get("run_id") or ""))
             for row in ci_acceptance_rows
@@ -1304,6 +1396,12 @@ class ClickHouseStatusChangeSource:
             "team_id": scope.team_ids[0]
             if scope.direct_scope is DirectScope.TEAM
             else "",
+            # CHAOS-3303 round 3 (Codex HIGH): _TEAM_OWNED_WORK_ITEM_IDS_
+            # SUBQUERY bounds its "latest compute" by as_of -- the natural
+            # as_of for a change-summary window is its own end, the same
+            # instant _authorized_repository_ids already resolved
+            # `repositories` at (see the as_of=current.end call above).
+            "as_of": current.end.astimezone(UTC),
         }
         transitions, transition_ref, transition_warning = await self._read(
             "work_items", _TRANSITIONS_SQL, params, scope

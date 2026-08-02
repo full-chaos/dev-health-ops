@@ -142,7 +142,11 @@ def test_project_profile_covers_every_project_applicable_rule() -> None:
         for rule in HEALTH_RULE_REGISTRY.values()
         if RuleApplicability.PROJECT in rule.applicability
     }
-    assert {finding.rule_id for finding in profile.findings} == expected_rule_ids
+    # Every shipped rule is provisional (test_every_shipped_finding_is_
+    # shadow_only_today), so every finding lands in shadow_findings today.
+    assert profile.launch_findings == ()
+    assert profile.suppressed_findings == ()
+    assert {finding.rule_id for finding in profile.shadow_findings} == expected_rule_ids
 
 
 def test_mixed_profile_reports_complete_unknown_and_not_applicable_dimensions() -> None:
@@ -169,7 +173,9 @@ def test_mixed_profile_reports_complete_unknown_and_not_applicable_dimensions() 
         org_id=_ORG_ID,
         observed_at=_NOW,
     )
-    findings_by_rule = {finding.rule_id: finding for finding in profile.findings}
+    # Every rule is provisional today, so every finding is shadow -- see
+    # test_every_shipped_finding_is_shadow_only_today.
+    findings_by_rule = {finding.rule_id: finding for finding in profile.shadow_findings}
 
     # data_trust_broken: measured healthy (complete_eligible=True -> current_value=0.0).
     assert findings_by_rule["health_rule.data_trust_broken.v1"].state == (
@@ -203,7 +209,9 @@ def test_change_failure_rate_not_applicable_flag_is_honored() -> None:
         observed_at=_NOW,
     )
     finding = next(
-        f for f in profile.findings if f.rule_id == "health_rule.change_failure_rate.v1"
+        f
+        for f in profile.shadow_findings
+        if f.rule_id == "health_rule.change_failure_rate.v1"
     )
     assert finding.state == DimensionState.UNKNOWN
 
@@ -229,8 +237,10 @@ def test_team_profile_without_cohort_suppresses_every_applicable_rule() -> None:
         org_id=_ORG_ID,
         observed_at=_NOW,
     )
-    assert profile.findings
-    for finding in profile.findings:
+    assert profile.launch_findings == ()
+    assert profile.suppressed_findings == ()
+    assert profile.shadow_findings
+    for finding in profile.shadow_findings:
         assert finding.state in (DimensionState.UNKNOWN, DimensionState.NOT_APPLICABLE)
 
 
@@ -255,18 +265,23 @@ def test_findings_are_deterministically_ordered() -> None:
         org_id=_ORG_ID,
         observed_at=_NOW,
     )
-    ordering_a = [f.rule_id for f in profile_a.findings]
-    ordering_b = [f.rule_id for f in profile_b.findings]
+    ordering_a = [f.rule_id for f in profile_a.shadow_findings]
+    ordering_b = [f.rule_id for f in profile_b.shadow_findings]
     assert ordering_a == ordering_b
 
-    expected = sorted(profile_a.findings, key=lambda f: (f.dimension.value, f.rule_id))
-    assert list(profile_a.findings) == expected
+    expected = sorted(
+        profile_a.shadow_findings, key=lambda f: (f.dimension.value, f.rule_id)
+    )
+    assert list(profile_a.shadow_findings) == expected
 
 
 def test_every_shipped_finding_is_shadow_only_today() -> None:
     """Every HEALTH_RULE_REGISTRY rule is provisional (CHAOS-3302's own
-    totality test) -- every finding this synthesis produces today must be
-    shadow_only, never a launch finding surfaced as authoritative.
+    totality test) -- every finding this synthesis produces today must land
+    in ``shadow_findings`` (never ``launch_findings``/``suppressed_findings``,
+    both of which require a non-provisional rule per ``health_rule_
+    registry._evaluate_with_registry``), and every one of those findings
+    must itself report ``shadow_only=True``.
     """
 
     sources = HealthEvaluationSources(
@@ -281,4 +296,7 @@ def test_every_shipped_finding_is_shadow_only_today() -> None:
         org_id=_ORG_ID,
         observed_at=_NOW,
     )
-    assert all(finding.shadow_only for finding in profile.findings)
+    assert profile.launch_findings == ()
+    assert profile.suppressed_findings == ()
+    assert profile.shadow_findings
+    assert all(finding.shadow_only for finding in profile.shadow_findings)

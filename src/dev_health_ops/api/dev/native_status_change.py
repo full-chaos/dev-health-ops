@@ -656,6 +656,46 @@ class ClickHouseStatusChangeSource:
         self._policies = dict(policies or default_native_freshness_policies())
         self._now = now
 
+    async def team_repository_ids(
+        self, org_id: str, team_id: str, *, as_of: datetime
+    ) -> list[str]:
+        """Re-derive one team's owned repositories from ``team_repo_ownership``.
+
+        Public (CHAOS-3303, Codex finding HIGH 2026-08-02): this is the
+        canonical, verified team-attribution source -- the ONLY place a
+        real cohort-size count for a team subject may come from. Exposed so
+        ``TeamHealthService`` can resolve its own ``cohort_size`` from this
+        exact query instead of trusting a caller-asserted integer (which
+        could claim "cohort_size=25" for a team with zero real
+        ``team_repo_ownership`` rows and get a fabricated healthy finding
+        out of a fail-closed status source). ``_authorized_repository_ids``
+        also delegates here for its own TEAM branch -- one source of truth
+        for "what repositories does this team own right now", never two
+        independently-drifting queries.
+
+        A genuinely failing lookup or zero-row result both return ``[]``,
+        by design indistinguishable to a caller other than "no verified
+        attribution" -- exactly what the fail-closed floor (N0) already
+        requires downstream.
+        """
+
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+                rows = await query_dicts(
+                    self._client,
+                    _TEAM_REPOSITORIES_SQL,
+                    {
+                        "org_id": org_id,
+                        "team_id": team_id,
+                        "as_of": as_of.astimezone(UTC),
+                    },
+                )
+        except Exception:
+            return []
+        return sorted(
+            {str(row["repository_id"]) for row in rows if row.get("repository_id")}
+        )
+
     async def _authorized_repository_ids(
         self, org_id: str, scope: DevScope, *, as_of: datetime
     ) -> list[str]:
@@ -687,22 +727,8 @@ class ClickHouseStatusChangeSource:
         regardless of real ownership data.
         """
         if scope.direct_scope is DirectScope.TEAM:
-            team_id = scope.team_ids[0]
-            try:
-                async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
-                    rows = await query_dicts(
-                        self._client,
-                        _TEAM_REPOSITORIES_SQL,
-                        {
-                            "org_id": org_id,
-                            "team_id": team_id,
-                            "as_of": as_of.astimezone(UTC),
-                        },
-                    )
-            except Exception:
-                return []
-            return sorted(
-                {str(row["repository_id"]) for row in rows if row.get("repository_id")}
+            return await self.team_repository_ids(
+                org_id, scope.team_ids[0], as_of=as_of
             )
         if scope.direct_scope is not DirectScope.ORGANIZATION or scope.team_ids:
             return self._repository_ids(scope)

@@ -1,15 +1,20 @@
 """Tests for CHAOS-3303's ``TeamHealthService``.
 
-Proven against a fake ``PlanExecutorRuntime`` in both directions, not by
-special-casing team scope inside the service itself:
+Proven against a fake ``PlanExecutorRuntime`` AND a fake
+``TeamAttributionSource`` independently, not by special-casing team scope
+inside the service itself:
 
 * a runtime that returns real, fresh team-scoped facts (mirroring
   ``native_status_change.py``'s now-landed ``team_repo_ownership``
-  re-derivation and its real 'team' SQL arms) produces real findings;
-* a runtime that returns the fail-closed shape (a team with no resolved
-  attribution, or a source genuinely unavailable) must never fabricate a
-  healthy/zero finding out of it, regardless of whether a cohort size is
-  supplied.
+  re-derivation and its real 'team' SQL arms) produces real findings, but
+  ONLY when the attribution source also reports real owned repositories;
+* a runtime that returns the fail-closed shape (a source genuinely
+  unavailable) must never fabricate a healthy/zero finding out of it;
+* an attribution source reporting zero owned repositories must suppress
+  every applicable rule as insufficient_cohort, even when the runtime
+  itself returns otherwise-complete facts -- there is no caller-supplied
+  cohort_size left to assert around this (Codex finding, HIGH,
+  2026-08-02): cohort_size is always ``len(team_repository_ids(...))``.
 """
 
 from __future__ import annotations
@@ -114,9 +119,34 @@ class FakeTeamRuntime:
         return DataHealthResult(sources=(), complete_eligible=False)
 
 
+@dataclass
+class FakeAttributionSource:
+    """A configurable ``TeamAttributionSource`` double -- ``repository_ids``
+    is the ONLY thing that determines ``cohort_size`` (see
+    ``TeamHealthService.evaluate_team``); there is no other lever a test
+    (or a caller) has to influence it.
+    """
+
+    repository_ids: tuple[str, ...] = ()
+    calls: list[tuple[str, str]] | None = None
+
+    async def team_repository_ids(
+        self, org_id: str, team_id: str, *, as_of: datetime
+    ) -> list[str]:
+        if self.calls is not None:
+            self.calls.append((org_id, team_id))
+        return list(self.repository_ids)
+
+
+_NO_ATTRIBUTION = FakeAttributionSource(repository_ids=())
+_FULL_ATTRIBUTION = FakeAttributionSource(
+    repository_ids=tuple(f"repo-{i}" for i in range(25))
+)
+
+
 @pytest.mark.asyncio
 async def test_evaluate_team_rejects_non_team_scope() -> None:
-    service = TeamHealthService(FakeTeamRuntime())
+    service = TeamHealthService(FakeTeamRuntime(), _NO_ATTRIBUTION)
     project_scope = DevScope(
         schema_version="dev_scope.v1",
         organization_id=_ORG_ID,
@@ -138,21 +168,19 @@ async def test_evaluate_team_rejects_non_team_scope() -> None:
             permission_fingerprint="fp",
             scope=project_scope,
             team_id="team-1",
-            cohort_size=5,
             now=_NOW,
         )
 
 
 @pytest.mark.asyncio
 async def test_evaluate_team_rejects_mismatched_team_id() -> None:
-    service = TeamHealthService(FakeTeamRuntime())
+    service = TeamHealthService(FakeTeamRuntime(), _NO_ATTRIBUTION)
     with pytest.raises(ValueError, match="team_ids must name exactly"):
         await service.evaluate_team(
             org_id=_ORG_ID,
             permission_fingerprint="fp",
             scope=_team_scope(team_id="team-1"),
             team_id="team-2",
-            cohort_size=5,
             now=_NOW,
         )
 
@@ -163,40 +191,68 @@ async def test_evaluate_team_never_queries_change_failure_rate_metric() -> None:
     must be a structural not_applicable, never an attempted, failing call.
     """
 
-    service = TeamHealthService(FakeTeamRuntime())
+    service = TeamHealthService(FakeTeamRuntime(), _FULL_ATTRIBUTION)
     profile = await service.evaluate_team(
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_team_scope(),
         team_id="team-1",
-        cohort_size=5,
         now=_NOW,
     )
     finding = next(
-        f for f in profile.findings if f.rule_id == "health_rule.change_failure_rate.v1"
+        f
+        for f in profile.shadow_findings
+        if f.rule_id == "health_rule.change_failure_rate.v1"
     )
     assert finding.state == DimensionState.UNKNOWN
 
 
 @pytest.mark.asyncio
 async def test_evaluate_team_without_attribution_never_reports_healthy() -> None:
-    """With cohort_size=0 (no resolved team_repo_ownership attribution),
-    every applicable rule requiring a minimum cohort must suppress -- never
-    a fabricated healthy/at-risk finding for an unattributed team.
+    """With zero resolved ``team_repo_ownership`` rows (cohort_size derives
+    to 0), every applicable rule requiring a minimum cohort must suppress --
+    never a fabricated healthy/at-risk finding for an unattributed team.
     """
 
-    service = TeamHealthService(FakeTeamRuntime())
+    service = TeamHealthService(FakeTeamRuntime(), _NO_ATTRIBUTION)
     profile = await service.evaluate_team(
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_team_scope(),
         team_id="team-1",
-        cohort_size=0,
         now=_NOW,
     )
-    assert profile.findings
-    for finding in profile.findings:
+    assert profile.launch_findings == ()
+    assert profile.suppressed_findings == ()
+    assert profile.shadow_findings
+    for finding in profile.shadow_findings:
         assert finding.state in (DimensionState.UNKNOWN, DimensionState.NOT_APPLICABLE)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_team_zero_attribution_suppresses_even_with_real_facts() -> None:
+    """Codex finding (HIGH, 2026-08-02), the exact repro shape: an
+    unattributed team (zero owned repositories) must stay suppressed even
+    when the runtime itself returns otherwise-complete, real facts --
+    proving cohort_size is genuinely derived from the attribution source,
+    never inferable from "the sources look fine" or any other signal.
+    """
+
+    service = TeamHealthService(FakeAttributedTeamRuntime(), _NO_ATTRIBUTION)
+    profile = await service.evaluate_team(
+        org_id=_ORG_ID,
+        permission_fingerprint="fp",
+        scope=_team_scope(),
+        team_id="team-1",
+        now=_NOW,
+    )
+    incident_finding = next(
+        f
+        for f in profile.shadow_findings
+        if f.rule_id == "health_rule.incident_load.v1"
+    )
+    assert incident_finding.state == DimensionState.UNKNOWN
+    assert incident_finding.suppressed_reason == "insufficient_cohort"
 
 
 @pytest.mark.asyncio
@@ -205,22 +261,23 @@ async def test_evaluate_team_with_attribution_stays_honest_when_runtime_fails_cl
 ):
     """Even with real attribution (cohort_size >= minimum), a runtime that
     hands back the fail-closed shape (e.g. a genuinely unresolved
-    ``team_repo_ownership`` lookup) must keep every status-derived dimension
-    unknown -- the service must never treat "cohort size is fine" as
-    license to assume the underlying facts are too.
+    ``team_repo_ownership``-derived read) must keep every status-derived
+    dimension unknown -- the service must never treat "cohort size is fine"
+    as license to assume the underlying facts are too.
     """
 
-    service = TeamHealthService(FakeTeamRuntime())
+    service = TeamHealthService(FakeTeamRuntime(), _FULL_ATTRIBUTION)
     profile = await service.evaluate_team(
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_team_scope(),
         team_id="team-1",
-        cohort_size=25,
         now=_NOW,
     )
     incident_finding = next(
-        f for f in profile.findings if f.rule_id == "health_rule.incident_load.v1"
+        f
+        for f in profile.shadow_findings
+        if f.rule_id == "health_rule.incident_load.v1"
     )
     assert incident_finding.state == DimensionState.UNKNOWN
 
@@ -302,22 +359,24 @@ async def test_evaluate_team_with_attribution_and_real_facts_reports_real_findin
 ):
     """The positive control: once the runtime returns real team-scoped
     facts (mirroring the now-landed native_status_change.py team arms) and
-    the caller supplies a cohort size that clears every applicable rule's
-    minimum, the incident_load dimension is a genuinely measured finding --
-    not honestly-unknown-by-construction like the fail-closed tests above.
+    the attribution source reports real owned repositories clearing every
+    applicable rule's minimum cohort, the incident_load dimension is a
+    genuinely measured finding -- not honestly-unknown-by-construction like
+    the fail-closed/unattributed tests above.
     """
 
-    service = TeamHealthService(FakeAttributedTeamRuntime())
+    service = TeamHealthService(FakeAttributedTeamRuntime(), _FULL_ATTRIBUTION)
     profile = await service.evaluate_team(
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_team_scope(),
         team_id="team-1",
-        cohort_size=25,
         now=_NOW,
     )
     incident_finding = next(
-        f for f in profile.findings if f.rule_id == "health_rule.incident_load.v1"
+        f
+        for f in profile.shadow_findings
+        if f.rule_id == "health_rule.incident_load.v1"
     )
     # 1 incident, sample_count=1 clears minimum_sample=1, value 1.0 <
     # threshold 10.0 -- a real, measured healthy finding.

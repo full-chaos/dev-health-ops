@@ -4,18 +4,25 @@ Builds one :class:`~.contracts_v2.health_rules.DimensionObservation` per
 applicable :data:`~.health_rule_registry.HEALTH_RULE_REGISTRY` rule for a
 subject, evaluates the whole batch through
 :func:`~.health_rule_registry.evaluate_registry` (CHAOS-3302's production
-seam, hard-bound to the canonical registry), and returns every finding --
-launch, shadow, and suppressed -- as ``HealthRuleFinding`` tuples. No
-composite score is ever computed; a caller reads dimension-by-dimension, per
-the CHAOS-3302/3303 "no default composite health score" guardrail.
+seam, hard-bound to the canonical registry), and returns
+:class:`HealthProfileResult` with the SAME three-way split
+``evaluate_registry`` itself returns (``launch_findings``/
+``shadow_findings``/``suppressed_findings``), never collapsed into one
+tuple. No composite score is ever computed; a caller reads
+dimension-by-dimension, per the CHAOS-3302/3303 "no default composite
+health score" guardrail.
 
 Every rule shipped in ``HEALTH_RULE_REGISTRY`` today is ``provisional``
 (CHAOS-3302's own ``test_no_shipped_rule_is_launch_authorized`` totality
-test), so every finding this module produces today is ``shadow_only``. That
-is expected, not a defect: calibration has not yet approved any rule for
-launch. The moment a future calibration review promotes a rule, the exact
-same synthesis code produces a launch finding with no changes required
-here.
+test), so ``launch_findings`` is empty and every finding this module
+produces today lands in ``shadow_findings``. That is expected, not a
+defect: calibration has not yet approved any rule for launch. A caller
+(e.g. ``PortfolioStatusService``) that computed status/ordering from a
+merged bucket would therefore be treating pure calibration data as launch
+authority -- ``launch_findings`` staying separate is what keeps that
+distinction available at every call site, not just this one. The moment a
+future calibration review promotes a rule, the exact same synthesis code
+starts populating ``launch_findings`` with no changes required here.
 
 ``_UNBOUND_RULE_LIMITATIONS`` is a closed, exhaustive table (checked at
 import time against every rule currently in the registry): a rule whose
@@ -29,7 +36,7 @@ module loudly, rather than silently producing no observation for it.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -81,10 +88,17 @@ class HealthEvaluationSources:
 
 @dataclass(frozen=True, slots=True)
 class HealthProfileResult:
+    """Mirrors ``HealthRuleEvaluationResult``'s own three-way split exactly --
+    see the module docstring for why a caller must never merge these back
+    into one bucket.
+    """
+
     subject_kind: RuleApplicability
     subject_id: str
     observations: tuple[DimensionObservation, ...]
-    findings: tuple[HealthRuleFinding, ...]
+    launch_findings: tuple[HealthRuleFinding, ...]
+    shadow_findings: tuple[HealthRuleFinding, ...]
+    suppressed_findings: tuple[HealthRuleFinding, ...]
 
 
 #: Rules with a bound canonical source, handled directly in
@@ -221,9 +235,10 @@ def synthesize_health_profile(
 ) -> HealthProfileResult:
     """Evaluate every ``HEALTH_RULE_REGISTRY`` rule applicable to ``applicability``.
 
-    Returns every finding -- launch, shadow, and suppressed -- sorted
-    deterministically by ``(dimension, rule_id)`` so two evaluations of the
-    same inputs always produce the same ordering.
+    Each of ``launch_findings``/``shadow_findings``/``suppressed_findings``
+    is independently sorted deterministically by ``(dimension, rule_id)`` so
+    two evaluations of the same inputs always produce the same ordering
+    within each bucket.
     """
 
     applicable_rules = tuple(
@@ -246,17 +261,22 @@ def synthesize_health_profile(
         ordered_observations.append(observation)
 
     evaluation = evaluate_registry(observations_by_rule, org_id=org_id)
-    findings = sorted(
-        (
-            *evaluation.launch_findings,
-            *evaluation.shadow_findings,
-            *evaluation.suppressed_findings,
-        ),
-        key=lambda finding: (finding.dimension.value, finding.rule_id),
-    )
+
+    def _ordered(
+        findings: Sequence[HealthRuleFinding],
+    ) -> tuple[HealthRuleFinding, ...]:
+        return tuple(
+            sorted(
+                findings,
+                key=lambda finding: (finding.dimension.value, finding.rule_id),
+            )
+        )
+
     return HealthProfileResult(
         subject_kind=applicability,
         subject_id=subject_id,
         observations=tuple(ordered_observations),
-        findings=tuple(findings),
+        launch_findings=_ordered(evaluation.launch_findings),
+        shadow_findings=_ordered(evaluation.shadow_findings),
+        suppressed_findings=_ordered(evaluation.suppressed_findings),
     )

@@ -163,7 +163,6 @@ async def test_evaluate_project_rejects_non_project_scope() -> None:
             org_id=_ORG_ID,
             permission_fingerprint="fp",
             scope=non_project_scope,
-            project_id="proj-1",
             now=_NOW,
         )
 
@@ -177,7 +176,6 @@ async def test_evaluate_project_requires_comparison_range() -> None:
             org_id=_ORG_ID,
             permission_fingerprint="fp",
             scope=_project_scope(with_comparison=False),
-            project_id="proj-1",
             now=_NOW,
         )
 
@@ -190,12 +188,14 @@ async def test_evaluate_project_queries_the_change_failure_rate_metric() -> None
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_project_scope(),
-        project_id="proj-1",
         now=_NOW,
     )
     assert runtime.query_metric_calls == 1
+    # Every shipped rule is provisional today, so the finding is shadow.
     finding = next(
-        f for f in profile.findings if f.rule_id == "health_rule.change_failure_rate.v1"
+        f
+        for f in profile.shadow_findings
+        if f.rule_id == "health_rule.change_failure_rate.v1"
     )
     # ZERO state maps to a genuinely measured 0.0 -> healthy, not unknown.
     assert finding.state == DimensionState.HEALTHY
@@ -215,16 +215,52 @@ async def test_evaluate_project_is_deterministic_across_repeated_calls() -> None
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_project_scope(),
-        project_id="proj-1",
         now=_NOW,
     )
     profile_b = await service.evaluate_project(
         org_id=_ORG_ID,
         permission_fingerprint="fp",
         scope=_project_scope(),
-        project_id="proj-1",
         now=_NOW,
     )
-    assert [f.finding_id for f in profile_a.findings] == [
-        f.finding_id for f in profile_b.findings
+    assert [f.finding_id for f in profile_a.shadow_findings] == [
+        f.finding_id for f in profile_b.shadow_findings
     ]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_project_derives_subject_id_from_scope_not_a_label() -> None:
+    """Codex finding (HIGH, 2026-08-02): project_id used to be a caller-
+    supplied label independent of `scope` -- the exact same committed
+    DevScope submitted as two different asserted labels ("alias-a",
+    "alias-b") minted two portfolio "subjects" with identical underlying
+    data. There is no longer a project_id parameter to assert through:
+    the subject id is always the scope's own (validator-guaranteed unique)
+    entity_ref id, proven here for two scopes that are identical except for
+    entity_id.
+    """
+
+    runtime = FakeRuntime()
+    service = ProjectHealthService(runtime)
+    scope_a = _project_scope()
+    scope_b = scope_a.model_copy(
+        update={
+            "entity_refs": [
+                DevEntityRef(
+                    entity_type=EntityType.PROJECT,
+                    entity_id="proj-2",
+                    display_label="Project 2",
+                )
+            ]
+        }
+    )
+
+    profile_a = await service.evaluate_project(
+        org_id=_ORG_ID, permission_fingerprint="fp", scope=scope_a, now=_NOW
+    )
+    profile_b = await service.evaluate_project(
+        org_id=_ORG_ID, permission_fingerprint="fp", scope=scope_b, now=_NOW
+    )
+
+    assert profile_a.subject_id == "proj-1"
+    assert profile_b.subject_id == "proj-2"

@@ -55,11 +55,21 @@ class ProjectHealthService:
         org_id: str,
         permission_fingerprint: str,
         scope: DevScope,
-        project_id: str,
         now: datetime,
     ) -> HealthProfileResult:
         if scope.direct_scope is not DirectScope.PROJECT:
             raise ValueError("ProjectHealthService requires a project direct scope")
+        # Codex finding (HIGH, 2026-08-02): project_id used to be a caller-
+        # supplied label independent of `scope`, so the SAME committed
+        # DevScope submitted under two different asserted labels ("alias-a",
+        # "alias-b") minted two portfolio "subjects" with identical
+        # underlying data -- dedup (and the resulting findings' subject_id)
+        # tracked the label, never the validated scope identity. DevScope's
+        # own validator already guarantees a PROJECT direct scope carries
+        # exactly one matching entity_ref, so its entity_id is the only
+        # subject identity this service ever uses -- there is no longer a
+        # separate value a caller can assert.
+        project_id = scope.entity_refs[0].entity_id
         if scope.comparison_range is None:
             # health_rule.change_failure_rate.v1's comparison_value and every
             # future trend-aware rule need a resolved comparison window;

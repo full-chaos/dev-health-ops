@@ -1,18 +1,20 @@
 """``PortfolioStatusService`` (CHAOS-3303): bounded multi-project status.
 
-Batches ``ProjectHealthService.evaluate_project`` across a bounded set of
-committed project subjects (``status.portfolio.v1`` / ``PROJECT_STATUS``
-intent) via ``asyncio.gather`` -- one bounded fan-out, never a per-project
-model loop. Never averages completion percentages or dimension states
-across projects (CHAOS-3303's own guardrail: "Do not average incompatible
-project completion percentages or treat unknown denominators as
-complete") -- every project's own findings stay independent; only the
-*ordering* and *counts* are computed here.
+Batches ``ProjectHealthService.evaluate_project`` across a bounded (<=25)
+set of committed project subjects (``status.portfolio.v1`` /
+``PROJECT_STATUS`` intent) -- never a per-project *model* loop, though
+evaluation itself is sequential (see ``evaluate_portfolio``'s own comment
+for why concurrent fan-out is unsafe over the shared production runtime).
+Never averages completion percentages or dimension states across projects
+(CHAOS-3303's own guardrail: "Do not average incompatible project
+completion percentages or treat unknown denominators as complete") --
+every project's own findings stay independent; only the *ordering* and
+*counts* are computed here, and only from launch-eligible findings (see
+``PortfolioStatusResult``).
 """
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -56,10 +58,22 @@ class PortfolioProjectScope:
     ``DevScope`` (subject resolution and cohort bounding are CHAOS-3301's
     territory, not this service's) -- this service performs no further
     subject resolution of its own.
+
+    Codex finding (HIGH, 2026-08-02): this used to carry its own
+    caller-supplied ``project_id`` field, independent of ``scope`` -- the
+    same committed scope submitted twice under two different asserted
+    labels minted two "different" portfolio subjects with identical data.
+    ``project_id`` is now a read-only view of the scope's own (validator-
+    guaranteed, unique) entity ref, so there is no longer a second value a
+    caller can assert; batch dedup (``evaluate_portfolio``'s duplicate
+    check) is therefore dedup by validated scope identity, not by label.
     """
 
-    project_id: str
     scope: DevScope
+
+    @property
+    def project_id(self) -> str:
+        return self.scope.entity_refs[0].entity_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,8 +91,20 @@ class PortfolioProjectFailure:
 
 @dataclass(frozen=True, slots=True)
 class PortfolioStatusResult:
-    #: Worst-severity-first, then ``project_id`` for stability -- see
-    #: ``_sort_key``.
+    """``projects`` is worst-severity-first, then ``project_id`` for
+    stability (see ``_sort_key``) -- and that severity is computed ONLY
+    from each project's ``HealthProfileResult.launch_findings`` (Codex
+    finding, HIGH, 2026-08-02): every rule in ``HEALTH_RULE_REGISTRY`` is
+    still provisional today, so ``launch_findings`` is empty for every
+    project and ``counts_by_worst_state`` correctly reports no elevated
+    state anywhere, rather than treating shadow (calibration-only)
+    findings as if they were launch authority. Each project's own
+    ``shadow_findings``/``suppressed_findings`` remain fully available on
+    ``HealthProfileResult`` -- that IS the separately-labeled calibration
+    payload; nothing here discards or merges it, it is simply never
+    consulted for status/ordering/counts.
+    """
+
     projects: tuple[HealthProfileResult, ...]
     counts_by_worst_state: Mapping[DimensionState, int]
     failures: tuple[PortfolioProjectFailure, ...]
@@ -89,10 +115,12 @@ class PortfolioStatusResult:
 
 
 def _worst_state(result: HealthProfileResult) -> DimensionState:
-    if not result.findings:
+    """Launch-eligible findings only -- see ``PortfolioStatusResult``'s docstring."""
+
+    if not result.launch_findings:
         return DimensionState.UNKNOWN
     return min(
-        (finding.state for finding in result.findings),
+        (finding.state for finding in result.launch_findings),
         key=lambda state: _DIMENSION_STATE_SEVERITY[state],
     )
 
@@ -129,31 +157,34 @@ class PortfolioStatusService:
         if len(set(project_ids)) != len(project_ids):
             raise ValueError("duplicate project_id in portfolio batch")
 
-        outcomes = await asyncio.gather(
-            *(
-                self._project_health_service.evaluate_project(
+        # Codex finding (HIGH, 2026-08-02): the production PlanExecutorRuntime
+        # (production_runtime._ProductionPlanExecutorRuntime) is backed by a
+        # single request-scoped SQLAlchemy AsyncSession (entitlement checks,
+        # NativeDataHealthReader) that forbids concurrent use -- fanning this
+        # loop out with asyncio.gather over one shared runtime risks false
+        # entitlement denials or a genuine query racing another and getting
+        # swallowed as "unavailable". Evaluation is bounded to
+        # MAX_PORTFOLIO_PROJECTS (<=25) and every finding is already required
+        # to be deterministic regardless of evaluation order, so sequential
+        # execution costs determinism nothing and removes the concurrency
+        # hazard outright, rather than introducing a second, parallel
+        # per-task-session lifecycle this service does not own.
+        results: list[HealthProfileResult] = []
+        failures: list[PortfolioProjectFailure] = []
+        for item in projects:
+            try:
+                result = await self._project_health_service.evaluate_project(
                     org_id=org_id,
                     permission_fingerprint=permission_fingerprint,
                     scope=item.scope,
-                    project_id=item.project_id,
                     now=now,
                 )
-                for item in projects
-            ),
-            return_exceptions=True,
-        )
-
-        results: list[HealthProfileResult] = []
-        failures: list[PortfolioProjectFailure] = []
-        for item, outcome in zip(projects, outcomes, strict=True):
-            if isinstance(outcome, BaseException):
+            except Exception as exc:  # noqa: BLE001 - isolate, never crash the batch
                 failures.append(
-                    PortfolioProjectFailure(
-                        project_id=item.project_id, error=repr(outcome)
-                    )
+                    PortfolioProjectFailure(project_id=item.project_id, error=repr(exc))
                 )
                 continue
-            results.append(outcome)
+            results.append(result)
 
         ordered = tuple(sorted(results, key=_sort_key))
         counts: dict[DimensionState, int] = {state: 0 for state in DimensionState}

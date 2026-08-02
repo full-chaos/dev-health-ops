@@ -1,10 +1,10 @@
 {
   "schema_version": "wave_3_1_proof_gate_manifest.v1",
-  "item_count": 52,
+  "item_count": 53,
   "status_counts": {
     "blocked": 14,
     "deferred": 7,
-    "proven_e2e": 4,
+    "proven_e2e": 5,
     "proven_unit": 27
   },
   "category_counts": {
@@ -12,7 +12,7 @@
     "blocking_matrix": 27,
     "gate": 5,
     "mutation_proof": 12,
-    "original_defect_reproduction": 3,
+    "original_defect_reproduction": 4,
     "real_project_positive_control": 1
   },
   "items": [
@@ -634,6 +634,20 @@
         "tests/api/dev/test_chaos_3292_preflight_acceptance.py::test_a2_unknown_target_is_not_found_and_runs_no_subject_tool"
       ],
       "requires_live_infra": false
+    },
+    {
+      "id": "defect.ask-dev-not-found.e2e-live-validated",
+      "category": "original_defect_reproduction",
+      "description": "The not-found defect reproduction proven through the real live Compose stack (real Postgres/ClickHouse/Valkey, real API, real HTTP/SSE, scripted OpenAI-compatible provider) rather than only the orchestrator-level unit harness -- no web/Playwright dependency, since the outcome never reaches the web UI.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_not_found.py",
+        "scripts/acceptance/run_ask_dev_compose.sh",
+        "tests/acceptance/test_ask_dev_not_found_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true
     },
     {
       "id": "defect.no-org-fallback-or-blank",

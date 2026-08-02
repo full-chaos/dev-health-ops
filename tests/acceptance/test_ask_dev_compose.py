@@ -123,6 +123,22 @@ def test_launcher_owns_seed_readiness_web_and_fixed_browser_oracle() -> None:
     assert "completed successfully" in launcher
 
 
+def test_launcher_runs_the_not_found_smoke_before_bringing_up_web() -> None:
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert "smoke_ask_dev_not_found.py" in launcher
+    prepare_index = launcher.index("prepare_ask_dev_acceptance.py")
+    smoke_index = launcher.index("smoke_ask_dev_not_found.py")
+    web_index = launcher.index("up -d --build --wait web")
+    # CHAOS-3300: proves the not-found original defect reproduction over the
+    # live HTTP/SSE API strictly after readiness is established and strictly
+    # before web is even brought up -- it needs neither.
+    assert prepare_index < smoke_index < web_index
+    # Live-validated 2026-08-02: without this, the smoke script's own
+    # `from scripts.acceptance...` import fails with ModuleNotFoundError
+    # (the script's directory, not ops_root, is on sys.path by default).
+    assert 'PYTHONPATH="${ops_root}/src:${ops_root}"' in launcher
+
+
 def test_oracle_is_versioned_and_requires_exact_grounded_answer_parts() -> None:
     oracle = json.loads(_ORACLE.read_text(encoding="utf-8"))
     assert oracle == {

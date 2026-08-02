@@ -167,6 +167,39 @@ def _core_defect_reproductions() -> tuple[ManifestItem, ...]:
                 "test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all",
             ),
         ),
+        ManifestItem(
+            id="defect.ask-dev-not-found.e2e-live-validated",
+            category="original_defect_reproduction",
+            description=(
+                "The not-found defect reproduction proven through the real "
+                "live Compose stack (real Postgres/ClickHouse/Valkey, real "
+                "API, real HTTP/SSE, scripted OpenAI-compatible provider) "
+                "rather than only the orchestrator-level unit harness -- "
+                "no web/Playwright dependency, since the outcome never "
+                "reaches the web UI."
+            ),
+            status="proven_e2e",
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_not_found.py",
+                "scripts/acceptance/run_ask_dev_compose.sh",
+                "tests/acceptance/test_ask_dev_not_found_smoke.py",
+            ),
+            requires_live_infra=True,
+            # Actually executed by this lane 2026-08-02 15:32 UTC against a
+            # live `docker compose` run of this exact Compose overlay
+            # (ask-dev-acceptance-{postgres,pgbouncer,clickhouse,valkey,
+            # migrate,scripted-openai,api}, fixtures generated for
+            # meridian/web-app, ask_dev_wave_3_1 enabled): terminal SSE
+            # event was ERROR/scope_not_found, no ANSWER_COMPLETED event,
+            # safe_message did not echo "Ask Dev" back. Exit code 0. Stack
+            # torn down cleanly after (`down --volumes --remove-orphans`,
+            # confirmed zero residual ask-dev-acceptance-* containers).
+            # This is a point-in-time confirmation, not an
+            # automatically-reverified one (execute_manifest cannot run
+            # docker compose) -- re-validate before relying on it again
+            # after any change to preflight_outcomes.py, the scripted
+            # provider, or this Compose overlay.
+        ),
     )
 
 
@@ -188,6 +221,10 @@ def _real_project_positive_control() -> tuple[ManifestItem, ...]:
                 "scripts/acceptance/run_ask_dev_compose.sh",
             ),
             requires_live_infra=True,
+            # Inherited harness (pre-dates CHAOS-3300); its live-run
+            # correctness was not independently re-confirmed by this lane --
+            # unlike defect.ask-dev-not-found.e2e-live-validated below, which
+            # this lane actually executed against the real Compose stack.
         ),
     )
 

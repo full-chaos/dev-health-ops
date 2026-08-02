@@ -52,7 +52,7 @@ def test_original_defect_reproductions_are_all_at_least_unit_proven() -> None:
     defects = [
         item for item in MANIFEST if item.category == "original_defect_reproduction"
     ]
-    assert len(defects) == 3
+    assert len(defects) == 4
     assert all(item.status in ("proven_unit", "proven_e2e") for item in defects)
 
 

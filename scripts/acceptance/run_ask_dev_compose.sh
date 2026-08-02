@@ -85,6 +85,19 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
   "${ops_root}/scripts/acceptance/prepare_ask_dev_acceptance.py"
 
+# CHAOS-3300: the "Ask Dev" not-found original defect reproduction, proven
+# through the real HTTP/SSE API surface (no Playwright/web needed for this
+# one -- it never reaches the web UI at all). PYTHONPATH must include
+# ops_root itself (not just src/) so `scripts.acceptance.*` imports resolve
+# the same way run_ask_dev_provider_profile.sh's smoke invocation does.
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_not_found.py"
+
 "${compose[@]}" up -d --build --wait web
 
 ASK_DEV_LIVE_ACCEPTANCE=1 \

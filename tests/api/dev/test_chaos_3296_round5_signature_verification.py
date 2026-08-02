@@ -562,6 +562,115 @@ async def test_genuine_team_scoped_handle_is_accepted():
     assert result.relationship_closure_verified is True
 
 
+# -- round-6 finding 4: relationship-path rooting used a live context.scope
+# -- read, not the pre-step snapshot ----------------------------------------
+
+
+FOREIGN_ENTITY_ID = "project-foreign"
+
+
+@pytest.mark.asyncio
+async def test_red_post_mint_entity_swap_does_not_re_root_relationship_paths():
+    """RED (Codex round 6, [HIGH], the one finding that survived the rest of
+    round 6): a step mints its evidence honestly against the REAL committed
+    scope, then -- AFTER minting, still within the same step -- mutates
+    ``context.scope.entity_refs`` in place to point at a project this
+    investigation was never scoped to. ``_mint_relationship_paths`` ran
+    AFTER every step, so it used to call ``_root_entity_id(context.scope)``
+    and see the step's own mutation: every relationship path ended up
+    rooted at (``source_entity_id=``) the FOREIGN entity, with
+    ``relationship_closure_verified`` still reporting True and
+    ``result.subject_entity_id`` (passed in from outside, never re-derived)
+    the only field still showing the truth. Rooting from the pre-step
+    ``_AuthorizationScope`` snapshot instead means the mutation can no
+    longer reach relationship-path construction at all: every minted path
+    must still be rooted at the ORIGINAL committed entity."""
+
+    async def run(ctx: StepContext) -> StepOutcome:
+        source_version = _ci_check_source_version(
+            "repo#ci7#checkA",
+            claim=_ci_claim(entity_id="repo#ci7#checkA", conclusion="success"),
+        )
+        # Minted honestly, BEFORE the mutation below, against the scope this
+        # run was actually authorized under -- the evidence signature itself
+        # is completely genuine.
+        handle = sign_evidence_for_scope(
+            scope=ctx.scope,
+            org_id=ORG_ID,
+            source_system="ci_runs",
+            source_version=source_version,
+            entity_type="ci_run",
+            entity_id="repo#ci7",
+            display_label="checkA",
+            observed_at=OBSERVED_AT,
+            freshness=FreshnessState.FRESH,
+        )
+        fact = _ci_fact(
+            entity_id="repo#ci7#checkA", conclusion="success", handle=handle
+        )
+        # Attacker-controlled: swap the committed subject to a foreign
+        # project AFTER minting, but still before this step returns -- the
+        # executor already snapshotted the true scope before any step ran.
+        ctx.scope.entity_refs[0] = ctx.scope.entity_refs[0].model_copy(
+            update={"entity_id": FOREIGN_ENTITY_ID}
+        )
+        return _queried_outcome(
+            DevSourceContent(schema_version="dev_source_content.v1", ci_checks=(fact,))
+        )
+
+    result, observation = await _run_single_step(
+        source_class=SourceClass.STATUS_CHANGE, run=run
+    )
+
+    assert observation.content is not None
+    assert len(observation.relationship_paths) == 1
+    path = observation.relationship_paths[0]
+    # The load-bearing assertion: rooted at the ORIGINAL committed entity,
+    # never the post-mint swap -- before the fix this was FOREIGN_ENTITY_ID.
+    assert path.source_entity_id == ROOT_ENTITY_ID
+    assert path.source_entity_id != FOREIGN_ENTITY_ID
+    assert result.relationship_closure_verified is True
+    assert result.subject_entity_id == ROOT_ENTITY_ID
+
+
+@pytest.mark.asyncio
+async def test_genuine_no_mutation_relationship_paths_still_root_correctly():
+    """Positive control: with no mid-step mutation at all, relationship
+    paths must still root at the real committed entity -- round 6's fix
+    must not leave every path unrooted (``root_entity_id is None``)."""
+
+    async def run(_ctx: StepContext) -> StepOutcome:
+        source_version = _ci_check_source_version(
+            "repo#ci7#checkA",
+            claim=_ci_claim(entity_id="repo#ci7#checkA", conclusion="success"),
+        )
+        handle = sign_evidence_for_scope(
+            scope=_scope(),
+            org_id=ORG_ID,
+            source_system="ci_runs",
+            source_version=source_version,
+            entity_type="ci_run",
+            entity_id="repo#ci7",
+            display_label="checkA",
+            observed_at=OBSERVED_AT,
+            freshness=FreshnessState.FRESH,
+        )
+        fact = _ci_fact(
+            entity_id="repo#ci7#checkA", conclusion="success", handle=handle
+        )
+        return _queried_outcome(
+            DevSourceContent(schema_version="dev_source_content.v1", ci_checks=(fact,))
+        )
+
+    result, observation = await _run_single_step(
+        source_class=SourceClass.STATUS_CHANGE, run=run
+    )
+
+    assert len(observation.relationship_paths) == 1
+    assert observation.relationship_paths[0].source_entity_id == ROOT_ENTITY_ID
+    assert result.relationship_closure_verified is True
+
+
 # -- generalized (round-6, programmatic) content binding: representative REDs
 
 

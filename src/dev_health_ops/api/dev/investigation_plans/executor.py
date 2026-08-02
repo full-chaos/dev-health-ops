@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from ..contracts import DevScope, DirectScope
+from ..contracts import DirectScope
 from ..contracts_v2.base import SourceClass, SourceRequirementState
 from ..contracts_v2.plan import DevInvestigationPlan, DevSourceRequirement
 from ..contracts_v2.result import (
@@ -229,16 +229,35 @@ class _PathCandidate:
     evidence_ref_ids: tuple[str, ...]
 
 
-def _root_entity_id(scope: DevScope) -> str | None:
+def _root_entity_id(auth_scope: _AuthorizationScope) -> str | None:
     """The committed single subject a relationship path closes over, or
     ``None`` when there is none to close over (organization/repository
-    scope legitimately shows broad facts -- PRD v2 §3.2/§7)."""
+    scope legitimately shows broad facts -- PRD v2 §3.2/§7).
 
-    if scope.direct_scope in (DirectScope.ORGANIZATION, DirectScope.REPOSITORY):
+    CHAOS-3296 round 6 (Codex finding, HIGH): this previously took the raw
+    ``StepContext.scope`` and read it directly INSIDE ``_mint_relationship_
+    paths``, which runs AFTER every step has already executed -- a step
+    that mutated ``context.scope.entity_refs`` in place mid-run (swapping
+    in a foreign project's entity after minting its own evidence) caused
+    every relationship path to be rooted at, and closed over, an entity the
+    caller was never authorized to see, with ``relationship_closure_
+    verified`` reporting True throughout (``result.subject_entity_id``,
+    passed in from outside and never re-derived from ``context.scope``,
+    still showed the real committed subject -- only the paths themselves
+    were mis-rooted). Taking the SAME pre-step ``_AuthorizationScope``
+    snapshot used for evidence-signature verification closes this: there
+    is no ``context.scope`` read left anywhere on the relationship-path
+    construction path, live or otherwise.
+    """
+
+    if auth_scope.direct_scope in (
+        DirectScope.ORGANIZATION.value,
+        DirectScope.REPOSITORY.value,
+    ):
         return None
-    if not scope.entity_refs:
+    if not auth_scope.entity_ids:
         return None
-    return scope.entity_refs[0].entity_id
+    return auth_scope.entity_ids[0]
 
 
 def _content_candidates(
@@ -811,7 +830,7 @@ class PlanExecutor:
                         closed=False,
                     )
         return self._budgeted_observation(
-            requirement, outcome, content, observation_id, context
+            requirement, outcome, content, observation_id, context, authorization_scope
         )
 
     def _budgeted_observation(
@@ -821,6 +840,7 @@ class PlanExecutor:
         content: DevSourceContent | None,
         observation_id: str,
         context: StepContext,
+        authorization_scope: _AuthorizationScope,
     ) -> tuple[DevSourceObservation, bool]:
         """Construct the final observation, then -- before returning it to
         persistence or presentation -- shrink ``content`` deterministically
@@ -849,6 +869,7 @@ class PlanExecutor:
                 source_class=requirement.source_class,
                 content=working_content,
                 context=context,
+                authorization_scope=authorization_scope,
                 observation_id=observation_id,
             )
             usable_fact_count = outcome.usable_fact_count
@@ -952,11 +973,12 @@ class PlanExecutor:
         source_class: SourceClass,
         content: DevSourceContent | None,
         context: StepContext,
+        authorization_scope: _AuthorizationScope,
         observation_id: str,
     ) -> tuple[tuple[DevRelationshipPath, ...], bool]:
         if content is None:
             return (), True
-        root_entity_id = _root_entity_id(context.scope)
+        root_entity_id = _root_entity_id(authorization_scope)
         if root_entity_id is None:
             return (), True
         accepted: dict[tuple[str, str], tuple[_PathCandidate, str]] = {}

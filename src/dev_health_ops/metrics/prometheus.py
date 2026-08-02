@@ -204,6 +204,17 @@ if _PROMETHEUS_AVAILABLE:
         ["intent"],
     )
 
+    ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_narrative_fallback_total",
+        "Ask Dev narrative provider calls that fell back to the deterministic "
+        "narrative built from the frame alone, by safe failure code "
+        "(CHAOS-3297 stack #4: answer_frames.narrative_fallback). The "
+        "'provider_unknown_failure' code labels a provider exception outside "
+        "the closed classification table -- a classifier gap, not a genuine "
+        "unclassifiable failure, and should trend to zero.",
+        ["failure_code"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -223,6 +234,7 @@ else:
     ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL = _noop_counter()
     ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL = _noop_counter()
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _noop_counter()
+    ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

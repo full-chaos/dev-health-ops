@@ -39,7 +39,7 @@ from .base import ContractModelV2, Label, PublicOutcome, ServerHandle
 from .frame import DevAnswerFrame
 from .narrative import DevNarrative
 
-__all__ = ["DevAnswerV2"]
+__all__ = ["DevAnswerV2", "outcome_display_label"]
 
 #: Safe, stable display labels for each public outcome. Kept separate from
 #: the enum code itself (CHAOS-3294: "safe display labels separate from
@@ -54,6 +54,18 @@ _OUTCOME_DISPLAY_LABELS: dict[PublicOutcome, str] = {
     PublicOutcome.DENIED: "Not permitted",
     PublicOutcome.FAILED: "Something went wrong",
 }
+
+
+def outcome_display_label(outcome: PublicOutcome) -> str:
+    """The canonical ``dev_answer.v2`` label for one public outcome.
+
+    The single public accessor for ``_OUTCOME_DISPLAY_LABELS`` (CHAOS-3297
+    stack #4, narrative fallback: any caller that assembles a
+    ``DevAnswerV2`` needs this exact table rather than a second, possibly
+    drifted copy of it).
+    """
+
+    return _OUTCOME_DISPLAY_LABELS[outcome]
 
 
 class DevAnswerV2(ContractModelV2):

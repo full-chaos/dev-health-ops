@@ -18,11 +18,14 @@ from typing import Any
 import pytest
 
 from dev_health_ops.api.dev.contracts import DirectScope, QuestionClass, ToolID
-from dev_health_ops.api.dev.contracts_v2 import ResolutionOutcome
+from dev_health_ops.api.dev.contracts_v2 import PublicOutcome, ResolutionOutcome
 from dev_health_ops.api.dev.contracts_v2.validators import scan_public_text
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator
 from dev_health_ops.api.dev.orchestrator_states import RunState
-from dev_health_ops.api.dev.subject_preflight import SUBJECT_BEARING_TOOLS
+from dev_health_ops.api.dev.subject_preflight import (
+    SUBJECT_BEARING_TOOLS,
+    PreflightDecision,
+)
 from dev_health_ops.llm.agent.contracts import (
     AgentFinalAnswer,
     AgentToolRequest,
@@ -199,6 +202,43 @@ async def test_a3_ledger_records_both_authorized_candidates() -> None:
         ATLAS_PROJECT_ONE.canonical_id,
         ATLAS_PROJECT_TWO.canonical_id,
     ]
+
+    # CHAOS-3325: the frame carries the same real candidates the ledger
+    # recorded (never fabricated), and the result exposes the exact
+    # terminating entry so the orchestrator can persist it via
+    # append_resolution before record_frame -- the ledger row
+    # persistence.service._authorize_clarification_candidates cross-checks
+    # the frame against.
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.NEEDS_CLARIFICATION
+    assert result.terminating_resolution_entry == entry
+    assert result.answer is not None
+    assert result.answer.frame.clarification_candidates == entry.candidates
+
+
+@pytest.mark.asyncio
+async def test_a3_orchestrator_persists_the_ledger_entry_before_the_frame() -> None:
+    """CHAOS-3325 Codex review (NO-SHIP, confirmed medium): the full
+    ``orchestrator.run`` wiring, not just ``SubjectPreflight`` in isolation --
+    proves ``append_resolution`` is actually called, with the real
+    candidate-bearing entry, strictly before ``record_frame``, so
+    ``persistence.service._authorize_clarification_candidates`` always has a
+    matching ledger row to cross-check the persisted frame against."""
+
+    output = await case_a3()
+
+    assert output.recorder is not None
+    assert len(output.recorder.resolutions) == 1
+    assert len(output.recorder.frames) == 1
+    assert output.recorder.call_order == ["append_resolution", "record_frame"]
+
+    persisted_entry = output.recorder.resolutions[0]
+    persisted_frame = output.recorder.frames[0]
+    assert persisted_entry.outcome is ResolutionOutcome.AMBIGUOUS_CANDIDATES
+    assert persisted_frame.clarification_candidates == persisted_entry.candidates
+    assert sorted(
+        candidate.entity_ref.entity_id for candidate in persisted_entry.candidates
+    ) == [ATLAS_PROJECT_ONE.canonical_id, ATLAS_PROJECT_TWO.canonical_id]
 
 
 # ---------------------------------------------------------------------------

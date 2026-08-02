@@ -332,6 +332,12 @@ class Recorder:
         self.terminals: list[RunState] = []
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
         self.frames: list[Any] = []
+        self.resolutions: list[Any] = []
+        #: CHAOS-3325: the recorder-method call sequence, by name -- proves
+        #: append_resolution lands before record_frame, not just that both
+        #: were called (two same-length lists alone prove nothing about
+        #: order).
+        self.call_order: list[str] = []
 
     async def transition(self, state: RunState) -> None:
         self.transitions.append(state)
@@ -351,8 +357,13 @@ class Recorder:
         """No-op here; CHAOS-3301's SubjectSetRecorder subclass captures this."""
         del subject_set
 
+    async def append_resolution(self, entry: Any) -> None:
+        self.resolutions.append(entry)
+        self.call_order.append("append_resolution")
+
     async def record_frame(self, frame: Any) -> None:
         self.frames.append(frame)
+        self.call_order.append("record_frame")
 
     async def rollback(self) -> None:
         pass

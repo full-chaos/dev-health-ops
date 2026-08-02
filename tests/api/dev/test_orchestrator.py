@@ -50,6 +50,7 @@ class Recorder:
         self.terminal_errors: list[Any] = []
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
         self.frames: list[Any] = []
+        self.resolutions: list[Any] = []
         self.rollbacks = 0
         self.fail_answer_write = fail_answer_write
         self.fail_frame_write = fail_frame_write
@@ -73,6 +74,9 @@ class Recorder:
 
     async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
         del subject_set
+
+    async def append_resolution(self, entry: Any) -> None:
+        self.resolutions.append(entry)
 
     async def record_frame(self, frame: Any) -> None:
         if self.fail_frame_write:

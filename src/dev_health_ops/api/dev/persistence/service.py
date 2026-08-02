@@ -31,6 +31,9 @@ from dev_health_ops.api.dev.contracts_v2.frame import (
 from dev_health_ops.api.dev.contracts_v2.narrative import (
     DevNarrative as DevNarrativeContract,
 )
+from dev_health_ops.api.dev.contracts_v2.subject import (
+    DevResolutionEntry as DevResolutionEntryContract,
+)
 from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from dev_health_ops.models.dev_persistence import (
     DEV_RETENTION_DAYS,
@@ -964,6 +967,74 @@ def _guarded_bulk_update_mappings(
 Session.bulk_save_objects = _guarded_bulk_save_objects  # type: ignore[method-assign]
 Session.bulk_insert_mappings = _guarded_bulk_insert_mappings  # type: ignore[method-assign]
 Session.bulk_update_mappings = _guarded_bulk_update_mappings  # type: ignore[method-assign]
+
+
+async def _authorize_clarification_candidates(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    validated: DevAnswerFrameContract,
+) -> None:
+    """CHAOS-3325 Codex review (NO-SHIP, confirmed medium): a schema-valid
+    ``clarification_candidates`` entry only proves *shape*, not provenance --
+    a frame naming an entity the resolution ledger never authorized (e.g.
+    another org's repository, ``entity_id="other-org-secret-repo"``) would
+    otherwise persist as canonical v2 state and be served verbatim by any
+    general ``project_answer_v2_to_v1`` caller or future CHAOS-3298 consumer.
+
+    A separate, independently monkeypatchable function -- the same posture
+    ``contracts_v2.validators`` uses for its guardrails -- so a RED/GREEN
+    test pair can prove this specific check, not the whole of
+    ``record_frame``, is what rejects an unauthorized candidate.
+
+    Non-empty ``clarification_candidates`` must equal, exactly and in the
+    same order, the owned run's persisted ``ambiguous_candidates``
+    resolution-ledger entry (``orchestrator.run`` persists it via
+    ``append_resolution`` immediately before calling ``record_frame`` for
+    this outcome -- see ``SubjectPreflightResult.terminating_resolution_
+    entry``); a missing ledger entry is rejected exactly like a mismatched
+    one, never treated as "nothing to check".
+
+    Empty candidates are never rejected here, regardless of what the ledger
+    holds for this run: a frame disclosing FEWER candidates than were
+    authorized is not a disclosure risk, only a mismatched or surplus one
+    is -- so this is a no-op whenever ``validated.clarification_candidates``
+    is empty (the honest "uninterpretable question" case CHAOS-3325 already
+    decided not to fabricate a placeholder for).
+    """
+
+    if not validated.clarification_candidates:
+        return
+    ledger_row = await session.scalar(
+        select(DevRunResolution)
+        .where(
+            DevRunResolution.run_id == run_id,
+            DevRunResolution.org_id == org_id,
+            DevRunResolution.user_id == user_id,
+            DevRunResolution.outcome == "ambiguous_candidates",
+        )
+        .order_by(DevRunResolution.entry_ordinal.desc())
+    )
+    if ledger_row is None:
+        raise DevPersistenceValidationError(
+            "frame_payload.clarification_candidates is non-empty but this "
+            "run has no recorded ambiguous_candidates resolution ledger "
+            "entry to authorize it"
+        )
+    try:
+        ledger_entry = DevResolutionEntryContract.model_validate(ledger_row.payload)
+    except PydanticValidationError as exc:
+        raise DevPersistenceValidationError(
+            "the run's recorded resolution ledger entry is not a valid "
+            f"dev_resolution_entry: {exc}"
+        ) from exc
+    if tuple(validated.clarification_candidates) != tuple(ledger_entry.candidates):
+        raise DevPersistenceValidationError(
+            "frame_payload.clarification_candidates does not match the "
+            "run's recorded ambiguous_candidates resolution ledger entry"
+        )
 
 
 class DevPersistenceService:
@@ -2322,6 +2393,12 @@ class DevPersistenceService:
         call's own arguments -- a caller passing a frame for a different
         run, or claiming a different outcome than it argues for, is a
         caller bug, not data to persist quietly.
+
+        CHAOS-3325 Codex review (NO-SHIP, confirmed medium): shape validation
+        alone did not prove *provenance* for ``clarification_candidates`` --
+        a schema-valid frame could name an entity the resolution ledger
+        never authorized. Extends the same cross-check posture one field
+        further: see ``_authorize_clarification_candidates``.
         """
 
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
@@ -2348,6 +2425,18 @@ class DevPersistenceService:
                 "frame_payload.public_outcome does not match the "
                 "public_outcome argument"
             )
+        # CHAOS-3325 Codex review (NO-SHIP, confirmed): the contract only
+        # enforces wire shape, not provenance -- see
+        # _authorize_clarification_candidates's own docstring. Runs before
+        # the row is constructed, so an unauthorized candidate list never
+        # reaches the payload-bearing row at all.
+        await _authorize_clarification_candidates(
+            self.session,
+            run_id=run_id,
+            org_id=org_id,
+            user_id=user_id,
+            validated=validated,
+        )
         record = await self._construct_validated_payload_row(
             model_cls=DevAnswerFrame,
             payload_dict=payload,

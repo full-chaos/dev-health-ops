@@ -24,6 +24,68 @@ same reasoning that produced the bugs. Treat an adversarial pass over the
 diff as a required step of this recipe, not a nice-to-have, and read the
 checklist below BEFORE writing the handler, not after a review flags it.
 
+**Tenant-isolation precondition:** every port must carry `org_id` through the
+row type, production construction, a mismatch-rejecting validation, the
+ClickHouse INSERT, and the readback predicate. Ship a cross-tenant test that
+is proven to FAIL when `org_id` is removed from the predicate. This is not
+defensive polish: a Critical cross-tenant leak was found on `github/cicd`, and
+making this a precondition let the next three ports ship it first-pass.
+
+**PR governance precondition:** when a change touches
+`src/dev_health_ops/workers/provider_unit_route.py`, the PR body must contain
+the `TEST-EVIDENCE` and `RISK-NOTES` markers required by the `governance`
+check. These are PR-body markers, not code markers; two lanes lost a CI round
+by omitting them.
+
+**Session audit precondition:** audits found a real defect in every port
+produced in this session, merged and unmerged alike, all with green CI. The
+preconditions below come from actual shipped or nearly-shipped defects; they
+are not style guidance.
+
+**Further port preconditions:**
+
+1. **A cited constructor is not proof of capability.** It must be reachable
+   with only its own switch enabled. `github/security` shipped a correct case
+   in `cmd/dev-health-worker/provider_sync.go:127`, but an upstream activation
+   gate returned an empty worker family because that switch was missing from
+   the gate condition. The registry said Go owned it; the binary could not
+   construct it. Add the switch to the activation condition and extend the
+   table-driven `TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch`
+   test, including `providerSyncRouteEnabled`, so only that pair's switch
+   enabled constructs a worker family. Remove the switch and prove the test
+   fails.
+2. **The cross-tenant test must be a true collision, not a one-sided check.**
+   A row under only the foreign tenant proves only that a foreign row is not
+   returned. Insert the SAME natural key under TWO `org_id` values with
+   distinguishable content; assert a tenant-scoped `SELECT ... FINAL` returns
+   exactly one row containing the claim tenant's content; assert `EffectExact`
+   in BOTH directions. Use
+   `internal/providersync/github_commit_stats_effects_integration_test.go` as
+   the example. This defect shipped twice on the same PR; both variants pass
+   an `org_id` predicate mutation proof and read the same in a PR summary.
+3. **Never both capped and successful.** If pagination reaches a cap, fail the
+   unit and do not advance the watermark. Otherwise the dropped records are
+   deterministic and every later run skips them. The rule is explicit at
+   `internal/providersync/github_prs_route.go:203`, but
+   `launchdarkly/feature-flags` and `github/cicd` currently truncate silently,
+   return success, and advance state at their 5,000-flag and 1,000-run caps.
+   Tracked as CHAOS-3192, CHAOS-3196, and CHAOS-3188.
+4. **An empty result must be distinguishable from a broken fetch.** A producer
+   that reports SUCCESS on an empty inventory passes seam tests while the
+   capability is absent. Emit an explicit status distinguishing `complete`,
+   `empty`, and `no_commit_at_bound`, as the `github/files` route does, and
+   assert it in a test. Also persist the computed `FetchEvidence.CapReached`
+   into the unit `Result`; `internal/providersync/native_rest.go:30` defines
+   the evidence, but `resultWithEvidence` currently returns it only inside
+   `FetchResult` at line 837. Truncation must remain queryable. CHAOS-3197.
+5. **A fail-open that also advances state is permanent data loss.** Swallowing
+   an error into an empty batch is survivable only if the unit remains
+   retryable. Trace the downstream consequence through
+   `internal/jobs/providerunit/`, `sync/sync_units.py`, and
+   `sync/watermarks.py` before allowing any error to be swallowed. CHAOS-3189
+   was live Python data loss found only by asking what state followed a
+   "successful" empty result.
+
 ## Defect classes to check for explicitly in every pair
 
 These are not hypothetical. Every one below was found by an adversarial

@@ -56,6 +56,19 @@ from .frame import (
     DevFrameVersions,
     DevReadinessBlock,
 )
+from .health_rules import (
+    CalibrationRecord,
+    CalibrationState,
+    DimensionObservation,
+    DimensionState,
+    HealthDimension,
+    HealthRuleDefinition,
+    HealthRuleFinding,
+    RuleApplicability,
+    RuleDirection,
+    TeamQualificationBasis,
+    TeamQualificationResult,
+)
 from .intent import DevMessageRequestV2, DevQuestionIntent
 from .narrative import DevNarrative
 from .plan import (
@@ -110,6 +123,20 @@ from .validators import (
 
 #: Every top-level, independently versioned v2 wire contract, keyed by its
 #: `schema_version` value — mirrors `dev_health_ops.api.dev.contracts.CONTRACT_MODELS`.
+#:
+#: The CHAOS-3302 health-rule governance contracts
+#: (``HealthRuleDefinition``/``DimensionObservation``/``HealthRuleFinding``/
+#: ``TeamQualificationResult``/``CalibrationRecord``) are deliberately NOT
+#: registered here. This registry backs the Ask Dev answer-frame contract
+#: family specifically: ``export_contracts_v2``'s checked-in schema/fixture
+#: export, and the no-answer-projection totality check
+#: (``no_answer_policy.assert_no_answer_policy_is_total`` /
+#: ``test_round4_every_v2_identifier_is_classified``) that walks every
+#: member of this dict looking for the answer frame's own disclosure
+#: surface. Health rules are a separate, code-owned governance contract
+#: family with their own manifest (``health_rule_manifest.v1``, see
+#: ``health_rule_manifest.py``) and are never embedded in, or projected
+#: through, a no-answer outcome -- they do not belong in this dict.
 CONTRACT_MODELS_V2: dict[str, type[ContractModelV2]] = {
     "dev_message_request.v2": DevMessageRequestV2,
     "dev_question_intent.v1": DevQuestionIntent,
@@ -132,8 +159,12 @@ __all__ = [
     "CONTRACT_MODELS_V2",
     "PLAN_REGISTRY",
     "SOURCE_CLASS_VOCABULARY",
+    "CalibrationRecord",
+    "CalibrationState",
     "Cardinality",
     "ContractModelV2",
+    "DimensionObservation",
+    "DimensionState",
     "DevAnswerFact",
     "DevAnswerFrame",
     "DevAnswerSection",
@@ -177,6 +208,9 @@ __all__ = [
     "EMPTY_CONTENT_OUTCOMES",
     "EntityKind",
     "EvidenceHandle",
+    "HealthDimension",
+    "HealthRuleDefinition",
+    "HealthRuleFinding",
     "NO_ANSWER_ANSWER_FIELD_POLICY",
     "NO_ANSWER_FRAME_FIELD_POLICY",
     "NO_ANSWER_OUTCOMES",
@@ -186,10 +220,14 @@ __all__ = [
     "PublicOutcome",
     "QuestionIntentID",
     "ResolutionOutcome",
+    "RuleApplicability",
+    "RuleDirection",
     "ServerHandle",
     "SourceClass",
     "SourceRequirementState",
     "StreamEventTypeV2",
+    "TeamQualificationBasis",
+    "TeamQualificationResult",
     "project_answer_v2_to_v1",
     "scan_public_text",
     "validate_completion_denominator",

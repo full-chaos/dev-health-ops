@@ -55,6 +55,7 @@ def _fingerprint(
     model: str = "certified-model",
     provider: str = "openai",
     role: AgentRole = AgentRole.LEGACY_AGENT,
+    api_key: str = "test-key",
 ) -> str:
     # CHAOS-3285: mirrors production_runtime._readiness_fingerprint's
     # extended formula. Every fixture in this file that builds a "current"
@@ -65,7 +66,11 @@ def _fingerprint(
     # contract digest (CHAOS-3285 round 2) is reused directly from the real
     # producer rather than re-derived here -- hand-duplicating a digest
     # computation is exactly the kind of drift that got the bare
-    # PROMPT_VERSION constant caught in the first place.
+    # PROMPT_VERSION constant caught in the first place. ``api_key``
+    # defaults to "test-key" -- most fixtures in this file monkeypatch
+    # OPENAI_API_KEY to that value; the "local" provider fixtures (whose
+    # resolved credentials.api_key is genuinely "") pass api_key="" instead
+    # (CHAOS-3285 round 5).
     return hashlib.sha256(
         "\0".join(
             (
@@ -73,6 +78,7 @@ def _fingerprint(
                 provider,
                 model,
                 base_url,
+                hashlib.sha256(api_key.encode()).hexdigest()[:24],
                 READINESS_VERSION,
                 TOOL_CONTRACT_VERSION,
                 BUDGET_POLICY_VERSION,
@@ -528,6 +534,69 @@ async def test_wire_policy_change_invalidates_stored_certification(
 
 
 @pytest.mark.asyncio
+async def test_credential_rotation_invalidates_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 round 5 (Codex HIGH), codex's exact repro: certify
+    provider key A, then rotate to key B for the exact same
+    provider/model/base_url -- selection must fail closed until B is
+    re-certified. Before this fix, the certification key never depended on
+    WHICH credential was actually tested, so B's rotation silently
+    inherited A's certification while every real request already carried
+    B's Authorization header, never having demonstrated B can handle the
+    production request shape at all."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "key-a")
+    fingerprint_a = _fingerprint(api_key="key-a")
+    role_key, role_value = _role_certification_setting(certification_key=fingerprint_a)
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": fingerprint_a,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+    session = cast(Any, object())
+
+    # Sanity: certified under key A, selection succeeds.
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.model == "certified-model"
+
+    # Rotate to key B -- same provider/model/base_url, a different
+    # credential -- without re-running preflight.
+    monkeypatch.setenv("OPENAI_API_KEY", "key-b")
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+def test_credential_fingerprint_never_leaks_the_raw_api_key() -> None:
+    """The credential fingerprint folded into the certification key must be
+    non-reversible: the raw api_key string itself must never appear in the
+    fingerprint's output."""
+
+    fingerprint = production_runtime._credential_fingerprint(
+        LLMCredentials(api_key="super-secret-key-value")
+    )
+
+    assert "super-secret-key-value" not in fingerprint
+    assert len(fingerprint) == 24
+
+
+@pytest.mark.asyncio
 async def test_provider_resolution_requires_current_certification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -689,6 +758,7 @@ async def test_platform_local_provider_uses_only_operator_environment(
         provider="local",
         model="google/gemma-4-e4b",
         base_url="http://host.docker.internal:1234/v1",
+        api_key="",
     )
     role_key, role_value = _role_certification_setting(
         certification_key=local_fingerprint
@@ -743,6 +813,7 @@ async def test_explicit_fail_closed_prevents_platform_fallback(
                     provider="local",
                     model="local-agent-model",
                     base_url="http://host.docker.internal:1234/v1",
+                    api_key="",
                 ),
                 "readiness_version": READINESS_VERSION,
                 "checked_at": "2026-07-29T12:00:00+00:00",

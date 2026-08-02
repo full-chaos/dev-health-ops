@@ -779,6 +779,28 @@ def _wire_request_digest(model: str) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:24]
 
 
+def _credential_fingerprint(credentials: LLMCredentials) -> str:
+    """Non-reversible fingerprint of the credential material actually used
+    on the wire -- the raw ``api_key`` is NEVER stored, logged, or included
+    in any return value anywhere; only its SHA-256 digest is, and only
+    inside this function.
+
+    CHAOS-3285 round 5 (Codex HIGH, ratified design): certifying provider
+    key A, then saving key B for the exact same provider/model/base_url,
+    left the stored certification (keyed only on provider/model/base_url)
+    reading as still current -- so live selection kept using it while every
+    real request actually carried B's Authorization header, never having
+    demonstrated B can handle the production request shape at all. Folding
+    this fingerprint into the certification key makes a rotated credential
+    unfindable by construction: a prior certification's key can never equal
+    the new credential's key, so ``is_current()`` reads False and selection
+    fails closed until the NEW credential is re-certified. This does not
+    rely on any save/rotation code path remembering to invalidate anything.
+    """
+
+    return hashlib.sha256(credentials.api_key.encode()).hexdigest()[:24]
+
+
 def _readiness_fingerprint(
     candidate: AgentProviderCandidate, *, role: AgentRole = AgentRole.LEGACY_AGENT
 ) -> str:
@@ -798,7 +820,8 @@ def _readiness_fingerprint(
     model at both probe round shapes (tool_choice, parallel_tool_calls,
     temperature, reasoning_effort, the full response_format wrapper AND
     schema body, serialized tool payloads, max_completion_tokens), see its
-    docstring.
+    docstring -- and (round 5) ``_credential_fingerprint`` -- see its
+    docstring for the credential-rotation gap this closes.
 
     Migration/invalidation semantics (explicit): this changes the computed
     fingerprint value for the existing single-role (legacy binary) selection
@@ -821,6 +844,7 @@ def _readiness_fingerprint(
                 candidate.provider,
                 candidate.model,
                 candidate.credentials.base_url,
+                _credential_fingerprint(candidate.credentials),
                 READINESS_VERSION,
                 TOOL_CONTRACT_VERSION,
                 BUDGET_POLICY_VERSION,

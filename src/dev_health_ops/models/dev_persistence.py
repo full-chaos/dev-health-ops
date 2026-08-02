@@ -253,6 +253,16 @@ class DevRun(Base):
         JSON, nullable=True
     )
     relationship_closure_verified: Mapped[bool | None] = mapped_column(nullable=True)
+    # CHAOS-3297 (0078): reserved for stack #4's narrative-fallback work.
+    # NULL on every run stack #1 produces -- no narrative synthesis exists
+    # yet. No CHECK constraint at this revision (see 0078's docstring);
+    # narrative_mode's closed vocabulary already exists
+    # (ck_dev_run_narratives_mode) but nothing here writes a value until a
+    # narrative pipeline does.
+    narrative_mode: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    narrative_failure_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(

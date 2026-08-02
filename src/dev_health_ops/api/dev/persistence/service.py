@@ -748,6 +748,29 @@ class DevPersistenceService:
             )
         )
 
+    async def get_run_narrative(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> DevRunNarrative | None:
+        """Return the tenant-owned narrative for one run, if any (CHAOS-3297).
+
+        Symmetric to ``get_answer_frame``: replay needs to reconstruct a
+        content-bearing answer's narrative without a second provider call,
+        exactly as it already reconstructs a no-answer frame. 0..1 rows per
+        run (``uq_dev_run_narratives_run``).
+        """
+
+        return await self.session.scalar(
+            select(DevRunNarrative).where(
+                DevRunNarrative.run_id == run_id,
+                DevRunNarrative.org_id == org_id,
+                DevRunNarrative.user_id == user_id,
+            )
+        )
+
     async def get_answer_message(
         self,
         *,

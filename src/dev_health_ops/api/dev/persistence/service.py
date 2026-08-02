@@ -17,11 +17,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeAlias, get_args
 
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.dev.contracts import DevError
+from dev_health_ops.api.dev.contracts_v2.frame import (
+    DevAnswerFrame as DevAnswerFrameContract,
+)
 from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from dev_health_ops.models.dev_persistence import (
     DEV_RETENTION_DAYS,
@@ -1630,6 +1634,20 @@ class DevPersistenceService:
         carry ``plan_step_partition``/``relationship_closure_verified`` from
         ``record_investigation_result`` without ever reaching this method
         (e.g. a failure between investigation and frame synthesis).
+
+        CHAOS-3297 Codex review round 2 MEDIUM #3: ``payload`` used to be an
+        opaque ``Mapping`` bounded only by byte size and a bare
+        ``public_outcome`` vocabulary check -- ``{"schema_version":
+        "dev_answer_frame.v1"}`` alone would pass both checks, get stored
+        verbatim, and tag the run ``contract_generation = 'v2'``, silently
+        bypassing every frame-level invariant the contract enforces
+        (structural closure, no-answer projection, plan-registry
+        membership, ...). ``payload`` is now validated as a real
+        ``DevAnswerFrame`` before anything is written, and its own
+        ``frame_id``/``run_id``/``public_outcome`` must agree with this
+        call's own arguments -- a caller passing a frame for a different
+        run, or claiming a different outcome than it argues for, is a
+        caller bug, not data to persist quietly.
         """
 
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
@@ -1637,6 +1655,25 @@ class DevPersistenceService:
             raise DevPersistenceNotFound("run not found")
         if public_outcome not in _PUBLIC_OUTCOMES:
             raise DevPersistenceValidationError("invalid public_outcome")
+        try:
+            validated = DevAnswerFrameContract.model_validate(payload)
+        except PydanticValidationError as exc:
+            raise DevPersistenceValidationError(
+                f"frame_payload is not a valid dev_answer_frame.v1: {exc}"
+            ) from exc
+        if validated.frame_id != str(frame_id):
+            raise DevPersistenceValidationError(
+                "frame_payload.frame_id does not match the frame_id argument"
+            )
+        if validated.run_id != str(run_id):
+            raise DevPersistenceValidationError(
+                "frame_payload.run_id does not match the run_id argument"
+            )
+        if validated.public_outcome.value != public_outcome:
+            raise DevPersistenceValidationError(
+                "frame_payload.public_outcome does not match the "
+                "public_outcome argument"
+            )
         record = DevAnswerFrame(
             run_id=run.id,
             org_id=org_id,

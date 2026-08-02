@@ -9,7 +9,10 @@ fails.
 
 from __future__ import annotations
 
+import json
+import re
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,6 +22,14 @@ import pytest_asyncio
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.dev import terminal_frames
+from dev_health_ops.api.dev.contract_fixtures import (
+    positive_fixtures as positive_fixtures_v1,
+)
+from dev_health_ops.api.dev.contract_fixtures_v2 import (
+    positive_fixtures as positive_fixtures_v2,
+)
+from dev_health_ops.api.dev.contracts import DevAnswer
 from dev_health_ops.api.dev.persistence import (
     DevPersistenceNotFound,
     DevPersistenceService,
@@ -42,6 +53,60 @@ from dev_health_ops.models.dev_persistence import (
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
+
+#: The v1 evidence-handle grammar (`evidence_service.EvidenceHandleService.issue`)
+#: -- the fixture's `ev_01` fails `EvidenceHandle`'s strict v2 grammar, which
+#: only the v2 embedded mirrors enforce (mirrors test_terminal_frames.py's
+#: identical helper).
+_REAL_EVIDENCE_HANDLE = "ev1_" + ("a1b2c3d4e5" * 4)
+
+#: One real orchestrator error code per no-answer/needs_clarification public
+#: outcome, chosen only to drive terminal_frames.build_error_frame -- any
+#: code that buckets to the target outcome works identically.
+_ERROR_CODE_BY_OUTCOME: dict[str, str] = {
+    "needs_clarification": "scope_ambiguous",
+    "not_found": "scope_not_found",
+    "temporarily_unavailable": "tool_unavailable",
+    "unsupported": "feature_not_enabled",
+    "denied": "scope_forbidden",
+    "failed": "internal_error",
+}
+
+
+def _legacy_answer_with_real_evidence() -> DevAnswer:
+    payload = deepcopy(positive_fixtures_v1()["dev_answer.v1"])
+    text = json.dumps(payload, default=str)
+    payload = json.loads(re.sub(r"ev_\d+", _REAL_EVIDENCE_HANDLE, text))
+    return DevAnswer.model_validate(payload)
+
+
+def _frame_payload(*, run_id: uuid.UUID, outcome: str) -> dict[str, Any]:
+    """A valid ``dev_answer_frame.v1`` payload for one public outcome, with
+    its own ``run_id``/``public_outcome`` set to match what
+    ``record_frame`` now cross-checks against its own arguments (CHAOS-3297
+    Codex review round 2 MEDIUM #3) -- an opaque ``{}``/partial dict no
+    longer passes validation, let alone the cross-check.
+    """
+
+    if outcome in _ERROR_CODE_BY_OUTCOME:
+        frame = terminal_frames.build_error_frame(
+            code=_ERROR_CODE_BY_OUTCOME[outcome],
+            run_id=str(run_id),
+            generated_at=datetime.now(UTC),
+        )
+        return frame.model_dump(mode="json")
+    if outcome == "answered_with_gaps":
+        frame = terminal_frames.wrap_legacy_answer_as_frame(
+            _legacy_answer_with_real_evidence(), run_id=str(run_id)
+        )
+        return frame.model_dump(mode="json")
+    if outcome == "answered":
+        payload = deepcopy(positive_fixtures_v2()["dev_answer_frame.v1"])
+        payload["run_id"] = str(run_id)
+        payload["frame_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"frame:{run_id}"))
+        return payload
+    raise AssertionError(f"no frame builder registered for outcome {outcome!r}")
+
 
 _TABLES = tables_of(
     User,
@@ -539,13 +604,14 @@ async def test_record_frame_every_public_outcome_and_invalid_outcome(persistence
             _conv_id, run_id = await _accepted_run(
                 service, org_id=org_id, user_id=user_id
             )
+            payload = _frame_payload(run_id=run_id, outcome=outcome)
             record = await service.record_frame(
                 org_id=org_id,
                 user_id=user_id,
                 run_id=run_id,
-                frame_id=uuid.uuid4(),
+                frame_id=uuid.UUID(payload["frame_id"]),
                 public_outcome=outcome,
-                payload={"schema_version": "dev_answer_frame.v1"},
+                payload=payload,
             )
             assert record.public_outcome == outcome
 
@@ -572,19 +638,91 @@ async def test_record_frame_every_public_outcome_and_invalid_outcome(persistence
 
 
 @pytest.mark.asyncio
+async def test_record_frame_rejects_a_schema_only_junk_payload(persistence):
+    """CHAOS-3297 Codex review round 2 MEDIUM #3, the exact repro.
+
+    Before this fix, ``record_frame`` accepted any ``Mapping`` bounded only
+    by byte size and a bare ``public_outcome`` vocabulary check --
+    ``{"schema_version": "dev_answer_frame.v1"}`` alone passed both,
+    silently bypassing every frame-level invariant the contract enforces
+    (structural closure, no-answer projection, plan-registry membership,
+    ...) and tagging the run ``contract_generation = 'v2'`` regardless.
+    Asserts no row is written and the run is not tagged v2.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        with pytest.raises(DevPersistenceValidationError, match="not a valid"):
+            await service.record_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                frame_id=uuid.uuid4(),
+                public_outcome="answered",
+                payload={"schema_version": "dev_answer_frame.v1"},
+            )
+
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        assert run.contract_generation == "v1", (
+            "a rejected junk payload must never tag the run v2"
+        )
+        assert run.public_outcome is None
+        frame_count = await session.scalar(
+            select(func.count())
+            .select_from(DevAnswerFrame)
+            .where(DevAnswerFrame.run_id == run_id)
+        )
+        assert frame_count == 0, "a rejected junk payload must never be written"
+
+
+@pytest.mark.asyncio
+async def test_record_frame_rejects_a_frame_id_mismatch(persistence):
+    """CHAOS-3297 Codex review round 2 MEDIUM #3: a structurally valid frame
+    for the *wrong* run/frame identity must be rejected, not silently
+    persisted under the caller's own (different) identifiers."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        # A fully valid frame -- just built for a different run_id than the
+        # one this call claims to be recording it for.
+        mismatched_payload = _frame_payload(run_id=uuid.uuid4(), outcome="answered")
+
+        with pytest.raises(DevPersistenceValidationError, match="run_id"):
+            await service.record_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                frame_id=uuid.UUID(mismatched_payload["frame_id"]),
+                public_outcome="answered",
+                payload=mismatched_payload,
+            )
+
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        assert run.contract_generation == "v1"
+
+
+@pytest.mark.asyncio
 async def test_record_narrative_requires_matching_recorded_frame(persistence):
     maker, org_id, _other_org, user_id, _other_user = persistence
     async with maker() as session:
         service = DevPersistenceService(session)
         _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
-        real_frame_id = uuid.uuid4()
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        real_frame_id = uuid.UUID(frame_payload["frame_id"])
         await service.record_frame(
             org_id=org_id,
             user_id=user_id,
             run_id=run_id,
             frame_id=real_frame_id,
             public_outcome="answered",
-            payload={},
+            payload=frame_payload,
         )
 
         # A mutated frame_id -- not matching the run's actual recorded frame
@@ -805,14 +943,15 @@ async def _record_every_v2_artifact(
         failed_steps=[],
         relationship_closure_verified=True,
     )
-    frame_id = uuid.uuid4()
+    frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+    frame_id = uuid.UUID(frame_payload["frame_id"])
     await service.record_frame(
         org_id=org_id,
         user_id=user_id,
         run_id=run_id,
         frame_id=frame_id,
         public_outcome="answered",
-        payload={},
+        payload=frame_payload,
     )
     await service.record_narrative(
         org_id=org_id,

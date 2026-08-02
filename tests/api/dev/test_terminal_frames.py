@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import itertools
 import re
 import textwrap
 import uuid
@@ -41,9 +42,18 @@ from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contract_fixtures_v2 import (
     positive_fixtures as positive_fixtures_v2,
 )
-from dev_health_ops.api.dev.contracts import DevAnswer, DevTimeRange, ToolID
+from dev_health_ops.api.dev.contracts import (
+    DevAnswer,
+    DevClaimFlags,
+    DevTimeRange,
+    ToolID,
+)
 from dev_health_ops.api.dev.contracts_v2 import validators as validators_module
-from dev_health_ops.api.dev.contracts_v2.base import PublicOutcome, SourceClass
+from dev_health_ops.api.dev.contracts_v2.base import (
+    FactDisclosure,
+    PublicOutcome,
+    SourceClass,
+)
 from dev_health_ops.api.dev.contracts_v2.frame import DevAnswerFrame as _FrameV2
 from dev_health_ops.api.dev.contracts_v2.plan import PLAN_REGISTRY
 from dev_health_ops.api.dev.orchestrator_states import RunState
@@ -452,6 +462,70 @@ def test_frame_construction_is_deterministic_for_the_same_inputs() -> None:
     first = tf.wrap_legacy_answer_as_frame(answer, run_id="run_determinism")
     second = tf.wrap_legacy_answer_as_frame(answer, run_id="run_determinism")
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3297 flags gap ("DevAnswerFact flags gap — design ratified
+# 2026-08-02"), v1-to-v2 half of the round-trip oracle: every v1
+# ``DevClaimFlags`` bit combination round-trips through
+# ``wrap_legacy_answer_as_frame`` to exactly the matching, canonically-ordered
+# ``DevAnswerFact.disclosures`` tuple. The v2-to-v1 half
+# (``compat._project_answered``) is
+# ``test_compat_projects_fact_disclosures_to_claim_flags_exhaustively`` in
+# test_contracts_v2.py.
+# ---------------------------------------------------------------------------
+
+
+def _claim_payload_with_flags(flags: dict[str, bool]) -> dict[str, Any]:
+    claim = deepcopy(positive_fixtures()["dev_answer.v1"]["claims"][0])
+    # The real evidence handle rather than the fixture's "ev_01": these
+    # claims are spliced into the legacy answer post-substitution (see
+    # `_legacy_answer`), so an unsubstituted evidence ref here would fail
+    # `validate_structural_closure` against `frame.evidence` (which *is*
+    # substituted) for reasons unrelated to what this oracle is testing. A
+    # v1 "observed" claim also requires at least one evidence/metric ref.
+    claim["evidence_ref_ids"] = [_REAL_EVIDENCE_HANDLE]
+    claim["metric_ref_ids"] = []
+    claim["flags"] = {
+        "stale": False,
+        "uncertain": False,
+        "conflicting": False,
+        "untrusted_source": False,
+        **flags,
+    }
+    return claim
+
+
+def _disclosure_subsets() -> list[tuple[FactDisclosure, ...]]:
+    """Every one of the 2**4 canonically-ordered ``FactDisclosure`` subsets.
+
+    ``itertools.combinations`` over an already enum-ordered sequence
+    preserves that order, matching the order
+    ``_disclosures_from_claim_flags`` (``terminal_frames.py``) itself
+    produces by iterating ``FactDisclosure``.
+    """
+
+    members = list(FactDisclosure)
+    return [
+        combo
+        for size in range(len(members) + 1)
+        for combo in itertools.combinations(members, size)
+    ]
+
+
+@pytest.mark.parametrize(
+    "subset",
+    _disclosure_subsets(),
+    ids=lambda s: "+".join(d.value for d in s) or "empty",
+)
+def test_wrap_legacy_answer_round_trips_claim_flags_exhaustively(
+    subset: tuple[FactDisclosure, ...],
+) -> None:
+    flags = DevClaimFlags(**{d.value: True for d in subset})
+    claim = _claim_payload_with_flags(flags.model_dump())
+    answer = _legacy_answer(claims=[claim])
+    frame = tf.wrap_legacy_answer_as_frame(answer, run_id="run_disclosure_oracle")
+    assert frame.facts[0].disclosures == subset
 
 
 # ---------------------------------------------------------------------------

@@ -38,12 +38,14 @@ from dev_health_ops.api.dev.contracts import (
 )
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator, DevRunLimits
 from dev_health_ops.api.dev.prompts.composer import (
+    ComposedPrompt,
     PromptComposer,
     PromptConversationTurn,
 )
 from dev_health_ops.api.dev.tool_registry import TOOL_DEFINITIONS, AskDevToolRegistry
 
 from ..contracts import (
+    AgentDecisionResult,
     AgentFinalAnswer,
     AgentLLMProvider,
     AgentMessage,
@@ -195,6 +197,58 @@ def _merge_usage(left: AgentUsage, right: AgentUsage) -> AgentUsage:
     )
 
 
+async def _decide_round_2(
+    *,
+    provider: AgentLLMProvider,
+    composer: PromptComposer,
+    scope_resolution: DevScopeResolution,
+    history: tuple[PromptConversationTurn, ...],
+    tools: tuple[AgentToolDefinition, ...],
+    response_schema: Mapping[str, object],
+    tool_request: AgentToolRequest,
+    tool_result: DevToolResult,
+    timeout_seconds: float,
+    max_output_tokens: int,
+    subject_committed: bool,
+    signal: CancellationSignal | None,
+) -> tuple[AgentDecisionResult, ComposedPrompt]:
+    """Round 2 for one prompt shape (committed or uncommitted subject):
+    tools offered AND a synthetic tool result already in the conversation
+    -- ``tool_choice="auto"`` and the full ``DevAnswer`` grammar
+    simultaneously, the combined worst-case shape. Shares the SAME
+    synthetic tool request/result across both shapes: the tool-result
+    content does not depend on ``subject_committed`` at all, only the
+    system/user prompt sections do, so reusing it isolates exactly the
+    prompt-shape dimension CHAOS-3285 round 2 (Codex HIGH) flagged as
+    never invalidated.
+    """
+
+    composed = composer.compose(
+        question=_PROBE_QUESTION,
+        scope=scope_resolution,
+        prior_turns=history,
+        tool_results=(tool_result,),
+        allowed_tools=None,
+        subject_committed=subject_committed,
+    )
+    messages = (
+        AgentMessage(AgentMessageRole.SYSTEM, composed.system_text),
+        AgentMessage(AgentMessageRole.USER, composed.user_text),
+        AgentMessage(AgentMessageRole.ASSISTANT, "", tool_request=tool_request),
+        AgentMessage(
+            AgentMessageRole.TOOL,
+            tool_result.model_dump_json(),
+            tool_call_id=tool_request.call_id,
+        ),
+    )
+    result = await provider.decide(
+        messages, tools, response_schema, timeout_seconds, max_output_tokens, signal
+    )
+    if not isinstance(result.decision, (AgentFinalAnswer, AgentToolRequest)):
+        raise AgentProviderError(AgentProviderErrorCode.INVALID_RESPONSE)
+    return result, composed
+
+
 async def certify_legacy_agent(
     provider: AgentLLMProvider,
     *,
@@ -206,6 +260,25 @@ async def certify_legacy_agent(
     shape. Returns a verdict derived from whatever the provider actually
     does with that shape -- including reproducing ``OUTPUT_EXHAUSTED``
     against a provider/budget combination that cannot handle it.
+
+    Three calls, not two (CHAOS-3285 round 2, Codex HIGH): round 1 (tools
+    offered, no tool result yet, always composed with
+    ``subject_committed=True``, the lower-risk shape regardless of which
+    prompt variant a real run ends up using -- the fixed subject-section
+    text is a small delta against the tool registry + grammar + history
+    that actually dominate exhaustion risk); round 2 under the
+    committed-subject shape (``PROMPT_VERSION``); and round 2 AGAIN under
+    the uncommitted-subject shape (``LEGACY_PROMPT_VERSION`` -- an
+    organization-wide question, or the Wave 3.1 flag off). Both round-2
+    calls exercise the actual combined worst-case shape (tool_choice="auto"
+    + the strict grammar), the one that determines exhaustion, so BOTH
+    prompt shapes a real run can select must independently certify
+    COMPATIBLE for the role to certify COMPATIBLE overall. This is what
+    makes ``_canonical_contract_digest``'s folding of BOTH prompt version
+    constants meaningful: without probing both shapes, invalidating on a
+    LEGACY_PROMPT_VERSION change would correctly force re-certification,
+    but the re-certification itself would still never have tested the
+    shape that changed.
     """
 
     limits = limits or DevRunLimits()
@@ -244,46 +317,50 @@ async def certify_legacy_agent(
             raise AgentProviderError(AgentProviderErrorCode.INVALID_RESPONSE)
 
         tool_result = _probe_tool_result(result_1.decision)
-        composed_round_2 = composer.compose(
-            question=_PROBE_QUESTION,
-            scope=scope_resolution,
-            prior_turns=history,
-            tool_results=(tool_result,),
-            allowed_tools=None,
-            subject_committed=True,
-        )
-        messages_round_2 = (
-            AgentMessage(AgentMessageRole.SYSTEM, composed_round_2.system_text),
-            AgentMessage(AgentMessageRole.USER, composed_round_2.user_text),
-            AgentMessage(
-                AgentMessageRole.ASSISTANT, "", tool_request=result_1.decision
-            ),
-            AgentMessage(
-                AgentMessageRole.TOOL,
-                tool_result.model_dump_json(),
-                tool_call_id=result_1.decision.call_id,
-            ),
-        )
-        result_2 = await provider.decide(
-            messages_round_2,
-            tools,
-            response_schema,
-            timeout_seconds,
-            limits.max_output_tokens_per_call,
-            signal,
-        )
-        usage = _merge_usage(usage, result_2.usage)
-        if not isinstance(result_2.decision, (AgentFinalAnswer, AgentToolRequest)):
-            raise AgentProviderError(AgentProviderErrorCode.INVALID_RESPONSE)
 
+        result_2_committed, composed_round_2_committed = await _decide_round_2(
+            provider=provider,
+            composer=composer,
+            scope_resolution=scope_resolution,
+            history=history,
+            tools=tools,
+            response_schema=response_schema,
+            tool_request=result_1.decision,
+            tool_result=tool_result,
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=limits.max_output_tokens_per_call,
+            subject_committed=True,
+            signal=signal,
+        )
+        usage = _merge_usage(usage, result_2_committed.usage)
+
+        result_2_uncommitted, composed_round_2_uncommitted = await _decide_round_2(
+            provider=provider,
+            composer=composer,
+            scope_resolution=scope_resolution,
+            history=history,
+            tools=tools,
+            response_schema=response_schema,
+            tool_request=result_1.decision,
+            tool_result=tool_result,
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=limits.max_output_tokens_per_call,
+            subject_committed=False,
+            signal=signal,
+        )
+        usage = _merge_usage(usage, result_2_uncommitted.usage)
+
+        observed_bytes = max(
+            len(composed_round_2_committed.system_text.encode("utf-8"))
+            + len(composed_round_2_committed.user_text.encode("utf-8")),
+            len(composed_round_2_uncommitted.system_text.encode("utf-8"))
+            + len(composed_round_2_uncommitted.user_text.encode("utf-8")),
+        )
         return LegacyAgentProbeResult(
             state=RoleCertificationState.COMPATIBLE,
             safe_error_code=None,
             usage=usage,
-            observed_request_bytes=(
-                len(composed_round_2.system_text.encode("utf-8"))
-                + len(composed_round_2.user_text.encode("utf-8"))
-            ),
+            observed_request_bytes=observed_bytes,
         )
     except AgentProviderError as exc:
         safe = safe_agent_provider_error(exc)

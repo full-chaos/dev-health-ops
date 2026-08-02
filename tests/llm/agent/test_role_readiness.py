@@ -21,6 +21,10 @@ from typing import Any
 
 import pytest
 
+from dev_health_ops.api.dev.prompts.composer import (
+    LEGACY_PROMPT_VERSION,
+    PROMPT_VERSION,
+)
 from dev_health_ops.llm.agent.openai_compatible import OpenAICompatibleAgentProvider
 from dev_health_ops.llm.agent.probes.legacy_agent import (
     _PRODUCTION_FLOOR_BYTES,
@@ -161,16 +165,62 @@ class _Store:
 
 async def _uncalibrated_round_requests() -> tuple[dict[str, Any], dict[str, Any]]:
     """Run the real probe against a client that never exhausts (rate 0), to
-    observe the two real request shapes it sends without inducing exhaustion.
-    Calibration is derived from these -- never a hand-guessed rate."""
+    observe the real round-1 and round-2 (committed-subject) request shapes
+    it sends without inducing exhaustion. Calibration is derived from
+    these -- never a hand-guessed rate.
+
+    CHAOS-3285 round 2 (Codex HIGH): the probe now sends a THIRD request --
+    round 2 again under the uncommitted-subject prompt shape
+    (LEGACY_PROMPT_VERSION), proving that shape too rather than only ever
+    exercising the committed one. This calibration helper deliberately
+    keeps using only the first two (round 1 and the committed round 2):
+    the combined-shape claim it exists to prove (tool_choice="auto" + the
+    strict grammar + accumulated history, together, is what exhausts) is
+    the same claim for either prompt shape, and testing it twice here would
+    duplicate coverage rather than add any."""
 
     provider, client = _provider(tokens_per_byte=0.0)
     result = await certify_legacy_agent(provider, timeout_seconds=30)
     assert result.state is RoleCertificationState.COMPATIBLE, (
         "calibration precondition failed: a rate of 0 must never exhaust"
     )
-    assert len(client.requests) == 2
+    assert len(client.requests) == 3
     return client.requests[0], client.requests[1]
+
+
+@pytest.mark.asyncio
+async def test_certify_legacy_agent_probes_both_prompt_shapes() -> None:
+    """CHAOS-3285 round 2 (Codex HIGH): before this fix, the probe forced
+    ``subject_committed=True`` unconditionally, so PromptComposer's OTHER
+    shape -- ``LEGACY_PROMPT_VERSION`` (uncommitted subject / the Wave 3.1
+    flag off) -- was never exercised at all, and the fingerprint never
+    folded that constant either, so a text-only change to only that shape
+    invalidated nothing. Prove both shapes are now actually sent, not just
+    that a fingerprint constant changed."""
+
+    provider, client = _provider(tokens_per_byte=0.0)
+    result = await certify_legacy_agent(provider, timeout_seconds=30)
+
+    assert result.state is RoleCertificationState.COMPATIBLE
+    assert len(client.requests) == 3
+
+    round_2_committed, round_2_uncommitted = client.requests[1], client.requests[2]
+    # Both are the same worst-case combined shape (tool_choice="auto" + the
+    # strict grammar)...
+    for request in (round_2_committed, round_2_uncommitted):
+        assert request.get("tool_choice") == "auto"
+        assert request.get("response_format") is not None
+
+    # ...but the composed system prompt genuinely differs between them --
+    # proof this is really two distinct prompt shapes being sent, not the
+    # same request twice.
+    committed_system_text = round_2_committed["messages"][0]["content"]
+    uncommitted_system_text = round_2_uncommitted["messages"][0]["content"]
+    assert committed_system_text != uncommitted_system_text
+    assert PROMPT_VERSION in committed_system_text
+    assert PROMPT_VERSION not in uncommitted_system_text
+    assert LEGACY_PROMPT_VERSION in uncommitted_system_text
+    assert LEGACY_PROMPT_VERSION not in committed_system_text
 
 
 def _without_grammar(round_2: dict[str, Any]) -> dict[str, Any]:
@@ -207,6 +257,7 @@ def _calibrate_noncompliant_rate(
         client.reasoning_tokens_for(_without_history(round_1, round_2)),
     )
     full_combination = client.reasoning_tokens_for(round_2)
+
     lower = cap / full_combination
     upper = cap / insufficient_alone
     assert lower < upper, (

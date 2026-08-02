@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import json
 import os
 import uuid
 from collections.abc import Mapping, Sequence
@@ -55,6 +57,7 @@ from dev_health_ops.models.settings import SettingCategory
 
 from .contracts import (
     DevActualCompletion,
+    DevAnswer,
     DevCIFact,
     DevContractVersions,
     DevDataHealth,
@@ -97,8 +100,9 @@ from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
 from .native_evidence import native_evidence_adapters
 from .native_status_change import ClickHouseStatusChangeSource
+from .orchestrator import DevRunLimits
 from .org_policy import load_ask_dev_org_policy
-from .prompts import PROMPT_VERSION
+from .prompts import LEGACY_PROMPT_VERSION, PROMPT_VERSION
 from .question_interpreter import QuestionInterpreter
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .scope_catalog import ClickHouseAuthorizedEntityCatalog
@@ -630,18 +634,77 @@ def _candidate(
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _canonical_contract_digest() -> str:
+    """Content digest of every capability input a role certification must
+    invalidate on, beyond the coarse version-string constants already
+    folded into ``_readiness_fingerprint``.
+
+    CHAOS-3285 round 2 (Codex HIGH): the fingerprint previously hashed only
+    ``PROMPT_VERSION`` -- the committed-subject prompt shape
+    (``subject_committed=True``). ``PromptComposer`` actually selects
+    between that and ``LEGACY_PROMPT_VERSION`` (the uncommitted-subject /
+    flag-off shape) per run, and the ``legacy_agent`` probe forces
+    ``subject_committed=True`` unconditionally -- so the uncommitted-subject
+    prompt shape was never probed, and a text-only change to ONLY that
+    shape's section (with no version bump, since it was never folded at
+    all) never invalidated anything either.
+
+    Rather than track more bare version-string constants (each one an
+    opportunity to forget folding the next thing that can change the wire
+    shape), this folds actual CONTENT: both prompt version constants, the
+    real ``DevAnswer`` response grammar the adapter sends on the wire, the
+    real tool registry manifest (every tool's real schema, not just the
+    registry's own version string), and the real ``DevRunLimits`` values (a
+    limit changing without anyone bumping a version string must still
+    invalidate). Computed from the real producers -- ``AskDevToolRegistry``,
+    ``DevAnswer.model_json_schema()``, ``DevRunLimits`` -- never hand-
+    maintained, and never touches a database or executes a tool.
+    Memoized: every input here is fixed at import time by the running code,
+    never per-request data, so recomputing per call would be pure overhead
+    on the request hot path.
+    """
+
+    async def _unused_executor(_context: object, _request: object) -> Any:
+        raise AssertionError(  # pragma: no cover - never invoked
+            "contract digest must never execute a tool"
+        )
+
+    registry = AskDevToolRegistry({tool_id: _unused_executor for tool_id in ToolID})
+    manifest = registry.manifest(allowed_tool_ids=None)
+    limits = DevRunLimits()
+    payload = {
+        "prompt_version": PROMPT_VERSION,
+        "legacy_prompt_version": LEGACY_PROMPT_VERSION,
+        "response_schema": DevAnswer.model_json_schema(mode="validation"),
+        "tool_manifest": manifest,
+        "limits": {
+            "max_output_tokens_per_call": limits.max_output_tokens_per_call,
+            "max_total_input_tokens": limits.max_total_input_tokens,
+            "max_total_output_tokens": limits.max_total_output_tokens,
+            "model_rounds": limits.model_rounds,
+            "tool_calls": limits.tool_calls,
+        },
+    }
+    canonical = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:24]
+
+
 def _readiness_fingerprint(
     candidate: AgentProviderCandidate, *, role: AgentRole = AgentRole.LEGACY_AGENT
 ) -> str:
     """Fingerprint every capability input that invalidates certification.
 
-    CHAOS-3285: extended to fold ``PROMPT_VERSION``, ``TOOL_CONTRACT_VERSION``,
-    and ``BUDGET_POLICY_VERSION`` -- previously only a manual
-    ``READINESS_VERSION`` bump invalidated a stale certification, even though
-    the composed prompt, tool registry, or per-family token-budget policy
-    can each independently change the wire shape a certified provider was
-    actually tested against. Also folds ``role`` now that certification is
-    per-role rather than a single binary verdict (see ``llm.agent.roles``).
+    CHAOS-3285: extended to fold ``TOOL_CONTRACT_VERSION``,
+    ``BUDGET_POLICY_VERSION``, and ``_canonical_contract_digest()`` (which
+    itself folds both prompt shapes, the real response grammar, the real
+    tool manifest, and the real run limits -- see its docstring) --
+    previously only a manual ``READINESS_VERSION`` bump invalidated a stale
+    certification, even though the composed prompt, tool registry, or
+    per-family token-budget policy can each independently change the wire
+    shape a certified provider was actually tested against. Also folds
+    ``role`` now that certification is per-role rather than a single binary
+    verdict (see ``llm.agent.roles``).
 
     Migration/invalidation semantics (explicit): this changes the computed
     fingerprint value for the existing single-role (legacy binary) selection
@@ -665,10 +728,10 @@ def _readiness_fingerprint(
                 candidate.model,
                 candidate.credentials.base_url,
                 READINESS_VERSION,
-                PROMPT_VERSION,
                 TOOL_CONTRACT_VERSION,
                 BUDGET_POLICY_VERSION,
                 role.value,
+                _canonical_contract_digest(),
             )
         ).encode()
     ).hexdigest()[:24]

@@ -385,11 +385,14 @@ async def test_acceptance_openai_runs_real_readiness_grounding_and_capabilities(
     assert capability.effective_provider_label == "OpenAI compatible"
     assert capability.effective_model_label == ACCEPTANCE_OPENAI_MODEL
     assert capability.provider_source == "platform"
-    # CHAOS-3285: 2 more requests than before -- the new production-sized
-    # legacy_agent role probe's two rounds, run against this same real
-    # scripted server above, in addition to the original transport-echo
-    # probe (2) and the orchestrator run's own requests.
-    assert len(scripted_openai_server.requests) == 10
+    # CHAOS-3285: 3 more requests than the pre-role-probe baseline of 8 --
+    # the new production-sized legacy_agent role probe's three rounds (round
+    # 1, round 2 under the committed-subject prompt shape, and round 2 AGAIN
+    # under the uncommitted-subject shape -- CHAOS-3285 round 2, Codex HIGH),
+    # run against this same real scripted server above, in addition to the
+    # original transport-echo probe (2) and the orchestrator run's own
+    # requests.
+    assert len(scripted_openai_server.requests) == 11
 
 
 @pytest.mark.asyncio

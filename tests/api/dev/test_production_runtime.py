@@ -12,7 +12,6 @@ from dev_health_ops.api.dev import production_runtime
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevScope, DevToolRequest, ToolID
 from dev_health_ops.api.dev.production_runtime import ProductionProviderResolution
-from dev_health_ops.api.dev.prompts import PROMPT_VERSION
 from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
 from dev_health_ops.api.dev.tool_registry import (
     TOOL_CONTRACT_VERSION,
@@ -62,7 +61,11 @@ def _fingerprint(
     # stored AgentReadinessRecord by hand must fold the same inputs the
     # real function now folds, or it would exercise a fingerprint formula
     # that no longer matches production and every "certification is
-    # current" assertion below would be testing nothing.
+    # current" assertion below would be testing nothing. The canonical
+    # contract digest (CHAOS-3285 round 2) is reused directly from the real
+    # producer rather than re-derived here -- hand-duplicating a digest
+    # computation is exactly the kind of drift that got the bare
+    # PROMPT_VERSION constant caught in the first place.
     return hashlib.sha256(
         "\0".join(
             (
@@ -71,10 +74,10 @@ def _fingerprint(
                 model,
                 base_url,
                 READINESS_VERSION,
-                PROMPT_VERSION,
                 TOOL_CONTRACT_VERSION,
                 BUDGET_POLICY_VERSION,
                 role.value,
+                production_runtime._canonical_contract_digest(),
             )
         ).encode()
     ).hexdigest()[:24]
@@ -187,6 +190,56 @@ def test_readiness_fingerprint_invalidates_pre_chaos_3285_stored_records() -> No
     assert pre_change_fingerprint != production_runtime._readiness_fingerprint(
         candidate
     )
+
+
+def test_canonical_contract_digest_folds_the_legacy_prompt_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 round 2 (Codex HIGH): the fingerprint previously folded
+    only PROMPT_VERSION -- the committed-subject prompt shape
+    (subject_committed=True). PromptComposer also produces
+    LEGACY_PROMPT_VERSION's shape (uncommitted subject / the flag-off
+    path), which the legacy_agent probe never exercises (it forces
+    subject_committed=True unconditionally) -- so a text-only change to
+    ONLY that prompt shape never invalidated any certification at all,
+    since LEGACY_PROMPT_VERSION was never folded anywhere. Prove the
+    canonical contract digest now folds it."""
+
+    production_runtime._canonical_contract_digest.cache_clear()
+    try:
+        baseline = production_runtime._canonical_contract_digest()
+
+        monkeypatch.setattr(
+            production_runtime, "LEGACY_PROMPT_VERSION", "changed-legacy-version"
+        )
+        production_runtime._canonical_contract_digest.cache_clear()
+        changed = production_runtime._canonical_contract_digest()
+
+        assert baseline != changed
+    finally:
+        production_runtime._canonical_contract_digest.cache_clear()
+
+
+def test_canonical_contract_digest_folds_the_real_run_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DevRunLimits value changing (e.g. the per-call output cap) must
+    invalidate certification even if nobody remembers to bump a version
+    string for it."""
+    from dev_health_ops.api.dev.orchestrator import DevRunLimits
+
+    production_runtime._canonical_contract_digest.cache_clear()
+    try:
+        baseline = production_runtime._canonical_contract_digest()
+
+        smaller_limits = DevRunLimits(max_output_tokens_per_call=2_048)
+        monkeypatch.setattr(production_runtime, "DevRunLimits", lambda: smaller_limits)
+        production_runtime._canonical_contract_digest.cache_clear()
+        changed = production_runtime._canonical_contract_digest()
+
+        assert baseline != changed
+    finally:
+        production_runtime._canonical_contract_digest.cache_clear()
 
 
 @pytest.mark.asyncio

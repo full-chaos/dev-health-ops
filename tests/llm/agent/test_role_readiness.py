@@ -431,11 +431,13 @@ def _assert_structurally_real_grammar(round_2: dict[str, Any]) -> None:
         "-- padding does not substitute for the actual schema shape"
     )
 
-    real_kind_property = _real_decision_schema()["properties"]["kind"]
-    assert properties.get("kind") == real_kind_property, (
-        "grammar's 'kind' property does not match the real generated "
-        "schema's non-null decision-kind enum -- an inert (e.g. all-null) "
-        "grammar does not substitute for the actual decision-kind field"
+    real_properties = _real_decision_schema()["properties"]
+    assert properties == real_properties, (
+        "grammar's full properties tree does not match the real generated "
+        "schema -- comparing only 'kind' (round 5) is insufficient: every "
+        "OTHER property could still be retyped to {'type': 'null'} with "
+        "padding, and 'kind' alone would never catch it (CHAOS-3285 round "
+        "6, Codex MEDIUM)"
     )
 
 
@@ -511,6 +513,44 @@ def _assert_structurally_real_history(round_2: dict[str, Any]) -> None:
             f"DevToolResult -- padding/all-null fields do not substitute "
             f"for a real tool-result payload: {exc}"
         ) from exc
+
+    # CHAOS-3285 round 6 (Codex MEDIUM), codex's exact repro: a VALID
+    # DevToolResult -- schema_version/run_id/tool_call_id/tool_id/status all
+    # present and well-formed -- can still be an "empty-success" result:
+    # every data field empty, serialized_bytes falsely claimed as 0 while
+    # padded "warnings" entries make the real payload kilobytes large.
+    # Pydantic validation alone (above) does not catch either defect: it
+    # has no cross-field rule tying serialized_bytes to the real encoded
+    # size, and "no data" is a legitimately valid (if useless) DevToolResult
+    # shape on its own.
+    declared_bytes = parsed.get("serialized_bytes")
+    assert isinstance(declared_bytes, int), "serialized_bytes must be an integer"
+    actual_bytes = len(
+        json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    assert actual_bytes > 0
+    relative_error = abs(declared_bytes - actual_bytes) / actual_bytes
+    assert relative_error <= 0.2, (
+        f"tool result's declared serialized_bytes ({declared_bytes}) does "
+        f"not match its actual encoded size ({actual_bytes} bytes, "
+        f"{relative_error:.1%} off) -- a claimed byte count this far from "
+        "reality (e.g. serialized_bytes=0 padded with kilobytes of "
+        "warnings) is not a truthful tool-result payload"
+    )
+
+    has_real_data = bool(
+        parsed.get("scope_resolution")
+        or parsed.get("metrics")
+        or parsed.get("metric_definitions")
+        or parsed.get("evidence")
+    )
+    assert has_real_data, (
+        "tool result has no real data-bearing content -- "
+        "scope_resolution/metrics/metric_definitions/evidence are all "
+        "empty. An 'empty-success' result (status='success', everything "
+        "else empty, padded only with warnings) is not a representative "
+        "production tool result"
+    )
 
 
 def _calibrate_noncompliant_rate(
@@ -739,6 +779,83 @@ async def test_calibration_fails_loudly_on_a_null_tool_result() -> None:
         AssertionError, match="does not validate as a real DevToolResult"
     ):
         _calibrate_noncompliant_rate(round_1, null_tool_result, cap=4096)
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_on_an_empty_success_tool_result() -> None:
+    """CHAOS-3285 round 6 (Codex MEDIUM), codex's exact repro: a VALID
+    DevToolResult -- schema_version/run_id/tool_call_id/tool_id/status all
+    present and well-formed -- can still be an "empty-success" result:
+    every data field empty, serialized_bytes falsely claimed as 0 while a
+    padded "warnings" entry makes the real payload kilobytes large.
+    Pydantic validation alone (round 5's fix) does not catch either
+    defect: it has no cross-field rule tying serialized_bytes to the real
+    encoded size, and "no data" is a legitimately valid DevToolResult
+    shape on its own."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    real_call_id = round_2["messages"][2]["tool_calls"][0]["id"]
+    empty_success_result = {
+        "schema_version": "dev_tool_result.v1",
+        "run_id": "run_01",
+        "tool_call_id": real_call_id,
+        "tool_id": "query_metric.v1",
+        "status": "success",
+        "warnings": ["x" * 2_000],
+        "serialized_bytes": 0,
+    }
+    empty_success = dict(round_2)
+    empty_success["messages"] = [
+        round_2["messages"][0],
+        round_2["messages"][1],
+        round_2["messages"][2],
+        {
+            "role": "tool",
+            "tool_call_id": real_call_id,
+            "content": json.dumps(empty_success_result),
+        },
+    ]
+
+    with pytest.raises(
+        AssertionError,
+        match="does not match its actual encoded size",
+    ):
+        _calibrate_noncompliant_rate(round_1, empty_success, cap=4096)
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_loudly_on_a_kind_preserved_all_null_schema() -> None:
+    """CHAOS-3285 round 6 (Codex MEDIUM), codex's exact repro: keep the
+    'kind' property EXACTLY matching the real schema -- satisfying round
+    5's kind-only comparison -- while retyping every OTHER property to
+    {"type": "null"} with description padding to keep the byte margins
+    satisfied. Comparing the FULL properties tree (not just kind) must
+    catch it."""
+
+    round_1, round_2 = await _uncalibrated_round_requests()
+    real_properties = round_2["response_format"]["json_schema"]["schema"]["properties"]
+    real_required = round_2["response_format"]["json_schema"]["schema"]["required"]
+    kind_preserved_properties = {
+        key: (
+            real_properties["kind"]
+            if key == "kind"
+            else {"type": "null", "description": "x" * 500}
+        )
+        for key in real_properties
+    }
+    kind_preserved_schema = dict(round_2)
+    kind_preserved_schema["response_format"] = {
+        "json_schema": {
+            "strict": True,
+            "schema": {
+                "properties": kind_preserved_properties,
+                "required": real_required,
+            },
+        }
+    }
+
+    with pytest.raises(AssertionError, match="full properties tree does not match"):
+        _calibrate_noncompliant_rate(round_1, kind_preserved_schema, cap=4096)
 
 
 @pytest.mark.asyncio

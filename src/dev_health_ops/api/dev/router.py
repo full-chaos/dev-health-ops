@@ -36,6 +36,7 @@ from dev_health_ops.api.queries.client import get_global_client
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.api.services.permissions import get_user_permissions
+from dev_health_ops.db import get_postgres_session
 from dev_health_ops.licensing import evaluate_org_feature_async
 from dev_health_ops.licensing.registry import ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE
 from dev_health_ops.llm.agent.contracts import AgentUsage
@@ -1312,19 +1313,53 @@ async def create_message(
     )
 
     async def run_with_events(event_sink) -> OrchestratorResult:
-        return await runtime.run(
-            request=body,
-            org_id=user.org_id,
-            user_id=user.user_id,
-            permission_fingerprint=_permission_fingerprint(user),
-            run_id=run_id,
-            conversation_id=str(conversation_id),
-            answer_id=answer_id,
-            cancellation=cancellation,
-            recorder=recorder,
-            event_sink=event_sink,
-            prior_turns=prior_turns,
-        )
+        try:
+            return await runtime.run(
+                request=body,
+                org_id=user.org_id,
+                user_id=user.user_id,
+                permission_fingerprint=_permission_fingerprint(user),
+                run_id=run_id,
+                conversation_id=str(conversation_id),
+                answer_id=answer_id,
+                cancellation=cancellation,
+                recorder=recorder,
+                event_sink=event_sink,
+                prior_turns=prior_turns,
+            )
+        except Exception:
+            # CHAOS-3297 Codex review round 3 Finding 2: finish()
+            # (orchestrator.py) can flush an answer and/or a frame on this
+            # request's session, then have its own terminal write fail for
+            # a reason unrelated to input validity. streaming.
+            # stream_orchestrator catches this exception and turns it into
+            # a generic internal_error SSE event without re-raising to
+            # this request's session-dependency teardown, which then
+            # commits whatever was already flushed: artifacts and a v2 tag
+            # on a run stuck non-terminal forever.
+            #
+            # Roll back this (possibly poisoned) session's own pending,
+            # uncommitted writes FIRST -- a fresh session's fallback write
+            # to the *same* dev_runs row would otherwise deadlock waiting
+            # for a lock this session's still-open transaction holds
+            # (nothing will ever commit it now that we are handling its
+            # failure). Any artifact that was only flushed, never
+            # committed, is discarded by this rollback -- acceptable,
+            # since a flush alone was never a durability guarantee.
+            # Anything committed by an *earlier*, already-completed
+            # transaction on this session is unaffected.
+            try:
+                await service.session.rollback()
+            except Exception:
+                pass
+            # Force the run terminal from a FRESH session/connection --
+            # never the session just rolled back above -- so no run can
+            # end up stuck non-terminal after this failure.
+            async with get_postgres_session() as fallback_session:
+                await DevPersistenceService(fallback_session).force_terminal_fallback(
+                    org_id=org_id, user_id=user_id, run_id=accepted.run.id
+                )
+            raise
 
     async def chunks() -> AsyncGenerator[bytes, None]:
         async for chunk in encoded_sse_stream(

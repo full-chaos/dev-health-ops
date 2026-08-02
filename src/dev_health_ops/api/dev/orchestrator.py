@@ -630,6 +630,31 @@ class DevOrchestrator:
             nonlocal terminal_written
             if terminal_written:
                 raise RuntimeError("terminal state already written")
+            # CHAOS-3297 Codex review round 3 Finding 2: materialize and
+            # validate the terminal error input before any record_*() write
+            # is attempted -- not after answer/frame are already flushed on
+            # the session. With the persistence-layer fix (round 3 CLASS A:
+            # terminal_error_payload's acceptance predicate is
+            # DevError.model_validate() succeeding, not a byte cap), this
+            # check is cheap and should never actually fire in practice --
+            # `error` is already a validated DevError instance by
+            # construction everywhere it is built in this module. It exists
+            # so a defect that somehow produces an invalid DevError is
+            # caught here, before any write, rather than discovered only
+            # when update_run's own validation fires after other artifacts
+            # are already on the session.
+            if error is not None:
+                try:
+                    DevError.model_validate(error.model_dump(mode="json"))
+                except ValidationError:
+                    error = DevError(
+                        schema_version="dev_error.v1",
+                        request_id=request.request_id,
+                        code="internal_error",
+                        safe_message="The request could not be completed.",
+                        retryable=False,
+                    )
+                    answer = None
             if answer is not None:
                 try:
                     await self._recorder.record_answer(answer)

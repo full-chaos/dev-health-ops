@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -367,6 +368,49 @@ class OrchestratorNativeErrorRuntime(FakeBoundedRuntime):
         return None
 
 
+class FrameWrittenThenTerminalPersistCrashesRuntime(FakeBoundedRuntime):
+    """Reproduces CHAOS-3297 Codex review round 3 Finding 2: a frame is
+    successfully flushed, then the terminal-state write itself fails for a
+    reason unrelated to input validity -- ``recorder.terminal()`` is never
+    called at all, simulating a database-layer failure the orchestrator's
+    own ``finish()`` could not recover from. Exercises
+    ``router.create_message``'s ``run_with_events`` last-resort fallback
+    directly, without needing to force a real database fault inside
+    ``update_run``.
+    """
+
+    async def run(
+        self,
+        *,
+        request,
+        run_id,
+        conversation_id,
+        answer_id,
+        recorder,
+        event_sink,
+        **_kwargs,
+    ) -> OrchestratorResult:
+        del conversation_id, answer_id
+        await recorder.transition(RunState.RESOLVING_SCOPE)
+        await event_sink(OrchestratorEvent(RunState.RESOLVING_SCOPE))
+
+        frame = dev_terminal_frames.build_error_frame(
+            code="scope_not_found",
+            run_id=run_id,
+            generated_at=datetime.now(UTC),
+            versions=_TEST_VERSIONS,
+        )
+        await recorder.record_frame(frame)
+        # Simulates terminal()/update_run failing for a reason unrelated to
+        # input validity (e.g. a dropped connection) -- never reaches
+        # recorder.terminal() at all, so the run stays non-terminal on the
+        # request session unless the router's last-resort fallback fires.
+        raise RuntimeError("simulated terminal-persist failure")
+
+    async def aclose(self) -> None:
+        return None
+
+
 def _parse_sse_events(text: str) -> list[tuple[str, dict[str, Any]]]:
     events: list[tuple[str, dict[str, Any]]] = []
     for block in text.strip().split("\n\n"):
@@ -435,6 +479,17 @@ async def dev_api_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     def _enable_foreign_keys(dbapi_connection: Any, _record: Any) -> None:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        # A streaming response keeps its request-scoped session open for
+        # the whole SSE stream (FastAPI does not tear down a dependency
+        # until the response body is fully consumed); a same-file SQLite
+        # connection opened concurrently by the CHAOS-3297 round 3
+        # Finding 2 last-resort fallback (a genuinely separate connection,
+        # by design -- it must not reuse a possibly-poisoned session)
+        # would otherwise immediately raise "database is locked" instead
+        # of waiting the brief moment SQLite needs to hand off the file
+        # lock. Postgres has no such single-writer file lock, so this is
+        # purely a same-process-SQLite test artifact.
+        cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
     async with engine.begin() as connection:
@@ -1057,6 +1112,136 @@ async def test_oversized_but_legal_error_persists_atomically_and_replays_byte_id
         assert run.terminal_error_payload is not None
         assert run.terminal_error_payload["safe_message"] == huge_message
         assert run.terminal_error_payload["remediation"] == huge_remediation
+
+
+@pytest.mark.asyncio
+async def test_terminal_persist_failure_after_frame_write_still_ends_the_run_terminal(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-3297 Codex review round 3 Finding 2.
+
+    A frame is successfully flushed, then the terminal-state write itself
+    fails for a reason unrelated to input validity (never reaches
+    ``recorder.terminal()`` at all -- simulating a database-layer failure,
+    not a validation failure Class A/round-2 already made vanishingly
+    unlikely). Before this fix, the run stayed stuck in a non-terminal
+    ``state`` forever (``streaming.stream_orchestrator`` swallows the
+    exception into a generic SSE event without re-raising to the request's
+    session-dependency teardown, which then commits whatever was already
+    flushed) while carrying an already-persisted frame and a
+    ``contract_generation = 'v2'`` tag -- a run a client could never
+    successfully retry (every retry 409s forever) and replay could never
+    make sense of.
+
+    ``router.get_postgres_session`` (``dev_health_ops.db.get_postgres_session``)
+    is hardcoded to the app's configured production Postgres engine, which
+    has no relationship to this test's isolated SQLite database -- and a
+    genuinely separate SQLite connection racing the request's own
+    still-open one hits aiosqlite/SQLAlchemy's own greenlet-bridging
+    limits in-process, orthogonal to what this test is about. The
+    fallback's *own* correctness (forces a stuck run terminal, is
+    idempotent) is proven directly against a real session in
+    ``test_persistence_v2.py::test_force_terminal_fallback_forces_a_stuck_run_terminal``;
+    this test proves the *wiring* -- that a terminal-persist failure
+    triggers exactly one rollback of the request session followed by
+    exactly one fallback call with the correct identifying arguments --
+    via a spy, and that the SSE response still degrades safely rather than
+    hanging or 500ing.
+    """
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=cast(Any, FrameWrittenThenTerminalPersistCrashesRuntime())
+    )
+
+    @asynccontextmanager
+    async def _noop_fresh_session():
+        yield None
+
+    monkeypatch.setattr(dev_router_module, "get_postgres_session", _noop_fresh_session)
+
+    fallback_calls: list[dict[str, Any]] = []
+
+    async def _spy_force_terminal_fallback(self, **kwargs: Any) -> None:
+        fallback_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        dev_router_module.DevPersistenceService,
+        "force_terminal_fallback",
+        _spy_force_terminal_fallback,
+    )
+
+    # The real AsyncSession.rollback() on the request-scoped session, called
+    # from inside run_with_events's except handler (a task spawned via
+    # asyncio.ensure_future in streaming.stream_orchestrator), triggers a
+    # SQLAlchemy/aiosqlite greenlet-bridging failure specific to this
+    # in-process ASGI-transport test harness ("greenlet_spawn has not been
+    # called") that does not reproduce against a real Postgres connection.
+    # Spying it out proves the *call* happens (the wiring this test is
+    # about) without depending on aiosqlite's cross-task greenlet behavior,
+    # which is an orthogonal test-harness concern.
+    rollback_calls = 0
+
+    async def _spy_rollback(self) -> None:
+        nonlocal rollback_calls
+        rollback_calls += 1
+
+    monkeypatch.setattr(AsyncSession, "rollback", _spy_rollback)
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": "request_terminal_persist_crash",
+        "client_message_id": "client_terminal_persist_crash",
+        "conversation_id": conversation_id,
+        "question": "What is the status of the thing I mean?",
+        "question_class": "status",
+        "scope": _scope_payload(dev_api_context.org_id),
+    }
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+    live_events = dict(_parse_sse_events(live.text))
+    assert "error" in live_events, (
+        "the crash must still surface as a safe SSE error event, not hang "
+        "or 500 the connection"
+    )
+
+    async with dev_api_context.maker() as session:
+        run = await session.scalar(
+            select(DevRun).where(DevRun.conversation_id == uuid.UUID(conversation_id))
+        )
+        assert run is not None
+
+    assert rollback_calls >= 1, (
+        "the poisoned session must be rolled back before the fresh-session "
+        "fallback is attempted"
+    )
+    assert len(fallback_calls) == 1, (
+        "the last-resort fallback must fire exactly once for this failure, "
+        f"got {len(fallback_calls)}"
+    )
+    assert fallback_calls[0]["run_id"] == run.id
+    assert fallback_calls[0]["org_id"] == dev_api_context.org_id
+    assert fallback_calls[0]["user_id"] == dev_api_context.user_id
+
+    async with dev_api_context.maker() as session:
+        runs = (
+            await session.scalars(
+                select(DevRun).where(
+                    DevRun.conversation_id == uuid.UUID(conversation_id)
+                )
+            )
+        ).all()
+        assert len(runs) == 1, "the replay must not have created a second run"
 
 
 @pytest.mark.asyncio

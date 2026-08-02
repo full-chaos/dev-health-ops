@@ -247,12 +247,37 @@ def _real_project_positive_control() -> tuple[ManifestItem, ...]:
                 "tests/acceptance/ask-dev-oracle.v1.json",
                 "tests/acceptance/test_ask_dev_compose.py",
                 "scripts/acceptance/run_ask_dev_compose.sh",
+                "scripts/acceptance/smoke_ask_dev_inherited_oracle.py",
+                "tests/acceptance/test_ask_dev_inherited_oracle_smoke.py",
             ),
             requires_live_infra=True,
-            # Inherited harness (pre-dates CHAOS-3300); its live-run
-            # correctness was not independently re-confirmed by this lane --
-            # unlike defect.ask-dev-not-found.e2e-live-validated below, which
-            # this lane actually executed against the real Compose stack.
+            # Lane-verified 2026-08-02 16:04 UTC (per team-lead direction):
+            # smoke_ask_dev_inherited_oracle.py asks the exact oracle
+            # question over the real HTTP/SSE API (no Playwright) and
+            # confirmed all three oracle claims -- expected_metric_id,
+            # expected_evidence_entity_fragment, expected_claim_kind -- were
+            # present in a real answer. The inherited harness did NOT rot;
+            # the ops-side substance holds. One real finding surfaced along
+            # the way: a naive 28-day-current + 28-day-comparison window
+            # (matching what the original Playwright/oracle harness and this
+            # lane's own earlier smoke scripts all use) returns
+            # comparison_value=null and an ungrounded "could not be
+            # established" answer, because
+            # `dev-hops fixtures generate --days 28` only backfills 28 days
+            # total -- the comparison half of a 28+28 window has no seeded
+            # data. smoke_ask_dev_inherited_oracle.py uses 14+14 (inside the
+            # backfill) and passes; this lane's earlier not-found/
+            # exact-commit/core-intents scripts still use 28+28, which is
+            # harmless for THEIR assertions (they only check "no error,
+            # non-empty summary", which the degraded/ungrounded answer still
+            # satisfies) but means those three prove "safe non-crashing
+            # behavior," not "a fully grounded correct answer" -- narrower
+            # than this item's claim. Not fixed retroactively (time-boxed
+            # per team-lead's wrap directive); worth a follow-up pass.
+            # Playwright leg itself (whether the web UI's own date-range
+            # picker defaults inside or outside the 28-day backfill) was NOT
+            # independently re-checked -- out of scope per team-lead
+            # ("skip the Playwright half if it drags").
         ),
     )
 
@@ -402,8 +427,13 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
             category="blocking_matrix",
             description="Exact named project status with complete current data.",
             status="proven_e2e",
-            evidence=("tests/acceptance/ask-dev-oracle.v1.json",),
+            evidence=(
+                "tests/acceptance/ask-dev-oracle.v1.json",
+                "scripts/acceptance/smoke_ask_dev_inherited_oracle.py",
+            ),
             requires_live_infra=True,
+            # Lane-verified 2026-08-02 via smoke_ask_dev_inherited_oracle.py
+            # -- see positive-control.real-project-status for the run detail.
         ),
         ManifestItem(
             id="matrix.project-incomplete-required-children",
@@ -488,14 +518,47 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
             requires_live_infra=True,
         ),
         ManifestItem(
+            id="matrix.multi-metric-comparison-organization-wide",
+            category="blocking_matrix",
+            description=(
+                "Multi-metric comparison (items_completed + "
+                "cyclomatic_per_kloc), organization-wide."
+            ),
+            status="proven_e2e",
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_metric_comparison.py",
+                "tests/acceptance/test_ask_dev_metric_comparison_smoke.py",
+            ),
+            requires_live_infra=True,
+            # Actually executed 2026-08-02 16:08 UTC: a comparison-shaped
+            # question with two requested_metric_ids routed through the
+            # real, wired metric.comparison.v1 plan (confirmed via direct
+            # dev_runs inspection: plan_step_partition showed
+            # registered_metric_query completed, 0 failed) and returned a
+            # non-error terminal answer. First live proof this plan runs at
+            # all for a real multi-metric request -- previously untested at
+            # any level beyond the plan document's own existence.
+        ),
+        ManifestItem(
             id="matrix.multi-metric-comparison-stale-source",
             category="blocking_matrix",
             description="Multi-metric comparison with one stale source.",
             status="deferred",
             blocked_reason=(
-                "metric.comparison.v1 is a wired core intent, but no "
-                "acceptance-level or unit-level fixture exercises a "
-                "multi-metric comparison with exactly one stale source yet"
+                "metric.comparison.v1 is a wired core intent and the "
+                "multi-metric happy path is now live-proven (see "
+                "matrix.multi-metric-comparison-organization-wide), but the "
+                "specific one-stale-source variant is not: attempted live "
+                "2026-08-02 with items_completed + cyclomatic_per_kloc "
+                "against this Compose profile's fixtures (dev-hops fixtures "
+                "generate --days 28) and direct dev_run_source_observations "
+                "inspection showed BOTH metrics genuinely available and "
+                "fresh (observed_state=available_current for both) -- this "
+                "fixture profile does not naturally produce a stale metric "
+                "source within the 28-day backfill window, so the negative "
+                "case needs either a metric class structurally absent from "
+                "these fixtures (not yet identified) or direct ClickHouse "
+                "row manipulation to force staleness, neither done here"
             ),
         ),
         ManifestItem(

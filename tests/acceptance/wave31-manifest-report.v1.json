@@ -1,15 +1,15 @@
 {
   "schema_version": "wave_3_1_proof_gate_manifest.v1",
-  "item_count": 56,
+  "item_count": 57,
   "status_counts": {
     "blocked": 15,
     "deferred": 7,
-    "proven_e2e": 7,
+    "proven_e2e": 8,
     "proven_unit": 27
   },
   "category_counts": {
     "attack": 5,
-    "blocking_matrix": 28,
+    "blocking_matrix": 29,
     "gate": 5,
     "mutation_proof": 12,
     "original_defect_reproduction": 5,
@@ -127,7 +127,8 @@
       "description": "Exact named project status with complete current data.",
       "status": "proven_e2e",
       "evidence": [
-        "tests/acceptance/ask-dev-oracle.v1.json"
+        "tests/acceptance/ask-dev-oracle.v1.json",
+        "scripts/acceptance/smoke_ask_dev_inherited_oracle.py"
       ],
       "blocked_reason": null,
       "test_nodeids": [],
@@ -164,12 +165,25 @@
       "requires_live_infra": false
     },
     {
+      "id": "matrix.multi-metric-comparison-organization-wide",
+      "category": "blocking_matrix",
+      "description": "Multi-metric comparison (items_completed + cyclomatic_per_kloc), organization-wide.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_metric_comparison.py",
+        "tests/acceptance/test_ask_dev_metric_comparison_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true
+    },
+    {
       "id": "matrix.multi-metric-comparison-stale-source",
       "category": "blocking_matrix",
       "description": "Multi-metric comparison with one stale source.",
       "status": "deferred",
       "evidence": [],
-      "blocked_reason": "metric.comparison.v1 is a wired core intent, but no acceptance-level or unit-level fixture exercises a multi-metric comparison with exactly one stale source yet",
+      "blocked_reason": "metric.comparison.v1 is a wired core intent and the multi-metric happy path is now live-proven (see matrix.multi-metric-comparison-organization-wide), but the specific one-stale-source variant is not: attempted live 2026-08-02 with items_completed + cyclomatic_per_kloc against this Compose profile's fixtures (dev-hops fixtures generate --days 28) and direct dev_run_source_observations inspection showed BOTH metrics genuinely available and fresh (observed_state=available_current for both) -- this fixture profile does not naturally produce a stale metric source within the 28-day backfill window, so the negative case needs either a metric class structurally absent from these fixtures (not yet identified) or direct ClickHouse row manipulation to force staleness, neither done here",
       "test_nodeids": [],
       "requires_live_infra": false
     },
@@ -711,7 +725,9 @@
       "evidence": [
         "tests/acceptance/ask-dev-oracle.v1.json",
         "tests/acceptance/test_ask_dev_compose.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
+        "scripts/acceptance/run_ask_dev_compose.sh",
+        "scripts/acceptance/smoke_ask_dev_inherited_oracle.py",
+        "tests/acceptance/test_ask_dev_inherited_oracle_smoke.py"
       ],
       "blocked_reason": null,
       "test_nodeids": [],

@@ -118,6 +118,26 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
   "${ops_root}/scripts/acceptance/smoke_ask_dev_core_intents.py"
 
+# CHAOS-3300: re-verify the inherited positive-control oracle over the same
+# real HTTP/SSE surface (ops-side substance; the Playwright leg below still
+# proves web/window equivalence separately).
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_inherited_oracle.py"
+
+# CHAOS-3300: organization-wide multi-metric comparison (metric.comparison.v1).
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_metric_comparison.py"
+
 "${compose[@]}" up -d --build --wait web
 
 ASK_DEV_LIVE_ACCEPTANCE=1 \

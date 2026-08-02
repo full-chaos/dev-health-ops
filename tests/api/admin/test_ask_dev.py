@@ -41,6 +41,13 @@ from dev_health_ops.llm.agent.readiness import (
     SettingsAgentReadinessStore,
     readiness_failure_state,
 )
+from dev_health_ops.llm.agent.roles import (
+    PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    AgentRole,
+    RoleCertificationRecord,
+    RoleCertificationState,
+    SettingsRoleCertificationStore,
+)
 from dev_health_ops.models.dev_persistence import DevConversation, DevRun
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import Setting
@@ -597,3 +604,160 @@ async def test_global_disable_has_precedence(monkeypatch: pytest.MonkeyPatch):
     )
     assert (state, allowed) == ("globally_disabled", False)
     assert reason == "Ask Dev is globally disabled."
+
+
+@pytest.mark.asyncio
+async def test_role_readiness_shows_not_yet_certified_with_no_stored_record(
+    admin_context, monkeypatch: pytest.MonkeyPatch
+):
+    """CHAOS-3285: before anything certifies a role, every role reads as
+    the honest not_yet_certified state -- distinct from stale_readiness (was
+    certified, now invalidated) and from any FAILED-derived state."""
+
+    async def byo_resolution(_session, *, org_id: str):
+        return ProductionProviderResolution(
+            provider=FakeReadinessProvider(),
+            source=AgentProviderSource.BYO,
+            family="openai",
+            model="org-model",
+            provider_label="OpenAI compatible",
+            model_label="org-model",
+            readiness_fingerprint="byo-readiness-fingerprint",
+        )
+
+    monkeypatch.setattr(ask_dev_admin, "resolve_certification_provider", byo_resolution)
+
+    response = await admin_context.client.get("/api/v1/admin/ask-dev")
+    assert response.status_code == 200
+    body = response.json()
+    roles = {entry["role"]: entry for entry in body["role_readiness"]}
+    assert set(roles) == {
+        "legacy_agent",
+        "intent_classification",
+        "answer_frame_narrative",
+    }
+    for entry in roles.values():
+        assert entry["state"] == "not_yet_certified"
+        assert entry["checked_at"] is None
+        assert entry["safe_remediation"]
+
+
+@pytest.mark.asyncio
+async def test_role_readiness_reflects_a_current_legacy_agent_certification(
+    admin_context, monkeypatch: pytest.MonkeyPatch
+):
+    async def byo_resolution(_session, *, org_id: str):
+        return ProductionProviderResolution(
+            provider=FakeReadinessProvider(),
+            source=AgentProviderSource.BYO,
+            family="openai",
+            model="org-model",
+            provider_label="OpenAI compatible",
+            model_label="org-model",
+            readiness_fingerprint="byo-readiness-fingerprint",
+        )
+
+    monkeypatch.setattr(ask_dev_admin, "resolve_certification_provider", byo_resolution)
+
+    async with admin_context.maker() as session:
+        store = SettingsRoleCertificationStore(
+            SettingsService(session, str(admin_context.org_id))
+        )
+        profile = (await store.load()).with_record(
+            RoleCertificationRecord(
+                role=AgentRole.LEGACY_AGENT,
+                certification_key="byo-readiness-fingerprint",
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                state=RoleCertificationState.COMPATIBLE,
+            )
+        )
+        await store.save(profile)
+        await session.commit()
+
+    response = await admin_context.client.get("/api/v1/admin/ask-dev")
+    assert response.status_code == 200
+    roles = {entry["role"]: entry for entry in response.json()["role_readiness"]}
+    assert roles["legacy_agent"]["state"] == "ready"
+    assert roles["legacy_agent"]["safe_remediation"] is None
+    assert roles["legacy_agent"]["checked_at"] is not None
+    assert roles["intent_classification"]["state"] == "not_yet_certified"
+    assert roles["answer_frame_narrative"]["state"] == "not_yet_certified"
+
+
+@pytest.mark.asyncio
+async def test_role_readiness_reports_stale_when_certification_key_changed(
+    admin_context, monkeypatch: pytest.MonkeyPatch
+):
+    """A record certified under a DIFFERENT capability-input key (e.g. the
+    prompt/tool/budget contract changed since) must never read as ready."""
+
+    async def byo_resolution(_session, *, org_id: str):
+        return ProductionProviderResolution(
+            provider=FakeReadinessProvider(),
+            source=AgentProviderSource.BYO,
+            family="openai",
+            model="org-model",
+            provider_label="OpenAI compatible",
+            model_label="org-model",
+            readiness_fingerprint="byo-readiness-fingerprint-current",
+        )
+
+    monkeypatch.setattr(ask_dev_admin, "resolve_certification_provider", byo_resolution)
+
+    async with admin_context.maker() as session:
+        store = SettingsRoleCertificationStore(
+            SettingsService(session, str(admin_context.org_id))
+        )
+        profile = (await store.load()).with_record(
+            RoleCertificationRecord(
+                role=AgentRole.LEGACY_AGENT,
+                certification_key="byo-readiness-fingerprint-stale",
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                state=RoleCertificationState.COMPATIBLE,
+            )
+        )
+        await store.save(profile)
+        await session.commit()
+
+    response = await admin_context.client.get("/api/v1/admin/ask-dev")
+    assert response.status_code == 200
+    roles = {entry["role"]: entry for entry in response.json()["role_readiness"]}
+    assert roles["legacy_agent"]["state"] == "stale_readiness"
+
+
+@pytest.mark.asyncio
+async def test_role_readiness_platform_boundary_redacts_remediation_not_state(
+    admin_context,
+):
+    """CHAOS-3265 boundary applied to the new per-role surface: an org
+    relying on platform fallback must see the platform role's state (it
+    carries no identity) but never platform's own specific remediation
+    text -- same discipline as the existing single-readiness field."""
+
+    async with admin_context.maker() as session:
+        store = SettingsRoleCertificationStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+        )
+        profile = (await store.load()).with_record(
+            RoleCertificationRecord(
+                role=AgentRole.LEGACY_AGENT,
+                certification_key="readiness-fingerprint",
+                readiness_version=READINESS_VERSION,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                state=RoleCertificationState.INCOMPATIBLE,
+                safe_error_code="output_exhausted",
+            )
+        )
+        await store.save(profile)
+        await session.commit()
+
+    response = await admin_context.client.get("/api/v1/admin/ask-dev")
+    assert response.status_code == 200
+    roles = {entry["role"]: entry for entry in response.json()["role_readiness"]}
+    assert roles["legacy_agent"]["state"] == "unsupported_model"
+    assert roles["legacy_agent"]["safe_remediation"] == (
+        "Ask Dev is temporarily unavailable. Contact your platform operator."
+    )

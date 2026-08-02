@@ -37,8 +37,19 @@ from dev_health_ops.llm.agent.readiness import (
     SettingsAgentReadinessStore,
     readiness_failure_state,
 )
+from dev_health_ops.llm.agent.role_readiness import RoleReadinessService
+from dev_health_ops.llm.agent.roles import (
+    PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    AgentRole,
+    SettingsRoleCertificationStore,
+)
 
-from .ask_dev import StrictAdminModel, _checked_at
+from .ask_dev import (
+    AskDevRoleReadiness,
+    StrictAdminModel,
+    _checked_at,
+    _role_readiness_list,
+)
 from .common import get_session
 
 router = APIRouter()
@@ -56,6 +67,11 @@ class PlatformAskDevReadinessResponse(StrictAdminModel):
     readiness_checked_at: AwareDatetime | None = None
     readiness_version: str | None = Field(default=None, max_length=128)
     safe_remediation: str | None = Field(default=None, max_length=2_048)
+    # CHAOS-3285: additive field, same rationale as AskDevAdminResponse's
+    # role_readiness -- a single generic badge cannot represent per-role
+    # certification. No schema_version bump here either (plan risk R6: web
+    # is a separate, coordinated change).
+    role_readiness: list[AskDevRoleReadiness] = Field(default_factory=list)
 
 
 def _platform_store(session: AsyncSession) -> SettingsAgentReadinessStore:
@@ -75,6 +91,18 @@ def _platform_store(session: AsyncSession) -> SettingsAgentReadinessStore:
     return SettingsAgentReadinessStore(
         SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
         key=PLATFORM_READINESS_SETTING_KEY,
+    )
+
+
+def _platform_role_store(session: AsyncSession) -> SettingsRoleCertificationStore:
+    """The platform-owned provider's per-role certification store -- same
+    ``org_id=""`` sentinel scoping and dedicated-key rationale as
+    ``_platform_store`` above (CHAOS-3265), under a key distinct from both
+    the ordinary per-org role store AND the legacy binary platform key."""
+
+    return SettingsRoleCertificationStore(
+        SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+        key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
     )
 
 
@@ -105,6 +133,10 @@ async def _platform_readiness_response(
                 else READINESS_VERSION
             ),
             safe_remediation=exc.safe_message,
+            # No candidate resolved -- there is nothing to project a
+            # per-role certification_key against (same reasoning as
+            # ask_dev.py's empty-list-when-unresolvable choice).
+            role_readiness=[],
         )
     try:
         readiness_state: ReadinessState
@@ -142,6 +174,11 @@ async def _platform_readiness_response(
                 "This configuration has not been certified under the current "
                 "readiness requirements. Run preflight again."
             )
+        role_profile = await _platform_role_store(session).load()
+        role_readiness = _role_readiness_list(
+            role_profile,
+            legacy_agent_certification_key=resolution.readiness_fingerprint,
+        )
         return PlatformAskDevReadinessResponse(
             configured=True,
             provider_label=resolution.provider_label,
@@ -156,6 +193,7 @@ async def _platform_readiness_response(
                 else READINESS_VERSION
             ),
             safe_remediation=safe_remediation,
+            role_readiness=role_readiness,
         )
     finally:
         try:
@@ -204,6 +242,27 @@ async def run_platform_ask_dev_readiness(
             model=resolution.model,
             fingerprint=resolution.readiness_fingerprint,
         )
+        try:
+            # CHAOS-3285: certify the legacy_agent role in the new per-role
+            # store too, on the same already-resolved provider, so the
+            # per-role projection reflects real preflight results rather
+            # than staying "not_yet_certified" forever. Best-effort: a bug
+            # here must never regress the existing (tested, relied-upon)
+            # binary certify() call above -- certify_legacy_agent already
+            # turns every AgentProviderError into a FAILED/INCOMPATIBLE
+            # record internally, so only a genuinely unexpected failure
+            # (e.g. store I/O) reaches this except.
+            await RoleReadinessService(_platform_role_store(session)).certify_role(
+                AgentRole.LEGACY_AGENT,
+                resolution.provider,
+                certification_key=resolution.readiness_fingerprint,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to certify the legacy_agent role during platform "
+                "Ask Dev preflight",
+                exc_info=True,
+            )
     finally:
         try:
             await resolution.provider.aclose()

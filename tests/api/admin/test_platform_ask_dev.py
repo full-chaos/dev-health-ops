@@ -46,6 +46,11 @@ from dev_health_ops.llm.agent.readiness import (
     AgentReadinessRecord,
     SettingsAgentReadinessStore,
 )
+from dev_health_ops.llm.agent.roles import (
+    PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    AgentRole,
+    SettingsRoleCertificationStore,
+)
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import Setting
 from dev_health_ops.models.users import Organization, User
@@ -76,19 +81,34 @@ class FakeReadinessProvider:
         )
 
     async def decide(self, *_args: Any, **_kwargs: Any) -> AgentDecisionResult:
+        # CHAOS-3285: the platform POST route now runs the OLD binary
+        # transport-echo probe (calls 1-2) AND the NEW production-sized
+        # legacy_agent role probe (calls 3-4) against the same resolved
+        # provider. Odd calls request a tool; even calls answer. Call 1 must
+        # echo READINESS_ECHO_TOOL_ID exactly (readiness.py's own strict
+        # match) -- every later tool_request round names a real registered
+        # tool instead, since certify_legacy_agent validates its synthetic
+        # tool result against the real DevToolResult/ToolID contract.
         self.calls += 1
-        if self.calls == 1:
+        if self.calls % 2 == 1:
+            tool_id = READINESS_ECHO_TOOL_ID if self.calls == 1 else "query_metric.v1"
+            arguments = (
+                {"nonce": "ready-v1"} if tool_id == READINESS_ECHO_TOOL_ID else {}
+            )
             return AgentDecisionResult(
-                decision=AgentToolRequest(
-                    READINESS_ECHO_TOOL_ID, {"nonce": "ready-v1"}, "call-1"
-                ),
+                decision=AgentToolRequest(tool_id, arguments, f"call-{self.calls}"),
                 usage=AgentUsage(input_tokens=3, output_tokens=2),
                 latency_ms=1,
                 provider_fingerprint="provider",
                 model_fingerprint="model",
             )
+        value = (
+            {"nonce": "ready-v1"}
+            if self.calls == 2
+            else {"status": "complete", "direct_summary": "Stub role probe answer."}
+        )
         return AgentDecisionResult(
-            decision=AgentFinalAnswer(value={"nonce": "ready-v1"}),
+            decision=AgentFinalAnswer(value=value),
             usage=AgentUsage(input_tokens=4, output_tokens=1),
             latency_ms=1,
             provider_fingerprint="provider",
@@ -576,3 +596,82 @@ async def test_stale_readiness_version_reports_stale_not_ready(
     )
     assert posted.status_code == 200
     assert posted.json()["readiness"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_post_certifies_legacy_agent_role_and_projects_it(
+    platform_context: PlatformContext, monkeypatch: pytest.MonkeyPatch
+):
+    """CHAOS-3285: preflight now also certifies the legacy_agent role in the
+    new per-role store, on the same resolved provider -- so the per-role
+    projection reflects real results instead of staying not_yet_certified
+    forever. intent/narrative have no probe yet (PR4) and stay
+    not_yet_certified."""
+
+    provider = FakeReadinessProvider()
+
+    async def resolve() -> ProductionProviderResolution:
+        return _resolution(provider)
+
+    monkeypatch.setattr(
+        platform_ask_dev, "resolve_platform_certification_provider", resolve
+    )
+
+    before = await platform_context.client.get(
+        "/api/v1/admin/platform/ask-dev/readiness"
+    )
+    before_roles = {entry["role"]: entry for entry in before.json()["role_readiness"]}
+    assert before_roles["legacy_agent"]["state"] == "not_yet_certified"
+
+    posted = await platform_context.client.post(
+        "/api/v1/admin/platform/ask-dev/readiness"
+    )
+    assert posted.status_code == 200
+    posted_roles = {entry["role"]: entry for entry in posted.json()["role_readiness"]}
+    assert posted_roles["legacy_agent"]["state"] == "ready"
+    assert posted_roles["legacy_agent"]["safe_remediation"] is None
+    assert posted_roles["legacy_agent"]["checked_at"] is not None
+    assert posted_roles["intent_classification"]["state"] == "not_yet_certified"
+    assert posted_roles["answer_frame_narrative"]["state"] == "not_yet_certified"
+
+    async with platform_context.maker() as session:
+        stored = await SettingsRoleCertificationStore(
+            SettingsService(session, PLATFORM_SETTINGS_ORG_ID),
+            key=PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+        ).load()
+        record = stored.for_role(AgentRole.LEGACY_AGENT)
+        assert record is not None
+        assert record.certification_key == _FINGERPRINT
+
+    after = await platform_context.client.get(
+        "/api/v1/admin/platform/ask-dev/readiness"
+    )
+    after_roles = {entry["role"]: entry for entry in after.json()["role_readiness"]}
+    assert after_roles["legacy_agent"]["state"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_role_certification_failure_does_not_regress_binary_readiness(
+    platform_context: PlatformContext, monkeypatch: pytest.MonkeyPatch
+):
+    """A failing provider must still land the existing binary readiness
+    outcome cleanly (no 500), and the new per-role projection must report
+    the same failure -- not silently swallow it, and not crash the route."""
+
+    provider = FailingReadinessProvider()
+
+    async def resolve() -> ProductionProviderResolution:
+        return _resolution(provider)
+
+    monkeypatch.setattr(
+        platform_ask_dev, "resolve_platform_certification_provider", resolve
+    )
+
+    posted = await platform_context.client.post(
+        "/api/v1/admin/platform/ask-dev/readiness"
+    )
+    assert posted.status_code == 200
+    posted_body = posted.json()
+    assert posted_body["readiness"] == "unsupported_model"
+    roles = {entry["role"]: entry for entry in posted_body["role_readiness"]}
+    assert roles["legacy_agent"]["state"] == "unsupported_model"

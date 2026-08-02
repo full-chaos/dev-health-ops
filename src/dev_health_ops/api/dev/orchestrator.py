@@ -50,6 +50,7 @@ from . import terminal_frames
 from .answer_validator import (
     AnswerValidationContext,
     AnswerValidationError,
+    completion_truncation_detail,
     validate_answer_candidate,
 )
 from .contracts import (
@@ -1554,6 +1555,31 @@ class DevOrchestrator:
                                 ),
                             )
                             continue
+                        if exc.code == "completion_denominator_withheld":
+                            # CHAOS-3297 s2 round 5 (codex MEDIUM): the
+                            # bounded repair pass above already gave the
+                            # model one chance to reissue this honestly; if
+                            # it still fabricated a completion total, the
+                            # user must not be left with only a generic
+                            # "validation failed" -- surface WHY (the
+                            # reason codes) and WHAT was actually assessed
+                            # (how many required items were displayed), the
+                            # same truncation detail the repair prompt
+                            # itself never leaked beyond bounded safe text.
+                            # DevError.code stays the closed-vocabulary
+                            # "answer_validation_failed" (this internal
+                            # exc.code is orchestrator-only branching, not
+                            # the wire code -- see "answer_grounding_floor_
+                            # not_met" just below for the same pattern).
+                            return await finish(
+                                RunState.FAILED,
+                                error=error(
+                                    "answer_validation_failed",
+                                    "The answer stated a completion total "
+                                    "that could not be verified. "
+                                    + completion_truncation_detail(tuple(tool_results)),
+                                ),
+                            )
                         if exc.code == "answer_grounding_floor_not_met":
                             # CHAOS-3290: a complete/substantive answer with
                             # no claim, metric, or evidence grounding at all

@@ -33,18 +33,38 @@ _NUMBER = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:[.,]\d+)*(?:%|\b)")
 # required_child_complete are ``None`` whenever the required-child source
 # itself was truncated -- see status_change_service.py). direct_summary
 # carries no citation requirement at all, so the same language needs the
-# identical guard independently of any claim. Detecting "some number" is
-# not enough (a deployment count or a cycle-time value is a legitimate,
-# differently-grounded number); require completion-specific vocabulary
-# AND a percentage/fraction/ratio shape together.
+# identical guard independently of any claim.
+#
+# Round 5 (codex HIGH): a digit-and-ratio-shape check alone is a
+# paraphrase away from bypassed -- "All 500 required items are
+# finished", "Nothing remains", "fully complete", and spelled-out
+# fractions ("three of five items are complete") all state exactly the
+# same withheld total/complete claim without ever matching a
+# percentage/fraction regex. Detecting "some number" is not enough (a
+# deployment count or a cycle-time value is a legitimate, differently-
+# grounded number) -- but once the denominator is withheld, ANY
+# completion-vocabulary sentence that also asserts either a QUANTITY
+# (digit, spelled-out number, percentage, fraction) or TOTALIZING
+# vocabulary (all/none/every/nothing/fully/entirely/completely) is a
+# completion-total assertion, deliberately erring toward over-rejection
+# here: the failure mode this guards is silent fabrication of trust,
+# and a false rejection only costs one bounded repair pass (see the
+# repairable=True below), never a hard failure.
 _COMPLETION_LANGUAGE = re.compile(
-    r"\bcomplet(?:e|ed|ion)\b|\bdone\b|\bfinished\b|\bremaining\b|\boutstanding\b",
+    r"\bcomplet(?:e|ed|ion)\b|\bdone\b|\bfinished\b|\bremain(?:s|ing)?\b|\boutstanding\b",
     re.IGNORECASE,
 )
-_COMPLETION_RATIO_SHAPE = re.compile(
-    r"\d+(?:\.\d+)?\s*%|\b\d+\s*(?:/|of|out of)\s*\d+\b",
+_TOTALIZING_LANGUAGE = re.compile(
+    r"\ball\b|\bnone\b|\bevery\b|\bnothing\b|\bfully\b|\bentirely\b|\bcompletely\b",
     re.IGNORECASE,
 )
+_NUMBER_WORD = re.compile(
+    r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
+    r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)\b",
+    re.IGNORECASE,
+)
+_ANY_QUANTITY = re.compile(r"\d|" + _NUMBER_WORD.pattern, re.IGNORECASE)
 _NON_REPAIRABLE_VALIDATION_MARKERS = (
     "unknown evidence",
     "unknown metric",
@@ -127,13 +147,15 @@ def _claim_has_grounding_reference(claim: DevClaim) -> bool:
 
 
 def _states_a_completion_ratio(text: str) -> bool:
-    """Whether `text` asserts a completion count/fraction/percentage/ratio
-    (e.g. "100% complete", "3 of 5 done", "2/5 remaining") -- see the
-    module-level comment above ``_COMPLETION_LANGUAGE``.
+    """Whether `text` asserts a completion total (a count, fraction,
+    percentage, ratio, or a totalizing claim like "all"/"nothing"/"fully")
+    -- e.g. "100% complete", "3 of 5 done", "All 500 required items are
+    finished", "Nothing remains", "fully complete", "three of five
+    complete". See the module-level comment above ``_COMPLETION_LANGUAGE``.
     """
-    return bool(_COMPLETION_LANGUAGE.search(text)) and bool(
-        _COMPLETION_RATIO_SHAPE.search(text)
-    )
+    if not _COMPLETION_LANGUAGE.search(text):
+        return False
+    return bool(_ANY_QUANTITY.search(text)) or bool(_TOTALIZING_LANGUAGE.search(text))
 
 
 def _any_tool_result_withheld_its_completion_denominator(
@@ -151,6 +173,30 @@ def _any_tool_result_withheld_its_completion_denominator(
         and result.actual_completion.required_child_total is None
         for result in tool_results
     )
+
+
+def completion_truncation_detail(tool_results: tuple[DevToolResult, ...]) -> str:
+    """A safe, user-facing description of why a completion total was
+    withheld (CHAOS-3297 s2 round 5, codex MEDIUM): rejecting a fabricated
+    completion claim without saying why leaves the user with nothing --
+    the failure path must still surface the reason codes and how many
+    required items WERE displayed, not just a generic "validation
+    failed". Built only from ``ActualCompletion`` reason codes and a
+    count -- never raw evidence/child content, so it stays safe to show
+    verbatim in a terminal error message.
+    """
+    for result in tool_results:
+        actual = result.actual_completion
+        if actual is not None and actual.required_child_total is None:
+            reasons = ", ".join(actual.reason_codes) or "unknown reason"
+            displayed = len(actual.required_children)
+            return (
+                f"The required-work assessment could not verify a "
+                f"complete total ({reasons}); {displayed} required "
+                "item(s) were displayed, but that count may be "
+                "incomplete."
+            )
+    return "The required-work assessment could not verify a complete total."
 
 
 def _answer_has_material_grounding(answer: DevAnswer) -> bool:
@@ -425,12 +471,24 @@ def validate_answer_candidate(
         # CHAOS-3297 s2 round 3: a citation existing (checked above) does
         # not mean it grounds THIS number -- a withheld server-side
         # completion denominator makes any completion ratio fabricated
-        # regardless of what the claim cites.
+        # regardless of what the claim cites. Round 5 (codex MEDIUM):
+        # repairable=True, not False -- unlike an identity/scope/mutated-
+        # evidence violation (a trust breach with no honest alternative),
+        # this is a phrasing choice the model can correct: reissue the
+        # same grounded facts under hedged, non-quantified language. A
+        # hard failure here would turn a model's fabricated-but-innocent
+        # word choice into a dead end the user never gets an answer from;
+        # the bounded repair pass (schema_repairs) gives it one chance to
+        # say the same thing honestly before that happens.
         if completion_denominator_withheld and _states_a_completion_ratio(claim.text):
             raise AnswerValidationError(
                 "claim states a completion ratio the server withheld as unknown",
-                code="answer_validation_failed",
-                repairable=False,
+                # Distinct code (not the shared "answer_validation_failed")
+                # so the orchestrator can build a specific, informative
+                # FAILED-terminal message if the repair pass doesn't fix
+                # it -- see completion_truncation_detail and its caller.
+                code="completion_denominator_withheld",
+                repairable=True,
             )
 
     if completion_denominator_withheld and _states_a_completion_ratio(
@@ -440,8 +498,8 @@ def validate_answer_candidate(
         # needs the identical guard independently of the claims loop.
         raise AnswerValidationError(
             "direct summary states a completion ratio the server withheld as unknown",
-            code="answer_validation_failed",
-            repairable=False,
+            code="completion_denominator_withheld",
+            repairable=True,
         )
 
     # CHAOS-3290 grounding floor -- see the constants above for the full
@@ -496,5 +554,6 @@ def validate_answer_candidate(
 __all__ = [
     "AnswerValidationContext",
     "AnswerValidationError",
+    "completion_truncation_detail",
     "validate_answer_candidate",
 ]

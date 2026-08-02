@@ -78,7 +78,7 @@ def _fingerprint(
                 BUDGET_POLICY_VERSION,
                 role.value,
                 production_runtime._canonical_contract_digest(),
-                production_runtime._wire_policy_digest(model),
+                production_runtime._wire_request_digest(model),
             )
         ).encode()
     ).hexdigest()[:24]
@@ -243,29 +243,39 @@ def test_canonical_contract_digest_folds_the_real_run_limits(
         production_runtime._canonical_contract_digest.cache_clear()
 
 
-def test_wire_policy_kwargs_differs_between_probe_round_shapes() -> None:
+def test_build_completion_request_differs_between_probe_round_shapes() -> None:
     """Round 1 (tools offered, no grammar yet) and round 2 (tools offered,
-    grammar) are genuinely distinct wire-policy shapes -- tool_choice
-    switches from "required" to "auto", and the response_format wrapper
-    only appears once a final answer is allowed."""
+    grammar) are genuinely distinct wire request shapes -- tool_choice
+    switches from "required" to "auto", and response_format only appears
+    once a final answer is allowed."""
 
-    round_1 = production_runtime.wire_policy_kwargs(
-        "certified-model", tools_present=True, allow_final_answer=False
+    from dev_health_ops.llm.agent.openai_compatible import build_completion_request
+
+    round_1 = build_completion_request(
+        model="certified-model",
+        messages=production_runtime._wire_request_probe_messages(round_1=True),
+        tools=production_runtime._probe_tools(production_runtime._probe_registry()),
+        response_schema={"type": "object"},
+        max_output_tokens=4096,
     )
-    round_2 = production_runtime.wire_policy_kwargs(
-        "certified-model", tools_present=True, allow_final_answer=True
+    round_2 = build_completion_request(
+        model="certified-model",
+        messages=production_runtime._wire_request_probe_messages(round_1=False),
+        tools=production_runtime._probe_tools(production_runtime._probe_registry()),
+        response_schema={"type": "object"},
+        max_output_tokens=4096,
     )
 
     assert round_1["tool_choice"] == "required"
     assert round_2["tool_choice"] == "auto"
-    assert "response_format_wrapper" not in round_1
-    assert "response_format_wrapper" in round_2
+    assert "response_format" not in round_1
+    assert "response_format" in round_2
 
 
-def test_wire_policy_digest_changes_when_supports_temperature_toggles(
+def test_wire_request_digest_changes_when_supports_temperature_toggles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHAOS-3285 round 4 (Codex HIGH): before this fix, the readiness
+    """CHAOS-3285 round 4 (Codex HIGH): before that fix, the readiness
     fingerprint never called any adapter capability-policy function at all
     -- only the bare candidate.model string, which does not change when a
     policy FUNCTION's behavior changes for an already-certified model (e.g.
@@ -275,61 +285,157 @@ def test_wire_policy_digest_changes_when_supports_temperature_toggles(
 
     from dev_health_ops.llm.agent import openai_compatible
 
-    production_runtime._wire_policy_digest.cache_clear()
+    production_runtime._wire_request_digest.cache_clear()
     try:
-        baseline = production_runtime._wire_policy_digest("certified-model")
+        baseline = production_runtime._wire_request_digest("certified-model")
 
         monkeypatch.setattr(
             openai_compatible, "supports_temperature", lambda _model: False
         )
-        production_runtime._wire_policy_digest.cache_clear()
-        changed = production_runtime._wire_policy_digest("certified-model")
+        production_runtime._wire_request_digest.cache_clear()
+        changed = production_runtime._wire_request_digest("certified-model")
 
         assert baseline != changed
     finally:
-        production_runtime._wire_policy_digest.cache_clear()
+        production_runtime._wire_request_digest.cache_clear()
 
 
-def test_wire_policy_digest_changes_when_parallel_tool_calls_support_toggles(
+def test_wire_request_digest_changes_when_parallel_tool_calls_support_toggles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dev_health_ops.llm.agent import openai_compatible
 
-    production_runtime._wire_policy_digest.cache_clear()
+    production_runtime._wire_request_digest.cache_clear()
     try:
-        baseline = production_runtime._wire_policy_digest("certified-model")
+        baseline = production_runtime._wire_request_digest("certified-model")
 
         monkeypatch.setattr(
             openai_compatible, "supports_parallel_tool_calls", lambda _model: False
         )
-        production_runtime._wire_policy_digest.cache_clear()
-        changed = production_runtime._wire_policy_digest("certified-model")
+        production_runtime._wire_request_digest.cache_clear()
+        changed = production_runtime._wire_request_digest("certified-model")
 
         assert baseline != changed
     finally:
-        production_runtime._wire_policy_digest.cache_clear()
+        production_runtime._wire_request_digest.cache_clear()
 
 
-def test_wire_policy_digest_changes_when_reasoning_effort_toggles(
+def test_wire_request_digest_changes_when_reasoning_effort_toggles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dev_health_ops.llm.agent import openai_compatible
 
-    production_runtime._wire_policy_digest.cache_clear()
+    production_runtime._wire_request_digest.cache_clear()
     try:
-        baseline = production_runtime._wire_policy_digest("certified-model")
+        baseline = production_runtime._wire_request_digest("certified-model")
 
         monkeypatch.setattr(
             openai_compatible,
             "chat_completion_reasoning_effort",
             lambda _model: "minimal",
         )
-        production_runtime._wire_policy_digest.cache_clear()
-        changed = production_runtime._wire_policy_digest("certified-model")
+        production_runtime._wire_request_digest.cache_clear()
+        changed = production_runtime._wire_request_digest("certified-model")
 
         assert baseline != changed
     finally:
-        production_runtime._wire_policy_digest.cache_clear()
+        production_runtime._wire_request_digest.cache_clear()
+
+
+def test_wire_request_digest_changes_when_the_max_token_policy_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3285 round 5 (Codex HIGH): decide() independently resolved
+    max_completion_tokens via model_family_budget -- a field round 4's
+    narrower wire_policy_kwargs never covered at all. build_completion_request
+    now assembles it, so a DevRunLimits change (which flows into the
+    max_output_tokens argument) must change the digest."""
+
+    from dev_health_ops.api.dev.orchestrator import DevRunLimits
+
+    production_runtime._wire_request_digest.cache_clear()
+    try:
+        baseline = production_runtime._wire_request_digest("certified-model")
+
+        smaller_limits = DevRunLimits(max_output_tokens_per_call=2_048)
+        monkeypatch.setattr(production_runtime, "DevRunLimits", lambda: smaller_limits)
+        production_runtime._wire_request_digest.cache_clear()
+        changed = production_runtime._wire_request_digest("certified-model")
+
+        assert baseline != changed
+    finally:
+        production_runtime._wire_request_digest.cache_clear()
+
+
+def test_wire_request_digest_is_sensitive_to_the_response_wrapper_and_tool_fields() -> (
+    None
+):
+    """CHAOS-3285 round 5 (Codex HIGH): round 4's wire_policy_kwargs
+    hand-duplicated the response_format wrapper's name/strict literals
+    separately from decide()'s own assembly of them -- so a change to
+    EITHER decide()'s real literals OR the full generated schema body, or
+    to how a tool gets serialized, could drift from the hand-duplicated
+    copy without the digest ever knowing. Now that build_completion_request
+    is the single producer both decide() and the digest consume, there is
+    no hand-duplicated copy left to drift -- but the digest's own
+    serialize-then-hash step must still not silently drop any of these
+    fields. Prove each one, mutating the SAME real producer's own output,
+    changes what gets hashed."""
+
+    from dev_health_ops.llm.agent.openai_compatible import build_completion_request
+
+    registry = production_runtime._probe_registry()
+    tools = production_runtime._probe_tools(registry)
+    response_schema = {"type": "object", "properties": {"status": {"type": "string"}}}
+    round_1 = build_completion_request(
+        model="certified-model",
+        messages=production_runtime._wire_request_probe_messages(round_1=True),
+        tools=tools,
+        response_schema=response_schema,
+        max_output_tokens=4096,
+    )
+    round_2 = build_completion_request(
+        model="certified-model",
+        messages=production_runtime._wire_request_probe_messages(round_1=False),
+        tools=tools,
+        response_schema=response_schema,
+        max_output_tokens=4096,
+    )
+
+    def _digest(
+        round_1_payload: dict[str, Any], round_2_payload: dict[str, Any]
+    ) -> str:
+        canonical = json.dumps(
+            {"round_1": round_1_payload, "round_2": round_2_payload},
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode()).hexdigest()[:24]
+
+    baseline = _digest(round_1, round_2)
+
+    mutated_name = json.loads(json.dumps(round_2))
+    mutated_name["response_format"]["json_schema"]["name"] = "a_different_name"
+    assert _digest(round_1, mutated_name) != baseline, "wrapper name change not hashed"
+
+    mutated_strict = json.loads(json.dumps(round_2))
+    mutated_strict["response_format"]["json_schema"]["strict"] = False
+    assert _digest(round_1, mutated_strict) != baseline, "strict flag change not hashed"
+
+    mutated_max_tokens = json.loads(json.dumps(round_2))
+    mutated_max_tokens["max_completion_tokens"] = (
+        mutated_max_tokens["max_completion_tokens"] + 1
+    )
+    assert _digest(round_1, mutated_max_tokens) != baseline, (
+        "max_completion_tokens change not hashed"
+    )
+
+    mutated_tools = json.loads(json.dumps(round_2))
+    mutated_tools["tools"][0]["function"]["description"] = "a different description"
+    assert _digest(round_1, mutated_tools) != baseline, (
+        "tool serialization change not hashed"
+    )
 
 
 def test_readiness_fingerprint_changes_when_wire_policy_toggles(
@@ -350,19 +456,19 @@ def test_readiness_fingerprint_changes_when_wire_policy_toggles(
         source=AgentProviderSource.PLATFORM,
     )
 
-    production_runtime._wire_policy_digest.cache_clear()
+    production_runtime._wire_request_digest.cache_clear()
     try:
         baseline = production_runtime._readiness_fingerprint(candidate)
 
         monkeypatch.setattr(
             openai_compatible, "supports_temperature", lambda _model: False
         )
-        production_runtime._wire_policy_digest.cache_clear()
+        production_runtime._wire_request_digest.cache_clear()
         changed = production_runtime._readiness_fingerprint(candidate)
 
         assert baseline != changed
     finally:
-        production_runtime._wire_policy_digest.cache_clear()
+        production_runtime._wire_request_digest.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -410,7 +516,7 @@ async def test_wire_policy_change_invalidates_stored_certification(
     from dev_health_ops.llm.agent import openai_compatible
 
     monkeypatch.setattr(openai_compatible, "supports_temperature", lambda _model: False)
-    production_runtime._wire_policy_digest.cache_clear()
+    production_runtime._wire_request_digest.cache_clear()
     try:
         with pytest.raises(DevRuntimeUnavailable) as exc_info:
             await production_runtime.resolve_production_provider(
@@ -418,7 +524,7 @@ async def test_wire_policy_change_invalidates_stored_certification(
             )
         assert exc_info.value.code == "provider_not_configured"
     finally:
-        production_runtime._wire_policy_digest.cache_clear()
+        production_runtime._wire_request_digest.cache_clear()
 
 
 @pytest.mark.asyncio

@@ -106,57 +106,6 @@ def _fingerprint(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:24]
 
 
-def wire_policy_kwargs(
-    model: str, *, tools_present: bool, allow_final_answer: bool
-) -> dict[str, Any]:
-    """Every model-capability-gated wire control this adapter conditionally
-    sends, for one (model, round-shape) combination.
-
-    Pure and deterministic: no network call, no per-request data (messages,
-    tool schemas, response schema content) -- only the model string and the
-    round shape (whether tools are offered, whether a final answer is
-    allowed this round). ``decide()`` below calls this directly to build
-    ``completion_kwargs``, rather than duplicating the same capability-gated
-    assembly inline.
-
-    CHAOS-3285 round 4 (Codex HIGH): before this extraction, the readiness
-    fingerprint never referenced any of ``supports_temperature``,
-    ``supports_parallel_tool_calls``, or ``chat_completion_reasoning_effort``
-    at all -- so a capability-policy change (e.g. ``supports_temperature``
-    gaining a new excluded model family on some future deploy) silently
-    changed the real outbound request for an already-COMPATIBLE-certified
-    model while its stored certification stayed "current" forever. The
-    readiness fingerprint now hashes THIS function's output directly (see
-    ``production_runtime._wire_policy_digest``) -- the same function
-    ``decide()`` calls -- so it can never drift from what actually gets
-    sent on the wire the way a hand-maintained list of "which controls
-    matter" could.
-    """
-
-    kwargs: dict[str, Any] = {
-        "tool_choice": (
-            ("auto" if allow_final_answer else "required") if tools_present else None
-        ),
-    }
-    if tools_present and supports_parallel_tool_calls(model):
-        kwargs["parallel_tool_calls"] = False
-    if supports_temperature(model):
-        kwargs["temperature"] = 0
-    reasoning_effort = chat_completion_reasoning_effort(model)
-    if reasoning_effort is not None:
-        kwargs["reasoning_effort"] = reasoning_effort
-    if allow_final_answer:
-        # The wrapper's own shape, not the (separately folded) nested
-        # decision schema body: whether a structured-output response is
-        # required at all, and under what name/strictness.
-        kwargs["response_format_wrapper"] = {
-            "type": "json_schema",
-            "name": "ask_dev_decision",
-            "strict": True,
-        }
-    return kwargs
-
-
 def _estimated_cost_microusd(
     *, model: str, input_tokens: int, output_tokens: int
 ) -> int | None:
@@ -254,52 +203,23 @@ class OpenAICompatibleAgentProvider:
         wire_tool_ids = build_wire_tool_name_map(item.tool_id for item in tools)
         started = time.monotonic()
         create_completion = cast(Any, self._client.chat.completions.create)
-        allow_final_answer = not tools or any(
-            message.role is AgentMessageRole.TOOL for message in messages
+        # CHAOS-3285 round 5 (Codex HIGH): the ENTIRE request -- not just the
+        # capability-gated controls round 4 extracted -- is assembled by
+        # build_completion_request, the single producer the readiness
+        # fingerprint's wire-request digest also consumes directly (see
+        # production_runtime._wire_request_digest). Round 4's narrower
+        # extraction still left max_completion_tokens, the response_format
+        # wrapper's literal name/strict values, and the full generated
+        # schema body assembled independently right here, invisible to the
+        # fingerprint; nothing about the request is assembled anywhere else
+        # now, so nothing here can drift from what gets fingerprinted again.
+        completion_kwargs = build_completion_request(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            response_schema=response_schema,
+            max_output_tokens=max_output_tokens,
         )
-        budget = model_family_budget(self.model)
-        # CHAOS-3285 round 4: every capability-gated wire control below is
-        # assembled by wire_policy_kwargs -- the SAME function the readiness
-        # fingerprint hashes for this model at both probe round shapes (see
-        # production_runtime._wire_policy_digest) -- so this call site and
-        # the fingerprint can never independently drift on what a capability
-        # policy change actually sends.
-        policy = wire_policy_kwargs(
-            self.model, tools_present=bool(tools), allow_final_answer=allow_final_answer
-        )
-        completion_kwargs: dict[str, Any] = {
-            "model": self.model,
-            "messages": [self._message_payload(item) for item in messages],
-            "tools": [self._tool_payload(item) for item in tools] or None,
-            "tool_choice": policy["tool_choice"],
-            "max_completion_tokens": budget.request_max_completion_tokens(
-                max_output_tokens
-            ),
-        }
-        if "parallel_tool_calls" in policy:
-            # Ask Dev's runtime is a sequential one-decision-per-round state
-            # machine (TRD 11-12, 20.4). Explicitly disabling native parallel
-            # tool calls keeps a standards-compliant OpenAI-compatible model
-            # from returning multiple tool calls in one response, which the
-            # normalizer must otherwise reject (CHAOS-3254).
-            completion_kwargs["parallel_tool_calls"] = policy["parallel_tool_calls"]
-        if "temperature" in policy:
-            completion_kwargs["temperature"] = policy["temperature"]
-        if "reasoning_effort" in policy:
-            completion_kwargs["reasoning_effort"] = policy["reasoning_effort"]
-        if allow_final_answer:
-            completion_kwargs["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "ask_dev_decision",
-                    "strict": True,
-                    "schema": self._decision_response_schema(
-                        self._answer_draft_schema(response_schema),
-                        tools,
-                        allow_final_answer=True,
-                    ),
-                },
-            }
         provider_task = asyncio.create_task(create_completion(**completion_kwargs))
         cancel_task = asyncio.create_task(signal.wait()) if signal is not None else None
         try:
@@ -783,3 +703,84 @@ class OpenAICompatibleAgentProvider:
             await close()
         if self._http_client is not None:
             await self._http_client.aclose()
+
+
+def build_completion_request(
+    *,
+    model: str,
+    messages: Sequence[AgentMessage],
+    tools: Sequence[AgentToolDefinition],
+    response_schema: Mapping[str, Any],
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    """The COMPLETE request ``OpenAICompatibleAgentProvider.decide()`` sends
+    to the wire for one call -- every keyword argument passed to
+    ``client.chat.completions.create(**...)``. ``decide()`` calls this
+    directly and dispatches its return value wholesale; nothing about the
+    request is assembled anywhere else.
+
+    This is the single producer the readiness fingerprint's wire-request
+    digest also consumes (``production_runtime._wire_request_digest``), so
+    every field assembled here -- the capability-gated wire controls
+    (tool_choice, parallel_tool_calls, temperature, reasoning_effort), the
+    model-resolved ``max_completion_tokens`` budget, the full
+    ``response_format`` (both the wrapper's name/strict literals AND the
+    generated schema body), the serialized tool definitions, and the
+    message scaffold shape -- can never independently drift between what
+    actually gets sent and what gets fingerprinted.
+
+    CHAOS-3285 round 5 (Codex HIGH): round 4's narrower
+    ``wire_policy_kwargs`` covered only the capability-gated controls, plus
+    a HAND-DUPLICATED copy of the response_format wrapper's name/strict
+    literals -- ``decide()`` itself still independently assembled
+    ``max_completion_tokens`` (via ``model_family_budget``), the full
+    generated schema body, and the serialized tool payloads, none of which
+    the fingerprint ever hashed. Changing any of those (e.g. the wrapper's
+    literal ``"name"``/``"strict"`` values) left the fingerprint unchanged.
+    This function replaces that narrower extraction entirely.
+    """
+
+    allow_final_answer = not tools or any(
+        message.role is AgentMessageRole.TOOL for message in messages
+    )
+    budget = model_family_budget(model)
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            OpenAICompatibleAgentProvider._message_payload(item) for item in messages
+        ],
+        "tools": [OpenAICompatibleAgentProvider._tool_payload(item) for item in tools]
+        or None,
+        "tool_choice": (
+            ("auto" if allow_final_answer else "required") if tools else None
+        ),
+        "max_completion_tokens": budget.request_max_completion_tokens(
+            max_output_tokens
+        ),
+    }
+    if tools and supports_parallel_tool_calls(model):
+        # Ask Dev's runtime is a sequential one-decision-per-round state
+        # machine (TRD 11-12, 20.4). Explicitly disabling native parallel
+        # tool calls keeps a standards-compliant OpenAI-compatible model
+        # from returning multiple tool calls in one response, which the
+        # normalizer must otherwise reject (CHAOS-3254).
+        request["parallel_tool_calls"] = False
+    if supports_temperature(model):
+        request["temperature"] = 0
+    reasoning_effort = chat_completion_reasoning_effort(model)
+    if reasoning_effort is not None:
+        request["reasoning_effort"] = reasoning_effort
+    if allow_final_answer:
+        request["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "ask_dev_decision",
+                "strict": True,
+                "schema": OpenAICompatibleAgentProvider._decision_response_schema(
+                    OpenAICompatibleAgentProvider._answer_draft_schema(response_schema),
+                    tools,
+                    allow_final_answer=True,
+                ),
+            },
+        }
+    return request

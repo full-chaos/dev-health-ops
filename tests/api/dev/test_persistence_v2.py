@@ -1338,6 +1338,107 @@ async def test_recover_stale_non_terminal_run_is_a_noop_for_a_missing_run(
         assert recovered is None
 
 
+@pytest.mark.asyncio
+async def test_recover_stale_non_terminal_run_refreshes_a_stale_identity_map_entry(
+    persistence,
+) -> None:
+    """CHAOS-3297 Codex review round 7 HIGH.
+
+    The row lock (``SELECT ... FOR UPDATE``) forces the SQL to wait for
+    and then see the latest committed row -- but that alone is not
+    enough. If the calling session already has this run's identity
+    mapped from an EARLIER load (exactly like router.py's
+    ``service.session`` does, via ``append_user_message_and_run``,
+    earlier in the very same request), SQLAlchemy's default loader
+    behavior returns that SAME cached Python object without refreshing
+    its attributes from the row this query just locked. A run that
+    genuinely completed for real -- via a second, independent session,
+    standing in for the live orchestrator's own successful terminal
+    write racing this recovery call -- in the gap between the caller's
+    stale read and this call must be preserved exactly, never
+    overwritten with ``failed``/``internal_error``.
+
+    Two real sessions against the same aiosqlite database, asserting
+    final state from a THIRD, fresh session -- no spies on the mechanism
+    under test.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session_a:
+        service_a = DevPersistenceService(session_a)
+        _conv_id, run_id = await _accepted_run(
+            service_a, org_id=org_id, user_id=user_id
+        )
+        await service_a.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="resolving_scope",
+        )
+        run = await session_a.get(DevRun, run_id)
+        assert run is not None
+        run.started_at = datetime.now(UTC) - timedelta(minutes=10)
+        await session_a.commit()
+
+        # session_a's identity map now holds this run object -- read as
+        # non-terminal ('resolving_scope') and old enough to recover.
+        # Nothing on session_a touches this row again until the call
+        # under test, below.
+
+        # A SEPARATE session -- standing in for the request's own path
+        # actually completing the run for real, in the gap between the
+        # caller's stale read and the recovery call below -- commits the
+        # real, successful outcome.
+        async with maker() as session_b:
+            service_b = DevPersistenceService(session_b)
+            completed = await service_b.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="completed",
+            )
+            assert completed is not None
+            await session_b.commit()
+            completed_at = completed.ended_at
+            assert completed_at is not None
+
+        # Sanity: session_a's cached object must still read stale right
+        # up until the call under test -- otherwise this test would not
+        # be exercising the identity-map gap at all, it would just be
+        # proving the row lock waits (already covered elsewhere).
+        assert run.state == "resolving_scope", (
+            "sanity: session_a's identity-mapped instance must still be "
+            "stale here for this test to exercise the gap it targets"
+        )
+
+        recovered = await service_a.recover_stale_non_terminal_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            stale_after=timedelta(minutes=5),
+        )
+        assert recovered is not None
+        assert recovered.state == "completed", (
+            "a run that genuinely completed between the caller's stale "
+            "read and this call must be returned as-is, never "
+            "overwritten by a stale-identity-map recovery"
+        )
+        assert recovered.safe_error_code != "internal_error"
+        assert recovered.ended_at is not None
+        assert recovered.ended_at.replace(tzinfo=UTC) == completed_at
+
+    async with maker() as session_c:
+        run_after = await session_c.get(DevRun, run_id)
+        assert run_after is not None
+        assert run_after.state == "completed", (
+            "the real completion must be durably preserved in the "
+            "database, not overwritten by the recovery call"
+        )
+        assert run_after.safe_error_code != "internal_error"
+        assert run_after.ended_at is not None
+        assert run_after.ended_at.replace(tzinfo=UTC) == completed_at
+
+
 # -- dev_run_stage_diagnostics ---------------------------------------------
 
 

@@ -1365,6 +1365,20 @@ class DevPersistenceService:
         out from under it -- this call and the real completion cannot
         both proceed against the same row at once.
 
+        The lock alone is not enough, though: if ``self.session`` already
+        has this run's identity mapped from an EARLIER load in the same
+        session (the request's own ``service.session`` typically has --
+        ``append_user_message_and_run`` loaded it earlier in this same
+        request), SQLAlchemy's default loader behavior returns that SAME
+        cached Python object without refreshing its attributes from the
+        row this query just locked (CHAOS-3297 Codex review round 7
+        HIGH). Without ``populate_existing=True`` below, a run that
+        genuinely completed between the caller's stale read and this
+        call would have its real outcome silently overwritten with
+        ``failed``/``internal_error`` -- the user saw success on the live
+        stream, and every replay after that would serve
+        ``internal_error`` forever.
+
         Returns:
 
         * ``None`` if the run does not exist, or is non-terminal and
@@ -1374,8 +1388,10 @@ class DevPersistenceService:
           same shape ``force_terminal_fallback`` uses) and committed, if
           it was non-terminal and at least ``stale_after`` old.
         * the run as-is, already terminal, if it completed (via this
-          call on an earlier replay, or the original request after all)
-          between the caller's own read and this lock.
+          call on an earlier replay, the original request after all, or
+          a genuinely concurrent request) between the caller's own read
+          and this lock -- always the freshly locked row, never a stale
+          cached instance.
         """
 
         run = await self.session.scalar(
@@ -1386,6 +1402,7 @@ class DevPersistenceService:
                 DevRun.user_id == user_id,
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if run is None:
             return None

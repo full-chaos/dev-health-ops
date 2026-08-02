@@ -279,6 +279,34 @@ RELATIONSHIP_MATRIX: dict[SourceClass, RelationshipMatrixEntry] = {
             freshness_policy="unversioned",
             evidence_expansion_capability=False,
         ),
+        # CHAOS-3297 stack #3: HealthRuleFinding/DeficiencyFinding are
+        # DERIVED aggregates -- a health.project.v1/health.team.v1/
+        # status.portfolio.v1/balance.team_workload.v1/deficiency.
+        # operational.v1 step's own content IS the direct verdict for its
+        # plan (unlike the "supporting" classes above), so role="direct".
+        # Neither finding type carries a per-fact relationship-path claim
+        # of its own the way a status/PR/CI/graph fact does (a finding is
+        # already the terminal judgment over several such facts, not one
+        # more entity-linked hop from the subject) -- empty relationship
+        # vocabulary, same posture as SOURCE_HEALTH. Not evidence-expansion
+        # capable: neither wire type resolves through EvidenceService's
+        # ``get_evidence.v1`` the way a primary fact does (see
+        # EVIDENCE_IDENTITY_TABLE's matching "accepted_risk" cells below
+        # for the full rationale).
+        _entry(
+            SourceClass.HEALTH_PROFILE,
+            role="direct",
+            requirement="required",
+            freshness_policy="health_profile_freshness.v1",
+            evidence_expansion_capability=False,
+        ),
+        _entry(
+            SourceClass.DEFICIENCY_INVENTORY,
+            role="direct",
+            requirement="required",
+            freshness_policy="deficiency_inventory_freshness.v1",
+            evidence_expansion_capability=False,
+        ),
     )
 }
 
@@ -326,6 +354,16 @@ CONTENT_SLOT_FIELDS: tuple[str, ...] = (
     "graph_edges",
     "observed_changes",
     "metric_refs",
+    # CHAOS-3297 stack #3: appended at the tail (lowest truncation
+    # priority) rather than reasoned into the middle of the existing
+    # order -- APPROVED_CONTENT_SLOTS below never lets a HEALTH_PROFILE/
+    # DEFICIENCY_INVENTORY step co-populate these alongside any field
+    # above (each source class populates exactly one slot set), so no
+    # observation this priority order ever ranks against exists yet;
+    # appending is the lowest-blast-radius choice for the six already-
+    # shipped plans' own truncation behavior.
+    "health_findings",
+    "deficiency_findings",
 )
 
 #: Which ``DevSourceContent`` slot(s) each ``SourceClass``'s own registered
@@ -374,6 +412,11 @@ APPROVED_CONTENT_SLOTS: dict[SourceClass, frozenset[str]] = {
     # entries above for the full rationale.
     SourceClass.COGNITIVE_LOAD: frozenset(),
     SourceClass.INVESTMENT_ALLOCATION: frozenset(),
+    # CHAOS-3297 stack #3 -- see the matching RELATIONSHIP_MATRIX entries
+    # above. Each is the ONLY slot its own steps (registered in the new
+    # wave_3_1_plans.py module) are ever allowed to populate.
+    SourceClass.HEALTH_PROFILE: frozenset({"health_findings"}),
+    SourceClass.DEFICIENCY_INVENTORY: frozenset({"deficiency_findings"}),
 }
 
 _missing_content_slots = set(SourceClass) - set(APPROVED_CONTENT_SLOTS)
@@ -631,6 +674,50 @@ EVIDENCE_IDENTITY_TABLE: dict[str, EvidenceIdentityCell] = {
         mode="required", derive=_identity_observed_change
     ),
     "metric_refs": EvidenceIdentityCell(mode="required", derive=_identity_metric_ref),
+    # CHAOS-3297 stack #3 (team-lead amendment, 2026-08-02): "required" mode
+    # verifies that a fact's OWN evidence_ref_ids resolve to a genuinely
+    # minted handle whose identity matches what that SAME fact's own
+    # wire fields would recompute -- it exists to catch a fabricated
+    # PRIMARY fact minted against, or citing, the wrong identity.
+    # HealthRuleFinding/DeficiencyFinding are not primary facts: they are
+    # DERIVED judgments the health-rule/deficiency evaluation engines
+    # compute over several already-canonical facts from OTHER source
+    # classes (status_change/source_health/cognitive_load/investment_
+    # allocation), so there is no single (source_system, source_version,
+    # entity_type, entity_id) tuple on the finding itself for a "required"
+    # cell's derive function to recompute and compare against -- and
+    # HealthRuleFinding structurally has no evidence_ref_ids field at all
+    # (contracts_v2.health_rules.HealthRuleFinding only names
+    # evidence_source_classes, a closed SourceClass vocabulary, never a
+    # specific handle). Per-finding evidence discipline is instead F10,
+    # enforced at the CONTRACT layer by each finding type itself:
+    # DeficiencyFinding.validate_evidence_or_classification requires
+    # evidence_ref_ids XOR evidence_classification on every instance: a
+    # finding that DOES cite real evidence still satisfies F10 by its own
+    # construction, one layer up from this table. classification-only is
+    # the accepted design (never "required" mode) for both cells.
+    "health_findings": EvidenceIdentityCell(
+        mode="accepted_risk",
+        rationale=(
+            "HealthRuleFinding is a derived aggregate with no per-finding "
+            "evidence_ref_ids field to bind -- provenance is the closed "
+            "evidence_source_classes vocabulary, never a specific minted "
+            "handle; see this table's module-level comment above."
+        ),
+    ),
+    "deficiency_findings": EvidenceIdentityCell(
+        mode="accepted_risk",
+        rationale=(
+            "DeficiencyFinding is a derived aggregate over several "
+            "already-canonical facts; its own F10 model_validator "
+            "(validate_evidence_or_classification) enforces evidence_ref_ids "
+            "XOR evidence_classification at the contract layer, which is "
+            "the correct enforcement point for a derived finding -- this "
+            "executor-level identity-binding check exists to catch a "
+            "fabricated PRIMARY fact and has no single recomputable "
+            "identity tuple to check a derived finding against."
+        ),
+    ),
 }
 
 _missing_evidence_cells = set(CONTENT_SLOT_FIELDS) - set(EVIDENCE_IDENTITY_TABLE)

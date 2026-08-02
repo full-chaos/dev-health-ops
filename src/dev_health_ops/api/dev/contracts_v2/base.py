@@ -17,7 +17,14 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    StringConstraints,
+)
 
 from dev_health_ops.api.dev.contracts import (
     Label,
@@ -35,6 +42,7 @@ __all__ = [
     "EMPTY_CONTENT_OUTCOMES",
     "Cardinality",
     "ContractModelV2",
+    "DevRelationshipPath",
     "EntityKind",
     "EvidenceHandle",
     "FactDisclosure",
@@ -217,6 +225,25 @@ class SourceClass(StrEnum):
     #: (``investment_metrics_daily`` -- new-value/KTLO/security/infra/
     #: unclassified delivery units).
     INVESTMENT_ALLOCATION = "investment_allocation"
+    #: CHAOS-3297 stack #3: CHAOS-3302 code-owned health-rule evaluation
+    #: (``health_rule_registry.evaluate_registry``) synthesized by
+    #: ``ProjectHealthService``/``TeamHealthService``/``PortfolioStatusService``/
+    #: ``TeamWorkloadService`` -- a *derived* judgment over several other
+    #: source classes' already-canonical facts, never a primary source of
+    #: its own. Shared by all four services: ``TeamWorkloadService`` returns
+    #: the exact same ``HealthProfileResult`` shape ``TeamHealthService``
+    #: does (its own docstring: "structurally this is TeamHealthService plus
+    #: two extra sources"), and a portfolio batch is just several
+    #: HEALTH_PROFILE observations flattened into one, each still tagged
+    #: with its own subject_id -- no separate source class per plan.
+    HEALTH_PROFILE = "health_profile"
+    #: CHAOS-3297 stack #3: CHAOS-3305 ``OperationalDeficiencyService``'s
+    #: ``deficiency.operational.v1`` inventory -- kept distinct from
+    #: ``HEALTH_PROFILE`` because ``DeficiencyFinding``'s own wire shape
+    #: (category/severity/remediation/verification, plus
+    #: ``DeficiencyCategoryStatus``'s per-category evaluated/unevaluated
+    #: split) has no ``HealthRuleFinding`` equivalent.
+    DEFICIENCY_INVENTORY = "deficiency_inventory"
 
 
 #: A **server-minted opaque handle**: the canonical hyphenated UUID form.
@@ -271,6 +298,32 @@ EvidenceHandle = Annotated[
     str,
     StringConstraints(min_length=44, max_length=44, pattern=r"^ev1_[0-9a-f]{40}$"),
 ]
+
+
+class DevRelationshipPath(ContractModelV2):
+    """One verifiable hop chain from a committed subject to supporting data.
+
+    Lives in this leaf module (not ``result.py``, where it originated)
+    because ``contracts_v2.deficiency`` needs it and also needs
+    ``contracts_v2.result`` to import ``DeficiencyFinding`` in the other
+    direction (CHAOS-3297 stack #3, ``DevSourceContent.deficiency_findings``)
+    -- the same "both sides of the seam read from the same leaf module"
+    reasoning ``FactDisclosure`` above was placed here for. ``result.py``
+    re-exports this name unchanged, so no existing import site elsewhere in
+    the package needed to change.
+    """
+
+    path_id: OpaqueID
+    source_entity_id: OpaqueID
+    relationship: OpaqueID
+    target_entity_id: OpaqueID
+    provenance: ShortText
+    confidence: FiniteFloat = Field(ge=0, le=1)
+    observed_at: AwareDatetime
+    evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+
 
 #: A platform provenance token: a dotted, lowercase, version-suffixed
 #: identifier such as ``intent_interpreter.v1``, ``status.entity.v2.1`` or

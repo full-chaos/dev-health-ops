@@ -39,6 +39,7 @@ from pydantic import AwareDatetime, Field, FiniteFloat, model_validator
 
 from .base import (
     ContractModelV2,
+    DevRelationshipPath,
     OpaqueID,
     PlatformVersionToken,
     ServerHandle,
@@ -46,7 +47,6 @@ from .base import (
     SourceRequirementState,
 )
 from .health_rules import DataSemantics, FactKind, RuleApplicability
-from .result import DevRelationshipPath
 
 __all__ = [
     "DEFICIENCY_CATEGORIES",

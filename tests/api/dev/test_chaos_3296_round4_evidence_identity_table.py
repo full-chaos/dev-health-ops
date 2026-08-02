@@ -612,17 +612,57 @@ async def test_metric_refs_identity_cell_matches_real_minting():
     _assert_cell_matches_minting("metric_refs", outcome.content.metric_refs[0], spy)
 
 
+#: The nine CHAOS-3295/3296 content slots whose wire_* helper in
+#: builtin_steps.py mints evidence unconditionally for every fact it
+#: constructs -- every one of these must stay "required" (never silently
+#: downgraded to "accepted_risk", which would be a fabricated exemption,
+#: not an honest one). CHAOS-3297 stack #3's health_findings/
+#: deficiency_findings are deliberately NOT in this set: those slots carry
+#: DERIVED findings from ProjectHealthService/TeamHealthService/
+#: PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService,
+#: not primary facts wired by a builtin_steps.py wire_* helper, and
+#: HealthRuleFinding has no evidence_ref_ids field to bind at all -- see
+#: relationship_matrix.py's own cell-level rationale strings.
+_UNCONDITIONALLY_MINTED_CONTENT_SLOTS = frozenset(
+    {
+        "status_facts",
+        "required_children",
+        "pull_requests",
+        "ci_checks",
+        "deployments",
+        "incidents",
+        "graph_edges",
+        "observed_changes",
+        "metric_refs",
+    }
+)
+
+
 def test_evidence_identity_table_is_total_over_content_slot_fields():
     assert set(EVIDENCE_IDENTITY_TABLE) == set(CONTENT_SLOT_FIELDS)
     for field, cell in EVIDENCE_IDENTITY_TABLE.items():
-        assert cell.mode == "required", (
-            f"{field}: every wire_* helper in builtin_steps.py mints "
-            "unconditionally today -- an accepted_risk cell here would be a "
-            "fabricated exemption, not an honest one; if this ever "
-            "legitimately changes, this assertion is the reminder to add a "
-            "real rationale rather than silently loosen the table."
-        )
-        assert cell.derive is not None
+        if field in _UNCONDITIONALLY_MINTED_CONTENT_SLOTS:
+            assert cell.mode == "required", (
+                f"{field}: every wire_* helper in builtin_steps.py mints "
+                "unconditionally today -- an accepted_risk cell here would be "
+                "a fabricated exemption, not an honest one; if this ever "
+                "legitimately changes, this assertion is the reminder to add "
+                "a real rationale rather than silently loosen the table."
+            )
+            assert cell.derive is not None
+            assert cell.rationale is None
+        else:
+            # A slot outside the unconditionally-minted set may be either
+            # mode, but "accepted_risk" must always carry a real,
+            # non-empty rationale (never a silent exemption) and never a
+            # derive function; the reverse for "required".
+            if cell.mode == "required":
+                assert cell.derive is not None
+                assert cell.rationale is None
+            else:
+                assert cell.mode == "accepted_risk"
+                assert cell.derive is None
+                assert cell.rationale
 
 
 # -- permanent RED tests: the three round-3 Codex repros, verbatim ----------

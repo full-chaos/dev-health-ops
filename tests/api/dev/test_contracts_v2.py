@@ -58,6 +58,7 @@ from dev_health_ops.api.dev.contracts import DevAnswer as DevAnswerV1
 from dev_health_ops.api.dev.contracts import DevError as DevErrorV1
 from dev_health_ops.api.dev.contracts_v2 import compat as compat_module
 from dev_health_ops.api.dev.contracts_v2 import validators as validators_module
+from dev_health_ops.api.dev.contracts_v2.validators import ANSWERED_CONTENT_OUTCOMES
 from dev_health_ops.api.dev.export_contracts_v2 import (
     check_artifacts,
     expected_artifacts,
@@ -688,22 +689,97 @@ def test_needs_clarification_frame_may_carry_zero_or_many_clarification_candidat
     ]
 
 
-def test_clarification_candidates_forbidden_outside_needs_clarification() -> None:
-    """(f)/(b): ABSENT on the five true no-answer outcomes, and
-    validate_outcome_consistency's new clause on 'answered'/
-    'answered_with_gaps' -- only 'needs_clarification' may carry it."""
+#: Every outcome that may NOT carry clarification_candidates, derived from the
+#: enum rather than listed: a ninth PublicOutcome member is parametrized into
+#: the rejection test below the moment it is declared, and fails there until it
+#: is classified into one of the two guards.
+_CANDIDATE_GUARDED_OUTCOMES = tuple(
+    sorted(
+        outcome.value
+        for outcome in v2.PublicOutcome
+        if outcome is not v2.PublicOutcome.NEEDS_CLARIFICATION
+    )
+)
 
-    denied_payload = dict(negative_fixtures()["dev_answer_frame.v1"])[
-        "denied_with_clarification_candidates"
-    ]
-    with pytest.raises(ValidationError, match="clarification_candidates"):
-        v2.DevAnswerFrame.model_validate(denied_payload)
 
-    answered_payload = dict(negative_fixtures()["dev_answer_frame.v1"])[
-        "answered_with_clarification_candidates"
-    ]
+def _candidate_bearing_frame_for(outcome: str) -> dict[str, Any]:
+    """One valid-but-for-the-candidates frame, retargeted at ``outcome``.
+
+    Built by retargeting the two committed negative fixtures rather than
+    hand-authoring a payload, so the candidate block under test is the exact
+    one those fixtures pin (Verification rule: build from the real producer).
+    Every other field is made legal for the outcome, so the ValidationError
+    the test asserts is attributable to ``clarification_candidates`` and not
+    to some unrelated invariant the retargeting broke.
+    """
+
+    negatives = dict(negative_fixtures()["dev_answer_frame.v1"])
+    if outcome in v2.NO_ANSWER_OUTCOMES:
+        payload = deepcopy(negatives["denied_with_clarification_candidates"])
+        payload["public_outcome"] = outcome
+        payload["direct_answer"] = v2.CANONICAL_NO_ANSWER_COPY[outcome]
+        return payload
+    payload = deepcopy(negatives["answered_with_clarification_candidates"])
+    payload["public_outcome"] = outcome
+    if outcome == "answered_with_gaps":
+        # answered_with_gaps independently requires a disclosed gap, so give
+        # it one -- otherwise the rejection could be that missing gap rather
+        # than the candidates.
+        payload["limitations"] = ["A required source was stale at query time."]
+    return payload
+
+
+def test_clarification_candidate_guards_partition_every_public_outcome() -> None:
+    """The two guards partition ``PublicOutcome`` exactly, with no gap.
+
+    Guard A is the ``ABSENT`` cell in ``NO_ANSWER_FRAME_FIELD_POLICY``, which
+    only reaches ``NO_ANSWER_OUTCOMES``; guard B is
+    ``validate_outcome_consistency``'s clause, which only reaches
+    ``ANSWERED_CONTENT_OUTCOMES``. ``needs_clarification`` is in neither, by
+    design -- it is the one outcome permitted to carry candidates. Asserting
+    the three sets tile the enum is what makes "forbidden everywhere else"
+    a closure rather than a claim about the cells someone happened to test.
+    """
+
+    guard_a = set(v2.NO_ANSWER_OUTCOMES)
+    guard_b = set(ANSWERED_CONTENT_OUTCOMES)
+    every_outcome = {outcome.value for outcome in v2.PublicOutcome}
+
+    assert guard_a & guard_b == set(), "an outcome cannot be governed by both guards"
+    assert guard_a | guard_b == every_outcome - {"needs_clarification"}
+    assert set(_CANDIDATE_GUARDED_OUTCOMES) == guard_a | guard_b
+    assert (
+        v2.NO_ANSWER_FRAME_FIELD_POLICY["clarification_candidates"]
+        is v2.NoAnswerFieldPolicy.ABSENT
+    )
+
+
+@pytest.mark.parametrize("outcome", _CANDIDATE_GUARDED_OUTCOMES)
+def test_clarification_candidates_forbidden_outside_needs_clarification(
+    outcome: str,
+) -> None:
+    """(f)/(b): every outcome but ``needs_clarification`` rejects candidates.
+
+    Total over the enum, not a sample of two cells: the earlier version of
+    this test exercised only ``denied`` and ``answered``, so a regression
+    opening any of the other five would not have been observed.
+    """
+
+    payload = _candidate_bearing_frame_for(outcome)
+    assert payload["clarification_candidates"], "the case must actually carry some"
     with pytest.raises(ValidationError, match="clarification_candidates"):
-        v2.DevAnswerFrame.model_validate(answered_payload)
+        v2.DevAnswerFrame.model_validate(payload)
+
+
+def test_needs_clarification_is_the_one_outcome_that_accepts_candidates() -> None:
+    """The positive half of the partition -- without it the test above is
+    satisfied by a validator that rejects candidates unconditionally."""
+
+    frame = v2.DevAnswerFrame.model_validate(
+        needs_clarification_frame_with_candidates()
+    )
+    assert frame.public_outcome is v2.PublicOutcome.NEEDS_CLARIFICATION
+    assert len(frame.clarification_candidates) == 2
 
 
 def test_answered_clarification_candidates_clause_is_new_not_preexisting(

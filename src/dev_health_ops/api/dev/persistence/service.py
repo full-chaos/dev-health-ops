@@ -8,6 +8,7 @@ target user is explicit.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -17,10 +18,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeAlias
 
-from sqlalchemy import and_, case, func, or_, select
+from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy import and_, case, event, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
+from dev_health_ops.api.dev.contracts import DevError
+from dev_health_ops.api.dev.contracts_v2.frame import (
+    DevAnswerFrame as DevAnswerFrameContract,
+)
+from dev_health_ops.api.dev.contracts_v2.narrative import (
+    DevNarrative as DevNarrativeContract,
+)
 from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from dev_health_ops.models.dev_persistence import (
     DEV_RETENTION_DAYS,
@@ -206,6 +216,28 @@ _NARRATIVE_TEXT_MAX_BYTES = 8 * 1024
 _NARRATIVE_PAYLOAD_MAX_BYTES = 16 * 1024
 
 
+# CHAOS-3297 Codex review round 3 CLASS A: the acceptance predicate for
+# terminal_error_payload is contract validity itself (DevError.model_validate
+# succeeds -> persist) -- not a byte cap. Three prior byte-cap incarnations
+# on this branch alone (16 KiB, 64 KiB, 4 KiB) each rejected some legal
+# DevError instance a later review round could still construct; a fourth
+# hand-computed "worst case" constant (144 KiB) was *itself* wrong by 13
+# bytes (retryable=False serializes one byte longer than True; some legal
+# AwareDatetime renderings are longer than a no-fraction UTC instant) --
+# proof that hand-assembling one "worst" instance is the wrong shape of
+# argument, not just an error to correct again. This constant is now only
+# a loose, cheap anti-runaway backstop with no aspiration to be tight; the
+# real ceiling is enforced by DevError's own pydantic validation before
+# this is ever consulted. tests/api/dev/test_persistence_v2.py::
+# test_dev_error_worst_case_is_within_the_terminal_error_backstop proves
+# this backstop can never legitimately reject a valid dev_error.v1: it
+# derives the worst case by walking DevError.model_fields (not a
+# hand-built example) and asserts the sum stays under this constant, so
+# the proof -- not a guess -- is what has to keep holding as the contract
+# evolves.
+_TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES = 1024 * 1024
+
+
 class DevPersistenceNotFound(LookupError):
     """The requested tenant-owned resource is absent or unauthorized."""
 
@@ -362,6 +394,17 @@ def _digest(value: str | None, *, field: str) -> str | None:
     return value
 
 
+def _sha256_digest(value: str) -> str:
+    """Compute a ``sha256:``-prefixed digest, matching
+    ``orchestrator_persistence._digest`` exactly -- unlike ``_digest``
+    above (which only *validates* a value is already in that shape), this
+    *produces* one, for cross-checking a caller-supplied pre-hashed
+    fingerprint against the raw value a validated payload carries.
+    """
+
+    return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
+
+
 def _safe_token(value: str | None, *, field: str, max_bytes: int) -> str | None:
     value = _bounded_text(value, field=field, max_bytes=max_bytes)
     if value is not None and _SAFE_TOKEN.fullmatch(value) is None:
@@ -423,6 +466,486 @@ def _safe_count_summary(value: Mapping[str, Any], *, field: str) -> dict[str, An
         if isinstance(item, int | float) and not isinstance(item, bool) and item < 0:
             raise DevPersistenceValidationError(f"{field} counts must be nonnegative")
     return copied
+
+
+# -- ORM-boundary payload validation (CHAOS-3297 Codex review round 7
+# MEDIUM, demoted to fast-fail UX by round 9). The AST scanner
+# (test_persistence_v2.py) is a syntax-level tripwire -- it can only ever
+# recognize the write *shapes* it was taught to look for, and it only sees
+# this module's own source. This session-level layer (mapper events below,
+# plus the do_orm_execute hook further down) is broader -- it fires for
+# every write issued *through this Session*, mapped-instance or Core DML
+# alike -- but it is still bounded by "through this Session": a Core-table
+# UPDATE against a bare Table has no `bind_mapper` to look up, and nothing
+# here can see the SET clause of an `INSERT ... ON CONFLICT DO UPDATE`'s
+# conflict resolution. Both are real, Codex-confirmed bypasses of this
+# layer specifically.
+#
+# The LOAD-BEARING, total guard is the DB trigger on each payload-bearing
+# table (see the round-9 comment block below `_PAYLOAD_MODEL_VALIDATORS`,
+# and `models/dev_persistence.py`) -- it validates the row on its way into
+# the table however it got there, ORM or Core or upsert or raw connection,
+# with no statement shape it does not see. This layer's job now is purely
+# fast-fail UX: a caller going through the ORM gets a clean
+# DevPersistenceValidationError before ever reaching the database, instead
+# of an IntegrityError surfacing from a trigger three layers down the
+# stack. Every check here is intentionally a strict subset of what the
+# trigger enforces (contract validity is a superset the trigger does not
+# attempt) -- keeping both correct never requires them to diverge, only
+# this layer to occasionally have less to say. -----------------------
+
+
+class _KnownUnvalidatedPayloadGap:
+    """Sentinel marking a payload-bearing model whose ``payload`` is not
+    yet validated against its wire contract, at either the service-method
+    layer (see ``_KNOWN_UNVALIDATED_PAYLOAD_SINKS``) or this ORM
+    boundary -- the same explicit, filed gap, not a silent pass.
+    CHAOS-3330 tracks closing both together, model by model."""
+
+
+_KNOWN_UNVALIDATED_PAYLOAD_GAP = _KnownUnvalidatedPayloadGap()
+
+#: Sentinel distinguishing "this column is part of the write, and its
+#: value is None" from "this column is not part of the write at all" --
+#: only the bulk-DML shim (``_BulkDmlPayloadTarget``) can ever produce
+#: this; a real, fully-formed ORM instance always has every mapped
+#: column, so ``getattr(target, name, _MISSING)`` never returns it there
+#: (CHAOS-3297 Codex review round 8 HIGH: cross-checks must refuse to
+#: validate against a column a bulk statement never touches, not treat
+#: its absence as ``None``).
+_MISSING = object()
+
+
+def _require_field_matches(
+    target: Any, *, column: str, expected: str, contract_field: str
+) -> None:
+    """Binds a validated payload to the ROW it is being written to, not
+    merely to itself (CHAOS-3297 Codex review round 8 HIGH: a fully
+    self-consistent, contract-valid payload for a DIFFERENT run/frame/
+    narrative is not a valid write to THIS row). Mirrors the cross-checks
+    ``record_frame``/``record_narrative`` already make between the
+    validated payload and the service method's own arguments -- here,
+    between the validated payload and the OTHER columns this same write
+    sets ``column`` to.
+
+    Refuses outright (deny by default) if ``column`` is not part of this
+    write at all -- a bulk statement's WHERE clause can leave an existing
+    row's identity columns unstated, and reading the pre-existing row to
+    "fill in" a comparison would compare the new payload against a value
+    this write is not actually asserting.
+    """
+
+    actual = getattr(target, column, _MISSING)
+    if actual is _MISSING:
+        raise DevPersistenceValidationError(
+            f"payload cross-check for `{contract_field}` requires the "
+            f"`{column}` column to be part of the same write -- refusing "
+            f"to validate a payload write that does not also state the "
+            f"row identity columns it must agree with"
+        )
+    if actual is None or str(actual) != expected:
+        raise DevPersistenceValidationError(
+            f"payload's `{contract_field}` does not match this write's `{column}`"
+        )
+
+
+def _validate_answer_frame_payload(target: Any) -> None:
+    try:
+        validated = DevAnswerFrameContract.model_validate(target.payload)
+    except PydanticValidationError as exc:
+        raise DevPersistenceValidationError(
+            f"dev_answer_frames.payload is not a valid dev_answer_frame.v1: {exc}"
+        ) from exc
+    # Mirrors record_frame's own cross-checks (frame_id/run_id/
+    # public_outcome against the caller's own arguments) -- here, against
+    # the same columns this write itself sets.
+    _require_field_matches(
+        target,
+        column="frame_id",
+        expected=validated.frame_id,
+        contract_field="frame_id",
+    )
+    _require_field_matches(
+        target, column="run_id", expected=validated.run_id, contract_field="run_id"
+    )
+    _require_field_matches(
+        target,
+        column="public_outcome",
+        expected=validated.public_outcome.value,
+        contract_field="public_outcome",
+    )
+
+
+def _validate_run_narrative_payload(target: Any) -> None:
+    # payload excludes `body` -- narrative_text is the separate
+    # authoritative copy (see record_narrative's own docstring); the full
+    # contract object must be reconstructed before validating, exactly as
+    # record_narrative already does at the service layer. narrative_text
+    # must be part of THIS write (not read from a possibly-stale
+    # pre-existing row) or there is nothing safe to reconstruct `body`
+    # from.
+    narrative_text = getattr(target, "narrative_text", _MISSING)
+    if narrative_text is _MISSING:
+        raise DevPersistenceValidationError(
+            "dev_run_narratives payload validation requires "
+            "`narrative_text` to be part of the same write -- refusing "
+            "to reconstruct `body` from a column this write does not set"
+        )
+    reconstructed = dict(target.payload)
+    reconstructed["body"] = narrative_text
+    try:
+        validated = DevNarrativeContract.model_validate(reconstructed)
+    except PydanticValidationError as exc:
+        raise DevPersistenceValidationError(
+            f"dev_run_narratives.payload is not a valid dev_narrative.v1: {exc}"
+        ) from exc
+    # Mirrors record_narrative's own cross-checks (narrative_id/run_id/
+    # frame_id/mode/provider_fingerprint against the caller's own
+    # arguments) -- here, against the same columns this write itself
+    # sets. This is exactly what closes CHAOS-3297 Codex review round 8
+    # HIGH: a fully valid dev_narrative.v1 payload for a DIFFERENT
+    # run/frame/narrative_id must not silently attach to this row.
+    _require_field_matches(
+        target,
+        column="narrative_id",
+        expected=validated.narrative_id,
+        contract_field="narrative_id",
+    )
+    _require_field_matches(
+        target, column="run_id", expected=validated.run_id, contract_field="run_id"
+    )
+    _require_field_matches(
+        target,
+        column="frame_id",
+        expected=validated.frame_id,
+        contract_field="frame_id",
+    )
+    _require_field_matches(
+        target, column="mode", expected=validated.mode, contract_field="mode"
+    )
+    expected_provider_fingerprint = (
+        _sha256_digest(validated.provider_metadata.model_fingerprint)
+        if validated.provider_metadata is not None
+        else None
+    )
+    actual_provider_fingerprint: Any = getattr(target, "provider_fingerprint", _MISSING)
+    if actual_provider_fingerprint is _MISSING:
+        raise DevPersistenceValidationError(
+            "dev_run_narratives payload validation requires "
+            "`provider_fingerprint` to be part of the same write"
+        )
+    # The column already stores the pre-hashed shape record_narrative
+    # writes; _digest validates that shape (or passes None through), the
+    # same way record_narrative's own cross-check does.
+    safe_actual_provider_fingerprint = _digest(
+        actual_provider_fingerprint, field="provider_fingerprint"
+    )
+    if safe_actual_provider_fingerprint != expected_provider_fingerprint:
+        raise DevPersistenceValidationError(
+            "payload's provider_metadata does not match this write's "
+            "provider_fingerprint"
+        )
+
+
+#: Total registry: every payload-bearing ORM model (see
+#: ``test_persistence_v2.py::_payload_bearing_orm_model_names``, which
+#: discovers the set from live column metadata, never a hand-typed list)
+#: must have an entry here -- either a validator function enforcing its
+#: wire contract, or explicitly ``_KNOWN_UNVALIDATED_PAYLOAD_GAP``
+#: (CHAOS-3330's four sinks, the same honest gap
+#: ``_KNOWN_UNVALIDATED_PAYLOAD_SINKS`` already names at the
+#: service-method level). Totality against the live model set is asserted
+#: by ``test_orm_boundary_payload_validator_registry_matches_the_live_schema``
+#: in ``test_persistence_v2.py``.
+_PAYLOAD_MODEL_VALIDATORS: dict[type, Any] = {
+    DevAnswerFrame: _validate_answer_frame_payload,
+    DevRunNarrative: _validate_run_narrative_payload,
+    DevRunIntent: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
+    DevRunResolution: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
+    DevRunSubjectSet: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
+    DevRunSourceObservation: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
+}
+
+
+# -- CHAOS-3297 Codex review round 8: partition of session-mediated write
+# paths this layer covers, verified empirically against SQLAlchemy 2.0.49
+# (probed directly, not assumed from docs). Round 9 found two more real
+# rows this layer could not see at all -- a Core-table UPDATE issued
+# through the Session (`bind_mapper` is None for a bare `Table`, not a
+# mapped class) and an `INSERT ... ON CONFLICT DO UPDATE`'s conflict SET
+# clause -- and moved the LOAD-BEARING guarantee to a DB trigger instead
+# (see the round-9 comment block below `_PAYLOAD_MODEL_VALIDATORS`). What
+# follows is still correct and still runs on every write it describes; it
+# is fast-fail UX layered in front of the trigger, not the total guard
+# anymore:
+#
+#   a) unit-of-work flush of ORM instances (attribute assignment, kwargs
+#      construction, merge, cascades) -> before_insert/before_update
+#      mapper events. Covered below.
+#   b) ORM-enabled DML, single .values(...) -> do_orm_execute reading the
+#      statement's own `_values`. Covered below.
+#   c) ORM-enabled DML, multi-row .values([...]) -> do_orm_execute
+#      reading `_multi_values` (confirmed: `_values` is None here, the
+#      row dicts live in `_multi_values` instead). Covered below.
+#   d) executemany-style parameter lists -- `session.execute(insert(M),
+#      [params, ...])` and ORM bulk-update-by-primary-key
+#      (`session.execute(update(M), [{"id": ..., ...}, ...])`) ->
+#      do_orm_execute reading `orm_execute_state.parameters` (confirmed:
+#      both `_values` and `_multi_values` are empty here, the row dicts
+#      arrive as `.parameters` instead, keyed by column NAME not
+#      `Column` object). Covered below.
+#   e) legacy bulk APIs (`Session.bulk_save_objects`/
+#      `bulk_insert_mappings`/`bulk_update_mappings`) -- confirmed
+#      empirically to fire NEITHER `before_insert`/`before_update` NOR
+#      `do_orm_execute` at all (a probe listener on both never fires).
+#      `AsyncSession` does not expose these directly, but they remain
+#      reachable via `await session.run_sync(lambda s:
+#      s.bulk_save_objects(...))`, which is exactly how this was
+#      reproduced. No event covers this path in SQLAlchemy 2.x -- it is
+#      structurally prohibited below instead (Session methods wrapped to
+#      raise for a payload-bearing model), proven by a mutation test that
+#      the prohibition itself fires.
+#   f) raw Core execution against a Connection obtained via
+#      `session.connection()`, entirely outside the Session -- confirmed
+#      empirically that `do_orm_execute` never fires there either. Out of
+#      scope by construction (this is not a "session-mediated" write path
+#      at all -- there is no Session-level event surface to hook), and
+#      documented as the legitimate escape hatch
+#      test_chaos_3297_frame_reachability.py uses to simulate genuinely
+#      out-of-band data. Kept as a documented, tested boundary, not
+#      silently assumed safe.
+#
+# (c) and (d) are both read through `_bulk_dml_row_dicts` below, which
+# returns `None` -- not an empty list -- when a DML statement against a
+# payload-bearing model carries its row data in NONE of `_values`/
+# `_multi_values`/`parameters`: an unrecognized shape this module was not
+# written against. The caller treats that as deny-by-default, not
+# "nothing to validate" -- see `_enforce_payload_contract_on_bulk_dml`.
+
+
+def _enforce_payload_contract_at_flush(
+    _mapper: Any, _connection: Any, target: Any
+) -> None:
+    validator = _PAYLOAD_MODEL_VALIDATORS.get(type(target))
+    if validator is None or validator is _KNOWN_UNVALIDATED_PAYLOAD_GAP:
+        return
+    validator(target)
+
+
+for _payload_model in _PAYLOAD_MODEL_VALIDATORS:
+    event.listen(_payload_model, "before_insert", _enforce_payload_contract_at_flush)
+    event.listen(_payload_model, "before_update", _enforce_payload_contract_at_flush)
+del _payload_model
+
+
+def _decode_column_keyed_row(values: Mapping[Any, Any]) -> dict[str, Any]:
+    """Column name -> Python value for one row's worth of a Core-style
+    statement's own column-keyed value mapping (`_values`, or one row
+    group of `_multi_values`), unwrapping a bound parameter to its
+    literal value where present."""
+
+    decoded: dict[str, Any] = {}
+    for column, value in values.items():
+        name = column.name if hasattr(column, "name") else str(column)
+        decoded[name] = value.value if hasattr(value, "value") else value
+    return decoded
+
+
+def _bulk_dml_row_dicts(orm_execute_state: Any) -> list[dict[str, Any]] | None:
+    """Every row's own column-name -> value dict a Core-style ORM DML
+    statement could be carrying its data in, across all three shapes (b),
+    (c), and (d) above. Returns `None` -- not `[]` -- if the statement
+    uses none of the three: an unrecognized internal representation this
+    boundary does not know how to inspect, which the caller must treat
+    as deny-by-default rather than silently allow through."""
+
+    statement = orm_execute_state.statement
+    values = getattr(statement, "_values", None)
+    multi_values = getattr(statement, "_multi_values", None)
+    parameters = orm_execute_state.parameters
+    if not values and not multi_values and not parameters:
+        return None
+
+    rows: list[dict[str, Any]] = []
+    if values:
+        rows.append(_decode_column_keyed_row(values))
+    if multi_values:
+        for row_group in multi_values:
+            for row in row_group:
+                rows.append(_decode_column_keyed_row(row))
+    if parameters:
+        parameter_rows = parameters if isinstance(parameters, list) else [parameters]
+        for row in parameter_rows:
+            rows.append(dict(row))
+    return rows
+
+
+class _BulkDmlPayloadTarget:
+    """Throwaway shim exposing one bulk-DML row's own column values with
+    the same attribute-access shape a real ORM instance has, so a bulk
+    statement's raw row dict can be validated with the exact same
+    validator functions a real ORM instance is -- and so that a column
+    genuinely absent from this specific write (as opposed to present and
+    ``None``) reads as ``_MISSING``, not ``None``."""
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self._row = dict(row)
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self._row[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+
+def _enforce_payload_contract_on_bulk_dml(orm_execute_state: Any) -> None:
+    """Catches every write form ``before_insert``/``before_update``
+    mapper events structurally cannot see at all: any Core-style ORM DML
+    statement executed via ``session.execute(...)`` runs as a bulk
+    statement, never through the ORM unit-of-work flush those events fire
+    from (confirmed empirically -- a probe ``before_update`` listener
+    never fires for any of shapes (b)/(c)/(d) above against a real
+    engine).
+    """
+
+    if not (orm_execute_state.is_update or orm_execute_state.is_insert):
+        return
+    mapper = orm_execute_state.bind_mapper
+    if mapper is None:
+        return
+    validator = _PAYLOAD_MODEL_VALIDATORS.get(mapper.class_)
+    if validator is None or validator is _KNOWN_UNVALIDATED_PAYLOAD_GAP:
+        return
+    rows = _bulk_dml_row_dicts(orm_execute_state)
+    if rows is None:
+        raise DevPersistenceValidationError(
+            f"unrecognized bulk DML write shape against payload-bearing "
+            f"model {mapper.class_.__name__} -- this statement carries "
+            f"no `_values`, `_multi_values`, or `parameters` this "
+            f"boundary knows how to inspect; deny by default rather than "
+            f"risk an unvalidated payload write"
+        )
+    for row in rows:
+        if "payload" not in row:
+            continue
+        validator(_BulkDmlPayloadTarget(row))
+
+
+event.listen(Session, "do_orm_execute", _enforce_payload_contract_on_bulk_dml)
+
+
+# -- CHAOS-3297 Codex review round 9: two more real bypasses of
+# everything above, both against a live database, both committing an
+# invalid or row-mismatched payload:
+#
+#   * `session.execute(update(DevAnswerFrame.__table__)...)` -- a
+#     Core-table UPDATE issued through the Session, not through the
+#     mapped class. `orm_execute_state.bind_mapper` is `None` for this
+#     statement (there is no ORM mapper to resolve a bare `Table`
+#     against), so `_enforce_payload_contract_on_bulk_dml` above returns
+#     at its very first `if mapper is None: return` -- correctly, by its
+#     own logic, since it has nothing to look up `_PAYLOAD_MODEL_VALIDATORS`
+#     with. This is not a bug in that function; it is the edge of what a
+#     mapper-keyed registry can see at all.
+#   * `insert(...).on_conflict_do_update(..., set_={"payload": ...})` --
+#     the INSERT's own values are whatever this layer validates, but the
+#     conflict resolution's SET clause is a separate part of the compiled
+#     statement nothing here inspects; an UPDATE that only takes effect
+#     on a conflict rides through completely unvalidated.
+#
+# Both are still "session-mediated" by any reasonable definition, and
+# both defeated this layer anyway -- the standing conclusion after three
+# rounds of extending a parser over SQLAlchemy's statement shapes: stop.
+# The load-bearing, TOTAL guarantee is now a BEFORE INSERT/UPDATE trigger
+# on each payload-bearing table (`dev_answer_frames`, `dev_run_narratives`
+# -- see `models/dev_persistence.py` for the full DDL and design
+# rationale, and Alembic migration 0080 for the Postgres arm). A trigger
+# validates the row the database is about to accept, independent of
+# which SQLAlchemy construct -- or non-SQLAlchemy client -- produced the
+# SQL that got it there. Neither bypass above, nor any bypass this module
+# has not yet been taught about, can write an invalid or row-mismatched
+# payload past it.
+#
+# Everything below this point (the legacy-bulk-API prohibition) and
+# everything above it (mapper events, `do_orm_execute`) remain exactly as
+# correct as they were -- they still catch what they catch, before the
+# database round-trip, with a clean `DevPersistenceValidationError`
+# instead of an `IntegrityError` surfacing from three layers down. They
+# are kept for that reason: fast-fail UX, not the load-bearing guarantee
+# anymore.
+
+
+# -- (e) above: legacy bulk APIs structurally prohibited for
+# payload-bearing models. Confirmed empirically that
+# `Session.bulk_save_objects`/`bulk_insert_mappings`/`bulk_update_mappings`
+# fire neither the mapper events nor `do_orm_execute` -- there is no event
+# hook in SQLAlchemy 2.x that sees these at all, so unlike (a)-(d) this
+# cannot be validated by an event, only refused up front. `AsyncSession`
+# does not expose these methods directly (only the underlying sync
+# `Session` does, reachable via `session.run_sync(...)`), but wrapping the
+# sync `Session` class methods themselves covers that path too, and every
+# other way these might be reached in-process. (The DB trigger would also
+# reject an invalid payload written this way -- these SQL statements are
+# not exempt from it -- but the prohibition still gives a clean Python
+# exception before ever reaching the database, same as the rest of this
+# layer.)
+
+_ORIGINAL_BULK_SAVE_OBJECTS = Session.bulk_save_objects
+_ORIGINAL_BULK_INSERT_MAPPINGS = Session.bulk_insert_mappings
+_ORIGINAL_BULK_UPDATE_MAPPINGS = Session.bulk_update_mappings
+
+
+def _mapped_class(mapper_or_class: Any) -> Any:
+    return getattr(mapper_or_class, "class_", mapper_or_class)
+
+
+def _guarded_bulk_save_objects(
+    self: Session, objects: Any, *args: Any, **kwargs: Any
+) -> Any:
+    materialized = list(objects)
+    for obj in materialized:
+        if type(obj) in _PAYLOAD_MODEL_VALIDATORS:
+            raise DevPersistenceValidationError(
+                f"bulk_save_objects is prohibited for payload-bearing "
+                f"model {type(obj).__name__} (CHAOS-3297 Codex review "
+                f"round 8) -- it bypasses the ORM payload-contract "
+                f"boundary entirely; use the normal "
+                f"Session.add()/flush() path instead"
+            )
+    return _ORIGINAL_BULK_SAVE_OBJECTS(self, materialized, *args, **kwargs)
+
+
+def _guarded_bulk_insert_mappings(
+    self: Session, mapper: Any, mappings: Any, *args: Any, **kwargs: Any
+) -> Any:
+    if _mapped_class(mapper) in _PAYLOAD_MODEL_VALIDATORS:
+        raise DevPersistenceValidationError(
+            f"bulk_insert_mappings is prohibited for payload-bearing "
+            f"model {_mapped_class(mapper).__name__} (CHAOS-3297 Codex "
+            f"review round 8) -- it bypasses the ORM payload-contract "
+            f"boundary entirely; use the normal "
+            f"Session.add()/flush() path instead"
+        )
+    return _ORIGINAL_BULK_INSERT_MAPPINGS(self, mapper, mappings, *args, **kwargs)
+
+
+def _guarded_bulk_update_mappings(
+    self: Session, mapper: Any, mappings: Any, *args: Any, **kwargs: Any
+) -> Any:
+    if _mapped_class(mapper) in _PAYLOAD_MODEL_VALIDATORS:
+        raise DevPersistenceValidationError(
+            f"bulk_update_mappings is prohibited for payload-bearing "
+            f"model {_mapped_class(mapper).__name__} (CHAOS-3297 Codex "
+            f"review round 8) -- it bypasses the ORM payload-contract "
+            f"boundary entirely; use the normal "
+            f"Session.add()/flush() path instead"
+        )
+    return _ORIGINAL_BULK_UPDATE_MAPPINGS(self, mapper, mappings, *args, **kwargs)
+
+
+Session.bulk_save_objects = _guarded_bulk_save_objects  # type: ignore[method-assign]
+Session.bulk_insert_mappings = _guarded_bulk_insert_mappings  # type: ignore[method-assign]
+Session.bulk_update_mappings = _guarded_bulk_update_mappings  # type: ignore[method-assign]
 
 
 class DevPersistenceService:
@@ -745,6 +1268,29 @@ class DevPersistenceService:
                 DevAnswerFrame.run_id == run_id,
                 DevAnswerFrame.org_id == org_id,
                 DevAnswerFrame.user_id == user_id,
+            )
+        )
+
+    async def get_run_narrative(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> DevRunNarrative | None:
+        """Return the tenant-owned narrative for one run, if any (CHAOS-3297).
+
+        Symmetric to ``get_answer_frame``: replay needs to reconstruct a
+        content-bearing answer's narrative without a second provider call,
+        exactly as it already reconstructs a no-answer frame. 0..1 rows per
+        run (``uq_dev_run_narratives_run``).
+        """
+
+        return await self.session.scalar(
+            select(DevRunNarrative).where(
+                DevRunNarrative.run_id == run_id,
+                DevRunNarrative.org_id == org_id,
+                DevRunNarrative.user_id == user_id,
             )
         )
 
@@ -1082,6 +1628,7 @@ class DevPersistenceService:
         metric_count: int | None = None,
         grounding_validation_status: str | None = None,
         safe_error_code: str | None = None,
+        terminal_error_payload: Mapping[str, Any] | None = None,
     ) -> DevRun | None:
         if state not in _RUN_STATES:
             raise DevPersistenceValidationError("invalid run state")
@@ -1106,28 +1653,96 @@ class DevPersistenceService:
             if value is not None and value < 0:
                 raise DevPersistenceValidationError(f"{field} must be nonnegative")
 
-        run.state = state
-        run.answer_id = answer_id
-        run.terminal_reason = _safe_token(
+        # CHAOS-3297 Codex review round 2 MEDIUM: every bound/validate call
+        # below must run to completion *before* a single `run.*` attribute
+        # is touched. Validating in the middle of a sequence of mutations
+        # (the previous shape) meant a legal-but-large terminal_error_payload
+        # raising here left `run.state`/`run.answer_id`/etc already mutated
+        # on the still-open session; the SSE layer catches this exception
+        # and never re-raises it to the request's session dependency, whose
+        # teardown then commits those partial mutations anyway -- silently
+        # persisting a "terminal" v2 run with terminal_error_payload=NULL,
+        # which replay can no longer serve verbatim. Computing every derived
+        # value into a local first makes this function atomic: either every
+        # value validates and every mutation happens, or the first failure
+        # raises with `run` completely untouched.
+        safe_terminal_reason = _safe_token(
             terminal_reason, field="terminal_reason", max_bytes=64
         )
-        run.provider_source = provider_source
-        run.provider_fingerprint = _digest(
+        safe_provider_fingerprint = _digest(
             provider_fingerprint, field="provider_fingerprint"
         )
-        run.model_fingerprint = _digest(model_fingerprint, field="model_fingerprint")
-        run.prompt_version = _safe_token(
+        safe_model_fingerprint = _digest(model_fingerprint, field="model_fingerprint")
+        safe_prompt_version = _safe_token(
             prompt_version, field="prompt_version", max_bytes=128
         )
-        run.tool_contract_version = _safe_token(
+        safe_tool_contract_version = _safe_token(
             tool_contract_version, field="tool_contract_version", max_bytes=128
         )
-        run.metric_version = _safe_token(
+        safe_metric_version = _safe_token(
             metric_version, field="metric_version", max_bytes=128
         )
-        run.query_version = _safe_token(
+        safe_query_version = _safe_token(
             query_version, field="query_version", max_bytes=128
         )
+        safe_grounding_validation_status = _safe_token(
+            grounding_validation_status,
+            field="grounding_validation_status",
+            max_bytes=32,
+        )
+        safe_error_code_value = _safe_token(
+            safe_error_code, field="safe_error_code", max_bytes=64
+        )
+        # CHAOS-3297 (0079): the exact terminal v1 DevError, so idempotent
+        # replay can reuse it verbatim instead of reconstructing an
+        # approximation from the frame (Codex review HIGH #1).
+        # CHAOS-3297 Codex review round 3 CLASS A: the acceptance predicate
+        # is contract validity itself -- DevError.model_validate succeeding
+        # is what admits a payload, not a byte cap (see
+        # _TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES's own comment for why a
+        # byte cap was the wrong shape of check here). The canonical
+        # round-tripped dump is what gets persisted, not the caller's raw
+        # dict, so a validated-but-differently-key-ordered payload can never
+        # diverge from what DevError itself considers this object to be.
+        # _TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES remains only as a loose
+        # anti-runaway guard that a valid dev_error.v1 can never trip.
+        bounded_terminal_error_payload: dict[str, Any] | None = None
+        if terminal_error_payload is not None:
+            try:
+                validated_terminal_error = DevError.model_validate(
+                    terminal_error_payload
+                )
+            except PydanticValidationError as exc:
+                raise DevPersistenceValidationError(
+                    f"terminal_error_payload is not a valid dev_error.v1: {exc}"
+                ) from exc
+            canonical_terminal_error_payload = validated_terminal_error.model_dump(
+                mode="json"
+            )
+            encoded_terminal_error_bytes = len(
+                json.dumps(
+                    canonical_terminal_error_payload,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            )
+            if encoded_terminal_error_bytes > _TERMINAL_ERROR_PAYLOAD_BACKSTOP_BYTES:
+                raise DevPersistenceValidationError(
+                    "terminal_error_payload exceeds the anti-runaway backstop"
+                )
+            bounded_terminal_error_payload = canonical_terminal_error_payload
+
+        # Every value above validated cleanly -- now mutate.
+        run.state = state
+        run.answer_id = answer_id
+        run.terminal_reason = safe_terminal_reason
+        run.provider_source = provider_source
+        run.provider_fingerprint = safe_provider_fingerprint
+        run.model_fingerprint = safe_model_fingerprint
+        run.prompt_version = safe_prompt_version
+        run.tool_contract_version = safe_tool_contract_version
+        run.metric_version = safe_metric_version
+        run.query_version = safe_query_version
         run.latency_ms = latency_ms
         run.input_tokens = input_tokens
         run.output_tokens = output_tokens
@@ -1138,14 +1753,9 @@ class DevPersistenceService:
             run.citation_count = citation_count
         if metric_count is not None:
             run.metric_count = metric_count
-        run.grounding_validation_status = _safe_token(
-            grounding_validation_status,
-            field="grounding_validation_status",
-            max_bytes=32,
-        )
-        run.safe_error_code = _safe_token(
-            safe_error_code, field="safe_error_code", max_bytes=64
-        )
+        run.grounding_validation_status = safe_grounding_validation_status
+        run.safe_error_code = safe_error_code_value
+        run.terminal_error_payload = bounded_terminal_error_payload
         if state in _TERMINAL_RUN_STATES:
             run.ended_at = self._now()
         await self.session.flush()
@@ -1167,6 +1777,131 @@ class DevPersistenceService:
                 actor_user_id=user_id,
             )
             return None
+        return run
+
+    async def force_terminal_fallback(
+        self, *, org_id: uuid.UUID, user_id: uuid.UUID, run_id: uuid.UUID
+    ) -> None:
+        """Last-resort durability guarantee (CHAOS-3297 Codex review round 3
+        Finding 2).
+
+        ``finish()`` (``orchestrator.py``) can flush an answer and/or a
+        frame, then have its own ``terminal()``/``update_run`` write fail
+        for a reason unrelated to input validity (a dropped connection, a
+        constraint violation, any database-layer failure) -- on a session
+        that failure may have left rollback-only. The SSE layer
+        (``streaming.stream_orchestrator``) catches that exception and
+        converts it to a generic ``internal_error`` event without
+        re-raising to the request's own session-dependency teardown, which
+        then commits whatever was already flushed -- artifacts and a
+        ``contract_generation = 'v2'`` tag on a run stuck in a
+        *non-terminal* ``state`` forever, since ``update_run`` never ran to
+        completion.
+
+        Callers invoke this from a **fresh session** bound to a new
+        connection (never ``self.session``, which the original failure may
+        have poisoned) after that failure propagates, forcing the run into
+        a safe terminal state unconditionally. Idempotent: a no-op if the
+        run is already terminal (``finish()`` actually completed and
+        something else, unrelated, raised afterward) or does not exist.
+        Deliberately minimal -- only the columns needed to leave the run in
+        a coherent terminal shape for replay; every other field it already
+        wrote (or didn't) is left as-is.
+        """
+
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None or run.state in _TERMINAL_RUN_STATES:
+            return
+        run.state = "failed"
+        run.safe_error_code = "internal_error"
+        run.terminal_error_payload = None
+        run.ended_at = self._now()
+        await self.session.commit()
+
+    async def recover_stale_non_terminal_run(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        stale_after: timedelta,
+    ) -> DevRun | None:
+        """Recovery at the point of manifestation for the idempotent-replay
+        path (CHAOS-3297 Codex review round 5 HIGH closure).
+
+        ``force_terminal_fallback`` is the last-resort write from
+        ``run_with_events``'s own except-block; if it ALSO fails on the
+        same DB incident (a dropped connection outlives the request), a
+        run can be committed non-terminal forever. Every subsequent
+        duplicate ``client_message_id`` POST replays only TERMINAL runs
+        and 409s otherwise -- with no fallback attempt left to run, that
+        409 never stops. This is the second-chance recovery for exactly
+        that scenario, invoked from the replay path itself, at the moment
+        a caller actually asks for this run again, rather than a
+        background sweep discovering it "eventually".
+
+        Takes a row lock (``SELECT ... FOR UPDATE``) on the run before
+        looking at its state or age, so a genuinely still-running request
+        racing this call cannot have its own terminal write clobbered
+        out from under it -- this call and the real completion cannot
+        both proceed against the same row at once.
+
+        The lock alone is not enough, though: if ``self.session`` already
+        has this run's identity mapped from an EARLIER load in the same
+        session (the request's own ``service.session`` typically has --
+        ``append_user_message_and_run`` loaded it earlier in this same
+        request), SQLAlchemy's default loader behavior returns that SAME
+        cached Python object without refreshing its attributes from the
+        row this query just locked (CHAOS-3297 Codex review round 7
+        HIGH). Without ``populate_existing=True`` below, a run that
+        genuinely completed between the caller's stale read and this
+        call would have its real outcome silently overwritten with
+        ``failed``/``internal_error`` -- the user saw success on the live
+        stream, and every replay after that would serve
+        ``internal_error`` forever.
+
+        Returns:
+
+        * ``None`` if the run does not exist, or is non-terminal and
+          younger than ``stale_after`` -- a real in-flight run. The
+          caller must still 409.
+        * the run, forced terminal (``failed`` / ``internal_error``, the
+          same shape ``force_terminal_fallback`` uses) and committed, if
+          it was non-terminal and at least ``stale_after`` old.
+        * the run as-is, already terminal, if it completed (via this
+          call on an earlier replay, the original request after all, or
+          a genuinely concurrent request) between the caller's own read
+          and this lock -- always the freshly locked row, never a stale
+          cached instance.
+        """
+
+        run = await self.session.scalar(
+            select(DevRun)
+            .where(
+                DevRun.id == run_id,
+                DevRun.org_id == org_id,
+                DevRun.user_id == user_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if run is None:
+            return None
+        if run.state in _TERMINAL_RUN_STATES:
+            return run
+        # SQLite (test harness only -- Postgres always round-trips
+        # DateTime(timezone=True) as aware) reads a naive datetime back
+        # even though it was written aware; normalize before comparing.
+        started_at = run.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        if self._now() - started_at < stale_after:
+            return None
+        run.state = "failed"
+        run.safe_error_code = "internal_error"
+        run.terminal_error_payload = None
+        run.ended_at = self._now()
+        await self.session.commit()
         return run
 
     async def append_tool_call(
@@ -1488,6 +2223,42 @@ class DevPersistenceService:
         await self.session.flush()
         return run
 
+    async def _construct_validated_payload_row(
+        self,
+        *,
+        model_cls: Any,
+        payload_dict: Mapping[str, Any],
+        field_name: str,
+        max_bytes: int,
+        **extra_columns: Any,
+    ) -> Any:
+        """The **one** place ``DevPersistenceService`` constructs a
+        payload-bearing ORM row (CHAOS-3297 Codex review round 5 MEDIUM
+        closure).
+
+        Every validated sink (``record_frame``, ``record_narrative``)
+        routes its already-validated, already-cross-checked canonical
+        payload dict through here rather than touching a payload-bearing
+        model's ``payload`` column anywhere in its own body. The totality
+        scanner
+        (``test_every_payload_field_reference_is_confined_to_the_audited_helper``)
+        denies by default: it scans every OTHER method on this class for
+        *any* reference to the literal column name ``"payload"`` --
+        a keyword argument, an attribute-assignment target, or a
+        dict-literal key -- which covers direct construction
+        (``Model(payload=x)``), ``**kwargs``-splat construction
+        (``Model(**{"payload": x})``), ORM ``update(Model).values(payload=x)``
+        calls, and direct attribute assignment (``row.payload = x``) alike,
+        with no write-form taxonomy to keep in sync as new bypass shapes
+        are discovered. A method outside this helper (and the explicitly
+        filed ``_KNOWN_UNVALIDATED_PAYLOAD_SINKS`` gap) that mentions
+        ``"payload"`` in any of those shapes fails that test at collection
+        time, before it ever runs against a database.
+        """
+
+        bounded = _bounded_json(payload_dict, field=field_name, max_bytes=max_bytes)
+        return model_cls(payload=bounded, **extra_columns)
+
     async def record_frame(
         self,
         *,
@@ -1519,6 +2290,20 @@ class DevPersistenceService:
         carry ``plan_step_partition``/``relationship_closure_verified`` from
         ``record_investigation_result`` without ever reaching this method
         (e.g. a failure between investigation and frame synthesis).
+
+        CHAOS-3297 Codex review round 2 MEDIUM #3: ``payload`` used to be an
+        opaque ``Mapping`` bounded only by byte size and a bare
+        ``public_outcome`` vocabulary check -- ``{"schema_version":
+        "dev_answer_frame.v1"}`` alone would pass both checks, get stored
+        verbatim, and tag the run ``contract_generation = 'v2'``, silently
+        bypassing every frame-level invariant the contract enforces
+        (structural closure, no-answer projection, plan-registry
+        membership, ...). ``payload`` is now validated as a real
+        ``DevAnswerFrame`` before anything is written, and its own
+        ``frame_id``/``run_id``/``public_outcome`` must agree with this
+        call's own arguments -- a caller passing a frame for a different
+        run, or claiming a different outcome than it argues for, is a
+        caller bug, not data to persist quietly.
         """
 
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
@@ -1526,15 +2311,35 @@ class DevPersistenceService:
             raise DevPersistenceNotFound("run not found")
         if public_outcome not in _PUBLIC_OUTCOMES:
             raise DevPersistenceValidationError("invalid public_outcome")
-        record = DevAnswerFrame(
+        try:
+            validated = DevAnswerFrameContract.model_validate(payload)
+        except PydanticValidationError as exc:
+            raise DevPersistenceValidationError(
+                f"frame_payload is not a valid dev_answer_frame.v1: {exc}"
+            ) from exc
+        if validated.frame_id != str(frame_id):
+            raise DevPersistenceValidationError(
+                "frame_payload.frame_id does not match the frame_id argument"
+            )
+        if validated.run_id != str(run_id):
+            raise DevPersistenceValidationError(
+                "frame_payload.run_id does not match the run_id argument"
+            )
+        if validated.public_outcome.value != public_outcome:
+            raise DevPersistenceValidationError(
+                "frame_payload.public_outcome does not match the "
+                "public_outcome argument"
+            )
+        record = await self._construct_validated_payload_row(
+            model_cls=DevAnswerFrame,
+            payload_dict=payload,
+            field_name="frame_payload",
+            max_bytes=_FRAME_PAYLOAD_MAX_BYTES,
             run_id=run.id,
             org_id=org_id,
             user_id=user_id,
             frame_id=frame_id,
             public_outcome=public_outcome,
-            payload=_bounded_json(
-                payload, field="frame_payload", max_bytes=_FRAME_PAYLOAD_MAX_BYTES
-            ),
             created_at=self._now(),
         )
         self.session.add(record)
@@ -1556,6 +2361,26 @@ class DevPersistenceService:
         narrative_text: str,
         payload: Mapping[str, Any],
     ) -> DevRunNarrative:
+        """Persist the canonical ``dev_narrative.v1`` for one run.
+
+        CHAOS-3297 Codex review round 3 CLASS B (record_frame's round 2 fix,
+        repeated here): ``payload`` used to be an opaque ``Mapping``,
+        bounded only by byte size and forbidden-key scanning -- never
+        validated as a real ``DevNarrative``, so a caller could tag a run
+        with a narrative row that does not actually satisfy the contract
+        (e.g. a ``provider`` mode narrative with no ``provider_metadata``).
+        ``payload`` is the narrative dump with ``body`` excluded
+        (``narrative_text`` is the separate authoritative copy --
+        ``PersistenceRunRecorder.record_narrative``), so the full contract
+        object is reconstructed (``body`` reinserted from
+        ``narrative_text``) before validating -- validation must exercise
+        every field the wire contract enforces, not the subset that happens
+        to already be in ``payload``. The validated object's own
+        ``narrative_id``/``run_id``/``frame_id``/``mode``/
+        ``provider_metadata`` must agree with this call's own arguments;
+        any mismatch rejects, no write.
+        """
+
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
         if run is None:
             raise DevPersistenceNotFound("run not found")
@@ -1572,27 +2397,69 @@ class DevPersistenceService:
             raise DevPersistenceValidationError(
                 "narrative frame_id must match the run's recorded answer frame"
             )
+        reconstructed = dict(payload)
+        reconstructed["body"] = narrative_text
+        try:
+            validated = DevNarrativeContract.model_validate(reconstructed)
+        except PydanticValidationError as exc:
+            raise DevPersistenceValidationError(
+                f"narrative payload is not a valid dev_narrative.v1: {exc}"
+            ) from exc
+        if validated.narrative_id != str(narrative_id):
+            raise DevPersistenceValidationError(
+                "narrative payload's narrative_id does not match the "
+                "narrative_id argument"
+            )
+        if validated.run_id != str(run_id):
+            raise DevPersistenceValidationError(
+                "narrative payload's run_id does not match the run_id argument"
+            )
+        if validated.frame_id != str(frame_id):
+            raise DevPersistenceValidationError(
+                "narrative payload's frame_id does not match the frame_id argument"
+            )
+        if validated.mode != mode:
+            raise DevPersistenceValidationError(
+                "narrative payload's mode does not match the mode argument"
+            )
+        # provider_fingerprint arrives already hashed (the caller -- see
+        # orchestrator_persistence.PersistenceRunRecorder.record_narrative --
+        # digests narrative.provider_metadata.model_fingerprint before this
+        # call); _digest here only validates that shape. To cross-check it
+        # against the *payload's own* raw model_fingerprint, that raw value
+        # must be hashed the identical way, not passed through the
+        # shape-only validator.
+        expected_provider_fingerprint = (
+            _sha256_digest(validated.provider_metadata.model_fingerprint)
+            if validated.provider_metadata is not None
+            else None
+        )
+        safe_provider_fingerprint = _digest(
+            provider_fingerprint, field="provider_fingerprint"
+        )
+        if expected_provider_fingerprint != safe_provider_fingerprint:
+            raise DevPersistenceValidationError(
+                "narrative payload's provider_metadata does not match the "
+                "provider_fingerprint argument"
+            )
         text = _bounded_text(
-            narrative_text, field="narrative_text", max_bytes=_NARRATIVE_TEXT_MAX_BYTES
+            validated.body, field="narrative_text", max_bytes=_NARRATIVE_TEXT_MAX_BYTES
         )
         if not text:
             raise DevPersistenceValidationError("narrative_text must not be empty")
-        record = DevRunNarrative(
+        record = await self._construct_validated_payload_row(
+            model_cls=DevRunNarrative,
+            payload_dict=validated.model_dump(mode="json", exclude={"body"}),
+            field_name="narrative_payload",
+            max_bytes=_NARRATIVE_PAYLOAD_MAX_BYTES,
             run_id=run.id,
             org_id=org_id,
             user_id=user_id,
             narrative_id=narrative_id,
             frame_id=frame_id,
             mode=mode,
-            provider_fingerprint=_digest(
-                provider_fingerprint, field="provider_fingerprint"
-            ),
+            provider_fingerprint=safe_provider_fingerprint,
             narrative_text=text,
-            payload=_bounded_json(
-                payload,
-                field="narrative_payload",
-                max_bytes=_NARRATIVE_PAYLOAD_MAX_BYTES,
-            ),
             created_at=self._now(),
         )
         self.session.add(record)

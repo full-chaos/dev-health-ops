@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,13 +18,16 @@ from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.dev import router as dev_router_module
+from dev_health_ops.api.dev import terminal_frames as dev_terminal_frames
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import (
     DevAnswer,
     DevContractVersions,
+    DevError,
     DevScope,
     DevScopeResolution,
     ScopeResolutionOutcome,
+    dev_error_remediation,
 )
 from dev_health_ops.api.dev.contracts_v2.base import PublicOutcome, QuestionIntentID
 from dev_health_ops.api.dev.evidence_service import (
@@ -272,6 +276,141 @@ class PreflightNoAnswerRuntime(FakeBoundedRuntime):
         return None
 
 
+class OrchestratorNativeErrorRuntime(FakeBoundedRuntime):
+    """A non-preflight orchestrator-native error termination (CHAOS-3297
+    Codex review HIGH #1).
+
+    Mirrors exactly what ``orchestrator.run()``'s ``finish()`` does for one
+    of its own ~30 ``error(code, message, ...)`` terminal call sites
+    (``frame_already_recorded=False``): builds the producer-authored
+    ``DevError`` the way the local ``error()`` closure does, builds and
+    records the minimal compatibility frame via
+    ``terminal_frames.build_error_frame``, then calls ``recorder.terminal``
+    with that exact error object -- exercising the real
+    ``PersistenceRunRecorder.terminal`` path that persists
+    ``terminal_error_payload``. Distinct from ``PreflightNoAnswerRuntime``,
+    which simulates the *preflight*'s own termination
+    (``frame_already_recorded=True``, error built by
+    ``project_preflight_error``): the two are different origins with
+    different frame-recording timing, and CHAOS-3297's fidelity requirement
+    must hold for both.
+    """
+
+    def __init__(
+        self, *, code: str, message: str, remediation: list[str] | None = None
+    ) -> None:
+        self.code = code
+        self.message = message
+        # None -> the normal canned dev_error_remediation(code) lookup;
+        # explicit override lets a test drive a legal-but-large remediation
+        # list (CHAOS-3297 Codex review round 2 MEDIUM: DevError.remediation
+        # admits up to 5 ShortText entries, up to 2048 characters each).
+        self._remediation_override = remediation
+
+    async def run(
+        self,
+        *,
+        request,
+        run_id,
+        conversation_id,
+        answer_id,
+        recorder,
+        event_sink,
+        **_kwargs,
+    ) -> OrchestratorResult:
+        del conversation_id, answer_id
+        await recorder.transition(RunState.RESOLVING_SCOPE)
+        await event_sink(OrchestratorEvent(RunState.RESOLVING_SCOPE))
+
+        error = DevError(
+            schema_version="dev_error.v1",
+            request_id=request.request_id,
+            code=self.code,
+            safe_message=self.message,
+            retryable=False,
+            remediation=(
+                self._remediation_override
+                if self._remediation_override is not None
+                else dev_error_remediation(self.code)
+            ),
+        )
+        frame = dev_terminal_frames.build_error_frame(
+            code=self.code,
+            run_id=run_id,
+            generated_at=datetime.now(UTC),
+            versions=_TEST_VERSIONS,
+        )
+        await recorder.record_frame(frame)
+        await recorder.terminal(
+            state=RunState.FAILED,
+            answer=None,
+            error=error,
+            usage=AgentUsage(input_tokens=0, output_tokens=0),
+            tool_call_count=0,
+            provider_fingerprint=None,
+            model_fingerprint=None,
+            prompt_checksum=None,
+        )
+        await event_sink(OrchestratorEvent(RunState.FAILED, error.code))
+        return OrchestratorResult(
+            run_id=run_id,
+            state=RunState.FAILED,
+            answer=None,
+            error=error,
+            events=(OrchestratorEvent(RunState.FAILED, error.code),),
+            usage=AgentUsage(input_tokens=0, output_tokens=0),
+            tool_call_count=0,
+            provider_fingerprint=None,
+            model_fingerprint=None,
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+
+class FrameWrittenThenTerminalPersistCrashesRuntime(FakeBoundedRuntime):
+    """Reproduces CHAOS-3297 Codex review round 3 Finding 2: a frame is
+    successfully flushed, then the terminal-state write itself fails for a
+    reason unrelated to input validity -- ``recorder.terminal()`` is never
+    called at all, simulating a database-layer failure the orchestrator's
+    own ``finish()`` could not recover from. Exercises
+    ``router.create_message``'s ``run_with_events`` last-resort fallback
+    directly, without needing to force a real database fault inside
+    ``update_run``.
+    """
+
+    async def run(
+        self,
+        *,
+        request,
+        run_id,
+        conversation_id,
+        answer_id,
+        recorder,
+        event_sink,
+        **_kwargs,
+    ) -> OrchestratorResult:
+        del conversation_id, answer_id
+        await recorder.transition(RunState.RESOLVING_SCOPE)
+        await event_sink(OrchestratorEvent(RunState.RESOLVING_SCOPE))
+
+        frame = dev_terminal_frames.build_error_frame(
+            code="scope_not_found",
+            run_id=run_id,
+            generated_at=datetime.now(UTC),
+            versions=_TEST_VERSIONS,
+        )
+        await recorder.record_frame(frame)
+        # Simulates terminal()/update_run failing for a reason unrelated to
+        # input validity (e.g. a dropped connection) -- never reaches
+        # recorder.terminal() at all, so the run stays non-terminal on the
+        # request session unless the router's last-resort fallback fires.
+        raise RuntimeError("simulated terminal-persist failure")
+
+    async def aclose(self) -> None:
+        return None
+
+
 def _parse_sse_events(text: str) -> list[tuple[str, dict[str, Any]]]:
     events: list[tuple[str, dict[str, Any]]] = []
     for block in text.strip().split("\n\n"):
@@ -340,6 +479,17 @@ async def dev_api_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     def _enable_foreign_keys(dbapi_connection: Any, _record: Any) -> None:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        # A streaming response keeps its request-scoped session open for
+        # the whole SSE stream (FastAPI does not tear down a dependency
+        # until the response body is fully consumed); a same-file SQLite
+        # connection opened concurrently by the CHAOS-3297 round 3
+        # Finding 2 last-resort fallback (a genuinely separate connection,
+        # by design -- it must not reuse a possibly-poisoned session)
+        # would otherwise immediately raise "database is locked" instead
+        # of waiting the brief moment SQLite needs to hand off the file
+        # lock. Postgres has no such single-writer file lock, so this is
+        # purely a same-process-SQLite test artifact.
+        cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
     async with engine.begin() as connection:
@@ -742,6 +892,523 @@ async def test_no_answer_replay_matches_live_terminal_projection(
         assert len(runs) == 1, "the replay must not have created a second run"
         assert runs[0].contract_generation == "v2"
         assert runs[0].public_outcome == outcome.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        pytest.param(
+            "scope_forbidden",
+            "The requested scope is not authorized.",
+            id="code_diverges_from_reconstruction",
+        ),
+        pytest.param(
+            "scope_not_found",
+            "The requested scope was not found.",
+            id="code_matches_reconstruction",
+        ),
+    ],
+)
+async def test_orchestrator_native_error_replay_serves_the_exact_live_payload(
+    dev_api_context, code: str, message: str
+) -> None:
+    """CHAOS-3297 Codex review HIGH #1: replay of an orchestrator-native
+    terminal error must serve the exact live ``DevError``, not a frame
+    reconstruction -- whether or not the reconstructed v1 *code* happens to
+    match ``run.safe_error_code``.
+
+    Before this fix, ``scope_not_found`` (id ``code_matches_reconstruction``)
+    was the live symptom: the old coherence guard only degraded to the
+    generic fallback when the reconstructed *code* diverged, so a matching
+    code let the frame-projected *copy* through unguarded -- live streams
+    "The requested scope was not found." with no remediation, replay served
+    the fixed canonical sentence "No matching subject was found for this
+    question." plus "Check the name and try again.". ``scope_forbidden``
+    (id ``code_diverges_from_reconstruction``, reconstructed code
+    ``forbidden``) already fell back, but only to the *generic* "did not
+    complete" fallback error, never the live run's own specific message
+    either. This test drives the real endpoint twice with the identical
+    ``client_message_id`` -- the first call is live, the second is the
+    idempotent replay -- and asserts every field (code, safe_message,
+    retryable, remediation) is byte-identical, not merely the code.
+    """
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=cast(Any, OrchestratorNativeErrorRuntime(code=code, message=message))
+    )
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": f"request_native_error_{code}",
+        "client_message_id": f"client_native_error_{code}",
+        "conversation_id": conversation_id,
+        "question": "What is the status of the thing I mean?",
+        "question_class": "status",
+        "scope": _scope_payload(dev_api_context.org_id),
+    }
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+    replay = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert replay.status_code == 200
+
+    live_events = dict(_parse_sse_events(live.text))
+    replay_events = dict(_parse_sse_events(replay.text))
+    assert "error" in live_events
+    assert "error" in replay_events
+
+    live_error = live_events["error"]["error"]
+    replay_error = replay_events["error"]["error"]
+    assert live_error["code"] == code
+    assert live_error["safe_message"] == message
+
+    def _comparable(error: dict[str, Any]) -> dict[str, Any]:
+        # request_id is excluded for the same documented reason as
+        # test_no_answer_replay_matches_live_terminal_projection: live
+        # builds it from the raw client-supplied request id, replay reads
+        # the persisted, UUID-folded dev_runs.request_id -- a pre-existing,
+        # separate divergence out of scope for this fix.
+        return {k: v for k, v in error.items() if k != "request_id"}
+
+    assert _comparable(live_error) == _comparable(replay_error), (
+        "replay must serve the exact live DevError -- code, safe_message, "
+        "retryable, AND remediation -- not a frame reconstruction"
+    )
+    assert replay_error["safe_message"] == message, (
+        "replay must not substitute a canonical/generic sentence for the "
+        "producer-authored live message"
+    )
+
+    async with dev_api_context.maker() as session:
+        runs = (
+            await session.scalars(
+                select(DevRun).where(
+                    DevRun.conversation_id == uuid.UUID(conversation_id)
+                )
+            )
+        ).all()
+        assert len(runs) == 1, "the replay must not have created a second run"
+        assert runs[0].terminal_error_payload is not None
+        assert runs[0].terminal_error_payload["code"] == code
+
+
+@pytest.mark.asyncio
+async def test_oversized_but_legal_error_persists_atomically_and_replays_byte_identical(
+    dev_api_context,
+) -> None:
+    """CHAOS-3297 Codex review round 2 MEDIUM (persistence/service.py):
+    a legal ``dev_error.v1`` must never be silently downgraded on write.
+
+    ``DevError.safe_message``/``remediation`` are ``ShortText`` -- a
+    *character* bound (``max_length=2048``), not a byte bound -- and
+    ``_bounded_json`` serializes with ``json.dumps``'s default
+    ``ensure_ascii=True``, which escapes an astral character as a
+    UTF-16 surrogate pair (two ``\\uXXXX`` sequences, 12 ASCII bytes each).
+    A fully legal, Pydantic-valid ``DevError`` with a maxed
+    ``safe_message`` and five maxed ``remediation`` entries therefore
+    serializes to roughly 144 KB -- far past the previous hand-picked 4 KiB
+    cap, which rejected this exact legal object. Before the fix, that
+    exception was raised *after* ``update_run`` had already mutated
+    ``run.state``/etc on the open session; the SSE layer swallows the
+    exception (never re-raising it to the request's session-dependency
+    teardown), so the partially-mutated run was committed anyway with
+    ``terminal_error_payload=NULL`` -- a "terminal" v2 run whose replay
+    silently lost verbatim fidelity. This test drives the real endpoint
+    with a maxed-out-but-legal error twice (live + idempotent replay) and
+    asserts the run persisted atomically (correct terminal state,
+    ``ended_at`` set, ``terminal_error_payload`` populated with the full
+    payload) and that replay is byte-identical to live.
+    """
+
+    worst_char = "\U0001f600"
+    huge_message = worst_char * 2048
+    huge_remediation = [worst_char * 2048] * 5
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=cast(
+            Any,
+            OrchestratorNativeErrorRuntime(
+                code="scope_not_found",
+                message=huge_message,
+                remediation=huge_remediation,
+            ),
+        )
+    )
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": "request_oversized_error",
+        "client_message_id": "client_oversized_error",
+        "conversation_id": conversation_id,
+        "question": "What is the status of the thing I mean?",
+        "question_class": "status",
+        "scope": _scope_payload(dev_api_context.org_id),
+    }
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+    live_events = dict(_parse_sse_events(live.text))
+    assert "error" in live_events
+    live_error = live_events["error"]["error"]
+    assert live_error["code"] == "scope_not_found"
+    assert live_error["safe_message"] == huge_message
+    assert live_error["remediation"] == huge_remediation
+
+    replay = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert replay.status_code == 200
+    replay_events = dict(_parse_sse_events(replay.text))
+    assert "error" in replay_events
+    replay_error = replay_events["error"]["error"]
+    assert replay_error["safe_message"] == huge_message, (
+        "replay must serve the oversized-but-legal message byte-identically, "
+        "not a truncated or fallback shape"
+    )
+    assert replay_error["remediation"] == huge_remediation
+
+    async with dev_api_context.maker() as session:
+        runs = (
+            await session.scalars(
+                select(DevRun).where(
+                    DevRun.conversation_id == uuid.UUID(conversation_id)
+                )
+            )
+        ).all()
+        assert len(runs) == 1, "the replay must not have created a second run"
+        run = runs[0]
+        assert run.state == "failed", (
+            "the run must land in its real terminal state, not be left "
+            "half-mutated by a validation failure mid-update_run"
+        )
+        assert run.ended_at is not None, (
+            "ended_at is set after every other field in update_run -- a "
+            "non-null value proves the whole call completed, not just the "
+            "fields that happened to be assigned before a mid-function raise"
+        )
+        assert run.terminal_error_payload is not None
+        assert run.terminal_error_payload["safe_message"] == huge_message
+        assert run.terminal_error_payload["remediation"] == huge_remediation
+
+
+@pytest.mark.asyncio
+async def test_terminal_persist_failure_after_frame_write_still_ends_the_run_terminal(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-3297 Codex review round 3 Finding 2.
+
+    A frame is successfully flushed, then the terminal-state write itself
+    fails for a reason unrelated to input validity (never reaches
+    ``recorder.terminal()`` at all -- simulating a database-layer failure,
+    not a validation failure Class A/round-2 already made vanishingly
+    unlikely). Before this fix, the run stayed stuck in a non-terminal
+    ``state`` forever (``streaming.stream_orchestrator`` swallows the
+    exception into a generic SSE event without re-raising to the request's
+    session-dependency teardown, which then commits whatever was already
+    flushed) while carrying an already-persisted frame and a
+    ``contract_generation = 'v2'`` tag -- a run a client could never
+    successfully retry (every retry 409s forever) and replay could never
+    make sense of.
+
+    ``router.get_postgres_session`` (``dev_health_ops.db.get_postgres_session``)
+    is hardcoded to the app's configured production Postgres engine, which
+    has no relationship to this test's isolated SQLite database -- and a
+    genuinely separate SQLite connection racing the request's own
+    still-open one hits aiosqlite/SQLAlchemy's own greenlet-bridging
+    limits in-process, orthogonal to what this test is about. The
+    fallback's *own* correctness (forces a stuck run terminal, is
+    idempotent) is proven directly against a real session in
+    ``test_persistence_v2.py::test_force_terminal_fallback_forces_a_stuck_run_terminal``;
+    this test proves the *wiring* -- that a terminal-persist failure
+    triggers exactly one rollback of the request session followed by
+    exactly one fallback call with the correct identifying arguments --
+    via a spy, and that the SSE response still degrades safely rather than
+    hanging or 500ing.
+    """
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=cast(Any, FrameWrittenThenTerminalPersistCrashesRuntime())
+    )
+
+    @asynccontextmanager
+    async def _noop_fresh_session():
+        yield None
+
+    monkeypatch.setattr(dev_router_module, "get_postgres_session", _noop_fresh_session)
+
+    fallback_calls: list[dict[str, Any]] = []
+
+    async def _spy_force_terminal_fallback(self, **kwargs: Any) -> None:
+        fallback_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        dev_router_module.DevPersistenceService,
+        "force_terminal_fallback",
+        _spy_force_terminal_fallback,
+    )
+
+    # The real AsyncSession.rollback() on the request-scoped session, called
+    # from inside run_with_events's except handler (a task spawned via
+    # asyncio.ensure_future in streaming.stream_orchestrator), triggers a
+    # SQLAlchemy/aiosqlite greenlet-bridging failure specific to this
+    # in-process ASGI-transport test harness ("greenlet_spawn has not been
+    # called") that does not reproduce against a real Postgres connection.
+    # Spying it out proves the *call* happens (the wiring this test is
+    # about) without depending on aiosqlite's cross-task greenlet behavior,
+    # which is an orthogonal test-harness concern.
+    rollback_calls = 0
+
+    async def _spy_rollback(self) -> None:
+        nonlocal rollback_calls
+        rollback_calls += 1
+
+    monkeypatch.setattr(AsyncSession, "rollback", _spy_rollback)
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": "request_terminal_persist_crash",
+        "client_message_id": "client_terminal_persist_crash",
+        "conversation_id": conversation_id,
+        "question": "What is the status of the thing I mean?",
+        "question_class": "status",
+        "scope": _scope_payload(dev_api_context.org_id),
+    }
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+    live_events = dict(_parse_sse_events(live.text))
+    assert "error" in live_events, (
+        "the crash must still surface as a safe SSE error event, not hang "
+        "or 500 the connection"
+    )
+
+    async with dev_api_context.maker() as session:
+        run = await session.scalar(
+            select(DevRun).where(DevRun.conversation_id == uuid.UUID(conversation_id))
+        )
+        assert run is not None
+
+    assert rollback_calls >= 1, (
+        "the poisoned session must be rolled back before the fresh-session "
+        "fallback is attempted"
+    )
+    assert len(fallback_calls) == 1, (
+        "the last-resort fallback must fire exactly once for this failure, "
+        f"got {len(fallback_calls)}"
+    )
+    assert fallback_calls[0]["run_id"] == run.id
+    assert fallback_calls[0]["org_id"] == dev_api_context.org_id
+    assert fallback_calls[0]["user_id"] == dev_api_context.user_id
+
+    async with dev_api_context.maker() as session:
+        runs = (
+            await session.scalars(
+                select(DevRun).where(
+                    DevRun.conversation_id == uuid.UUID(conversation_id)
+                )
+            )
+        ).all()
+        assert len(runs) == 1, "the replay must not have created a second run"
+
+
+@pytest.mark.asyncio
+async def test_stale_non_terminal_run_recovers_via_replay_when_the_fallback_itself_failed(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-3297 Codex review round 5 HIGH.
+
+    ``force_terminal_fallback`` is the request's own last-resort write
+    (round 3 Finding 2, proven above). If it ALSO fails on the same DB
+    incident that broke the original ``runtime.run()`` call, that fix
+    alone leaves the run committed non-terminal forever: the replay path
+    only ever replays TERMINAL runs, so every future duplicate
+    ``client_message_id`` POST would 409 indefinitely with no fallback
+    attempt left to run. This proves the second-chance recovery closes
+    that gap -- against a REAL aiosqlite database, asserting the run's
+    actual persisted state, not a spy call count, exactly because a spy
+    that stubs the fallback out cannot see whether the *real* recovery
+    path leaves the row in a coherent, replayable state.
+
+    Two phases: a duplicate that arrives while the run is still fresh
+    must still 409 (genuine in-flight concurrency is not the bug this
+    closes); a duplicate old enough that the run cannot possibly still be
+    in flight must recover it and serve a terminal result instead.
+    """
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=cast(Any, FrameWrittenThenTerminalPersistCrashesRuntime())
+    )
+
+    @asynccontextmanager
+    async def _noop_fresh_session():
+        yield None
+
+    monkeypatch.setattr(dev_router_module, "get_postgres_session", _noop_fresh_session)
+
+    # Injected failure: the request's own last-resort fallback -- and its
+    # bounded retry -- fail every time this is called, simulating the
+    # same DB incident that broke runtime.run() also taking out the
+    # fallback write. This is the exact double failure the recovery below
+    # exists for.
+    async def _always_failing_fallback(self, **_kwargs: Any) -> None:
+        raise RuntimeError("simulated fallback failure -- same DB incident")
+
+    monkeypatch.setattr(
+        dev_router_module.DevPersistenceService,
+        "force_terminal_fallback",
+        _always_failing_fallback,
+    )
+
+    # See test_terminal_persist_failure_after_frame_write_still_ends_the_run_terminal
+    # above: the real AsyncSession.rollback() on the request-scoped
+    # session, called from run_with_events's except handler inside a task
+    # spawned by streaming.stream_orchestrator, hits an aiosqlite/
+    # SQLAlchemy greenlet-bridging limit specific to this in-process
+    # ASGI-transport test harness. Spying it out is an orthogonal
+    # test-harness workaround, not part of what this test proves.
+    async def _spy_rollback(self) -> None:
+        return None
+
+    monkeypatch.setattr(AsyncSession, "rollback", _spy_rollback)
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": "request_stale_recovery_original",
+        "client_message_id": "client_stale_recovery",
+        "conversation_id": conversation_id,
+        "question": "What is the status of the thing I mean?",
+        "question_class": "status",
+        "scope": _scope_payload(dev_api_context.org_id),
+    }
+
+    live = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    assert live.status_code == 200
+    live_events = dict(_parse_sse_events(live.text))
+    assert "error" in live_events, (
+        "the crash must still surface as a safe SSE error event, not hang "
+        "or 500 the connection"
+    )
+
+    _NON_TERMINAL = {
+        "completed",
+        "insufficient_evidence",
+        "refused",
+        "failed",
+        "cancelled",
+    }
+    async with dev_api_context.maker() as session:
+        run = await session.scalar(
+            select(DevRun).where(DevRun.conversation_id == uuid.UUID(conversation_id))
+        )
+        assert run is not None
+        run_id = run.id
+        assert run.state not in _NON_TERMINAL, (
+            "the double failure (runtime crash + failed fallback) must "
+            "leave the run non-terminal -- this is the gap being closed"
+        )
+
+    # Phase 1: a duplicate arriving while the run is still fresh must
+    # still 409 -- this is genuine in-flight concurrency, not a stuck run,
+    # and recover_stale_non_terminal_run must not touch it.
+    fresh_duplicate = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={**payload, "request_id": "request_stale_recovery_fresh_duplicate"},
+    )
+    assert fresh_duplicate.status_code == 409
+    assert fresh_duplicate.json()["code"] == "concurrency_limited"
+
+    async with dev_api_context.maker() as session:
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        assert run.state not in _NON_TERMINAL, (
+            "a 409'd fresh duplicate must not have mutated the run"
+        )
+        assert run.ended_at is None
+
+    # Phase 2: age the run past the recovery threshold -- simulating time
+    # passing with no further attempts, e.g. the DB incident having
+    # ended, but nothing else ever having touched this run.
+    async with dev_api_context.maker() as session:
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        run.started_at = (
+            datetime.now(UTC)
+            - dev_router_module._STALE_NON_TERMINAL_RUN_THRESHOLD
+            - timedelta(seconds=1)
+        )
+        await session.commit()
+
+    aged_duplicate = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={**payload, "request_id": "request_stale_recovery_aged_duplicate"},
+    )
+    assert aged_duplicate.status_code == 200, (
+        "an aged non-terminal run must recover and serve a terminal "
+        "result instead of 409ing forever"
+    )
+
+    async with dev_api_context.maker() as session:
+        run_after = await session.get(DevRun, run_id)
+        assert run_after is not None
+        assert run_after.state == "failed", (
+            "recovery must be visible in the real database's own state, "
+            "not merely in the HTTP response"
+        )
+        assert run_after.safe_error_code == "internal_error"
+        assert run_after.ended_at is not None
+
+    async with dev_api_context.maker() as session:
+        runs = (
+            await session.scalars(
+                select(DevRun).where(
+                    DevRun.conversation_id == uuid.UUID(conversation_id)
+                )
+            )
+        ).all()
+        assert len(runs) == 1, "recovery must not have created a second run"
 
 
 @pytest.mark.asyncio

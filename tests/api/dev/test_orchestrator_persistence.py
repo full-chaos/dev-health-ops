@@ -59,6 +59,9 @@ async def test_recorder_persists_only_safe_versioned_terminal_metadata() -> None
     assert terminal["provider_fingerprint"].startswith("sha256:")
     assert terminal["model_fingerprint"].startswith("sha256:")
     assert terminal["safe_error_code"] == "provider_unavailable"
+    # CHAOS-3297 Codex review HIGH #1: the exact validated v1 DevError must
+    # flow through to update_run so a later replay can reuse it verbatim.
+    assert terminal["terminal_error_payload"] == error.model_dump(mode="json")
     assert "prompt" not in terminal and "provider_response" not in terminal
 
 

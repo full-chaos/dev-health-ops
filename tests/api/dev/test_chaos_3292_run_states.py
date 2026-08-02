@@ -74,7 +74,7 @@ def test_router_replay_allowlist_matches_the_terminal_set() -> None:
     from dev_health_ops.api.dev import router
 
     source = inspect.getsource(router)
-    marker = "if accepted.run.state not in {"
+    marker = "if replay_run.state not in {"
     assert marker in source, "the replay allow-list moved; re-point this guard"
     block = source.split(marker, 1)[1].split("}", 1)[0]
     listed = {

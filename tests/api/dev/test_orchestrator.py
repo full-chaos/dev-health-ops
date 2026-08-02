@@ -39,14 +39,20 @@ from dev_health_ops.llm.agent.scripted import ScriptedAgentProvider, ScriptedSte
 
 
 class Recorder:
-    def __init__(self, *, fail_answer_write: bool = False) -> None:
+    def __init__(
+        self, *, fail_answer_write: bool = False, fail_frame_write: bool = False
+    ) -> None:
         self.transitions: list[RunState] = []
         self.tools: list[DevToolRequest] = []
         self.executions: list[Any] = []
         self.answers: list[DevAnswer] = []
         self.terminals: list[RunState] = []
+        self.terminal_errors: list[Any] = []
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
+        self.frames: list[Any] = []
+        self.rollbacks = 0
         self.fail_answer_write = fail_answer_write
+        self.fail_frame_write = fail_frame_write
 
     async def transition(self, state: RunState) -> None:
         self.transitions.append(state)
@@ -69,16 +75,19 @@ class Recorder:
         del subject_set
 
     async def record_frame(self, frame: Any) -> None:
-        del frame
+        if self.fail_frame_write:
+            raise RuntimeError("frame storage unavailable")
+        self.frames.append(frame)
 
     async def rollback(self) -> None:
-        pass
+        self.rollbacks += 1
 
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
 
     async def terminal(self, **values) -> None:
         self.terminals.append(values["state"])
+        self.terminal_errors.append(values.get("error"))
 
 
 class RecordingProvider:
@@ -648,6 +657,119 @@ async def test_output_exhausted_is_a_safe_error_not_internal_error() -> None:
     assert result.error.code == "model_not_supported"
     assert result.error.code != "internal_error"
     assert result.error.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_output_exhausted_provider_failure_still_persists_a_frame() -> None:
+    """CHAOS-3297 Codex review HIGH #2 -- finish()'s frame-mandatory totality
+    must also hold for a provider failure, not only the local error() closure.
+
+    Reproduces the exact live symptom: OUTPUT_EXHAUSTED classifies to the v1
+    code "model_not_supported" (``DevOrchestrator._provider_error``), which
+    -- before ``terminal_frames.ORCHESTRATOR_ERROR_CODES`` was extended to
+    cover every ``_provider_error`` output, not only the codes the local
+    ``error()`` closure builds -- was not a registered code.
+    ``build_error_frame`` raised ``ValueError`` on the unregistered code,
+    ``finish()``'s (then-)broad exception handler silently swallowed it,
+    rolled back, and committed a FAILED terminal run with zero frames --
+    violating the frame-mandatory invariant on a routine provider failure,
+    not an edge case. A frame must exist for this run.
+    """
+    recorder = Recorder()
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    error=AgentProviderError(
+                        AgentProviderErrorCode.OUTPUT_EXHAUSTED,
+                        retryable=False,
+                    )
+                )
+            ],
+            script_id="output-exhausted-frame",
+            recorder=recorder,
+        )
+    )
+    assert result.state is RunState.FAILED
+    assert result.error is not None and result.error.code == "model_not_supported"
+    assert len(recorder.frames) == 1, (
+        "finish() must never commit a terminal run with zero frames, even "
+        "when the terminating code came from _provider_error rather than "
+        "the local error() closure"
+    )
+    assert recorder.frames[0].public_outcome.value == "unsupported"
+    assert recorder.rollbacks == 0
+
+
+@pytest.mark.asyncio
+async def test_finish_falls_back_to_a_registered_bucket_for_an_unregistered_code(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """CHAOS-3297 Codex review HIGH #2, defense in depth (round 2 MEDIUM #2
+    extends this same reproduction with operational visibility).
+
+    Simulates a registry-drift bug directly: even if a future producer code
+    slips past ``terminal_frames.ORCHESTRATOR_ERROR_CODES`` /
+    ``PUBLIC_OUTCOME_BY_ERROR_CODE`` (the totality test that would normally
+    catch this at CI time is deliberately bypassed here, via monkeypatch, to
+    exercise the runtime fallback itself), ``finish()`` must still persist a
+    frame -- falling back to the always-registered "internal_error" bucket
+    -- rather than silently committing an unbucketed, frame-less terminal
+    run the way it did before this fix. Round 2: that fallback must also be
+    operationally visible -- a structured ERROR log record and a Prometheus
+    counter increment -- not a silent downgrade an operator would never see
+    (Codex review round 2 MEDIUM #2).
+    """
+    import logging
+
+    from dev_health_ops.api.dev import terminal_frames as tf
+    from dev_health_ops.metrics.prometheus import (
+        ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL,
+    )
+
+    mutated_codes = frozenset(tf.ORCHESTRATOR_ERROR_CODES - {"cancelled"})
+    mutated_buckets = {
+        code: outcome
+        for code, outcome in tf.PUBLIC_OUTCOME_BY_ERROR_CODE.items()
+        if code != "cancelled"
+    }
+    monkeypatch.setattr(tf, "ORCHESTRATOR_ERROR_CODES", mutated_codes)
+    monkeypatch.setattr(tf, "PUBLIC_OUTCOME_BY_ERROR_CODE", mutated_buckets)
+
+    before = ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL.labels(
+        code="cancelled"
+    )._value.get()
+
+    recorder = Recorder()
+    cancellation = asyncio.Event()
+    cancellation.set()
+    with caplog.at_level(logging.ERROR, logger="dev_health_ops.api.dev.orchestrator"):
+        result = await _run(
+            _orchestrator([], script_id="registry-drift", recorder=recorder),
+            cancellation,
+        )
+    assert result.state is RunState.CANCELLED
+    assert result.error is not None and result.error.code == "cancelled"
+    assert len(recorder.frames) == 1, (
+        "a registry gap must fall back to a registered bucket, never a "
+        "frame-less commit"
+    )
+    assert recorder.frames[0].public_outcome.value == "failed"
+    assert recorder.rollbacks == 0
+
+    assert any(
+        record.levelno == logging.ERROR
+        and "unregistered_terminal_code" in record.message
+        for record in caplog.records
+    ), "the registry-gap fallback must log an ERROR record, not fail silently"
+
+    after = ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL.labels(
+        code="cancelled"
+    )._value.get()
+    assert after == before + 1, (
+        "the registry-gap fallback must increment "
+        "ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL"
+    )
 
 
 @pytest.mark.asyncio

@@ -6,11 +6,12 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import uuid
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import (
@@ -36,6 +37,7 @@ from dev_health_ops.api.queries.client import get_global_client
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.api.services.permissions import get_user_permissions
+from dev_health_ops.db import get_postgres_session
 from dev_health_ops.licensing import evaluate_org_feature_async
 from dev_health_ops.licensing.registry import ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE
 from dev_health_ops.llm.agent.contracts import AgentUsage
@@ -94,6 +96,21 @@ from .streaming import encoded_sse_stream
 def _disable_shared_cache(response: Response) -> None:
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["Pragma"] = "no-cache"
+
+
+logger = logging.getLogger(__name__)
+
+#: How long a non-terminal run must sit unchanged before a duplicate
+#: ``client_message_id`` POST is allowed to force it terminal instead of
+#: 409ing indefinitely (CHAOS-3297 Codex review round 5 HIGH closure).
+#: Ask Dev turns are expected to complete in low tens of seconds end to
+#: end; five minutes is comfortably longer than any run that is still
+#: genuinely in flight could take without something else already having
+#: failed it, while still being short enough that the double-failure
+#: scenario this closes (the request's own fallback write ALSO failing)
+#: recovers within a user's normal retry patience rather than needing a
+#: background sweep to notice it.
+_STALE_NON_TERMINAL_RUN_THRESHOLD = timedelta(minutes=5)
 
 
 router = APIRouter(
@@ -614,13 +631,37 @@ def _replayed_result(
     state = RunState(run.state)
     answer = None
     error = None
+    terminal_error_payload = getattr(run, "terminal_error_payload", None)
     if answer_payload is not None:
         answer = DevAnswer.model_validate(answer_payload)
+    elif terminal_error_payload is not None:
+        # CHAOS-3297 Codex review HIGH #1: the exact validated v1 DevError
+        # `PersistenceRunRecorder.terminal` persisted at terminal time, for
+        # *every* origin (the orchestrator's own error() closure,
+        # _provider_error, or a preflight termination's
+        # project_preflight_error) -- replayed verbatim. This supersedes the
+        # frame-reconstruction branch below: reconstructing from
+        # `compat._ERROR_OUTCOME_CODES`'s fixed, outcome-keyed table is only
+        # ever an *approximation* of the live copy (correct code, but a
+        # generic canonical safe_message/remediation that can differ from
+        # the producer-authored text a live run actually streamed -- e.g.
+        # "scope_not_found" reconstructs the same *code* on both sides but a
+        # different *message*, which the old code-only coherence guard could
+        # not catch). A row that has this column is authoritative on its
+        # own; it never needs the frame at all.
+        try:
+            error = DevError.model_validate(terminal_error_payload)
+        except ValidationError:
+            error = _replay_fallback_error(run)
     elif (
         frame_payload is not None
         and organization_id is not None
         and time_range is not None
     ):
+        # Compatibility fallback for a run persisted before 0079 added
+        # `terminal_error_payload` -- no such row has ever run through the
+        # branch above, so this reconstruction (with its documented
+        # code-only-fidelity caveat) is the best available replay for it.
         # CHAOS-3299 / TRD v2 Section 12: a v2 run with no answer message
         # (needs_clarification/not_found/temporarily_unavailable/unsupported/
         # denied/failed -- no assistant DevMessage is ever recorded for these)
@@ -688,6 +729,25 @@ def _replayed_result(
                 error = project_preflight_error(
                     answer_v2, request_id=str(run.request_id)
                 )
+                # CHAOS-3297: `project_preflight_error` reconstructs a v1
+                # code from a *fixed*, outcome-keyed table
+                # (`compat._ERROR_OUTCOME_CODES` / the `scope_ambiguous`
+                # special case) -- correct for a genuinely preflight-sourced
+                # frame, but orchestrator.run()'s own ~30 non-preflight
+                # terminal() calls (CHAOS-3297 stack #1) now also persist a
+                # frame for replay-gate reachability, carrying today's
+                # richer v1 code taxonomy verbatim in `run.safe_error_code`
+                # (e.g. "cancelled", "tool_limit_reached", "scope_forbidden").
+                # Trusting the frame reconstruction there would silently
+                # rewrite the replayed code away from what live actually
+                # streamed (a v1 wire-vocabulary change on retry). Whichever
+                # origin produced this frame, `run.safe_error_code` is always
+                # what `terminal()` persisted from the exact live error
+                # object -- so if the frame's fixed reconstruction disagrees
+                # with it, the frame is not authoritative for this run and
+                # the exact-fidelity fallback below wins instead.
+                if run.safe_error_code and error.code != run.safe_error_code:
+                    error = _replay_fallback_error(run)
         except ValidationError:
             error = _replay_fallback_error(run)
     else:
@@ -1183,43 +1243,66 @@ async def create_message(
     run_id = str(accepted.run.id)
 
     if not accepted.created:
-        if accepted.run.state not in {
+        replay_run = accepted.run
+        if replay_run.state not in {
             RunState.COMPLETED.value,
             RunState.INSUFFICIENT_EVIDENCE.value,
             RunState.REFUSED.value,
             RunState.FAILED.value,
             RunState.CANCELLED.value,
         }:
-            _raise(
-                status.HTTP_409_CONFLICT,
-                "concurrency_limited",
-                "The matching Ask Dev request is still running.",
-                request_id=request_id,
-                retryable=True,
+            # CHAOS-3297 Codex review round 5 HIGH: recovery at the point
+            # of manifestation, not a background job. Ordinarily a
+            # non-terminal run here just means the original request is
+            # genuinely still running -- 409 is correct, and
+            # recover_stale_non_terminal_run leaves any run younger than
+            # the threshold untouched, returning None so this still 409s.
+            # But if run_with_events's own except-block fallback
+            # (force_terminal_fallback) ALSO failed on the same DB
+            # incident that broke the original attempt, this run would
+            # otherwise stay non-terminal forever and every future replay
+            # of this client_message_id would 409 indefinitely. Recover
+            # it here instead, once it is old enough that it cannot
+            # possibly still be a genuinely in-flight request.
+            recovered = await service.recover_stale_non_terminal_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=replay_run.id,
+                stale_after=_STALE_NON_TERMINAL_RUN_THRESHOLD,
             )
+            if recovered is None:
+                _raise(
+                    status.HTTP_409_CONFLICT,
+                    "concurrency_limited",
+                    "The matching Ask Dev request is still running.",
+                    request_id=request_id,
+                    retryable=True,
+                )
+                raise AssertionError("unreachable")
+            replay_run = recovered
         answer_payload = None
         frame_payload = None
-        if accepted.run.answer_id is not None:
+        if replay_run.answer_id is not None:
             try:
                 answer_message = await service.get_answer_message(
                     org_id=org_id,
                     user_id=user_id,
-                    answer_id=accepted.run.answer_id,
+                    answer_id=replay_run.answer_id,
                 )
                 answer_payload = answer_message.answer_payload
             except Exception as exc:
                 _raise_persistence(exc, request_id)
                 raise AssertionError("unreachable")
-        elif accepted.run.contract_generation == "v2":
+        elif replay_run.contract_generation == "v2":
             frame = await service.get_answer_frame(
                 org_id=org_id,
                 user_id=user_id,
-                run_id=accepted.run.id,
+                run_id=replay_run.id,
             )
             if frame is not None:
                 frame_payload = frame.payload
         replayed = _replayed_result(
-            run=accepted.run,
+            run=replay_run,
             answer_payload=answer_payload,
             frame_payload=frame_payload,
             organization_id=str(org_id),
@@ -1269,19 +1352,91 @@ async def create_message(
     )
 
     async def run_with_events(event_sink) -> OrchestratorResult:
-        return await runtime.run(
-            request=body,
-            org_id=user.org_id,
-            user_id=user.user_id,
-            permission_fingerprint=_permission_fingerprint(user),
-            run_id=run_id,
-            conversation_id=str(conversation_id),
-            answer_id=answer_id,
-            cancellation=cancellation,
-            recorder=recorder,
-            event_sink=event_sink,
-            prior_turns=prior_turns,
-        )
+        try:
+            return await runtime.run(
+                request=body,
+                org_id=user.org_id,
+                user_id=user.user_id,
+                permission_fingerprint=_permission_fingerprint(user),
+                run_id=run_id,
+                conversation_id=str(conversation_id),
+                answer_id=answer_id,
+                cancellation=cancellation,
+                recorder=recorder,
+                event_sink=event_sink,
+                prior_turns=prior_turns,
+            )
+        except Exception:
+            # CHAOS-3297 Codex review round 3 Finding 2: finish()
+            # (orchestrator.py) can flush an answer and/or a frame on this
+            # request's session, then have its own terminal write fail for
+            # a reason unrelated to input validity. streaming.
+            # stream_orchestrator catches this exception and turns it into
+            # a generic internal_error SSE event without re-raising to
+            # this request's session-dependency teardown, which then
+            # commits whatever was already flushed: artifacts and a v2 tag
+            # on a run stuck non-terminal forever.
+            #
+            # Roll back this (possibly poisoned) session's own pending,
+            # uncommitted writes FIRST -- a fresh session's fallback write
+            # to the *same* dev_runs row would otherwise deadlock waiting
+            # for a lock this session's still-open transaction holds
+            # (nothing will ever commit it now that we are handling its
+            # failure). Any artifact that was only flushed, never
+            # committed, is discarded by this rollback -- acceptable,
+            # since a flush alone was never a durability guarantee.
+            # Anything committed by an *earlier*, already-completed
+            # transaction on this session is unaffected.
+            try:
+                await service.session.rollback()
+            except Exception:
+                # Best-effort only: this session is about to be abandoned
+                # regardless (the fallback below always uses a fresh
+                # session/connection, never this one), so a rollback
+                # failure here -- the session already unusable, the
+                # connection already dropped -- changes nothing about
+                # what happens next. Swallowing it, not re-raising, is
+                # what lets the fallback attempt still run.
+                pass
+            # Force the run terminal from a FRESH session/connection --
+            # never the session just rolled back above -- so no run can
+            # end up stuck non-terminal after this failure.
+            #
+            # Bounded retry (CHAOS-3297 Codex review round 5 HIGH): one
+            # extra attempt, since a single transient failure here (the
+            # same connection blip that broke the original write, a
+            # momentary pool exhaustion) should not be allowed to strand
+            # the run non-terminal when a second attempt on a distinct
+            # connection would likely succeed. Not a queue-and-backoff
+            # mechanism -- if both attempts fail (the same DB incident
+            # taking out the fallback too), that failure is logged and
+            # swallowed here rather than replacing the original
+            # exception; recover_stale_non_terminal_run on the replay
+            # path is the durable backstop for that case, not this loop.
+            fallback_exc: Exception | None = None
+            for attempt in range(2):
+                try:
+                    async with get_postgres_session() as fallback_session:
+                        await DevPersistenceService(
+                            fallback_session
+                        ).force_terminal_fallback(
+                            org_id=org_id, user_id=user_id, run_id=accepted.run.id
+                        )
+                    fallback_exc = None
+                    break
+                except Exception as exc:
+                    fallback_exc = exc
+            if fallback_exc is not None:
+                logger.error(
+                    "ask_dev.force_terminal_fallback_failed",
+                    extra={
+                        "run_id": run_id,
+                        "org_id": str(org_id),
+                        "attempts": 2,
+                    },
+                    exc_info=fallback_exc,
+                )
+            raise
 
     async def chunks() -> AsyncGenerator[bytes, None]:
         async for chunk in encoded_sse_stream(

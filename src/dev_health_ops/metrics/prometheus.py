@@ -169,6 +169,17 @@ if _PROMETHEUS_AVAILABLE:
         ["scope_mode"],
     )
 
+    # ---------------------------------------------------------------------------
+    # Ask Dev metrics
+    # ---------------------------------------------------------------------------
+    ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_unregistered_terminal_code_total",
+        "Ask Dev orchestrator terminal error codes outside terminal_frames."
+        "ORCHESTRATOR_ERROR_CODES, falling back to the internal_error frame bucket "
+        "(a closed-registry drift bug, not a transient failure)",
+        ["code"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -184,6 +195,7 @@ else:
     GITHUB_RATE_LIMIT_REMAINING = _noop_gauge()
     INVESTMENT_MEMBERSHIP_SCOPE_STALE_TOTAL = _noop_counter()
     INVESTMENT_MEMBERSHIP_SCOPE_LAG_SECONDS = _noop_gauge()
+    ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

@@ -60,6 +60,18 @@ PLAN_REGISTRY: frozenset[str] = frozenset(
         "balance.team_workload.v1",
         "deficiency.operational.v1",
         "investigation.bounded.v1",
+        # CHAOS-3297 Codex review MEDIUM #3: a *compatibility* marker, not a
+        # governed DevInvestigationPlan -- no plan document exists for this
+        # id and none should be authored. Every content-bearing frame's
+        # `versions.plan_id` must be a registry member
+        # (validators.validate_plan_registry_membership), including the
+        # pre-CHAOS-3295 model-tool-choice loop's frames
+        # (terminal_frames.wrap_legacy_answer_as_frame /
+        # terminal_frames.build_error_frame's scope_ambiguous path), which no
+        # real plan governs. Registering the truthful label for "the legacy
+        # loop produced this" is the fix; borrowing a real plan's identity to
+        # pass the membership check would misstate what actually ran.
+        "legacy.tool_choice.v1",
     }
 )
 

@@ -597,7 +597,15 @@ class ClickHouseMetricSource:
             if repo_ids:
                 clauses.append("AND toString(repo_id) IN %(repo_ids)s")
                 params["repo_ids"] = repo_ids
-            if scope.team_ids and definition.source_table == "investment_metrics_daily":
+            # CHAOS-3301: was a hardcoded `source_table == "investment_metrics_daily"`
+            # check, which happened to be equivalent to `supports_team_filter` for
+            # every metric registered today but would silently stop applying the
+            # team filter for the next `supports_team_filter=True` metric added on a
+            # different source table -- MetricQueryService._validate_request
+            # (service.py) already gates on `supports_team_filter`, the two must
+            # not drift. See test_every_team_filter_supporting_metric_applies_its_
+            # team_filter (test_metrics.py) for the totality check.
+            if scope.team_ids and definition.supports_team_filter:
                 clauses.append("AND team_id IN %(team_ids)s")
                 params["team_ids"] = list(scope.team_ids)
         return "\n".join(clauses), params

@@ -66,6 +66,7 @@ __all__ = [
     "IntentClassifier",
     "InterpretedQuestion",
     "QuestionInterpreter",
+    "count_mention_candidates",
     "extract_mentions",
 ]
 
@@ -304,6 +305,14 @@ def untyped_name_candidates(
     the span was a subject at all ("What is our DORA score?" would otherwise
     break). It re-arms the legacy backstop instead, which judges the model's
     own answer text and is exactly today's behaviour for this shape.
+
+    Deliberately **uncapped** (CHAOS-3301 review fix): this used to truncate
+    to ``MAX_MENTIONS`` internally, so a caller reading ``len(...)`` as an
+    "uncapped" total for the oversized-rejection guard was in fact reading an
+    already-capped number — a 26th all-untyped subject was silently invisible
+    to that guard, not merely dropped from the merged mention list. Capping
+    for the merge bound is the caller's job (``_add_untyped_mentions``
+    already does it); this function only finds candidates.
     """
 
     claimed = {value.casefold() for value in typed}
@@ -336,16 +345,18 @@ def untyped_name_candidates(
             continue
         seen.add(normalized)
         found.append(span)
-    return tuple(found[:MAX_MENTIONS])
+    return tuple(found)
 
 
-def extract_mentions(
-    question: str,
-    *,
-    context_refs: Sequence[DevEntityRef] = (),
-    mint_id: Callable[[], str] = lambda: str(uuid.uuid4()),
-) -> tuple[DevSubjectMention, ...]:
-    """Ordered, deduplicated subject mentions for one question.
+def _candidate_mentions(
+    question: str, *, context_refs: Sequence[DevEntityRef] = ()
+) -> list[_MentionCandidate]:
+    """The full ordered, deduplicated mention candidate list, uncapped.
+
+    Shared by ``extract_mentions`` (which additionally caps the result to
+    ``MAX_MENTIONS`` for the ``DevSubjectMention``/``DevResolutionLedger``
+    contract bound) and ``count_mention_candidates`` (which reports the raw,
+    uncapped count — CHAOS-3301, see its docstring for why that matters).
 
     Two input classes, in precedence order:
 
@@ -413,7 +424,37 @@ def extract_mentions(
                     lookup_text=ref.entity_id,
                 )
             )
+    return ordered
 
+
+def count_mention_candidates(
+    question: str, *, context_refs: Sequence[DevEntityRef] = ()
+) -> int:
+    """The number of named subjects in ``question``, before ``MAX_MENTIONS`` capping.
+
+    CHAOS-3301. ``len(extract_mentions(question))`` alone cannot distinguish
+    "a complete 25-subject cohort" from "26 subjects named, the 26th silently
+    dropped" — both report exactly 25, since ``DevSubjectMention.mention_ordinal``
+    and ``DevResolutionLedger.mention_ids`` are hard-capped at the same bound.
+    Bounds must be rejections, never truncations: this is what lets the subject
+    preflight tell the two apart and reject the oversized case honestly instead
+    of narrating a false "complete" cohort.
+    """
+
+    return len(_candidate_mentions(question, context_refs=context_refs))
+
+
+def extract_mentions(
+    question: str,
+    *,
+    context_refs: Sequence[DevEntityRef] = (),
+    mint_id: Callable[[], str] = lambda: str(uuid.uuid4()),
+) -> tuple[DevSubjectMention, ...]:
+    """Ordered, deduplicated subject mentions for one question, capped at
+    ``MAX_MENTIONS`` — see ``count_mention_candidates`` for the uncapped count.
+    """
+
+    ordered = _candidate_mentions(question, context_refs=context_refs)
     mentions: list[DevSubjectMention] = []
     for ordinal, candidate in enumerate(ordered[:MAX_MENTIONS]):
         mentions.append(
@@ -772,6 +813,14 @@ class InterpretedQuestion:
     #: one re-arms the legacy backstop rather than terminating the run — see
     #: ``untyped_name_candidates``.
     untyped_mention_ids: frozenset[str] = frozenset()
+    #: The number of *typed* named subjects the kind-noun grammar found,
+    #: before ``MAX_MENTIONS`` capping (CHAOS-3301). ``len(mentions)`` alone
+    #: cannot distinguish "a complete 25-subject cohort" from "26 subjects
+    #: named, the 26th silently dropped" — both would report 25. Bounds are
+    #: rejections, never truncations: the subject preflight uses this to
+    #: reject the oversized case honestly instead of narrating a false
+    #: "complete" cohort.
+    total_named_mention_count: int = 0
 
     @property
     def mention_by_id(self) -> dict[str, DevSubjectMention]:
@@ -799,7 +848,24 @@ class QuestionInterpreter:
         mentions = extract_mentions(
             request.question, context_refs=context_refs, mint_id=self._mint_id
         )
-        mentions, untyped_ids = self._add_untyped_mentions(request.question, mentions)
+        # Computed once, from the raw text, before MAX_MENTIONS capping and
+        # before any untyped-name/fallback additions — see
+        # InterpretedQuestion.total_named_mention_count.
+        total_typed_mention_count = count_mention_candidates(
+            request.question, context_refs=context_refs
+        )
+        mentions, untyped_ids, total_untyped_candidate_count = (
+            self._add_untyped_mentions(request.question, mentions)
+        )
+        # CHAOS-3301 fix: the uncapped total must include untyped bare-name
+        # candidates too, counted before `_add_untyped_mentions` silently
+        # stops merging at MAX_MENTIONS. Counting only the typed grammar
+        # candidates let 25 typed + 1 resolvable bare name report a
+        # "complete" 25-subject total instead of the true 26 -- the oversized
+        # rejection below never saw it.
+        total_named_mention_count = (
+            total_typed_mention_count + total_untyped_candidate_count
+        )
         normalized = _normalize(request.question)
         signals = _Signals(
             normalized=normalized,
@@ -867,11 +933,12 @@ class QuestionInterpreter:
             mentions=mentions,
             untyped_mention_ids=frozenset(untyped_ids)
             & {mention.mention_id for mention in mentions},
+            total_named_mention_count=total_named_mention_count,
         )
 
     def _add_untyped_mentions(
         self, question: str, mentions: tuple[DevSubjectMention, ...]
-    ) -> tuple[tuple[DevSubjectMention, ...], set[str]]:
+    ) -> tuple[tuple[DevSubjectMention, ...], set[str], int]:
         """Mint a mention for each bare name the kind-noun grammar missed.
 
         ``requested_entity_kind`` is a **declared default** for these, because
@@ -879,12 +946,18 @@ class QuestionInterpreter:
         the ledger's committed reference carries whichever kind actually
         matched. Recording a default is the honest option: the alternative is
         no mention at all, which is how an unresolved name reaches an answer.
+
+        Returns the merged mentions, the minted untyped mention ids, and the
+        *uncapped* number of untyped candidates found (CHAOS-3301) — counted
+        before the ``MAX_MENTIONS`` cap below silently stops merging, so a
+        caller can still see a candidate that got dropped for being past the
+        bound instead of it vanishing into a false "complete" count.
         """
 
         typed = [mention.original_text_span for mention in mentions]
         candidates = untyped_name_candidates(question, typed)
         if not candidates:
-            return mentions, set()
+            return mentions, set(), 0
         merged = list(mentions)
         untyped_ids: set[str] = set()
         for span in candidates:
@@ -902,7 +975,7 @@ class QuestionInterpreter:
                     normalized_lookup_text=_normalize(span)[:2048],
                 )
             )
-        return tuple(merged), untyped_ids
+        return tuple(merged), untyped_ids, len(candidates)
 
     async def _apply_fallback(
         self,

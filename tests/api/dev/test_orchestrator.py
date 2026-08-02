@@ -18,6 +18,7 @@ from dev_health_ops.api.dev.contracts import (
     DevToolResult,
     ToolID,
 )
+from dev_health_ops.api.dev.contracts_v2 import DevSubjectSet
 from dev_health_ops.api.dev.orchestrator import (
     DevOrchestrator,
     DevRunLimits,
@@ -63,6 +64,9 @@ class Recorder:
         self, *, preflight_outcome: str | None, legacy_guard_reason: str | None
     ) -> None:
         self.preflight_diagnostics.append((preflight_outcome, legacy_guard_reason))
+
+    async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
+        del subject_set
 
     async def terminal(self, **values) -> None:
         self.terminals.append(values["state"])

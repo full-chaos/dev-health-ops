@@ -36,6 +36,7 @@ from dev_health_ops.api.dev.contracts import (
     QuestionClass,
     ToolID,
 )
+from dev_health_ops.api.dev.contracts_v2 import DevSubjectSet
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator, OrchestratorResult
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
@@ -345,6 +346,10 @@ class Recorder:
     ) -> None:
         self.preflight_diagnostics.append((preflight_outcome, legacy_guard_reason))
 
+    async def record_subject_set(self, subject_set: DevSubjectSet) -> None:
+        """No-op here; CHAOS-3301's SubjectSetRecorder subclass captures this."""
+        del subject_set
+
     async def terminal(self, **values: Any) -> None:
         self.terminals.append(values["state"])
 
@@ -448,8 +453,14 @@ async def run_preflight_orchestrator(
     org_id: str = ORG_ID,
     fail_search: bool = False,
     preflight_enabled: bool = True,
+    recorder_factory: Callable[[], Recorder] = Recorder,
 ) -> RunOutput:
-    """One full orchestrator run with the preflight wired the way production wires it."""
+    """One full orchestrator run with the preflight wired the way production wires it.
+
+    ``recorder_factory`` defaults to the plain ``Recorder`` above; CHAOS-3301's
+    harness passes a subclass that also captures ``record_subject_set`` calls,
+    without duplicating this whole function for one extra capture point.
+    """
 
     catalog = SeededCatalog(entities, fail_search=fail_search)
     scope_service = ScopeResolutionService(catalog, cache=ScopeRequestCache())
@@ -481,7 +492,7 @@ async def run_preflight_orchestrator(
     provider = RecordingProvider(
         (script or status_then_answer)(script_id), script_id=script_id
     )
-    recorder = Recorder()
+    recorder = recorder_factory()
     orchestrator = DevOrchestrator(
         provider=provider,
         provider_source="platform",

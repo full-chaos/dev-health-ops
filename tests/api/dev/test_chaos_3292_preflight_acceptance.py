@@ -603,24 +603,31 @@ async def test_a10_a_live_context_ref_still_commits() -> None:
 
 
 # ---------------------------------------------------------------------------
-# A11 — a TEAM subject resolves, and is honestly unsupported
+# A11 — a TEAM subject resolves and commits (CHAOS-3301 superseded this
+# section: team is now a real v1 direct scope, not an interim "resolved but
+# unsupported" kind — see tests/api/dev/test_chaos_3301_controls.py's P1/N1
+# for the full CHAOS-3301 control set this A11 pair now defers to).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_a11_resolved_team_is_unsupported_never_not_found() -> None:
+async def test_a11_resolved_team_is_a_committed_subject_end_to_end() -> None:
+    from dev_health_ops.api.dev.contracts import DirectScope
+
     output = await case_a11()
 
-    assert output.result.state is RunState.FAILED
-    assert output.result.error is not None
-    # The team demonstrably exists, so "not found" would be a lie and an
-    # organization fallback would be the CHAOS-3289 defect on another kind.
-    assert output.result.error.code == "feature_not_enabled"
-    assert _subject_bearing_calls(output) == []
+    assert output.result.state is RunState.COMPLETED
+    assert [request.tool_id.value for request in output.calls] == ["status_snapshot.v1"]
+    status_call = output.calls[0]
+    assert status_call.scope.direct_scope is DirectScope.TEAM
+    assert [ref.entity_id for ref in status_call.scope.entity_refs] == [
+        PLATFORM_TEAM.canonical_id
+    ]
 
 
 @pytest.mark.asyncio
-async def test_a11_team_resolution_records_an_exact_match_without_raising() -> None:
+async def test_a11_team_resolution_records_an_exact_match_and_commits() -> None:
+    from dev_health_ops.api.dev.contracts import DirectScope
     from dev_health_ops.api.dev.contracts_v2 import EntityKind as ContractEntityKind
     from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
     from dev_health_ops.api.dev.scope_service import (
@@ -647,8 +654,10 @@ async def test_a11_team_resolution_records_an_exact_match_without_raising() -> N
         now=fixed_now,
     )
     request = request_for("What is the status of the Platform team?")
-    # No ValueError from DirectScope(...)/EntityType(...), which have no team
-    # member: the preflight builds DevEntityRefV2 straight from the entity.
+    # No ValueError from DirectScope(...)/EntityType(...): CHAOS-3301 gave
+    # both a real TEAM member, so the preflight's committed_resolution_for
+    # now builds a genuine v1 DevScope(direct_scope=TEAM, ...) rather than
+    # only recording the exact_match ledger entry.
     result = await preflight.run(
         request=request,
         org_id=ORG_ID,
@@ -664,7 +673,12 @@ async def test_a11_team_resolution_records_an_exact_match_without_raising() -> N
     assert entry.outcome is ResolutionOutcome.EXACT_MATCH
     assert entry.committed_entity_ref is not None
     assert entry.committed_entity_ref.entity_kind is ContractEntityKind.TEAM
-    assert result.diagnostic == "committed_kind_unsupported_in_v1"
+    assert result.diagnostic == "proceeded_committed_subject"
+    assert result.committed_resolution is not None
+    committed_scope = result.committed_resolution.resolved_scope
+    assert committed_scope is not None
+    assert committed_scope.direct_scope is DirectScope.TEAM
+    assert committed_scope.team_ids == [PLATFORM_TEAM.canonical_id]
 
 
 @pytest.mark.asyncio

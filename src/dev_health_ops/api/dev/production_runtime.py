@@ -94,7 +94,7 @@ from .question_interpreter import QuestionInterpreter
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .scope_catalog import ClickHouseAuthorizedEntityCatalog
 from .scope_service import (
-    DIRECT_SCOPE_KINDS,
+    MODEL_SEARCHABLE_ENTITY_KINDS,
     EntityKind,
     ScopeRef,
     ScopeRequestCache,
@@ -134,11 +134,15 @@ _ACCEPTANCE_OPENAI_DISCLOSURE_KEY = "ask_dev_scripted_acceptance"
 _ACCEPTANCE_OPENAI_HOSTS = frozenset(
     {"127.0.0.1", "localhost", "ask-dev-scripted-openai"}
 )
-# Named-entity resolution never searches organization scope itself (CHAOS-3256):
-# resolve_scope.v1 only disambiguates the direct scopes an organization search
-# can return an authorized match for.
+# CHAOS-3301 structural pattern: an explicit, independently-pinned constant
+# (scope_service.MODEL_SEARCHABLE_ENTITY_KINDS), never derived from
+# DIRECT_SCOPE_KINDS — DIRECT_SCOPE_KINDS gained TEAM this issue, and that
+# must not silently widen what the model-facing resolve_scope.v1 tool can
+# search by free-text query (team is a preflight-committed *subject*, never a
+# query-search kind on this surface). Named-entity resolution also never
+# searches organization scope itself (CHAOS-3256).
 _SEARCHABLE_SCOPE_KINDS: tuple[EntityKind, ...] = tuple(
-    sorted(DIRECT_SCOPE_KINDS - {EntityKind.ORGANIZATION}, key=lambda kind: kind.value)
+    sorted(MODEL_SEARCHABLE_ENTITY_KINDS, key=lambda kind: kind.value)
 )
 
 
@@ -604,8 +608,16 @@ def _scope_request(scope: DevScope) -> ScopeResolveRequest:
         )
     return ScopeResolveRequest(
         explicit_refs=refs,
-        team_filter_refs=tuple(
-            ScopeRef(EntityKind.TEAM, value) for value in scope.team_ids
+        # A team *direct* scope already carries its team as an explicit_ref
+        # (via the entity_refs branch above); team_ids there is required by
+        # DevScope.validate_direct_scope to name that same team, not a second
+        # independent dimension. Also passing it as a team_filter_ref would
+        # make `resolve()` treat the run as team-*filtered* (outcome=FILTERED)
+        # rather than an exact single-entity commit (CHAOS-3301).
+        team_filter_refs=(
+            ()
+            if scope.direct_scope is DirectScope.TEAM
+            else tuple(ScopeRef(EntityKind.TEAM, value) for value in scope.team_ids)
         ),
         time_range=TimeRangeRequest(
             preset_days=None,

@@ -7,8 +7,9 @@ objects into these models, but must not redeclare their wire shape.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     AwareDatetime,
@@ -54,6 +55,11 @@ class DirectScope(StrEnum):
     WORK_UNIT = "work_unit"
     ISSUE = "issue"
     PULL_REQUEST = "pull_request"
+    #: CHAOS-3301. A team as a direct subject, distinct from the pre-existing
+    #: ``team_ids`` *filter* on any other direct scope (see
+    #: ``DevScope.validate_direct_scope`` below for the invariant that keeps
+    #: the two structurally separate).
+    TEAM = "team"
 
 
 class EntityType(StrEnum):
@@ -62,6 +68,7 @@ class EntityType(StrEnum):
     WORK_UNIT = "work_unit"
     ISSUE = "issue"
     PULL_REQUEST = "pull_request"
+    TEAM = "team"
 
 
 class AskDevSurfaceRouteID(StrEnum):
@@ -80,6 +87,12 @@ class AskDevSurfaceRouteID(StrEnum):
     DATA_HEALTH = "data_health"
 
 
+#: CHAOS-3301: deliberately never gains an ``EntityType.TEAM`` entry. Surface
+#: context is a total per-route allowlist of what a *page* may assert as the
+#: subject (``_validate_surface_context`` below); admitting TEAM here would
+#: let page context set ``direct_scope=team`` directly. A page-supplied team
+#: reference is instead re-resolved as question text through the subject
+#: preflight, exactly like any other named subject the issue describes.
 _SURFACE_ENTITY_TYPES: dict[AskDevSurfaceRouteID, frozenset[EntityType]] = {
     AskDevSurfaceRouteID.DIAGNOSE_OVERVIEW: frozenset({EntityType.REPOSITORY}),
     AskDevSurfaceRouteID.FLOW_METRICS: frozenset({EntityType.REPOSITORY}),
@@ -243,6 +256,7 @@ class DevScope(ContractModel):
             DirectScope.WORK_UNIT: EntityType.WORK_UNIT,
             DirectScope.ISSUE: EntityType.ISSUE,
             DirectScope.PULL_REQUEST: EntityType.PULL_REQUEST,
+            DirectScope.TEAM: EntityType.TEAM,
         }
         expected = entity_scope.get(self.direct_scope)
         if expected is not None:
@@ -251,8 +265,45 @@ class DevScope(ContractModel):
                 or self.entity_refs[0].entity_type != expected
             ):
                 raise ValueError("direct entity scope requires one matching entity")
+        if self.direct_scope is DirectScope.TEAM:
+            # A team filter can never be read as a team subject: team_ids
+            # must name exactly the one committed team, never be empty (the
+            # metrics path only applies its team_id filter when team_ids is
+            # populated) and never carry any other id. An organization scope
+            # carrying team_ids stays a filter, structurally — this branch
+            # only fires for DirectScope.TEAM.
+            if self.team_ids != [self.entity_refs[0].entity_id]:
+                raise ValueError(
+                    "team direct scope requires team_ids to name exactly that team"
+                )
+            if self.repositories:
+                # CHAOS-3301 review fix: a team direct scope has no
+                # repository list of its own -- team-to-repository
+                # attribution is re-derived at query time from
+                # ``team_repo_ownership``, never carried on the wire. Without
+                # this, a foreign ``repositories`` list validated as merely
+                # unused and was silently consumed by the status source seam
+                # instead of being rejected here.
+                raise ValueError("team direct scope cannot carry a repository list")
         self._validate_surface_context()
         return self
+
+    def model_copy(
+        self, *, update: Mapping[str, Any] | None = None, deep: bool = False
+    ) -> Self:
+        """Revalidating copy (CHAOS-3301 review fix).
+
+        Pydantic's base ``model_copy`` is a raw field copy that never reruns
+        ``validate_direct_scope`` — ``model_copy(update={"repositories": [...]})``
+        on a TEAM scope returned and serialized a scope the invariant exists
+        to forbid, even though ``__init__`` and ``model_validate`` both reject
+        it. Every production caller only patches time fields, so
+        round-tripping the update through ``model_validate`` costs nothing
+        real and closes the construction path.
+        """
+
+        copied = super().model_copy(update=update, deep=deep)
+        return type(self).model_validate(copied.model_dump())
 
     def _validate_surface_context(self) -> None:
         context = self.surface_context

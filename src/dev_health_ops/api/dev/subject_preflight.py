@@ -50,12 +50,14 @@ from .contracts import (
     ToolID,
 )
 from .contracts_v2 import (
+    Cardinality,
     DevAnswerV2,
     DevEntityRefV2,
     DevResolutionCandidate,
     DevResolutionEntry,
     DevResolutionLedger,
     DevSubjectMention,
+    DevSubjectSet,
     PublicOutcome,
     ResolutionOutcome,
     validate_ledger_extends,
@@ -69,10 +71,10 @@ from .preflight_outcomes import (
     PREFLIGHT_OUTCOME_BY_RESOLUTION,
     build_preflight_answer,
 )
-from .question_interpreter import InterpretedQuestion, QuestionInterpreter
+from .question_interpreter import MAX_MENTIONS, InterpretedQuestion, QuestionInterpreter
 from .scope_service import (
+    DIRECT_SCOPE_KINDS,
     SEARCHABLE_ENTITY_KINDS,
-    V1_SEARCHABLE_ENTITY_KINDS,
     AuthorizedEntity,
     EntityKind,
     MentionResolution,
@@ -80,7 +82,9 @@ from .scope_service import (
 )
 
 __all__ = [
+    "PREFLIGHT_DIAGNOSTICS",
     "SUBJECT_BEARING_TOOLS",
+    "CommittedSubjects",
     "PreflightDecision",
     "SubjectPreflight",
     "SubjectPreflightResult",
@@ -114,21 +118,82 @@ class PreflightDecision(StrEnum):
     TERMINATE = "terminate"
 
 
+#: Every diagnostic this module can emit — content-free codes recorded on
+#: ``dev_runs.preflight_outcome``, a ``String(32)`` column with no CHECK
+#: constraint. A diagnostic over 32 characters is a real insert-time failure
+#: in production and passes every unit test that never persists a run
+#: (CHAOS-3292's "interpreter_clarification_required", 34 chars, was exactly
+#: that — fixed alongside this closed tuple). Kept literal, not derived from
+#: an f-string template, so a new diagnostic is always visible here and the
+#: length test below is exhaustive.
+PREFLIGHT_DIAGNOSTICS: tuple[str, ...] = (
+    "clarification_required",
+    "proceeded_organization_wide",
+    "unresolved_ambiguous_candidates",
+    "unresolved_no_authorized_match",
+    "unresolved_catalog_unavailable",
+    "unresolved_unsupported_kind",
+    "proceeded_unresolved_bare_name",
+    "committed_kind_unsupported_in_v1",
+    "oversized_mention_set_in_v1",
+    "cohort_unsupported_in_v1",
+    "committed_cohort_v1_only",
+    "proceeded_committed_subject",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CommittedSubjects:
+    """What the preflight committed for one run: a scope, a subject set, or both.
+
+    CHAOS-3301. Exactly one of ``resolution``/``subject_set`` is set for a
+    singular commit or a cohort respectively, except the "duplicate aliases
+    collapse to one subject" case (N4), where both are set: the run proceeds
+    on ``resolution`` (there is only one *distinct* committed entity), and
+    ``subject_set`` still records that the question named it more than once
+    (``original_mention_count`` on the persisted ``dev_subject_set.v1``).
+    """
+
+    resolution: DevScopeResolution | None
+    subject_set: DevSubjectSet | None
+
+    def __post_init__(self) -> None:
+        if self.resolution is None and self.subject_set is None:
+            raise ValueError(
+                "CommittedSubjects requires a resolution, a subject set, or both"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class SubjectPreflightResult:
     decision: PreflightDecision
     interpretation: InterpretedQuestion
     #: ``None`` only when the question named no subject at all.
     ledger: DevResolutionLedger | None
-    #: The server-committed scope, when exactly one subject resolved exactly.
+    #: The server-committed scope, when exactly one *distinct* subject
+    #: resolved exactly. ``None`` for a cohort (CHAOS-3301, D1): a committed
+    #: cohort never proceeds to tool execution on the v1 surface, so it never
+    #: has a single scope to bind — see ``subject_set`` and
+    #: ``committed_subjects`` instead.
     committed_resolution: DevScopeResolution | None
+    #: CHAOS-3301: the full committed-subject outcome (scope and/or subject
+    #: set). ``committed_resolution``/``subject_set`` are equivalent
+    #: shorthands over this, kept as separate fields because the orchestrator
+    #: and persistence each only need one half.
+    committed_subjects: CommittedSubjects | None = None
+    #: The persisted ``dev_subject_set.v1``, present whenever the question
+    #: named more than one mention (a cohort, complete or partial; or
+    #: duplicate aliases of one entity) — regardless of whether the run then
+    #: proceeds (N4) or terminates unsupported (D1).
+    subject_set: DevSubjectSet | None = None
     #: Present only for ``TERMINATE``.
-    answer: DevAnswerV2 | None
-    outcome: PublicOutcome | None
+    answer: DevAnswerV2 | None = None
+    outcome: PublicOutcome | None = None
     #: The per-run tool allowlist the model round is held to.
-    allowed_tools: frozenset[ToolID]
-    #: Content-free code recorded on the run row. Never question or entity text.
-    diagnostic: str
+    allowed_tools: frozenset[ToolID] = frozenset()
+    #: Content-free code recorded on the run row. Never question or entity
+    #: text. Always a member of ``PREFLIGHT_DIAGNOSTICS``.
+    diagnostic: str = ""
     #: Mention IDs whose lack of a committed subject must block a
     #: subject-bearing tool. Excludes unresolved *untyped* mentions, which we
     #: are not confident were subjects at all.
@@ -234,7 +299,13 @@ class SubjectPreflight:
                 interpretation=interpretation,
                 ledger=None,
                 outcome=PublicOutcome.NEEDS_CLARIFICATION,
-                diagnostic="interpreter_clarification_required",
+                # CHAOS-3301 fix, pre-existing CHAOS-3292 bug: the previous
+                # value ("interpreter_clarification_required", 34 chars)
+                # exceeded dev_runs.preflight_outcome's String(32) column
+                # with no CHECK constraint -- a real insert-time failure for
+                # every clarification-required run, caught by the new closed
+                # PREFLIGHT_DIAGNOSTICS length test below.
+                diagnostic="clarification_required",
                 run_id=run_id,
                 answer_id=answer_id,
                 conversation_id=conversation_id,
@@ -255,6 +326,24 @@ class SubjectPreflight:
                 outcome=None,
                 allowed_tools=ALL_TOOLS,
                 diagnostic="proceeded_organization_wide",
+            )
+
+        if interpretation.total_named_mention_count > MAX_MENTIONS:
+            # Bounds are rejections, never truncations (CHAOS-3301). Without
+            # this check, `mentions` (already capped by extract_mentions) is
+            # indistinguishable from a genuinely complete cohort at exactly
+            # the bound -- a 26-subject question would silently narrate the
+            # first 25 as though nothing were omitted. Rejected before any
+            # catalog round trip.
+            return self._terminate(
+                interpretation=interpretation,
+                ledger=None,
+                outcome=PublicOutcome.UNSUPPORTED,
+                diagnostic="oversized_mention_set_in_v1",
+                run_id=run_id,
+                answer_id=answer_id,
+                conversation_id=conversation_id,
+                generated_at=generated_at,
             )
 
         await phase(RunState.RESOLVING_SUBJECTS)
@@ -309,25 +398,55 @@ class SubjectPreflight:
             for mention in mentions
             if mention.mention_id in untyped_ids
         )
-        # Precedence: the lowest-ordinal unresolved mention wins. Stable and
-        # explainable ("the first thing you named"), and independent of catalog
-        # latency — a severity ordering would let a slow catalog change the
-        # reported outcome between runs, which directly breaks determinism.
+        # D2 (Amendment TRD v2 line 154, CHAOS-3301): for a plural/cohort
+        # question with at least two *distinct* exactly-resolved mentions, an
+        # unresolved typed mention no longer terminates the run — it is
+        # recorded as omitted on the eventual subject set instead. Singular
+        # behavior (one named subject) is unchanged: the lowest-ordinal
+        # unresolved mention still terminates immediately, exactly as A6
+        # established. Stable and explainable ("the first thing you named"),
+        # and independent of catalog latency — a severity ordering would let
+        # a slow catalog change the reported outcome between runs, which
+        # directly breaks determinism.
+        #
+        # The threshold counts UNIQUE committed entities, deduped by (kind,
+        # canonical id) here rather than raw exact-match mentions (CHAOS-3301
+        # review fix): two aliases of the same entity plus one unresolved
+        # mention previously satisfied ">= 2 exact matches" and skipped the
+        # termination loop below even though only one distinct subject had
+        # resolved, letting the unresolved mention slip past without being
+        # accounted for anywhere. With one distinct entity, D2 must not
+        # activate — the pre-D2 lowest-ordinal termination applies instead.
+        blocking_committed_entities: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
         for mention in mentions:
             if mention.mention_id not in blocking_ids:
                 continue
             entry = latest[mention.mention_id]
-            if entry.outcome in UNRESOLVED_OUTCOMES:
-                return self._terminate(
-                    interpretation=interpretation,
-                    ledger=ledger,
-                    outcome=PREFLIGHT_OUTCOME_BY_RESOLUTION[entry.outcome],
-                    diagnostic=f"unresolved_{entry.outcome.value}",
-                    run_id=run_id,
-                    answer_id=answer_id,
-                    conversation_id=conversation_id,
-                    generated_at=generated_at,
+            if entry.outcome is ResolutionOutcome.EXACT_MATCH:
+                entity = self._authorized_entity_for(entry)
+                blocking_committed_entities.setdefault(
+                    (entity.kind, entity.canonical_id), entity
                 )
+        cohort_may_proceed_partial = (
+            intent.cardinality is Cardinality.PLURAL_COHORT
+            and len(blocking_committed_entities) >= 2
+        )
+        if not cohort_may_proceed_partial:
+            for mention in mentions:
+                if mention.mention_id not in blocking_ids:
+                    continue
+                entry = latest[mention.mention_id]
+                if entry.outcome in UNRESOLVED_OUTCOMES:
+                    return self._terminate(
+                        interpretation=interpretation,
+                        ledger=ledger,
+                        outcome=PREFLIGHT_OUTCOME_BY_RESOLUTION[entry.outcome],
+                        diagnostic=f"unresolved_{entry.outcome.value}",
+                        run_id=run_id,
+                        answer_id=answer_id,
+                        conversation_id=conversation_id,
+                        generated_at=generated_at,
+                    )
 
         if unresolved_untyped:
             # A bare name we could not resolve is not proof of a subject, so
@@ -368,17 +487,26 @@ class SubjectPreflight:
                 diagnostic="proceeded_unresolved_bare_name",
             )
 
-        committed = [
-            latest[mention.mention_id].committed_entity_ref for mention in mentions
+        # All exactly-resolved mentions, not only blocking (typed) ones: by
+        # this point any untyped mention is either exact_match or absent
+        # entirely (`unresolved_untyped` already returned above otherwise),
+        # so a resolved bare name commits exactly as a resolved typed one
+        # does — matching pre-CHAOS-3301 behavior (A-series "resolvable bare
+        # name commits a subject").
+        committed_entries = [
+            (mention, latest[mention.mention_id])
+            for mention in mentions
+            if latest[mention.mention_id].outcome is ResolutionOutcome.EXACT_MATCH
         ]
-        kinds = {ref.entity_kind for ref in committed if ref is not None}
-        if any(
-            EntityKind(kind.value) not in V1_SEARCHABLE_ENTITY_KINDS for kind in kinds
-        ):
-            # Interim TEAM semantics (CHAOS-3301 owns the rest): the ledger
-            # already records exact_match with a team ref — the team
-            # demonstrably exists — but no v1 DevScope can carry a team
-            # subject. Never not_found, never organization fallback.
+        kinds: set[ContractEntityKind] = set()
+        for _mention, entry in committed_entries:
+            assert entry.committed_entity_ref is not None  # exact_match guarantees this
+            kinds.add(entry.committed_entity_ref.entity_kind)
+        if any(EntityKind(kind.value) not in DIRECT_SCOPE_KINDS for kind in kinds):
+            # A defensive totality check, not a live branch today: every
+            # SEARCHABLE_ENTITY_KINDS member (including TEAM, CHAOS-3301) has
+            # a v1 DevScope representation. Guards against a future v2-only
+            # kind reaching here before it gets one.
             return self._terminate(
                 interpretation=interpretation,
                 ledger=ledger,
@@ -389,38 +517,129 @@ class SubjectPreflight:
                 conversation_id=conversation_id,
                 generated_at=generated_at,
             )
-        if len(committed) > 1:
-            # A cohort has no faithful v1 representation either: a v1 DevScope
-            # names one direct subject. The landed v2-to-v1 projector reaches
-            # the same conclusion independently for ``subject_set_ref``
-            # ("Cohort-scoped Ask Dev answers require a newer client"), and
-            # committing only the first of several named subjects is precisely
-            # the fabricated-premise shape this issue exists to close.
-            # CHAOS-3301 owns subject sets and batch execution.
+
+        # Dedup by (kind, canonical id): duplicate aliases of the same entity
+        # collapse to one committed subject (N4) — the *distinct* subject
+        # count is what determines singular-vs-cohort, not the raw mention
+        # count. Insertion order is preserved (first-seen entity wins the
+        # position), which keeps this deterministic across runs.
+        unique_by_id: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
+        for _mention, entry in committed_entries:
+            entity = self._authorized_entity_for(entry)
+            unique_by_id.setdefault((entity.kind, entity.canonical_id), entity)
+        unique_entities = list(unique_by_id.values())
+        unique_kinds = {entity.kind for entity in unique_entities}
+
+        if len(unique_entities) > 1:
+            if len(unique_kinds) > 1:
+                # A heterogeneous set has no faithful v1 representation and
+                # is a non-goal outright (never even a committed set): a
+                # ``dev_subject_set.v1`` must be homogeneous in entity kind.
+                # The landed v2-to-v1 projector reaches the same conclusion
+                # independently for ``subject_set_ref`` ("Cohort-scoped Ask
+                # Dev answers require a newer client").
+                return self._terminate(
+                    interpretation=interpretation,
+                    ledger=ledger,
+                    outcome=PublicOutcome.UNSUPPORTED,
+                    diagnostic="cohort_unsupported_in_v1",
+                    run_id=run_id,
+                    answer_id=answer_id,
+                    conversation_id=conversation_id,
+                    generated_at=generated_at,
+                )
+            # A homogeneous, bounded cohort: commit and persist the subject
+            # set, but the v1 surface still returns unsupported (D1) —
+            # rendering a cohort answer is CHAOS-3297/3298's job, not this
+            # issue's. "committed" (not "cohort_unsupported") is the honest
+            # distinction: we did commit every resolvable member, and cannot
+            # render it here, rather than refusing outright.
+            #
+            # Omissions are partitioned by outcome (CHAOS-3301 review fix):
+            # AMBIGUOUS_CANDIDATES is a distinct outcome from no-match/
+            # unavailable/unsupported-kind, and the set contract keeps them
+            # in separate fields (`ambiguous_mention_ids` vs
+            # `unresolved_mention_ids`) so a reader — and any later
+            # ambiguity-disambiguation flow — can tell "we found nothing" from
+            # "we found more than one" without re-deriving it from the ledger.
+            omitted_blocking_entries = [
+                (mention.mention_id, latest[mention.mention_id].outcome)
+                for mention in mentions
+                if mention.mention_id in blocking_ids
+                and latest[mention.mention_id].outcome in UNRESOLVED_OUTCOMES
+            ]
+            unresolved_ids = tuple(
+                mention_id
+                for mention_id, outcome in omitted_blocking_entries
+                if outcome is not ResolutionOutcome.AMBIGUOUS_CANDIDATES
+            )
+            ambiguous_ids = tuple(
+                mention_id
+                for mention_id, outcome in omitted_blocking_entries
+                if outcome is ResolutionOutcome.AMBIGUOUS_CANDIDATES
+            )
+            warnings: tuple[str, ...] = ()
+            if unresolved_ids:
+                warnings += (
+                    "one or more named subjects could not be resolved and "
+                    "were omitted from this set",
+                )
+            if ambiguous_ids:
+                warnings += (
+                    "one or more named subjects were ambiguous and were "
+                    "omitted from this set",
+                )
+            subject_set = self._scope_service.committed_subject_set_for(
+                unique_entities,
+                set_id=self._mint_id(),
+                original_mention_count=len(mentions),
+                unresolved_mention_ids=unresolved_ids,
+                ambiguous_mention_ids=ambiguous_ids,
+                warnings=warnings,
+            )
             return self._terminate(
                 interpretation=interpretation,
                 ledger=ledger,
                 outcome=PublicOutcome.UNSUPPORTED,
-                diagnostic="cohort_unsupported_in_v1",
+                diagnostic="committed_cohort_v1_only",
                 run_id=run_id,
                 answer_id=answer_id,
                 conversation_id=conversation_id,
                 generated_at=generated_at,
+                subject_set=subject_set,
             )
 
-        entry = latest[mentions[0].mention_id]
-        entity = self._authorized_entity_for(entry)
+        # Exactly one *distinct* committed subject — a singular commit, even
+        # if the question named it more than once (N4: duplicate aliases).
+        entity = unique_entities[0]
         committed_resolution = self._scope_service.committed_resolution_for(
             entity,
             org_id=org_id,
             base_scope=authorized_scope,
             resolved_at=generated_at,
         )
+        # The subject set here is audit-only: it exists so a duplicate-alias
+        # question's original mention count is not lost, not because this run
+        # is a cohort — it never blocks execution, unlike the >1-distinct
+        # branch above.
+        audit_subject_set: DevSubjectSet | None = (
+            self._scope_service.committed_subject_set_for(
+                unique_entities,
+                set_id=self._mint_id(),
+                original_mention_count=len(mentions),
+            )
+            if len(mentions) > 1
+            else None
+        )
         return SubjectPreflightResult(
             decision=PreflightDecision.PROCEED,
             interpretation=interpretation,
             ledger=ledger,
             committed_resolution=committed_resolution,
+            committed_subjects=CommittedSubjects(
+                resolution=committed_resolution, subject_set=audit_subject_set
+            ),
+            subject_set=audit_subject_set,
             answer=None,
             outcome=None,
             # With a subject already committed there is nothing left for the
@@ -705,6 +924,7 @@ class SubjectPreflight:
         conversation_id: str,
         generated_at: datetime,
         clarification_key: str = "ambiguous",
+        subject_set: DevSubjectSet | None = None,
     ) -> SubjectPreflightResult:
         answer = build_preflight_answer(
             outcome=outcome,
@@ -721,6 +941,12 @@ class SubjectPreflight:
             interpretation=interpretation,
             ledger=ledger,
             committed_resolution=None,
+            committed_subjects=(
+                CommittedSubjects(resolution=None, subject_set=subject_set)
+                if subject_set is not None
+                else None
+            ),
+            subject_set=subject_set,
             answer=answer,
             outcome=outcome,
             allowed_tools=frozenset(),

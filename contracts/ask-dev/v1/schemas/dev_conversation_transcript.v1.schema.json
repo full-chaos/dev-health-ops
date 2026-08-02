@@ -1261,7 +1261,8 @@
         "project",
         "work_unit",
         "issue",
-        "pull_request"
+        "pull_request",
+        "team"
       ],
       "title": "DirectScope",
       "type": "string"
@@ -1272,7 +1273,8 @@
         "project",
         "work_unit",
         "issue",
-        "pull_request"
+        "pull_request",
+        "team"
       ],
       "title": "EntityType",
       "type": "string"

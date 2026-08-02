@@ -11,7 +11,7 @@ from dev_health_ops.api.dev.contracts import (
     MetricID,
 )
 from dev_health_ops.api.dev.metrics.clickhouse import ClickHouseMetricSource
-from dev_health_ops.api.dev.metrics.definitions import get_metric
+from dev_health_ops.api.dev.metrics.definitions import get_metric, list_metrics
 
 UTC = timezone.utc
 
@@ -214,3 +214,39 @@ async def test_investment_coverage_accounts_for_excluded_unclassified_work(
     assert result.rows[0].value == pytest.approx(100.0)
     assert result.coverage == pytest.approx(0.75)
     assert dict(result.metadata)["classification_coverage"] == "0.75"
+
+
+def test_every_team_filter_supporting_metric_applies_its_team_filter() -> None:
+    """CHAOS-3301 recon addendum: ``_scope_filter``'s team clause must be
+    driven by ``MetricDefinition.supports_team_filter`` — the same field
+    ``MetricQueryService._validate_request`` already gates on
+    (``service.py:312``) — never a hardcoded per-``source_table`` string.
+
+    Before this test (and the corresponding ``clickhouse.py`` fix): the elif
+    branch checked ``definition.source_table == "investment_metrics_daily"``
+    literally. That happened to equal ``supports_team_filter`` for every
+    metric registered today, but the next ``supports_team_filter=True``
+    metric added on a different source table would silently stop applying
+    the team filter — passing ``_validate_request`` (which does consult the
+    real field) and then querying unfiltered by team, exactly the
+    silent-drop class CHAOS-3301's status-source totality test closes for
+    ``native_status_change.py``.
+    """
+
+    source = ClickHouseMetricSource(client=object())
+    team_scope = _scope().model_copy(update={"team_ids": ["team_platform"]})
+    for definition in list_metrics():
+        if definition.source_table == "compounding_risk_daily":
+            # Bespoke path: _compounding_risk's own risk_scope/scope_id
+            # logic (verified by test_compounding_component_weight_version_
+            # is_order_independent's fixtures using a team scope elsewhere)
+            # never goes through _scope_filter's generic team clause at all.
+            continue
+        clauses, _params = source._scope_filter(definition, team_scope)
+        applies_team_filter = "team_id IN %(team_ids)s" in clauses
+        assert applies_team_filter == definition.supports_team_filter, (
+            f"{definition.metric_id}: supports_team_filter="
+            f"{definition.supports_team_filter} but _scope_filter "
+            f"{'applies' if applies_team_filter else 'does not apply'} "
+            "a team_id clause"
+        )

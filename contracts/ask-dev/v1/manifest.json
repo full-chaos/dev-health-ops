@@ -33,7 +33,7 @@
       },
       "schema": {
         "path": "schemas/dev_conversation.v1.schema.json",
-        "sha256": "763452f78629179c07604927650d39e3e3c82247823b1854e352f61fbafa8872"
+        "sha256": "8cc7267de6d08f5a63d1ecef1b4a0b45856a925637ba780f6433856fa7d27bbb"
       },
       "schema_version": "dev_conversation.v1"
     },
@@ -51,7 +51,7 @@
       },
       "schema": {
         "path": "schemas/dev_conversation_summary.v1.schema.json",
-        "sha256": "3c9983bdc802a85fa4b5f766fd3e6de109142bba97fb6e207b45173f07a06d7f"
+        "sha256": "53f0fac1fef5801a794ed160b1904fc107c3647d60e52c7462ddeccdb8c6f167"
       },
       "schema_version": "dev_conversation_summary.v1"
     },
@@ -74,7 +74,7 @@
       },
       "schema": {
         "path": "schemas/dev_conversation_transcript.v1.schema.json",
-        "sha256": "b7c1e321eca3616507d09d47cc6516a9999fcfba2e047b572a6f78f778926639"
+        "sha256": "635befb43b9080a935d49df136f51508a5b5e1b152809cba67d42de27bc2b60a"
       },
       "schema_version": "dev_conversation_transcript.v1"
     },
@@ -107,7 +107,7 @@
       },
       "schema": {
         "path": "schemas/dev_message_request.v1.schema.json",
-        "sha256": "ef00198a78046e649a750a465e230df7e5b02c27ed8d6ad5dae6f2268a6fc897"
+        "sha256": "258a495a3ac72ec52164b37164d71b4f01b60d8f1008b046965cd2f002c7b2bc"
       },
       "schema_version": "dev_message_request.v1"
     },
@@ -150,7 +150,7 @@
       },
       "schema": {
         "path": "schemas/dev_answer.v1.schema.json",
-        "sha256": "eb16f4820efce0d76fc9d9dbaff84719b91b41fe2f3d5016c324bcdb8141269d"
+        "sha256": "5178e487e3d2b8cbcde7ffea08ea0d3121937db7357c861c3738b2c9120e9039"
       },
       "schema_version": "dev_answer.v1"
     },
@@ -168,7 +168,7 @@
       },
       "schema": {
         "path": "schemas/dev_claim.v1.schema.json",
-        "sha256": "f47efaec1dfde2d409b1053bfd04b29a5e8f5f112e7895501115ead41862b0fb"
+        "sha256": "4a8505fb87ccae4c4e63c17403410a18f543e54f1e46a79c0b8144d7b60b5481"
       },
       "schema_version": "dev_claim.v1"
     },
@@ -186,7 +186,7 @@
       },
       "schema": {
         "path": "schemas/dev_metric_ref.v1.schema.json",
-        "sha256": "bac5613b1a2bf598138469db99fbb65a20f60d466e9b1228728b14cfd34aa2cf"
+        "sha256": "8038eef2144551ffd165681dd96a9541d0ae74925708250691f5674acbedde32"
       },
       "schema_version": "dev_metric_ref.v1"
     },
@@ -240,7 +240,7 @@
       },
       "schema": {
         "path": "schemas/dev_scope.v1.schema.json",
-        "sha256": "97d5d98bbe7a8e4790ccf0bd67d5c0296f5f2d81cdcaa3235042b493bbb7bcdd"
+        "sha256": "d968b133e6ebf1fde7851c9a3c7c650dddf6edc5bb3a4dca311c6302add5e1a8"
       },
       "schema_version": "dev_scope.v1"
     },
@@ -258,7 +258,7 @@
       },
       "schema": {
         "path": "schemas/dev_scope_resolution.v1.schema.json",
-        "sha256": "707fe458b01f5dbe407833a7145497918e0052f66d01236bfec62bf8dd609c94"
+        "sha256": "6f0f9de88d78beb53b5d6e42b9e161cadaf947a2939a3215a810069600227b81"
       },
       "schema_version": "dev_scope_resolution.v1"
     },
@@ -276,7 +276,7 @@
       },
       "schema": {
         "path": "schemas/dev_tool_request.v1.schema.json",
-        "sha256": "e28410490c2b34bbf729d537e0d022c4cdc8a2dcf53013381c6105832bdb4582"
+        "sha256": "eed1f7ad4d5dac6f12680329eded654e7808fa78280e11280f4e3cf541a0bfe1"
       },
       "schema_version": "dev_tool_request.v1"
     },
@@ -299,7 +299,7 @@
       },
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "215fcb63d94c629b2002b91c3ab0c81b055bc5aee38b60b71ce81232c9870367"
+        "sha256": "6e21eb00432d01add4cf0d0a6fab85f1fec136f37861b7722c95a9aefaca47fe"
       },
       "schema_version": "dev_tool_result.v1"
     },
@@ -335,7 +335,7 @@
       },
       "schema": {
         "path": "schemas/dev_stream_event.v1.schema.json",
-        "sha256": "e26991bfcfd4ef628bcfbb6186fcbe1f9034c6259910f85d6d9ab779df1fea49"
+        "sha256": "eeb3461c25d455140d30e7a779e1480ddd2773fdec29f67b8d053ae4b2cdcc6f"
       },
       "schema_version": "dev_stream_event.v1"
     },

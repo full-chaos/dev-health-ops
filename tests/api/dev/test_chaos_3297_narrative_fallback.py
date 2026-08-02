@@ -25,7 +25,9 @@ from typing import Any
 
 import pytest
 
+from dev_health_ops.api.dev import contract_fixtures_v2
 from dev_health_ops.api.dev.answer_frames import narrative_fallback as _nf
+from dev_health_ops.api.dev.answer_frames import narrative_request as _nreq
 from dev_health_ops.api.dev.answer_frames.narrative_fallback import (
     _KNOWN_PROVIDER_EXCEPTIONS,
     NarrativeFailureCode,
@@ -147,6 +149,40 @@ def test_brief_carries_the_content_needed_for_grounding():
     )
     assert brief["completion"] is not None
     assert brief["readiness"] is not None
+
+
+def _frame_with_one_metric(**extra_metric_fields: Any) -> DevAnswerFrame:
+    # contract_fixtures_v2._metric_ref() is the producer-validated golden for
+    # dev_metric_ref.v1 -- reused rather than hand-authoring resolved_scope/
+    # current_window shapes (feedback_generate_fixtures_from_the_producer).
+    metric = {**contract_fixtures_v2._metric_ref(), **extra_metric_fields}
+    return DevAnswerFrame.model_validate(
+        {**positive_fixtures()["dev_answer_frame.v1"], "metrics": [metric]}
+    )
+
+
+def test_metric_evidence_ref_ids_are_stripped_from_the_brief():
+    frame = _frame_with_one_metric()
+    brief = build_narrative_brief(frame)
+    assert "evidence_ref_ids" not in brief["metrics"][0]
+
+
+def test_a_future_metric_evidence_classification_field_would_also_be_stripped():
+    """Forward-compat proof for the orchestrator's ruling on stack #3's
+    incoming ``DevMetricRefV2.evidence_classification`` field: exercises the
+    stripping mechanism directly (the real contract does not carry this
+    field yet), so the exclusion is proven correct ahead of the field's
+    landing rather than discovered broken on rebase."""
+
+    metric_dict = {
+        "metric_ref_id": "metric_01",
+        "label": "Cycle time (p50)",
+        "value": 12.5,
+        "evidence_classification": "legacy_v1_unminted",
+    }
+    projected = _nreq._project_metric_for_brief(metric_dict)
+    assert "evidence_classification" not in projected
+    assert projected["value"] == 12.5  # narratable content is preserved
 
 
 def test_an_unclassified_new_frame_field_breaks_the_real_totality_check(monkeypatch):

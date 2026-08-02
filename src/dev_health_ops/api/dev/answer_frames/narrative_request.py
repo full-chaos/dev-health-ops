@@ -31,6 +31,21 @@ then, the three existing ref fields are ``EXCLUDED``: they are opaque
 identifiers with no narratable content, unlike the entity/fact/metric
 blocks that do carry a display label or text the provider needs to write
 correct prose.
+
+Sub-field note (orchestrator ruling, 2026-08-02): stack #3 is adding
+``DevMetricRefV2.evidence_classification`` (closed vocabulary,
+exclusive-or with ``evidence_ref_ids``; distinguishes a legacy-v1-sourced
+metric's explicit unminted marker from a plan-minted metric that never sets
+it). ``metrics`` stays ``INCLUDED`` as a *frame* field -- a narrative still
+needs metric values/labels/comparisons to write grounded prose -- but
+``evidence_classification`` itself is provenance metadata, not narrative
+content, and is stripped per-metric by ``_project_metric_for_brief`` before
+it can reach the provider. This is a targeted sub-field exclusion, not a
+second totality-checked policy: ``metrics`` is a bounded, closed contract
+(``DevMetricRefV2``) with a small field count, and the two provenance
+fields it can carry (``evidence_ref_ids``, now also
+``evidence_classification``) are named explicitly rather than projected
+through an allowlist of their own.
 """
 
 from __future__ import annotations
@@ -169,6 +184,31 @@ def assert_narrative_brief_policy_is_total() -> None:
         )
 
 
+#: Fields of ``DevMetricRefV2`` that never reach the narrative provider even
+#: though the enclosing ``metrics`` frame field is ``INCLUDED`` -- provenance
+#: about *how* a metric's evidence was sourced, not narratable content. See
+#: the module docstring's "Sub-field note".
+_METRIC_BRIEF_EXCLUDED_SUBFIELDS: frozenset[str] = frozenset(
+    {"evidence_ref_ids", "evidence_classification"}
+)
+
+
+def _project_metric_for_brief(metric: dict[str, Any]) -> dict[str, Any]:
+    """Strip provenance sub-fields from one dumped ``DevMetricRefV2``.
+
+    ``dict.pop(key, None)`` on a key that does not exist yet (e.g.
+    ``evidence_classification`` before stack #3 lands it) is a no-op, so
+    this is safe to ship ahead of the field's landing and takes effect
+    automatically once it exists -- no second edit required.
+    """
+
+    return {
+        key: value
+        for key, value in metric.items()
+        if key not in _METRIC_BRIEF_EXCLUDED_SUBFIELDS
+    }
+
+
 def build_narrative_brief(frame: DevAnswerFrame) -> dict[str, Any]:
     """Project ``frame`` through the allowlist a narrative provider may see.
 
@@ -183,7 +223,10 @@ def build_narrative_brief(frame: DevAnswerFrame) -> dict[str, Any]:
         for name, disposition in NARRATIVE_BRIEF_FIELD_POLICY.items()
         if disposition is NarrativeFieldDisposition.INCLUDED
     }
-    return {key: value for key, value in dumped.items() if key in included}
+    brief = {key: value for key, value in dumped.items() if key in included}
+    if "metrics" in brief:
+        brief["metrics"] = [_project_metric_for_brief(m) for m in brief["metrics"]]
+    return brief
 
 
 assert_narrative_brief_policy_is_total()

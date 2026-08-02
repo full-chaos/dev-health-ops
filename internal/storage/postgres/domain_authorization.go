@@ -687,7 +687,13 @@ func coordinatorPosture() RolePosture {
 			{"scheduled_jobs", false, true, false},
 			{"scheduled_sync_occurrences", true, true, false},
 			{"fixed_schedule_occurrences", true, true, false},
-			{"sync_dispatch_outbox", false, true, false},
+			// syncreconciler.Materializer.Step executes coordinator-pool INSERTs at
+			// internal/syncreconciler/materializer.go:125,
+			// internal/syncreconciler/materializer.go:235,
+			// internal/syncreconciler/materializer.go:345, and
+			// internal/syncreconciler/materializer.go:450. The first three also use
+			// ON CONFLICT DO UPDATE.
+			{"sync_dispatch_outbox", true, true, false},
 			{"sync_run_units", false, false, false},
 			{"sync_runs", false, true, false},
 			{"sync_dispatch_transport_routes", false, true, false},

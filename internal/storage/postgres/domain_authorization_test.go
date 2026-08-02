@@ -136,6 +136,36 @@ func TestDomainPostureInventoriesEachOriginalTableExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestSyncDispatchOutboxPosturesKeepBothRolesLeastPrivilege(t *testing.T) {
+	t.Parallel()
+
+	find := func(t *testing.T, posture RolePosture) TablePrivilege {
+		t.Helper()
+		var matches []TablePrivilege
+		for _, table := range posture.RequiredTables {
+			if table.TableName == "sync_dispatch_outbox" {
+				matches = append(matches, table)
+			}
+		}
+		if len(matches) != 1 {
+			t.Fatalf("sync_dispatch_outbox posture rows = %d, want exactly 1", len(matches))
+		}
+		return matches[0]
+	}
+
+	coordinator := find(t, coordinatorPosture())
+	if !coordinator.AllowInsert || !coordinator.AllowUpdate || coordinator.AllowDelete {
+		t.Errorf("coordinator sync_dispatch_outbox = %+v, want SELECT+INSERT+UPDATE without DELETE", coordinator)
+	}
+
+	// The coordinator fix must not widen or narrow the independently required
+	// domain posture for provider-sync execution.
+	domain := find(t, domainPosture())
+	if !domain.AllowInsert || !domain.AllowUpdate || domain.AllowDelete {
+		t.Errorf("domain sync_dispatch_outbox = %+v, want unchanged SELECT+INSERT+UPDATE without DELETE", domain)
+	}
+}
+
 // unnest() does not error on mismatched array-parameter lengths; it silently
 // NULL-pads the shorter ones instead (confirmed empirically against a live
 // server — see CheckRolePosture's comment). This pins the Go-side guard that

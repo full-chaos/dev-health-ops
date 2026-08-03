@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, event, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from dev_health_ops.db import normalize_sync_postgres_uri
 from dev_health_ops.models import (
     Base,
     Integration,
@@ -41,6 +42,27 @@ from dev_health_ops.sync.dispatch_outbox import (
     observe_due_outbox_rows,
     upsert_outbox_wakeup,
 )
+
+_POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
+
+
+def _require_postgres_test_uri() -> None:
+    if os.getenv(_POSTGRES_TEST_URI_ENV):
+        return
+    if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+        pytest.fail(f"{_POSTGRES_TEST_URI_ENV} must be configured for PostgreSQL tests")
+    pytest.skip(f"requires {_POSTGRES_TEST_URI_ENV}")
+
+
+@pytest.fixture(scope="module")
+def require_postgres_test_uri() -> None:
+    _require_postgres_test_uri()
+
+
+def _postgres_engine():
+    return create_engine(
+        normalize_sync_postgres_uri(os.environ[_POSTGRES_TEST_URI_ENV])
+    )
 
 
 @pytest.fixture
@@ -894,12 +916,9 @@ def test_backoff_seconds_sequence_is_capped():
     ]
 
 
-@pytest.mark.skipif(
-    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
-    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
-)
+@pytest.mark.usefixtures("require_postgres_test_uri")
 def test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible():
-    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = _postgres_engine()
     Base.metadata.create_all(engine)
     run_id = None
     integration_id = None
@@ -988,12 +1007,9 @@ def test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible()
         engine.dispose()
 
 
-@pytest.mark.skipif(
-    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
-    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
-)
+@pytest.mark.usefixtures("require_postgres_test_uri")
 def test_real_postgres_route_change_fences_claim_from_another_session():
-    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = _postgres_engine()
     Base.metadata.create_all(engine)
     run_id = None
     integration_id = None
@@ -1078,12 +1094,9 @@ def test_real_postgres_route_change_fences_claim_from_another_session():
         engine.dispose()
 
 
-@pytest.mark.skipif(
-    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
-    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
-)
+@pytest.mark.usefixtures("require_postgres_test_uri")
 def test_real_postgres_publish_lock_blocks_route_change_until_commit():
-    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = _postgres_engine()
     Base.metadata.create_all(engine)
     run_id = None
     integration_id = None

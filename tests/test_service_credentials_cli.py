@@ -6,19 +6,82 @@ import os
 import subprocess
 import sys
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import sqlalchemy as sa
+from sqlalchemy.engine import make_url
 
 from dev_health_ops import cli, service_credentials
+from dev_health_ops.db import normalize_sync_postgres_uri
+from dev_health_ops.models import Base
 from dev_health_ops.models.internal_service_credential import InternalServiceCredential
+from dev_health_ops.models.users import User
+
+_POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
+
+
+def _require_postgres_test_uri() -> None:
+    if os.getenv(_POSTGRES_TEST_URI_ENV):
+        return
+    if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+        pytest.fail(f"{_POSTGRES_TEST_URI_ENV} must be configured for PostgreSQL tests")
+    pytest.skip(f"requires {_POSTGRES_TEST_URI_ENV}")
+
+
+@pytest.fixture(scope="module")
+def require_postgres_test_uri() -> None:
+    _require_postgres_test_uri()
 
 
 def _postgres_test_uri() -> str:
-    uri = os.getenv("DEV_HEALTH_POSTGRES_TEST_URI")
-    if uri is None:
-        pytest.skip("DEV_HEALTH_POSTGRES_TEST_URI is not configured")
-    return uri
+    _require_postgres_test_uri()
+    return os.environ[_POSTGRES_TEST_URI_ENV]
+
+
+@contextmanager
+def _postgres_credential_database(postgres_uri: str) -> Iterator[str]:
+    configured_url = make_url(postgres_uri)
+    database_name = f"test_service_credentials_{uuid.uuid4().hex}"
+    admin_url = configured_url.set(
+        drivername="postgresql+psycopg2", database="postgres"
+    )
+    admin_engine = sa.create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    engine = None
+    try:
+        with admin_engine.connect() as connection:
+            connection.exec_driver_sql(f'CREATE DATABASE "{database_name}"')
+        test_url = configured_url.set(database=database_name)
+        engine = sa.create_engine(
+            normalize_sync_postgres_uri(test_url.render_as_string(hide_password=False))
+        )
+        Base.metadata.create_all(
+            engine,
+            tables=[
+                Base.metadata.tables[User.__tablename__],
+                Base.metadata.tables["internal_service_credentials"],
+            ],
+        )
+        yield test_url.render_as_string(hide_password=False)
+    finally:
+        if engine is not None:
+            engine.dispose()
+        with admin_engine.connect() as connection:
+            connection.execute(
+                sa.text(
+                    """
+                    SELECT pg_terminate_backend(pid)
+                    FROM pg_stat_activity
+                    WHERE datname = :database_name
+                      AND pid <> pg_backend_pid()
+                    """
+                ),
+                {"database_name": database_name},
+            )
+            connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{database_name}"')
+        admin_engine.dispose()
 
 
 def _run_service_credentials_cli(
@@ -241,18 +304,20 @@ async def test_rotate_rejects_past_expiry_without_mutating_existing_credential(
     assert session.commits == 0
 
 
+@pytest.mark.usefixtures("require_postgres_test_uri")
 def test_service_credential_create_emits_only_token_and_db_flag_is_honored() -> None:
     postgres_uri = _postgres_test_uri()
-    created = _run_service_credentials_cli(
-        postgres_uri, "create", "--scope", "entitlements:read"
-    )
-    assert created.returncode == 0, created.stderr
-    token_lines = created.stdout.splitlines()
-    assert len(token_lines) == 1
-    assert token_lines[0].startswith("svc_acr_")
-    assert token_lines[0] not in created.stderr
+    with _postgres_credential_database(postgres_uri) as test_uri:
+        created = _run_service_credentials_cli(
+            test_uri, "create", "--scope", "entitlements:read"
+        )
+        assert created.returncode == 0, created.stderr
+        token_lines = created.stdout.splitlines()
+        assert len(token_lines) == 1
+        assert token_lines[0].startswith("svc_acr_")
+        assert token_lines[0] not in created.stderr
 
-    listed = _run_service_credentials_cli(postgres_uri, "list")
-    assert listed.returncode == 0, listed.stderr
-    assert token_lines[0] not in listed.stdout
-    assert isinstance(json.loads(listed.stdout), list)
+        listed = _run_service_credentials_cli(test_uri, "list")
+        assert listed.returncode == 0, listed.stderr
+        assert token_lines[0] not in listed.stdout
+        assert isinstance(json.loads(listed.stdout), list)

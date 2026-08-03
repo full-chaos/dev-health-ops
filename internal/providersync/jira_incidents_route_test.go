@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -22,6 +23,16 @@ type jiraIncidentDoerFunc func(*http.Request) (*http.Response, error)
 func (doer jiraIncidentDoerFunc) Do(request *http.Request) (*http.Response, error) {
 	return doer(request)
 }
+
+type jiraIncidentEntitlementFunc func(context.Context, string) error
+
+func (require jiraIncidentEntitlementFunc) Require(ctx context.Context, orgID string) error {
+	return require(ctx, orgID)
+}
+
+var allowJiraIncidentEntitlement = jiraIncidentEntitlementFunc(
+	func(context.Context, string) error { return nil },
+)
 
 func (doer *jiraIncidentDoer) Do(request *http.Request) (*http.Response, error) {
 	doer.t.Helper()
@@ -85,7 +96,7 @@ func TestJiraIncidentsRouteCollectsOnlyNativelyAdmittedJSMIncidents(t *testing.T
 		t.Fatal(err)
 	}
 
-	batch, err := (JiraIncidentRouteHandler{}).Collect(
+	batch, err := (JiraIncidentRouteHandler{Entitlement: allowJiraIncidentEntitlement}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt,
 	)
 	if err != nil {
@@ -138,7 +149,9 @@ func TestJiraIncidentsRouteFailsClosedBeforeWatermarkOnIncompleteTraversal(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := (JiraIncidentRouteHandler{MaxPages: 1}).Collect(
+	batch, err := (JiraIncidentRouteHandler{
+		Entitlement: allowJiraIncidentEntitlement, MaxPages: 1,
+	}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
@@ -172,11 +185,78 @@ func TestJiraIncidentsRouteRejectsNullIssueInventory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := (JiraIncidentRouteHandler{}).Collect(
+	batch, err := (JiraIncidentRouteHandler{Entitlement: allowJiraIncidentEntitlement}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	if err == nil || batch.Watermark != nil || len(batch.Effects) != 0 {
 		t.Fatalf("batch=%+v err=%v", batch, err)
+	}
+}
+
+func TestJiraIncidentsRouteRejectsDisabledEntitlementBeforeProviderFetch(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("jira", "incidents")
+	claim.SourceExternalID = "JSM"
+	requests := 0
+	doer := jiraIncidentDoerFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("provider fetch must not run")
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"jira", "https://acme.atlassian.net", doer, func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (JiraIncidentRouteHandler{
+		Entitlement: jiraIncidentEntitlementFunc(func(context.Context, string) error {
+			return ErrJiraIncidentEntitlementDisabled
+		}),
+	}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+	)
+	if !errors.Is(err, ErrJiraIncidentEntitlementDisabled) || requests != 0 ||
+		batch.Watermark != nil || len(batch.Effects) != 0 {
+		t.Fatalf("requests=%d batch=%+v err=%v", requests, batch, err)
+	}
+}
+
+func TestJiraIncidentsRouteRechecksRevokedEntitlementBeforePersistenceHandoff(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("jira", "incidents")
+	claim.SourceExternalID = "JSM"
+	doer := &jiraIncidentDoer{t: t}
+	client, err := providerfoundation.NewHTTPClient(
+		"jira", "https://acme.atlassian.net", doer,
+		func(request *http.Request) error {
+			request.Header.Set("Accept", "application/json")
+			request.Header.Set("Content-Type", "application/json")
+			return nil
+		},
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	entitlement := jiraIncidentEntitlementFunc(func(context.Context, string) error {
+		checks++
+		if checks > 1 {
+			return ErrJiraIncidentEntitlementDisabled
+		}
+		return nil
+	})
+	batch, err := (JiraIncidentRouteHandler{Entitlement: entitlement}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+	)
+	if !errors.Is(err, ErrJiraIncidentEntitlementDisabled) || checks != 2 ||
+		len(batch.Effects) != 0 || batch.Watermark != nil {
+		t.Fatalf("entitlement checks=%d batch=%+v err=%v", checks, batch, err)
 	}
 }

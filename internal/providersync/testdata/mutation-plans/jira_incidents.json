@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "jira/incidents native route (CHAOS-3127)",
   "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
-  "$limitation": "The plan pins native admission, whole-row normalization, tenant scope, readback content, and route readiness. The integration-tagged ClickHouse test separately proves the SQL schema and FINAL tenant-scoped readback against a real server.",
+  "$limitation": "The plan pins both entitlement checks, entitlement policy parity, native admission, whole-row normalization, tenant scope, readback content, and route readiness. Integration-tagged tests separately prove the Postgres atomic entitlement snapshot and ClickHouse FINAL tenant-scoped readback against real servers.",
   "mutations": [
     {
       "id": "admission-404-must-exclude",
@@ -35,6 +35,39 @@
       "replace": "\t\tif false || row.Provider != \"jira\" ||",
       "rationale": "the effect sink must reject a row whose tenant differs from the claimed unit",
       "proof": [["go", "test", "-run", "^TestJiraIncidentScopeRejectsCrossTenantRows$", "./internal/providersync/"]]
+    },
+    {
+      "id": "entitlement-before-fetch",
+      "file": "internal/providersync/jira_incidents_route.go",
+      "find": "\tif err := handler.Entitlement.Require(ctx, claim.OrgID); err != nil {\n\t\treturn CompleteRouteBatch{}, err\n\t}",
+      "replace": "\tif err := handler.Entitlement.Require(ctx, claim.OrgID); err != nil && false {\n\t\treturn CompleteRouteBatch{}, err\n\t}",
+      "rationale": "a disabled canonical-incident entitlement must fail before the first Jira request",
+      "proof": [["go", "test", "-run", "^TestJiraIncidentsRouteRejectsDisabledEntitlementBeforeProviderFetch$", "./internal/providersync/"]]
+    },
+    {
+      "id": "entitlement-recheck-before-write",
+      "file": "internal/providersync/jira_incidents_route.go",
+      "find": "\twriteAuthorizationErr := handler.Entitlement.Require(ctx, claim.OrgID)\n\tif writeAuthorizationErr != nil {\n\t\treturn CompleteRouteBatch{}, writeAuthorizationErr\n\t}",
+      "replace": "\twriteAuthorizationErr := handler.Entitlement.Require(ctx, claim.OrgID)\n\tif writeAuthorizationErr != nil && false {\n\t\treturn CompleteRouteBatch{}, writeAuthorizationErr\n\t}",
+      "rationale": "an entitlement revoked during provider traversal must fail before the collected batch is handed to persistence",
+      "proof": [["go", "test", "-run", "^TestJiraIncidentsRouteRechecksRevokedEntitlementBeforePersistenceHandoff$", "./internal/providersync/"]]
+    },
+    {
+      "id": "entitlement-policy-org-override",
+      "file": "internal/providersync/jira_incident_entitlement.go",
+      "find": "\t\t\t\tFeatureKey: jiraIncidentFeatureKey, Allowed: true,\n\t\t\t\tReason: \"enabled_by_org_override\", ExpiresAt: state.OrgOverride.ExpiresAt,",
+      "replace": "\t\t\t\tFeatureKey: jiraIncidentFeatureKey, Allowed: false,\n\t\t\t\tReason: \"enabled_by_org_override\", ExpiresAt: state.OrgOverride.ExpiresAt,",
+      "rationale": "an active enabled org override must produce the same allowed decision as Python's canonical feature policy",
+      "proof": [["go", "test", "-run", "^TestGenericOracleMatchesLivePythonForJiraIncidentEntitlement$", "./internal/providersync/"]]
+    },
+    {
+      "id": "worker-builder-requires-entitlement",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "\t\t\t\tif jiraIncidentEntitlement == nil {",
+      "replace": "\t\t\t\tif false {",
+      "rationale": "a route-ready Jira incidents worker cannot be constructed without an entitlement dependency",
+      "build": ["go", "test", "-run", "^$", "./cmd/dev-health-worker/"],
+      "proof": [["go", "test", "-run", "^TestBuildProviderSyncHandlerRejectsJiraIncidentsWithoutEntitlement$", "./cmd/dev-health-worker/"]]
     },
     {
       "id": "readback-whole-row-content",

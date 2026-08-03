@@ -88,9 +88,10 @@ type jiraIncidentRow struct {
 }
 
 type JiraIncidentRouteHandler struct {
-	MaxPages int
-	MaxRows  int
-	PerPage  int
+	Entitlement JiraIncidentEntitlement
+	MaxPages    int
+	MaxRows     int
+	PerPage     int
 }
 
 func (handler JiraIncidentRouteHandler) limits() (int, int, int, error) {
@@ -121,8 +122,12 @@ func (handler JiraIncidentRouteHandler) Collect(
 	if ctx == nil || claim.Validate() != nil || claim.Provider != "jira" ||
 		claim.Dataset != "incidents" || client == nil || client.Provider != "jira" ||
 		client.BaseURL == nil || normalizedAt.IsZero() || claim.SinceAt == nil ||
-		claim.BeforeAt == nil || !claim.SinceAt.Before(*claim.BeforeAt) {
+		claim.BeforeAt == nil || !claim.SinceAt.Before(*claim.BeforeAt) ||
+		handler.Entitlement == nil {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	if err := handler.Entitlement.Require(ctx, claim.OrgID); err != nil {
+		return CompleteRouteBatch{}, err
 	}
 	maxPages, maxRows, perPage, err := handler.limits()
 	if err != nil {
@@ -188,6 +193,13 @@ func (handler JiraIncidentRouteHandler) Collect(
 	effect, err := effectBatchFromValues("operational_incidents", EffectReadbackRequired, rows)
 	if err != nil {
 		return CompleteRouteBatch{}, err
+	}
+	// Mirror Python's second check after provider collection and immediately
+	// before handing the batch to the persistence pipeline. A grant may be
+	// revoked while Jira pagination is in flight.
+	writeAuthorizationErr := handler.Entitlement.Require(ctx, claim.OrgID)
+	if writeAuthorizationErr != nil {
+		return CompleteRouteBatch{}, writeAuthorizationErr
 	}
 	watermark := claim.BeforeAt.UTC()
 	return CompleteRouteBatch{

@@ -142,6 +142,7 @@ func buildProviderSyncHandler(
 	clickhouseConnection driver.Conn,
 	valkeyClient valkeygo.Client,
 	domainPool *pgxpool.Pool,
+	jiraIncidentEntitlement providersync.JiraIncidentEntitlement,
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
@@ -281,10 +282,16 @@ func buildProviderSyncHandler(
 				sink, readback = ghCommitStatsSink, ghCommitStatsSink
 			case session.Claim.Provider == "jira" &&
 				session.Claim.Dataset == "incidents":
+				if jiraIncidentEntitlement == nil {
+					return providersync.CompleteRouteExecutor{},
+						errWorkerDependencyUnavailable
+				}
 				jiraSink := providersync.JiraIncidentClickHouseEffects{
 					Conn: clickhouseConnection, Lease: session,
 				}
-				routeHandler = providersync.JiraIncidentRouteHandler{}
+				routeHandler = providersync.JiraIncidentRouteHandler{
+					Entitlement: jiraIncidentEntitlement,
+				}
 				sink, readback = jiraSink, jiraSink
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
@@ -430,7 +437,9 @@ func constructProviderSyncWorkerWithDependencies(
 	collector, _ := observer.(*jobruntime.MetricsCollector)
 	handler, providerMetrics := buildProviderSyncHandler(
 		repository, workerRouteSwitches(cfg), decryptor, clickhouseConnection,
-		valkeyClient, postgresDatabase.pools.Domain, collector, logger,
+		valkeyClient, postgresDatabase.pools.Domain,
+		providersync.PostgresJiraIncidentEntitlement{Pool: postgresDatabase.pools.Domain},
+		collector, logger,
 	)
 	adapter, err := jobruntime.NewAdapter[jobruntime.ProviderUnitArgs](
 		registry, spec, handler, jobruntime.Dependencies{

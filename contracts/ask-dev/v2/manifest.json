@@ -451,7 +451,7 @@
       },
       "schema": {
         "path": "schemas/dev_stream_event.v2.schema.json",
-        "sha256": "a2ba322b50a715805929741a24a4211f98081d6c6597ea77115f3b8da50ab26f"
+        "sha256": "4f9649b45d387d381d5e25de302ddc85e6e7e5c1092424f1c28acafb1f2370ab"
       },
       "schema_version": "dev_stream_event.v2"
     }

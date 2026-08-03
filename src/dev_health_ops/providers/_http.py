@@ -303,7 +303,7 @@ class InstrumentedRESTCore:
         -- records exactly one usage observation via ``_record_usage``
         (CHAOS-2754 contract: actuals are real request counts, never
         abstract units). ``operation`` is the caller-authored label (often a
-        path TEMPLATE, e.g. ``"cicd:GET /repos/{o}/{r}/actions/runs"``,
+        path TEMPLATE, e.g. ``"tests:GET /repos/{o}/{r}/actions/runs"``,
         distinct from the literal ``path`` sent over the wire) used both for
         usage-recorder resolution and for diagnostic messages.
 

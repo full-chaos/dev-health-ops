@@ -438,6 +438,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 			cfg:  config.Config{WorkerGithubBlameEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubBlame: true},
 		},
+		"github_tests": {
+			cfg:  config.Config{WorkerGithubTestsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubTests: true},
+		},
 		"linear": {
 			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},
 			want: providersync.CompleteRouteSwitches{LinearWorkItems: true},
@@ -560,6 +564,30 @@ func TestBuildProviderSyncHandlerConstructsGitHubBlameCapability(t *testing.T) {
 	}
 }
 
+func TestBuildProviderSyncHandlerConstructsGitHubTestsCapability(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(
+		nil, providersync.CompleteRouteSwitches{GithubTests: true},
+		nil, nil, nil, nil, nil, nil, slog.Default(),
+	)
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "github", Dataset: "tests",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := executor.Handler.(providersync.GitHubTestsRouteHandler); !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.GitHubTestsClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+}
+
 func TestBuildProviderSyncHandlerConstructsGitHubCICDCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,
@@ -577,10 +605,10 @@ func TestBuildProviderSyncHandlerConstructsGitHubCICDCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := executor.Handler.(providersync.GitHubCICDRouteHandler); !ok {
+	if _, ok := executor.Handler.(providersync.GitHubTestsRouteHandler); !ok {
 		t.Fatalf("executor handler=%T", executor.Handler)
 	}
-	if _, ok := executor.Committer.Sink.(providersync.GitHubCICDClickHouseEffects); !ok {
+	if _, ok := executor.Committer.Sink.(providersync.GitHubTestsClickHouseEffects); !ok {
 		t.Fatalf("executor sink=%T", executor.Committer.Sink)
 	}
 }
@@ -673,6 +701,7 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 		"github_commit_stats":  {WorkerGithubCommitStatsEnabled: true},
 		"jira_incidents":       {WorkerJiraIncidentsEnabled: true},
 		"github_blame":         {WorkerGithubBlameEnabled: true},
+		"github_tests":         {WorkerGithubTestsEnabled: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !providerSyncWorkerEnabled(cfg) {

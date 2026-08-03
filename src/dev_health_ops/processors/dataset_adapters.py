@@ -318,8 +318,8 @@ def _run_github_dataset(
     # though the raise unwinds through run_async below.
     usage_sink: list[dict[str, Any]] = []
 
-    async def _handler(store: Any) -> None:
-        await process_github_repo(
+    async def _handler(store: Any) -> Any:
+        return await process_github_repo(
             store=store,
             owner=owner,
             repo_name=repo_name,
@@ -345,7 +345,9 @@ def _run_github_dataset(
         )
 
     try:
-        run_async(_run_with_reused_or_new_store(context, runtime, _handler))
+        inventory_status = run_async(
+            _run_with_reused_or_new_store(context, runtime, _handler)
+        )
     except Exception as exc:
         _attach_usage_sink_to_exception(exc, usage_sink)
         raise
@@ -366,6 +368,9 @@ def _run_github_dataset(
     }
     if usage_sink:
         result["observations"] = {PROVIDER_USAGE_OBSERVATION_KEY: list(usage_sink)}
+    if context.dataset_key == DatasetKey.FILES.value:
+        if inventory_status is not None:
+            result["inventory_status"] = str(inventory_status)
     return result
 
 

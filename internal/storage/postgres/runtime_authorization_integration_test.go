@@ -10,6 +10,7 @@ import (
 
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -87,8 +88,9 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE ROLE " + runtimeAuthorizationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + runtimeAuthorizationQueuePass + "'",
 		"GRANT CONNECT ON DATABASE worker_test TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA public TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_sources, public.integration_datasets, public.integration_credentials, public.sync_dispatch_transport_routes, public.sync_configurations, public.organizations, public.billing_notifications, public.external_ingest_sources, public.feature_flags, public.org_feature_overrides, public.org_licenses, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
-		"GRANT SELECT, UPDATE ON TABLE public.sync_runs, public.sync_run_units, public.report_runs, public.saved_reports TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.sync_configurations, public.organizations, public.billing_notifications, public.external_ingest_sources, public.feature_flags, public.org_feature_overrides, public.org_licenses, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources, public.integration_datasets, public.sync_runs, public.sync_run_units TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, UPDATE ON TABLE public.report_runs, public.saved_reports TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + runtimeAuthorizationDomainRole,
@@ -119,6 +121,14 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	}
 	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); err != nil {
 		t.Fatalf("queue authorization failed: %v", err)
+	}
+	if _, err := domain.Exec(ctx, "INSERT INTO public.sync_run_units (id, state) VALUES (1, 'planned')"); err != nil {
+		t.Fatalf("domain materializer cannot insert sync-run-unit state: %v", err)
+	}
+	_, err = queue.Exec(ctx, "INSERT INTO public.sync_run_units (id, state) VALUES (2, 'forbidden')")
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Fatalf("queue domain materializer write-boundary error = %v, want 42501 insufficient_privilege", err)
 	}
 	if _, err := admin.Exec(ctx, "GRANT TEMPORARY ON DATABASE worker_test TO PUBLIC"); err != nil {
 		t.Fatal(err)

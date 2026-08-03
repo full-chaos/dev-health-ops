@@ -45,6 +45,7 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"gitlab/commits":             ExecutorNativeGo,
 	"gitlab/commit-stats":        ExecutorNativeGo,
 	"github/blame":               ExecutorNativeGo,
+	"github/tests":               ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -148,7 +149,9 @@ type CompleteRouteSwitches struct {
 	// left for github/pr-reviews, which needs its own GraphQL fetch — see
 	// deploy/go-workers/provider-sync-porting-recipe.md.
 	GithubPRs bool
-	// GithubCICD gates the isolated ci_pipeline_runs writer only.
+	// GithubCICD gates the shared complete TestOps route and its six effects.
+	// Configuration rejects enabling it together with GithubTests, so both
+	// aliases share one complete writer and one admission identity.
 	GithubCICD        bool
 	GithubCommits     bool
 	GithubDeployments bool
@@ -160,6 +163,8 @@ type CompleteRouteSwitches struct {
 	GithubCommitStats bool
 	// GithubBlame gates the resumable, tenant-scoped git_blame writer.
 	GithubBlame bool
+	// GithubTests gates the shared complete TestOps route and its six effects.
+	GithubTests bool
 }
 
 // Descriptor resolves the canonical capability descriptor for a claimed
@@ -259,7 +264,12 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = []string{"git_pull_requests"}
 		descriptor.RouteEnabled = switches.GithubPRs
 	case provider == "github" && dataset == "cicd":
-		descriptor.Destinations = []string{"ci_pipeline_runs"}
+		// cicd and tests delegate to one complete-row unit. Startup rejects both
+		// switches enabled together, so ci_pipeline_runs has one active writer.
+		descriptor.Destinations = []string{
+			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
+			"test_suite_results", "test_case_results", "coverage_snapshots",
+		}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubCICD
 	case provider == "github" && dataset == "commits":
@@ -289,6 +299,13 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = []string{"github_blame_path_progress", "git_blame"}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubBlame
+	case provider == "github" && dataset == "tests":
+		descriptor.Destinations = []string{
+			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
+			"test_suite_results", "test_case_results", "coverage_snapshots",
+		}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubTests
 	}
 	return descriptor, true
 }

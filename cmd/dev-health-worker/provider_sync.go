@@ -193,11 +193,13 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Thirteen route-ready pairs can reach this closure today:
+			// Fourteen route-ready pairs can reach this closure today:
 			// launchdarkly/feature-flags plus github/repo-metadata, cicd,
-			// commits, deployments, security, files, commit-stats, and blame,
-			// plus jira/incidents, gitlab/repo-metadata, commits, and commit-stats. Each
-			// has its own CompleteRouteHandler and effect sink. session.Claim
+			// tests, commits, deployments, security, files, commit-stats, and
+			// blame, plus jira/incidents and gitlab/repo-metadata, commits, and
+			// commit-stats. The GitHub cicd/tests aliases intentionally share
+			// one complete handler and effect sink; every other route has its
+			// own. session.Claim
 			// is already known here — providerunit.Handler.Work only calls
 			// BuildExecutor after its own descriptor gate passed for THIS
 			// claim's provider/dataset — so select by claim rather than
@@ -261,10 +263,10 @@ func buildProviderSyncHandler(
 				sink, readback = ghPRSink, ghPRSink
 			case session.Claim.Provider == "github" &&
 				session.Claim.Dataset == "cicd":
-				ghCICDSink := providersync.GitHubCICDClickHouseEffects{
+				ghCICDSink := providersync.GitHubTestsClickHouseEffects{
 					Conn: clickhouseConnection, Lease: session,
 				}
-				routeHandler = providersync.GitHubCICDRouteHandler{}
+				routeHandler = providersync.GitHubTestsRouteHandler{}
 				sink, readback = ghCICDSink, ghCICDSink
 			case session.Claim.Provider == "github" &&
 				session.Claim.Dataset == "commits":
@@ -329,6 +331,13 @@ func buildProviderSyncHandler(
 					},
 				}
 				sink, readback = ghBlameSink, ghBlameSink
+			case session.Claim.Provider == "github" &&
+				session.Claim.Dataset == "tests":
+				ghTestsSink := providersync.GitHubTestsClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitHubTestsRouteHandler{}
+				sink, readback = ghTestsSink, ghTestsSink
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
@@ -526,7 +535,7 @@ func providerSyncWorkerEnabled(cfg config.Config) bool {
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
 		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||
 		cfg.WorkerGithubCommitStatsEnabled || cfg.WorkerJiraIncidentsEnabled ||
-		cfg.WorkerGithubBlameEnabled
+		cfg.WorkerGithubBlameEnabled || cfg.WorkerGithubTestsEnabled
 }
 
 func providerSyncRiverConfig(

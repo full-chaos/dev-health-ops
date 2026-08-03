@@ -1,6 +1,11 @@
 package providersync
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+var oracleCommitStatsNormalizedAt = time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
 
 var oracleCommitStatsGoOnlyFields = map[string]string{
 	"org_id": "carried from the Go claim to scope ClickHouse's tenant-partitioned replacing key",
@@ -19,7 +24,7 @@ func buildCommitStatsRowForOracle(t *testing.T, input map[string]any) commitStat
 		OrgID: "org-1", RepoID: input["repo_id"].(string),
 		CommitHash: input["commit_hash"].(string), FilePath: filename,
 		Additions: int32(additions), Deletions: int32(deletions),
-		OldFileMode: "unknown", NewFileMode: "unknown", LastSynced: oracleCICDNormalizedAt,
+		OldFileMode: "unknown", NewFileMode: "unknown", LastSynced: oracleCommitStatsNormalizedAt,
 	}
 }
 

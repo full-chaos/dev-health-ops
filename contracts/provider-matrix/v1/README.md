@@ -387,8 +387,8 @@ scheduler activation, and migration 0066 remain unchanged.
 
 ## Implementation status for `(github, tests)`
 
-CHAOS-3336 remains `go_executor: none` / `route_ready: false`. The first
-reviewable foundation ports the untrusted report boundary: bounded in-memory
+CHAOS-3336 is `native_go` / `route_ready: true`. The complete route builds on
+the untrusted-report foundation: bounded in-memory
 ZIP traversal, a 200-report cap, DTD/entity rejection, JUnit suite/case
 normalization, LCOV aggregate normalization, stable IDs, fallback run
 timestamps, stack truncation, and incoherent-coverage rejection. A generic
@@ -398,15 +398,30 @@ include summary-bearing input, `DA`-only LF/LH fallback with duplicate line
 records, and multi-service input whose service is attributed by the majority
 of report files (with Python's first-seen tie behavior).
 
-This is intentionally not represented as a complete route. The active Python
-`sync_tests` contract also owns Actions run pagination, per-run job pagination,
+The complete route also owns Actions run pagination, per-run job pagination,
 branch-protection acceptance checks, the authenticated-to-unauthenticated
 two-hop artifact download, Cobertura parsing, and six independently persisted
 destinations: `ci_pipeline_runs`, `ci_job_runs`, `ci_acceptance_checks`,
-`test_suite_results`, `test_case_results`, and `coverage_snapshots`. Native
-effect sinks/readbacks, cross-tenant collision proofs, and crash-window recovery
-must cover all six before the executor or readiness fields can change. Until
-then Python remains the only owner and no native switch exists.
+`test_suite_results`, `test_case_results`, and `coverage_snapshots`. Bounded
+fetches fail closed when a next page or skipped classified report would make
+the unit incomplete, so no effect manifest or watermark is committed. The
+authenticated artifact request follows its pre-signed redirect with an
+explicitly unauthenticated, lease- and budget-governed request. Six
+tenant-prefixed FINAL readbacks fence retries. The independently named
+`WORKER_GITHUB_TESTS_ENABLED` switch defaults off in both runtimes; deployment,
+scheduler activation, and migration 0066 remain unchanged.
+
+### Shared `ci_pipeline_runs` ownership
+
+`github/tests` and `github/cicd` delegate to one native complete-row unit. It
+mirrors Python's `PipelineRunExtendedRow` producer and owns jobs, acceptance
+checks, and test reports in the same committed effect set. The legacy
+nine-column CICD handler is never constructed by the production worker:
+ReplacingMergeTree replaces whole rows, so a later partial write would erase
+extended columns with defaults rather than merge them. Both Go and Python
+startup configuration reject enabling the CICD and tests switches together.
+Thus either matrix name can select the complete unit while exactly one writer
+owns each natural key in a process; two independent writers are not permitted.
 
 ## Known Go/Python divergences (fail-closed by design)
 

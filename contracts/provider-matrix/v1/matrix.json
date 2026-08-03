@@ -51,7 +51,12 @@
       "native_shadow": false,
       "route_dataset": "cicd",
       "route_destinations": [
-        "ci_pipeline_runs"
+        "ci_acceptance_checks",
+        "ci_job_runs",
+        "ci_pipeline_runs",
+        "coverage_snapshots",
+        "test_case_results",
+        "test_suite_results"
       ],
       "route_ready": true,
       "credential_modes": [
@@ -284,11 +289,18 @@
       "processor_flags": {
         "sync_tests": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "tests",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "ci_acceptance_checks",
+        "ci_job_runs",
+        "ci_pipeline_runs",
+        "coverage_snapshots",
+        "test_case_results",
+        "test_suite_results"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"

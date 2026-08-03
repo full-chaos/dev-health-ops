@@ -123,6 +123,20 @@ def test_github_budget_estimator_splits_pr_social_pressure() -> None:
     assert {estimate.route_family for estimate in estimates} == {"prs", "pr_social"}
 
 
+def test_github_cicd_aliases_share_complete_testops_admission_identity() -> None:
+    tests = GitHubBudgetEstimator().estimate(_context(dataset_key="tests"))
+    cicd = GitHubBudgetEstimator().estimate(_context(dataset_key="cicd"))
+
+    assert cicd == tests
+    assert {estimate.route_family for estimate in tests} == {"tests"}
+    assert {
+        (estimate.bucket.dimension, estimate.estimated_units) for estimate in tests
+    } == {
+        (BudgetDimension.REST_CORE, 8),
+        (BudgetDimension.CONTENTS_BLOB, 4),
+    }
+
+
 def test_github_budget_route_family_limits_override_dimension_defaults() -> None:
     files_contents = next(
         estimate

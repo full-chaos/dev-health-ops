@@ -193,6 +193,78 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 	return nil, last
 }
 
+// DoUnauthenticated issues one absolute-URL request without applying provider
+// authentication. It is intentionally narrow: GitHub Actions artifact
+// downloads redirect to a short-lived pre-signed object URL, and forwarding
+// the provider token to that different host would disclose a credential.
+// The request still honors the live lease, backoff gate, and shared budget.
+func (c *HTTPClient) DoUnauthenticated(
+	ctx context.Context,
+	method string,
+	absoluteURL string,
+) (response *http.Response, err error) {
+	if c == nil || c.Doer == nil || c.Lease == nil {
+		return nil, ErrCredentialInvalid
+	}
+	target, parseErr := url.Parse(absoluteURL)
+	if parseErr != nil || target.Scheme == "" || target.Host == "" ||
+		(target.Scheme != "http" && target.Scheme != "https") {
+		return nil, ErrCredentialInvalid
+	}
+	if err := c.Lease.Assert(ctx); err != nil {
+		return nil, err
+	}
+	if c.Gate != nil {
+		if wait, err := c.Gate.Wait(ctx); err != nil {
+			return nil, err
+		} else if wait > 0 {
+			return nil, &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
+		}
+	}
+	var reservation Reservation
+	if c.Budget != nil {
+		reservation, err = c.Budget.Acquire(ctx, c.BudgetKey)
+		if err != nil || reservation == nil {
+			if c.Metrics != nil {
+				c.Metrics.RecordBudgetDenied(c.Provider)
+			}
+			return nil, ErrBudgetUnavailable
+		}
+		defer func() {
+			releaseErr := c.releaseReservation(ctx, reservation)
+			if releaseErr == nil {
+				return
+			}
+			if c.Metrics != nil {
+				c.Metrics.RecordBudgetReleaseError(c.Provider)
+			}
+			if err == nil {
+				if response != nil && response.Body != nil {
+					_ = response.Body.Close()
+				}
+				response = nil
+			}
+			err = errors.Join(err, releaseErr)
+		}()
+	}
+	request, requestErr := http.NewRequestWithContext(ctx, method, target.String(), nil)
+	if requestErr != nil {
+		return nil, ErrCredentialInvalid
+	}
+	response, err = c.Doer.Do(request)
+	if err != nil {
+		c.observe(ErrorTransient)
+		return nil, &ProviderError{Class: ErrorTransient}
+	}
+	classification := ClassifyHTTP(c.Provider, response.StatusCode, response.Header)
+	if classification == nil {
+		c.observe("")
+	} else {
+		c.observe(classification.Class)
+	}
+	return response, nil
+}
+
 func (c *HTTPClient) retryDelay(attempt int, retryAfter time.Duration) time.Duration {
 	if retryAfter > 0 {
 		if retryAfter > c.Retry.MaxWait {

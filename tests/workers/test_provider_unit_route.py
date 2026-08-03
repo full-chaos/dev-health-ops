@@ -352,6 +352,34 @@ def test_github_blame_invalid_switch_fails_closed() -> None:
         )
 
 
+def test_github_tests_switch_routes_only_when_enabled() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_TESTS_ENABLED": "true"}
+    )
+    assert off.github_tests is False
+    assert on.github_tests is True
+    assert off.routes_to_river("github", "tests") is False
+    assert on.routes_to_river("github", "tests") is True
+
+
+def test_github_tests_invalid_switch_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITHUB_TESTS_ENABLED": "sometimes"}
+        )
+
+
+def test_github_cicd_and_tests_complete_unit_aliases_are_mutually_exclusive() -> None:
+    with pytest.raises(ProviderUnitRouteError, match="mutually exclusive"):
+        ProviderUnitRouteSwitches.from_environment(
+            {
+                "WORKER_GITHUB_CICD_ENABLED": "true",
+                "WORKER_GITHUB_TESTS_ENABLED": "true",
+            }
+        )
+
+
 # ---------------------------------------------------------------------------
 # CHAOS-3131: routability is derived from the checked-in matrix, not from a
 # hardcoded provider/dataset literal.

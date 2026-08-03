@@ -91,7 +91,7 @@ def test_github_code_datasets_call_repo_processor_with_explicit_flags(
     dataset_key: str, flags: dict[str, bool]
 ) -> None:
     ctx = _context(dataset_key=dataset_key, processor_flags=flags)
-    processor = AsyncMock()
+    processor = AsyncMock(return_value=None)
 
     with patch("dev_health_ops.processors.github.process_github_repo", processor):
         result = run_dataset_unit(ctx, _runtime())
@@ -142,6 +142,39 @@ def test_github_prs_unit_does_not_over_fetch_deployments_incidents_or_security()
     assert kwargs["sync_incidents"] is False
     assert kwargs["sync_cicd"] is False
     assert kwargs["sync_tests"] is False
+
+
+def test_github_files_unit_persists_proven_inventory_status() -> None:
+    from dev_health_ops.processors.github import GitHubFilesInventoryStatus
+
+    ctx = _context(
+        dataset_key="files",
+        processor_flags=_flags(sync_git=True, sync_files=True),
+    )
+    processor = AsyncMock(return_value=GitHubFilesInventoryStatus.EMPTY)
+
+    with patch("dev_health_ops.processors.github.process_github_repo", processor):
+        result = run_dataset_unit(ctx, _runtime())
+
+    assert result["inventory_status"] == "empty"
+
+
+def test_github_files_traversal_failure_propagates_from_adapter() -> None:
+    from dev_health_ops.processors.github import GitHubFilesTraversalFailed
+
+    ctx = _context(
+        dataset_key="files",
+        processor_flags=_flags(sync_git=True, sync_files=True),
+    )
+    processor = AsyncMock(
+        side_effect=GitHubFilesTraversalFailed("github files traversal failed")
+    )
+
+    with (
+        patch("dev_health_ops.processors.github.process_github_repo", processor),
+        pytest.raises(GitHubFilesTraversalFailed),
+    ):
+        run_dataset_unit(ctx, _runtime())
 
 
 @pytest.mark.parametrize(

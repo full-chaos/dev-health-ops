@@ -2,6 +2,7 @@ import asyncio
 import logging
 import zipfile
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
 from dev_health_ops.analytics.complexity import (
@@ -100,6 +101,18 @@ else:
 
 
 # --- GitHub Sync Helpers ---
+
+
+class GitHubFilesInventoryStatus(StrEnum):
+    """Proven outcomes for a completed GitHub files inventory traversal."""
+
+    COMPLETE = "complete"
+    EMPTY = "empty"
+    NO_COMMIT_AT_BOUND = "no_commit_at_bound"
+
+
+class GitHubFilesTraversalFailed(RuntimeError):
+    """The files inventory could not be proven complete for this unit."""
 
 
 def _repository_from_code_repo(repo: "GitHubRepositoryData") -> Repository:
@@ -1097,12 +1110,10 @@ async def _fetch_scannable_contents(
 
     Only paths matching the complexity scanner's include/exclude globs are
     fetched, keeping API volume proportional to what the metrics jobs can
-    actually use. A non-rate-limit fetch failure degrades to a paths-only
-    backfill (contents stay NULL) rather than failing the sync; a
-    ``RateLimitException``/``RateLimitExceededException`` propagates so the
-    caller's deferral semantics apply, mirroring the commit-stats fetch path
-    (CHAOS-2773 CS7 -- previously this degraded a rate limit to empty too,
-    silently masking it for the files dataset).
+    actually use. Any fetch failure leaves the inventory unproven: rate-limit
+    exceptions retain their existing deferral semantics and every other error
+    becomes ``GitHubFilesTraversalFailed`` so the unit cannot report success or
+    advance its watermark (CHAOS-3189).
     """
     scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
     scannable: list[str] = []
@@ -1129,8 +1140,9 @@ async def _fetch_scannable_contents(
     except (RateLimitException, RateLimitExceededException):
         raise
     except Exception as e:
-        logging.warning("Failed to fetch file contents for %s: %s", repo_full_name, e)
-        return {}
+        raise GitHubFilesTraversalFailed(
+            f"github files content fetch failed for {repo_full_name}"
+        ) from e
 
 
 async def _backfill_github_missing_data(
@@ -1149,7 +1161,7 @@ async def _backfill_github_missing_data(
     until: datetime | None = None,
     usage_sink: list[dict[str, Any]] | None = None,
     metrics_sink: Any | None = None,
-) -> None:
+) -> GitHubFilesInventoryStatus | None:
     # Logic matches the CLI sync orchestration.
     logging.info(
         "Backfilling data for %s...",
@@ -1191,7 +1203,7 @@ async def _backfill_github_missing_data(
     )
     needs_commit_stats = needs.commit_stats and include_commit_stats
     if not (needs_files or needs_blame or needs_commit_stats):
-        return
+        return None
 
     gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
 
@@ -1206,6 +1218,7 @@ async def _backfill_github_missing_data(
     if needs_files or needs_blame:
         code_client = _github_code_client_from_connector(connector)
     tree_ref = default_branch
+    inventory_status: GitHubFilesInventoryStatus | None = None
     try:
         if needs_files or needs_blame:
             try:
@@ -1216,6 +1229,10 @@ async def _backfill_github_missing_data(
                         owner, repo_name, ref=default_branch, until=until
                     )
                     if resolved_ref is None:
+                        if needs_files:
+                            inventory_status = (
+                                GitHubFilesInventoryStatus.NO_COMMIT_AT_BOUND
+                            )
                         logging.warning(
                             "No GitHub commit found for %s at or before %s; "
                             "skipping file backfill",
@@ -1267,11 +1284,20 @@ async def _backfill_github_missing_data(
                             ref_value=tree_ref,
                             contents_by_path=contents_by_path,
                         )
+                        inventory_status = GitHubFilesInventoryStatus.COMPLETE
+                    elif needs_files:
+                        inventory_status = GitHubFilesInventoryStatus.EMPTY
             except (RateLimitException, RateLimitExceededException):
                 raise
+            except GitHubFilesTraversalFailed:
+                raise
             except Exception as e:
+                if needs_files:
+                    raise GitHubFilesTraversalFailed(
+                        f"github files traversal failed for {repo_full_name}"
+                    ) from e
                 logging.warning(
-                    f"Failed to backfill GitHub files for {repo_full_name}: {e}"
+                    "Failed to traverse GitHub blame for %s: %s", repo_full_name, e
                 )
 
         if needs_commit_stats:
@@ -1399,6 +1425,7 @@ async def _backfill_github_missing_data(
                     "observations",
                     len(observations),
                 )
+    return inventory_status
 
 
 async def _sync_github_commits(
@@ -1781,7 +1808,7 @@ async def process_github_repo(
     sync_files: bool | None = None,
     sync_blame: bool | None = None,
     usage_sink: list[dict[str, Any]] | None = None,
-) -> None:
+) -> GitHubFilesInventoryStatus | None:
     """
     Process a GitHub repository using the GitHub connector.
 
@@ -1807,6 +1834,7 @@ async def process_github_repo(
     run_commit_stats = sync_git if sync_commit_stats is None else sync_commit_stats
     run_files = (backfill_missing and sync_git) if sync_files is None else sync_files
     run_blame = (backfill_missing and sync_git) if sync_blame is None else sync_blame
+    inventory_status: GitHubFilesInventoryStatus | None = None
 
     connector = (
         GitHubConnector(credentials=token)
@@ -1845,7 +1873,7 @@ async def process_github_repo(
             logging.info(f"Repository stored: {db_repo.repo} ({db_repo.id})")
 
             if blame_only:
-                await _backfill_github_missing_data(
+                inventory_status = await _backfill_github_missing_data(
                     store=store,
                     ingestion_sink=ingestion_sink,
                     connector=connector,
@@ -1863,7 +1891,7 @@ async def process_github_repo(
                     owner,
                     repo_name,
                 )
-                return
+                return inventory_status
 
             raw_commits: list[Any] | None = None
             window_truncated = False
@@ -2003,7 +2031,7 @@ async def process_github_repo(
             # (CHAOS-2376).
             if run_files or run_blame:
                 try:
-                    await _backfill_github_missing_data(
+                    inventory_status = await _backfill_github_missing_data(
                         store=store,
                         ingestion_sink=ingestion_sink,
                         connector=connector,
@@ -2018,7 +2046,17 @@ async def process_github_repo(
                         until=until,
                         usage_sink=usage_sink,
                     )
+                except (
+                    RateLimitException,
+                    RateLimitExceededException,
+                    GitHubFilesTraversalFailed,
+                ):
+                    raise
                 except Exception as e:
+                    if run_files:
+                        raise GitHubFilesTraversalFailed(
+                            f"github files traversal failed for {repo_info.full_name}"
+                        ) from e
                     logging.warning(
                         "Backfill failed for GitHub repo %s: %s",
                         repo_info.full_name,
@@ -2030,6 +2068,7 @@ async def process_github_repo(
                 owner,
                 repo_name,
             )
+            return inventory_status
 
     except ConnectorException as e:
         logging.error(f"Connector error: {e}")

@@ -35,23 +35,24 @@ import (
 // These tests enforce the FIRST half of that sentence and not the second. They
 // make the flip visible and deliberate -- it cannot happen without editing a pin
 // in the same commit. They cannot verify that concrete delivery capability is
-// retained: set the flag and the pin together and everything here passes, 42501
-// and all. A reviewer supplies that evidence; see CHAOS-3146. Reviewed twice now
+// retained: set the flag and the pin together and everything here passes even if
+// a different runtime prerequisite is missing. A reviewer supplies that evidence.
+// Reviewed twice now
 // because the original wording claimed the whole sentence, and an overstated
 // comment is how a green test becomes read as permission to flip.
 //
-// Flipping syncMutation today also ships a known 42501: the Materializer runs on
-// the coordinator pool and inserts into public.sync_dispatch_outbox, which
-// coordinatorPosture() declares without INSERT (CHAOS-3146). So the pin's current
-// value is not merely "not yet" -- it is load-bearing.
+// CHAOS-3146 closed one concrete prerequisite by proving the restricted
+// coordinator can execute the Materializer's sync_dispatch_outbox INSERT. That
+// does not prove the whole mutation pipeline is ready to activate, so the pin
+// remains load-bearing until the complete delivery evidence is reviewed.
 //
 // What this file does NOT enforce, corrected after adversarial review pointed out
 // the original comment claimed otherwise: it cannot verify that flipping the seam
 // RETAINS concrete River delivery capability. Set the flag and the pin together
-// and both tests pass, 42501 and all. These tests prove the seam is dormant and
-// that changing it is deliberate; the capability evidence is a human's job at
-// review time, and CHAOS-3146 is the specific blocker. Do not let a green test
-// here be read as permission to flip.
+// and both tests pass without exercising that capability. These tests prove the
+// seam is dormant and that changing it is deliberate; the complete capability
+// evidence remains a human's job at review time. Do not let a green test here be
+// read as permission to flip.
 var checkedInReconcilerActivationPin = map[string]bool{
 	"syncMutation": false,
 }
@@ -172,8 +173,7 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 		t.Fatal(
 			"the PRODUCTION reconciler configuration built the sync MUTATION " +
 				"stepper. This process must observe, not mutate, until the seam is " +
-				"deliberately flipped -- and flipping it today ships a 42501 " +
-				"(CHAOS-3146). If activation is intended, that is a reviewed source " +
+				"deliberately flipped. If activation is intended, that is a reviewed source " +
 				"change: update the pin, record the capability evidence, and expect " +
 				"this test to need rewriting.",
 		)
@@ -389,8 +389,8 @@ func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
 //     actually configured, because supplying one would turn this into an
 //     integration test.
 //   - That flipping the seam retains concrete River delivery capability. Set the
-//     flag and the pin together and everything here passes, 42501 and all
-//     (CHAOS-3146).
+//     flag and the pin together and everything here passes without exercising
+//     that capability. CHAOS-3146 proves the outbox INSERT grant only.
 //
 // A green run here therefore means "the seam is dormant and changing it is
 // deliberate", never "it is safe to flip".

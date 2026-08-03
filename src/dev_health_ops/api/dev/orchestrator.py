@@ -48,6 +48,7 @@ from dev_health_ops.metrics.prometheus import (
 )
 
 from . import terminal_frames
+from .answer_frames import narrative_fallback
 from .answer_validator import (
     AnswerValidationContext,
     AnswerValidationError,
@@ -77,6 +78,7 @@ from .contracts import (
     dev_error_remediation,
 )
 from .contracts_v2 import (
+    NO_ANSWER_OUTCOMES,
     Cardinality,
     DevInvestigationResult,
     DevResolutionEntry,
@@ -84,6 +86,7 @@ from .contracts_v2 import (
     QuestionIntentID,
 )
 from .contracts_v2.frame import DevAnswerFrame
+from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
 from .investigation_plans import PlanExecutor, StepContext
 from .orchestrator_states import TERMINAL_STATES, RunState
@@ -390,6 +393,18 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_narrative(self, narrative: DevNarrative) -> None:
+        """Persist one ``dev_narrative.v1`` (CHAOS-3297 stack #4).
+
+        Called at most once per run, only for a frame that already
+        persisted (``record_frame`` succeeded) and only for a content-
+        bearing outcome — narrative is ABSENT by contract for every
+        ``NO_ANSWER_OUTCOMES`` member (``no_answer_policy``), the same
+        guardrail that keeps a no-answer outcome from carrying a free-form
+        channel.
+        """
+        ...
+
     async def terminal(
         self,
         *,
@@ -402,6 +417,8 @@ class RunRecorder(Protocol):
         model_fingerprint: str | None,
         prompt_checksum: str | None,
         prompt_version: str | None,
+        narrative_mode: str | None = None,
+        narrative_failure_code: str | None = None,
     ) -> None: ...
 
 
@@ -445,6 +462,9 @@ class NullRunRecorder:
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
 
+    async def record_narrative(self, narrative: DevNarrative) -> None:
+        del narrative
+
     async def terminal(
         self,
         *,
@@ -457,6 +477,8 @@ class NullRunRecorder:
         model_fingerprint: str | None,
         prompt_checksum: str | None,
         prompt_version: str | None,
+        narrative_mode: str | None = None,
+        narrative_failure_code: str | None = None,
     ) -> None:
         del (
             state,
@@ -468,6 +490,8 @@ class NullRunRecorder:
             model_fingerprint,
             prompt_checksum,
             prompt_version,
+            narrative_mode,
+            narrative_failure_code,
         )
 
 
@@ -729,6 +753,14 @@ class DevOrchestrator:
                         safe_message="The validated answer could not be stored.",
                         retryable=True,
                     )
+            # CHAOS-3297 stack #4: populated only inside the frame-construction
+            # branch below (frame_already_recorded=True has no local `frame`
+            # to synthesize a narrative from -- the preflight TERMINATE branch
+            # doesn't attach a narrative today, a documented gap, not silently
+            # dropped: see the module docstring). Stay None (migration 0078's
+            # documented default) for every other path.
+            narrative_mode: str | None = None
+            narrative_failure_code: str | None = None
             # CHAOS-3297 P1: every terminal path persists a dev_answer_frame.v1,
             # structurally rather than by caller discipline -- the preflight
             # TERMINATE branch already built and recorded a richer frame ahead
@@ -828,6 +860,58 @@ class DevOrchestrator:
                     # recoverable, a dropped answer is not, so this path
                     # deliberately leaves the session as-is and proceeds
                     # frame-less.
+                else:
+                    # CHAOS-3297 stack #4: narrative synthesis only runs for
+                    # a frame that actually persisted -- record_narrative's
+                    # own frame_id cross-check (persistence/service.py)
+                    # would otherwise always reject against a frame_id
+                    # nothing wrote -- and only for a content-bearing
+                    # outcome (see the narrative_mode/narrative_failure_code
+                    # declaration above the frame-construction block for the
+                    # no-answer-outcome rationale).
+                    if frame.public_outcome not in NO_ANSWER_OUTCOMES:
+                        (
+                            narrative,
+                            failure_code,
+                        ) = await narrative_fallback.synthesize_narrative(
+                            frame=frame,
+                            # No certified narrative provider is wired
+                            # yet -- CHAOS-3285's territory. This is a
+                            # configuration state, not a provider
+                            # failure: synthesize_narrative goes
+                            # straight to the deterministic fallback
+                            # with no failure code.
+                            provider=None,
+                            generated_at=datetime.now(UTC),
+                        )
+                        narrative_mode = narrative.mode
+                        narrative_failure_code = (
+                            failure_code.value if failure_code is not None else None
+                        )
+                        try:
+                            await self._recorder.record_narrative(narrative)
+                        except Exception as narrative_write_fault:
+                            # Same posture as the record_frame failure above:
+                            # a narrative sub-artifact write failure must
+                            # never strand or crash an otherwise-successful
+                            # run. Unlike that case, never roll back here --
+                            # the frame (and answer, if any) already
+                            # committed successfully in this flush (we are in
+                            # record_frame's `else`), and rolling back would
+                            # discard them over an unrelated narrative
+                            # failure. The run terminates without a
+                            # persisted narrative row; narrative_mode/
+                            # narrative_failure_code above still record what
+                            # would have been persisted.
+                            logger.error(
+                                "ask_dev.orchestrator.narrative_persistence_failed",
+                                extra={
+                                    "run_id": run_id,
+                                    "exception_type": type(
+                                        narrative_write_fault
+                                    ).__name__,
+                                },
+                            )
             await self._recorder.terminal(
                 state=state,
                 answer=answer,
@@ -838,6 +922,8 @@ class DevOrchestrator:
                 model_fingerprint=model_fingerprint,
                 prompt_checksum=prompt_checksum,
                 prompt_version=prompt_version,
+                narrative_mode=narrative_mode,
+                narrative_failure_code=narrative_failure_code,
             )
             terminal_written = True
             event = OrchestratorEvent(

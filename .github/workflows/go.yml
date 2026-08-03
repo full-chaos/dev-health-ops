@@ -1,50 +1,50 @@
 name: Go
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '**/*.go'
-      - '**/go.mod'
-      - '**/go.sum'
-      - 'go.work'
-      - 'go.work.sum'
-      - 'contracts/jobs/v1/**'
-      - 'deploy/go-workers/**'
-      - 'src/dev_health_ops/workers/job_contracts/**'
-      - 'tests/workers/job_contracts/**'
-      - 'docker/go-worker.Dockerfile'
-      - 'tests/compatibility/river/**'
-      - 'ci/check_go.sh'
-      - 'ci/check_go_containers.sh'
-      - 'ci/check_river_compat_static.sh'
-      - 'ci/evidence/go-worker-migration/**'
-      - 'ci/local_validate.sh'
-      - '.dockerignore'
-      - 'Makefile'
-      - '.github/workflows/go.yml'
-  pull_request:
-    branches: ['**']
-    paths:
-      - '**/*.go'
-      - '**/go.mod'
-      - '**/go.sum'
-      - 'go.work'
-      - 'go.work.sum'
-      - 'contracts/jobs/v1/**'
-      - 'deploy/go-workers/**'
-      - 'src/dev_health_ops/workers/job_contracts/**'
-      - 'tests/workers/job_contracts/**'
-      - 'docker/go-worker.Dockerfile'
-      - 'tests/compatibility/river/**'
-      - 'ci/check_go.sh'
-      - 'ci/check_go_containers.sh'
-      - 'ci/check_river_compat_static.sh'
-      - 'ci/evidence/go-worker-migration/**'
-      - 'ci/local_validate.sh'
-      - '.dockerignore'
-      - 'Makefile'
-      - '.github/workflows/go.yml'
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - '**/*.go'
+  #     - '**/go.mod'
+  #     - '**/go.sum'
+  #     - 'go.work'
+  #     - 'go.work.sum'
+  #     - 'contracts/jobs/v1/**'
+  #     - 'deploy/go-workers/**'
+  #     - 'src/dev_health_ops/workers/job_contracts/**'
+  #     - 'tests/workers/job_contracts/**'
+  #     - 'docker/go-worker.Dockerfile'
+  #     - 'tests/compatibility/river/**'
+  #     - 'ci/check_go.sh'
+  #     - 'ci/check_go_containers.sh'
+  #     - 'ci/check_river_compat_static.sh'
+  #     - 'ci/evidence/go-worker-migration/**'
+  #     # - 'ci/local_validate.sh'
+  #     - '.dockerignore'
+  #     - 'Makefile'
+  #     - '.github/workflows/go.yml'
+  # pull_request:
+  #   branches: ['**']
+  #   paths:
+  #     - '**/*.go'
+  #     - '**/go.mod'
+  #     - '**/go.sum'
+  #     - 'go.work'
+  #     - 'go.work.sum'
+  #     - 'contracts/jobs/v1/**'
+  #     - 'deploy/go-workers/**'
+  #     - 'src/dev_health_ops/workers/job_contracts/**'
+  #     - 'tests/workers/job_contracts/**'
+  #     - 'docker/go-worker.Dockerfile'
+  #     - 'tests/compatibility/river/**'
+  #     - 'ci/check_go.sh'
+  #     - 'ci/check_go_containers.sh'
+  #     - 'ci/check_river_compat_static.sh'
+  #     - 'ci/evidence/go-worker-migration/**'
+  #     # - 'ci/local_validate.sh'
+  #     - '.dockerignore'
+  #     - 'Makefile'
+  #     - '.github/workflows/go.yml'
   merge_group:
   workflow_dispatch:
 

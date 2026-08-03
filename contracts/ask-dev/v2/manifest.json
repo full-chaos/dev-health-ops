@@ -334,6 +334,11 @@
           "case": "coverage_stale_source_outside_vocabulary",
           "path": "examples/negative/dev_answer_frame.v1.coverage_stale_source_outside_vocabulary.json",
           "sha256": "6504bc262de2d28ab0a0785376de46f3b5cf67de1c6dc89fd1da4ea3091829cc"
+        },
+        {
+          "case": "coverage_degraded_source_outside_vocabulary",
+          "path": "examples/negative/dev_answer_frame.v1.coverage_degraded_source_outside_vocabulary.json",
+          "sha256": "0f90024941f5b767dfb1648ca6f955620f39ee4ce29cfba1dec9ac6fdc5fee47"
         }
       ],
       "positive": {
@@ -342,7 +347,7 @@
       },
       "schema": {
         "path": "schemas/dev_answer_frame.v1.schema.json",
-        "sha256": "7e336d66f6246d75213b8e5958dac4a2b5a1c25aabe48bf71d9c5c03a7096376"
+        "sha256": "a75875a8d9b159cc07f6be98c2296c73e48f5d1fcfe8f60a4f21ee7e52ce0b50"
       },
       "schema_version": "dev_answer_frame.v1"
     },
@@ -428,7 +433,7 @@
       },
       "schema": {
         "path": "schemas/dev_answer.v2.schema.json",
-        "sha256": "d87c3115a58332dc64e6215abb11ca585369b0d85b973bd50a292b47960f2088"
+        "sha256": "8cb9dd96139a9db09664785e8556a3f9f678f2ae0d3ded5ed4c0e174975ac5db"
       },
       "schema_version": "dev_answer.v2"
     },

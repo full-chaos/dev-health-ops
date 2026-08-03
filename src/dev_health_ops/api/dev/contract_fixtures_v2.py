@@ -819,6 +819,11 @@ def _coverage_source_vocabulary_cases() -> list[tuple[str, dict[str, Any]]]:
             "stale_required_sources",
             "Nightfall-deployments",
         ),
+        case(
+            "coverage_degraded_source_outside_vocabulary",
+            "degraded_required_sources",
+            "Nightfall-status-probe",
+        ),
     ]
 
 

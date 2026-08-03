@@ -305,6 +305,7 @@ def _project_answered(
         coverage.available_source_count == coverage.required_source_count
         and not coverage.unavailable_required_sources
         and not coverage.stale_required_sources
+        and not coverage.degraded_required_sources
     )
     status = (
         AnswerStatus.COMPLETE

@@ -290,6 +290,7 @@ def _coverage_reports_a_gap(coverage: DevCoverage) -> bool:
         coverage.available_source_count < coverage.required_source_count
         or coverage.unavailable_required_sources
         or coverage.stale_required_sources
+        or coverage.degraded_required_sources
     )
 
 

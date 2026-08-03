@@ -98,6 +98,21 @@ What this activation waived and satisfied:
    `LaunchDarklyRouteHandler`/`LaunchDarklyClickHouseEffects` pair would fail
    closed on every claimed github unit rather than serve it.
 
+## Activation status for `(gitlab, repo-metadata)`
+
+CHAOS-3342 makes the pair `native_go` / `route_ready: true` with the same
+fail-closed boundary as the GitHub repository route. The production binary
+constructs a GitLab-specific handler and the tenant-keyed `repos` sink plus
+readback; fixture parity is checked by executing the production Python row
+builder and comparing it with the production Go row type through the generic
+oracle. Self-managed GitLab origins retain a non-default port and the fetched
+project id must equal the claimed source id.
+
+Routing remains off unless `WORKER_GITLAB_REPO_METADATA_ENABLED=true` is set
+for both the Python producer gate and Go worker. Every checked-in deployment
+keeps it false. This route-readiness change therefore transfers no live unit,
+does not activate a River scheduler path, and does not change migration 0066.
+
 ## Effect timestamp stabilization (applies to every complete route)
 
 `BuildEffectBatch` digests the serialized rows, so any wall-clock value inside

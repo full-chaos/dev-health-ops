@@ -40,6 +40,7 @@ func TestBuildProviderSyncWorkerConstructsRealDependenciesForEveryRouteReadySwit
 	for name, enable := range map[string]func(*config.Config){
 		"launchdarkly_feature_flags": func(cfg *config.Config) { cfg.WorkerLaunchDarklyFeatureFlagsEnabled = true },
 		"github_repo_metadata":       func(cfg *config.Config) { cfg.WorkerGithubRepoMetadataEnabled = true },
+		"gitlab_repo_metadata":       func(cfg *config.Config) { cfg.WorkerGitlabRepoMetadataEnabled = true },
 		"github_prs":                 func(cfg *config.Config) { cfg.WorkerGithubPRsEnabled = true },
 		"github_cicd":                func(cfg *config.Config) { cfg.WorkerGithubCICDEnabled = true },
 		"github_commits":             func(cfg *config.Config) { cfg.WorkerGithubCommitsEnabled = true },

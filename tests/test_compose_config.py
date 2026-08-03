@@ -983,6 +983,7 @@ def test_route_switches_default_off_for_producer_gate() -> None:
     switch_names = (
         "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
         "WORKER_GITHUB_REPO_METADATA_ENABLED",
+        "WORKER_GITLAB_REPO_METADATA_ENABLED",
     )
 
     shared_env = services["api"]["environment"]  # &env anchor: api, worker, beat

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "name": "GitLab repository native route structural closure (CHAOS-3342)",
+  "build": ["go", "build", "./..."],
+  "mutations": [
+    {
+      "id": "G1-claim-project-id-binding",
+      "file": "internal/providersync/gitlab_repository_route.go",
+      "find": "strconv.FormatInt(parsedProjectID, 10) != projectID",
+      "replace": "false",
+      "rationale": "the fetched GitLab project must be the exact numeric project id claimed by the leased provider unit; accepting another project would persist data outside the claimed source scope",
+      "proof": [
+        ["go", "test", "-count=1", "-run", "^TestGitLabRepositoryRouteFailsClosedOnInvalidScopeAndPayload$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "G2-normalized-time-millisecond",
+      "file": "internal/providersync/gitlab_repository_route.go",
+      "find": "normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)",
+      "replace": "normalizedAt = normalizedAt.UTC()",
+      "rationale": "ClickHouse stores DateTime64(3); retaining finer precision changes effect identity and makes post-write readback disagree with the persisted row",
+      "proof": [
+        ["go", "test", "-count=1", "-run", "^TestGitLabRepositoryRouteEmitsCompleteReposEffect$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "G3-self-managed-instance-scheme",
+      "file": "internal/providersync/gitlab_repository_route.go",
+      "find": "return scheme + \"://\" + host, true",
+      "replace": "return host, true",
+      "rationale": "the instance discriminator must use the production Python normalizer's scheme-qualified representation or self-managed project ids can compare against the wrong scope",
+      "proof": [
+        ["go", "test", "-count=1", "-run", "^TestGenericOracleMatchesLivePythonForGitLabRepositoryRow$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "G4-readback-tenant-key",
+      "file": "internal/providersync/github_repository_effects_clickhouse.go",
+      "find": "WHERE org_id = ? AND id = ?",
+      "replace": "WHERE org_id != ? AND id = ?",
+      "rationale": "repository ids are provider-derived and can collide across organizations; recovery must inspect the exact tenant key or one tenant's row can authorize another tenant's effect",
+      "proof": [
+        ["go", "test", "-count=1", "-tags", "integration", "-run", "^TestGitLabRepositoryReadbackSeparatesTenantKeyCollision$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "G5-route-readiness-is-explicit",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "case provider == \"gitlab\" && dataset == \"repo-metadata\":\n\t\tdescriptor.Destinations = []string{\"repos\"}\n\t\tdescriptor.RouteReady = true\n\t\tdescriptor.RouteEnabled = switches.GitlabRepoMetadata",
+      "replace": "case provider == \"gitlab\" && dataset == \"repo-metadata\":\n\t\tdescriptor.Destinations = []string{\"repos\"}\n\t\tdescriptor.RouteReady = false\n\t\tdescriptor.RouteEnabled = switches.GitlabRepoMetadata",
+      "rationale": "the completed pair must be represented by the canonical descriptor consumed by routing and the checked-in matrix; dead handler code is not a port",
+      "proof": [
+        ["go", "test", "-count=1", "-run", "^TestProviderMatrixMatchesCheckedInContract$", "./internal/providersync/"]
+      ]
+    }
+  ]
+}

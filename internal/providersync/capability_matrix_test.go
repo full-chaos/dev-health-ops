@@ -100,6 +100,7 @@ var routeReadyPairs = map[string]struct{}{
 	"github/files":               {},
 	"github/commit-stats":        {},
 	"jira/incidents":             {},
+	"gitlab/repo-metadata":       {},
 }
 
 // TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the freeze guard:
@@ -122,11 +123,12 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 	all := CompleteRouteSwitches{
 		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
 		LaunchDarklyFeatureFlags: true, GithubRepoMetadata: true,
-		GithubPRs: true, GithubCICD: true, GithubCommits: true,
+		GitlabRepoMetadata: true,
+		GithubPRs:          true, GithubCICD: true, GithubCommits: true,
 		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 		GithubCommitStats: true,
 	}
-	if reflect.TypeOf(all).NumField() != 12 {
+	if reflect.TypeOf(all).NumField() != 13 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -157,10 +159,8 @@ func TestGitHubBlameRemainsUnexecutableAndUnroutable(t *testing.T) {
 	}
 }
 
-// TestGithubRepoMetadataSwitchDoesNotOpenGitLab pins the split that
-// CHAOS-3123 introduced: gitlab/repo-metadata shares repo-metadata's
-// destination manifest but has no CompleteRouteHandler, so folding it back
-// into github's case would let one switch open a route with nothing behind it.
+// TestGithubRepoMetadataSwitchDoesNotOpenGitLab pins the independent switches:
+// enabling GitHub repository sync must not route GitLab repository units.
 func TestGithubRepoMetadataSwitchDoesNotOpenGitLab(t *testing.T) {
 	t.Parallel()
 	switches := CompleteRouteSwitches{GithubRepoMetadata: true}
@@ -168,8 +168,23 @@ func TestGithubRepoMetadataSwitchDoesNotOpenGitLab(t *testing.T) {
 	if !ok {
 		t.Fatal("gitlab/repo-metadata has no descriptor")
 	}
-	if descriptor.RouteReady || descriptor.RouteEnabled {
+	if !descriptor.RouteReady || descriptor.RouteEnabled ||
+		descriptor.Executor != ExecutorNativeGo {
 		t.Fatalf("gitlab/repo-metadata descriptor=%+v", descriptor)
+	}
+}
+
+func TestGitlabRepoMetadataSwitchRoutesOnlyGitLab(t *testing.T) {
+	t.Parallel()
+	switches := CompleteRouteSwitches{GitlabRepoMetadata: true}
+	gitlab, ok := switches.Descriptor("gitlab", "repo-metadata")
+	if !ok || !gitlab.RouteReady || !gitlab.RouteEnabled ||
+		gitlab.Executor != ExecutorNativeGo {
+		t.Fatalf("gitlab/repo-metadata descriptor=%+v ok=%v", gitlab, ok)
+	}
+	github, ok := switches.Descriptor("github", "repo-metadata")
+	if !ok || github.RouteEnabled {
+		t.Fatalf("github/repo-metadata descriptor=%+v ok=%v", github, ok)
 	}
 }
 
@@ -254,6 +269,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"github/files":               GitHubFilesRouteHandler{},
 		"github/commit-stats":        GitHubCommitStatsRouteHandler{},
 		"jira/incidents":             JiraIncidentRouteHandler{},
+		"gitlab/repo-metadata":       GitLabRepositoryRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

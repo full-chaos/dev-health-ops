@@ -6,6 +6,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from dev_health_ops.metrics.testops_schemas import (
+    CoverageSnapshotRow,
+    TestCaseResultRow,
+    TestSuiteResultRow,
+)
 from dev_health_ops.processors.testops_ingest import ingest_report_members
 from internal.providersync.testdata.field_reflection import typed_dict_field_names
 
@@ -37,7 +42,11 @@ def reflected(class_name: str) -> frozenset[str]:
 
 def build_rows(
     case: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[
+    list[TestSuiteResultRow],
+    list[TestCaseResultRow],
+    list[CoverageSnapshotRow],
+]:
     started = datetime.fromisoformat(case["started_at"].replace("Z", "+00:00"))
     finished = datetime.fromisoformat(case["finished_at"].replace("Z", "+00:00"))
     return asyncio.run(

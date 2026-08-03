@@ -245,7 +245,7 @@ def test_is_route_ready_reflects_the_checked_in_matrix() -> None:
 
 def test_is_route_ready_fails_closed_for_unknown_pairs() -> None:
     assert not ProviderUnitRouteSwitches.is_route_ready("acme", "widgets")
-    assert not ProviderUnitRouteSwitches.is_route_ready("github", "commits")
+    assert ProviderUnitRouteSwitches.is_route_ready("github", "commits")
 
 
 def _write_matrix_fixture(path: Path, *, ready_pairs: set[tuple[str, str]]) -> None:

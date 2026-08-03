@@ -5,10 +5,10 @@
   "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "script": "scripts/acceptance/smoke_ask_dev_inherited_oracle.py",
   "script_sha256": "4f6bcc21f9ab3d60ac6db7ef9d9cfb9dea73f98730b4591362c129b093cf9b0d",
-  "commit_sha": "81c6e27b0c21d8b04d4028a9f06b969258a094bc",
+  "commit_sha": "e395de592140caefdc6680e1a0e954095663045b",
   "command": "python smoke_ask_dev_inherited_oracle.py",
-  "started_at": "2026-08-03T03:31:12.545816+00:00",
-  "finished_at": "2026-08-03T03:31:13.239849+00:00",
+  "started_at": "2026-08-03T05:11:40.313839+00:00",
+  "finished_at": "2026-08-03T05:11:41.029051+00:00",
   "status": "passed",
   "error": null,
   "assertions": [

@@ -5,10 +5,10 @@
   "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "script": "scripts/acceptance/smoke_ask_dev_not_found.py",
   "script_sha256": "c445d6ddbeb669b81bc6c92b6be31853dfb759d007af25fb42add5660f4c4791",
-  "commit_sha": "81c6e27b0c21d8b04d4028a9f06b969258a094bc",
+  "commit_sha": "e395de592140caefdc6680e1a0e954095663045b",
   "command": "python smoke_ask_dev_not_found.py",
-  "started_at": "2026-08-03T03:31:06.419647+00:00",
-  "finished_at": "2026-08-03T03:31:06.927194+00:00",
+  "started_at": "2026-08-03T05:11:33.653286+00:00",
+  "finished_at": "2026-08-03T05:11:34.233626+00:00",
   "status": "passed",
   "error": null,
   "assertions": [
@@ -46,6 +46,11 @@
       "name": "feature_overrides_is_list",
       "passed": true,
       "detail": "response was not a list"
+    },
+    {
+      "name": "wave_3_1_override_created",
+      "passed": true,
+      "detail": "failed to enable ask_dev_wave_3_1"
     },
     {
       "name": "conversation_response_is_object",

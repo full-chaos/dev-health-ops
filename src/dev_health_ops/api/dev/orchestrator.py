@@ -1831,19 +1831,27 @@ class DevOrchestrator:
                             # below), not the scarier "validation failed"
                             # error a real grounding violation gets.
                             #
-                            # CHAOS-3297 stack #5 (guard cutover): demoted
-                            # from answer-blocking to advisory wherever the
-                            # server still holds material of its own. Note
-                            # what this can and cannot reach: `answer.metrics`
-                            # and `answer.evidence` are OVERWRITTEN above with
-                            # the canonical tuples, so this guard only fires
-                            # when BOTH are empty -- the demotion is therefore
-                            # never about the model's citations, and the only
-                            # thing left to ship is the plan's own findings
-                            # (health/deficiency), which ride on the frame.
-                            # When the plan produced none either, there is
-                            # genuinely nothing server-verified to show and
-                            # the run terminates exactly as it does today.
+                            # CHAOS-3297 stack #5 (guard cutover): routed
+                            # through the same demotion seam as the
+                            # CHAOS-3289 backstop below, so there is one
+                            # rule for "a guard rejected the model's answer"
+                            # rather than two that could drift.
+                            #
+                            # In practice this seam cannot fire for THIS
+                            # guard, and that is a property worth stating
+                            # rather than leaving a reader to rediscover:
+                            # `answer.metrics`/`answer.evidence` are
+                            # OVERWRITTEN above with the canonical tuples, so
+                            # `answer_grounding_floor_not_met` implies both
+                            # are empty -- which is exactly the condition
+                            # `_server_grounded_answer` refuses to build on.
+                            # The CHAOS-3290 floor therefore never had server
+                            # material to erase in the first place; the guard
+                            # that did is the named-entity backstop below.
+                            # `test_chaos_3297_s5_guard_cutover.py::test_c4_*`
+                            # pins that implication so a future change to the
+                            # floor's trigger cannot silently make this branch
+                            # live without anyone noticing.
                             demoted = self._server_grounded_answer(
                                 answer_id=answer_id,
                                 conversation_id=conversation_id,
@@ -2698,30 +2706,6 @@ class DevOrchestrator:
 
         return preflight is not None
 
-    @staticmethod
-    def _plan_findings_present(
-        investigation_result: DevInvestigationResult | None,
-    ) -> bool:
-        """Whether the plan executor produced any finding the frame carries.
-
-        The health/deficiency findings are server-computed and completely
-        independent of the model's answer -- ``terminal_frames.
-        wrap_legacy_answer_as_frame`` embeds them additively -- so they are
-        substantive material a demoted-guard run can ship even when the
-        model's own answer contributed nothing citable.
-        """
-
-        if investigation_result is None:
-            return False
-        return any(
-            observation.content is not None
-            and (
-                observation.content.health_findings
-                or observation.content.deficiency_findings
-            )
-            for observation in investigation_result.observations
-        )
-
     def _server_grounded_answer(
         self,
         *,
@@ -2758,24 +2742,38 @@ class DevOrchestrator:
         * the tool results disagree about a canonical object
           (``_canonical_answer_data`` returns ``None``), which is an
           integrity failure, not a grounding one;
-        * there is no server-verified material at all -- no canonical
-          metric, no canonical evidence, and no plan finding. An "answer"
-          built from nothing but this module's own copy would be a
+        * there is no canonical metric and no canonical evidence. An
+          "answer" built from nothing but this module's own copy would be a
           substantive-looking shell, which is the precise failure the
           CHAOS-3290 floor exists to prevent.
+
+        On that last point, ``investigation_result`` is deliberately NOT
+        part of the predicate, and the parameter is kept only to document
+        that (codex adversarial review, round 1 HIGH -- an earlier revision
+        did count plan findings as sufficient material). The plan's
+        health/deficiency findings are real server-computed content, but
+        ``finish()`` embeds them into the FRAME, and no client surface reads
+        a frame today: ``streaming.py`` sends ``result.answer`` live, and
+        ``router``'s replay prefers the stored v1 answer. So a run demoted
+        on the strength of findings alone would terminate COMPLETED while
+        the client received an answer with no claim, no metric and no
+        evidence -- the exact empty shell this function's third guard
+        exists to refuse, and a worse outcome than the honest
+        ``insufficient_evidence`` it replaced. When canonical material IS
+        present the findings ride along on the frame for free, which is the
+        only case where they add anything a caller can reach. Revisit once
+        CHAOS-3298 puts v2 on the wire and a findings-only frame is
+        genuinely readable.
         """
 
+        del investigation_result  # see the docstring: documented non-input
         if not cutover_active:
             return None
         canonical_data = self._canonical_answer_data(tool_results)
         if canonical_data is None:
             return None
         canonical_metrics, canonical_evidence = canonical_data
-        if not (
-            canonical_metrics
-            or canonical_evidence
-            or self._plan_findings_present(investigation_result)
-        ):
+        if not (canonical_metrics or canonical_evidence):
             return None
         degraded = any(
             result.status in {"unavailable", "error"} for result in tool_results

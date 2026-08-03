@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -77,6 +78,8 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 //     tenant-scoped FINAL readback and production-worker construction.
 //   - jira/incidents: CHAOS-3127, native JSM admission plus live whole-row
 //     OperationalIncident parity and tenant-scoped FINAL readback.
+//   - github/blame: CHAOS-3343, live selection and row parity plus
+//     tenant-scoped persisted progress and crash-safe FINAL readback.
 //
 // github/prs (CHAOS-3122) is deliberately NOT in this set despite having a
 // real CompleteRouteHandler and passing fixture-level parity evidence: codex
@@ -101,6 +104,7 @@ var routeReadyPairs = map[string]struct{}{
 	"github/commit-stats":        {},
 	"jira/incidents":             {},
 	"gitlab/repo-metadata":       {},
+	"github/blame":               {},
 }
 
 // TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the freeze guard:
@@ -127,8 +131,9 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		GithubPRs:          true, GithubCICD: true, GithubCommits: true,
 		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 		GithubCommitStats: true,
+		GithubBlame:       true,
 	}
-	if reflect.TypeOf(all).NumField() != 13 {
+	if reflect.TypeOf(all).NumField() != 14 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -147,15 +152,19 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 	}
 }
 
-func TestGitHubBlameRemainsUnexecutableAndUnroutable(t *testing.T) {
+func TestGitHubBlameRequiresItsOwnSwitch(t *testing.T) {
 	t.Parallel()
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "blame")
+	descriptor, ok := (CompleteRouteSwitches{GithubBlame: true}).Descriptor("github", "blame")
 	if !ok {
 		t.Fatal("github/blame has no descriptor")
 	}
-	if descriptor.Executor != ExecutorNone || descriptor.RouteReady ||
-		descriptor.RouteEnabled || len(descriptor.Destinations) != 0 {
+	if descriptor.Executor != ExecutorNativeGo || !descriptor.RouteReady ||
+		!descriptor.RouteEnabled || !slices.Equal(descriptor.Destinations, []string{"git_blame"}) {
 		t.Fatalf("github/blame descriptor=%+v", descriptor)
+	}
+	off, _ := (CompleteRouteSwitches{}).Descriptor("github", "blame")
+	if off.RouteEnabled {
+		t.Fatalf("default github/blame descriptor=%+v", off)
 	}
 }
 
@@ -270,6 +279,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"github/commit-stats":        GitHubCommitStatsRouteHandler{},
 		"jira/incidents":             JiraIncidentRouteHandler{},
 		"gitlab/repo-metadata":       GitLabRepositoryRouteHandler{},
+		"github/blame":               GitHubBlameRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

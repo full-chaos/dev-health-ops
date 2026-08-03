@@ -139,6 +139,33 @@ both the Python producer gate and Go worker. Every checked-in deployment keeps
 it false. This route-readiness change therefore transfers no live unit, does
 not activate a River scheduler path, and does not change migration 0066.
 
+## Activation status for `(gitlab, commit-stats)`
+
+CHAOS-3349 makes this pair `native_go` / `route_ready: true` without changing
+the shared `git_commit_stats` schema or claiming a provider-instance
+dimension. It keeps Python's existing unit boundary: the commits window is
+fetched first, then at most 50 aggregate detail rows on full sync or
+`COMMIT_STATS_MAX_COMMITS` (default 300) rows on incremental sync. List errors
+and safety-cap hits fail the unit before effects or watermark advancement;
+accepted hashes are deduplicated in first-seen order before that selection, so
+one hash cannot emit duplicate natural-key/version rows. Python's soft detail
+behavior is retained only for ordinary non-auth failures: authentication, rate
+limits, lease or budget loss, and context cancellation/deadlines fail the unit
+without effects or watermark advancement. Unknown future provider error
+classes also fail closed; only the explicit non-auth detail classes are soft.
+
+Row parity executes the live GitLab `_map_commit_stats` normalizer and the
+production row builder, with the full `GitCommitStat` field set reflected from
+the production model. The shared ClickHouse commit-stat effect requires
+recovery readback through a tenant-scoped `SELECT ... FINAL`; its integration
+fixture collides the same natural key across two organizations and proves
+retry convergence.
+
+Routing remains off unless `WORKER_GITLAB_COMMIT_STATS_ENABLED=true` is set
+for both the Python producer gate and Go worker. Every checked-in deployment
+keeps it false. This route-readiness change therefore transfers no live unit,
+does not activate a River scheduler path, and does not change migration 0066.
+
 ## Effect timestamp stabilization (applies to every complete route)
 
 `BuildEffectBatch` digests the serialized rows, so any wall-clock value inside

@@ -139,6 +139,7 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 		cfg.WorkerJiraIncidentsEnabled ||
 		cfg.WorkerLaunchDarklyFeatureFlagsEnabled ||
 		cfg.WorkerGithubRepoMetadataEnabled || cfg.WorkerGitlabRepoMetadataEnabled ||
+		cfg.WorkerGitlabCommitStatsEnabled ||
 		cfg.WorkerGithubPRsEnabled ||
 		cfg.WorkerGithubCICDEnabled || cfg.WorkerGithubCommitsEnabled ||
 		cfg.WorkerGithubDeploymentsEnabled || cfg.WorkerGithubSecurityEnabled ||
@@ -172,6 +173,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITHUB_REPO_METADATA_ENABLED":       "true",
 		"WORKER_GITLAB_REPO_METADATA_ENABLED":       "true",
 		"WORKER_GITLAB_COMMITS_ENABLED":             "true",
+		"WORKER_GITLAB_COMMIT_STATS_ENABLED":        "true",
 		"WORKER_GITHUB_PRS_ENABLED":                 "true",
 		"WORKER_GITHUB_CICD_ENABLED":                "true",
 		"WORKER_GITHUB_COMMITS_ENABLED":             "true",
@@ -210,6 +212,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		!cfg.WorkerLaunchDarklyFeatureFlagsEnabled ||
 		!cfg.WorkerGithubRepoMetadataEnabled || !cfg.WorkerGitlabRepoMetadataEnabled ||
 		!cfg.WorkerGitlabCommitsEnabled ||
+		!cfg.WorkerGitlabCommitStatsEnabled ||
 		!cfg.WorkerGithubPRsEnabled ||
 		!cfg.WorkerGithubCICDEnabled || !cfg.WorkerGithubCommitsEnabled ||
 		!cfg.WorkerGithubDeploymentsEnabled || !cfg.WorkerGithubSecurityEnabled ||
@@ -237,6 +240,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITHUB_REPO_METADATA_ENABLED":       "sometimes",
 		"WORKER_GITLAB_REPO_METADATA_ENABLED":       "sometimes",
 		"WORKER_GITLAB_COMMITS_ENABLED":             "sometimes",
+		"WORKER_GITLAB_COMMIT_STATS_ENABLED":        "sometimes",
 		"WORKER_GITHUB_PRS_ENABLED":                 "sometimes",
 		"WORKER_GITHUB_COMMITS_ENABLED":             "sometimes",
 		"WORKER_GITHUB_COMMIT_STATS_ENABLED":        "sometimes",

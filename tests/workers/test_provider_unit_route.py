@@ -231,6 +231,26 @@ def test_gitlab_cicd_invalid_value_fails_closed() -> None:
             ProviderUnitRouteSwitches.from_environment({name: "sometimes"})
 
 
+def test_gitlab_incidents_defaults_off_and_routes_independently() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert off.gitlab_incidents is False
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "incidents")
+    assert not off.routes_to_river("gitlab", "incidents")
+
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITLAB_INCIDENTS_ENABLED": "true"}
+    )
+    assert on.routes_to_river("gitlab", "incidents")
+    assert not on.routes_to_river("jira", "incidents")
+
+
+def test_gitlab_incidents_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITLAB_INCIDENTS_ENABLED": "sometimes"}
+        )
+
+
 # ---------------------------------------------------------------------------
 # CHAOS-3122: the (github, prs) producer-side switch. Its Go counterpart is
 # config.Config.WorkerGithubPRsEnabled, read from the same

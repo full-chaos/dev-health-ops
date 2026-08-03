@@ -116,6 +116,7 @@ var routeReadyPairs = map[string]struct{}{
 	"gitlab/commit-stats":        {},
 	"gitlab/cicd":                {},
 	"gitlab/tests":               {},
+	"gitlab/incidents":           {},
 	"github/blame":               {},
 	"github/tests":               {},
 }
@@ -145,13 +146,14 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		GitlabCommitStats:  true,
 		GitlabCICD:         true,
 		GitlabTests:        true,
+		GitlabIncidents:    true,
 		GithubPRs:          true, GithubCICD: true, GithubCommits: true,
 		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 		GithubCommitStats: true,
 		GithubBlame:       true,
 		GithubTests:       true,
 	}
-	if reflect.TypeOf(all).NumField() != 19 {
+	if reflect.TypeOf(all).NumField() != 20 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -354,6 +356,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"gitlab/commit-stats":        GitLabCommitStatsRouteHandler{},
 		"gitlab/cicd":                GitLabTestsRouteHandler{},
 		"gitlab/tests":               GitLabTestsRouteHandler{},
+		"gitlab/incidents":           GitLabIncidentsRouteHandler{},
 		"github/blame":               GitHubBlameRouteHandler{},
 		"github/tests":               GitHubTestsRouteHandler{},
 	}

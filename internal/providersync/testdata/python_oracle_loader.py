@@ -52,6 +52,8 @@ _GITLAB_COMMITS_SOURCE = _source("dev_health_ops/providers/gitlab/commits.py")
 _GITLAB_COMMIT_STATS_SOURCE = _source("dev_health_ops/providers/gitlab/commit_stats.py")
 _GITLAB_INSTANCE_SOURCE = _source("dev_health_ops/providers/gitlab/instance.py")
 _GITLAB_REPOSITORY_SOURCE = _source("dev_health_ops/providers/gitlab/repository.py")
+_GITLAB_PROCESSOR_SOURCE = _source("dev_health_ops/processors/gitlab.py")
+_FETCH_UTILS_SOURCE = _source("dev_health_ops/processors/fetch_utils.py")
 _GIT_MODEL_SOURCE = _source("dev_health_ops/models/git.py")
 _REPOSITORY_ROWS_SOURCE = _source("dev_health_ops/storage/repository_rows.py")
 _RELEASE_REF_SOURCE = _source("dev_health_ops/processors/release_ref.py")
@@ -80,6 +82,9 @@ _OPERATIONAL_ORDERING_RULES_SOURCE = _source(
 )
 _OPERATIONAL_SOURCE = _source("dev_health_ops/models/operational.py")
 _OPERATIONAL_IDENTITY_SOURCE = _source("dev_health_ops/models/operational_identity.py")
+_OPERATIONAL_MIGRATION_SOURCE = _source(
+    "dev_health_ops/providers/operational_migration.py"
+)
 _JSM_MODELS_SOURCE = _source("dev_health_ops/providers/jira/jsm_models.py")
 _JSM_INCIDENTS_SOURCE = _source("dev_health_ops/providers/jira/jsm_incidents.py")
 _LICENSE_TYPES_SOURCE = _source("dev_health_ops/licensing/types.py")
@@ -521,6 +526,133 @@ def _target_github_processor() -> None:
     _install_module("github", {"RateLimitExceededException": Exception})
 
 
+def _target_gitlab_processor() -> None:
+    """Load the live GitLab incident producer with only its pure dependencies."""
+    _target_jsm_incidents()
+    _install_module(
+        "dev_health_ops.models.atlassian_ops",
+        {
+            "AtlassianOpsAlert": object,
+            "AtlassianOpsIncident": object,
+            "AtlassianOpsSchedule": object,
+        },
+    )
+    _load_source_module(
+        "dev_health_ops.providers.operational_migration",
+        _OPERATIONAL_MIGRATION_SOURCE,
+    )
+    _install_module(
+        "dev_health_ops.analytics.complexity",
+        {"DEFAULT_COMPLEXITY_CONFIG_PATH": None, "ComplexityScanner": object},
+    )
+    _install_module(
+        "dev_health_ops.connectors.models",
+        {
+            name: object
+            for name in ("Author", "Repository", "RepoStats", "SecurityAlertData")
+        },
+    )
+    _install_module("dev_health_ops.metrics.sinks.ingestion", {"IngestionSink": object})
+
+    class _Incident:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    _install_module(
+        "dev_health_ops.models.git",
+        {
+            "CiPipelineRun": object,
+            "Deployment": object,
+            "GitBlame": object,
+            "GitCommit": object,
+            "GitCommitStat": object,
+            "GitPullRequest": object,
+            "GitPullRequestReview": object,
+            "Incident": _Incident,
+            "Repo": object,
+        },
+    )
+    _install_module(
+        "dev_health_ops.processors.base_git",
+        {
+            name: object
+            for name in (
+                "BaseGitProcessor",
+                "backfill_file_records",
+                "blame_backfill_needed",
+                "build_ci_pipeline_run",
+                "build_deployment",
+                "build_git_pull_request",
+                "check_backfill_needs",
+                "historical_backfill_day",
+                "resolve_commit_stats_limit",
+                "select_unblamed_paths",
+                "write_historical_complexity",
+            )
+        },
+    )
+    _install_module(
+        "dev_health_ops.utils",
+        {
+            "BATCH_SIZE": 1000,
+            "CONNECTORS_AVAILABLE": True,
+            "AGGREGATE_STATS_MARKER": "__AGGREGATE__",
+            "is_skippable": _unsupported_dependency,
+        },
+    )
+    _load_source_module("dev_health_ops.processors.fetch_utils", _FETCH_UTILS_SOURCE)
+    _install_module(
+        "dev_health_ops.processors.release_ref",
+        {"get_release_ref_enrichment": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.processors.storage_protocol", {"GitSyncStore": object}
+    )
+    _install_module(
+        "dev_health_ops.processors.testops_ingest",
+        {
+            "MAX_ARTIFACTS_PER_RUN": 0,
+            "MAX_RUNS_PER_SYNC": 0,
+            "ingest_report_members": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.processors.testops_tests",
+        {"process_gitlab_test_report": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.providers.gitlab.commit_stats",
+        {"build_gitlab_commit_stat_values": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.providers.gitlab.commits",
+        {"build_gitlab_commit_values": _unsupported_dependency},
+    )
+    _load_source_module(
+        "dev_health_ops.providers.gitlab.instance", _GITLAB_INSTANCE_SOURCE
+    )
+    _install_module(
+        "dev_health_ops.providers.gitlab.repository",
+        {"build_gitlab_repository_values": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.providers.pr_state",
+        {"normalize_pr_state": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.connectors",
+        {
+            "BatchResult": object,
+            "ConnectorException": Exception,
+            "GitLabConnector": object,
+        },
+    )
+    _install_module(
+        "dev_health_ops.connectors.utils",
+        {"RateLimitConfig": object, "RateLimitGate": object},
+    )
+
+
 def _target_testops_ingest() -> None:
     """Load only the report schemas, parsers, and pure ingestion producers."""
     _load_source_module(
@@ -671,6 +803,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.processors.github",
         _GITHUB_PROCESSOR_SOURCE,
         _target_github_processor,
+    ),
+    _GITLAB_PROCESSOR_SOURCE: (
+        "dev_health_ops.processors.gitlab",
+        _GITLAB_PROCESSOR_SOURCE,
+        _target_gitlab_processor,
     ),
     _LAUNCHDARKLY_PROCESSOR_SOURCE: (
         "dev_health_ops.processors.launchdarkly",

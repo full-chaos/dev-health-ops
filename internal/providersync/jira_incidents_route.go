@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/google/uuid"
 )
 
 const (
@@ -588,6 +590,12 @@ func encodeJiraOperationalValue(value any) (string, byte, []byte, error) {
 			return "", 0, nil, err
 		}
 		return "datetime", 1, []byte(typed.UTC().Format("2006-01-02T15:04:05.000000Z")), nil
+	case uuid.UUID:
+		return "uuid", 1, []byte(strings.ToLower(typed.String())), nil
+	case float64:
+		encoded := make([]byte, 8)
+		binary.BigEndian.PutUint64(encoded, math.Float64bits(typed))
+		return "float64", 1, encoded, nil
 	default:
 		return "", 0, nil, providerfoundation.ErrNormalizationInvalid
 	}

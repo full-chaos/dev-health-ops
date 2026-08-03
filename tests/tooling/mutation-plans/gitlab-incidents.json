@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "name": "gitlab-incidents-native-route",
+  "$comment": "CHAOS-3361 structural closures. Each mutation removes one fetch, completeness, accounting, destination, tenant-readback, routing, or live-budget property and must drive its direct proof green to red to green.",
+  "build": [
+    "go",
+    "test",
+    "-tags=integration",
+    "-run",
+    "^$",
+    "./internal/providersync"
+  ],
+  "mutations": [
+    {
+      "id": "GI1",
+      "file": "internal/providersync/gitlab_incidents_route.go",
+      "find": "\t\t\"issue_type\": {\"incident\"}, \"state\": {\"all\"},",
+      "replace": "\t\t\"issue_type\": {\"issue\"}, \"state\": {\"all\"},",
+      "expect_occurrences": 1,
+      "rationale": "The GitLab request must ask the production incidents endpoint for incident issues rather than ordinary issues before any normalization occurs.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabIncidentsRouteEmitsCompleteCanonicalBatch$", "./internal/providersync"]]
+    },
+    {
+      "id": "GI2",
+      "file": "internal/providersync/gitlab_incidents_route.go",
+      "find": "\t\t\tseen[id] = struct{}{}",
+      "replace": "\t\t\t_ = id",
+      "expect_occurrences": 1,
+      "rationale": "Duplicate issue IDs returned across GitLab pages must not create duplicate canonical incidents or inflate the persisted batch.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabIncidentsRouteEmitsCompleteCanonicalBatch$", "./internal/providersync"]]
+    },
+    {
+      "id": "GI3",
+      "file": "internal/providersync/gitlab_incidents_route.go",
+      "find": "\t\t\t\tif len(pageItems) >= perPage {",
+      "replace": "\t\t\t\tif false && len(pageItems) >= perPage {",
+      "expect_occurrences": 1,
+      "rationale": "A saturated accepted-row cap cannot prove the newest-first source window is exhausted and must fail before advancing the watermark.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabIncidentsRouteFailsClosedOnIncompleteOrMalformedInventory/saturated_accepted-row_cap$", "./internal/providersync"]]
+    },
+    {
+      "id": "GI4",
+      "file": "internal/providersync/gitlab_incidents_route.go",
+      "find": "\tincidentEffect, err := effectBatchFromValues(\"operational_incidents\", EffectReadbackRequired, incidents)",
+      "replace": "\tincidentEffect, err := effectBatchFromValues(\"repos\", EffectReadbackRequired, incidents)",
+      "expect_occurrences": 1,
+      "rationale": "The complete incidents unit owns exactly its three operational destinations and must not reintroduce the repository writer owned by repo-metadata.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabIncidentsRouteEmitsCompleteCanonicalBatch$", "./internal/providersync"]]
+    },
+    {
+      "id": "GI5",
+      "file": "internal/providersync/gitlab_incidents_route.go",
+      "find": "\t(*doer.attempts)++",
+      "replace": "\t_ = doer.attempts",
+      "expect_occurrences": 1,
+      "rationale": "Evidence must count physical transport attempts, including retries, rather than logical pages or successful responses.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabIncidentsRouteCountsPhysicalRetryAttempts$", "./internal/providersync"]]
+    },
+    {
+      "id": "GI6S",
+      "file": "internal/providersync/gitlab_incidents_effects_clickhouse.go",
+      "find": "FROM operational_services FINAL WHERE org_id = ? AND id = ? LIMIT 1\", row.OrgID, row.ID)",
+      "replace": "FROM operational_services FINAL WHERE org_id != ? AND id = ? LIMIT 1\", row.OrgID, row.ID)",
+      "expect_occurrences": 1,
+      "rationale": "Retry inspection must read the service row from the claimed tenant even when another tenant has the same generated ID.",
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-timeout", "10m", "-run", "^TestGitLabIncidentsThreeDestinationsHaveExactRetryReadback$", "./internal/providersync"]]
+    },
+    {
+      "id": "GI6M",
+      "file": "internal/providersync/gitlab_incidents_effects_clickhouse.go",
+      "find": "FROM operational_service_repository_mappings FINAL WHERE org_id = ? AND id = ? LIMIT 1\", row.OrgID, row.ID)",
+      "replace": "FROM operational_service_repository_mappings FINAL WHERE org_id != ? AND id = ? LIMIT 1\", row.OrgID, row.ID)",
+      "expect_occurrences": 1,
+      "rationale": "Retry inspection must read the repository mapping from the claimed tenant even when another tenant has the same generated ID.",
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-timeout", "10m", "-run", "^TestGitLabIncidentsThreeDestinationsHaveExactRetryReadback$", "./internal/providersync"]]
+    },
+    {
+      "id": "GI6I",
+      "file": "internal/providersync/gitlab_incidents_effects_clickhouse.go",
+      "find": "FROM operational_incidents FINAL WHERE org_id = ? AND id = ? LIMIT 1\", row.OrgID, row.ID)",
+      "replace": "FROM operational_incidents FINAL WHERE org_id != ? AND id = ? LIMIT 1\", row.OrgID, row.ID)",
+      "expect_occurrences": 1,
+      "rationale": "Retry inspection must read the incident row from the claimed tenant even when another tenant has the same generated ID.",
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-timeout", "10m", "-run", "^TestGitLabIncidentsThreeDestinationsHaveExactRetryReadback$", "./internal/providersync"]]
+    },
+    {
+      "id": "GI7",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "\tcase provider == \"gitlab\" && dataset == \"incidents\":\n\t\tdescriptor.Destinations = []string{\n\t\t\t\"operational_services\", \"operational_service_repository_mappings\",\n\t\t\t\"operational_incidents\",\n\t\t}\n\t\tdescriptor.RouteReady = true",
+      "replace": "\tcase provider == \"gitlab\" && dataset == \"incidents\":\n\t\tdescriptor.Destinations = []string{\n\t\t\t\"operational_services\", \"operational_service_repository_mappings\",\n\t\t\t\"operational_incidents\",\n\t\t}\n\t\tdescriptor.RouteReady = false",
+      "expect_occurrences": 1,
+      "rationale": "The capability matrix must advertise the completed GitLab incidents route as ready while preserving independent default-off enablement.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestProviderMatrixMatchesCheckedInContract$", "./internal/providersync"]]
+    },
+    {
+      "id": "GI8",
+      "file": "internal/providersync/request_plan.go",
+      "find": "{Dimension: BudgetRESTCore, Units: max(1, spanDays), Confidence: \"medium\", RouteFamily: \"issues\"}",
+      "replace": "{Dimension: BudgetRESTCore, Units: 1, Confidence: \"medium\", RouteFamily: \"issues\"}",
+      "expect_occurrences": 1,
+      "rationale": "The Go preflight reservation must retain the live Python incidents estimator's issue-page growth across multi-day windows.",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "GI9",
+      "file": "src/dev_health_ops/processors/gitlab.py",
+      "find": "            issue_type=\"incident\",",
+      "replace": "            issue_type=\"issue\",",
+      "expect_occurrences": 1,
+      "rationale": "The differential traversal oracle must fail when the live Python producer's GitLab issue filter diverges from the Go request contract.",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/processors/gitlab.py"],
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "GI10",
+      "file": "internal/providersync/gitlab_incidents_effects_clickhouse.go",
+      "find": "\t\tif _, duplicate := seen[key]; duplicate {",
+      "replace": "\t\tif false {",
+      "expect_occurrences": 1,
+      "rationale": "Every incidents destination must reject duplicate canonical IDs before appending any ClickHouse rows or allowing duplicate expectations to self-confirm in readback.",
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-timeout", "10m", "-run", "^TestGitLabIncidentsThreeDestinationsHaveExactRetryReadback$", "./internal/providersync"]]
+    }
+  ]
+}

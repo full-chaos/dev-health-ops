@@ -16,7 +16,8 @@ permissions:
   contents: read
 
 jobs:
-  # SELF_HOSTED_RUNNERS=enabled routes trusted repository events to ARC.
+  # Set the repository variable SELF_HOSTED_RUNNERS=enabled to route trusted
+  # repository events to ARC. Unset/disabled values use GitHub-hosted runners.
   # Fork pull requests always remain on GitHub-hosted runners. This expression
   # is evaluated by GitHub before scheduling, so it does not require a gate job.
   changes:

@@ -180,6 +180,57 @@ func TestLaunchDarklyRouteKeepsCodeReferencesBestEffort(t *testing.T) {
 	}
 }
 
+func TestLaunchDarklyRouteFailsClosedOnCodeReferencePayloadFaults(t *testing.T) {
+	oversized := `{"items":[],"padding":"` +
+		strings.Repeat("x", nativeMaxObjectBytes) + `"}`
+	tests := map[string]string{
+		"oversized":    oversized,
+		"invalid JSON": `{"items":`,
+		"non-object":   `[]`,
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			doer := &launchDarklyRouteDoer{responses: []launchDarklyRouteResponse{
+				{status: http.StatusOK, body: `{"items":[],"totalCount":0}`},
+				{status: http.StatusOK, body: `{"items":[]}`},
+				{status: http.StatusOK, body: body},
+			}}
+			client, err := providerfoundation.NewHTTPClient(
+				"launchdarkly",
+				"https://app.launchdarkly.com",
+				doer,
+				func(*http.Request) error { return nil },
+				providerfoundation.RetryPolicy{
+					MaxAttempts: 1,
+					InitialWait: time.Nanosecond,
+					MaxWait:     time.Nanosecond,
+				},
+				providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claim := nativeTestClaim("launchdarkly", "feature-flags")
+			claim.DatasetOptions = map[string]any{"project_key": "payments"}
+			batch, err := (LaunchDarklyRouteHandler{
+				CodeReferences: staticLaunchDarklyReferenceResolver{},
+			}).Collect(
+				context.Background(),
+				claim,
+				providerfoundation.Credential{Provider: "launchdarkly"},
+				client,
+				time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
+			)
+			if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
+				t.Fatalf("error=%v want ErrNormalizationInvalid", err)
+			}
+			if len(batch.Effects) != 0 || batch.Watermark != nil {
+				t.Fatalf("failed collection returned effects or watermark: %+v", batch)
+			}
+		})
+	}
+}
+
 type staticLaunchDarklyReferenceResolver struct{}
 
 func (staticLaunchDarklyReferenceResolver) ResolveLaunchDarklyCodeReferences(

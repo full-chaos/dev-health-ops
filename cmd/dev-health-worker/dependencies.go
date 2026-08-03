@@ -437,6 +437,7 @@ func workerRouteSwitches(cfg config.Config) providersync.CompleteRouteSwitches {
 		GithubSecurity:           cfg.WorkerGithubSecurityEnabled,
 		GithubFiles:              cfg.WorkerGithubFilesEnabled,
 		GithubCommitStats:        cfg.WorkerGithubCommitStatsEnabled,
+		GithubBlame:              cfg.WorkerGithubBlameEnabled,
 	}
 }
 
@@ -462,6 +463,7 @@ func providerRouteSwitchesReady(
 		{"github", "security", cfg.WorkerGithubSecurityEnabled},
 		{"github", "files", cfg.WorkerGithubFilesEnabled},
 		{"github", "commit-stats", cfg.WorkerGithubCommitStatsEnabled},
+		{"github", "blame", cfg.WorkerGithubBlameEnabled},
 	}
 	return func(context.Context) error {
 		for _, route := range routes {

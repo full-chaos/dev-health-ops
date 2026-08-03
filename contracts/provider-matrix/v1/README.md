@@ -267,6 +267,41 @@ Full recipe, the (now fifteen) defect classes above generalized into a
 checklist for the remaining 16 GitHub pairs, and difficulty tiers, are in
 `deploy/go-workers/provider-sync-porting-recipe.md`.
 
+## Implementation status for `(github, blame)`
+
+CHAOS-3335 marks this pair `native_go` but deliberately leaves
+`route_ready: false`. The handler, sink, readback, binary constructor, and
+isolated configuration switch are structural foundation only; no deployment
+may route the pair and Python remains its sole owner.
+
+The Go route resolves a commit at the claim bound, walks the recursive tree,
+fetches GraphQL blame ranges for every selected blob, expands them to the
+production `git_blame` row shape, and writes one readback-required effect.
+Its 500-file safety bound is fail-closed: an oversized inventory produces
+`ErrGitHubBlameIncomplete`, no effect, and no watermark advance. Likewise, a
+per-file REST or GraphQL failure remains retryable instead of being converted
+to the Python producer's historical partial success.
+
+That safety bound is also the readiness blocker. Unlike Python's
+coverage-aware selection of the next missing paths, the native unit has no
+persisted path cursor or resumable subdivision. A repository with more than
+500 blobs would therefore retry forever. The pair cannot become route-ready
+until bounded retries make forward progress while preserving complete path
+coverage and proving parity across subdivisions.
+
+Readback is a full-order-key point lookup over `git_blame FINAL`, including
+`org_id`; integration tests plant the same natural key under two tenants and
+prove each owner sees only its row. A separate PostgreSQL + ClickHouse crash
+test proves that a write accepted before process death is reconciled as exact
+and marked committed without inserting a duplicate physical version.
+
+Normalization parity is executed against the active Python
+`_backfill_github_missing_data` producer rather than a hand-authored expected
+row. The generic oracle derives the compared fields from the live `GitBlame`
+model and executes the real range-expansion/constructor path while replacing
+only provider and sink seams. These proofs make the foundation reviewable;
+they do not waive the resumability blocker or authorize activation.
+
 ## Known Go/Python divergences (fail-closed by design)
 
 `repositoryIdentity` mirrors Python's `get_repo_uuid_from_repo` for the ASCII

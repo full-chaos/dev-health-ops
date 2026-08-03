@@ -122,8 +122,9 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		GithubPRs: true, GithubCICD: true, GithubCommits: true,
 		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 		GithubCommitStats: true,
+		GithubBlame:       true,
 	}
-	if reflect.TypeOf(all).NumField() != 12 {
+	if reflect.TypeOf(all).NumField() != 13 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -238,6 +239,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"github/security":            GitHubSecurityRouteHandler{},
 		"github/files":               GitHubFilesRouteHandler{},
 		"github/commit-stats":        GitHubCommitStatsRouteHandler{},
+		"github/blame":               GitHubBlameRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

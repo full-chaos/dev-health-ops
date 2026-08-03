@@ -35,6 +35,7 @@ __all__ = [
     "MANIFEST",
     "MANIFEST_SCHEMA_VERSION",
     "MIGRATION_COEXISTENCE_REASON",
+    "STACK3_PERSISTENCE_GAP_REASON",
     "STACK3_WIRING_GAP_REASON",
     "TEAM_ATTRIBUTION_LIVE_DEFECT_REASON",
     "ManifestIntegrityError",
@@ -228,6 +229,51 @@ TEAM_ATTRIBUTION_LIVE_DEFECT_REASON = (
     "requirement -- this item flips once CHAOS-3332 ships and a "
     "live re-run of smoke_ask_dev_exact_commit.py's pattern "
     "against a named team subject confirms it."
+)
+
+#: The CHAOS-3297 stack-3 plan wiring landed (ops #1383/#1387, merged to
+#: main 2026-08-03) -- PROJECT_HEALTH/TEAM_HEALTH/TEAM_WORKLOAD_BALANCE/
+#: OPERATIONAL_DEFICIENCY_INVENTORY are now real entries in the live
+#: plan_registry (production_runtime.py's CORE_PLANS_BY_INTENT +
+#: WAVE_3_1_PLANS_BY_INTENT). STACK3_WIRING_GAP_REASON's root cause is
+#: therefore RESOLVED -- but attempting a live run against the fixed
+#: wiring found a second, distinct, 100%-reproducible defect one layer
+#: deeper, so these rows stay blocked with a NEW reason rather than
+#: silently flipping. This is the CHAOS-3332 pattern repeating: a
+#: wiring/registration gap gets fixed, and the newly-reachable code path
+#: immediately surfaces a real bug that was unreachable, and therefore
+#: invisible, until the gap closed.
+STACK3_PERSISTENCE_GAP_REASON = (
+    "PROJECT_HEALTH/TEAM_HEALTH/TEAM_WORKLOAD_BALANCE/"
+    "OPERATIONAL_DEFICIENCY_INVENTORY are now wired in the live "
+    "plan_registry (ops #1383/#1387), but every one of their mandatory "
+    "steps crashes to a terminal ERROR/internal_error before scope "
+    "resolution completes -- 100% reproducible, live-confirmed for "
+    "TEAM_HEALTH/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY "
+    'against a named TEAM subject ("Is the Core team healthy?"/'
+    '"overburdened?"/"What operational deficiencies does the Core '
+    'team have?"); PROJECT_HEALTH shares the identical root cause but '
+    "was not independently live-run since this fixture profile seeds "
+    "zero PROJECT-kind rows (the same constraint documented on "
+    "positive-control.real-project-status). Unlike CHAOS-3332, this "
+    "crash IS logged: "
+    "dev_health_ops.api.dev.persistence.service.DevPersistenceValidation"
+    "Error: invalid source_class, raised from "
+    "persistence/service.py:2255 append_source_observation, via "
+    "orchestrator_persistence.py:175/203, via orchestrator.py:1109 "
+    "run(). Root cause read directly from source: wave_3_1_plans.py's "
+    "four plans declare source_class=SourceClass.HEALTH_PROFILE (three "
+    "plans) or SourceClass.DEFICIENCY_INVENTORY (one plan) -- both "
+    "legitimate members of the SourceClass contract enum -- but "
+    "persistence/service.py's separate _SOURCE_CLASSES frozenset "
+    "allowlist, which append_source_observation validates against "
+    "before every mandatory-step write, was never updated with either "
+    "value. Every investigation using any of the four plans fails on "
+    "its first mandatory step. Filed as CHAOS-3337 (parent CHAOS-3297, "
+    "Ask Dev project) with the full traceback and the one-line fix "
+    "(add both string values to _SOURCE_CLASSES) -- these rows flip "
+    "once CHAOS-3337 ships and a live re-run of "
+    "smoke_ask_dev_stack3_intents.py confirms it."
 )
 
 
@@ -1030,10 +1076,23 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
             category="blocking_matrix",
             description=(
                 "A safe, honest outcome for a question whose intent has no "
-                "wired plan yet (PROJECT_HEALTH/TEAM_HEALTH/etc) -- traced, "
-                "not guessed. Team-lead guidance 2026-08-02: 'don't leave "
-                "presumably UNSUPPORTED in the manifest -- one traced run, "
-                "assert the exact outcome/code'."
+                "wired plan -- traced, not guessed. Team-lead guidance "
+                "2026-08-02: 'don't leave presumably UNSUPPORTED in the "
+                "manifest -- one traced run, assert the exact outcome/code'. "
+                "HISTORICAL NOTE (2026-08-03): originally traced against "
+                "PROJECT_HEALTH/TEAM_HEALTH as the live examples, before the "
+                "CHAOS-3297 stack-3 wiring landed (ops #1383/#1387) -- both "
+                "are now real plan_registry entries, so this exact shape no "
+                "longer describes their live behavior (see "
+                "STACK3_PERSISTENCE_GAP_REASON: they now reach the "
+                "plan-governed path and crash, rather than safely falling "
+                "through). The cited tests below still prove the general "
+                "mechanism correctly (they construct their own registry "
+                "with the intent absent, the same technique "
+                "gate.plan-registry-gap-is-loud's tests use) -- "
+                "PORTFOLIO_STATUS is the current live example of this row's "
+                "claim; see gate.plan-registry-gap-is-loud and its "
+                "e2e-live-validated sibling for that proof."
             ),
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3300_unwired_intent_fallback.py",),
@@ -1059,6 +1118,22 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
             # "not supported yet" -- worth stack-3 landing a dedicated
             # UNSUPPORTED short-circuit rather than relying on the legacy
             # loop's grounding guard as the only backstop.
+        ),
+        ManifestItem(
+            id="matrix.stack3-intents.e2e-blocked-by-live-defect",
+            category="blocking_matrix",
+            description=(
+                "Live end-to-end proof attempt for the four CHAOS-3297 "
+                "stack-3 newly-wired intents (PROJECT_HEALTH/TEAM_HEALTH/"
+                "TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY), "
+                "per team-lead priority 2026-08-03 following ops #1383/"
+                "#1387 merging the wiring to main. Blocked by a newly "
+                "discovered, 100%-reproducible live defect one layer "
+                "beneath the wiring itself -- not by the wiring gap that "
+                "STACK3_WIRING_GAP_REASON described, which is now resolved."
+            ),
+            status="blocked",
+            blocked_reason=STACK3_PERSISTENCE_GAP_REASON,
         ),
     )
 
@@ -1115,6 +1190,65 @@ def _gates() -> tuple[ManifestItem, ...]:
             ),
             status="blocked",
             blocked_reason=MIGRATION_COEXISTENCE_REASON,
+        ),
+        ManifestItem(
+            id="gate.plan-registry-gap-is-loud",
+            category="gate",
+            description=(
+                "A recognized-but-currently-unwired intent (PORTFOLIO_STATUS "
+                "today) must fall back to the legacy model-round loop "
+                "LOUDLY -- a structured WARNING log record plus "
+                "ASK_DEV_PLAN_REGISTRY_GAP_TOTAL -- and still complete as a "
+                "real, non-error answer, never terminate. Team-lead "
+                "ratification (2026-08-02): this is a provable row, not an "
+                "acknowledged gap -- the fallback IS the designed, correct "
+                "behavior until the stack-5 guard cutover, and "
+                "BOUNDED_INVESTIGATION's separate, always-silent fallthrough "
+                "must never trigger the same signal."
+            ),
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3300_plan_registry_gap.py",),
+            content_markers=(
+                "test_plan_registry_gap_is_loud_for_a_normally_plan_governed_intent",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3300_plan_registry_gap.py::"
+                "test_plan_registry_gap_is_loud_for_a_normally_plan_governed_intent",
+                "tests/api/dev/test_chaos_3300_plan_registry_gap.py::"
+                "test_bounded_investigation_never_triggers_the_gap_signal",
+            ),
+        ),
+        ManifestItem(
+            id="gate.plan-registry-gap-is-loud.e2e-live-validated",
+            category="gate",
+            description=(
+                "The same plan_registry_gap fallback, proven over the real "
+                "live Compose stack against PORTFOLIO_STATUS -- the intent "
+                "actually in this gap today, not a simulated one. A "
+                "portfolio-shaped question (\"What's the status of all our "
+                'projects across the portfolio?") ran through many legacy '
+                "model-round progress events (confirming the fallback loop "
+                "actually engaged, not a fast-path), committed scope, and "
+                "completed as a real non-error answer (status='partial') "
+                "rather than hanging or terminating. This smoke has no "
+                "public API to observe the WARNING log line or the counter "
+                "directly, so it proves the externally-observable half of "
+                "the contract; gate.plan-registry-gap-is-loud proves the "
+                "signal half at the unit level, driven through the same "
+                "orchestrator seam."
+            ),
+            status="proven_e2e",
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+                "tests/acceptance/test_ask_dev_stack3_intents_smoke.py",
+            ),
+            requires_live_infra=True,
+            execution_artifact="tests/acceptance/artifacts/portfolio_status_gap.json",
+            required_assertion_names=(
+                "answer_completed_event_present",
+                "answer_status_not_hard_error",
+                "stream_terminated_as_answer",
+            ),
         ),
         ManifestItem(
             id="gate.web-default-ci",

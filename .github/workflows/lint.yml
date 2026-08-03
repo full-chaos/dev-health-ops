@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-latest' }}
     permissions:
       contents: read
     outputs:
@@ -38,13 +38,14 @@ jobs:
               - 'requirements.txt'
               - 'pyproject.toml'
               - 'scripts/**'
+              - '.github/workflows/lint.yml'
 
   lint-job:
     needs: [changes]
     if: >-
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-latest' }}
     # Lint job needs package read access for dependency installs.
     permissions:
       contents: read
@@ -74,14 +75,14 @@ jobs:
           ruff check .
 
   # Required-status-check gate. Branch protection requires a check named
-  # exactly "lint". The aggregator always runs and treats skipped (path
-  # filter, e.g. docs-only PRs) as pass so PRs are never blocked waiting
-  # on a status that will never report. Do not remove.
+  # exactly "lint". The aggregator runs after failures/skips but exits cleanly
+  # when the workflow is cancelled, preventing a superseded run from holding
+  # the concurrency group. Do not remove.
   lint:
     name: lint
-    if: always()
+    if: ${{ always() && !cancelled() }}
     needs: [lint-job]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-latest' }}
     steps:
       - name: Aggregate lint result
         env:

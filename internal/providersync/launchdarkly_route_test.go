@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -231,6 +232,45 @@ func TestLaunchDarklyRouteFailsClosedOnCodeReferencePayloadFaults(t *testing.T) 
 	}
 }
 
+func TestLaunchDarklyRouteFailsClosedOnFlagPaginationCap(t *testing.T) {
+	doer := &launchDarklyFlagCapDoer{}
+	client, err := providerfoundation.NewHTTPClient(
+		"launchdarkly",
+		"https://app.launchdarkly.com",
+		doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 1,
+			InitialWait: time.Nanosecond,
+			MaxWait:     time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := nativeTestClaim("launchdarkly", "feature-flags")
+	claim.DatasetOptions = map[string]any{"project_key": "payments"}
+	batch, err := (LaunchDarklyRouteHandler{
+		CodeReferences: staticLaunchDarklyReferenceResolver{},
+	}).Collect(
+		context.Background(),
+		claim,
+		providerfoundation.Credential{Provider: "launchdarkly"},
+		client,
+		time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
+	)
+	if !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("error=%v want ErrPaginationCapExceeded", err)
+	}
+	if len(batch.Effects) != 0 || batch.Watermark != nil {
+		t.Fatalf("capped collection returned effects or watermark: %+v", batch)
+	}
+	if doer.flagRequests != nativeMaxPages {
+		t.Fatalf("flag requests=%d want %d", doer.flagRequests, nativeMaxPages)
+	}
+}
+
 type staticLaunchDarklyReferenceResolver struct{}
 
 func (staticLaunchDarklyReferenceResolver) ResolveLaunchDarklyCodeReferences(
@@ -261,6 +301,40 @@ type launchDarklyRouteResponse struct {
 type launchDarklyRouteDoer struct {
 	responses []launchDarklyRouteResponse
 	requests  []*http.Request
+}
+
+// launchDarklyFlagCapDoer models a provider with 101 full pages. The route's
+// 100-page safety bound must fail closed before the 101st page rather than
+// terminalizing a truncated 5,000-row inventory as successful.
+type launchDarklyFlagCapDoer struct {
+	flagRequests int
+}
+
+func (doer *launchDarklyFlagCapDoer) Do(request *http.Request) (*http.Response, error) {
+	var body string
+	switch request.URL.Path {
+	case "/api/v2/flags/payments":
+		page := doer.flagRequests
+		doer.flagRequests++
+		if page >= 101 {
+			return nil, errors.New("requested beyond the modeled 101 full pages")
+		}
+		items := make([]string, 50)
+		for index := range items {
+			items[index] = `{"key":"flag-` + strconv.Itoa(page*50+index) + `"}`
+		}
+		body = `{"items":[` + strings.Join(items, ",") + `],"totalCount":5050}`
+	case "/api/v2/auditlog", "/api/v2/code-refs/repositories":
+		body = `{"items":[]}`
+	default:
+		return nil, errors.New("unexpected request: " + request.URL.String())
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    request,
+	}, nil
 }
 
 func (doer *launchDarklyRouteDoer) Do(request *http.Request) (*http.Response, error) {

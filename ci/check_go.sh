@@ -22,7 +22,8 @@ Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|inte
   test   Run go test ./... in every Go module.
   race   Run go test -race ./... in every Go module.
   live-python-oracles
-         Run `go test -count=1 ./internal/providersync/...` unconditionally
+         Run the provider-sync and scheduled-planner live-Python oracle packages
+         with `go test -count=1` unconditionally
          (cache lookup disabled by -count=1 itself, not by any assumption
          about cache state). Separate from `test` because that package
          executes real production Python files (src/dev_health_ops/**.py)
@@ -190,7 +191,7 @@ check_race() {
 }
 
 check_live_python_oracles() {
-  # internal/providersync executes REAL production Python files
+  # internal/providersync and internal/scheduler/sync execute REAL production Python files
   # (src/dev_health_ops/**.py, via testdata/python_oracle_loader.py)
   # directly at test time -- not test fixtures, the actual functions this
   # repo ships. `//go:embed` cannot reach outside its own package
@@ -219,6 +220,8 @@ check_live_python_oracles() {
   # coverage possible again by construction.
   printf 'go test -count=1: internal/providersync (live Python oracle sources are outside the Go embed/cache boundary)\n'
   (cd "${ROOT}" && GOWORK=off go test -mod=readonly -count=1 ./internal/providersync/...)
+  printf 'go test -count=1: internal/scheduler/sync (live Python planner source is outside the Go embed/cache boundary)\n'
+  (cd "${ROOT}" && GOWORK=off go test -mod=readonly -count=1 ./internal/scheduler/sync/...)
 }
 
 check_build() {

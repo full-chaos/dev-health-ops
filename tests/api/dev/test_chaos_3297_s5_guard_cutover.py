@@ -31,15 +31,21 @@ The halves that make these controls non-vacuous:
 
 from __future__ import annotations
 
+import inspect
 import json
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import (
     AnswerStatus,
+    DevAnswer,
+    DevCoverage,
+    DevModelMetadata,
+    DevScope,
+    DevScopeResolution,
     DevToolRequest,
     DevToolResult,
     ToolID,
@@ -59,14 +65,21 @@ from dev_health_ops.api.dev.tool_registry import AskDevToolRegistry
 from dev_health_ops.llm.agent.contracts import AgentFinalAnswer
 from dev_health_ops.llm.agent.scripted import ScriptedStep
 from tests._chaos_3292_preflight import (
+    ANSWER_ID,
     ASK_DEV_PROJECT,
+    CONVERSATION_ID,
     ORG_ID,
     Recorder,
+    RecordingProvider,
     RunOutput,
+    fixed_now,
     grounded_answer_payload,
+    organization_resolution,
+    recording_registry,
     run_preflight_orchestrator,
     scope_dict,
     status_then_answer,
+    versions,
 )
 
 #: The unresolved bare name the question uses and the answer narrates. The
@@ -250,6 +263,86 @@ def _preflight_result_stub() -> SubjectPreflightResult:
         outcome=None,
         allowed_tools=frozenset(),
         diagnostic="test",
+    )
+
+
+def _bare_orchestrator() -> DevOrchestrator:
+    """A ``DevOrchestrator`` wired only enough to call one pure-ish helper.
+
+    No run is driven through it, so the provider script and registry are
+    inert -- but they are the harness's own, not new stubs, so this cannot
+    drift from what the e2e cases construct.
+    """
+
+    async def resolve(**_values: Any) -> DevScopeResolution:
+        return _resolution()
+
+    return DevOrchestrator(
+        provider=RecordingProvider(status_then_answer("bare"), script_id="bare"),
+        provider_source="platform",
+        provider_family="scripted",
+        registry=recording_registry([]),
+        scope_resolver=resolve,
+        versions=versions(),
+        recorder=Recorder(),
+    )
+
+
+def _resolution() -> DevScopeResolution:
+    return organization_resolution(DevScope.model_validate(scope_dict()))
+
+
+def _coverage() -> DevCoverage:
+    return DevCoverage(
+        required_source_count=1,
+        available_source_count=1,
+        unavailable_required_sources=[],
+        stale_required_sources=[],
+        as_of=fixed_now(),
+    )
+
+
+def _model() -> DevModelMetadata:
+    return DevModelMetadata(
+        provider_source="platform",
+        provider_family="scripted",
+        model_fingerprint="0" * 24,
+    )
+
+
+def _canonical_tool_result() -> DevToolResult:
+    """One successful tool result carrying real canonical evidence."""
+
+    payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+    payload = _with_v2_handles(payload)
+    for metric in payload.get("metrics", []):
+        metric["evidence_ref_ids"] = []
+    return DevToolResult.model_validate(payload)
+
+
+def _empty_shell_answer(**kwargs: Any) -> DevAnswer:
+    """The answer a defeated material predicate would produce: server copy,
+    nothing else. Used only by the M2 mutation.
+    """
+
+    return DevAnswer(
+        schema_version="dev_answer.v1",
+        answer_id=kwargs["answer_id"],
+        conversation_id=kwargs["conversation_id"],
+        generated_at=kwargs["now"],
+        resolved_scope=kwargs["resolution"],
+        as_of=kwargs["now"],
+        status=AnswerStatus.PARTIAL,
+        direct_summary=SERVER_GROUNDED_SUMMARY,
+        claims=[],
+        metrics=[],
+        evidence=[],
+        conflicts=[],
+        coverage=kwargs["coverage"],
+        warnings=[],
+        suggested_follow_up_questions=[],
+        versions=versions(),
+        model=kwargs["model"],
     )
 
 
@@ -449,16 +542,17 @@ async def test_m2_defeating_the_material_predicate_breaks_the_negative_control(
 ) -> None:
     """The fail-safe in C2 is load-bearing, not incidental.
 
-    Forcing ``_plan_findings_present`` true makes the demotion believe there
-    is plan material to ship when there is none. C2's run then completes
-    with an answer carrying no metric, no evidence and no claim -- the empty
+    Forcing the canonical extraction to report material makes the demotion
+    believe there is something to ship when there is not. C2's run then
+    completes carrying no metric, no evidence and no claim -- the empty
     shell the CHAOS-3290 floor exists to prevent, and the reason the
-    predicate is an ``or`` over real material rather than an unconditional
-    yes.
+    predicate reads real canonical tuples rather than an unconditional yes.
     """
 
     monkeypatch.setattr(
-        DevOrchestrator, "_plan_findings_present", staticmethod(lambda _result: True)
+        DevOrchestrator,
+        "_server_grounded_answer",
+        lambda self, **kwargs: _empty_shell_answer(**kwargs),
     )
     output = await _narrating_run(
         script_id="s5-m2",
@@ -470,3 +564,85 @@ async def test_m2_defeating_the_material_predicate_breaks_the_negative_control(
     answer = output.result.answer
     assert answer is not None
     assert not answer.metrics and not answer.evidence and not answer.claims
+
+
+# ---------------------------------------------------------------------------
+# C4 -- plan findings alone are NOT shippable material
+# ---------------------------------------------------------------------------
+
+
+class _ExplodingInvestigationResult:
+    """Any read of this object is a test failure.
+
+    Stronger than passing a findings fixture and asserting the result: a
+    fixture proves the answer for ONE investigation_result, this proves the
+    parameter is not consulted for ANY of them.
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(
+            f"_server_grounded_answer must not read investigation_result "
+            f"(accessed {name!r}) -- plan findings are not shippable v1 material"
+        )
+
+
+def test_c4_plan_findings_are_never_the_material_that_justifies_demoting() -> None:
+    """Codex adversarial review round 1 (HIGH), closed here permanently.
+
+    An earlier revision counted the plan's health/deficiency findings as
+    sufficient material. They are real server-computed content, but
+    ``finish()`` embeds them into the FRAME, and no client surface reads a
+    frame today -- ``streaming.py`` sends ``result.answer`` live and the
+    router's replay prefers the stored v1 answer. So demoting on findings
+    alone terminated COMPLETED while the client received an answer with no
+    claim, no metric and no evidence: strictly worse than the honest
+    ``insufficient_evidence`` it replaced.
+
+    Both cells asserted, so this is a statement about the predicate rather
+    than about one input: with no canonical material the seam refuses even
+    though an investigation_result is present, and with canonical material
+    it builds one without ever consulting it.
+    """
+
+    orchestrator = _bare_orchestrator()
+    common: dict[str, Any] = {
+        "answer_id": ANSWER_ID,
+        "conversation_id": CONVERSATION_ID,
+        "resolution": _resolution(),
+        "coverage": _coverage(),
+        "investigation_result": cast(Any, _ExplodingInvestigationResult()),
+        "model": _model(),
+        "now": fixed_now(),
+        "cutover_active": True,
+    }
+
+    assert orchestrator._server_grounded_answer(tool_results=(), **common) is None
+
+    with_material = orchestrator._server_grounded_answer(
+        tool_results=(_canonical_tool_result(),), **common
+    )
+    assert with_material is not None
+    assert with_material.evidence
+    assert with_material.direct_summary == SERVER_GROUNDED_SUMMARY
+
+
+def test_c4b_the_grounding_floor_can_never_reach_the_demotion_seam() -> None:
+    """The implication the orchestrator's own comment states, pinned.
+
+    ``validate_answer_candidate`` is handed an answer whose ``metrics`` and
+    ``evidence`` the orchestrator has already overwritten with the canonical
+    tuples, so ``answer_grounding_floor_not_met`` implies both are empty --
+    and empty canonical tuples are exactly what ``_server_grounded_answer``
+    refuses to build on. The CHAOS-3290 floor therefore never had server
+    material to erase. If a future change to the floor's trigger makes that
+    branch genuinely live, this fails rather than the branch quietly
+    starting to ship answers nobody re-reviewed.
+    """
+
+    from dev_health_ops.api.dev import answer_validator
+
+    source = inspect.getsource(answer_validator._answer_has_material_grounding)
+    assert "answer.metrics" in source and "answer.evidence" in source, (
+        "the floor no longer keys on answer.metrics/answer.evidence; the "
+        "orchestrator's 'this branch cannot fire' reasoning must be re-derived"
+    )

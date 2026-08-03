@@ -17,6 +17,7 @@ fails the contract suite" acceptance clause, made attributable per-guard.
 from __future__ import annotations
 
 import itertools
+import json
 import re
 from copy import deepcopy
 from enum import StrEnum
@@ -27,6 +28,10 @@ from pydantic import BaseModel, ValidationError
 
 from dev_health_ops.api.dev import contracts_v2 as v2
 from dev_health_ops.api.dev.contract_fixtures import (
+    TEAM_ID,
+    committed_team_commit,
+)
+from dev_health_ops.api.dev.contract_fixtures import (
     positive_fixtures as positive_fixtures_v1,
 )
 from dev_health_ops.api.dev.contract_fixtures_v2 import (
@@ -36,6 +41,7 @@ from dev_health_ops.api.dev.contract_fixtures_v2 import (
     negative_fixtures,
     no_answer_answer_fixture,
     positive_fixtures,
+    positive_variant_fixtures,
     stream_fixtures,
 )
 from dev_health_ops.api.dev.contracts import (
@@ -59,6 +65,9 @@ from dev_health_ops.api.dev.contracts import DevError as DevErrorV1
 from dev_health_ops.api.dev.contracts_v2 import compat as compat_module
 from dev_health_ops.api.dev.contracts_v2 import validators as validators_module
 from dev_health_ops.api.dev.contracts_v2.validators import ANSWERED_CONTENT_OUTCOMES
+from dev_health_ops.api.dev.export_contracts import (
+    expected_artifacts as expected_artifacts_v1,
+)
 from dev_health_ops.api.dev.export_contracts_v2 import (
     check_artifacts,
     expected_artifacts,
@@ -120,6 +129,94 @@ def test_stream_sequences_require_exactly_one_terminal_then_done() -> None:
             v2.validate_stream_v2(
                 [v2.DevStreamEventV2.model_validate(item) for item in payloads]
             )
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "case", "payload"),
+    [
+        (schema_version, case, payload)
+        for schema_version, cases in positive_variant_fixtures().items()
+        for case, payload in cases
+    ],
+)
+def test_positive_variant_fixture_validates(
+    schema_version: str, case: str, payload: dict[str, object]
+) -> None:
+    v2.CONTRACT_MODELS_V2[schema_version].model_validate(payload)
+
+
+def test_v2_team_golden_is_the_same_producer_output_v1_exports() -> None:
+    """CHAOS-3338: one committed TEAM scope, exported into both trees.
+
+    ``DevScopeV2`` subclasses ``DevScope``, so there is exactly one correct
+    team wire shape. Exporting it twice from one producer call is what
+    makes the two trees' team examples unable to drift apart.
+    """
+
+    v1_team = json.loads(
+        expected_artifacts_v1()["examples/positive/dev_scope.v1.team_direct_scope.json"]
+    )
+    v2_request = json.loads(
+        expected_artifacts()[
+            "examples/positive/dev_message_request.v2.team_direct_scope.json"
+        ]
+    )
+
+    assert v2_request["scope"] == v1_team
+    assert v2.DevScopeV2.model_validate(v1_team).direct_scope.value == "team"
+
+
+def test_v2_scope_accepts_the_committed_team_scope() -> None:
+    """CHAOS-3338 regression, fail-before/pass-after.
+
+    ``DevScopeV2`` re-declares ``team_ids`` as a ``tuple``, while the
+    inherited ``DevScope.validate_direct_scope`` compared it against a
+    ``list`` literal -- and ``("t",) != ["t"]`` is always True, so the
+    branch rejected *every* v2 team scope, the real producer's included.
+    ``investigation_plans.builtin_steps._wire_metric_content``
+    revalidates the committed scope as a ``DevScopeV2``, so a committed
+    team subject raised there for the entire metrics step. Restoring the
+    ``!= [ ... ]`` comparison fails this test while leaving every v1 team
+    test green, which is what makes the sequence-type mismatch the
+    attributable cause.
+    """
+
+    committed = committed_team_commit().resolved_scope
+    assert committed is not None
+
+    scope_v2 = v2.DevScopeV2.model_validate(committed.model_dump(mode="json"))
+
+    assert scope_v2.team_ids == (TEAM_ID,)
+    assert tuple(committed.team_ids) == scope_v2.team_ids
+
+    # The invariant itself must still bite on a v2 scope, not merely have
+    # been loosened into accepting anything.
+    mismatched = committed.model_dump(mode="json")
+    mismatched["team_ids"] = []
+    with pytest.raises(ValidationError, match="team_ids to name exactly that team"):
+        v2.DevScopeV2.model_validate(mismatched)
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("team_scope_with_repository_list", "cannot carry a repository list"),
+        (
+            "team_scope_without_matching_team_id",
+            "team_ids to name exactly that team",
+        ),
+        (
+            "team_scope_entity_ref_is_not_a_team",
+            "direct entity scope requires one matching entity",
+        ),
+    ],
+)
+def test_v2_team_scope_negative_examples_fail_for_their_named_reason(
+    case: str, reason: str
+) -> None:
+    payload = dict(negative_fixtures()["dev_message_request.v2"])[case]
+    with pytest.raises(ValidationError, match=reason):
+        v2.DevMessageRequestV2.model_validate(payload)
 
 
 def test_checked_in_contract_artifacts_have_no_drift() -> None:

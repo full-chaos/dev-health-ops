@@ -1,0 +1,41 @@
+{
+  "client_message_id": "web-msg-2026-07-31-0001",
+  "conversation_id": "0f1a2b3c-0005-4a00-8000-000000000001",
+  "idempotency_key": "idem_01",
+  "question": "How is the Platform team doing?",
+  "question_class_hint": null,
+  "request_id": "web-req-2026-07-31-0001",
+  "requested_metric_ids": [],
+  "retry_of_run_id": "0f1a2b3c-0001-4a00-8000-000000000002",
+  "schema_version": "dev_message_request.v2",
+  "scope": {
+    "comparison_range": {
+      "end": "2026-06-28T00:00:00Z",
+      "start": "2026-05-29T00:00:00Z",
+      "timezone": "America/Los_Angeles"
+    },
+    "direct_scope": "team",
+    "entity_refs": [
+      {
+        "display_label": "Platform",
+        "entity_id": "team_platform",
+        "entity_type": "team",
+        "repository_id": null
+      }
+    ],
+    "organization_id": "org_fullchaos",
+    "repositories": [
+      "repo_dev_health"
+    ],
+    "schema_version": "dev_scope.v1",
+    "surface_context": null,
+    "team_ids": [
+      "team_platform"
+    ],
+    "time_range": {
+      "end": "2026-07-28T00:00:00Z",
+      "start": "2026-06-28T00:00:00Z",
+      "timezone": "America/Los_Angeles"
+    }
+  }
+}

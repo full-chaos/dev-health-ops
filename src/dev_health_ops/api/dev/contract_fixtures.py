@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime
 from typing import Any
+
+from .contracts import DevScope, DevScopeResolution
+from .scope_service import AuthorizedEntity, EntityKind, ScopeResolutionService
 
 NOW = "2026-07-28T12:00:00Z"
 START = "2026-06-28T00:00:00Z"
 END = "2026-07-28T00:00:00Z"
 PREVIOUS_START = "2026-05-29T00:00:00Z"
+
+TEAM_ID = "team_platform"
+TEAM_LABEL = "Platform"
 
 
 def _time_range(start: str = START, end: str = END) -> dict[str, Any]:
@@ -54,6 +61,62 @@ def _scope_resolution() -> dict[str, Any]:
         "warnings": [],
         "resolved_at": NOW,
     }
+
+
+def committed_team_commit() -> DevScopeResolution:
+    """The one committed TEAM scope, built by the **real producer**.
+
+    CHAOS-3338. ``ScopeResolutionService.committed_resolution_for`` is the
+    single construction of an exact-match committed scope in production —
+    it is what the subject preflight itself calls
+    (``subject_preflight.py``) — so the team golden this module exports is
+    the real wire shape rather than hand-authored JSON free to drift from
+    it. Team became a real committed direct scope in CHAOS-3301, but no
+    positive example of one was ever exported, which left
+    ``dev-health-web``'s ``validateScope`` team arm with nothing to verify
+    against except a live call into this producer.
+
+    ``__new__`` skips ``__init__`` deliberately: ``committed_resolution_for``
+    touches neither the catalog nor the request cache, and a fixture module
+    has no ClickHouse client to hand it. Same construction
+    ``tests/api/dev/test_chaos_3332_tool_executor_faults.py`` already uses.
+
+    The requested scope is an organization scope, which is what the page
+    actually sends when a user names a team in the question rather than
+    navigating to it: the commit is what *narrows* it to that team.
+    """
+
+    base_scope = DevScope.model_validate(
+        {
+            "schema_version": "dev_scope.v1",
+            "organization_id": "org_fullchaos",
+            "direct_scope": "organization",
+            "repositories": [],
+            "entity_refs": [],
+            "team_ids": [],
+            "time_range": _time_range(),
+            "comparison_range": _time_range(PREVIOUS_START, START),
+            "surface_context": None,
+        }
+    )
+    service = ScopeResolutionService.__new__(ScopeResolutionService)
+    return service.committed_resolution_for(
+        AuthorizedEntity(EntityKind.TEAM, TEAM_ID, TEAM_LABEL),
+        org_id="org_fullchaos",
+        base_scope=base_scope,
+        resolved_at=datetime.fromisoformat(NOW.replace("Z", "+00:00")),
+    )
+
+
+def _team_scope() -> dict[str, Any]:
+    resolved = committed_team_commit().resolved_scope
+    if resolved is None:  # pragma: no cover - an exact commit always resolves
+        raise RuntimeError("committed team resolution produced no resolved scope")
+    return resolved.model_dump(mode="json")
+
+
+def _team_scope_resolution() -> dict[str, Any]:
+    return committed_team_commit().model_dump(mode="json")
 
 
 def _evidence() -> dict[str, Any]:
@@ -344,13 +407,41 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
     }
 
 
+def positive_variant_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
+    """Extra *valid* payloads for contracts with more than one shipped shape.
+
+    ``positive_fixtures`` holds exactly one canonical payload per contract,
+    which is enough for schema coverage but silently under-describes any
+    contract whose invariants branch on a discriminator. ``dev_scope.v1``
+    branches on ``direct_scope``, and its canonical payload is a
+    ``repository`` scope, so nothing in the exported set showed a consumer
+    what a committed ``team`` scope looks like (CHAOS-3338). Variants are
+    exported as ``examples/positive/{schema}.{label}.json`` alongside the
+    canonical example and listed under ``positive_variants`` in the
+    manifest.
+    """
+
+    return {
+        "dev_scope.v1": [("team_direct_scope", _team_scope())],
+        "dev_scope_resolution.v1": [("team_direct_scope", _team_scope_resolution())],
+    }
+
+
 def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     """Return intentional failures; case labels explain the invariant exercised."""
 
     positives = positive_fixtures()
+    variants = {
+        schema: dict(cases) for schema, cases in positive_variant_fixtures().items()
+    }
 
     def changed(schema: str, mutator: Any) -> dict[str, Any]:
         value = deepcopy(positives[schema])
+        mutator(value)
+        return value
+
+    def changed_variant(schema: str, label: str, mutator: Any) -> dict[str, Any]:
+        value = deepcopy(variants[schema][label])
         mutator(value)
         return value
 
@@ -541,7 +632,39 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                 changed(
                     "dev_scope.v1", lambda value: value.__setitem__("repositories", [])
                 ),
-            )
+            ),
+            # CHAOS-3338: one case per clause of the TEAM branch of
+            # ``DevScope.validate_direct_scope``, each mutating the shipped
+            # team golden rather than a hand-built payload, so a clause that
+            # stops rejecting is attributable to that clause alone.
+            (
+                "team_scope_with_repository_list",
+                changed_variant(
+                    "dev_scope.v1",
+                    "team_direct_scope",
+                    lambda value: value.__setitem__(
+                        "repositories", ["repo_dev_health"]
+                    ),
+                ),
+            ),
+            (
+                "team_scope_without_matching_team_id",
+                changed_variant(
+                    "dev_scope.v1",
+                    "team_direct_scope",
+                    lambda value: value.__setitem__("team_ids", []),
+                ),
+            ),
+            (
+                "team_scope_entity_ref_is_not_a_team",
+                changed_variant(
+                    "dev_scope.v1",
+                    "team_direct_scope",
+                    lambda value: value["entity_refs"][0].__setitem__(
+                        "entity_type", "project"
+                    ),
+                ),
+            ),
         ],
         "dev_scope_resolution.v1": [
             (
@@ -553,7 +676,17 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                         value.__setitem__("resolved_scope", None),
                     ),
                 ),
-            )
+            ),
+            (
+                "team_resolution_scope_with_repository_list",
+                changed_variant(
+                    "dev_scope_resolution.v1",
+                    "team_direct_scope",
+                    lambda value: value["resolved_scope"].__setitem__(
+                        "repositories", ["repo_dev_health"]
+                    ),
+                ),
+            ),
         ],
         "dev_tool_request.v1": [
             (
@@ -651,4 +784,10 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
     }
 
 
-__all__ = ["negative_fixtures", "positive_fixtures", "stream_fixtures"]
+__all__ = [
+    "committed_team_commit",
+    "negative_fixtures",
+    "positive_fixtures",
+    "positive_variant_fixtures",
+    "stream_fixtures",
+]

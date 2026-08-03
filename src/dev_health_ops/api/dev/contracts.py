@@ -272,7 +272,17 @@ class DevScope(ContractModel):
             # populated) and never carry any other id. An organization scope
             # carrying team_ids stays a filter, structurally — this branch
             # only fires for DirectScope.TEAM.
-            if self.team_ids != [self.entity_refs[0].entity_id]:
+            # CHAOS-3338: compared as tuples, not against a list literal.
+            # ``DevScopeV2`` (contracts_v2.embedded) re-declares ``team_ids``
+            # as a ``tuple[OpaqueID, ...]``, and ``("t",) != ["t"]`` is
+            # always True in Python -- so this branch rejected *every* v2
+            # team scope, including the one the real producer commits.
+            # ``investigation_plans.builtin_steps._wire_metric_content``
+            # revalidates the committed scope as a ``DevScopeV2``, so a
+            # committed team subject raised there for the whole metrics
+            # step. Found by exporting the first team golden into the v2
+            # tree, which had no positive team example until now.
+            if tuple(self.team_ids) != (self.entity_refs[0].entity_id,):
                 raise ValueError(
                     "team direct scope requires team_ids to name exactly that team"
                 )

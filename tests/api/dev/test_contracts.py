@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
+from datetime import datetime
 
 import pytest
 from pydantic import ValidationError
 
 from dev_health_ops.api.dev.contract_fixtures import (
+    TEAM_ID,
+    TEAM_LABEL,
     negative_fixtures,
     positive_fixtures,
+    positive_variant_fixtures,
     stream_fixtures,
 )
 from dev_health_ops.api.dev.contracts import (
@@ -24,11 +29,30 @@ from dev_health_ops.api.dev.export_contracts import (
     check_artifacts,
     expected_artifacts,
 )
+from dev_health_ops.api.dev.scope_service import (
+    AuthorizedEntity,
+    EntityKind,
+    ScopeResolutionService,
+)
 
 
 @pytest.mark.parametrize("schema_version", CONTRACT_MODELS)
 def test_positive_fixture_validates(schema_version: str) -> None:
     CONTRACT_MODELS[schema_version].model_validate(positive_fixtures()[schema_version])
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "case", "payload"),
+    [
+        (schema_version, case, payload)
+        for schema_version, cases in positive_variant_fixtures().items()
+        for case, payload in cases
+    ],
+)
+def test_positive_variant_fixture_validates(
+    schema_version: str, case: str, payload: dict[str, object]
+) -> None:
+    CONTRACT_MODELS[schema_version].model_validate(payload)
 
 
 @pytest.mark.parametrize(
@@ -225,6 +249,109 @@ def test_organization_scope_with_a_team_filter_stays_a_filter() -> None:
     scope = DevScope.model_validate(org_scope)
 
     assert scope.team_ids == ["team_platform"]
+
+
+def _live_producer_team_scope() -> dict[str, object]:
+    """Re-derive the committed TEAM scope straight from the producer.
+
+    Deliberately does NOT go through ``contract_fixtures``: this is the
+    other half of a differential oracle, so it has to call
+    ``ScopeResolutionService.committed_resolution_for`` itself. If the
+    fixture module ever stops producing its golden from the producer (a
+    hand-edit, a copy-paste of the JSON), the comparison below breaks.
+    """
+
+    base_scope = DevScope.model_validate(
+        {
+            "schema_version": "dev_scope.v1",
+            "organization_id": "org_fullchaos",
+            "direct_scope": "organization",
+            "repositories": [],
+            "entity_refs": [],
+            "team_ids": [],
+            "time_range": {
+                "start": "2026-06-28T00:00:00Z",
+                "end": "2026-07-28T00:00:00Z",
+                "timezone": "America/Los_Angeles",
+            },
+            "comparison_range": {
+                "start": "2026-05-29T00:00:00Z",
+                "end": "2026-06-28T00:00:00Z",
+                "timezone": "America/Los_Angeles",
+            },
+            "surface_context": None,
+        }
+    )
+    service = ScopeResolutionService.__new__(ScopeResolutionService)
+    resolution = service.committed_resolution_for(
+        AuthorizedEntity(EntityKind.TEAM, TEAM_ID, TEAM_LABEL),
+        org_id="org_fullchaos",
+        base_scope=base_scope,
+        resolved_at=datetime.fromisoformat("2026-07-28T12:00:00+00:00"),
+    )
+    assert resolution.resolved_scope is not None
+    return resolution.resolved_scope.model_dump(mode="json")
+
+
+def test_team_scope_golden_is_exported_and_matches_the_live_producer() -> None:
+    """CHAOS-3338: the shipped team golden is producer output, not JSON.
+
+    Before this, ``contracts/ask-dev/v1`` shipped no positive example of a
+    TEAM ``DevScope`` at all, even though CHAOS-3301 made TEAM a real
+    committed direct scope -- so ``dev-health-web``'s ``validateScope``
+    team arm had nothing to verify against but a live call into this same
+    producer.
+    """
+
+    artifacts = expected_artifacts()
+    path = "examples/positive/dev_scope.v1.team_direct_scope.json"
+    assert path in artifacts, "team-scope golden is not in the exported artifact set"
+
+    payload = json.loads(artifacts[path])
+    assert payload["direct_scope"] == "team"
+    DevScope.model_validate(payload)
+    assert payload == _live_producer_team_scope()
+
+
+def test_team_scope_golden_is_listed_in_the_manifest() -> None:
+    """A file nobody can find from the manifest is not shipped, only present."""
+
+    manifest = json.loads(expected_artifacts()["manifest.json"])
+    entry = next(
+        item
+        for item in manifest["contracts"]
+        if item["schema_version"] == "dev_scope.v1"
+    )
+    variants = {case["case"]: case["path"] for case in entry["positive_variants"]}
+    assert variants == {
+        "team_direct_scope": "examples/positive/dev_scope.v1.team_direct_scope.json"
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("team_scope_with_repository_list", "cannot carry a repository list"),
+        (
+            "team_scope_without_matching_team_id",
+            "team_ids to name exactly that team",
+        ),
+        (
+            "team_scope_entity_ref_is_not_a_team",
+            "direct entity scope requires one matching entity",
+        ),
+    ],
+)
+def test_team_scope_negative_examples_fail_for_their_named_reason(
+    case: str, reason: str
+) -> None:
+    """The generic negative sweep only asserts *some* error; each team
+    mutation has to be rejected by the clause its label names, or the
+    example documents an invariant it does not actually exercise."""
+
+    payload = dict(negative_fixtures()["dev_scope.v1"])[case]
+    with pytest.raises(ValidationError, match=reason):
+        DevScope.model_validate(payload)
 
 
 def test_checked_in_contract_artifacts_have_no_drift() -> None:

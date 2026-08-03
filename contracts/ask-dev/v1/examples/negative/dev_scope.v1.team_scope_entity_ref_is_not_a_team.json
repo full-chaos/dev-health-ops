@@ -1,0 +1,28 @@
+{
+  "comparison_range": {
+    "end": "2026-06-28T00:00:00Z",
+    "start": "2026-05-29T00:00:00Z",
+    "timezone": "America/Los_Angeles"
+  },
+  "direct_scope": "team",
+  "entity_refs": [
+    {
+      "display_label": "Platform",
+      "entity_id": "team_platform",
+      "entity_type": "project",
+      "repository_id": null
+    }
+  ],
+  "organization_id": "org_fullchaos",
+  "repositories": [],
+  "schema_version": "dev_scope.v1",
+  "surface_context": null,
+  "team_ids": [
+    "team_platform"
+  ],
+  "time_range": {
+    "end": "2026-07-28T00:00:00Z",
+    "start": "2026-06-28T00:00:00Z",
+    "timezone": "America/Los_Angeles"
+  }
+}

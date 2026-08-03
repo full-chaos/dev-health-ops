@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import uuid
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -38,11 +39,20 @@ from pydantic import ValidationError
 from dev_health_ops.api.dev import orchestrator as orchestrator_module
 from dev_health_ops.api.dev.contracts import (
     AnswerStatus,
+    DevCoverage,
     DevError,
     FreshnessState,
     ToolID,
 )
-from dev_health_ops.api.dev.contracts_v2.base import SourceRequirementState
+from dev_health_ops.api.dev.contracts_v2 import (
+    DevInvestigationResult,
+    DevSourceObservation,
+)
+from dev_health_ops.api.dev.contracts_v2.base import (
+    QuestionIntentID,
+    SourceClass,
+    SourceRequirementState,
+)
 from dev_health_ops.api.dev.data_health_service import DataHealthState
 from dev_health_ops.api.dev.investigation_plans import state_mapping
 from dev_health_ops.api.dev.investigation_plans.plan_documents import (
@@ -686,6 +696,161 @@ def test_available_unknown_has_no_healthy_producer() -> None:
         "AVAILABLE_UNKNOWN that means 'healthy but unproven freshness' is "
         "reachable, so _coverage_with_plan_sources must split the state by "
         "cause instead of blocking it wholesale"
+    )
+
+
+def _observation(
+    level: str, state: SourceRequirementState, *, source: SourceClass
+) -> DevSourceObservation:
+    """One contract-valid observation at an exact (level, state) coordinate.
+
+    Hand-built rather than produced by the executor, and deliberately so: the
+    closure table below has to cover coordinates no registered plan can
+    currently reach (``optional`` at any state, ``mandatory`` at
+    ``not_applicable``), which is precisely what a producer-driven fixture
+    cannot supply. The *behavioural* tests above all drive the real plan
+    executor; this one complements them with totality over the partition.
+    """
+
+    unmeasured = state in UNMEASURED_REQUIREMENT_STATES
+    return DevSourceObservation(
+        schema_version="dev_source_observation.v1",
+        observation_id=str(uuid.uuid4()),
+        source_class=source,
+        adapter_id="status_change_service.status_snapshot.v1",
+        requirement_level=level,
+        observed_state=state,
+        data_semantics="not_measured" if unmeasured else "no_data",
+        usable_fact_count=0,
+        subject_coverage=0.0 if unmeasured else 1.0,
+        observed_at=_METRIC_WINDOW,
+        query_version="v1",
+        limitation=f"source_{state.value}" if unmeasured else None,
+    )
+
+
+def _investigation_with(observations: tuple[DevSourceObservation, ...]) -> Any:
+    """Wrap observations in a contract-valid ``DevInvestigationResult``.
+
+    ``plan_id``/``plan_version`` come from the real registry rather than
+    being typed as literals. Both are pattern-constrained on the contract,
+    and the constraint is not guessable: writing this by hand first produced
+    ``"1"`` (rejected, ``min_length=3``) and then ``"1.0.0"`` (rejected, it
+    must match ``^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$``).
+    That is the hand-authored-fixture failure mode in miniature -- caught
+    here by a validator, but the same guess in a place with no validator is
+    how a fixture drifts away from the shape production actually emits. Only
+    the coordinates no producer can reach are fabricated below; everything
+    obtainable from the real thing is taken from the real thing.
+    """
+
+    plan = CORE_PLANS_BY_INTENT[QuestionIntentID.ENTITY_STATUS]
+    return DevInvestigationResult(
+        schema_version="dev_investigation_result.v1",
+        result_id=str(uuid.uuid4()),
+        plan_id=plan.plan_id,
+        plan_version=plan.plan_version,
+        run_id=str(uuid.uuid4()),
+        subject_entity_id=None,
+        observations=observations,
+        completed_steps=(),
+        skipped_steps=(),
+        failed_steps=(),
+        relationship_closure_verified=True,
+        completed_at=_METRIC_WINDOW,
+    )
+
+
+#: The closure table. Rows are ``requirement_level``; the value is the set of
+#: ``observed_state`` members that must NOT block a complete answer at that
+#: level. Every other (level, state) pair must block.
+#:
+#: This exists because CHAOS-3334 took three rounds of the same defect --
+#: mandatory-only, then applicable-conditional, then AVAILABLE_UNKNOWN -- each
+#: found by someone else after the previous fix was called done. A fourth
+#: patch is not a closure argument; a partition where every cell is stated and
+#: checked is.
+_NON_BLOCKING: dict[str, set[SourceRequirementState]] = {
+    "mandatory": {
+        SourceRequirementState.AVAILABLE_CURRENT,
+    },
+    "conditional": {
+        SourceRequirementState.AVAILABLE_CURRENT,
+        # Never applicable to this subject -- the plan says it was not needed.
+        SourceRequirementState.NOT_APPLICABLE,
+    },
+    "optional": set(SourceRequirementState),
+    "not_applicable": set(SourceRequirementState),
+}
+
+
+@pytest.mark.parametrize("level", sorted(_NON_BLOCKING))
+def test_the_blocking_partition_is_total_over_level_and_state(level: str) -> None:
+    """Every (requirement_level, observed_state) cell, stated and checked.
+
+    Drives the real ``_coverage_with_plan_sources`` over a clean 1/1
+    tool-only coverage and asserts, per cell, whether a ``complete`` answer
+    would still be permitted -- using the answer contract's own predicate
+    (a source named in either disclosure list blocks it), not a
+    reimplementation of it.
+    """
+
+    baseline = DevCoverage(
+        required_source_count=1,
+        available_source_count=1,
+        unavailable_required_sources=[],
+        stale_required_sources=[],
+        as_of=_METRIC_WINDOW,
+    )
+    for state in SourceRequirementState:
+        merged = DevOrchestrator._coverage_with_plan_sources(
+            baseline,
+            _investigation_with(
+                (_observation(level, state, source=SourceClass.STATUS_CHANGE),)
+            ),
+        )
+        blocks = bool(
+            merged.unavailable_required_sources or merged.stale_required_sources
+        )
+        expected_block = state not in _NON_BLOCKING[level]
+        assert blocks is expected_block, (
+            f"({level}, {state.value}) should "
+            f"{'block' if expected_block else 'permit'} a complete answer"
+        )
+        # An observation that participates must also be counted, or the
+        # coverage ratio would understate what the server required.
+        if level in {"mandatory", "conditional"} and not (
+            level == "conditional" and state is SourceRequirementState.NOT_APPLICABLE
+        ):
+            assert merged.required_source_count == 2
+        else:
+            assert merged.required_source_count == 1
+
+
+def test_every_registered_plan_contributes_a_blocking_source() -> None:
+    """The merge must never be a silent no-op for a whole plan.
+
+    ``_coverage_with_plan_sources`` returns coverage untouched when no
+    observation participates. For every plan registered today that cannot
+    happen -- each declares at least one mandatory source requirement -- so a
+    plan-governed run always has something that can refuse a false
+    ``complete``. A future plan with only conditional or optional
+    requirements would silently opt out of this entire ticket's protection,
+    which is exactly the kind of gap that gets noticed a wave later.
+    """
+
+    without_mandatory = sorted(
+        plan.plan_id
+        for plan in CORE_PLANS_BY_INTENT.values()
+        if not any(
+            requirement.requirement_level == "mandatory"
+            for requirement in plan.source_requirements
+        )
+    )
+    assert without_mandatory == [], (
+        "these plans declare no mandatory source, so a failed investigation "
+        "cannot refuse a complete answer for them; decide whether their "
+        "conditional requirements should participate before registering them"
     )
 
 

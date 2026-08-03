@@ -139,7 +139,7 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 		cfg.WorkerJiraIncidentsEnabled ||
 		cfg.WorkerLaunchDarklyFeatureFlagsEnabled ||
 		cfg.WorkerGithubRepoMetadataEnabled || cfg.WorkerGithubPRsEnabled ||
-		cfg.WorkerGithubCICDEnabled {
+		cfg.WorkerGithubCICDEnabled || cfg.WorkerGithubCommitsEnabled {
 		t.Fatal("provider route switches must default off")
 	}
 }
@@ -168,6 +168,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITHUB_REPO_METADATA_ENABLED":       "true",
 		"WORKER_GITHUB_PRS_ENABLED":                 "true",
 		"WORKER_GITHUB_CICD_ENABLED":                "true",
+		"WORKER_GITHUB_COMMITS_ENABLED":             "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +198,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		!cfg.WorkerJiraIncidentsEnabled ||
 		!cfg.WorkerLaunchDarklyFeatureFlagsEnabled ||
 		!cfg.WorkerGithubRepoMetadataEnabled || !cfg.WorkerGithubPRsEnabled ||
-		!cfg.WorkerGithubCICDEnabled {
+		!cfg.WorkerGithubCICDEnabled || !cfg.WorkerGithubCommitsEnabled {
 		t.Fatal("expected independent provider route opt-ins")
 	}
 
@@ -219,6 +220,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": "sometimes",
 		"WORKER_GITHUB_REPO_METADATA_ENABLED":       "sometimes",
 		"WORKER_GITHUB_PRS_ENABLED":                 "sometimes",
+		"WORKER_GITHUB_COMMITS_ENABLED":             "sometimes",
 	} {
 		if _, err := Load(workerSpec(map[string]string{key: value})); err == nil {
 			t.Fatalf("expected %s=%q to fail", key, value)

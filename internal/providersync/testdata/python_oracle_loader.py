@@ -299,7 +299,11 @@ def _target_github_processor() -> None:
             "CiPipelineRun": object,
             "Deployment": object,
             "GitBlame": object,
-            "GitCommit": object,
+            "GitCommit": type(
+                "GitCommit",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            ),
             "GitCommitStat": object,
             "GitPullRequest": object,
             "GitPullRequestReview": object,

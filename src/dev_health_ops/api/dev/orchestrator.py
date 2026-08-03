@@ -605,6 +605,7 @@ class DevOrchestrator:
         preflight: SubjectPreflight | None = None,
         plan_registry: Mapping[QuestionIntentID, DevInvestigationPlan] | None = None,
         plan_executor: PlanExecutor | None = None,
+        narrative_provider: narrative_fallback.NarrativeProvider | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -626,6 +627,14 @@ class DevOrchestrator:
         # not preflight itself is enabled.
         self._plan_registry = plan_registry or {}
         self._plan_executor = plan_executor
+        # CHAOS-3297 stack #4: ``None`` is the only certified state today --
+        # no narrative provider has been certified yet (CHAOS-3285's
+        # territory). synthesize_narrative treats a ``None`` provider as a
+        # configuration state, not a failure, and goes straight to the
+        # deterministic fallback. This is the seam CHAOS-3285 populates and
+        # the seam C3/C4 live-endpoint controls inject a scripted provider
+        # through.
+        self._narrative_provider = narrative_provider
         self._composer = PromptComposer(registry)
 
     async def run(
@@ -875,13 +884,14 @@ class DevOrchestrator:
                             failure_code,
                         ) = await narrative_fallback.synthesize_narrative(
                             frame=frame,
-                            # No certified narrative provider is wired
-                            # yet -- CHAOS-3285's territory. This is a
-                            # configuration state, not a provider
-                            # failure: synthesize_narrative goes
-                            # straight to the deterministic fallback
-                            # with no failure code.
-                            provider=None,
+                            # self._narrative_provider is None until
+                            # CHAOS-3285 certifies one (a configuration
+                            # state, not a provider failure --
+                            # synthesize_narrative goes straight to the
+                            # deterministic fallback with no failure
+                            # code in that case) or a test injects a
+                            # scripted one.
+                            provider=self._narrative_provider,
                             generated_at=datetime.now(UTC),
                         )
                         narrative_mode = narrative.mode

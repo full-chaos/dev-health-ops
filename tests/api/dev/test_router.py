@@ -62,6 +62,7 @@ from dev_health_ops.models.dev_persistence import (
     DevFeedback,
     DevMessage,
     DevRun,
+    DevRunNarrative,
     DevRunResolution,
     DevToolCall,
 )
@@ -89,6 +90,15 @@ _TABLES = tables_of(
     # in this module and its two dependents (test_chaos_3297_frame_e2e.py,
     # test_chaos_3297_frame_reachability.py) that import dev_api_context.
     DevRunResolution,
+    # CHAOS-3297 stack #4: finish() now calls record_narrative for a
+    # content-bearing terminal outcome (its first production call site --
+    # previously only the fully-formed but never-invoked persistence
+    # layer existed), so every schema this fixture backs must provision
+    # this table or the insert raises "no such table" and the narrative
+    # persistence failure path (which never strands the run, by design)
+    # silently absorbs it -- exactly the shape of gap
+    # DevRunResolution's own comment above describes for a sibling table.
+    DevRunNarrative,
     Setting,
 )
 

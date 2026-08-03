@@ -57,6 +57,18 @@ CLICKHOUSE_URI=… dev-hops metrics daily
 - GraphQL schema export `api/graphql/export_schema.py` is consumed by web CI for drift detection.
 - **Lefthook** (`make install` once — `core.hooksPath` is shared across worktrees): `commit-msg` strips agent attribution; `pre-commit` ruff format+fix then `mypy` gate; `pre-push` `ruff format --check` + `ruff check` + `mypy`. Fix code, don't add ignores/config exclusions.
 
+## Landing the plane
+
+- **Push early and incrementally.** “Work is not done until `git push` succeeds” is not only end-of-run cleanup. One CHAOS-3033 lane ran 57 minutes, compacted with “commit, push, PR” still in its plan, and delivered code that was never pushed. Push after the first commit; an unpushed worktree is one crash from nothing.
+- **Split landing from long autonomous work.** Commit, push, and PR is short, mechanical, and high-certainty. Exploratory porting is long and compaction-prone. Dispatch landing as its own short task.
+- **Give long-running lanes a durable brief and a todo pointer.** Write the brief to `<project>/.remember/lanes/<lane-id>/BRIEF.md`. The `dev-health` root is not a git repository, so this does not pollute `git status --porcelain`; unlike `/tmp`, it does not evaporate. Forty review artifacts were lost in `/tmp` (CHAOS-3169). The todo list is load-bearing because the harness re-injects it after compaction: its first item must be “re-read BRIEF.md” and its last must be “land per BRIEF.md”. Require the lane to quote a `MARKER` line from the brief in its final report; otherwise “I re-read it” is unverified. Briefs are operational scaffolding for one run. Decisions and plans still belong in Linear, never only in `.remember/`.
+- **Do not let worker lanes delegate to sub-agents.** One port lane blocked on a delegated result and was killed after 30 minutes of inactivity without producing anything. Two sibling lanes completed the same task without delegating. A “30 minutes of inactivity” timeout is itself a fallback masquerade: an outstanding call made the lane look alive until the clock showed it was dead.
+- **A cited constructor is not proof of capability.** The constructor must be reachable with only its own switch enabled. A port satisfied the `file:line` acceptance bar while `cmd/dev-health-worker/provider_sync.go` returned an empty worker family because its config switch was missing from the activation condition. Registry ownership did not make the binary construct it. Strengthen the bar: cite the constructor and prove reachability with a table-driven test that enables only each pair's switch.
+
+## PR and CI conventions
+
+- The `governance` check requires `TEST-EVIDENCE` and `RISK-NOTES` markers in the PR body when a change touches `src/dev_health_ops/workers/provider_unit_route.py`. This is a PR-body requirement, not a code requirement. Missing markers cost two lanes a CI round.
+
 ## Pre-push validation gate (REQUIRED for every ops change)
 
 Before pushing ANY change to `dev-health-ops`, run the standing local gate from the

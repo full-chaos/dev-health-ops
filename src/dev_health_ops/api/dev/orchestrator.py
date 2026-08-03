@@ -40,7 +40,11 @@ from dev_health_ops.llm.agent.errors import (
     safe_agent_provider_error,
 )
 from dev_health_ops.llm.budget import budget_idempotency_scope
-from dev_health_ops.metrics.prometheus import ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL
+from dev_health_ops.metrics.prometheus import (
+    ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL,
+    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL,
+    ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL,
+)
 
 from . import terminal_frames
 from .answer_validator import (
@@ -677,7 +681,31 @@ class DevOrchestrator:
             if answer is not None:
                 try:
                     await self._recorder.record_answer(answer)
-                except Exception:
+                except Exception as answer_write_fault:
+                    # CHAOS-3332 Codex review (MED): this rewrite is the same
+                    # invisible-failure class the rest of this ticket removes,
+                    # and it is the one instance the new catch-all cannot
+                    # cover -- the exception is handled *locally* and never
+                    # propagates to the bottom of run(), so without this log a
+                    # validated answer being lost to a database failure is
+                    # indistinguishable from any other internal_error, with no
+                    # exception type and no traceback anywhere.
+                    #
+                    # It shares ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL with the
+                    # catch-all deliberately: both mean "a run terminated
+                    # internal_error for a reason no branch anticipated", which
+                    # is the alert an operator actually wants, and the distinct
+                    # log message keeps the two separable when triaging.
+                    logger.exception(
+                        "ask_dev.orchestrator.answer_write_fault",
+                        extra={
+                            "run_id": run_id,
+                            "exception_type": type(answer_write_fault).__name__,
+                        },
+                    )
+                    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                        exception_type=type(answer_write_fault).__name__
+                    ).inc()
                     state = RunState.FAILED
                     answer = None
                     error = DevError(
@@ -1307,6 +1335,61 @@ class DevOrchestrator:
                                     "execution deadline."
                                 ),
                             )
+                        except ToolRegistryError:
+                            # Run-level registry failures (unknown tool,
+                            # malformed executor output, cancellation) stay
+                            # fatal by design -- see
+                            # _rejected_tool_execution's docstring. Listed
+                            # explicitly so the catch-all below cannot
+                            # silently demote them to a per-call error.
+                            raise
+                        except Exception as executor_fault:
+                            # CHAOS-3332: an executor that raises OUTSIDE its
+                            # declared contract -- neither a rejection, a
+                            # timeout, nor a registry fault -- used to escape
+                            # every handler here and land in the catch-all at
+                            # the bottom of run(), which mapped it to a
+                            # terminal internal_error while logging nothing
+                            # at all. AskDevToolRegistry.execute re-raises
+                            # whatever the executor raised verbatim, so this
+                            # is the only place that class can be caught.
+                            #
+                            # The observed instance: a committed TEAM subject
+                            # (a real v1 direct scope since CHAOS-3301)
+                            # reaching MetricQueryService._validate_request,
+                            # which raises a bare ValueError because no
+                            # registered metric lists DirectScope.TEAM in its
+                            # supported_scopes. Every status question naming a
+                            # team died on its first tool call with zero
+                            # operator signal.
+                            #
+                            # One failed tool call must not discard a run that
+                            # can still answer from its other evidence, so
+                            # this degrades exactly like the timeout above
+                            # (CHAOS-3262's posture). It is NOT a silent
+                            # downgrade: an executor breaking its contract is
+                            # a server defect, so it is logged with a
+                            # traceback and counted under its own signal.
+                            # The safe_message is fixed text -- the exception
+                            # string is operator-only and never echoed to the
+                            # model or the user.
+                            logger.exception(
+                                "ask_dev.orchestrator.tool_executor_fault",
+                                extra={
+                                    "run_id": run_id,
+                                    "tool_id": tool_request.tool_id.value,
+                                    "exception_type": type(executor_fault).__name__,
+                                },
+                            )
+                            ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL.labels(
+                                tool_id=tool_request.tool_id.value,
+                                exception_type=type(executor_fault).__name__,
+                            ).inc()
+                            execution = self._rejected_tool_execution(
+                                tool_request=tool_request,
+                                code="source_unavailable",
+                                message="The tool did not produce a result.",
+                            )
                     if execution.serialized_bytes > self._limits.per_tool_bytes:
                         return await finish(
                             RunState.FAILED,
@@ -1616,7 +1699,32 @@ class DevOrchestrator:
                     "tool_unavailable", "The requested tool was not available."
                 ),
             )
-        except Exception:
+        except Exception as unhandled:
+            # CHAOS-3332: this handler is the run's last resort, and until now
+            # it mapped anything at all to a terminal internal_error while
+            # emitting nothing -- no log line, no metric, no exception type.
+            # A 100%-reproducible production crash (every TEAM-subject status
+            # question) was therefore indistinguishable from a transient blip
+            # in every operator surface there is. An increment here is always
+            # an unclassified server defect: every *expected* terminal
+            # condition in this run loop has its own typed handler above, so
+            # anything reaching this line is by construction something no
+            # branch anticipated, and it must be loud.
+            #
+            # Logged before finish() rather than after: finish() itself does
+            # database writes that can raise, and the diagnosis for the
+            # original exception must survive that.
+            logger.exception(
+                "ask_dev.orchestrator.unhandled_run_fault",
+                extra={
+                    "run_id": run_id,
+                    "exception_type": type(unhandled).__name__,
+                    "terminal_written": terminal_written,
+                },
+            )
+            ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                exception_type=type(unhandled).__name__
+            ).inc()
             if terminal_written:
                 raise
             return await finish(

@@ -59,6 +59,7 @@ from .operational_ordering_guard import (
     guard_operational_writer_tables,
     operational_ordering_contract_is_explicit,
 )
+from .repository_rows import build_repository_insert_row, repository_json_or_none
 from .utils import _parse_date_value, _parse_datetime_value
 
 logger = logging.getLogger(__name__)
@@ -182,9 +183,7 @@ class ClickHouseStore:
 
     @staticmethod
     def _json_or_none(value: Any) -> str | None:
-        if value is None:
-            return None
-        return json.dumps(value, default=str)
+        return repository_json_or_none(value)
 
     @staticmethod
     def _json_column(value: Any) -> str:
@@ -361,26 +360,7 @@ class ClickHouseStore:
           scope for this hot-path sink.
         """
         assert self.client is not None
-        repo_id = self._normalize_uuid(repo.id)
-
-        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
-        created_at = (
-            self._normalize_datetime(getattr(repo, "created_at", None)) or synced_at
-        )
-
-        row = {
-            "id": repo_id,
-            "repo": repo.repo,
-            "ref": getattr(repo, "ref", None),
-            "created_at": created_at,
-            "settings": self._json_or_none(getattr(repo, "settings", None)),
-            "tags": self._json_or_none(getattr(repo, "tags", None)),
-            "provider": getattr(repo, "provider", None) or "unknown",
-            "last_synced": synced_at,
-            # Nullable(UUID) — NULL for native sync, stamped by external-ingest
-            # sink writes (CHAOS-2698 D1).
-            "source_id": self._normalize_uuid_or_none(getattr(repo, "source_id", None)),
-        }
+        row = build_repository_insert_row(repo)
         await self._insert_rows(
             "repos",
             [

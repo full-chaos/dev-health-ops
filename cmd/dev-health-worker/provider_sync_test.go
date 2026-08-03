@@ -233,6 +233,7 @@ func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
 	for name, want := range map[string]providersync.CompleteRouteSwitches{
 		"none":            {},
 		"github":          {GithubRepoMetadata: true},
+		"gitlab":          {GitlabRepoMetadata: true},
 		"github_prs":      {GithubPRs: true},
 		"github_cicd":     {GithubCICD: true},
 		"github_security": {GithubSecurity: true},
@@ -288,6 +289,12 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 			name: "github repo metadata",
 			cfg: config.Config{
 				Profile: "sync", WorkerGithubRepoMetadataEnabled: true,
+			},
+		},
+		{
+			name: "gitlab repo metadata",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabRepoMetadataEnabled: true,
 			},
 		},
 		{
@@ -366,6 +373,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 		"github": {
 			cfg:  config.Config{WorkerGithubRepoMetadataEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubRepoMetadata: true},
+		},
+		"gitlab": {
+			cfg:  config.Config{WorkerGitlabRepoMetadataEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabRepoMetadata: true},
 		},
 		"github_prs": {
 			cfg:  config.Config{WorkerGithubPRsEnabled: true},
@@ -593,6 +604,7 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 	for name, cfg := range map[string]config.Config{
 		"launchdarkly":         {WorkerLaunchDarklyFeatureFlagsEnabled: true},
 		"github_repo_metadata": {WorkerGithubRepoMetadataEnabled: true},
+		"gitlab_repo_metadata": {WorkerGitlabRepoMetadataEnabled: true},
 		"github_cicd":          {WorkerGithubCICDEnabled: true},
 		"github_commits":       {WorkerGithubCommitsEnabled: true},
 		"github_deployments":   {WorkerGithubDeploymentsEnabled: true},
@@ -606,5 +618,33 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 				t.Fatal("route-ready switch leaves the provider worker family dormant")
 			}
 		})
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsGitLabRepositoryCapability(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(
+		nil,
+		providersync.CompleteRouteSwitches{GitlabRepoMetadata: true},
+		nil, nil, nil, nil, nil, nil, slog.Default(),
+	)
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "gitlab", Dataset: "repo-metadata",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := executor.Handler.(providersync.GitLabRepositoryRouteHandler); !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.GitLabRepositoryClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+	if _, ok := executor.Committer.Readback.(providersync.GitLabRepositoryClickHouseEffects); !ok {
+		t.Fatalf("executor readback=%T", executor.Committer.Readback)
 	}
 }

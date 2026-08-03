@@ -193,10 +193,10 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Nine route-ready pairs can reach this closure today:
+			// Ten route-ready pairs can reach this closure today:
 			// launchdarkly/feature-flags plus github/repo-metadata, cicd,
-			// commits, deployments, security, files, commit-stats, and
-			// jira/incidents. Each
+			// commits, deployments, security, files, and commit-stats, plus
+			// jira/incidents and gitlab/repo-metadata. Each
 			// has its own CompleteRouteHandler and effect sink. session.Claim
 			// is already known here — providerunit.Handler.Work only calls
 			// BuildExecutor after its own descriptor gate passed for THIS
@@ -231,6 +231,13 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitHubRepositoryRouteHandler{}
 				sink, readback = ghSink, ghSink
+			case session.Claim.Provider == "gitlab" &&
+				session.Claim.Dataset == "repo-metadata":
+				glSink := providersync.GitLabRepositoryClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitLabRepositoryRouteHandler{}
+				sink, readback = glSink, glSink
 			case session.Claim.Provider == "github" &&
 				session.Claim.Dataset == "prs":
 				ghPRSink := providersync.GitHubPullRequestClickHouseEffects{
@@ -371,10 +378,11 @@ func buildProviderSyncWorker(
 	logger *slog.Logger,
 ) (workerFamily, error) {
 	// Construct the family when ANY route switch is on, not launchdarkly's
-	// alone: (github, repo-metadata) became routable in CHAOS-3123 and
-	// (github, prs) in CHAOS-3122, and a process that dispatches github units
-	// while refusing to build the handler for them would strand every unit at
-	// a worker with nothing registered.
+	// alone: (github, repo-metadata) became routable in CHAOS-3123,
+	// (github, prs) in CHAOS-3122, and (gitlab, repo-metadata) in CHAOS-3342.
+	// A process that dispatches either provider's units while refusing to build
+	// the handler for them would strand every unit at a worker with nothing
+	// registered.
 	if cfg.Profile != "sync" || !providerSyncWorkerEnabled(cfg) {
 		return workerFamily{}, nil
 	}
@@ -486,6 +494,7 @@ func constructProviderSyncWorkerWithDependencies(
 
 func providerSyncWorkerEnabled(cfg config.Config) bool {
 	return cfg.WorkerLaunchDarklyFeatureFlagsEnabled || cfg.WorkerGithubRepoMetadataEnabled ||
+		cfg.WorkerGitlabRepoMetadataEnabled ||
 		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubCICDEnabled ||
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
 		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||

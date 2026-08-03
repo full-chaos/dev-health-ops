@@ -48,6 +48,11 @@ def _legacy_answer() -> DevAnswer:
     payload = deepcopy(positive_fixtures()["dev_answer.v1"])
     text = __import__("json").dumps(payload, default=str)
     payload = __import__("json").loads(re.sub(r"ev_\d+", _REAL_EVIDENCE_HANDLE, text))
+    # F10 (CHAOS-3297 stack #3): a real v1-sourced metric never carries
+    # evidence_ref_ids -- see test_terminal_frames.py's own _legacy_answer
+    # for the full rationale.
+    for metric in payload.get("metrics", []):
+        metric["evidence_ref_ids"] = []
     return DevAnswer.model_validate(payload)
 
 

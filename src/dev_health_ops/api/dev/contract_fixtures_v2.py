@@ -427,6 +427,8 @@ def _metric_ref() -> dict[str, Any]:
         "freshness": "fresh",
         "coverage": 1.0,
         "evidence_ref_ids": [],
+        # F10 (CHAOS-3297 stack #3): evidence_ref_ids XOR evidence_classification.
+        "evidence_classification": "legacy_v1_unminted",
     }
 
 

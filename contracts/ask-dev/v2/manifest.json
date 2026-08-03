@@ -141,7 +141,7 @@
       },
       "schema": {
         "path": "schemas/dev_source_observation.v1.schema.json",
-        "sha256": "d35744203e2981efc5f3a14c3b9ea805794a50225fac3f143da00eabe74cdde7"
+        "sha256": "ae8ad6c631aa627a7ef2103c75c9aa79117951bd8d78cd176104f020a893f489"
       },
       "schema_version": "dev_source_observation.v1"
     },
@@ -159,7 +159,7 @@
       },
       "schema": {
         "path": "schemas/dev_investigation_result.v1.schema.json",
-        "sha256": "0fadf29fa235a7563fe04146b54229feafcf8ddaffbbc192ad6d776b0c2de677"
+        "sha256": "1b2443d220b3e268686aca9676513c3a12d802376825e9ebf34ca9c185306769"
       },
       "schema_version": "dev_investigation_result.v1"
     },
@@ -238,7 +238,7 @@
         {
           "case": "denied_with_metrics",
           "path": "examples/negative/dev_answer_frame.v1.denied_with_metrics.json",
-          "sha256": "b737c1a7c1532d0d9265292ad1958fc900af549a6f214cb7251ec6308ced9b06"
+          "sha256": "7b4330c6d853cfa6144089113d7f46bfb5391a97a2f68e97f72cf48ddbfabe51"
         },
         {
           "case": "denied_with_comparisons",
@@ -337,7 +337,7 @@
       },
       "schema": {
         "path": "schemas/dev_answer_frame.v1.schema.json",
-        "sha256": "6a630b576546f6706fbf3c4abb2d11c4d4019e0c25934a9f99993b0e43e0fa4a"
+        "sha256": "9e522a40477b0267161e62bdaa6793e37bbe85e8ecc3b791c4f8857d77863470"
       },
       "schema_version": "dev_answer_frame.v1"
     },
@@ -423,7 +423,7 @@
       },
       "schema": {
         "path": "schemas/dev_answer.v2.schema.json",
-        "sha256": "ad2988218fc5d9fcc0d67bb419dc0e05eb5f8536597945d93de6507391f48d2e"
+        "sha256": "afc72360f1621105720996f460739bf4441688ac1b0cb80c1f982981bc3fd1f1"
       },
       "schema_version": "dev_answer.v2"
     },
@@ -441,7 +441,7 @@
       },
       "schema": {
         "path": "schemas/dev_stream_event.v2.schema.json",
-        "sha256": "13c66280165216e66faa3f87274272514fdee6833ac3892ef5d498b532c5ec33"
+        "sha256": "ea027bb155d71526985c4868f41ef7006b36a40b325ea6c3c4b5b20aebe2dd4a"
       },
       "schema_version": "dev_stream_event.v2"
     }

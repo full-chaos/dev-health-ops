@@ -169,6 +169,13 @@ NO_ANSWER_FRAME_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
     "readiness": NoAnswerFieldPolicy.ABSENT,
     "sections": NoAnswerFieldPolicy.ABSENT,
     "facts": NoAnswerFieldPolicy.ABSENT,
+    # ABSENT forces the whole tuple empty on a no-answer outcome, which
+    # makes DevMetricRefV2.evidence_classification (CHAOS-3297 stack #3,
+    # F10 metric half) moot here: there is never a metric instance -- with
+    # or without a classification -- for a no-answer outcome to carry. No
+    # separate registry entry for DevMetricRefV2 is needed; F10's XOR
+    # invariant is enforced at the metric's own construction validator and
+    # re-checked by validate_frame_grounding, independent of this table.
     "metrics": NoAnswerFieldPolicy.ABSENT,
     "comparisons": NoAnswerFieldPolicy.ABSENT,
     "relationship_paths": NoAnswerFieldPolicy.ABSENT,

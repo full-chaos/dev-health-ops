@@ -690,6 +690,7 @@ from dev_health_ops.api.dev.contracts_v2.embedded import (  # noqa: E402
     DevRequiredChildFactV2,
     DevScopeV2,
     DevStatusFactV2,
+    MetricEvidenceClassification,
 )
 from dev_health_ops.api.dev.contracts_v2.plan import (  # noqa: E402
     DevInvestigationPlan,
@@ -1219,6 +1220,15 @@ def _fact_with_no_evidence(field: str):
             freshness=FreshnessState.FRESH,
             coverage=1.0,
             evidence_ref_ids=(),
+            # F10 (CHAOS-3297 stack #3): DevMetricRefV2 now requires evidence
+            # XOR a classification at construction time -- a distinct,
+            # earlier gate than the executor-level "required content slot
+            # with zero evidence" check this test exists to prove. This is
+            # a test double, not a real legacy-v1-sourced metric; the
+            # classification value only satisfies F10's contract-layer XOR
+            # so construction reaches the executor check this test is
+            # actually about (evidence_ref_ids stays () either way).
+            evidence_classification=MetricEvidenceClassification.LEGACY_V1_UNMINTED,
         )
     raise AssertionError(f"no no-evidence builder for {field!r}")
 

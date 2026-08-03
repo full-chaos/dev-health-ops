@@ -81,6 +81,17 @@ def _legacy_answer(*, claims: list[dict[str, Any]] | None = None) -> DevAnswer:
     payload = __import__("json").loads(re.sub(r"ev_\d+", _REAL_EVIDENCE_HANDLE, text))
     if claims is not None:
         payload["claims"] = claims
+    # F10 (CHAOS-3297 stack #3): a REAL v1-sourced metric never carries
+    # evidence_ref_ids -- production_runtime.py's query_metric.v1 tool
+    # scrubs them on every call, so the model never sees anything but ().
+    # The fixture's "ev_01" placeholder (now substituted to a real-format
+    # handle above, for the unrelated claim/evidence round-trip this helper
+    # also serves) is not representative of that; clear it to match what a
+    # real legacy answer's metric actually looks like, so
+    # wrap_legacy_answer_as_frame's unconditional evidence_classification
+    # is exercised the way production hits it.
+    for metric in payload.get("metrics", []):
+        metric["evidence_ref_ids"] = []
     return DevAnswer.model_validate(payload)
 
 

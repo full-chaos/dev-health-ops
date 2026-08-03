@@ -38,6 +38,26 @@ through ``wrap_legacy_answer_as_frame`` via ``DevAnswerFact.disclosures``
 folded into the fact's disclosure tuple in canonical (enum) order. See
 ``contracts_v2.base.FactDisclosure`` and ``contracts_v2.compat``'s
 import-time bijection assertion against ``DevClaimFlags.model_fields``.
+
+Forward guidance for stack #4/#5's real frame-only builders (not a build
+order for this module today -- CHAOS-3297 stack #3 never constructs a NEW
+``DevAnswerFact`` from ``DevInvestigationResult`` content; it only embeds
+``HealthRuleFinding``/``DeficiencyFinding`` objects directly on
+``DevAnswerFrame.health_findings``/``deficiency_findings``, neither of
+which has a ``disclosures``-equivalent field): when a future builder DOES
+construct a ``DevAnswerFact`` from a ``DevSourceObservation``/
+``DevSourceContent`` fact (a status fact, a pull request, a CI check, ...),
+its ``disclosures`` must derive from that observation's own
+``SourceRequirementState`` (``AVAILABLE_STALE`` -> ``FactDisclosure.STALE``,
+``AVAILABLE_UNKNOWN`` -> ``FactDisclosure.UNCERTAIN``, etc.) -- NEVER from
+``DevEvidenceRefV2.flags.untrusted_content``, which defaults ``True`` on
+every minted handle (see ``production_runtime._mint_evidence``) and would
+mark nearly every fact ``UNTRUSTED_SOURCE`` if used this way, making
+``answered`` structurally unreachable for any observation-backed fact.
+Package placement note: this rule belongs in THIS module (not a new
+``answer_frames`` package) -- lane-3297-s4 already created that package on
+its own branch for the narrative-fallback work, so minting a second one
+here would collide.
 """
 
 from __future__ import annotations
@@ -52,6 +72,7 @@ from .contracts import (
     DevAnswer,
     DevClaimFlags,
     DevContractVersions,
+    DevMetricRef,
 )
 from .contracts import ToolID as _ToolID
 from .contracts_v2.base import (
@@ -61,7 +82,12 @@ from .contracts_v2.base import (
     SourceClass,
 )
 from .contracts_v2.deficiency import DeficiencyFinding
-from .contracts_v2.embedded import DevCoverageV2, DevEvidenceRefV2, DevMetricRefV2
+from .contracts_v2.embedded import (
+    DevCoverageV2,
+    DevEvidenceRefV2,
+    DevMetricRefV2,
+    MetricEvidenceClassification,
+)
 from .contracts_v2.frame import (
     DevAnswerFact,
     DevAnswerFrame,
@@ -290,6 +316,28 @@ def _disclosures_from_claim_flags(flags: DevClaimFlags) -> tuple[FactDisclosure,
 
     return tuple(
         disclosure for disclosure in FactDisclosure if getattr(flags, disclosure.value)
+    )
+
+
+def _wrap_legacy_metric(metric: DevMetricRef) -> DevMetricRefV2:
+    """One v1 ``DevMetricRef`` (from ``answer.metrics``) mirrored into
+    ``DevMetricRefV2``, with F10's evidence_classification set
+    UNCONDITIONALLY (team-lead ruling, 2026-08-02) -- never inferred from
+    whether ``metric.evidence_ref_ids`` happens to be empty. Every v1-sourced
+    metric originates from the legacy model-tool-choice loop, ultimately from
+    ``production_runtime.py``'s ``query_metric.v1`` tool, which deliberately
+    scrubs ``evidence_ref_ids`` to ``()`` on every call -- so this is always
+    the correct classification for this path, by construction, not a guess.
+    If that invariant is ever violated (a v1 metric genuinely carrying real
+    evidence_ref_ids), ``DevMetricRefV2``'s own XOR validator rejects the
+    contradiction loudly rather than silently picking one side.
+    """
+
+    return DevMetricRefV2.model_validate(
+        {
+            **metric.model_dump(),
+            "evidence_classification": MetricEvidenceClassification.LEGACY_V1_UNMINTED,
+        }
     )
 
 
@@ -538,10 +586,7 @@ def wrap_legacy_answer_as_frame(
         health_findings_truncated=health_findings_truncated,
         deficiency_findings=deficiency_findings,
         deficiency_findings_truncated=deficiency_findings_truncated,
-        metrics=tuple(
-            DevMetricRefV2.model_validate(metric.model_dump())
-            for metric in answer.metrics
-        ),
+        metrics=tuple(_wrap_legacy_metric(metric) for metric in answer.metrics),
         evidence=tuple(
             DevEvidenceRefV2.model_validate(item.model_dump())
             for item in answer.evidence

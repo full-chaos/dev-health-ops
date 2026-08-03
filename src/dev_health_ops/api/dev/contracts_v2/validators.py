@@ -42,11 +42,11 @@ reproduced against those five:
     verified without a model in the loop. That layer is the TRD v2 §11
     layer-6 narrative-consistency validator, tracked as CHAOS-3297.
 (h) ``validate_frame_grounding`` — F10 (CHAOS-3297 stack #3, ratified
-    2026-08-02): every frame fact carries signer-minted evidence or an
-    explicit no-evidence classification (``fact.disclosures``). The
-    grounding floor ``contracts_v2/validators.py`` was missing before
-    stack #3 -- see that function's own docstring for the deliberately
-    NOT-yet-covered metrics half.
+    2026-08-02): every frame fact AND every metric block carries
+    signer-minted evidence or an explicit no-evidence classification
+    (``fact.disclosures`` / ``DevMetricRefV2.evidence_classification``).
+    The grounding floor ``contracts_v2/validators.py`` was missing before
+    stack #3.
 
 Where the code lives
 --------------------
@@ -462,13 +462,13 @@ def validate_outcome_consistency(frame: _frame.DevAnswerFrame) -> None:
 
 
 def validate_frame_grounding(frame: _frame.DevAnswerFrame) -> None:
-    """F10 (CHAOS-3297 stack #3, ratified 2026-08-02): every frame fact
-    carries signer-minted evidence or an explicit no-evidence
-    classification. Mirrors ``answer_validator._answer_has_material_grounding``'s
-    v1 shape (a grounding floor at the contract layer, not merely
-    documented) applied here at the per-fact granularity F10's own text
-    specifies, rather than v1's whole-answer "something somewhere is
-    grounded" check.
+    """F10 (CHAOS-3297 stack #3, ratified 2026-08-02): every frame fact AND
+    every metric block carries signer-minted evidence or an explicit
+    no-evidence classification. Mirrors ``answer_validator.
+    _answer_has_material_grounding``'s v1 shape (a grounding floor at the
+    contract layer, not merely documented) applied here at the per-fact/
+    per-metric granularity F10's own text specifies, rather than v1's
+    whole-answer "something somewhere is grounded" check.
 
     ``fact.disclosures`` (CHAOS-3297 flags gap, ratified 2026-08-02) is the
     "explicit no-evidence classification" channel for a
@@ -481,33 +481,58 @@ def validate_frame_grounding(frame: _frame.DevAnswerFrame) -> None:
     combination F10 forbids: neither real evidence nor an honest
     explanation for its absence.
 
-    Deliberately does NOT check ``frame.metrics`` yet. ``DevMetricRefV2``
-    has no disclosure-equivalent field, and ``frame.metrics`` today is
-    populated ONLY from the legacy v1 answer's own metrics
-    (``wrap_legacy_answer_as_frame``), which in turn can originate from
-    ``production_runtime.py``'s v1 ``query_metric.v1`` tool --
-    that tool deliberately scrubs ``evidence_ref_ids`` to ``()`` on every
-    call (its metric-service refs are not signer-minted ``DevEvidenceRef``
-    ids; see that call site's own comment). A strict per-metric grounding
-    requirement here would reject essentially every existing legacy-answer
-    frame that cites a metric -- a real regression, not a hypothetical
-    one. Tracked as an explicit, honest gap pending a design decision on
-    whether ``DevMetricRefV2`` needs its own no-evidence classification or
-    the requirement is scoped to v2-investigation-plan-sourced metrics
-    only (CHAOS-3297 Linear issue) -- never silently claimed as covered.
+    ``DevMetricRefV2.evidence_classification`` (CHAOS-3297 F10 metric half,
+    ratified 2026-08-02, option (a) over scoping the requirement away in
+    validator logic) closes the metric half of the SAME rule:
+    ``wrap_legacy_answer_as_frame`` sets ``legacy_v1_unminted``
+    unconditionally on every v1-sourced metric (that path's evidence is
+    always scrubbed by ``production_runtime.py``'s ``query_metric.v1``
+    tool), and the v2 investigation-plan path's ``_wire_metric_content``
+    mints real evidence directly. ``DevMetricRefV2`` already enforces
+    evidence XOR classification via its own ``model_validator`` -- this
+    frame-level re-check is defense in depth (the SAME posture
+    ``validate_frame_semantics`` takes for structural closure before its
+    other guards), not the only enforcement point: a metric that reached
+    ``frame.metrics`` via ``model_copy`` (which never reruns validators --
+    see ``builtin_steps.py``'s construct-then-mint pattern) could otherwise
+    carry an un-revalidated, silently invalid combination.
     """
 
-    ungrounded = [
+    ungrounded_facts = [
         fact.fact_id
         for fact in frame.facts
         if not fact.evidence_ref_ids and not fact.disclosures
     ]
-    if ungrounded:
+    if ungrounded_facts:
         raise ValueError(
             "F10: fact(s) "
-            f"{sorted(ungrounded)} carry neither evidence_ref_ids nor a "
-            "disclosure -- every fact requires signer-minted evidence or "
+            f"{sorted(ungrounded_facts)} carry neither evidence_ref_ids nor "
+            "a disclosure -- every fact requires signer-minted evidence or "
             "an explicit no-evidence classification"
+        )
+    ungrounded_metrics = [
+        metric.metric_ref_id
+        for metric in frame.metrics
+        if not metric.evidence_ref_ids and metric.evidence_classification is None
+    ]
+    if ungrounded_metrics:
+        raise ValueError(
+            "F10: metric(s) "
+            f"{sorted(ungrounded_metrics)} carry neither evidence_ref_ids "
+            "nor an evidence_classification -- every metric requires "
+            "signer-minted evidence or an explicit no-evidence classification"
+        )
+    overgrounded_metrics = [
+        metric.metric_ref_id
+        for metric in frame.metrics
+        if metric.evidence_ref_ids and metric.evidence_classification is not None
+    ]
+    if overgrounded_metrics:
+        raise ValueError(
+            "F10: metric(s) "
+            f"{sorted(overgrounded_metrics)} carry BOTH evidence_ref_ids and "
+            "an evidence_classification -- the classification exists only "
+            "for the no-evidence case"
         )
 
 

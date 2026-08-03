@@ -1348,6 +1348,17 @@
           "title": "Display Precision",
           "type": "integer"
         },
+        "evidence_classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricEvidenceClassification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "evidence_ref_ids": {
           "items": {
             "maxLength": 44,
@@ -2477,6 +2488,14 @@
       ],
       "title": "HealthRuleFinding",
       "type": "object"
+    },
+    "MetricEvidenceClassification": {
+      "description": "Closed reasons a ``DevMetricRefV2`` may carry no per-metric evidence\nref (F10, CHAOS-3297 stack #3, ratified 2026-08-02) -- the same\n\"evidence XOR an explicit no-evidence classification\" pattern\n``contracts_v2.deficiency.DeficiencyEvidenceClassification`` already\nestablished, applied to metrics here.",
+      "enum": [
+        "legacy_v1_unminted"
+      ],
+      "title": "MetricEvidenceClassification",
+      "type": "string"
     },
     "MetricID": {
       "enum": [

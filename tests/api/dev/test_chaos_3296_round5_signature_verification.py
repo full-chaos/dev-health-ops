@@ -75,6 +75,7 @@ from dev_health_ops.api.dev.contracts_v2.embedded import (
     DevMetricRefV2,
     DevScopeV2,
     DevStatusFactV2,
+    MetricEvidenceClassification,
 )
 from dev_health_ops.api.dev.contracts_v2.plan import (
     DevInvestigationPlan,
@@ -829,6 +830,14 @@ def _metric_fact(
         freshness=FreshnessState.FRESH,
         coverage=1.0,
         evidence_ref_ids=(),
+        # F10 (CHAOS-3297 stack #3): a bootstrapping placeholder satisfying
+        # the evidence-XOR-classification requirement at construction time,
+        # exactly like builtin_steps.py's own provisional-then-mint pattern
+        # -- every call site below that later attaches real evidence via
+        # model_copy must ALSO clear this in the SAME update (model_copy
+        # never revalidates, so leaving it set would silently produce an
+        # invalid wire object nothing catches).
+        evidence_classification=MetricEvidenceClassification.LEGACY_V1_UNMINTED,
     )
 
 
@@ -857,7 +866,9 @@ async def test_red_metric_full_field_swap_is_rejected():
             observed_at=OBSERVED_AT,
             freshness=FreshnessState.FRESH,
         )
-        genuine_ref = genuine.model_copy(update={"evidence_ref_ids": (handle,)})
+        genuine_ref = genuine.model_copy(
+            update={"evidence_ref_ids": (handle,), "evidence_classification": None}
+        )
         forged_ref = genuine.model_copy(
             update={
                 "metric_id": MetricID.AVG_WIP,
@@ -865,6 +876,7 @@ async def test_red_metric_full_field_swap_is_rejected():
                     {"timestamp": OBSERVED_AT, "value": float(i)} for i in range(999)
                 ),
                 "evidence_ref_ids": (handle,),
+                "evidence_classification": None,
             }
         )
         return _queried_outcome(

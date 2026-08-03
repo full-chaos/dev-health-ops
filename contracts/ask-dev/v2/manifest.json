@@ -451,7 +451,7 @@
       },
       "schema": {
         "path": "schemas/dev_stream_event.v2.schema.json",
-        "sha256": "5be2fb3d60aae37bd1a645fb96488ace92847121b71e77daf10c2f4a4774585b"
+        "sha256": "4f9649b45d387d381d5e25de302ddc85e6e7e5c1092424f1c28acafb1f2370ab"
       },
       "schema_version": "dev_stream_event.v2"
     }
@@ -461,6 +461,10 @@
     {
       "case": "valid",
       "path": "examples/streams/valid.json"
+    },
+    {
+      "case": "valid_with_narrative_fallback",
+      "path": "examples/streams/valid_with_narrative_fallback.json"
     },
     {
       "case": "invalid_duplicate_terminal",
@@ -493,6 +497,22 @@
     {
       "case": "invalid_answer_run_id_mismatch",
       "path": "examples/streams/invalid_answer_run_id_mismatch.json"
+    },
+    {
+      "case": "invalid_missing_frame_ready",
+      "path": "examples/streams/invalid_missing_frame_ready.json"
+    },
+    {
+      "case": "invalid_duplicate_frame_ready",
+      "path": "examples/streams/invalid_duplicate_frame_ready.json"
+    },
+    {
+      "case": "invalid_duplicate_narrative_fallback",
+      "path": "examples/streams/invalid_duplicate_narrative_fallback.json"
+    },
+    {
+      "case": "invalid_narrative_fallback_before_frame_ready",
+      "path": "examples/streams/invalid_narrative_fallback_before_frame_ready.json"
     }
   ]
 }

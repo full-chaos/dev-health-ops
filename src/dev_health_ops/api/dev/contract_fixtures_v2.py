@@ -1382,23 +1382,36 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
 
 def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
     started = deepcopy(positive_fixtures()["dev_stream_event.v2"])
-    terminal_error = {
+    # CHAOS-3297 requirement 9: every terminal run persists a frame (P1), so
+    # every valid stream carries exactly one interior answer.frame_ready
+    # milestone, strictly between run.started and the terminal result.
+    # Threaded into every fixture list below at sequence 1 (immediately
+    # after started) so each existing negative fixture stays isolated to
+    # the ONE violation its name claims, rather than also failing for the
+    # unrelated reason "missing frame_ready".
+    frame_ready = {
         **deepcopy(started),
         "sequence": 1,
+        "event": "answer.frame_ready",
+    }
+    terminal_error = {
+        **deepcopy(started),
+        "sequence": 2,
         "event": "error",
         "error": _error(),
     }
     done = {
         **deepcopy(started),
-        "sequence": 2,
+        "sequence": 3,
         "event": "done",
         "terminal_kind": "error",
     }
     duplicate_terminal = [
         deepcopy(started),
+        deepcopy(frame_ready),
         deepcopy(terminal_error),
-        {**deepcopy(terminal_error), "sequence": 2},
-        {**deepcopy(done), "sequence": 3},
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
     ]
 
     # Codex adversarial review (CHAOS-3294): "run.started, done, error, done"
@@ -1406,15 +1419,16 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
     # tripped the old check, which only looked at the *last* event.
     premature_done = {
         **deepcopy(started),
-        "sequence": 1,
+        "sequence": 2,
         "event": "done",
         "terminal_kind": "error",
     }
     premature_done_stream = [
         deepcopy(started),
+        deepcopy(frame_ready),
         premature_done,
-        {**deepcopy(terminal_error), "sequence": 2},
-        {**deepcopy(done), "sequence": 3},
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
     ]
 
     # Round-2 adversarial review: a second `run.started` never tripped any
@@ -1423,15 +1437,17 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
     duplicate_start_stream = [
         deepcopy(started),
         {**deepcopy(started), "sequence": 1},
-        {**deepcopy(terminal_error), "sequence": 2},
-        {**deepcopy(done), "sequence": 3},
+        {**deepcopy(frame_ready), "sequence": 2},
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
     ]
 
     duplicate_done_stream = [
         deepcopy(started),
-        {**deepcopy(terminal_error), "sequence": 1},
-        {**deepcopy(done), "sequence": 2},
+        deepcopy(frame_ready),
+        {**deepcopy(terminal_error), "sequence": 2},
         {**deepcopy(done), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
     ]
 
     # Codex adversarial review (CHAOS-3294): two `resolution.updated` events
@@ -1459,8 +1475,9 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
         deepcopy(started),
         resolution_v1,
         resolution_v2_rewrite,
-        {**deepcopy(terminal_error), "sequence": 3},
-        {**deepcopy(done), "sequence": 4},
+        {**deepcopy(frame_ready), "sequence": 3},
+        {**deepcopy(terminal_error), "sequence": 4},
+        {**deepcopy(done), "sequence": 5},
     ]
 
     # Codex adversarial review (CHAOS-3294): an `answer.completed` event's
@@ -1474,23 +1491,84 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
         )
     answer_completed_mismatch = {
         **deepcopy(started),
-        "sequence": 1,
+        "sequence": 2,
         "event": "answer.completed",
         "answer": mismatched_run_answer,
     }
     answer_run_id_mismatch_stream = [
         deepcopy(started),
+        deepcopy(frame_ready),
         answer_completed_mismatch,
-        {**deepcopy(done), "sequence": 2, "terminal_kind": "answer"},
+        {**deepcopy(done), "sequence": 3, "terminal_kind": "answer"},
+    ]
+
+    # CHAOS-3297 stack #4: answer.frame_ready itself is a new mandatory
+    # interior marker -- exercise the guard the way every other marker in
+    # this fixture set is exercised (missing entirely; duplicated; placed
+    # after the terminal result it must precede).
+    missing_frame_ready_stream = [
+        deepcopy(started),
+        {**deepcopy(terminal_error), "sequence": 1},
+        {**deepcopy(done), "sequence": 2},
+    ]
+    duplicate_frame_ready_stream = [
+        deepcopy(started),
+        deepcopy(frame_ready),
+        {**deepcopy(frame_ready), "sequence": 2},
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
+    ]
+    # No "frame_ready after terminal" fixture: given the three fixed-position
+    # checks (run.started@0, terminal@len-2, done@len-1) already passed, a
+    # single frame_ready occurrence is pigeonholed into the open interior --
+    # see stream._validate_run_lifecycle's docstring for why that range is
+    # not independently checked (it cannot independently fail).
+
+    # CHAOS-3297 stack #4: answer.narrative_fallback is optional, at most
+    # once, and must occur after answer.frame_ready when present -- exercise
+    # both halves of that guard.
+    narrative_fallback = {
+        **deepcopy(started),
+        "sequence": 2,
+        "event": "answer.narrative_fallback",
+        "narrative_failure_code": "narrative_grounding_failed",
+    }
+    valid_with_narrative_fallback_stream = [
+        deepcopy(started),
+        deepcopy(frame_ready),
+        deepcopy(narrative_fallback),
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
+    ]
+    duplicate_narrative_fallback_stream = [
+        deepcopy(started),
+        deepcopy(frame_ready),
+        deepcopy(narrative_fallback),
+        {**deepcopy(narrative_fallback), "sequence": 3},
+        {**deepcopy(terminal_error), "sequence": 4},
+        {**deepcopy(done), "sequence": 5},
+    ]
+    narrative_fallback_before_frame_ready_stream = [
+        deepcopy(started),
+        {**deepcopy(narrative_fallback), "sequence": 1},
+        {**deepcopy(frame_ready), "sequence": 2},
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
     ]
 
     return {
-        "valid": [started, terminal_error, done],
+        "valid": [started, frame_ready, terminal_error, done],
+        "valid_with_narrative_fallback": valid_with_narrative_fallback_stream,
         "invalid_duplicate_terminal": duplicate_terminal,
-        "invalid_missing_done": [deepcopy(started), deepcopy(terminal_error)],
+        "invalid_missing_done": [
+            deepcopy(started),
+            deepcopy(frame_ready),
+            deepcopy(terminal_error),
+        ],
         "invalid_out_of_order": [
             {**deepcopy(started), "sequence": 1},
-            {**deepcopy(terminal_error), "sequence": 0},
+            {**deepcopy(frame_ready), "sequence": 0},
+            {**deepcopy(terminal_error), "sequence": 2},
             deepcopy(done),
         ],
         "invalid_premature_done": premature_done_stream,
@@ -1498,6 +1576,12 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
         "invalid_duplicate_start": duplicate_start_stream,
         "invalid_ledger_rewrite": ledger_rewrite_stream,
         "invalid_answer_run_id_mismatch": answer_run_id_mismatch_stream,
+        "invalid_missing_frame_ready": missing_frame_ready_stream,
+        "invalid_duplicate_frame_ready": duplicate_frame_ready_stream,
+        "invalid_duplicate_narrative_fallback": duplicate_narrative_fallback_stream,
+        "invalid_narrative_fallback_before_frame_ready": (
+            narrative_fallback_before_frame_ready_stream
+        ),
     }
 
 

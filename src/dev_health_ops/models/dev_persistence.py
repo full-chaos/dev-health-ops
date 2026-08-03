@@ -352,6 +352,20 @@ class DevRun(Base):
             "tool_call_count >= 0 AND citation_count >= 0 AND metric_count >= 0",
             name="ck_dev_runs_counts_nonnegative",
         ),
+        # CHAOS-3297 codex NO-SHIP finding round 1, MEDIUM #3: the closed
+        # vocabulary contracts_v2.base.NarrativeFailureCode owns, enforced
+        # at the DB boundary (migration 0083) so an ORM write that bypasses
+        # persistence.service.update_run, a bulk write, or a raw connection
+        # can never persist an invented code -- the same posture migration
+        # 0080 established for dev_answer_frames/dev_run_narratives.payload.
+        CheckConstraint(
+            "narrative_failure_code IS NULL OR narrative_failure_code IN ("
+            "'provider_timeout', 'provider_refused', 'provider_empty_content', "
+            "'provider_schema_violation', 'provider_output_budget_exceeded', "
+            "'provider_unsafe_content', 'narrative_grounding_failed', "
+            "'provider_unknown_failure')",
+            name="ck_dev_runs_narrative_failure_code",
+        ),
         Index(
             "ix_dev_runs_owner_conversation_started",
             "org_id",

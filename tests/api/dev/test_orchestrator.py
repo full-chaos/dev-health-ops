@@ -40,7 +40,11 @@ from dev_health_ops.llm.agent.scripted import ScriptedAgentProvider, ScriptedSte
 
 class Recorder:
     def __init__(
-        self, *, fail_answer_write: bool = False, fail_frame_write: bool = False
+        self,
+        *,
+        fail_answer_write: bool = False,
+        fail_frame_write: bool = False,
+        fail_narrative_write: bool = False,
     ) -> None:
         self.transitions: list[RunState] = []
         self.tools: list[DevToolRequest] = []
@@ -50,10 +54,13 @@ class Recorder:
         self.terminal_errors: list[Any] = []
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
         self.frames: list[Any] = []
+        self.narratives: list[Any] = []
+        self.terminal_calls: list[dict[str, Any]] = []
         self.resolutions: list[Any] = []
         self.rollbacks = 0
         self.fail_answer_write = fail_answer_write
         self.fail_frame_write = fail_frame_write
+        self.fail_narrative_write = fail_narrative_write
 
     async def transition(self, state: RunState) -> None:
         self.transitions.append(state)
@@ -89,9 +96,15 @@ class Recorder:
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
 
+    async def record_narrative(self, narrative: Any) -> None:
+        if self.fail_narrative_write:
+            raise RuntimeError("narrative storage unavailable")
+        self.narratives.append(narrative)
+
     async def terminal(self, **values) -> None:
         self.terminals.append(values["state"])
         self.terminal_errors.append(values.get("error"))
+        self.terminal_calls.append(values)
 
 
 class RecordingProvider:
@@ -179,6 +192,61 @@ def _answer(*, script_id: str, invalid_schema: bool = False) -> dict:
     return payload
 
 
+def _signed_evidence_ref_id(script_id: str) -> str:
+    """A real signed-shaped evidence ref (``ev1_<40 hex>``, matching
+    ``EvidenceReferenceSigner.issue()``'s actual output), deterministic per
+    ``script_id`` so a test's answer and its mock tool result agree on the
+    same ID. See ``_answer_with_signed_evidence``'s docstring for why this
+    exists."""
+
+    return "ev1_" + hashlib.sha256(script_id.encode()).hexdigest()[:40]
+
+
+def _answer_with_signed_evidence(*, script_id: str) -> dict:
+    """``_answer()``, but with a real signed-shaped evidence ref rather than
+    the shared ``dev_claim.v1`` fixture's legacy placeholder ``"ev_01"``.
+
+    CHAOS-3297 stack #4 finding: the shared fixture's placeholder predates
+    the v2 ``EvidenceHandle`` shape (``ev1_`` + 40 hex chars) and fails it,
+    which makes ``terminal_frames.wrap_legacy_answer_as_frame`` raise and
+    silently fall back to an ``internal_error`` frame for *every* test in
+    this file that uses the shared fixture -- including the pre-existing
+    ``test_scripted_tool_to_validated_answer_exercises_the_state_machine``,
+    confirmed by adding a ``recorder.frames[0].public_outcome`` assertion
+    to it and watching it fail with 'failed' instead of 'answered_with_gaps'
+    (`ask_dev.orchestrator.frame_construction_failed` fires but nothing
+    before this stack ever asserted on the frame closely enough to notice).
+    Real production evidence refs are minted by
+    ``production_runtime._mint_evidence`` -> ``EvidenceReferenceSigner.issue``,
+    which already emits the correct shape, so this is a test-fixture gap,
+    not a live production defect -- but it is a real, silent test-coverage
+    gap: those tests believe they exercise the answered_with_gaps frame
+    path and instead exercise the internal_error fallback. Filed as a
+    finding, not fixed here (terminal_frames.py / the shared fixture are
+    outside this stack's claimed scope) -- this local override, paired
+    with ``_registry_with_signed_evidence`` so the claim's evidence ID
+    also matches what the mock tool actually returned (answer-grounding
+    validation requires that), keeps this stack's own narrative-
+    reachability tests correct regardless.
+    """
+
+    payload = _answer(script_id=script_id)
+    signed_evidence_ref_id = _signed_evidence_ref_id(script_id)
+    payload["claims"][0]["evidence_ref_ids"] = [signed_evidence_ref_id]
+    # Real production v1 metrics never carry evidence_ref_ids at all --
+    # production_runtime.py's query_metric.v1 tool deliberately scrubs them
+    # to () (F10 finding), which is exactly why
+    # wrap_legacy_answer_as_frame's metric conversion unconditionally
+    # stamps evidence_classification=LEGACY_V1_UNMINTED (the F10 XOR
+    # constraint rejects a metric carrying both). Matching that shape here
+    # rather than giving the metric its own fabricated evidence.
+    payload["metrics"][0]["evidence_ref_ids"] = []
+    # DevAnswer's own v1 validator requires every claim evidence_ref_id to
+    # be present in the answer's top-level evidence list.
+    payload["evidence"][0]["evidence_ref_id"] = signed_evidence_ref_id
+    return payload
+
+
 def _tool_result(**overrides: object) -> DevToolResult:
     payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
     payload.update(overrides)
@@ -203,6 +271,35 @@ def _registry(*, calls: list[DevToolRequest] | None = None) -> AskDevToolRegistr
                 "tool_id": request.tool_id.value,
             }
         )
+        return DevToolResult.model_validate(payload)
+
+    return AskDevToolRegistry({tool_id: execute for tool_id in ToolID})
+
+
+def _registry_with_signed_evidence(evidence_ref_id: str) -> AskDevToolRegistry:
+    """Like ``_registry()``, but the tool result's own evidence carries
+    ``evidence_ref_id`` -- paired with ``_answer_with_signed_evidence``'s
+    matching claim so answer-grounding validation finds the claim's
+    evidence ID among what the tool actually returned (the shared
+    ``dev_tool_result.v1`` fixture has the same stale ``"ev_01"``
+    placeholder as the answer fixture -- see
+    ``_answer_with_signed_evidence``'s docstring). Also clears the tool
+    result's own metric evidence_ref_ids to ``[]``, matching
+    ``_answer_with_signed_evidence``'s metric -- ``validate_answer_candidate``
+    requires the answer's echoed metric to equal the canonical tool-result
+    metric *exactly*, field for field, not just share a ``metric_ref_id``."""
+
+    async def execute(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+            }
+        )
+        payload["evidence"][0]["evidence_ref_id"] = evidence_ref_id
+        payload["metrics"][0]["evidence_ref_ids"] = []
         return DevToolResult.model_validate(payload)
 
     return AskDevToolRegistry({tool_id: execute for tool_id in ToolID})
@@ -285,6 +382,108 @@ async def test_scripted_tool_to_validated_answer_exercises_the_state_machine() -
     assert RunState.ANSWER_VALIDATION in recorder.transitions
     assert recorder.terminals == [RunState.COMPLETED]
     assert len(recorder.answers) == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_answer_synthesizes_and_persists_a_deterministic_fallback_narrative() -> (
+    None
+):
+    """CHAOS-3297 stack #4 reachability: a content-bearing (answered_with_gaps
+    -- wrap_legacy_answer_as_frame never emits plain 'answered', see its
+    module docstring) terminal run must call narrative_fallback.synthesize_narrative,
+    persist the result via record_narrative, and thread narrative_mode/
+    narrative_failure_code into terminal(). No certified provider is wired
+    yet (CHAOS-3285), so mode must be deterministic_fallback with no failure
+    code -- a configuration state, not a failure.
+
+    Drives the real DevOrchestrator.run(), not a hand-rolled diagnostic --
+    the recorder is the only test double, matching this file's own house
+    rule (Recorder implements the real RunRecorder protocol, including the
+    record_narrative method this stack added)."""
+
+    script_id = "narrative-reachability"
+    recorder = Recorder()
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={"metric_id": "items_completed", "limit": 12},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_signed_evidence(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            recorder=recorder,
+            registry=_registry_with_signed_evidence(_signed_evidence_ref_id(script_id)),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert len(recorder.frames) == 1
+    assert recorder.frames[0].public_outcome.value == "answered_with_gaps"
+    assert len(recorder.narratives) == 1
+    assert recorder.narratives[0].mode == "deterministic_fallback"
+    assert recorder.narratives[0].frame_id == recorder.frames[0].frame_id
+    assert len(recorder.terminal_calls) == 1
+    assert recorder.terminal_calls[0]["narrative_mode"] == "deterministic_fallback"
+    assert recorder.terminal_calls[0]["narrative_failure_code"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_narrative_persistence_failure_never_strands_an_otherwise_completed_run() -> (
+    None
+):
+    """Mirrors test_answer_storage_failure's own posture for record_answer,
+    applied to record_narrative: a persistence failure on the narrative
+    sub-artifact must not crash or downgrade an otherwise-successful run --
+    the frame (and the v1 answer) already committed in this flush and
+    remain authoritative. The run must still reach COMPLETED.
+
+    codex NO-SHIP finding round 1 (HIGH #2b): narrative_mode/
+    narrative_failure_code must stay at their None default when the write
+    failed, not claim a mode the row never durably received -- the
+    original defect was exactly dev_runs asserting
+    'deterministic_fallback' for a narrative that was never written."""
+
+    script_id = "narrative-write-failure"
+    recorder = Recorder(fail_narrative_write=True)
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={"metric_id": "items_completed", "limit": 12},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_signed_evidence(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            recorder=recorder,
+            registry=_registry_with_signed_evidence(_signed_evidence_ref_id(script_id)),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert recorder.narratives == []  # the failed write never landed
+    assert len(recorder.terminal_calls) == 1
+    assert recorder.terminal_calls[0]["narrative_mode"] is None
+    assert recorder.terminal_calls[0]["narrative_failure_code"] is None
 
 
 @pytest.mark.asyncio
@@ -491,6 +690,13 @@ async def test_answer_storage_failure_becomes_one_safe_failed_terminal() -> None
     assert result.answer is None
     assert result.error is not None and result.error.code == "internal_error"
     assert recorder.terminals == [RunState.FAILED]
+    # CHAOS-3297 stack #4: "internal_error" maps to PublicOutcome.FAILED, a
+    # NO_ANSWER_OUTCOMES member -- narrative synthesis must be skipped
+    # entirely (no free-form channel on a no-answer outcome), not merely
+    # produce an empty/fallback narrative.
+    assert recorder.narratives == []
+    assert recorder.terminal_calls[0]["narrative_mode"] is None
+    assert recorder.terminal_calls[0]["narrative_failure_code"] is None
 
 
 @pytest.mark.asyncio

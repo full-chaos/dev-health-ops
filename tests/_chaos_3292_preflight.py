@@ -372,6 +372,11 @@ class Recorder:
         """No-op here; CHAOS-3295's InvestigationRecorder subclass captures this."""
         del result
 
+    async def record_narrative(self, narrative: Any) -> None:
+        """No-op here; CHAOS-3297 stack #4's narrative synthesis is not
+        under test in this module -- only the RunRecorder protocol shape."""
+        del narrative
+
     async def terminal(self, **values: Any) -> None:
         self.terminals.append(values["state"])
 

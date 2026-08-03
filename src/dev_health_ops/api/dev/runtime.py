@@ -9,6 +9,7 @@ from typing import Literal
 
 from dev_health_ops.llm.agent.contracts import AgentLLMProvider
 
+from .answer_frames import narrative_fallback
 from .contracts import DevContractVersions, DevMessageRequest
 from .contracts_v2.base import QuestionIntentID
 from .contracts_v2.plan import DevInvestigationPlan
@@ -48,6 +49,12 @@ class BoundedDevRuntime:
     #: these once ``preflight`` is also set.
     plan_registry: Mapping[QuestionIntentID, DevInvestigationPlan] | None = None
     plan_executor: PlanExecutor | None = None
+    #: CHAOS-3297 stack #4. ``None`` is the only certified state in
+    #: production today (no narrative provider is certified yet --
+    #: CHAOS-3285's territory); tests inject a scripted one through this
+    #: same seam to drive the live C3/C4 provider-failure-matrix controls
+    #: through the real endpoint.
+    narrative_provider: narrative_fallback.NarrativeProvider | None = None
 
     async def run(
         self,
@@ -75,6 +82,7 @@ class BoundedDevRuntime:
             preflight=self.preflight,
             plan_registry=self.plan_registry,
             plan_executor=self.plan_executor,
+            narrative_provider=self.narrative_provider,
         )
         return await orchestrator.run(
             request=request,

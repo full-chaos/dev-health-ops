@@ -3299,6 +3299,21 @@
       "title": "MetricID",
       "type": "string"
     },
+    "NarrativeFailureCode": {
+      "description": "The closed, run-persisted vocabulary for\n``dev_runs.narrative_failure_code`` (CHAOS-3297 stack #4, migration\n0078's docstring names this module's package as the vocabulary's\nowner).\n\nDeclared here rather than in ``answer_frames.narrative_fallback``\n(where the classification logic that produces it lives): both\n``contracts_v2.stream`` (the ``answer.narrative_fallback`` SSE event's\n``narrative_failure_code`` field) and ``persistence.service``\n(``update_run``'s own closed-vocabulary check, alongside its DB CHECK\nconstraint) need to validate against this exact set, and neither may\ndepend on ``answer_frames`` -- an orchestration-layer package that\nitself depends on ``contracts_v2``. Same leaf-module reasoning as\n``FactDisclosure`` above. ``answer_frames.narrative_fallback``\nre-exports this name for backward compatibility rather than defining\nits own copy.\n\nSeven members are the issue's own acceptance-criteria failure modes\n(timeout, refusal, empty content, schema violation, output-budget\nexhaustion, unsafe prose, narrative grounding failure); the eighth,\n``PROVIDER_UNKNOWN_FAILURE``, is the closed-vocabulary totality guard's\ncatch-all for a provider exception outside the six typed\n``NarrativeProviderError`` subclasses.",
+      "enum": [
+        "provider_timeout",
+        "provider_refused",
+        "provider_empty_content",
+        "provider_schema_violation",
+        "provider_output_budget_exceeded",
+        "provider_unsafe_content",
+        "narrative_grounding_failed",
+        "provider_unknown_failure"
+      ],
+      "title": "NarrativeFailureCode",
+      "type": "string"
+    },
     "ProgressStateV2": {
       "enum": [
         "interpreting_question",
@@ -3393,6 +3408,8 @@
         "resolution.updated",
         "progress",
         "answer.delta",
+        "answer.frame_ready",
+        "answer.narrative_fallback",
         "answer.completed",
         "warning",
         "error",
@@ -3444,6 +3461,17 @@
     },
     "event": {
       "$ref": "#/$defs/StreamEventTypeV2"
+    },
+    "narrative_failure_code": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NarrativeFailureCode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "occurred_at": {
       "format": "date-time",

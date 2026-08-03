@@ -60,10 +60,17 @@ def _validate_fixtures() -> None:
                 continue
             raise RuntimeError(f"negative fixture unexpectedly passed: {name}/{label}")
     streams = stream_fixtures()
-    parsed_valid = [DevStreamEventV2.model_validate(item) for item in streams["valid"]]
-    validate_stream_v2(parsed_valid)
+    # CHAOS-3297 stack #4: "valid_with_narrative_fallback" is the same
+    # lifecycle plus the optional answer.narrative_fallback marker -- also
+    # expected to validate cleanly, not a negative fixture. See
+    # test_contracts_v2._VALID_STREAM_FIXTURE_NAMES for the same exemption.
+    valid_stream_labels = {"valid", "valid_with_narrative_fallback"}
+    for label in valid_stream_labels:
+        validate_stream_v2(
+            [DevStreamEventV2.model_validate(item) for item in streams[label]]
+        )
     for label, payloads in streams.items():
-        if label == "valid":
+        if label in valid_stream_labels:
             continue
         try:
             validate_stream_v2(

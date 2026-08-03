@@ -49,6 +49,7 @@ __all__ = [
     "IdempotencyKey",
     "Label",
     "LongText",
+    "NarrativeFailureCode",
     "OpaqueID",
     "PlatformVersionToken",
     "PublicOutcome",
@@ -162,6 +163,42 @@ class FactDisclosure(StrEnum):
     UNCERTAIN = "uncertain"
     CONFLICTING = "conflicting"
     UNTRUSTED_SOURCE = "untrusted_source"
+
+
+class NarrativeFailureCode(StrEnum):
+    """The closed, run-persisted vocabulary for
+    ``dev_runs.narrative_failure_code`` (CHAOS-3297 stack #4, migration
+    0078's docstring names this module's package as the vocabulary's
+    owner).
+
+    Declared here rather than in ``answer_frames.narrative_fallback``
+    (where the classification logic that produces it lives): both
+    ``contracts_v2.stream`` (the ``answer.narrative_fallback`` SSE event's
+    ``narrative_failure_code`` field) and ``persistence.service``
+    (``update_run``'s own closed-vocabulary check, alongside its DB CHECK
+    constraint) need to validate against this exact set, and neither may
+    depend on ``answer_frames`` -- an orchestration-layer package that
+    itself depends on ``contracts_v2``. Same leaf-module reasoning as
+    ``FactDisclosure`` above. ``answer_frames.narrative_fallback``
+    re-exports this name for backward compatibility rather than defining
+    its own copy.
+
+    Seven members are the issue's own acceptance-criteria failure modes
+    (timeout, refusal, empty content, schema violation, output-budget
+    exhaustion, unsafe prose, narrative grounding failure); the eighth,
+    ``PROVIDER_UNKNOWN_FAILURE``, is the closed-vocabulary totality guard's
+    catch-all for a provider exception outside the six typed
+    ``NarrativeProviderError`` subclasses.
+    """
+
+    PROVIDER_TIMEOUT = "provider_timeout"
+    PROVIDER_REFUSED = "provider_refused"
+    PROVIDER_EMPTY_CONTENT = "provider_empty_content"
+    PROVIDER_SCHEMA_VIOLATION = "provider_schema_violation"
+    PROVIDER_OUTPUT_BUDGET_EXCEEDED = "provider_output_budget_exceeded"
+    PROVIDER_UNSAFE_CONTENT = "provider_unsafe_content"
+    NARRATIVE_GROUNDING_FAILED = "narrative_grounding_failed"
+    PROVIDER_UNKNOWN_FAILURE = "provider_unknown_failure"
 
 
 class SourceRequirementState(StrEnum):

@@ -41,6 +41,7 @@ from dev_health_ops.llm.agent.errors import (
 )
 from dev_health_ops.llm.budget import budget_idempotency_scope
 from dev_health_ops.metrics.prometheus import (
+    ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
     ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL,
     ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL,
     ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL,
@@ -87,7 +88,11 @@ from .contracts_v2.plan import DevInvestigationPlan
 from .investigation_plans import PlanExecutor, StepContext
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
-from .preflight_outcomes import TERMINAL_STATE_BY_OUTCOME, project_preflight_error
+from .preflight_outcomes import (
+    LEGACY_ONLY_QUESTION_INTENTS,
+    TERMINAL_STATE_BY_OUTCOME,
+    project_preflight_error,
+)
 from .prompts import PromptComposer, PromptConversationTurn
 from .subject_preflight import (
     SUBJECT_BEARING_TOOLS,
@@ -636,6 +641,14 @@ class DevOrchestrator:
         resolve_scope_attempted = False
         last_resolve_scope_outcome: ScopeResolutionOutcome | None = None
         selected_event_sink = event_sink or self._event_sink
+        # CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02): set
+        # by the CHAOS-3295 plan-execution block below when a plan actually
+        # runs, read by `finish()`'s closure (a free variable over this
+        # enclosing scope, not `nonlocal` -- `finish()` only reads it) so
+        # the legacy answer's frame can embed the plan's findings alongside
+        # it, without threading a new parameter through every one of
+        # `finish()`'s ~35 call sites.
+        investigation_result: DevInvestigationResult | None = None
 
         async def transition(state: RunState, safe_code: str | None = None) -> None:
             event = OrchestratorEvent(state=state, safe_code=safe_code)
@@ -730,7 +743,9 @@ class DevOrchestrator:
                 try:
                     frame = (
                         terminal_frames.wrap_legacy_answer_as_frame(
-                            answer, run_id=run_id
+                            answer,
+                            run_id=run_id,
+                            investigation_result=investigation_result,
                         )
                         if answer is not None
                         else terminal_frames.build_error_frame(
@@ -1027,6 +1042,40 @@ class DevOrchestrator:
             if self._plan_executor is not None and preflight_result is not None:
                 intent = preflight_result.interpretation.intent
                 plan = self._plan_registry.get(intent.intent_id)
+                # CHAOS-3300 finding (2026-08-02): a plan-eligible-by-vocabulary
+                # intent whose plan_registry.get(...) returns None silently
+                # falls through to the legacy model-tool-choice loop below --
+                # a real capability downgrade (a status_snapshot.v1-only
+                # answer instead of a governed health/deficiency/portfolio
+                # evaluation) that produced no signal anywhere. Distinguish it
+                # from BOUNDED_INVESTIGATION, whose fallthrough is the
+                # DESIGNED behavior (preflight_outcomes.LEGACY_ONLY_QUESTION_INTENTS'
+                # own docstring) -- only the genuine gap is loud.
+                #
+                # Team-lead ratification (2026-08-02, superseding an earlier,
+                # reverted attempt at an honest "feature_not_enabled" early
+                # termination here): the legacy fallback stays the terminal
+                # behavior for BOTH cases -- PORTFOLIO_STATUS recognition is
+                # new this wave; before it, these questions degraded to
+                # BOUNDED_INVESTIGATION and got a legacy answer, so
+                # terminating unsupported now would regress live free-form
+                # traffic to a refusal. That is exactly the behavioral cliff
+                # the epic's own §g sequencing defers to the stack-5 guard
+                # cutover, once frames are proven -- not a side effect stack
+                # 3 introduces alone. One rule until then: a recognized-but-
+                # unwired intent falls back loudly (this log + counter),
+                # never terminally.
+                if (
+                    plan is None
+                    and intent.intent_id not in LEGACY_ONLY_QUESTION_INTENTS
+                ):
+                    logger.warning(
+                        "ask_dev.orchestrator.plan_registry_gap",
+                        extra={"run_id": run_id, "intent_id": intent.intent_id.value},
+                    )
+                    ASK_DEV_PLAN_REGISTRY_GAP_TOTAL.labels(
+                        intent=intent.intent_id.value
+                    ).inc()
                 cardinality = intent.cardinality
                 plan_eligible = (
                     plan is not None and cardinality in plan.supported_cardinalities

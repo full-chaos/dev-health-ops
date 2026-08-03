@@ -1,0 +1,172 @@
+{
+  "clarification_candidates": [],
+  "comparisons": [],
+  "completion": {
+    "calculable": false,
+    "denominator": null,
+    "numerator": null,
+    "rate": null,
+    "rule_id": null,
+    "rule_version": null
+  },
+  "conflicts": [],
+  "coverage": {
+    "as_of": "2026-07-28T12:00:00Z",
+    "available_source_count": 1,
+    "required_source_count": 1,
+    "stale_required_sources": [],
+    "unavailable_required_sources": []
+  },
+  "deficiency_refs": [],
+  "direct_answer": "Twelve work items completed in the selected period.",
+  "evidence": [
+    {
+      "citation_text": "The contract implementation remains in progress.",
+      "confidence": 1.0,
+      "display_label": "Implement contract baseline",
+      "entity_id": "item_01",
+      "entity_type": "work_item",
+      "evidence_ref_id": "ev1_a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5",
+      "flags": {
+        "conflicting": false,
+        "deleted": false,
+        "redacted": false,
+        "stale": false,
+        "unavailable": false,
+        "uncertain": false,
+        "untrusted_content": true
+      },
+      "freshness": "fresh",
+      "link": {
+        "internal_path": "/work/items/item_01",
+        "source_url": null
+      },
+      "observed_at": "2026-07-28T12:00:00Z",
+      "provenance": "Canonical work graph projection",
+      "repository_ids": [
+        "repo_dev_health"
+      ],
+      "schema_version": "dev_evidence_ref.v1",
+      "source_system": "work_graph",
+      "source_version": "work_graph.v1",
+      "valid_entity_ids": [
+        "item_01"
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "confidence": 1.0,
+      "disclosures": [],
+      "evidence_ref_ids": [
+        "ev1_a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5"
+      ],
+      "fact_id": "claim_01",
+      "kind": "observed",
+      "relationship_path_ids": [],
+      "text": "Twelve work items completed in the selected period."
+    }
+  ],
+  "finding_refs": [],
+  "frame_id": "6ed7b22c-52f4-5250-bb85-3344114daf61",
+  "generated_at": "2026-07-28T12:00:00Z",
+  "health_profile_refs": [],
+  "limitations": [],
+  "metrics": [
+    {
+      "aggregation": "count",
+      "comparison_value": 10.0,
+      "comparison_window": {
+        "end": "2026-06-28T00:00:00Z",
+        "start": "2026-05-29T00:00:00Z",
+        "timezone": "America/Los_Angeles"
+      },
+      "coverage": 1.0,
+      "current_window": {
+        "end": "2026-07-28T00:00:00Z",
+        "start": "2026-06-28T00:00:00Z",
+        "timezone": "America/Los_Angeles"
+      },
+      "definition_version": "items_completed.v1",
+      "dimensions": [
+        "repository"
+      ],
+      "display_precision": 0,
+      "evidence_ref_ids": [],
+      "freshness": "fresh",
+      "label": "Items completed",
+      "metric_id": "items_completed",
+      "metric_ref_id": "metric_01",
+      "query_version": "query_metric.v1",
+      "resolved_scope": {
+        "comparison_range": {
+          "end": "2026-06-28T00:00:00Z",
+          "start": "2026-05-29T00:00:00Z",
+          "timezone": "America/Los_Angeles"
+        },
+        "direct_scope": "repository",
+        "entity_refs": [],
+        "organization_id": "org_fullchaos",
+        "repositories": [
+          "repo_dev_health"
+        ],
+        "schema_version": "dev_scope.v1",
+        "surface_context": {
+          "entity_refs": [
+            {
+              "display_label": "Selected repository",
+              "entity_id": "repo_dev_health",
+              "entity_type": "repository",
+              "repository_id": null
+            }
+          ],
+          "filter_fingerprint": "filters_01",
+          "route_id": "diagnose_overview"
+        },
+        "team_ids": [
+          "team_platform"
+        ],
+        "time_range": {
+          "end": "2026-07-28T00:00:00Z",
+          "start": "2026-06-28T00:00:00Z",
+          "timezone": "America/Los_Angeles"
+        }
+      },
+      "schema_version": "dev_metric_ref.v1",
+      "series": [],
+      "source_version": "work_item_metrics_daily.v1",
+      "unit": "items",
+      "value": 12.0
+    }
+  ],
+  "public_outcome": "answered_with_gaps",
+  "readiness": null,
+  "relationship_paths": [],
+  "run_id": "36633896-1b96-5f75-baaf-a40c6c33885f",
+  "safe_follow_up_questions": [
+    "What changed from the previous period?"
+  ],
+  "schema_version": "dev_answer_frame.v1",
+  "sections": [
+    {
+      "fact_ids": [
+        "claim_01"
+      ],
+      "section_id": "097a4352-8147-5063-9a44-a1ca45843377",
+      "title": "Answer"
+    }
+  ],
+  "source_observations": [],
+  "subject_ref": null,
+  "subject_set_ref": null,
+  "versions": {
+    "interpreter_version": "legacy_tool_choice_interpreter.v1",
+    "metric_definition_version": "ask_dev_metrics.v1",
+    "plan_id": "legacy.tool_choice.v1",
+    "plan_version": "legacy_tool_choice.v1",
+    "prompt_version": "ask_dev_prompt.v1",
+    "query_version": "ask_dev_queries.v1",
+    "rule_version": null,
+    "tool_contract_version": "ask_dev_tools.v2"
+  }
+}

@@ -104,6 +104,12 @@ def _legacy_answer_with_real_evidence() -> DevAnswer:
     payload = deepcopy(positive_fixtures_v1()["dev_answer.v1"])
     text = json.dumps(payload, default=str)
     payload = json.loads(re.sub(r"ev_\d+", _REAL_EVIDENCE_HANDLE, text))
+    # F10 (CHAOS-3297 stack #3): a real v1-sourced metric never carries
+    # evidence_ref_ids -- see test_terminal_frames.py's _legacy_answer for
+    # the full rationale. Clear it so wrap_legacy_answer_as_frame's
+    # unconditional evidence_classification is exercised realistically.
+    for metric in payload.get("metrics", []):
+        metric["evidence_ref_ids"] = []
     return DevAnswer.model_validate(payload)
 
 

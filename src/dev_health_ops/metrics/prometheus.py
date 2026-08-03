@@ -195,6 +195,15 @@ if _PROMETHEUS_AVAILABLE:
         ["exception_type"],
     )
 
+    ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_plan_registry_gap_total",
+        "Ask Dev requests for an intent preflight_outcomes.PLAN_ID_BY_INTENT names "
+        "a real plan for, that fell back to the legacy model-tool-choice loop "
+        "because this runtime's plan_registry does not carry that plan yet "
+        "(CHAOS-3300 finding: a silent capability downgrade unless observed here)",
+        ["intent"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -213,6 +222,7 @@ else:
     ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL = _noop_counter()
     ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL = _noop_counter()
     ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL = _noop_counter()
+    ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

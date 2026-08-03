@@ -101,17 +101,21 @@ from .evidence_service import (
     EvidenceReferenceSigner,
     EvidenceService,
 )
-from .investigation_plans import (
-    PlanExecutor,
-    build_default_registry,
-)
+from .investigation_plans import PlanExecutor
 from .investigation_plans.plan_documents import CORE_PLANS_BY_INTENT
+from .investigation_plans.wave_3_1_plans import (
+    WAVE_3_1_PLANS_BY_INTENT,
+    build_registry_with_wave_3_1,
+)
 from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
 from .native_evidence import native_evidence_adapters
 from .native_status_change import ClickHouseStatusChangeSource
+from .native_team_workload import ClickHouseTeamWorkloadSource
+from .operational_deficiency_service import OperationalDeficiencyService
 from .orchestrator import DevRunLimits
 from .org_policy import load_ask_dev_org_policy
+from .project_health_service import ProjectHealthService
 from .prompts import LEGACY_PROMPT_VERSION, PROMPT_VERSION
 from .question_interpreter import QuestionInterpreter
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
@@ -138,6 +142,8 @@ from .status_change_service import (
     StatusSnapshotRequest,
 )
 from .subject_preflight import SubjectPreflight
+from .team_health_service import TeamHealthService
+from .team_workload_service import TeamWorkloadService
 from .tool_registry import TOOL_CONTRACT_VERSION, AskDevToolRegistry
 from .work_graph_neighbors_service import (
     ALLOWED_RELATIONSHIP_TYPES,
@@ -1357,9 +1363,18 @@ async def _assemble_production_runtime(
         ClickHouseAuthorizedEntityCatalog(clickhouse), cache=ScopeRequestCache()
     )
     metric_service = MetricQueryService(ClickHouseMetricSource(clickhouse))
+    # CHAOS-3297 stack #3: kept as a NAMED reference (not inlined into
+    # StatusChangeService's constructor call the way it was before this
+    # stack) so TeamHealthService/TeamWorkloadService/
+    # OperationalDeficiencyService can share the SAME source instance --
+    # its own (org_id, team_id, as_of) cache then turns their internal
+    # team_repository_ids lookup into a hit rather than a second round
+    # trip, per those services' own docstrings.
+    status_change_source = ClickHouseStatusChangeSource(clickhouse)
     status_service = StatusChangeService(
-        ClickHouseStatusChangeSource(clickhouse), metric_service=metric_service
+        status_change_source, metric_service=metric_service
     )
+    team_workload_source = ClickHouseTeamWorkloadSource(clickhouse)
     secret = os.getenv("JWT_SECRET_KEY")
     if not secret:
         raise DevRuntimeUnavailable(
@@ -2136,8 +2151,24 @@ async def _assemble_production_runtime(
     # CHAOS-3295: the plan-governed investigation seam rides the same
     # organization gate as preflight -- a plan can only run once a subject
     # is committed, and only the preflight commits one.
-    plan_executor = (
-        PlanExecutor(
+    plan_executor: PlanExecutor | None = None
+    if wave_3_1_enabled:
+        plan_executor_runtime = _ProductionPlanExecutorRuntime(
+            status_service=status_service,
+            metric_service=metric_service,
+            work_graph_service=work_graph_service,
+            data_health_service=data_health_service,
+            evidence_signer=evidence_signer,
+        )
+        # CHAOS-3297 stack #3: every CHAOS-3303/3304/3305 service is
+        # constructed over the SAME PlanExecutorRuntime instance the six
+        # core plans' steps use -- never a second, parallel query path.
+        # TeamHealthService/TeamWorkloadService/OperationalDeficiencyService
+        # share the SAME status_change_source instance so their internal
+        # team_repository_ids lookup shares its (org_id, team_id, as_of)
+        # cache with the runtime's own calls (see that instance's own
+        # construction comment above).
+        plan_executor = PlanExecutor(
             # CHAOS-3296 round 5 (structural inversion, 2026-08-02): passing
             # the exact ``EvidenceReferenceSigner`` every builtin step's
             # ``mint_evidence`` already signs through is what turns on
@@ -2146,20 +2177,26 @@ async def _assemble_production_runtime(
             # ``investigation_plans.executor._evidence_signature_failures``)
             # rather than trusting a receipt of what this run minted, so no
             # runtime-wrapping step is needed here anymore.
-            registry=build_default_registry(
-                _ProductionPlanExecutorRuntime(
-                    status_service=status_service,
-                    metric_service=metric_service,
-                    work_graph_service=work_graph_service,
-                    data_health_service=data_health_service,
-                    evidence_signer=evidence_signer,
-                )
+            #
+            # build_registry_with_wave_3_1 registers the six core plans'
+            # steps PLUS health.project.v1/health.team.v1/
+            # balance.team_workload.v1/deficiency.operational.v1's, all
+            # against ONE shared registry, validated together.
+            registry=build_registry_with_wave_3_1(
+                plan_executor_runtime,
+                project_health=ProjectHealthService(plan_executor_runtime),
+                team_health=TeamHealthService(
+                    plan_executor_runtime, status_change_source
+                ),
+                team_workload=TeamWorkloadService(
+                    plan_executor_runtime, status_change_source, team_workload_source
+                ),
+                operational_deficiency=OperationalDeficiencyService(
+                    plan_executor_runtime, status_change_source, team_workload_source
+                ),
             ),
             evidence_signer=evidence_signer,
         )
-        if wave_3_1_enabled
-        else None
-    )
 
     return BoundedDevRuntime(
         provider=provider.provider,
@@ -2169,7 +2206,14 @@ async def _assemble_production_runtime(
         scope_resolver=scope_resolver,
         versions=versions,
         preflight=preflight,
-        plan_registry=CORE_PLANS_BY_INTENT if wave_3_1_enabled else None,
+        # CHAOS-3297 stack #3: the combined ten-plan lookup -- orchestrator.py's
+        # own plan_registry.get(intent.intent_id) is intent-generic and needs
+        # no change to reach the four new plans.
+        plan_registry=(
+            {**CORE_PLANS_BY_INTENT, **WAVE_3_1_PLANS_BY_INTENT}
+            if wave_3_1_enabled
+            else None
+        ),
         plan_executor=plan_executor,
     )
 

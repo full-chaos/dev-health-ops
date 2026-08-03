@@ -684,6 +684,7 @@ def _replayed_result(
         from .contracts_v2.frame import DevAnswerFrame as _DevAnswerFrameV2
         from .contracts_v2.no_answer_policy import NO_ANSWER_OUTCOMES
         from .preflight_outcomes import project_preflight_error
+        from .terminal_frames import tolerant_parse_legacy_frame_payload
 
         # project_preflight_error is only total over the no-answer outcomes
         # plus needs_clarification (CHAOS-3292's ratified vocabulary for a
@@ -701,7 +702,18 @@ def _replayed_result(
             PublicOutcome.NEEDS_CLARIFICATION.value
         }
         try:
-            frame_obj = _DevAnswerFrameV2.model_validate(frame_payload)
+            frame_obj = _DevAnswerFrameV2.model_validate(
+                # CHAOS-3297 s3 version-skew read posture: a row persisted
+                # before this branch's DevMetricRefV2.evidence_classification
+                # field existed has no way to satisfy F10's XOR check without
+                # this shim -- see terminal_frames.tolerant_parse_legacy_
+                # frame_payload's own docstring. This branch never carries a
+                # non-empty metrics tuple today (NO_ANSWER_FRAME_FIELD_POLICY
+                # forces it empty for every outcome reachable here), so this
+                # is defensive hardening ahead of a future read path, not a
+                # fix for an observed crash on this one.
+                tolerant_parse_legacy_frame_payload(frame_payload)
+            )
             if (
                 frame_obj.public_outcome.value not in _REPLAYABLE_PREFLIGHT_OUTCOMES
                 or run.public_outcome != frame_obj.public_outcome.value

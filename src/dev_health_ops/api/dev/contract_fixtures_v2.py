@@ -427,7 +427,102 @@ def _metric_ref() -> dict[str, Any]:
         "freshness": "fresh",
         "coverage": 1.0,
         "evidence_ref_ids": [],
+        # F10 (CHAOS-3297 stack #3): evidence_ref_ids XOR evidence_classification.
+        "evidence_classification": "legacy_v1_unminted",
     }
+
+
+def _health_finding() -> dict[str, Any]:
+    """A valid, standalone ``health_rule_finding.v1`` (CHAOS-3297 stack #3)."""
+
+    return {
+        "schema_version": "health_rule_finding.v1",
+        "finding_id": "0f1a2b3c-000a-4a00-8000-000000000001",
+        "rule_id": "health_rule.change_failure_rate.v1",
+        "rule_version": "health_rule.change_failure_rate.v1.1",
+        "dimension": "reliability_release",
+        "subject_kind": "project",
+        "subject_id": "repo_dev_health",
+        "state": "at_risk",
+        "fact_kind": "observed",
+        "shadow_only": True,
+        "evidence_source_classes": ["status_change"],
+        "remediation_template": "Investigate recent deployment failures.",
+        "calibration_state": "provisional",
+        "evaluated_at": NOW,
+        "suppressed_reason": None,
+    }
+
+
+def _deficiency_finding() -> dict[str, Any]:
+    """A valid, standalone ``deficiency_finding.v1`` (CHAOS-3297 stack #3)."""
+
+    return {
+        "schema_version": "deficiency_finding.v1",
+        "finding_id": "0f1a2b3c-000b-4a00-8000-000000000001",
+        "category": "data_integration",
+        "rule_id": "deficiency_rule.unconfigured_required_source.v1",
+        "rule_version": "deficiency_rule.unconfigured_required_source.v1",
+        "subject_kind": "project",
+        "subject_id": "repo_dev_health",
+        "severity": "at_risk",
+        "fact_kind": "observed",
+        "observed_state": "unconfigured",
+        "data_semantics": "not_measured",
+        "sample_count": None,
+        "coverage": 0.0,
+        "current_window_days": 30,
+        "comparison_window_days": None,
+        "relationship_paths": [],
+        "evidence_ref_ids": [],
+        "evidence_classification": "structural_absence",
+        "blast_radius": "Required source is unconfigured for this repository.",
+        "remediation": {
+            "schema_version": "deficiency_remediation.v1",
+            "remediation_template": "Configure the required source.",
+            "verification_condition": "Resolves once re-evaluated healthy.",
+        },
+        "limitations": [],
+        "evaluated_at": NOW,
+    }
+
+
+#: All eight closed deficiency categories, in taxonomy order -- mirrors
+#: ``contracts_v2.deficiency.DEFICIENCY_CATEGORIES`` by value (this module
+#: builds raw JSON-shaped dicts, so it cannot import the enum itself
+#: without coupling fixture construction to contract internals the same
+#: way every other raw-dict builder here avoids).
+_ALL_DEFICIENCY_CATEGORIES = (
+    "data_integration",
+    "planning_relationships",
+    "delivery_flow",
+    "review_ci",
+    "deployment_reliability",
+    "ownership_code_risk",
+    "capacity_cognitive_load",
+    "investment_balance",
+)
+
+
+def _deficiency_category_statuses() -> list[dict[str, Any]]:
+    """A valid, full eight-category ``deficiency_category_status.v1`` set
+    (CHAOS-3297 stack #3 codex round 1, FINDING 2) -- every category
+    genuinely evaluated with zero findings, the "evaluated-zero" shape.
+    ``deficiency_category_statuses`` requires either the empty tuple or
+    exactly these eight, never a partial set.
+    """
+
+    return [
+        {
+            "schema_version": "deficiency_category_status.v1",
+            "category": category,
+            "evaluated": True,
+            "finding_count": 0,
+            "applicability_states_observed": [],
+            "limitation": None,
+        }
+        for category in _ALL_DEFICIENCY_CATEGORIES
+    ]
 
 
 #: The canonical server copy a ``denied`` frame is allowed to render, taken
@@ -627,6 +722,20 @@ def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any
             lambda v: v.__setitem__("deficiency_refs", ["deficiency_01"]),
         ),
         case(
+            "denied_with_health_findings",
+            lambda v: v.__setitem__("health_findings", [_health_finding()]),
+        ),
+        case(
+            "denied_with_deficiency_findings",
+            lambda v: v.__setitem__("deficiency_findings", [_deficiency_finding()]),
+        ),
+        case(
+            "denied_with_deficiency_category_statuses",
+            lambda v: v.__setitem__(
+                "deficiency_category_statuses", _deficiency_category_statuses()
+            ),
+        ),
+        case(
             "denied_with_subject_identity",
             lambda v: v.__setitem__("subject_ref", _entity_ref()),
         ),
@@ -817,6 +926,12 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
         # test_disabling_one_frame_validator_flips_only_its_own_fixture).
         value["public_outcome"] = "needs_clarification"
         value["facts"][0]["evidence_ref_ids"] = []
+        # F10 (CHAOS-3297 stack #3): a fact with neither evidence_ref_ids nor
+        # a disclosure now fails validate_frame_grounding too, which would
+        # make this fixture attributable to TWO guardrails instead of one.
+        # A disclosure is this fact's explicit no-evidence classification,
+        # keeping it isolated to validate_outcome_consistency's own check.
+        value["facts"][0]["disclosures"] = ["untrusted_source"]
         value["facts"][0]["relationship_path_ids"] = []
         value["completion"] = None
         value["readiness"] = None
@@ -853,6 +968,15 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     frame_answered_with_disclosure = changed(
         "dev_answer_frame.v1",
         lambda value: value["facts"][0].__setitem__("disclosures", ["stale"]),
+    )
+    # F10 (CHAOS-3297 stack #3, ratified 2026-08-02): a fact with neither
+    # evidence_ref_ids nor a disclosure -- isolated from every other frame
+    # guardrail (the base positive fixture is otherwise a valid 'answered'
+    # frame; only this one fact's evidence is cleared, with no disclosure
+    # substituted).
+    frame_fact_missing_grounding = changed(
+        "dev_answer_frame.v1",
+        lambda value: value["facts"][0].__setitem__("evidence_ref_ids", []),
     )
     # DevAnswerFact.validate_disclosures_canonical_order: declared out of
     # ascending FactDisclosure order.
@@ -1181,6 +1305,7 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             ("relationship_outside_frame", frame_relationship_outside_frame),
             ("answered_without_versions", frame_answered_without_versions),
             ("answered_with_disclosure", frame_answered_with_disclosure),
+            ("fact_missing_grounding", frame_fact_missing_grounding),
             ("disclosures_out_of_order", frame_disclosures_out_of_order),
             ("disclosures_duplicated", frame_disclosures_duplicated),
             (

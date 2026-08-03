@@ -502,6 +502,37 @@ async def test_a_valid_provider_narrative_is_accepted():
     assert answer.narrative.mode == "provider"
 
 
+@pytest.mark.asyncio
+async def test_synthesize_narrative_leaner_entry_point_accepts_a_valid_result():
+    """synthesize_narrative (no answer_id/conversation_id needed) is the
+    orchestrator-facing entry point -- direct coverage, not only indirect
+    coverage through synthesize_narrative_answer's wrapper."""
+
+    frame = _frame()
+    provider = _ScriptedProvider(result=_valid_provider_result(frame))
+
+    narrative, failure_code = await _nf.synthesize_narrative(
+        frame=frame, provider=provider, generated_at=_GENERATED_AT
+    )
+
+    assert failure_code is None
+    assert narrative.mode == "provider"
+    assert narrative.run_id == frame.run_id
+    assert narrative.frame_id == frame.frame_id
+
+
+@pytest.mark.asyncio
+async def test_synthesize_narrative_with_no_provider_returns_deterministic_fallback():
+    frame = _frame()
+
+    narrative, failure_code = await _nf.synthesize_narrative(
+        frame=frame, provider=None, generated_at=_GENERATED_AT
+    )
+
+    assert failure_code is None  # no provider configured is not a failure
+    assert narrative.mode == "deterministic_fallback"
+
+
 # ---------------------------------------------------------------------------
 # C4: the provider cannot move a number, entity, or outcome. Proves the
 # already-landed validators are actually reached from this path.

@@ -80,6 +80,7 @@ __all__ = [
     "assert_narrative_choice_is_the_only_delta",
     "build_deterministic_fallback_narrative",
     "classify_provider_exception",
+    "synthesize_narrative",
     "synthesize_narrative_answer",
 ]
 
@@ -372,23 +373,29 @@ def assert_narrative_choice_is_the_only_delta(
 # ---------------------------------------------------------------------------
 
 
-async def synthesize_narrative_answer(
+async def synthesize_narrative(
     *,
     frame: DevAnswerFrame,
     provider: NarrativeProvider | None,
-    answer_id: str,
-    conversation_id: str,
-    run_id: str,
     generated_at: datetime,
-) -> tuple[DevAnswerV2, NarrativeFailureCode | None]:
-    """Produce the ``dev_answer.v2`` for one frame, with narrative fallback.
+) -> tuple[DevNarrative, NarrativeFailureCode | None]:
+    """Produce the ``dev_narrative.v1`` for one frame, with fallback.
 
-    Returns ``(answer, failure_code)`` -- ``failure_code`` is ``None`` when
-    the provider narrative was accepted, and one of ``NarrativeFailureCode``
-    (persisted as ``dev_runs.narrative_failure_code``) when the deterministic
-    fallback was selected. ``provider=None`` (no certified provider
-    configured) goes straight to the deterministic fallback with no failure
-    code -- that is a configuration state, not a provider failure.
+    The leaner entry point: needs only ``frame`` (which already carries
+    ``run_id``/``frame_id``) and no answer-level identifiers, so an
+    orchestrator call site that has a frame but has not yet assembled a
+    ``dev_answer.v2`` can call this directly. ``synthesize_narrative_answer``
+    below is a convenience wrapper for callers (tests, any future v2-native
+    answer assembly) that also want the full ``DevAnswerV2`` with P6's
+    identity check applied.
+
+    Returns ``(narrative, failure_code)`` -- ``failure_code`` is ``None``
+    when the provider narrative was accepted, and one of
+    ``NarrativeFailureCode`` (persisted as
+    ``dev_runs.narrative_failure_code``) when the deterministic fallback was
+    selected. ``provider=None`` (no certified provider configured) goes
+    straight to the deterministic fallback with no failure code -- that is a
+    configuration state, not a provider failure.
 
     Layered validation (plan §a P6, issue requirement 8): a provider result
     is accepted only if it survives the same narrative/frame binding checks
@@ -406,15 +413,7 @@ async def synthesize_narrative_answer(
     )
 
     if provider is None:
-        answer = assert_narrative_choice_is_the_only_delta(
-            frame,
-            answer_id=answer_id,
-            conversation_id=conversation_id,
-            run_id=run_id,
-            generated_at=generated_at,
-            narrative=fallback_narrative,
-        )
-        return answer, None
+        return fallback_narrative, None
 
     brief = build_narrative_brief(frame)
     failure_code: NarrativeFailureCode | None = None
@@ -469,27 +468,41 @@ async def synthesize_narrative_answer(
             # -- distinct code, same fallback destination.
             failure_code = NarrativeFailureCode.NARRATIVE_GROUNDING_FAILED
         else:
-            answer = assert_narrative_choice_is_the_only_delta(
-                frame,
-                answer_id=answer_id,
-                conversation_id=conversation_id,
-                run_id=run_id,
-                generated_at=generated_at,
-                narrative=candidate_narrative,
-            )
-            return answer, None
+            return candidate_narrative, None
 
     # Every path that reaches here (provider call raised, or the response
-    # failed grounding validation) set failure_code above; the only paths
-    # that leave it None return early.
+    # failed grounding validation) set failure_code above; the only path
+    # that leaves it None returned early.
     assert failure_code is not None, "fallback reached with no failure_code set"
     ASK_DEV_NARRATIVE_FALLBACK_TOTAL.labels(failure_code=failure_code.value).inc()
+    return fallback_narrative, failure_code
+
+
+async def synthesize_narrative_answer(
+    *,
+    frame: DevAnswerFrame,
+    provider: NarrativeProvider | None,
+    answer_id: str,
+    conversation_id: str,
+    run_id: str,
+    generated_at: datetime,
+) -> tuple[DevAnswerV2, NarrativeFailureCode | None]:
+    """Produce the ``dev_answer.v2`` for one frame, with narrative fallback.
+
+    Convenience wrapper over :func:`synthesize_narrative` for a caller that
+    already has (or wants) the answer-level identifiers and P6's runtime
+    identity check. See that function for the failure/fallback semantics.
+    """
+
+    narrative, failure_code = await synthesize_narrative(
+        frame=frame, provider=provider, generated_at=generated_at
+    )
     answer = assert_narrative_choice_is_the_only_delta(
         frame,
         answer_id=answer_id,
         conversation_id=conversation_id,
         run_id=run_id,
         generated_at=generated_at,
-        narrative=fallback_narrative,
+        narrative=narrative,
     )
     return answer, failure_code

@@ -4,6 +4,7 @@ import "sort"
 
 const (
 	BudgetRESTCore           = "rest_core"
+	BudgetContentsBlob       = "contents_blob"
 	BudgetSearch             = "search"
 	BudgetGraphQLCost        = "graphql_cost"
 	BudgetSecondaryAbuseRisk = "secondary_abuse_risk"
@@ -30,6 +31,8 @@ func ProviderRequestPlan(
 	}
 	var estimates []RequestEstimate
 	switch provider {
+	case "github":
+		estimates = githubRequestPlan(dataset, spanDays)
 	case "linear":
 		estimates = linearRequestPlan(dataset, spanDays)
 	case "jira":
@@ -51,6 +54,16 @@ func ProviderRequestPlan(
 		return estimates[left].RouteFamily < estimates[right].RouteFamily
 	})
 	return estimates
+}
+
+func githubRequestPlan(dataset string, spanDays int) []RequestEstimate {
+	if dataset != "cicd" {
+		return nil
+	}
+	return []RequestEstimate{
+		{BudgetRESTCore, 4 * spanDays, "low", "cicd"},
+		{BudgetContentsBlob, 2 * spanDays, "low", "cicd"},
+	}
 }
 
 func linearRequestPlan(dataset string, spanDays int) []RequestEstimate {

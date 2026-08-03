@@ -103,13 +103,24 @@ func (materializer *Materializer) Step(
 // materializeDispatchSQL mirrors _dispatchable_run_ids followed by
 // _materialize_outbox_wakeups and its canonical upsert transition. The
 // DISTINCT candidate set is bounded before insertion, and the unique outbox
-// key arbitrates concurrent Go/Python writers.
+// key arbitrates concurrent Go/Python writers. For schedule-triggered runs,
+// scheduled_sync_occurrences.sync_run_id is the readiness fence: the table's
+// completed-state constraint permits that link only in the same coordinator
+// transaction that links job_run_id and marks the occurrence completed.
 const materializeDispatchSQL = `
 WITH candidates AS (
 	SELECT DISTINCT run.id, run.org_id
 	FROM public.sync_runs AS run
 	JOIN public.sync_run_units AS unit ON unit.sync_run_id = run.id
 	WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
+		AND (
+			run.triggered_by <> 'schedule'
+			OR EXISTS (
+				SELECT 1
+				FROM public.scheduled_sync_occurrences AS occurrence
+				WHERE occurrence.sync_run_id = run.id
+			)
+		)
 		AND (
 			unit.status = 'planned'
 			OR (unit.status = 'dispatching' AND unit.updated_at <= $2)
@@ -217,6 +228,14 @@ WITH candidates AS (
 	SELECT run.id, run.org_id
 	FROM public.sync_runs AS run
 	WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
+		AND (
+			run.triggered_by <> 'schedule'
+			OR EXISTS (
+				SELECT 1
+				FROM public.scheduled_sync_occurrences AS occurrence
+				WHERE occurrence.sync_run_id = run.id
+			)
+		)
 		AND NOT EXISTS (
 			SELECT 1
 			FROM public.sync_run_units AS unit

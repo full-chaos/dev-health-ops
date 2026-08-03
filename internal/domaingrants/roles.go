@@ -190,6 +190,13 @@ var acknowledgedDynamicSQL = []AcknowledgedDynamicSQL{
 			"sync_dispatch_transport_routes, is proven by the constant-SQL sites in the same " +
 			"controller, so the dynamic variant adds no new table.",
 	},
+	{
+		File: "internal/scheduler/sync/materializer.go",
+		Why: "pgx.Batch is populated with a constant INSERT into sync_run_units and then " +
+			"executed through SendBatch, whose argument is the batch object rather than SQL text. " +
+			"The domain posture grants sync_run_units SELECT+INSERT+UPDATE, and the restricted-role " +
+			"integration test executes the same INSERT boundary.",
+	},
 }
 
 // PartitionDynamicSQL splits dynamic-SQL sites into acknowledged and not, and
@@ -251,6 +258,53 @@ var acknowledgedBlindSpots = []AcknowledgedBlindSpot{
 	{
 		Role: RoleCoordinator, Table: "work_graph_execution_requests", Privilege: PrivInsert,
 		Why: "same producer path as the SELECT above; workgraph/publisher.go:37 does the INSERT.",
+	},
+	{
+		Role: RoleDomain, Table: "sync_run_units", Privilege: PrivInsert,
+		Why: "scheduler/sync/materializer.go queues the native scheduled-plan unit INSERT through " +
+			"pgx.Batch on the domain transaction; SendBatch is a dynamic-SQL blind spot. " +
+			"TestScheduledMaterializerRoleBoundary proves the domain/coordinator split.",
+	},
+	{
+		Role: RoleCoordinator, Table: "feature_flags", Privilege: PrivUpdate,
+		Why: "scheduler/sync/materializer.go locks canonical_incident_ingestion with SELECT FOR " +
+			"UPDATE inside the coordinator occurrence transaction; no feature row is mutated.",
+	},
+	{
+		Role: RoleCoordinator, Table: "organizations", Privilege: PrivUpdate,
+		Why: "scheduler/sync/materializer.go locks the scheduled organization with " +
+			"SELECT FOR KEY SHARE before planning; PostgreSQL requires UPDATE privilege " +
+			"for that row-lock clause, although no organization column is mutated.",
+	},
+	{
+		Role: RoleCoordinator, Table: "org_feature_overrides", Privilege: PrivUpdate,
+		Why: "scheduler/sync/materializer.go locks the matching org override with SELECT FOR UPDATE " +
+			"inside the coordinator occurrence transaction; no override row is mutated.",
+	},
+	{
+		Role: RoleCoordinator, Table: "job_runs", Privilege: PrivSelect,
+		Why: "scheduler/sync/materializer.go verifies the deterministic scheduler job-run identity " +
+			"after INSERT ON CONFLICT through the coordinator transaction.",
+	},
+	{
+		Role: RoleCoordinator, Table: "job_runs", Privilege: PrivInsert,
+		Why: "scheduler/sync/materializer.go creates the deterministic scheduler job-run ledger " +
+			"through the coordinator transaction after the domain graph commits.",
+	},
+	{
+		Role: RoleCoordinator, Table: "sync_run_reference_discoveries", Privilege: PrivInsert,
+		Why: "scheduler/sync/materializer.go creates the deterministic discovery ledger through " +
+			"the coordinator transaction after the domain graph commits.",
+	},
+	{
+		Role: RoleCoordinator, Table: "sync_watermarks", Privilege: PrivSelect,
+		Why: "scheduler/sync/materializer.go reads frozen watermark inputs while building the plan " +
+			"inside the coordinator occurrence transaction.",
+	},
+	{
+		Role: RoleCoordinator, Table: "tier_limits", Privilege: PrivSelect,
+		Why: "scheduler/sync/materializer.go reads backfill_days and max_sync_units while building " +
+			"the plan inside the coordinator occurrence transaction.",
 	},
 }
 

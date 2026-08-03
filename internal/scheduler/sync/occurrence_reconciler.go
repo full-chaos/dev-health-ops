@@ -84,12 +84,15 @@ type PlanResult struct {
 	SyncRunID string
 }
 
-// Materializer creates the authoritative run graph for one occurrence inside
-// the reconciler's transaction.
+// Materializer creates the authoritative run graph for one occurrence. The
+// supplied transaction is the coordinator transaction: loaders retain their
+// policy locks there, and coordinator-owned ledgers plus the final occurrence
+// link commit there. A native materializer separately owns and commits its
+// domain transaction for sync_runs and sync_run_units.
 //
-// It must not commit, and it must be idempotent for a repeated occurrence: the
-// reconciler links the occurrence to the returned identities in the same
-// transaction, so a crash between the plan and the link leaves neither.
+// It must be idempotent for a repeated occurrence. A crash after the domain
+// commit but before the coordinator commit leaves an unlinked graph, so replay
+// must derive the same identities and verify/reuse those rows.
 //
 // Returning ErrOccurrenceIneligible records a retryable policy denial.
 // Returning any other error records a retryable planner failure. Both are
@@ -98,7 +101,8 @@ type Materializer interface {
 	Materialize(ctx context.Context, tx pgx.Tx, occurrence PendingOccurrence) (PlanResult, error)
 }
 
-// unavailableMaterializer stands in until a native sync planner exists.
+// unavailableMaterializer is the explicit fail-closed seam for tests or a
+// partial composition that cannot construct the native planner.
 //
 // It is not a stub that quietly succeeds. Every invocation reports that the
 // planner is missing, which leaves the occurrence untouched and closes
@@ -108,9 +112,8 @@ type Materializer interface {
 // ignore.
 type unavailableMaterializer struct{}
 
-// NewUnavailableMaterializer constructs the explicit missing-planner seam.
-// Replace it with the native planner in CUT-09/CUT-10; do not replace it with
-// anything that returns success.
+// NewUnavailableMaterializer constructs the explicit missing-planner seam. It
+// must never be used as a successful placeholder.
 func NewUnavailableMaterializer() Materializer { return unavailableMaterializer{} }
 
 func (unavailableMaterializer) Materialize(
@@ -119,7 +122,7 @@ func (unavailableMaterializer) Materialize(
 	PendingOccurrence,
 ) (PlanResult, error) {
 	return PlanResult{}, fmt.Errorf(
-		"%w: the native scheduled-sync planner is not implemented",
+		"%w: the native scheduled-sync planner is not available in this composition",
 		ErrMaterializerUnavailable,
 	)
 }

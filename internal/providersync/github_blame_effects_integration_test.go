@@ -5,6 +5,8 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -147,6 +149,59 @@ WHERE org_id = ? AND repo_id = ? AND path = ? AND line_no = ?`,
 		if err != nil || inspection != EffectExact {
 			t.Fatalf("tenant=%s inspection=%s error=%v", test.row.OrgID, inspection, err)
 		}
+	}
+}
+
+func TestGitHubBlameCoverageReadsOnlyTheOwningTenant(t *testing.T) {
+	ctx, sink := newGitHubBlameIntegrationSink(t)
+	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claimA := nativeTestClaim("github", "blame")
+	claimA.OrgID = "org-a"
+	claimB := claimA
+	claimB.OrgID = "org-b"
+	email, name, hash := "a@example.com", "Ada", "abc123"
+	row := func(orgID, path string) gitBlameRow {
+		return gitBlameRow{
+			RepoID: repoID, Path: path, LineNo: 1,
+			AuthorEmail: &email, AuthorName: &name, CommitHash: &hash,
+			LastSynced: now, OrgID: orgID,
+		}
+	}
+	for _, write := range []struct {
+		claim Claim
+		path  string
+	}{
+		{claim: claimA, path: "src/a-only.go"},
+		{claim: claimA, path: "src/shared.go"},
+		{claim: claimA, path: "src/third.go"},
+		{claim: claimB, path: "src/b-only.go"},
+		{claim: claimB, path: "src/shared.go"},
+	} {
+		if err := sink.WriteEffect(ctx, write.claim, gitBlameEffect(t, row(write.claim.OrgID, write.path))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	coverage := GitHubBlameClickHouseCoverage{Conn: sink.Conn, Lease: sink.Lease}
+	pathsA, err := coverage.BlamedPaths(ctx, claimA, repoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathsB, err := coverage.BlamedPaths(ctx, claimB, repoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(pathsA)
+	slices.Sort(pathsB)
+	if !slices.Equal(pathsA, []string{"src/a-only.go", "src/shared.go", "src/third.go"}) {
+		t.Fatalf("org-a paths=%v", pathsA)
+	}
+	if !slices.Equal(pathsB, []string{"src/b-only.go", "src/shared.go"}) {
+		t.Fatalf("org-b paths=%v", pathsB)
+	}
+	bounded := GitHubBlameClickHouseCoverage{Conn: sink.Conn, Lease: sink.Lease, MaxPaths: 2}
+	if _, err := bounded.BlamedPaths(ctx, claimA, repoID); !errors.Is(err, ErrGitHubBlameProgressUnavailable) {
+		t.Fatalf("over-bound coverage error=%v, want ErrGitHubBlameProgressUnavailable", err)
 	}
 }
 

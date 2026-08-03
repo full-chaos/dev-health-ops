@@ -22,11 +22,13 @@
         "blame_only": true,
         "sync_blame": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "blame",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "git_blame"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"

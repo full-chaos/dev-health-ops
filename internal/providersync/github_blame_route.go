@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -65,14 +64,20 @@ type gitHubBlameRange struct {
 	} `json:"commit"`
 }
 
-// GitHubBlameRouteHandler is deliberately unavailable until the complete-route
-// layer can read persisted per-path blame coverage. Python selects only the
-// next BLAME_BACKFILL_MAX_FILES unblamed paths on each run; this handler's
-// current interface has no equivalent read seam. Failing before the first HTTP
-// request prevents retries from reblaming the same prefix and burning quota.
-type GitHubBlameRouteHandler struct{}
+// GitHubBlameCoverage provides the durable, tenant-scoped progress boundary
+// used to select the next bounded set of unblamed paths.
+type GitHubBlameCoverage interface {
+	BlamedPaths(context.Context, Claim, string) ([]string, error)
+}
 
-func (GitHubBlameRouteHandler) Collect(
+type GitHubBlameRouteHandler struct {
+	Coverage GitHubBlameCoverage
+	// MaxFiles is test-configurable below the production ceiling. Zero uses
+	// gitHubBlameMaxFiles; values above that ceiling fail closed.
+	MaxFiles int
+}
+
+func (handler GitHubBlameRouteHandler) Collect(
 	ctx context.Context,
 	claim Claim,
 	_ providerfoundation.Credential,
@@ -82,7 +87,19 @@ func (GitHubBlameRouteHandler) Collect(
 	if err := validateGitHubBlameCollectInputs(ctx, claim, client, normalizedAt); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	return CompleteRouteBatch{}, ErrGitHubBlameProgressUnavailable
+	if handler.Coverage == nil {
+		return CompleteRouteBatch{}, ErrGitHubBlameProgressUnavailable
+	}
+	maxFiles := handler.MaxFiles
+	if maxFiles == 0 {
+		maxFiles = gitHubBlameMaxFiles
+	}
+	if maxFiles < 1 || maxFiles > gitHubBlameMaxFiles {
+		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	return collectGitHubBlame(
+		ctx, claim, client, normalizedAt, handler.Coverage, maxFiles, false,
+	)
 }
 
 // collectGitHubBlameFoundation retains the bounded fetch and normalization
@@ -93,6 +110,20 @@ func collectGitHubBlameFoundation(
 	claim Claim,
 	client *providerfoundation.HTTPClient,
 	normalizedAt time.Time,
+) (CompleteRouteBatch, error) {
+	return collectGitHubBlame(
+		ctx, claim, client, normalizedAt, nil, gitHubBlameMaxFiles, true,
+	)
+}
+
+func collectGitHubBlame(
+	ctx context.Context,
+	claim Claim,
+	client *providerfoundation.HTTPClient,
+	normalizedAt time.Time,
+	coverage GitHubBlameCoverage,
+	maxFiles int,
+	requireCompleteInventory bool,
 ) (CompleteRouteBatch, error) {
 	if err := validateGitHubBlameCollectInputs(ctx, claim, client, normalizedAt); err != nil {
 		return CompleteRouteBatch{}, err
@@ -120,7 +151,7 @@ func collectGitHubBlameFoundation(
 		return CompleteRouteBatch{}, fmt.Errorf("%w: %w", ErrGitHubBlameTraversalFailed, err)
 	}
 	if treeRef == "" {
-		return gitHubBlameBatch(claim, repoPayload.FullName, nil, requests, 0)
+		return gitHubBlameBatch(claim, repoPayload.FullName, nil, requests, 0, 0)
 	}
 	var tree gitHubTreePayload
 	if err := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree); err != nil {
@@ -133,12 +164,25 @@ func collectGitHubBlameFoundation(
 			paths = append(paths, entry.Path)
 		}
 	}
-	sort.Strings(paths)
-	if len(paths) > gitHubBlameMaxFiles {
+	if requireCompleteInventory && len(paths) > maxFiles {
 		return CompleteRouteBatch{}, fmt.Errorf(
 			"%w: repository has %d files, maximum complete unit is %d",
-			ErrGitHubBlameIncomplete, len(paths), gitHubBlameMaxFiles,
+			ErrGitHubBlameIncomplete, len(paths), maxFiles,
 		)
+	}
+	remainingPaths := 0
+	if !requireCompleteInventory {
+		if coverage == nil {
+			return CompleteRouteBatch{}, ErrGitHubBlameProgressUnavailable
+		}
+		blamedPaths, err := coverage.BlamedPaths(ctx, claim, repoID)
+		if err != nil {
+			return CompleteRouteBatch{}, fmt.Errorf("%w: %w", ErrGitHubBlameProgressUnavailable, err)
+		}
+		paths, remainingPaths, err = selectNextGitHubBlamePaths(paths, blamedPaths, maxFiles)
+		if err != nil {
+			return CompleteRouteBatch{}, err
+		}
 	}
 	rows := make([]gitBlameRow, 0)
 	for _, filePath := range paths {
@@ -163,7 +207,35 @@ func collectGitHubBlameFoundation(
 			}
 		}
 	}
-	return gitHubBlameBatch(claim, repoPayload.FullName, rows, requests, 1)
+	return gitHubBlameBatch(claim, repoPayload.FullName, rows, requests, 1, remainingPaths)
+}
+
+func selectNextGitHubBlamePaths(
+	filePaths []string,
+	blamedPaths []string,
+	maxFiles int,
+) ([]string, int, error) {
+	if maxFiles < 1 || maxFiles > gitHubBlameMaxFiles {
+		return nil, 0, ErrInvalidConfiguration
+	}
+	blamed := make(map[string]struct{}, len(blamedPaths))
+	for _, path := range blamedPaths {
+		if path != "" {
+			blamed[path] = struct{}{}
+		}
+	}
+	unblamed := make([]string, 0, len(filePaths))
+	for _, path := range filePaths {
+		if _, exists := blamed[path]; !exists {
+			unblamed = append(unblamed, path)
+		}
+	}
+	remaining := 0
+	if len(unblamed) > maxFiles {
+		remaining = len(unblamed) - maxFiles
+		unblamed = unblamed[:maxFiles]
+	}
+	return unblamed, remaining, nil
 }
 
 func validateGitHubBlameCollectInputs(
@@ -258,14 +330,17 @@ func gitHubBlameBatch(
 	claim Claim,
 	fullName string,
 	rows []gitBlameRow,
-	requests, pages int,
+	requests, pages, remainingPaths int,
 ) (CompleteRouteBatch, error) {
 	effect, err := effectBatchFromValues("git_blame", EffectReadbackRequired, rows)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	status := "complete"
-	if len(rows) == 0 {
+	if remainingPaths > 0 {
+		status = "partial"
+	}
+	if len(rows) == 0 && remainingPaths == 0 {
 		status = "empty"
 		if pages == 0 {
 			status = "no_commit_at_bound"
@@ -275,6 +350,7 @@ func gitHubBlameBatch(
 		Effects: []EffectBatch{effect},
 		Result: map[string]any{
 			"blame_rows_synced": len(rows), "inventory_status": status, "repo": fullName,
+			"remaining_paths": remainingPaths,
 		},
 		Watermark: claim.BeforeAt,
 		Evidence: FetchEvidence{

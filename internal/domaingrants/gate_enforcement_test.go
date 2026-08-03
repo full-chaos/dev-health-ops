@@ -27,6 +27,13 @@ import (
 // prove the value reached the data structure while the loop that printed it was
 // deletable with everything still green.
 func TestAdvisoryReportCoversEveryCategory(t *testing.T) {
+	real := knownOpenCriticals
+	t.Cleanup(func() { knownOpenCriticals = real })
+	knownOpenCriticals = []KnownOpenCritical{{
+		Role: RoleCoordinator, Table: "sync_dispatch_outbox", Privilege: PrivInsert,
+		Ticket: "CHAOS-1111", Why: "synthetic known-open category fixture",
+	}}
+
 	var selectOnly PrivilegeSet
 	selectOnly.add(PrivSelect)
 

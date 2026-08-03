@@ -308,6 +308,39 @@ func TestCoordinatorStatementsArePermittedToTheCoordinatorRole(t *testing.T) {
 	}
 }
 
+// TestCoordinatorMaterializerCanInsertSyncDispatchOutbox is the CHAOS-3146
+// regression at the real trust boundary. The reconciler constructs its
+// Materializer with the restricted coordinator pool, so only a connection as
+// that login can prove the migration grants the INSERT that Step needs. The
+// statement is the production post_sync materialization shape, including its
+// conflict arbiter; a table owner or a one-column INSERT would miss the defect.
+//
+// The domain posture is checked in the same harness because sync_dispatch_outbox
+// is deliberately dual-role. Fixing the coordinator must not alter the domain
+// role's independently declared privileges.
+func TestCoordinatorMaterializerCanInsertSyncDispatchOutbox(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	_, uri := startGrantHarness(t, ctx)
+
+	statement := `INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			created_at, updated_at
+		) VALUES (
+			gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
+			'post_sync', 'pending', now(), 0, now(), now()
+		) ON CONFLICT (sync_run_id, kind) DO NOTHING`
+	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	if err := execInRolledBackTransaction(t, ctx, coordinator, statement); err != nil {
+		t.Errorf("restricted coordinator cannot execute syncreconciler materializer INSERT: %v", err)
+	}
+
+	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+		t.Errorf("coordinator grant changed the domain role's privilege posture: %v", err)
+	}
+}
+
 // TestCoordinatorReadinessAcceptsTheGrantsThePostureDescribes closes the loop
 // on the pair above: statements succeeding is worthless if readiness rejects
 // the same role, and readiness passing is worthless if it would also pass

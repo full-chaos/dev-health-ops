@@ -2207,10 +2207,30 @@ class DevOrchestrator:
         invariant that already exists, with no second completeness rule to
         keep in sync.
 
-        Only ``mandatory`` observations participate. ``conditional`` and
-        ``optional`` requirements are, by their own definition, allowed not
-        to resolve -- counting them would refuse ``complete`` on healthy runs
-        whose conditional steps simply did not apply.
+        ``mandatory`` observations always participate. ``conditional`` ones
+        participate **unless they were never applicable** -- the distinction
+        the plan itself draws, and one already present in the data rather
+        than inferred:
+
+        * ``not_applicable`` means the step's applicability predicate said
+          this subject does not need the source at all. It must never block:
+          ``status.entity.v2``'s two conditional requirements are
+          ``not_applicable`` on every project-subject run, so counting them
+          would refuse ``complete`` everywhere.
+        * any *other* unmeasured state on a conditional means the predicate
+          said the source **was** needed for this subject, the step ran, and
+          the data did not arrive. ``_work_graph_applicable`` fires for
+          issue/pull-request subjects, so this is reachable in production,
+          not hypothetical: before this clause an issue-subject run whose
+          ``work_graph_expansion`` failed still answered ``complete`` at
+          coverage 3/3 with an empty unavailable list -- the same laundering
+          this function exists to stop, one requirement level over.
+
+        ``optional`` never participates: optional means the answer does not
+        need it even when it is available.
+
+        Only a *complete* claim is blocked either way -- ``partial`` remains
+        reachable, and now names the missing source.
 
         Usability reuses ``UNMEASURED_REQUIREMENT_STATES``, the closed set
         the plan executor already treats as "never actually measured", so
@@ -2235,7 +2255,12 @@ class DevOrchestrator:
         required_added = 0
         available_added = 0
         for observation in investigation_result.observations:
-            if observation.requirement_level != "mandatory":
+            if observation.requirement_level not in {"mandatory", "conditional"}:
+                continue
+            if (
+                observation.requirement_level == "conditional"
+                and observation.observed_state is SourceRequirementState.NOT_APPLICABLE
+            ):
                 continue
             label = observation.source_class.value
             required_added += 1

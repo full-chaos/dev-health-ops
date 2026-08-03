@@ -40,6 +40,7 @@ from dev_health_ops.api.dev.investigation_plans.state_mapping import (
 )
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator
 from dev_health_ops.api.dev.orchestrator_states import RunState
+from dev_health_ops.api.dev.scope_service import AuthorizedEntity, EntityKind
 from dev_health_ops.llm.agent.contracts import (
     AgentFinalAnswer,
     AgentToolRequest,
@@ -65,8 +66,28 @@ from tests._chaos_3295_plan_executor import (
 #: one of them would pass a single-step test while leaving the other laundered.
 STATUS_SOURCE_LABEL = "status_change"
 HEALTH_SOURCE_LABEL = "source_health"
+WORK_GRAPH_SOURCE_LABEL = "work_graph"
 
 QUESTION = "What's the status of the Ask Dev project?"
+
+#: An issue subject, because ``_work_graph_applicable`` only fires for issue
+#: and pull-request scopes -- a project subject can never exercise the
+#: applicable-conditional arm at all. Single-word label: the interpreter binds
+#: a name to the adjacent kind noun, and a multi-word label does not resolve
+#: through "<name> issue" phrasing.
+NIGHTFALL_ISSUE = AuthorizedEntity(EntityKind.ISSUE, "issue-4242", "Nightfall")
+
+
+class WorkGraphFailingRuntime(FakePlanExecutorRuntime):
+    """The shared double, with the applicable ``work_graph_expansion`` failing.
+
+    Distinct from a *skipped* conditional step: this one's applicability
+    predicate says yes, so it runs and then fails.
+    """
+
+    async def work_graph_neighbors(self, **kwargs: Any) -> Any:
+        self.work_graph_calls += 1
+        raise RuntimeError("work graph source unavailable")
 
 
 class HealthFailingRuntime(FakePlanExecutorRuntime):
@@ -112,6 +133,26 @@ def _script(status: str, *, tool: ToolID = ToolID.STATUS_SNAPSHOT) -> Any:
         return steps
 
     return build
+
+
+def _complete_then_partial_script(script_id: str) -> list[ScriptedStep]:
+    """One tool call, a ``complete`` answer (refused), then a ``partial`` one."""
+
+    steps: list[ScriptedStep] = [
+        ScriptedStep(
+            decision=AgentToolRequest(
+                tool_id=ToolID.STATUS_SNAPSHOT.value,
+                arguments={"limit": 25, "include_comparison": False},
+                call_id="tool_call_01",
+            ),
+            usage=AgentUsage(input_tokens=100, output_tokens=10),
+        )
+    ]
+    for status in ("complete", "partial"):
+        payload = deepcopy(answer_payload(script_id=script_id))
+        payload["status"] = status
+        steps.append(ScriptedStep(decision=AgentFinalAnswer(payload)))
+    return steps
 
 
 async def _plan_run(
@@ -303,15 +344,126 @@ async def test_a_plan_free_run_keeps_its_tool_only_coverage() -> None:
     assert coverage.unavailable_required_sources == []
 
 
+@pytest.mark.asyncio
+async def test_an_applicable_conditional_that_failed_also_refuses_complete() -> None:
+    """The same laundering one requirement level over (team-lead review, Q2).
+
+    A ``conditional`` requirement is not "optional" -- it is *required if
+    applicable*. ``_work_graph_applicable`` fires for issue and pull-request
+    subjects, so on an issue subject ``work_graph_expansion`` is deemed
+    needed, actually runs, and can fail. Before this arm landed, such a run
+    still answered ``complete`` at coverage 3/3 with an empty unavailable
+    list -- the plan asked for a source, attempted it, did not get it, and
+    the answer claimed completeness anyway.
+
+    Note what makes this test meaningful: ``work_graph_calls == 1``. The
+    conditional step must have *run*. A version of this case where the
+    predicate declined and the step never executed would prove nothing --
+    that is the ``not_applicable`` path, which the control below requires to
+    stay non-blocking.
+
+    Mutation kill site: restoring the ``!= "mandatory"`` filter (the
+    mandatory-only arm) fails this at the terminal assertion -- observed
+    ``RunState.COMPLETED`` with ``AnswerStatus.COMPLETE`` and coverage 3/3,
+    which is the repro exactly as reported.
+    """
+
+    runtime = WorkGraphFailingRuntime()
+    output = await run_preflight_orchestrator(
+        question="What's the status of the Nightfall issue?",
+        entities=[(ORG_ID, NIGHTFALL_ISSUE)],
+        script_id="chaos3334-conditional-failed",
+        script=_script("complete"),
+        recorder_factory=InvestigationRecorder,
+        plan_registry=CORE_PLANS_BY_INTENT,
+        plan_executor=executor_for(runtime),
+    )
+
+    # The conditional step was applicable and really executed.
+    assert runtime.work_graph_calls == 1
+
+    result = output.result
+    assert result.state is RunState.FAILED
+    assert result.error is not None
+    assert result.error.code == "answer_validation_failed"
+    assert result.answer is None
+
+    recorder = output.recorder
+    assert isinstance(recorder, InvestigationRecorder)
+    investigation = recorder.results[0]
+    assert "work_graph_expansion" in investigation.failed_steps
+    work_graph = [
+        observation
+        for observation in investigation.observations
+        if observation.source_class.value == WORK_GRAPH_SOURCE_LABEL
+    ]
+    assert len(work_graph) == 1
+    # Measured and failed -- not merely "never applicable".
+    assert work_graph[0].requirement_level == "conditional"
+    assert work_graph[0].observed_state is not SourceRequirementState.NOT_APPLICABLE
+    assert work_graph[0].observed_state in UNMEASURED_REQUIREMENT_STATES
+
+
+@pytest.mark.asyncio
+async def test_the_merged_coverage_survives_a_repair_turn() -> None:
+    """Coverage must be re-merged on every candidate, not just the first.
+
+    The answer candidate is rebuilt inside the model-round loop, so a
+    refused-then-repaired answer goes through the merge a second time. That
+    is correct today only because ``investigation_result`` is a loop-
+    invariant free variable and the candidate dict is rebuilt rather than
+    mutated -- properties a later refactor could quietly break, at which
+    point the *second* answer would silently revert to tool-only coverage
+    and the repair turn would become a way to launder exactly what the first
+    turn refused.
+
+    The script answers ``complete`` first (refused, costing a repair round)
+    and ``partial`` second (accepted), so the assertions below are read off
+    an answer produced on a repair turn.
+    """
+
+    output = await run_preflight_orchestrator(
+        question=QUESTION,
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script_id="chaos3334-repair-turn",
+        script=_complete_then_partial_script,
+        recorder_factory=InvestigationRecorder,
+        plan_registry=CORE_PLANS_BY_INTENT,
+        plan_executor=executor_for(HealthFailingRuntime()),
+    )
+
+    result = output.result
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status is AnswerStatus.PARTIAL
+    # The provider really was asked twice -- otherwise no repair turn
+    # happened and this test would be measuring the first candidate.
+    assert output.provider is not None
+    assert len(output.provider.user_texts) >= 3
+
+    coverage = result.answer.coverage
+    assert HEALTH_SOURCE_LABEL in coverage.unavailable_required_sources
+    assert coverage.required_source_count == 3
+    assert coverage.available_source_count == 2
+
+
 def test_every_source_requirement_state_is_classified() -> None:
     """Totality over the closed vocabulary.
 
-    ``_coverage_with_plan_sources`` splits mandatory observations three ways:
+    ``_coverage_with_plan_sources`` splits every *participating* observation
+    -- mandatory, plus conditional ones that were applicable -- three ways:
     unavailable, stale, or available. A state added to
     ``SourceRequirementState`` later must land in exactly one of those buckets
     deliberately -- this test fails the moment a new member appears without
     someone deciding which it is, rather than letting it silently default to
     "available" (the fall-through branch) and quietly re-open the laundering.
+
+    ``NOT_APPLICABLE`` sits in the unavailable bucket here and still never
+    blocks a conditional, because participation is decided *before* this
+    classification: the merge skips a conditional observation carrying that
+    state outright. Both facts are load-bearing and separately pinned --
+    ``test_a_healthy_plan_run_still_allows_a_complete_answer`` for the skip,
+    this test for the classification.
     """
 
     stale_states = {SourceRequirementState.AVAILABLE_STALE}

@@ -474,6 +474,47 @@ async def test_the_fallback_appends_and_never_erases_the_not_found_entry() -> No
 
 
 @pytest.mark.asyncio
+async def test_the_persisted_entry_matches_the_pre_existing_ambiguity_shape() -> None:
+    """Codex confirmation review (medium), scoped: no NEW persistence gap.
+
+    The orchestrator persists exactly one resolution row -- the terminating
+    entry the frame's candidates are authorized against (CHAOS-3325) -- so a
+    durable ledger has never been a contiguous prefix. This pins that the
+    fallback lands in the same shape the pre-existing genuine-ambiguity path
+    already lands in, and that the two stay distinguishable durably: the
+    diagnostic on ``dev_runs.preflight_outcome`` is what says which happened.
+
+    Widening persistence to store the whole prefix would change what
+    ``_authorize_clarification_candidates`` compares against and belongs with
+    CHAOS-3325's contract, not here.
+    """
+
+    ambiguous = await _run(
+        _preflight(
+            [
+                (ORG_ID, ASK_DEV_PROJECT),
+                (ORG_ID, ATLAS_PROJECT_ONE),
+                (ORG_ID, ATLAS_PROJECT_TWO),
+            ]
+        ),
+        request_for("Compare project Ask Dev and project Atlas"),
+    )
+    fallback = await _run(
+        _preflight([(ORG_ID, issue) for issue in go_workers_issues(3)]),
+        request_for(GO_WORKERS_QUESTION),
+    )
+
+    for result in (ambiguous, fallback):
+        assert result.ledger is not None
+        assert [entry.entry_ordinal for entry in result.ledger.entries] == [0, 1]
+        assert result.terminating_resolution_entry is not None
+        assert result.terminating_resolution_entry.entry_ordinal == 1
+
+    assert ambiguous.diagnostic == "unresolved_ambiguous_candidates"
+    assert fallback.diagnostic == "unresolved_close_matches"
+
+
+@pytest.mark.asyncio
 async def test_a_genuine_ambiguity_keeps_its_own_clarification_copy() -> None:
     """The close-matches copy must not swallow real same-name ambiguity."""
 

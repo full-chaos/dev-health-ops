@@ -70,6 +70,23 @@ def _exact_resolution() -> DevScopeResolution:
     return _resolution(outcome="exact")
 
 
+def _closest_match() -> dict:
+    """One CHAOS-3366-shaped closest match, built from the published entity-ref
+    shape the real resolver emits rather than a hand-written stub."""
+
+    scope = deepcopy(positive_fixtures()["dev_scope_resolution.v1"])["requested_scope"]
+    return {
+        "entity_ref": {
+            "entity_type": "project",
+            "entity_id": "project_falcon_nine",
+            "display_label": "Falcon Nine",
+            "repository_id": None,
+        },
+        "repository_id": scope["repositories"][0],
+        "reason": "Closest authorized name match.",
+    }
+
+
 def _versions() -> DevContractVersions:
     return DevContractVersions(
         prompt_version="ask-dev-prompt.v1",
@@ -332,3 +349,29 @@ def test_public_outcome_mapping_matches_the_trd_table() -> None:
     assert NO_MATCH_PUBLIC_OUTCOME is PublicOutcome.NOT_FOUND
     assert NO_MATCH_PUBLIC_OUTCOME_LABEL == "No authorized match found"
     assert internal_token_leak([NO_MATCH_PUBLIC_OUTCOME_LABEL]) is None
+
+
+def test_a_no_match_resolution_may_carry_closest_matches() -> None:
+    """CHAOS-3367 contract change, so CHAOS-3366 is additive: the PRD's
+    sentence ends "Here are the closest matches, if any", and before this the
+    contract rejected candidates on anything but ``ambiguous`` -- there was
+    nowhere for that list to live."""
+
+    resolution = _resolution(
+        resolved_scope=None,
+        outcome="forbidden_or_not_found",
+        authorized_repository_ids=[],
+        authorized_entity_ids=[],
+        candidates=[_closest_match()],
+        fallbacks=[],
+        warnings=[],
+    )
+    assert len(resolution.candidates) == 1
+
+
+def test_a_committed_scope_still_rejects_candidates() -> None:
+    """The widening is exactly two outcomes wide. An ``exact`` commit with a
+    candidate list beside it is a contradiction, not extra context."""
+
+    with pytest.raises(ValueError, match="candidates are allowed only"):
+        _resolution(outcome="exact", candidates=[_closest_match()])

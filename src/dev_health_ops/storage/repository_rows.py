@@ -28,7 +28,13 @@ def repository_json_or_none(value: Any) -> str | None:
     """Encode repository JSON fields in the cross-runtime canonical form."""
     if value is None:
         return None
-    return json.dumps(value, default=str, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(
+        value,
+        default=str,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def build_repository_insert_row(

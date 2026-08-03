@@ -1,0 +1,55 @@
+name: Local ARC Smoke Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/arc-local-smoke.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arc-local-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Verify local ARC runner
+    runs-on: local-arc-runners
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Inspect runner environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Runner name: ${RUNNER_NAME}"
+          echo "Runner OS: ${RUNNER_OS}"
+          echo "Runner architecture: ${RUNNER_ARCH}"
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          echo "Workflow ref: ${GITHUB_WORKFLOW_REF}"
+
+          uname -a
+          id
+          df -h
+
+      - name: Verify Docker access
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker version
+          docker info
+
+      - name: Run an ARM64 container
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm --platform linux/arm64 alpine:3.22 \
+            sh -c 'uname -m && echo "ARC Docker smoke test passed"'

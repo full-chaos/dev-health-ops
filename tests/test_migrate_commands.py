@@ -172,10 +172,10 @@ class TestPostgresUpgrade:
         )
         scripts = ScriptDirectory.from_config(cfg)
 
-        assert set(scripts.get_heads()) == {"0066", "0080"}
-        assert scripts.get_revision("application_schema@head").revision == "0080"
-        assert _database_has_revision(cfg, ("0080",), "0065")
-        assert not _database_has_revision(cfg, ("0080",), "0066")
+        assert set(scripts.get_heads()) == {"0066", "0082"}
+        assert scripts.get_revision("application_schema@head").revision == "0082"
+        assert _database_has_revision(cfg, ("0082",), "0065")
+        assert not _database_has_revision(cfg, ("0082",), "0066")
 
     def test_cutover_revision_lineage_detection_uses_real_alembic_graph(self) -> None:
         cfg = _make_alembic_config(

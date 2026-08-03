@@ -32,6 +32,7 @@ into both ``builtin_steps.register_builtin_steps`` and this module's
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Protocol
 
@@ -52,6 +53,7 @@ from ..contracts_v2.health_rules import HealthRuleFinding
 from ..contracts_v2.plan import DevInvestigationPlan, DevSourceRequirement
 from ..contracts_v2.result import HEALTH_FINDING_SEVERITY_RANK, DevSourceContent
 from ..health_profile_synthesis import HealthProfileResult
+from ..persistence.service import _SOURCE_CLASSES as _PERSISTENCE_SOURCE_CLASSES
 from ..preflight_outcomes import PLAN_ID_BY_INTENT
 from .builtin_steps import PlanExecutorRuntime, register_builtin_steps
 from .plan_documents import CORE_PLANS_BY_INTENT, CORE_QUESTION_INTENT_IDS
@@ -67,6 +69,42 @@ __all__ = [
     "capped_health_findings",
     "register_wave_3_1_steps",
 ]
+
+
+def _source_classes_missing_from_persistence_allowlist(
+    plans_by_intent: Mapping[QuestionIntentID, DevInvestigationPlan],
+    *,
+    allowlist: frozenset[str],
+) -> frozenset[str]:
+    """Every ``SourceClass`` value any of ``plans_by_intent``'s steps can
+    emit that ``allowlist`` does not contain (CHAOS-3337).
+
+    ``persistence.service._SOURCE_CLASSES`` is a separate, hand-maintained
+    frozenset -- ``SourceClass`` being a closed pydantic enum only proves a
+    plan document's own ``source_requirements`` are internally consistent,
+    never that the persistence layer's own allowlist was updated to match.
+    A registered plan whose steps emit a ``SourceClass`` this table does
+    not carry crashes the FIRST live run that reaches
+    ``DevPersistenceService.append_source_observation`` with
+    ``DevPersistenceValidationError('invalid source_class')`` -- CHAOS-3337
+    was exactly this, for ``HEALTH_PROFILE``/``DEFICIENCY_INVENTORY``
+    (CHAOS-3297 stack #3), the third total-table to miss a ``SourceClass``
+    reconciliation (the CHAOS-3296/3297 relationship-matrix tables at
+    #1374's merge were the first two).
+
+    Pure and directly testable (see ``test_chaos_3337_source_class_
+    persistence_allowlist.py``), and also invoked below at THIS module's
+    own import time against the real registries and the real allowlist --
+    so the next ``SourceClass`` addition to a registered plan's
+    ``source_requirements`` fails at import, not live.
+    """
+
+    emitted = {
+        requirement.source_class.value
+        for plan in plans_by_intent.values()
+        for requirement in plan.source_requirements
+    }
+    return frozenset(emitted) - allowlist
 
 
 #: A finding-emitting service surface: exactly what this module's steps
@@ -554,6 +592,28 @@ _plan_id_mismatches = sorted(
 if _plan_id_mismatches:
     raise RuntimeError(
         f"wave_3_1 plan_id disagrees with PLAN_ID_BY_INTENT: {_plan_id_mismatches}"
+    )
+
+#: CHAOS-3337: every SourceClass the six core plans PLUS this module's four
+#: can emit, checked against persistence's own allowlist at THIS module's
+#: import time -- see ``_source_classes_missing_from_persistence_allowlist``'s
+#: own docstring. Covers both registries (not just this module's own) since
+#: either side could add a new SourceClass a plan's steps emit.
+_missing_from_persistence_allowlist = (
+    _source_classes_missing_from_persistence_allowlist(
+        {**CORE_PLANS_BY_INTENT, **WAVE_3_1_PLANS_BY_INTENT},
+        allowlist=_PERSISTENCE_SOURCE_CLASSES,
+    )
+)
+if _missing_from_persistence_allowlist:
+    raise RuntimeError(
+        "SourceClass(es) "
+        f"{sorted(_missing_from_persistence_allowlist)} are emitted by a "
+        "registered plan's source_requirements, but "
+        "persistence.service._SOURCE_CLASSES does not allow them -- every "
+        "observation for this source class would be rejected at write "
+        "time with DevPersistenceValidationError('invalid source_class') "
+        "(CHAOS-3337)"
     )
 
 #: The four question classes this module wires. ``PORTFOLIO_STATUS`` is

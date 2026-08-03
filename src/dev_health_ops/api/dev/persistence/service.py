@@ -147,6 +147,18 @@ _RESOLUTION_OUTCOMES = frozenset(
 _ENTITY_KINDS = frozenset(
     {"repository", "project", "work_unit", "issue", "pull_request", "team"}
 )
+#: CHAOS-3337: this frozenset is a SEPARATE, hand-maintained mirror of
+#: ``contracts_v2.base.SourceClass`` -- that enum being closed only proves a
+#: plan document's own ``source_requirements`` are internally consistent,
+#: never that THIS allowlist was updated to match. A registered plan whose
+#: steps emit a SourceClass this table does not carry crashes the first
+#: live run that reaches ``append_source_observation`` below with
+#: ``DevPersistenceValidationError('invalid source_class')`` -- exactly
+#: what happened for ``health_profile``/``deficiency_inventory``
+#: (CHAOS-3297 stack #3, merged #1387) before this fix. Reconciliation is
+#: now also checked at ``investigation_plans.wave_3_1_plans`` import time
+#: (``_source_classes_missing_from_persistence_allowlist``), so the next
+#: SourceClass a registered plan's steps emit fails at import, not live.
 _SOURCE_CLASSES = frozenset(
     {
         "status_change",
@@ -161,6 +173,8 @@ _SOURCE_CLASSES = frozenset(
         "incident",
         "operational_control",
         "source_health",
+        "health_profile",
+        "deficiency_inventory",
     }
 )
 _REQUIREMENT_LEVELS = frozenset(

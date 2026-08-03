@@ -435,6 +435,292 @@ WHERE org_id = ? AND repo_id = ? AND path = ?`,
 	}
 }
 
+func TestGitHubBlameReplansWhenPreparedProgressIsProvablyAbsent(t *testing.T) {
+	for _, test := range []struct {
+		name                string
+		beginProgressEffect bool
+	}{
+		{name: "after prepare before begin"},
+		{name: "after begin before write", beginProgressEffect: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			harness := startBlameReadbackHarness(t, ctx)
+			claim, now := harness.claim, harness.now
+			failedPath := "src/file-000.go"
+			firstBatch, err := (GitHubBlameRouteHandler{
+				Coverage: GitHubBlameClickHouseCoverage{
+					Conn: harness.conn, Lease: harness.sink.Lease,
+				},
+				MaxFiles: 1,
+			}).Collect(
+				ctx, claim, providerfoundation.Credential{},
+				gitHubRepositoryClient(t, gitHubBlameDoer{
+					t: t, fileCount: 1,
+					graphQLErrPaths: map[string]bool{failedPath: true},
+				}, "https://api.github.com"),
+				now,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var failedProgress gitHubBlamePathProgressRow
+			if err := json.Unmarshal(firstBatch.Effects[0].Rows[0], &failedProgress); err != nil {
+				t.Fatal(err)
+			}
+			if failedProgress.Outcome != gitHubBlameOutcomeRetryableError ||
+				len(firstBatch.Effects[1].Rows) != 0 {
+				t.Fatalf("initial effects=%+v progress=%+v", firstBatch.Effects, failedProgress)
+			}
+			oldProgressDigest := firstBatch.Effects[0].ContentDigest
+			state, err := NewEffectLedgerState(claim, firstBatch.Effects, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := harness.repository.PrepareEffects(ctx, claim, state, now); err != nil {
+				t.Fatal(err)
+			}
+			if test.beginProgressEffect {
+				if err := harness.repository.BeginEffect(
+					ctx, claim, 0, oldProgressDigest, now.Add(time.Second),
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			recoveryNow := now.Add(61 * time.Second)
+			freshRepository, recovered := reclaimGitHubBlameUnit(
+				t, ctx, harness, recoveryNow,
+			)
+			freshSink := GitHubBlameClickHouseEffects{
+				Conn:  harness.conn,
+				Lease: leaseGuardAt(freshRepository, recovered, recoveryNow),
+			}
+			result, err := executeRecoveredGitHubBlame(
+				t, ctx, harness, freshRepository, recovered, freshSink,
+				recoveryNow, gitHubBlameDoer{t: t, fileCount: 1},
+			)
+			if err != nil || result.Effects.Written != 2 ||
+				result.Effects.MarkedCommitted != 0 || result.Effects.Skipped != 0 {
+				t.Fatalf("result=%+v error=%v", result, err)
+			}
+			persisted, err := freshRepository.LoadEffects(ctx, recovered, recoveryNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Effects[0].ContentDigest == oldProgressDigest ||
+				persisted.Effects[0].Status != GenerationBlockCommitted ||
+				persisted.Effects[1].Status != GenerationBlockCommitted {
+				t.Fatalf("replanned ledger=%+v", persisted)
+			}
+			var progressCount, blameCount uint64
+			if err := harness.conn.QueryRow(ctx, `
+SELECT count() FROM github_blame_path_progress FINAL
+WHERE org_id = ? AND generation = ? AND outcome = 'rows'`,
+				claim.OrgID, claim.GenerationKey(),
+			).Scan(&progressCount); err != nil {
+				t.Fatal(err)
+			}
+			if err := harness.conn.QueryRow(ctx, `
+SELECT count() FROM git_blame FINAL WHERE org_id = ?`, claim.OrgID,
+			).Scan(&blameCount); err != nil {
+				t.Fatal(err)
+			}
+			if progressCount != 1 || blameCount != 2 {
+				t.Fatalf("progress=%d blame=%d", progressCount, blameCount)
+			}
+		})
+	}
+}
+
+func TestGitHubBlameDoesNotReplanWritingProgressThatReachedClickHouse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	harness := startBlameReadbackHarness(t, ctx)
+	claim, now := harness.claim, harness.now
+	failedPath := "src/file-000.go"
+	firstBatch, err := (GitHubBlameRouteHandler{
+		Coverage: GitHubBlameClickHouseCoverage{
+			Conn: harness.conn, Lease: harness.sink.Lease,
+		},
+		MaxFiles: 1,
+	}).Collect(
+		ctx, claim, providerfoundation.Credential{},
+		gitHubRepositoryClient(t, gitHubBlameDoer{
+			t: t, fileCount: 1,
+			graphQLErrPaths: map[string]bool{failedPath: true},
+		}, "https://api.github.com"),
+		now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := NewEffectLedgerState(claim, firstBatch.Effects, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.repository.PrepareEffects(ctx, claim, state, now); err != nil {
+		t.Fatal(err)
+	}
+	progress := firstBatch.Effects[0]
+	if err := harness.repository.BeginEffect(
+		ctx, claim, 0, progress.ContentDigest, now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.sink.WriteEffect(ctx, claim, progress); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveryNow := now.Add(61 * time.Second)
+	freshRepository, recovered := reclaimGitHubBlameUnit(t, ctx, harness, recoveryNow)
+	freshSink := GitHubBlameClickHouseEffects{
+		Conn:  harness.conn,
+		Lease: leaseGuardAt(freshRepository, recovered, recoveryNow),
+	}
+	attempted := []string{}
+	result, err := executeRecoveredGitHubBlame(
+		t, ctx, harness, freshRepository, recovered, freshSink, recoveryNow,
+		gitHubBlameDoer{t: t, fileCount: 1, blamePaths: &attempted},
+	)
+	if err != nil || result.Effects.MarkedCommitted != 1 ||
+		result.Effects.Written != 1 || len(attempted) != 0 {
+		t.Fatalf("result=%+v attempted=%v error=%v", result, attempted, err)
+	}
+	persisted, err := freshRepository.LoadEffects(ctx, recovered, recoveryNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Effects[0].ContentDigest != progress.ContentDigest {
+		t.Fatalf("accepted manifest was replanned: old=%s new=%s",
+			progress.ContentDigest, persisted.Effects[0].ContentDigest)
+	}
+}
+
+func TestGitHubBlameConditionalReplanRejectsStaleLedgerSnapshot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	harness := startBlameReadbackHarness(t, ctx)
+	claim, now := harness.claim, harness.now
+	batch, err := (GitHubBlameRouteHandler{
+		Coverage: GitHubBlameClickHouseCoverage{
+			Conn: harness.conn, Lease: harness.sink.Lease,
+		},
+		MaxFiles: 1,
+	}).Collect(
+		ctx, claim, providerfoundation.Credential{},
+		gitHubRepositoryClient(t, gitHubBlameDoer{
+			t: t, fileCount: 1,
+			graphQLErrPaths: map[string]bool{"src/file-000.go": true},
+		}, "https://api.github.com"),
+		now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := NewEffectLedgerState(claim, batch.Effects, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := harness.repository.PrepareEffects(ctx, claim, state, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canReplan, err := (GitHubBlameRouteHandler{
+		Coverage: GitHubBlameClickHouseCoverage{
+			Conn: harness.conn, Lease: harness.sink.Lease,
+		},
+	}).CanReplanRecovery(ctx, claim, expected)
+	if err != nil || !canReplan {
+		t.Fatalf("precondition canReplan=%v error=%v", canReplan, err)
+	}
+	if err := harness.repository.BeginEffect(
+		ctx, claim, 0, expected.Effects[0].ContentDigest, now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.repository.ResetPreparedEffectsForReplan(
+		ctx, claim, expected, now.Add(2*time.Second),
+	); !errors.Is(err, ErrEffectLedgerConflict) {
+		t.Fatalf("stale reset error=%v, want ErrEffectLedgerConflict", err)
+	}
+	persisted, err := harness.repository.LoadEffects(ctx, claim, now.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("ledger was deleted after stale reset: %v", err)
+	}
+	if persisted.Effects[0].Status != GenerationBlockWriting ||
+		persisted.Effects[1].Status != GenerationBlockPending {
+		t.Fatalf("ledger changed after stale reset: %+v", persisted)
+	}
+}
+
+func reclaimGitHubBlameUnit(
+	t *testing.T,
+	ctx context.Context,
+	harness *blameReadbackHarness,
+	recoveryNow time.Time,
+) (*PostgresRepository, Claim) {
+	t.Helper()
+	repository, err := NewPostgresRepository(harness.repository.Pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: firstUnitID, OrgID: harness.claim.OrgID, Owner: uuid.NewString(),
+		Now: recoveryNow, LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repository, claim
+}
+
+func executeRecoveredGitHubBlame(
+	t *testing.T,
+	ctx context.Context,
+	harness *blameReadbackHarness,
+	repository *PostgresRepository,
+	claim Claim,
+	sink GitHubBlameClickHouseEffects,
+	now time.Time,
+	doer gitHubBlameDoer,
+) (CompleteRouteExecutionResult, error) {
+	t.Helper()
+	session := &LeaseSession{
+		Repository: repository, Claim: claim, LeaseDuration: time.Minute,
+		Deadline: now.Add(5 * time.Minute), Now: func() time.Time { return now },
+	}
+	descriptor, _ := (CompleteRouteSwitches{GithubBlame: true}).Descriptor("github", "blame")
+	return (CompleteRouteExecutor{
+		Credentials: providerfoundation.CredentialResolver{
+			Repository: githubBlameIntegrationCredentialRepository{},
+			Decryptor:  githubBlameIntegrationCredentialDecryptor{},
+		},
+		Doer: doer,
+		Retry: providerfoundation.RetryPolicy{
+			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		Budget:       executorBudgetStore{},
+		BudgetLimits: map[CostClass]int{CostHeavy: 1},
+		BudgetTTL:    time.Minute,
+		Gate: func(Claim, *providerfoundation.HTTPClient) providerfoundation.BackoffGate {
+			return executorBackoffGate{}
+		},
+		Handler: GitHubBlameRouteHandler{
+			Coverage: GitHubBlameClickHouseCoverage{Conn: harness.conn, Lease: sink.Lease},
+			MaxFiles: 1,
+		},
+		Comparator: ProductionContractComparator{},
+		Committer: EffectCommitter{
+			Ledger: repository, Sink: sink, Readback: sink,
+			Now: func() time.Time { return now },
+		},
+		HeartbeatInterval: 30 * time.Second,
+		Now:               func() time.Time { return now },
+	}).Execute(ctx, session, descriptor)
+}
+
 type githubBlameIntegrationCredentialRepository struct{}
 
 func (githubBlameIntegrationCredentialRepository) ResolveEncrypted(

@@ -306,6 +306,15 @@ advance durably without fabricated line rows. Non-rate-limit per-file failures
 stay retryable and rotate behind never-attempted paths; provider rate limits
 still abort the whole unit. Successive syncs therefore advance without either
 manifest conflicts or permanently unblameable-path starvation.
+
+The one manifest that may be replanned is a GitHub-blame manifest that crashed
+before its first progress effect became durable. Replanning requires the first
+effect to be `pending` or `writing`, every later effect to remain `pending`, an
+exact-generation ClickHouse probe to find zero progress rows, and a
+transactional PostgreSQL comparison to prove the ledger has not changed since
+that probe. Any accepted progress row or concurrent ledger transition keeps
+the original manifest and uses normal exact readback recovery.
+
 Missing, failed, or over-bound coverage reads fail with
 `ErrGitHubBlameProgressUnavailable` before any blame GraphQL request, effect, or
 watermark. A live Python oracle executes `select_unblamed_paths` for empty,
@@ -316,7 +325,9 @@ Readback is a full-order-key point lookup over `git_blame FINAL`, including
 same-organization cross-repository progress isolation. A separate PostgreSQL +
 ClickHouse production-executor crash test proves that ordered progress and
 blame writes accepted before process death are reconciled as exact without
-inserting a duplicate physical version.
+inserting a duplicate physical version. Two additional executor tests cover
+crashes after manifest preparation and after beginning the progress effect but
+before its write; both safely replan when a transient per-file error clears.
 
 Foundation normalization parity is executed against the active Python
 `_backfill_github_missing_data` producer rather than a hand-authored expected

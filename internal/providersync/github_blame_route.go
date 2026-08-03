@@ -112,6 +112,10 @@ type GitHubBlameCoverage interface {
 	Progress(context.Context, Claim, string, string, string) (GitHubBlameProgressState, error)
 }
 
+type GitHubBlameGenerationProgressProbe interface {
+	HasGenerationProgress(context.Context, Claim, string) (bool, error)
+}
+
 type GitHubBlameRouteHandler struct {
 	Coverage GitHubBlameCoverage
 	// MaxFiles is test-configurable below the production ceiling. Zero uses
@@ -167,6 +171,30 @@ func (handler GitHubBlameRouteHandler) CollectRecovery(
 		ctx, claim, client, normalizedAt, handler.Coverage, maxFiles, false,
 		state.Generation,
 	)
+}
+
+func (handler GitHubBlameRouteHandler) CanReplanRecovery(
+	ctx context.Context,
+	claim Claim,
+	state EffectLedgerState,
+) (bool, error) {
+	if !isSafeGitHubBlameReplanState(claim, state) {
+		return false, nil
+	}
+	probe, ok := handler.Coverage.(GitHubBlameGenerationProgressProbe)
+	if !ok {
+		return false, ErrInvalidConfiguration
+	}
+	hasProgress, err := probe.HasGenerationProgress(
+		ctx, claim, state.Generation,
+	)
+	if err != nil {
+		return false, err
+	}
+	if hasProgress {
+		return false, nil
+	}
+	return true, nil
 }
 
 // collectGitHubBlameFoundation retains the bounded fetch and normalization
@@ -560,3 +588,4 @@ func (row gitBlameRow) validate(claim Claim) error {
 
 var _ CompleteRouteHandler = GitHubBlameRouteHandler{}
 var _ RecoveringCompleteRouteHandler = GitHubBlameRouteHandler{}
+var _ SafeReplanningCompleteRouteHandler = GitHubBlameRouteHandler{}

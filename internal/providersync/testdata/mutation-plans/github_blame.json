@@ -160,6 +160,27 @@
       "proof": [
         ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameCrashWindowRecoversWithoutDuplicateVersion$", "./internal/providersync/"]
       ]
+    },
+    {
+      "id": "B16-durable-generation-progress-blocks-replan",
+      "file": "internal/providersync/github_blame_route.go",
+      "find": "if hasProgress {",
+      "replace": "if hasProgress && false {",
+      "rationale": "a writing progress effect that reached ClickHouse must preserve its original manifest; treating it as absent discards accepted effect identity and refetches mutable provider results",
+      "proof": [
+        ["go", "test", "-run", "^TestGitHubBlameSafeReplanRequiresAbsentGenerationProgress$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B17-replan-reset-requires-exact-ledger-snapshot",
+      "file": "internal/providersync/effect_ledger.go",
+      "find": "!bytes.Equal(encodeEffectLedgerState(current), expectedEncoded) ||",
+      "replace": "false ||",
+      "rationale": "the transactional reset must reject a stale probe snapshot if any effect status changed before the PostgreSQL row lock was acquired",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [
+        ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameConditionalReplanRejectsStaleLedgerSnapshot$", "./internal/providersync/"]
+      ]
     }
   ]
 }

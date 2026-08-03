@@ -246,6 +246,20 @@ type EffectLedger interface {
 	) error
 }
 
+// EffectLedgerReplanner is intentionally separate from EffectLedger. Only a
+// route that can prove its first ordered durable effect is absent may discard
+// a prepared manifest whose provider-dependent rows can no longer be
+// reproduced. The repository rechecks the exact loaded state under the same
+// row lock used by all other ledger transitions.
+type EffectLedgerReplanner interface {
+	ResetPreparedEffectsForReplan(
+		context.Context,
+		Claim,
+		EffectLedgerState,
+		time.Time,
+	) error
+}
+
 func (repository *PostgresRepository) LoadEffects(
 	ctx context.Context,
 	claim Claim,
@@ -381,6 +395,48 @@ func (repository *PostgresRepository) ResolveEffect(
 	})
 }
 
+func (repository *PostgresRepository) ResetPreparedEffectsForReplan(
+	ctx context.Context,
+	claim Claim,
+	expected EffectLedgerState,
+	now time.Time,
+) error {
+	if !isSafeGitHubBlameReplanState(claim, expected) || now.IsZero() {
+		return ErrInvalidConfiguration
+	}
+	expectedEncoded := encodeEffectLedgerState(expected)
+	if len(expectedEncoded) == 0 {
+		return ErrEffectLedgerConflict
+	}
+	return repository.mutateGenerationJournal(ctx, claim, now, func(document map[string]json.RawMessage) error {
+		current, err := decodeEffectLedgerState(document[effectLedgerResultKey])
+		if err != nil || !bytes.Equal(encodeEffectLedgerState(current), expectedEncoded) ||
+			!isSafeGitHubBlameReplanState(claim, current) {
+			return ErrEffectLedgerConflict
+		}
+		delete(document, effectLedgerResultKey)
+		return nil
+	})
+}
+
+func isSafeGitHubBlameReplanState(claim Claim, state EffectLedgerState) bool {
+	if claim.Validate() != nil || state.validate() != nil ||
+		claim.Provider != "github" || claim.Dataset != "blame" ||
+		state.Generation != claim.GenerationKey() || state.Provider != claim.Provider ||
+		state.Dataset != claim.Dataset || len(state.Effects) != 2 {
+		return false
+	}
+	progress, blame := state.Effects[0], state.Effects[1]
+	if progress.Destination != "github_blame_path_progress" ||
+		progress.Recovery != EffectReadbackRequired ||
+		(progress.Status != GenerationBlockPending && progress.Status != GenerationBlockWriting) {
+		return false
+	}
+	return blame.Destination == "git_blame" &&
+		blame.Recovery == EffectReadbackRequired &&
+		blame.Status == GenerationBlockPending
+}
+
 func (repository *PostgresRepository) transitionEffect(
 	ctx context.Context,
 	claim Claim,
@@ -448,3 +504,4 @@ WHERE unit.id = $1::uuid
   AND run.status NOT IN ('success', 'partial_failed', 'failed')`
 
 var _ EffectLedger = (*PostgresRepository)(nil)
+var _ EffectLedgerReplanner = (*PostgresRepository)(nil)

@@ -247,6 +247,24 @@ def test_github_files_switch_is_the_second_required_key() -> None:
     ).routes_to_river("github", "files")
 
 
+def test_github_commit_stats_switch_routes_only_when_enabled() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_COMMIT_STATS_ENABLED": "true"}
+    )
+    assert off.github_commit_stats is False
+    assert not off.routes_to_river("github", "commit-stats")
+    assert on.github_commit_stats is True
+    assert on.routes_to_river("github", "commit-stats")
+
+
+def test_github_commit_stats_invalid_switch_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITHUB_COMMIT_STATS_ENABLED": "sometimes"}
+        )
+
+
 # ---------------------------------------------------------------------------
 # CHAOS-3131: routability is derived from the checked-in matrix, not from a
 # hardcoded provider/dataset literal.

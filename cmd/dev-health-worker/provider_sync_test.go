@@ -290,6 +290,12 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 			},
 		},
 		{
+			name: "github prs",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubPRsEnabled: true,
+			},
+		},
+		{
 			name: "github commits",
 			cfg: config.Config{
 				Profile: "sync", WorkerGithubCommitsEnabled: true,
@@ -311,6 +317,12 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 			name: "github files",
 			cfg: config.Config{
 				Profile: "sync", WorkerGithubFilesEnabled: true,
+			},
+		},
+		{
+			name: "github commit stats",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubCommitStatsEnabled: true,
 			},
 		},
 	} {
@@ -372,6 +384,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 			cfg:  config.Config{WorkerGithubFilesEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubFiles: true},
 		},
+		"github_commit_stats": {
+			cfg:  config.Config{WorkerGithubCommitStatsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubCommitStats: true},
+		},
 		"linear": {
 			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},
 			want: providersync.CompleteRouteSwitches{LinearWorkItems: true},
@@ -391,6 +407,31 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 				t.Fatalf("workerRouteSwitches = %+v, want %+v", got, probe.want)
 			}
 		})
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsGitHubCommitStatsCapability(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(
+		nil,
+		providersync.CompleteRouteSwitches{GithubCommitStats: true},
+		nil, nil, nil, nil, nil, slog.Default(),
+	)
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "github", Dataset: "commit-stats",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := executor.Handler.(providersync.GitHubCommitStatsRouteHandler); !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.GitHubCommitStatsClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
 	}
 }
 
@@ -501,6 +542,7 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 		"github_deployments":   {WorkerGithubDeploymentsEnabled: true},
 		"github_security":      {WorkerGithubSecurityEnabled: true},
 		"github_files":         {WorkerGithubFilesEnabled: true},
+		"github_commit_stats":  {WorkerGithubCommitStatsEnabled: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !providerSyncWorkerEnabled(cfg) {

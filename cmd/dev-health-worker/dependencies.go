@@ -436,6 +436,7 @@ func workerRouteSwitches(cfg config.Config) providersync.CompleteRouteSwitches {
 		GithubDeployments:        cfg.WorkerGithubDeploymentsEnabled,
 		GithubSecurity:           cfg.WorkerGithubSecurityEnabled,
 		GithubFiles:              cfg.WorkerGithubFilesEnabled,
+		GithubCommitStats:        cfg.WorkerGithubCommitStatsEnabled,
 	}
 }
 
@@ -460,6 +461,7 @@ func providerRouteSwitchesReady(
 		{"github", "deployments", cfg.WorkerGithubDeploymentsEnabled},
 		{"github", "security", cfg.WorkerGithubSecurityEnabled},
 		{"github", "files", cfg.WorkerGithubFilesEnabled},
+		{"github", "commit-stats", cfg.WorkerGithubCommitStatsEnabled},
 	}
 	return func(context.Context) error {
 		for _, route := range routes {

@@ -87,22 +87,12 @@
     },
     {
       "provider": "github",
-      "route_family": "cicd",
-      "dimensions": [
-        "rest_core",
-        "contents_blob"
-      ],
-      "covers": "CI/CD workflow runs + artifact expansion",
-      "confidence": "low"
-    },
-    {
-      "provider": "github",
       "route_family": "tests",
       "dimensions": [
         "rest_core",
         "contents_blob"
       ],
-      "covers": "Test report ingestion",
+      "covers": "Shared CI/CD workflow runs and test report artifact ingestion",
       "confidence": "low"
     },
     {

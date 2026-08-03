@@ -136,6 +136,8 @@ type Config struct {
 	WorkerGithubCommitStatsEnabled bool
 	// WorkerGithubBlameEnabled gates the resumable (github, blame) route.
 	WorkerGithubBlameEnabled bool
+	// WorkerGithubTestsEnabled gates the complete six-effect (github, tests) route.
+	WorkerGithubTestsEnabled bool
 
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
@@ -256,11 +258,18 @@ func Load(spec Spec) (Config, error) {
 			name:   "WORKER_GITHUB_BLAME_ENABLED",
 			target: &cfg.WorkerGithubBlameEnabled,
 		},
+		{
+			name:   "WORKER_GITHUB_TESTS_ENABLED",
+			target: &cfg.WorkerGithubTestsEnabled,
+		},
 	} {
 		*item.target, err = boolEnv(lookup, item.name, false)
 		if err != nil {
 			return Config{}, err
 		}
+	}
+	if cfg.WorkerGithubCICDEnabled && cfg.WorkerGithubTestsEnabled {
+		return Config{}, fmt.Errorf("WORKER_GITHUB_CICD_ENABLED and WORKER_GITHUB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
 	}
 	cfg.HealthCheckTimeout, err = durationEnv(
 		lookup,
@@ -526,6 +535,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("worker_github_commits_enabled", c.WorkerGithubCommitsEnabled),
 		slog.Bool("worker_github_security_enabled", c.WorkerGithubSecurityEnabled),
 		slog.Bool("worker_github_blame_enabled", c.WorkerGithubBlameEnabled),
+		slog.Bool("worker_github_tests_enabled", c.WorkerGithubTestsEnabled),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.Bool("settings_encryption_key_configured", c.SettingsEncryptionKey.Configured()),

@@ -10,16 +10,17 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	githubTestsMaxReportsPerRun = 200
-	githubTestsMaxReportBytes   = 64 << 20
-	githubTestsMaxArchiveBytes  = 256 << 20
+	githubTestsMaxReportsPerRun    = 200
+	githubTestsMaxArchiveEntries   = 2_000
+	githubTestsMaxReportBytes      = 64 << 20
+	githubTestsMaxArchiveBytes     = 256 << 20
+	githubTestsMaxCompressionRatio = 200
 )
 
 var ErrGitHubTestsReportInvalid = errors.New("github tests report invalid")
@@ -159,8 +160,15 @@ func parseGitHubTestsArtifact(
 	result := githubTestsReportRows{}
 	processed := 0
 	var expanded uint64
-	for _, member := range reader.File {
-		name := filepath.ToSlash(member.Name)
+	members := reader.File
+	if len(members) > githubTestsMaxArchiveEntries {
+		members = members[:githubTestsMaxArchiveEntries]
+	}
+	for _, member := range members {
+		if !isSafeGitHubTestsArchiveMemberName(member.Name) {
+			continue
+		}
+		name := member.Name
 		lower := strings.ToLower(name)
 		if member.FileInfo().IsDir() || (!strings.HasSuffix(lower, ".xml") && !strings.HasSuffix(lower, ".info")) {
 			continue
@@ -171,6 +179,13 @@ func parseGitHubTestsArtifact(
 		}
 		if member.UncompressedSize64 > githubTestsMaxReportBytes || expanded+member.UncompressedSize64 > githubTestsMaxArchiveBytes {
 			result.Skipped++
+			continue
+		}
+		compressed := member.CompressedSize64
+		if compressed == 0 {
+			compressed = 1
+		}
+		if member.UncompressedSize64 > compressed*githubTestsMaxCompressionRatio {
 			continue
 		}
 		body, err := readZipReport(member)
@@ -194,7 +209,7 @@ func parseGitHubTestsArtifact(
 			result.Suites = append(result.Suites, suites...)
 			result.Cases = append(result.Cases, cases...)
 		case "coverage":
-			coverage, err := parseLCOVRow(body, name, repoID, runID, orgID, normalizedAt)
+			coverage, err := parseGitHubCoverageRow(body, name, repoID, runID, orgID, normalizedAt)
 			if err != nil {
 				result.Skipped++
 				continue
@@ -203,6 +218,166 @@ func parseGitHubTestsArtifact(
 		}
 	}
 	return result, nil
+}
+
+func isSafeGitHubTestsArchiveMemberName(name string) bool {
+	if name == "" || strings.HasSuffix(name, "/") {
+		return false
+	}
+	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, `\`) {
+		return false
+	}
+	for _, part := range strings.Split(strings.ReplaceAll(name, `\`, "/"), "/") {
+		if part == ".." {
+			return false
+		}
+	}
+	if len(name) >= 2 && name[1] == ':' {
+		return false
+	}
+	return true
+}
+
+type coberturaDocument struct {
+	LinesValid      string           `xml:"lines-valid,attr"`
+	LinesCovered    string           `xml:"lines-covered,attr"`
+	BranchesValid   string           `xml:"branches-valid,attr"`
+	BranchesCovered string           `xml:"branches-covered,attr"`
+	Classes         []coberturaClass `xml:"packages>package>classes>class"`
+}
+type coberturaClass struct {
+	Filename string          `xml:"filename,attr"`
+	Lines    []coberturaLine `xml:"lines>line"`
+}
+type coberturaLine struct {
+	Hits              string `xml:"hits,attr"`
+	ConditionCoverage string `xml:"condition-coverage,attr"`
+}
+
+func parseGitHubCoverageRow(body []byte, reportPath, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
+	trimmed := strings.TrimSpace(string(body))
+	if strings.HasPrefix(strings.ToLower(trimmed), "<coverage") {
+		return parseCoberturaRow(body, reportPath, repoID, runID, orgID, normalizedAt)
+	}
+	return parseLCOVRow(body, reportPath, repoID, runID, orgID, normalizedAt)
+}
+
+func parseCoberturaRow(body []byte, reportPath, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
+	upper := bytes.ToUpper(body)
+	if len(body) > githubTestsMaxReportBytes || bytes.Contains(upper, []byte("<!DOCTYPE")) || bytes.Contains(upper, []byte("<!ENTITY")) {
+		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
+	}
+	var document coberturaDocument
+	if err := xml.Unmarshal(body, &document); err != nil {
+		return coverageSnapshotRow{}, err
+	}
+	type metrics struct {
+		path                                                     string
+		linesTotal, linesCovered, branchesTotal, branchesCovered int64
+	}
+	files := make([]metrics, 0, len(document.Classes))
+	positions := map[string]int{}
+	for _, class := range document.Classes {
+		if class.Filename == "" {
+			continue
+		}
+		current := metrics{path: class.Filename}
+		current.linesTotal = int64(len(class.Lines))
+		for _, line := range class.Lines {
+			if hits := parseOptionalInt64(line.Hits); hits != nil && *hits > 0 {
+				current.linesCovered++
+			}
+			total, covered := coberturaConditionCounts(line.ConditionCoverage)
+			current.branchesTotal += total
+			current.branchesCovered += covered
+		}
+		if index, ok := positions[current.path]; ok {
+			files[index] = current
+		} else {
+			positions[current.path] = len(files)
+			files = append(files, current)
+		}
+	}
+	linesTotal := parseOptionalInt64(document.LinesValid)
+	linesCovered := parseOptionalInt64(document.LinesCovered)
+	branchesTotal := parseOptionalInt64(document.BranchesValid)
+	branchesCovered := parseOptionalInt64(document.BranchesCovered)
+	if linesTotal == nil {
+		var value int64
+		for _, file := range files {
+			value += file.linesTotal
+		}
+		linesTotal = nilIfZero(value)
+	}
+	if linesCovered == nil {
+		var value int64
+		for _, file := range files {
+			value += file.linesCovered
+		}
+		linesCovered = nilIfZero(value)
+	}
+	if branchesTotal == nil {
+		var value int64
+		for _, file := range files {
+			value += file.branchesTotal
+		}
+		branchesTotal = nilIfZero(value)
+	}
+	if branchesCovered == nil {
+		var value int64
+		for _, file := range files {
+			value += file.branchesCovered
+		}
+		branchesCovered = nilIfZero(value)
+	}
+	if linesCovered != nil && linesTotal != nil && *linesCovered > *linesTotal {
+		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
+	}
+	if branchesCovered != nil && branchesTotal != nil && *branchesCovered > *branchesTotal {
+		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
+	}
+	serviceCounts := map[string]int{}
+	serviceOrder := []string{}
+	for _, file := range files {
+		if service := testServiceID(file.path); service != nil {
+			if _, ok := serviceCounts[*service]; !ok {
+				serviceOrder = append(serviceOrder, *service)
+			}
+			serviceCounts[*service]++
+		}
+	}
+	var serviceID *string
+	best := 0
+	for _, service := range serviceOrder {
+		if serviceCounts[service] > best {
+			value := service
+			serviceID = &value
+			best = serviceCounts[service]
+		}
+	}
+	format := "cobertura"
+	row := coverageSnapshotRow{RepoID: repoID, RunID: runID, SnapshotID: hashTestIdentifier(runID, format, reportPath), ReportFormat: &format, LinesTotal: linesTotal, LinesCovered: linesCovered, BranchesTotal: branchesTotal, BranchesCovered: branchesCovered, ServiceID: serviceID, OrgID: orgID, LastSynced: normalizedAt}
+	row.LineCoveragePct = coveragePercent(row.LinesCovered, row.LinesTotal)
+	row.BranchCoveragePct = coveragePercent(row.BranchesCovered, row.BranchesTotal)
+	return row, nil
+}
+
+func coberturaConditionCounts(value string) (int64, int64) {
+	start := strings.Index(value, "(")
+	slash := strings.Index(value, "/")
+	if start < 0 || slash < start {
+		return 0, 0
+	}
+	end := strings.Index(value[slash:], ")")
+	if end < 0 {
+		return 0, 0
+	}
+	covered := parseOptionalInt64(value[start+1 : slash])
+	total := parseOptionalInt64(value[slash+1 : slash+end])
+	if covered == nil || total == nil {
+		return 0, 0
+	}
+	return *total, *covered
 }
 
 func readZipReport(member *zip.File) ([]byte, error) {
@@ -226,7 +401,7 @@ func classifyGitHubTestReport(name string, body []byte) string {
 	if strings.Contains(head, "<testsuite") || strings.Contains(head, "<testsuites") {
 		return "junit"
 	}
-	if strings.HasSuffix(name, ".info") || strings.HasPrefix(strings.TrimSpace(head), "tn:") || strings.HasPrefix(strings.TrimSpace(head), "sf:") {
+	if strings.HasSuffix(name, ".info") || strings.HasPrefix(strings.TrimSpace(head), "tn:") || strings.HasPrefix(strings.TrimSpace(head), "sf:") || strings.Contains(head, "<coverage") {
 		return "coverage"
 	}
 	return ""
@@ -283,7 +458,7 @@ func parseJUnitRows(
 		duration := parseOptionalFloat(suite.Time)
 		finished := cloneTime(fallbackFinished)
 		if hasSuiteTimestamp && started != nil && duration != nil {
-			value := started.Add(time.Duration(*duration * float64(time.Second)))
+			value := started.Add(time.Duration(*duration * float64(time.Second))).UTC().Truncate(time.Millisecond)
 			finished = &value
 		}
 		service := junitServiceID(suite)
@@ -566,7 +741,7 @@ func parseGitHubTestsTime(value string) *time.Time {
 	if err != nil {
 		return nil
 	}
-	parsed = parsed.UTC()
+	parsed = parsed.UTC().Truncate(time.Millisecond)
 	return &parsed
 }
 
@@ -574,7 +749,7 @@ func cloneTime(value *time.Time) *time.Time {
 	if value == nil {
 		return nil
 	}
-	copy := value.UTC()
+	copy := value.UTC().Truncate(time.Millisecond)
 	return &copy
 }
 

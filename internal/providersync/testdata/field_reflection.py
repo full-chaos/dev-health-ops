@@ -148,3 +148,36 @@ def typed_dict_field_names(source: str, class_name: str) -> frozenset[str]:
     raise ValueError(
         f"typed_dict_field_names: no annotated public fields found for {class_name!r}"
     )
+
+
+def dict_assigned_keys(
+    source: str, function_name: str, dict_var_name: str
+) -> frozenset[str]:
+    """Reflect literal keys assigned through ``mapping[\"key\"] = value``."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            or node.name != function_name
+        ):
+            continue
+        keys: set[str] = set()
+        for statement in ast.walk(node):
+            if not isinstance(statement, ast.Assign):
+                continue
+            for target in statement.targets:
+                if (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == dict_var_name
+                    and isinstance(target.slice, ast.Constant)
+                    and isinstance(target.slice.value, str)
+                ):
+                    keys.add(target.slice.value)
+        if keys:
+            return frozenset(keys)
+        break
+    raise ValueError(
+        f"dict_assigned_keys: no literal subscript assignments to {dict_var_name!r} "
+        f"inside {function_name!r}"
+    )

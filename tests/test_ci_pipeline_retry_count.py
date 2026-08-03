@@ -129,14 +129,14 @@ class _GitHubWorkflowRunClient:
         return self.runs[:max_runs]
 
     def drain_usage_observations(self) -> list[dict[str, object]]:
-        return [{"route_family": "cicd", "request_count": 1}]
+        return [{"route_family": "tests", "request_count": 1}]
 
     async def close(self) -> None:
         self.closed = True
 
 
 @pytest.mark.asyncio
-async def test_github_workflow_run_async_drains_cicd_usage(monkeypatch):
+async def test_github_workflow_run_async_drains_tests_usage(monkeypatch):
     run = GitHubWorkflowRunData(
         run_id="200",
         status="success",
@@ -165,7 +165,7 @@ async def test_github_workflow_run_async_drains_cicd_usage(monkeypatch):
     assert len(runs) == 1
     assert runs[0].run_id == "200"
     assert runs[0].retry_count == 2
-    assert usage_sink == [{"route_family": "cicd", "request_count": 1}]
+    assert usage_sink == [{"route_family": "tests", "request_count": 1}]
     assert client.closed is True
 
 
@@ -199,7 +199,7 @@ async def test_github_workflow_run_async_propagates_incomplete_pagination(
             usage_sink=usage_sink,
         )
 
-    assert usage_sink == [{"route_family": "cicd", "request_count": 1}]
+    assert usage_sink == [{"route_family": "tests", "request_count": 1}]
     assert client.closed is True
 
 

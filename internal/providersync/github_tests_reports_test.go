@@ -3,6 +3,7 @@ package providersync
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,67 @@ func TestGitHubTestsArtifactSkipsMalformedMemberWithoutDroppingValidReports(t *t
 	}
 	if rows.Skipped != 1 || len(rows.Coverage) != 1 || len(rows.Suites) != 0 {
 		t.Fatalf("rows=%+v", rows)
+	}
+}
+
+func TestGitHubTestsArchiveMemberNameMatchesPythonSafetyContract(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name string
+		want bool
+	}{
+		{name: "", want: false},
+		{name: "reports/", want: false},
+		{name: "../../reports/junit.xml", want: false},
+		{name: "/reports/junit.xml", want: false},
+		{name: `\reports\junit.xml`, want: false},
+		{name: `\\server\share\junit.xml`, want: false},
+		{name: `C:\reports\junit.xml`, want: false},
+		{name: "reports/nested/junit.xml", want: true},
+		{name: `reports\nested\junit.xml`, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isSafeGitHubTestsArchiveMemberName(test.name); got != test.want {
+				t.Fatalf("safe(%q) = %t, want %t", test.name, got, test.want)
+			}
+		})
+	}
+}
+
+func TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification(t *testing.T) {
+	for _, unsafeName := range []string{
+		"../../reports/junit.xml",
+		"/reports/junit.xml",
+		`\reports\junit.xml`,
+		`\\server\share\junit.xml`,
+		`C:\reports\junit.xml`,
+	} {
+		t.Run(unsafeName, func(t *testing.T) {
+			rows, err := parseGitHubTestsArtifact(
+				githubTestsZip(t, map[string]string{
+					unsafeName:          githubTestsJUnitFixture,
+					"reports/good.info": githubTestsLCOVFixture,
+				}),
+				"repo", "run", "org", nil, nil, time.Now(),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows.Suites) != 0 || len(rows.Cases) != 0 || len(rows.Coverage) != 1 || rows.Skipped != 0 {
+				t.Fatalf("unsafe member %q was classified: %+v", unsafeName, rows)
+			}
+		})
+	}
+
+	rows, err := parseGitHubTestsArtifact(
+		githubTestsZip(t, map[string]string{"reports/nested/junit.xml": githubTestsJUnitFixture}),
+		"repo", "run", "org", nil, nil, time.Now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Suites) != 1 || len(rows.Cases) != 2 || rows.Skipped != 0 {
+		t.Fatalf("valid nested report was not classified: %+v", rows)
 	}
 }
 
@@ -169,6 +231,82 @@ end_of_record
 	if row.LinesTotal == nil || *row.LinesTotal != 3 ||
 		row.LinesCovered == nil || *row.LinesCovered != 2 {
 		t.Fatalf("coverage=%+v", row)
+	}
+}
+
+func TestGitHubTestsArtifactParsesCoberturaCoverage(t *testing.T) {
+	const cobertura = `<coverage lines-valid="2" lines-covered="1" branches-valid="2" branches-covered="1"><packages><package><classes><class filename="services/api/main.go"><lines><line number="1" hits="1" branch="true" condition-coverage="50% (1/2)"/><line number="2" hits="0"/></lines></class></classes></package></packages></coverage>`
+	if _, err := parseCoberturaRow([]byte(cobertura), "coverage.xml", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a", time.Now()); err != nil {
+		t.Fatalf("parse cobertura: %v", err)
+	}
+	rows, err := parseGitHubTestsArtifact(
+		githubTestsZip(t, map[string]string{"coverage.xml": cobertura}),
+		"c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a", nil, nil,
+		time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Coverage) != 1 || rows.Coverage[0].ReportFormat == nil || *rows.Coverage[0].ReportFormat != "cobertura" {
+		t.Fatalf("coverage=%+v skipped=%d", rows.Coverage, rows.Skipped)
+	}
+	row := rows.Coverage[0]
+	if row.LinesTotal == nil || *row.LinesTotal != 2 || row.LinesCovered == nil || *row.LinesCovered != 1 ||
+		row.BranchesTotal == nil || *row.BranchesTotal != 2 || row.BranchesCovered == nil || *row.BranchesCovered != 1 ||
+		row.ServiceID == nil || *row.ServiceID != "api" {
+		t.Fatalf("coverage=%+v", row)
+	}
+}
+
+func TestGitHubTestsArtifactDoesNotTraversePastPythonEntryCap(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	for index := 0; index < githubTestsMaxArchiveEntries+1; index++ {
+		_, err := writer.Create(fmt.Sprintf("ignored/%04d.txt", index))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	report, err := writer.Create("reports/after-cap.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := report.Write([]byte(githubTestsJUnitFixture)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := parseGitHubTestsArtifact(buffer.Bytes(), "repo", "run", "org", nil, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Suites) != 0 || len(rows.Cases) != 0 {
+		t.Fatalf("entry beyond Python's total-entry cap was parsed: %+v", rows)
+	}
+}
+
+func TestGitHubTestsArtifactSkipsPythonOverRatioMember(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	header := &zip.FileHeader{Name: "reports/bomb.xml", Method: zip.Deflate}
+	member, err := writer.CreateHeader(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `<testsuite name="bomb"><testcase name="case"><system-out>` + strings.Repeat(" ", 1<<20) + `</system-out></testcase></testsuite>`
+	if _, err := member.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := parseGitHubTestsArtifact(buffer.Bytes(), "repo", "run", "org", nil, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Suites) != 0 || rows.Skipped != 0 {
+		t.Fatalf("over-ratio member did not match Python skip semantics: %+v", rows)
 	}
 }
 

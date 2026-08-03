@@ -3385,6 +3385,8 @@
         "resolution.updated",
         "progress",
         "answer.delta",
+        "answer.frame_ready",
+        "answer.narrative_fallback",
         "answer.completed",
         "warning",
         "error",
@@ -3436,6 +3438,20 @@
     },
     "event": {
       "$ref": "#/$defs/StreamEventTypeV2"
+    },
+    "narrative_failure_code": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Narrative Failure Code"
     },
     "occurred_at": {
       "format": "date-time",

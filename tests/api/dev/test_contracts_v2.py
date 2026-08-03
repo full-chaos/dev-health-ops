@@ -99,13 +99,22 @@ def test_every_contract_requires_its_explicit_version(schema_version: str) -> No
         v2.CONTRACT_MODELS_V2[schema_version].model_validate(payload)
 
 
+#: CHAOS-3297 stack #4: both must validate cleanly -- the base lifecycle
+#: (run.started, answer.frame_ready, terminal, done) and the same lifecycle
+#: with an optional answer.narrative_fallback between frame_ready and the
+#: terminal result. Every other key in stream_fixtures() is a deliberate,
+#: isolated violation and must raise.
+_VALID_STREAM_FIXTURE_NAMES = frozenset({"valid", "valid_with_narrative_fallback"})
+
+
 def test_stream_sequences_require_exactly_one_terminal_then_done() -> None:
     fixtures = stream_fixtures()
-    v2.validate_stream_v2(
-        [v2.DevStreamEventV2.model_validate(item) for item in fixtures["valid"]]
-    )
+    for name in _VALID_STREAM_FIXTURE_NAMES:
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in fixtures[name]]
+        )
     for name, payloads in fixtures.items():
-        if name == "valid":
+        if name in _VALID_STREAM_FIXTURE_NAMES:
             continue
         with pytest.raises((ValidationError, ValueError)):
             v2.validate_stream_v2(
@@ -1209,6 +1218,97 @@ def test_finding6_stream_rejects_duplicate_done() -> None:
         v2.validate_stream_v2(
             [v2.DevStreamEventV2.model_validate(item) for item in payloads]
         )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3297 stack #4: answer.frame_ready / answer.narrative_fallback added
+# to the lifecycle invariant.
+# ---------------------------------------------------------------------------
+
+
+def test_stream_valid_with_narrative_fallback_round_trips() -> None:
+    """The optional interior marker's happy path: present, after
+    frame_ready, before the terminal result, with its own
+    narrative_failure_code payload."""
+
+    payloads = stream_fixtures()["valid_with_narrative_fallback"]
+    v2.validate_stream_v2(
+        [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+    )
+
+
+def test_stream_rejects_a_missing_frame_ready() -> None:
+    payloads = stream_fixtures()["invalid_missing_frame_ready"]
+    with pytest.raises(ValueError, match="exactly one answer.frame_ready"):
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+        )
+
+
+def test_stream_rejects_a_duplicate_frame_ready() -> None:
+    payloads = stream_fixtures()["invalid_duplicate_frame_ready"]
+    with pytest.raises(ValueError, match="exactly one answer.frame_ready"):
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+        )
+
+
+def test_stream_rejects_a_duplicate_narrative_fallback() -> None:
+    payloads = stream_fixtures()["invalid_duplicate_narrative_fallback"]
+    with pytest.raises(ValueError, match="at most one answer.narrative_fallback"):
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+        )
+
+
+def test_stream_rejects_a_narrative_fallback_before_frame_ready() -> None:
+    payloads = stream_fixtures()["invalid_narrative_fallback_before_frame_ready"]
+    with pytest.raises(ValueError, match="must occur after answer.frame_ready"):
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+        )
+
+
+def test_disabling_the_frame_ready_count_check_permits_a_missing_frame_ready(
+    monkeypatch,
+) -> None:
+    """Mutation control (rule 2/3): disable
+    ``validate_exactly_one_frame_ready`` specifically (a separate,
+    independently monkeypatchable function -- see its docstring), leaving
+    every other lifecycle check intact. The old test above (missing
+    frame_ready is rejected) must flip to accepting the same stream,
+    proving this guard, not something else, is what rejects it."""
+
+    from dev_health_ops.api.dev.contracts_v2 import stream as stream_module
+
+    payloads = stream_fixtures()["invalid_missing_frame_ready"]
+    monkeypatch.setattr(
+        stream_module, "validate_exactly_one_frame_ready", lambda events: None
+    )
+    v2.validate_stream_v2(
+        [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+    )
+
+
+def test_disabling_the_narrative_fallback_order_check_permits_a_reordered_stream(
+    monkeypatch,
+) -> None:
+    """Same mutation-control pattern for
+    ``validate_narrative_fallback_follows_frame_ready``: disabled, the
+    "narrative_fallback before frame_ready" stream must be silently
+    accepted instead of rejected."""
+
+    from dev_health_ops.api.dev.contracts_v2 import stream as stream_module
+
+    payloads = stream_fixtures()["invalid_narrative_fallback_before_frame_ready"]
+    monkeypatch.setattr(
+        stream_module,
+        "validate_narrative_fallback_follows_frame_ready",
+        lambda events: None,
+    )
+    v2.validate_stream_v2(
+        [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+    )
 
 
 # ---------------------------------------------------------------------------

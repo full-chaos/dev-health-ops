@@ -50,6 +50,8 @@ __all__ = [
     "DevStreamEventV2",
     "ProgressStateV2",
     "StreamEventTypeV2",
+    "validate_exactly_one_frame_ready",
+    "validate_narrative_fallback_follows_frame_ready",
     "validate_stream_v2",
 ]
 
@@ -59,6 +61,20 @@ class StreamEventTypeV2(StrEnum):
     RESOLUTION_UPDATED = "resolution.updated"
     PROGRESS = "progress"
     ANSWER_DELTA = "answer.delta"
+    #: CHAOS-3297 requirement 9: fires once a dev_answer_frame.v1 has been
+    #: constructed and is the server's committed answer -- the moment the
+    #: CHAOS-3299 replay gate becomes reachable for this run, strictly
+    #: before the terminal result. No payload: it is a milestone signal,
+    #: not a content channel (the frame itself is never streamed early --
+    #: only the terminal answer.completed carries it, embedded in the
+    #: DevAnswerV2).
+    ANSWER_FRAME_READY = "answer.frame_ready"
+    #: CHAOS-3297 requirement 9: optional, at most once, fires only when
+    #: narrative synthesis fell back to the deterministic narrative --
+    #: carries the safe NarrativeFailureCode value (a closed-vocabulary
+    #: token, never raw provider content) so a client can distinguish
+    #: "the model improved this answer" from "the server's own words".
+    ANSWER_NARRATIVE_FALLBACK = "answer.narrative_fallback"
     ANSWER_COMPLETED = "answer.completed"
     WARNING = "warning"
     ERROR = "error"
@@ -91,6 +107,13 @@ class DevStreamEventV2(ContractModelV2):
     warning: ShortText | None = None
     error: DevErrorV2 | None = None
     terminal_kind: Literal["answer", "error"] | None = None
+    #: CHAOS-3297 stack #4: the safe NarrativeFailureCode value carried by
+    #: an ``answer.narrative_fallback`` event -- a closed-vocabulary token
+    #: (``answer_frames.narrative_fallback.NarrativeFailureCode``), never
+    #: raw provider content. Not imported from that module here: contracts
+    #: are the leaf of the dependency graph and do not depend on the
+    #: orchestration-layer package that produces this value.
+    narrative_failure_code: ShortText | None = None
 
     @model_validator(mode="after")
     def validate_event_payload(self) -> Self:
@@ -105,6 +128,10 @@ class DevStreamEventV2(ContractModelV2):
             StreamEventTypeV2.WARNING: ("warning", self.warning),
             StreamEventTypeV2.ERROR: ("error", self.error),
             StreamEventTypeV2.DONE: ("terminal_kind", self.terminal_kind),
+            StreamEventTypeV2.ANSWER_NARRATIVE_FALLBACK: (
+                "narrative_failure_code",
+                self.narrative_failure_code,
+            ),
         }
         required = required_payload.get(self.event)
         if required is not None and required[1] is None:
@@ -117,12 +144,15 @@ class DevStreamEventV2(ContractModelV2):
             "warning": self.warning,
             "error": self.error,
             "terminal_kind": self.terminal_kind,
+            "narrative_failure_code": self.narrative_failure_code,
         }
         allowed = {
             StreamEventTypeV2.RUN_STARTED: set(),
             StreamEventTypeV2.RESOLUTION_UPDATED: {"resolution_ledger"},
             StreamEventTypeV2.PROGRESS: {"progress"},
             StreamEventTypeV2.ANSWER_DELTA: {"delta"},
+            StreamEventTypeV2.ANSWER_FRAME_READY: set(),
+            StreamEventTypeV2.ANSWER_NARRATIVE_FALLBACK: {"narrative_failure_code"},
             StreamEventTypeV2.ANSWER_COMPLETED: {"answer"},
             StreamEventTypeV2.WARNING: {"warning"},
             StreamEventTypeV2.ERROR: {"error"},
@@ -165,16 +195,36 @@ def _validate_run_lifecycle(events: Sequence[DevStreamEventV2]) -> None:
     A stream is exactly one ``run.started`` at index 0, then any number of
     interior events, then exactly one terminal result (``answer.completed``
     or ``error``), then exactly one ``done`` as the final event, whose
-    ``terminal_kind`` matches that terminal result.
+    ``terminal_kind`` matches that terminal result. Within the interior,
+    exactly one ``answer.frame_ready`` must appear (CHAOS-3297 P1: every
+    terminal run persists a frame, so every stream has exactly one
+    frame-ready milestone), and at most one ``answer.narrative_fallback``
+    may appear, never before ``answer.frame_ready`` -- a narrative can only
+    be selected (accepted or fallen back) for a frame that already exists.
 
     Stated as one positional invariant rather than as separate rules per
     event type deliberately: the round-1 and round-2 counterexamples
     (premature ``done``, duplicate ``done``, duplicate ``run.started``) were
     all the same defect — a lifecycle marker appearing somewhere other than
     its one allowed position — and a rule written per marker keeps leaving
-    the next marker open. Here, each of the three markers is required to
-    occur exactly once and at exactly one index, so no marker can repeat or
-    move without failing.
+    the next marker open. Here, each of the three fixed-position markers is
+    required to occur exactly once and at exactly one index, so no marker
+    can repeat or move without failing.
+
+    ``answer.frame_ready``/``answer.narrative_fallback`` are interior
+    markers with a floating index rather than a fixed one, so only the
+    checks that are independently reachable are written: once the three
+    fixed-position checks above have passed, any index not already claimed
+    by ``run.started``/the terminal result/``done`` is *necessarily* inside
+    the open interior range between them (a pigeonhole argument, not an
+    assumption) — so an explicit "frame_ready is inside the interior" or
+    "narrative_fallback is before the terminal result" check could never
+    independently fail and would be dead code. What genuinely is
+    independent: frame_ready must occur exactly once (nothing else
+    constrains its count), narrative_fallback at most once, and
+    narrative_fallback's index (when present) must be greater than
+    frame_ready's -- nothing else orders those two interior markers
+    relative to each other.
     """
 
     expected_indexes = {
@@ -196,12 +246,71 @@ def _validate_run_lifecycle(events: Sequence[DevStreamEventV2]) -> None:
                 f"the {label} event must be at position "
                 f"{expected_indexes[label]} of the stream, not {occurrences[0]}"
             )
-    terminal = events[expected_indexes["terminal result"]]
+    terminal_index = expected_indexes["terminal result"]
+    terminal = events[terminal_index]
     terminal_kind = (
         "answer" if terminal.event is StreamEventTypeV2.ANSWER_COMPLETED else "error"
     )
     if events[-1].terminal_kind != terminal_kind:
         raise ValueError("done terminal_kind must match the terminal result")
+
+    validate_exactly_one_frame_ready(events)
+    validate_narrative_fallback_follows_frame_ready(events)
+
+
+def validate_exactly_one_frame_ready(events: Sequence[DevStreamEventV2]) -> None:
+    """CHAOS-3297 P1: every terminal run persists a frame, so every stream
+    has exactly one ``answer.frame_ready`` milestone. A separate,
+    independently monkeypatchable function (not inlined into
+    ``_validate_run_lifecycle``) so a mutation test can disable this one
+    clause without disturbing the fixed-position checks around it -- same
+    posture ``contracts_v2.validators`` already documents for its own
+    guards.
+    """
+
+    frame_ready_indexes = [
+        index
+        for index, event in enumerate(events)
+        if event.event is StreamEventTypeV2.ANSWER_FRAME_READY
+    ]
+    if len(frame_ready_indexes) != 1:
+        raise ValueError(
+            "stream must contain exactly one answer.frame_ready event, found "
+            f"{len(frame_ready_indexes)}"
+        )
+
+
+def validate_narrative_fallback_follows_frame_ready(
+    events: Sequence[DevStreamEventV2],
+) -> None:
+    """``answer.narrative_fallback`` is optional, at most once, and -- when
+    present -- must occur after ``answer.frame_ready`` (a narrative can only
+    be selected, accepted or fallen back, for a frame that already exists).
+    """
+
+    frame_ready_indexes = [
+        index
+        for index, event in enumerate(events)
+        if event.event is StreamEventTypeV2.ANSWER_FRAME_READY
+    ]
+    narrative_fallback_indexes = [
+        index
+        for index, event in enumerate(events)
+        if event.event is StreamEventTypeV2.ANSWER_NARRATIVE_FALLBACK
+    ]
+    if len(narrative_fallback_indexes) > 1:
+        raise ValueError(
+            "stream must contain at most one answer.narrative_fallback event, "
+            f"found {len(narrative_fallback_indexes)}"
+        )
+    if (
+        narrative_fallback_indexes
+        and frame_ready_indexes
+        and narrative_fallback_indexes[0] < frame_ready_indexes[0]
+    ):
+        raise ValueError(
+            "answer.narrative_fallback must occur after answer.frame_ready"
+        )
 
 
 def validate_stream_v2(events: Sequence[DevStreamEventV2]) -> None:

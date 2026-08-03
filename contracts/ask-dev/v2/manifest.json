@@ -446,7 +446,7 @@
       },
       "schema": {
         "path": "schemas/dev_stream_event.v2.schema.json",
-        "sha256": "b50ba93311767ae9a564110d3f57adbecf68e0969be158d01db28d00d299634c"
+        "sha256": "2b015a446130405626d7a3654bde89c9856bc77ef7ace1a3bff46db415739f66"
       },
       "schema_version": "dev_stream_event.v2"
     }
@@ -456,6 +456,10 @@
     {
       "case": "valid",
       "path": "examples/streams/valid.json"
+    },
+    {
+      "case": "valid_with_narrative_fallback",
+      "path": "examples/streams/valid_with_narrative_fallback.json"
     },
     {
       "case": "invalid_duplicate_terminal",
@@ -488,6 +492,22 @@
     {
       "case": "invalid_answer_run_id_mismatch",
       "path": "examples/streams/invalid_answer_run_id_mismatch.json"
+    },
+    {
+      "case": "invalid_missing_frame_ready",
+      "path": "examples/streams/invalid_missing_frame_ready.json"
+    },
+    {
+      "case": "invalid_duplicate_frame_ready",
+      "path": "examples/streams/invalid_duplicate_frame_ready.json"
+    },
+    {
+      "case": "invalid_duplicate_narrative_fallback",
+      "path": "examples/streams/invalid_duplicate_narrative_fallback.json"
+    },
+    {
+      "case": "invalid_narrative_fallback_before_frame_ready",
+      "path": "examples/streams/invalid_narrative_fallback_before_frame_ready.json"
     }
   ]
 }

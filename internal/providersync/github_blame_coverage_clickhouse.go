@@ -19,6 +19,30 @@ type GitHubBlameClickHouseCoverage struct {
 	MaxPaths int
 }
 
+func (coverage GitHubBlameClickHouseCoverage) HasGenerationProgress(
+	ctx context.Context,
+	claim Claim,
+	generation string,
+) (bool, error) {
+	if ctx == nil || coverage.Conn == nil || coverage.Lease == nil ||
+		claim.Validate() != nil || claim.Provider != "github" ||
+		claim.Dataset != "blame" || generation == "" ||
+		generation != claim.GenerationKey() {
+		return false, ErrInvalidConfiguration
+	}
+	if err := coverage.Lease.Assert(ctx); err != nil {
+		return false, err
+	}
+	var count uint64
+	if err := coverage.Conn.QueryRow(ctx, `
+SELECT count()
+FROM github_blame_path_progress FINAL
+WHERE org_id = ? AND generation = ?`, claim.OrgID, generation).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (coverage GitHubBlameClickHouseCoverage) Progress(
 	ctx context.Context,
 	claim Claim,
@@ -145,3 +169,4 @@ func gitHubBlameProgressPathCount(state GitHubBlameProgressState) int {
 }
 
 var _ GitHubBlameCoverage = GitHubBlameClickHouseCoverage{}
+var _ GitHubBlameGenerationProgressProbe = GitHubBlameClickHouseCoverage{}

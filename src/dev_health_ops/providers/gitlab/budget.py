@@ -152,6 +152,23 @@ def _dataset_estimates(
             ),
         )
 
+    if dataset_key == DatasetKey.INCIDENTS.value:
+        return (
+            _estimate(
+                bucket(BudgetDimension.REST_CORE),
+                1,
+                _CONFIDENCE_HIGH,
+                "project",
+            ),
+            _estimate(
+                bucket(BudgetDimension.REST_CORE),
+                _scaled_units(1, span_days),
+                _CONFIDENCE_MEDIUM,
+                "issues",
+                notes=("native incident issue pages vary by incident volume",),
+            ),
+        )
+
     if dataset_key == DatasetKey.SECURITY.value:
         return (
             _estimate(bucket(BudgetDimension.REST_CORE), 2, _CONFIDENCE_LOW, "project"),

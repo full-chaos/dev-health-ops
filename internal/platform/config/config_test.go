@@ -142,6 +142,7 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 		cfg.WorkerGitlabCommitStatsEnabled ||
 		cfg.WorkerGitlabCICDEnabled ||
 		cfg.WorkerGitlabTestsEnabled ||
+		cfg.WorkerGitlabIncidentsEnabled ||
 		cfg.WorkerGithubPRsEnabled ||
 		cfg.WorkerGithubCICDEnabled || cfg.WorkerGithubCommitsEnabled ||
 		cfg.WorkerGithubDeploymentsEnabled || cfg.WorkerGithubSecurityEnabled ||
@@ -199,6 +200,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITLAB_COMMITS_ENABLED":             "true",
 		"WORKER_GITLAB_COMMIT_STATS_ENABLED":        "true",
 		"WORKER_GITLAB_CICD_ENABLED":                "true",
+		"WORKER_GITLAB_INCIDENTS_ENABLED":           "true",
 		"WORKER_GITHUB_PRS_ENABLED":                 "true",
 		"WORKER_GITHUB_CICD_ENABLED":                "false",
 		"WORKER_GITHUB_COMMITS_ENABLED":             "true",
@@ -241,6 +243,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		!cfg.WorkerGitlabCommitStatsEnabled ||
 		!cfg.WorkerGitlabCICDEnabled ||
 		cfg.WorkerGitlabTestsEnabled ||
+		!cfg.WorkerGitlabIncidentsEnabled ||
 		!cfg.WorkerGithubPRsEnabled ||
 		cfg.WorkerGithubCICDEnabled || !cfg.WorkerGithubCommitsEnabled ||
 		!cfg.WorkerGithubDeploymentsEnabled || !cfg.WorkerGithubSecurityEnabled ||
@@ -271,6 +274,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITLAB_COMMIT_STATS_ENABLED":        "sometimes",
 		"WORKER_GITLAB_CICD_ENABLED":                "sometimes",
 		"WORKER_GITLAB_TESTS_ENABLED":               "sometimes",
+		"WORKER_GITLAB_INCIDENTS_ENABLED":           "sometimes",
 		"WORKER_GITHUB_PRS_ENABLED":                 "sometimes",
 		"WORKER_GITHUB_COMMITS_ENABLED":             "sometimes",
 		"WORKER_GITHUB_COMMIT_STATS_ENABLED":        "sometimes",

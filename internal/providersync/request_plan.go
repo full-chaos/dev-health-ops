@@ -79,6 +79,11 @@ func gitLabRequestPlan(dataset string, spanDays int) []RequestEstimate {
 			Dimension: BudgetRESTCore, Units: max(6, 6*spanDays),
 			Confidence: "low", RouteFamily: "pipelines",
 		}}
+	case "incidents":
+		return []RequestEstimate{
+			{Dimension: BudgetRESTCore, Units: max(1, spanDays), Confidence: "medium", RouteFamily: "issues"},
+			{Dimension: BudgetRESTCore, Units: 1, Confidence: "high", RouteFamily: "project"},
+		}
 	default:
 		return nil
 	}

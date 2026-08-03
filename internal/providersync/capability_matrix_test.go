@@ -142,6 +142,18 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 	}
 }
 
+func TestGitHubBlameRemainsUnexecutableAndUnroutable(t *testing.T) {
+	t.Parallel()
+	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "blame")
+	if !ok {
+		t.Fatal("github/blame has no descriptor")
+	}
+	if descriptor.Executor != ExecutorNone || descriptor.RouteReady ||
+		descriptor.RouteEnabled || len(descriptor.Destinations) != 0 {
+		t.Fatalf("github/blame descriptor=%+v", descriptor)
+	}
+}
+
 // TestGithubRepoMetadataSwitchDoesNotOpenGitLab pins the split that
 // CHAOS-3123 introduced: gitlab/repo-metadata shares repo-metadata's
 // destination manifest but has no CompleteRouteHandler, so folding it back

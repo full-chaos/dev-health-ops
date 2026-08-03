@@ -46,6 +46,7 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"gitlab/commit-stats":        ExecutorNativeGo,
 	"gitlab/cicd":                ExecutorNativeGo,
 	"gitlab/tests":               ExecutorNativeGo,
+	"gitlab/incidents":           ExecutorNativeGo,
 	"github/blame":               ExecutorNativeGo,
 	"github/tests":               ExecutorNativeGo,
 }
@@ -145,6 +146,8 @@ type CompleteRouteSwitches struct {
 	// complete TestOps writer.
 	GitlabCICD  bool
 	GitlabTests bool
+	// GitlabIncidents gates the three-destination canonical operational batch.
+	GitlabIncidents bool
 	// GithubPRs gates (github, prs) only (CHAOS-3122/CHAOS-3123 follow-on).
 	// It must never gate github/pr-reviews or github/pr-comments: those two
 	// datasets share the "prs" legacy target and processor flag in Python
@@ -251,6 +254,13 @@ func (switches CompleteRouteSwitches) Descriptor(
 		}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GitlabTests
+	case provider == "gitlab" && dataset == "incidents":
+		descriptor.Destinations = []string{
+			"operational_services", "operational_service_repository_mappings",
+			"operational_incidents",
+		}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabIncidents
 	case provider == "github" && dataset == "prs":
 		// GitHub has a native complete-route handler
 		// (GitHubPullRequestRouteHandler) and a git_pull_requests effect sink

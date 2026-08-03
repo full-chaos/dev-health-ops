@@ -578,11 +578,15 @@
       "processor_flags": {
         "sync_incidents": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "incidents",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_incidents",
+        "operational_service_repository_mappings",
+        "operational_services"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]

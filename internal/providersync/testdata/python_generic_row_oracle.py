@@ -46,6 +46,7 @@ import pathlib
 import sys
 from datetime import date, datetime, timezone
 from typing import Any
+from uuid import UUID
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
@@ -118,6 +119,8 @@ def _encode(value: Any) -> Any:
             value = value.replace(tzinfo=timezone.utc)
         encoded = value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         return {"t": "datetime", "v": encoded}
+    if isinstance(value, UUID):
+        return {"t": "uuid", "v": str(value).lower()}
     if isinstance(value, date):
         return {"t": "date", "v": value.isoformat()}
     if isinstance(value, dict):

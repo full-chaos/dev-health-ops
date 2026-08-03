@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // oracleCase is one input case for a generic Python<->Go oracle comparison
@@ -403,6 +405,9 @@ func typedEncode(t *testing.T, v reflect.Value) any {
 	}
 	if integer, ok := v.Interface().(big.Int); ok {
 		return map[string]any{"t": "int", "v": integer.String()}
+	}
+	if identifier, ok := v.Interface().(uuid.UUID); ok {
+		return map[string]any{"t": "uuid", "v": strings.ToLower(identifier.String())}
 	}
 	switch v.Kind() {
 	case reflect.String:

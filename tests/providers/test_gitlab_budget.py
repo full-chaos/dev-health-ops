@@ -66,6 +66,18 @@ def test_gitlab_budget_estimator_returns_project_budget_for_repo_metadata() -> N
     assert estimate.to_dict()["bucket"]["dimension"] == "rest_core"
 
 
+def test_gitlab_incidents_budget_covers_project_and_windowed_issue_pages() -> None:
+    estimates = GitLabBudgetEstimator().estimate(_context(dataset_key="incidents"))
+
+    assert [
+        (estimate.route_family, estimate.estimated_units, estimate.confidence)
+        for estimate in estimates
+    ] == [("project", 1, "high"), ("issues", 2, "medium")]
+    assert {estimate.bucket.dimension for estimate in estimates} == {
+        BudgetDimension.REST_CORE
+    }
+
+
 def test_gitlab_budget_estimator_maps_known_route_families_to_rest_core() -> None:
     work_items = GitLabBudgetEstimator().estimate(_context(dataset_key="work-items"))
     pipelines = GitLabBudgetEstimator().estimate(_context(dataset_key="tests"))

@@ -365,7 +365,12 @@ async def test_acceptance_openai_runs_real_readiness_grounding_and_capabilities(
         ToolID(tool_id) for tool_id in _ORACLE["required_tool_ids"]
     ]
     assert executed_requests[0].include_comparison is True
-    assert executed_requests[1].query == "meridian/web-app"
+    # CHAOS-3300: the fixture's dev_message_request.v1 question ("How many
+    # items completed in this period?") names no repository, so the
+    # scripted provider now derives an organization-wide query (the shared
+    # fixture org prefix) rather than the old single-repository literal --
+    # see scripted_openai_service._evidence_query_from_question.
+    assert executed_requests[1].query == "meridian"
     changed_summary = result.answer.model_copy(
         update={"direct_summary": f"{result.answer.direct_summary} changed"}
     )
@@ -536,3 +541,91 @@ async def test_scripted_server_enforces_the_openai_tool_name_regex(
     body = response.json()
     assert body["error"]["type"] == "invalid_request_error"
     assert "tools" in body["error"]["param"]
+
+
+def _search_evidence_request(question: str) -> dict[str, Any]:
+    """Build the minimal chat-completions payload that drives the scripted
+    server's search_evidence.v1 tool-call branch: a user message carrying
+    the question and a prior query_metric.v1 tool result (see
+    ``scripted_openai_service.py``'s ``elif`` chain), offering
+    ``search_evidence_v1`` as an available tool.
+    """
+    return {
+        "model": "ask-dev-scripted-v1",
+        "messages": [
+            {
+                "role": "user",
+                "content": json.dumps({"question": question}, separators=(",", ":")),
+            },
+            {
+                "role": "tool",
+                "content": json.dumps(
+                    {"tool_id": "query_metric.v1", "status": "success"},
+                    separators=(",", ":"),
+                ),
+            },
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_evidence_v1",
+                    "description": "d",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        "tool_choice": "auto",
+    }
+
+
+async def _search_evidence_query(
+    scripted_openai_server: ScriptedOpenAIServer, question: str
+) -> str:
+    host, port = cast(tuple[str, int], scripted_openai_server.server_address)
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"http://{host}:{port}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {_ACCEPTANCE_KEY}"},
+            json=_search_evidence_request(question),
+        )
+    assert response.status_code == 200
+    tool_calls = response.json()["choices"][0]["message"]["tool_calls"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "search_evidence_v1"
+    arguments = json.loads(tool_calls[0]["function"]["arguments"])
+    return cast(str, arguments["query"])
+
+
+@pytest.mark.asyncio
+async def test_named_repository_question_still_searches_that_exact_repository(
+    scripted_openai_server: ScriptedOpenAIServer,
+) -> None:
+    """CHAOS-3300: the named-subject negative control depends on the
+    scripted provider's search_evidence.v1 query staying the exact named
+    repository -- this must not regress when the org-wide branch below is
+    introduced.
+    """
+    query = await _search_evidence_query(
+        scripted_openai_server, "What's the status of meridian/web-app?"
+    )
+    assert query == "meridian/web-app"
+
+
+@pytest.mark.asyncio
+async def test_organization_wide_question_searches_are_not_restricted_to_one_repository(
+    scripted_openai_server: ScriptedOpenAIServer,
+) -> None:
+    """CHAOS-3300 attack.unrelated-evidence.availability: previously this
+    branch hardcoded the query to the literal "meridian/web-app" regardless
+    of the question asked, so an organization-wide question could never
+    surface a second repository's evidence through this fixture no matter
+    what the real product allowed. A question naming no repository must now
+    receive a query that is not a single-repository identity.
+    """
+    query = await _search_evidence_query(
+        scripted_openai_server,
+        "What's the status of the organization's repositories?",
+    )
+    assert query == "meridian"
+    assert "/" not in query

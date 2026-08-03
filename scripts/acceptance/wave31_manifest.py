@@ -509,27 +509,51 @@ def _attacks() -> tuple[ManifestItem, ...]:
             description=(
                 "The same unrelated-org facts must be available in an "
                 "explicit organization-wide answer (the other half of the "
-                "attack -- exclusion when named, availability when not)."
+                "attack -- exclusion when named, availability when not). "
+                "Proven at the layer that decides it: EvidenceService."
+                "search over an ORGANIZATION-resolved scope returns "
+                "evidence from a repository the scope never named. The "
+                "non-obvious mechanism is _authorized_entity_ids, which "
+                "excludes ORGANIZATION and REPOSITORY kinds, so an "
+                "org-wide resolution yields an EMPTY valid_entity_ids that "
+                "downstream authorization treats as unrestricted rather "
+                "than as 'nothing authorized'; a mutation restricting "
+                "records to the resolved scope's own entity ids kills the "
+                "test. The fixture limitation that originally blocked this "
+                "row is also fixed -- the scripted provider derives its "
+                "search_evidence.v1 query from the question instead of "
+                "hardcoding one repository identity, with the named-subject "
+                "path byte-for-byte unchanged. NOT claimed: the ClickHouse "
+                "SQL layer beneath EvidenceService is covered by neither "
+                "test, and smoke_ask_dev_unrelated_evidence.py has not been "
+                "re-run live against a --repo-count 2 bring-up since the "
+                "provider fix, so the end-to-end 'multi-repository evidence "
+                "actually appears in a live answer' claim remains unproven. "
+                "That script's own docstring still describes the pre-fix "
+                "provider (it hardcoded one repository identity) and is "
+                "deliberately left byte-for-byte unedited: its bytes are "
+                "bound by script_sha256 into "
+                "attack.unrelated-evidence.e2e-live-validated's execution "
+                "artifact, so correcting even a docstring there invalidates "
+                "that artifact until the scenario is re-run live. Read this "
+                "row, not that docstring, for the current provider "
+                "behaviour."
             ),
-            status="deferred",
-            blocked_reason=(
-                "Codex finding (HIGH, 2026-08-02): this half of the claim "
-                "was previously folded into attack.unrelated-evidence's "
-                "single description alongside the exclusion half, but "
-                "neither the cited unit test "
-                "(test_an_edge_unrelated_to_the_committed_subject_fails_closed, "
-                "which only proves exclusion) nor the live smoke "
-                "(smoke_ask_dev_unrelated_evidence.py, whose org-wide "
-                "positive control is disclosed as weaker than intended -- "
-                "the scripted provider's search_evidence.v1 call hardcodes "
-                "its query to one repository name regardless of question) "
-                "actually proves organization-wide availability. Split into "
-                "its own row rather than silently overclaimed alongside the "
-                "real exclusion proof. Closing this needs either a unit "
-                "test asserting the organization-wide (no committed "
-                "subject) case surfaces unrelated facts, or a live scenario "
-                "using a provider that does not hardcode its evidence "
-                "search -- neither exists yet."
+            status="proven_unit",
+            evidence=(
+                "tests/api/dev/test_evidence_service.py",
+                "tests/api/dev/test_acceptance_openai_runtime.py",
+            ),
+            content_markers=(
+                "test_organization_wide_search_admits_evidence_from_multiple_repositories",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_evidence_service.py::"
+                "test_organization_wide_search_admits_evidence_from_multiple_repositories",
+                "tests/api/dev/test_acceptance_openai_runtime.py::"
+                "test_organization_wide_question_searches_are_not_restricted_to_one_repository",
+                "tests/api/dev/test_acceptance_openai_runtime.py::"
+                "test_named_repository_question_still_searches_that_exact_repository",
             ),
         ),
         ManifestItem(

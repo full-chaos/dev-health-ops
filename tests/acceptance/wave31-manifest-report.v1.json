@@ -2,10 +2,10 @@
   "schema_version": "wave_3_1_proof_gate_manifest.v1",
   "item_count": 64,
   "status_counts": {
-    "blocked": 4,
-    "deferred": 8,
+    "blocked": 2,
+    "deferred": 7,
     "proven_e2e": 14,
-    "proven_unit": 38
+    "proven_unit": 41
   },
   "category_counts": {
     "attack": 7,
@@ -88,11 +88,18 @@
     {
       "id": "attack.unrelated-evidence.availability",
       "category": "attack",
-      "description": "The same unrelated-org facts must be available in an explicit organization-wide answer (the other half of the attack -- exclusion when named, availability when not).",
-      "status": "deferred",
-      "evidence": [],
-      "blocked_reason": "Codex finding (HIGH, 2026-08-02): this half of the claim was previously folded into attack.unrelated-evidence's single description alongside the exclusion half, but neither the cited unit test (test_an_edge_unrelated_to_the_committed_subject_fails_closed, which only proves exclusion) nor the live smoke (smoke_ask_dev_unrelated_evidence.py, whose org-wide positive control is disclosed as weaker than intended -- the scripted provider's search_evidence.v1 call hardcodes its query to one repository name regardless of question) actually proves organization-wide availability. Split into its own row rather than silently overclaimed alongside the real exclusion proof. Closing this needs either a unit test asserting the organization-wide (no committed subject) case surfaces unrelated facts, or a live scenario using a provider that does not hardcode its evidence search -- neither exists yet.",
-      "test_nodeids": [],
+      "description": "The same unrelated-org facts must be available in an explicit organization-wide answer (the other half of the attack -- exclusion when named, availability when not). Proven at the layer that decides it: EvidenceService.search over an ORGANIZATION-resolved scope returns evidence from a repository the scope never named. The non-obvious mechanism is _authorized_entity_ids, which excludes ORGANIZATION and REPOSITORY kinds, so an org-wide resolution yields an EMPTY valid_entity_ids that downstream authorization treats as unrestricted rather than as 'nothing authorized'; a mutation restricting records to the resolved scope's own entity ids kills the test. The fixture limitation that originally blocked this row is also fixed -- the scripted provider derives its search_evidence.v1 query from the question instead of hardcoding one repository identity, with the named-subject path byte-for-byte unchanged. NOT claimed: the ClickHouse SQL layer beneath EvidenceService is covered by neither test, and smoke_ask_dev_unrelated_evidence.py has not been re-run live against a --repo-count 2 bring-up since the provider fix, so the end-to-end 'multi-repository evidence actually appears in a live answer' claim remains unproven. That script's own docstring still describes the pre-fix provider (it hardcoded one repository identity) and is deliberately left byte-for-byte unedited: its bytes are bound by script_sha256 into attack.unrelated-evidence.e2e-live-validated's execution artifact, so correcting even a docstring there invalidates that artifact until the scenario is re-run live. Read this row, not that docstring, for the current provider behaviour.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_evidence_service.py",
+        "tests/api/dev/test_acceptance_openai_runtime.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_evidence_service.py::test_organization_wide_search_admits_evidence_from_multiple_repositories",
+        "tests/api/dev/test_acceptance_openai_runtime.py::test_organization_wide_question_searches_are_not_restricted_to_one_repository",
+        "tests/api/dev/test_acceptance_openai_runtime.py::test_named_repository_question_still_searches_that_exact_repository"
+      ],
       "requires_live_infra": false,
       "execution_artifact": null,
       "required_assertion_names": []
@@ -220,11 +227,16 @@
     {
       "id": "matrix.light-on-feature-work",
       "category": "blocking_matrix",
-      "description": "'Which teams are light on feature work?' with adequate investment-classification coverage.",
-      "status": "blocked",
-      "evidence": [],
-      "blocked_reason": "The closest existing test, test_chaos_3304_workload_observation_adapters.py::test_investment_shift_stable_high_ktlo_mix_reports_neutral_measured_zero, is adapter-layer only -- it proves the observation adapter reports a neutral, measured-zero shift, not that the health-rule layer produces the launch-level 'light on feature work' finding this row claims. Citing it would overclaim what a passing adapter test proves about the rule/finding layer. CHAOS-3337 shipped 2026-08-03 (ops #1402), removing the separate live-e2e blocker: matrix.team-workload-balance.e2e-live-validated now proves TEAM_WORKLOAD_BALANCE is live-reachable, but that smoke only asserts a real completed answer, not the specific launch-level 'light on feature work' finding shape this row claims -- closing this needs a rule/finding-layer unit test, or a live smoke that asserts the specific finding content.",
-      "test_nodeids": [],
+      "description": "'Which teams are light on feature work?' with adequate investment-classification coverage. Proven at the rule/finding layer this question is actually answered from, not the adapter layer: with adequate classification coverage a measured shift past the rule's threshold produces a real INVESTMENT_BALANCE finding at the rule's triggered state, a shift below it reports healthy, and an adequately-covered window with no comparison baseline reports unknown rather than a fabricated answer. Two things are deliberately NOT claimed. First, the finding is shadow-only today: health_rule.investment_allocation_shift.v1 is provisional and CHAOS-3331-blocked from promotion, so what is proven is the finding SHAPE, not that it reaches a launch surface. Second, the answer is magnitude-only by design (PRD 6.6/10) -- the rule renders no 'light on feature work' value judgment, and the assertion on its neutral remediation wording is what binds that. The live arm (matrix.team-workload-balance.e2e-live-validated) proves TEAM_WORKLOAD_BALANCE is reachable but asserts only a completed answer, not this finding's content.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py::test_investment_shift_with_adequate_coverage_produces_a_neutral_finding",
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py::test_investment_shift_with_adequate_coverage_but_no_baseline_is_unknown"
+      ],
       "requires_live_infra": false,
       "execution_artifact": null,
       "required_assertion_names": []
@@ -428,11 +440,15 @@
     {
       "id": "matrix.project-health-unknown-not-applicable",
       "category": "blocking_matrix",
-      "description": "Project health with unknown and not-applicable dimensions.",
-      "status": "blocked",
-      "evidence": [],
-      "blocked_reason": "No PROJECT-scoped test asserts UNKNOWN and NOT_APPLICABLE together -- the closest existing test, test_chaos_3303_health_profile_synthesis.py::test_team_profile_without_cohort_suppresses_every_applicable_rule, proves this pair for a TEAM-scoped profile, not PROJECT. CHAOS-3337 (the persistence-layer allowlist gap that separately blocked ALL live stack-3 e2e attempts) shipped 2026-08-03 (ops #1402) and no longer applies, but a literal PROJECT subject still cannot be live-verified: this fixture profile seeds zero PROJECT-kind rows (see positive-control.real-project-status). Closing this needs a new PROJECT-scoped unit test.",
-      "test_nodeids": [],
+      "description": "Project health with unknown and not-applicable dimensions. Proven at the synthesis layer for a PROJECT subject: a structurally inapplicable source and a never-queried one stay distinguishable in the profile's own observations (NOT_APPLICABLE vs UNAVAILABLE -- evaluate_rule collapses both to a DimensionState.UNKNOWN finding, so the observation is the only place the distinction survives), and neither contaminates a dimension that WAS measured. A literal PROJECT subject still cannot be live-verified: this fixture profile seeds zero PROJECT-kind rows (see positive-control.real-project-status), so the e2e arm of this cell remains unproven and is not claimed here.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3303_health_profile_synthesis.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3303_health_profile_synthesis.py::test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly"
+      ],
       "requires_live_infra": false,
       "execution_artifact": null,
       "required_assertion_names": []

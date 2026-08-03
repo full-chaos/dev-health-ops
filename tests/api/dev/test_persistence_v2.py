@@ -28,7 +28,7 @@ import pytest_asyncio
 from pydantic import AwareDatetime
 from sqlalchemy import Table, event, func, insert, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, PendingRollbackError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
@@ -1615,6 +1615,96 @@ async def test_record_narrative_flush_failure_is_isolated_by_a_savepoint(
         )
         assert run is not None
         assert run.state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_old_unprotected_narrative_write_would_have_poisoned_the_session(
+    persistence,
+) -> None:
+    """Planted-defect proof, reconstructing record_narrative's OLD shape
+    verbatim: before the fix, the narrative row was written with a bare
+    ``session.add(record); await self.session.flush()`` -- no
+    ``begin_nested()`` SAVEPOINT around it. This test performs exactly
+    that (a real, validly-shaped second ``DevRunNarrative`` row for a run
+    that already has one, added and flushed directly on the session, with
+    no SAVEPOINT), and confirms what the fixed test above (``..._is_
+    isolated_by_a_savepoint``) confirms does NOT happen anymore: the
+    session goes rollback-only, and a subsequent genuine write -- exactly
+    the terminal() call that follows record_narrative in production --
+    fails with PendingRollbackError, not because that write is itself
+    invalid, but because an earlier, unrelated, already-rolled-back flush
+    poisoned the whole transaction."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        real_frame_id = uuid.UUID(frame_payload["frame_id"])
+        await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=real_frame_id,
+            public_outcome="answered",
+            payload=frame_payload,
+        )
+
+        first_narrative_id = uuid.uuid4()
+        first_payload, first_text, first_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=first_narrative_id,
+            mode="deterministic_fallback",
+        )
+        await service.record_narrative(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            narrative_id=first_narrative_id,
+            frame_id=real_frame_id,
+            mode="deterministic_fallback",
+            provider_fingerprint=first_fingerprint,
+            narrative_text=first_text,
+            payload=first_payload,
+        )
+
+        # record_narrative's OLD internals, reproduced directly: a real,
+        # validly-shaped second row (same run_id -- violates
+        # uq_dev_run_narratives_run), added and flushed with no SAVEPOINT.
+        second_narrative_id = uuid.uuid4()
+        second_payload, second_text, second_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=second_narrative_id,
+            mode="deterministic_fallback",
+        )
+        second_row = DevRunNarrative(
+            run_id=run_id,
+            org_id=org_id,
+            user_id=user_id,
+            narrative_id=second_narrative_id,
+            frame_id=real_frame_id,
+            mode="deterministic_fallback",
+            provider_fingerprint=second_fingerprint,
+            narrative_text=second_text,
+            payload=second_payload,
+            created_at=datetime.now(UTC),
+        )
+        session.add(second_row)
+        with pytest.raises(IntegrityError):
+            await session.flush()
+
+        # The bug codex found: with no SAVEPOINT protecting the write
+        # above, the whole session is now rollback-only. A genuine
+        # follow-up write -- itself perfectly valid -- cannot proceed.
+        with pytest.raises(PendingRollbackError):
+            await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="completed",
+            )
 
 
 # -- dev_runs.terminal_error_payload (CHAOS-3297 Codex review round 3

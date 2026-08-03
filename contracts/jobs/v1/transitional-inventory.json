@@ -393,12 +393,12 @@
       "notes": "Beat entry prune-external-ingest-batches, crontab(5,15) UTC"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:759",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:761",
       "surface": "dispatch_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 759
+        "line": 761
       },
       "queue_or_cadence": "sync",
       "dispatches": "run_sync_unit (per unit)",
@@ -417,7 +417,7 @@
       "notes": "transport-routes.json kind dispatch_sync_run, route=celery"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1150",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1152",
       "surface": "run_sync_unit",
       "class": "celery_task",
       "source": {
@@ -2289,7 +2289,7 @@
       "notes": ""
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1046",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1048",
       "surface": "getattr(signature,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {

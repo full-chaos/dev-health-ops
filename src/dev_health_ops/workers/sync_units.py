@@ -58,7 +58,7 @@ from sqlalchemy.orm import Session, SessionTransactionOrigin
 from dev_health_ops.api.services.sync_coverage import (
     invalidate_sync_coverage_projection_sync,
 )
-from dev_health_ops.exceptions import RateLimitException
+from dev_health_ops.exceptions import PaginationException, RateLimitException
 from dev_health_ops.models import (
     BackfillJob,
     JobRun,
@@ -267,6 +267,8 @@ def _classify_error(exc: BaseException) -> str:
     """
     if isinstance(exc, CanonicalIncidentFeatureDisabledError):
         return FEATURE_DISABLED_ERROR_CATEGORY
+    if isinstance(exc, PaginationException):
+        return "pagination_incomplete"
     msg = str(exc).lower()
     for pattern, category in _PROVIDER_ERROR_PATTERNS:
         if pattern in msg:

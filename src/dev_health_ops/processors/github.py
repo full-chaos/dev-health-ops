@@ -329,15 +329,11 @@ async def _fetch_github_workflow_runs_async(
     runs: list[CiPipelineRun] = []
     client = _github_code_client_from_connector(connector)
     try:
-        try:
-            raw_runs = await client.get_workflow_runs(
-                owner,
-                repo_name,
-                max_runs=max_runs,
-            )
-        except Exception as exc:
-            logging.debug("Failed to fetch workflow runs: %s", exc)
-            return runs
+        raw_runs = await client.get_workflow_runs(
+            owner,
+            repo_name,
+            max_runs=max_runs,
+        )
 
         for run in raw_runs:
             started_at = run.started_at

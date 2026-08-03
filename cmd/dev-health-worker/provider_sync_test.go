@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -15,6 +16,12 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
+
+type providerSyncEntitlementFunc func(context.Context, string) error
+
+func (require providerSyncEntitlementFunc) Require(ctx context.Context, orgID string) error {
+	return require(ctx, orgID)
+}
 
 // TestBuildProviderSyncHandlerSharesOneMetricsInstance is CHAOS-3118
 // mutation-tested evidence for dev_health_provider_*, not a behavioral
@@ -50,7 +57,7 @@ func TestBuildProviderSyncHandlerSharesOneMetricsInstance(t *testing.T) {
 	// Postgres connection.
 	handler, providerMetrics := buildProviderSyncHandler(
 		nil, providersync.CompleteRouteSwitches{}, nil, nil, nil, nil,
-		collector, slog.Default(),
+		nil, collector, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("buildProviderSyncHandler returned an incomplete handler")
@@ -234,7 +241,7 @@ func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			handler, _ := buildProviderSyncHandler(
-				nil, want, nil, nil, nil, nil, nil, slog.Default(),
+				nil, want, nil, nil, nil, nil, nil, nil, slog.Default(),
 			)
 			if handler == nil {
 				t.Fatal("buildProviderSyncHandler returned no handler")
@@ -414,7 +421,7 @@ func TestBuildProviderSyncHandlerConstructsGitHubCommitStatsCapability(t *testin
 	handler, _ := buildProviderSyncHandler(
 		nil,
 		providersync.CompleteRouteSwitches{GithubCommitStats: true},
-		nil, nil, nil, nil, nil, slog.Default(),
+		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("provider sync handler is not constructed")
@@ -435,11 +442,60 @@ func TestBuildProviderSyncHandlerConstructsGitHubCommitStatsCapability(t *testin
 	}
 }
 
+func TestBuildProviderSyncHandlerConstructsJiraIncidentsCapability(t *testing.T) {
+	entitlementFunc := providerSyncEntitlementFunc(func(context.Context, string) error { return nil })
+	entitlement := &entitlementFunc
+	handler, _ := buildProviderSyncHandler(
+		nil, providersync.CompleteRouteSwitches{JiraIncidents: true},
+		nil, nil, nil, nil, entitlement, nil, slog.Default(),
+	)
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "jira", Dataset: "incidents",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, ok := executor.Handler.(providersync.JiraIncidentRouteHandler)
+	if !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	sink, ok := executor.Committer.Sink.(providersync.JiraIncidentClickHouseEffects)
+	if !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+	if route.Entitlement != entitlement || sink.Entitlement != entitlement {
+		t.Fatal("Jira route and writer do not share the constructed entitlement")
+	}
+	if _, ok := executor.Committer.Readback.(providersync.JiraIncidentClickHouseReadback); !ok {
+		t.Fatalf("executor readback=%T", executor.Committer.Readback)
+	}
+}
+
+func TestBuildProviderSyncHandlerRejectsJiraIncidentsWithoutEntitlement(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(
+		nil, providersync.CompleteRouteSwitches{JiraIncidents: true},
+		nil, nil, nil, nil, nil, nil, slog.Default(),
+	)
+	_, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "jira", Dataset: "incidents",
+		}},
+	})
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("error=%v want dependency unavailable", err)
+	}
+}
+
 func TestBuildProviderSyncHandlerConstructsGitHubCICDCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,
 		providersync.CompleteRouteSwitches{GithubCICD: true},
-		nil, nil, nil, nil, nil, slog.Default(),
+		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("provider sync handler is not constructed")
@@ -464,7 +520,7 @@ func TestBuildProviderSyncHandlerConstructsGitHubCommitsCapability(t *testing.T)
 	handler, _ := buildProviderSyncHandler(
 		nil,
 		providersync.CompleteRouteSwitches{GithubCommits: true},
-		nil, nil, nil, nil, nil, slog.Default(),
+		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("provider sync handler is not constructed")
@@ -486,7 +542,7 @@ func TestBuildProviderSyncHandlerConstructsGitHubCommitsCapability(t *testing.T)
 }
 
 func TestBuildProviderSyncHandlerConstructsGitHubDeploymentsCapability(t *testing.T) {
-	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubDeployments: true}, nil, nil, nil, nil, nil, slog.Default())
+	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubDeployments: true}, nil, nil, nil, nil, nil, nil, slog.Default())
 	executor, err := handler.BuildExecutor(&providersync.LeaseSession{Claim: providersync.Claim{Unit: providersync.Unit{Provider: "github", Dataset: "deployments"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -500,7 +556,7 @@ func TestBuildProviderSyncHandlerConstructsGitHubDeploymentsCapability(t *testin
 }
 
 func TestBuildProviderSyncHandlerConstructsGitHubSecurityCapability(t *testing.T) {
-	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubSecurity: true}, nil, nil, nil, nil, nil, slog.Default())
+	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubSecurity: true}, nil, nil, nil, nil, nil, nil, slog.Default())
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("provider sync handler is not constructed")
 	}
@@ -517,7 +573,7 @@ func TestBuildProviderSyncHandlerConstructsGitHubSecurityCapability(t *testing.T
 }
 
 func TestBuildProviderSyncHandlerConstructsGitHubFilesCapability(t *testing.T) {
-	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubFiles: true}, nil, nil, nil, nil, nil, slog.Default())
+	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubFiles: true}, nil, nil, nil, nil, nil, nil, slog.Default())
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("provider sync handler is not constructed")
 	}
@@ -543,6 +599,7 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 		"github_security":      {WorkerGithubSecurityEnabled: true},
 		"github_files":         {WorkerGithubFilesEnabled: true},
 		"github_commit_stats":  {WorkerGithubCommitStatsEnabled: true},
+		"jira_incidents":       {WorkerJiraIncidentsEnabled: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !providerSyncWorkerEnabled(cfg) {

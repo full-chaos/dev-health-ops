@@ -56,8 +56,8 @@ func TestCompleteRouteSwitchesCollapseWorkItemAliasesAndRemainIndependent(t *tes
 	jiraWorkItems, _ := switches.Descriptor("jira", "work-items")
 	jiraIncidents, _ := switches.Descriptor("jira", "incidents")
 	launchDarkly, _ := switches.Descriptor("launchdarkly", "feature-flags")
-	if jiraWorkItems.RouteEnabled || jiraIncidents.RouteEnabled ||
-		launchDarkly.RouteEnabled {
+	if jiraWorkItems.RouteEnabled || !jiraIncidents.RouteReady ||
+		!jiraIncidents.RouteEnabled || launchDarkly.RouteEnabled {
 		t.Fatalf(
 			"independent routes jira_work=%+v jira_incidents=%+v ld=%+v",
 			jiraWorkItems, jiraIncidents, launchDarkly,

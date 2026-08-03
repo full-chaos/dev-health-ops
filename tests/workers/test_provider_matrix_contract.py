@@ -206,13 +206,12 @@ def test_producer_gate_cannot_route_any_scope_outside_the_ready_set(
 def test_incomplete_route_switches_remain_forbidden(
     matrix: dict[str, Any],
 ) -> None:
-    """The linear/jira scaffolding switches must stay unusable for as long as
+    """The work-item scaffolding switches must stay unusable for as long as
     their Go descriptors are not route-ready."""
 
     scaffolding = {
         "linear_work_items": ("linear", "work-items"),
         "jira_work_items": ("jira", "work-items"),
-        "jira_incidents": ("jira", "incidents"),
     }
     ready = {
         (pair["provider"], pair["dataset"])

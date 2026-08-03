@@ -440,10 +440,12 @@
       "processor_flags": {
         "sync_cicd": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "cicd",
-      "route_destinations": [],
+      "route_destinations": [
+        "ci_pipeline_runs"
+      ],
       "route_ready": false,
       "credential_modes": [
         "personal_access_token"

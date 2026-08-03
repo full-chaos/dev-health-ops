@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import pathlib
-import uuid
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
@@ -17,12 +14,14 @@ from internal.providersync.testdata.python_oracle_loader import load_live_module
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _REPOSITORY_SOURCE = REPO_ROOT / "src/dev_health_ops/providers/gitlab/repository.py"
+_MODEL_SOURCE = REPO_ROOT / "src/dev_health_ops/models/git.py"
+_ROW_ENCODER_SOURCE = REPO_ROOT / "src/dev_health_ops/storage/repository_rows.py"
 
 
 def _reflected_fields() -> frozenset[str]:
     return dict_literal_keys(
-        _REPOSITORY_SOURCE.read_text(),
-        "build_gitlab_repository_values",
+        _ROW_ENCODER_SOURCE.read_text(),
+        "build_repository_insert_row",
         (RETURN_LITERAL,),
     )
 
@@ -33,17 +32,10 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
         SimpleNamespace(**case["project"]), case["gitlab_url"]
     )
     normalized_at = datetime.fromisoformat(case["normalized_at"].replace("Z", "+00:00"))
-    digest = hashlib.sha256(values["repo"].strip().lower().encode()).digest()[:16]
-    return {
-        "id": str(uuid.UUID(bytes=digest)),
-        "repo": values["repo"],
-        "ref": None,
-        "created_at": normalized_at,
-        "settings": json.dumps(values["settings"], default=str, separators=(",", ":")),
-        "tags": json.dumps(values["tags"], default=str, separators=(",", ":")),
-        "provider": values["provider"],
-        "last_synced": normalized_at,
-    }
+    model = load_live_module(_MODEL_SOURCE)
+    repo = model.Repo(repo_path=None, created_at=normalized_at, **values)
+    row_encoder = load_live_module(_ROW_ENCODER_SOURCE)
+    return row_encoder.build_repository_insert_row(repo, synced_at=normalized_at)
 
 
 oracle_registry.register(
@@ -51,5 +43,8 @@ oracle_registry.register(
         id="gitlab/repo-metadata/row",
         build_row=_build_row,
         reflected_fields=_reflected_fields,
+        excluded_fields={
+            "source_id": "the Go native repos insert omits this nullable column and ClickHouse defaults it to NULL",
+        },
     )
 )

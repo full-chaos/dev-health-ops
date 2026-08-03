@@ -2,7 +2,6 @@ package providersync
 
 import (
 	"context"
-	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
@@ -46,9 +45,8 @@ func (GitLabRepositoryRouteHandler) Collect(
 		return CompleteRouteBatch{}, err
 	}
 	var payload repositoryPayload
-	if err := fetchObject(
-		ctx, client, "/api/v4/projects/"+url.PathEscape(projectID), &payload,
-	); err != nil {
+	path := providerRelativePath(client, "api", "v4", "projects", projectID)
+	if err := fetchObject(ctx, client, path, &payload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := payload.ID.Int64()
@@ -76,7 +74,7 @@ func (GitLabRepositoryRouteHandler) Collect(
 		value := payload.WebURL
 		webURL = &value
 	}
-	settings, err := json.Marshal(gitLabRepositorySettings{
+	settings, err := marshalRepositoryJSON(gitLabRepositorySettings{
 		Source:            "gitlab",
 		ProjectID:         parsedProjectID,
 		URL:               webURL,
@@ -86,7 +84,7 @@ func (GitLabRepositoryRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
-	tags, err := json.Marshal([]string{"gitlab"})
+	tags, err := marshalRepositoryJSON([]string{"gitlab"})
 	if err != nil {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}

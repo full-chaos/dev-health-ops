@@ -117,7 +117,7 @@ func TestGitLabRepositoryRoutePreservesSelfManagedInstancePort(t *testing.T) {
 	batch, err := (GitLabRepositoryRouteHandler{}).Collect(
 		context.Background(), nativeTestClaim("gitlab", "repo-metadata"),
 		providerfoundation.Credential{},
-		gitLabRepositoryClient(t, doer, "https://gitlab.example:8443"), now,
+		gitLabRepositoryClient(t, doer, "https://gitlab.example:8443/root"), now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -128,6 +128,9 @@ func TestGitLabRepositoryRoutePreservesSelfManagedInstancePort(t *testing.T) {
 	}
 	if !strings.Contains(row.Settings, `"gitlab_instance_url":"https://gitlab.example:8443"`) {
 		t.Fatalf("settings=%s", row.Settings)
+	}
+	if len(doer.requests) != 1 || doer.requests[0].URL.Path != "/root/api/v4/projects/123" {
+		t.Fatalf("requests=%d path=%q", len(doer.requests), doer.requests[0].URL.Path)
 	}
 }
 

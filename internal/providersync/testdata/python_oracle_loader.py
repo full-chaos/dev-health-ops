@@ -43,6 +43,8 @@ _BASE_GIT_SOURCE = _source("dev_health_ops/processors/base_git.py")
 _GITHUB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/github/code_client.py")
 _GITLAB_INSTANCE_SOURCE = _source("dev_health_ops/providers/gitlab/instance.py")
 _GITLAB_REPOSITORY_SOURCE = _source("dev_health_ops/providers/gitlab/repository.py")
+_GIT_MODEL_SOURCE = _source("dev_health_ops/models/git.py")
+_REPOSITORY_ROWS_SOURCE = _source("dev_health_ops/storage/repository_rows.py")
 _RELEASE_REF_SOURCE = _source("dev_health_ops/processors/release_ref.py")
 
 _SAFE_SOURCE_MODULES: dict[str, Path] = {
@@ -460,6 +462,16 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.providers.gitlab.repository",
         _GITLAB_REPOSITORY_SOURCE,
         _target_gitlab_repository,
+    ),
+    _GIT_MODEL_SOURCE: (
+        "dev_health_ops.models.git",
+        _GIT_MODEL_SOURCE,
+        lambda: None,
+    ),
+    _REPOSITORY_ROWS_SOURCE: (
+        "dev_health_ops.storage.repository_rows",
+        _REPOSITORY_ROWS_SOURCE,
+        lambda: None,
     ),
     _RELEASE_REF_SOURCE: (
         "dev_health_ops.processors.release_ref",

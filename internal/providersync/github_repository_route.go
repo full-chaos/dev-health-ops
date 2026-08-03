@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,6 +16,18 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// marshalRepositoryJSON matches the canonical Python ClickHouse repository
+// encoder: compact separators, UTF-8 preserved, and no HTML-only escaping.
+func marshalRepositoryJSON(value any) ([]byte, error) {
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(encoded.Bytes(), []byte{'\n'}), nil
+}
 
 // repositoryRow is the frozen `repos` projection. Field order and JSON names
 // mirror the Python ClickHouse sink (`ClickHouseStore.insert_repo`) so the
@@ -125,7 +138,7 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 	if defaultBranch == "" {
 		defaultBranch = "main"
 	}
-	settings, err := json.Marshal(repositorySettings{
+	settings, err := marshalRepositoryJSON(repositorySettings{
 		Source:            "github",
 		GitHubInstanceURL: instance,
 		RepoID:            repoID,
@@ -139,7 +152,7 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 	if payload.Language != "" {
 		tagValues = append(tagValues, payload.Language)
 	}
-	tags, err := json.Marshal(tagValues)
+	tags, err := marshalRepositoryJSON(tagValues)
 	if err != nil {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}

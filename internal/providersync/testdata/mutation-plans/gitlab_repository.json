@@ -52,6 +52,36 @@
       "proof": [
         ["go", "test", "-count=1", "-run", "^TestProviderMatrixMatchesCheckedInContract$", "./internal/providersync/"]
       ]
+    },
+    {
+      "id": "G6-gitlab-url-alias-precedence",
+      "file": "internal/providerfoundation/clients.go",
+      "find": "for _, name := range []string{\"gitlab_url\", \"url\", \"base_url\"} {",
+      "replace": "for _, name := range []string{\"base_url\", \"url\", \"gitlab_url\"} {",
+      "rationale": "GitLab must resolve aliases exactly like Python before applying PRIVATE-TOKEN; lower-priority base_url must never redirect the credential to a conflicting host",
+      "proof": [
+        ["go", "test", "-count=1", "-run", "^TestGitLabClientURLAliasesMatchCanonicalPythonPrecedence$", "./internal/providerfoundation/"]
+      ]
+    },
+    {
+      "id": "G7-self-managed-base-path-root",
+      "file": "internal/providersync/gitlab_repository_route.go",
+      "find": "path := providerRelativePath(client, \"api\", \"v4\", \"projects\", projectID)",
+      "replace": "path := \"/api/v4/projects/\" + url.PathEscape(projectID)",
+      "rationale": "a self-managed GitLab origin may be mounted under a path root; an absolute API path must not discard that configured root",
+      "proof": [
+        ["go", "test", "-count=1", "-run", "^TestGitLabRepositoryRoutePreservesSelfManagedInstancePort$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "G8-real-model-tags-reach-persisted-row",
+      "file": "src/dev_health_ops/storage/repository_rows.py",
+      "find": "tags = getattr(repo, \"repo_tags\", None)",
+      "replace": "tags = getattr(repo, \"tags\", None)",
+      "rationale": "the real Repo model moves constructor tags to repo_tags; reading the nonexistent tags attribute writes NULL and the live whole-row oracle must detect that production persistence divergence",
+      "proof": [
+        ["go", "test", "-count=1", "-run", "^TestGenericOracleMatchesLivePythonForGitLabRepositoryRow$", "./internal/providersync/"]
+      ]
     }
   ]
 }

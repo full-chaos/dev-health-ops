@@ -53,7 +53,7 @@ func TestGenericOracleMatchesLivePythonForGitLabRepositoryRow(t *testing.T) {
 			},
 		}},
 		{ID: "self_managed", Input: map[string]any{
-			"gitlab_url": "https://GITLAB.example:8443/api/v4", "normalized_at": "2026-07-23T12:30:00.123Z",
+			"gitlab_url": "https://GITLAB.example:8443/root", "normalized_at": "2026-07-23T12:30:00.123Z",
 			"project": map[string]any{
 				"id": 123, "name": "api", "path_with_namespace": "Acme/API",
 				"web_url": nil, "default_branch": "main",

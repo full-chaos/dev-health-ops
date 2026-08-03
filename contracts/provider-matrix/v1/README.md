@@ -103,10 +103,15 @@ What this activation waived and satisfied:
 CHAOS-3342 makes the pair `native_go` / `route_ready: true` with the same
 fail-closed boundary as the GitHub repository route. The production binary
 constructs a GitLab-specific handler and the tenant-keyed `repos` sink plus
-readback; fixture parity is checked by executing the production Python row
-builder and comparing it with the production Go row type through the generic
-oracle. Self-managed GitLab origins retain a non-default port and the fetched
-project id must equal the claimed source id.
+readback. Fixture parity constructs the production Python `Repo` model and
+executes the same persisted-row encoder used by `ClickHouseStore.insert_repo`,
+then compares that row with the production Go row type through the generic
+oracle. This boundary pins the model's `repo_tags` field rather than a
+hand-assembled `tags` surrogate. GitLab credential URL aliases follow the
+Python precedence `gitlab_url > url > base_url`, evaluating decrypted storage
+before config only within the same alias; self-managed URL path roots and
+non-default ports are retained. The fetched project id must equal the claimed
+source id.
 
 Routing remains off unless `WORKER_GITLAB_REPO_METADATA_ENABLED=true` is set
 for both the Python producer gate and Go worker. Every checked-in deployment

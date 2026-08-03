@@ -41,6 +41,17 @@ func TestExplicitProviderClientsApplyTypedAuthentication(t *testing.T) {
 			want:       "gitlab-token",
 		},
 		{
+			name: "jira basic auth",
+			credential: testCredential("jira", map[string]string{
+				"email": "dev@acme.test", "api_token": "jira-token",
+				"base_url": "https://acme.atlassian.net",
+			}),
+			newClient: NewJiraClient,
+			path:      "/rest/api/3/search/jql",
+			header:    "Authorization",
+			want:      "Basic ZGV2QGFjbWUudGVzdDpqaXJhLXRva2Vu",
+		},
+		{
 			name:       "linear",
 			credential: testCredential("linear", map[string]string{"api_key": "linear-key"}),
 			newClient:  NewLinearClient,
@@ -98,6 +109,11 @@ func TestExplicitProviderClientsApplyTypedAuthentication(t *testing.T) {
 			}
 			if test.credential.Provider == "pagerduty" && doer.header.Get("Accept") != pagerDutyAccept {
 				t.Fatalf("PagerDuty Accept=%q", doer.header.Get("Accept"))
+			}
+			if test.credential.Provider == "jira" &&
+				(doer.header.Get("Accept") != "application/json" ||
+					doer.header.Get("Content-Type") != "application/json") {
+				t.Fatalf("Jira JSON headers=%v", doer.header)
 			}
 		})
 	}

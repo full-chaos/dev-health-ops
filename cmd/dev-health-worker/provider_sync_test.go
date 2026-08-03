@@ -235,6 +235,7 @@ func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
 		"github":          {GithubRepoMetadata: true},
 		"gitlab":          {GitlabRepoMetadata: true},
 		"gitlab_commits":  {GitlabCommits: true},
+		"gitlab_stats":    {GitlabCommitStats: true},
 		"github_prs":      {GithubPRs: true},
 		"github_cicd":     {GithubCICD: true},
 		"github_security": {GithubSecurity: true},
@@ -302,6 +303,12 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 			name: "gitlab commits",
 			cfg: config.Config{
 				Profile: "sync", WorkerGitlabCommitsEnabled: true,
+			},
+		},
+		{
+			name: "gitlab commit stats",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabCommitStatsEnabled: true,
 			},
 		},
 		{
@@ -394,6 +401,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 		"gitlab_commits": {
 			cfg:  config.Config{WorkerGitlabCommitsEnabled: true},
 			want: providersync.CompleteRouteSwitches{GitlabCommits: true},
+		},
+		"gitlab_commit_stats": {
+			cfg:  config.Config{WorkerGitlabCommitStatsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabCommitStats: true},
 		},
 		"github_prs": {
 			cfg:  config.Config{WorkerGithubPRsEnabled: true},
@@ -653,6 +664,7 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 		"github_repo_metadata": {WorkerGithubRepoMetadataEnabled: true},
 		"gitlab_repo_metadata": {WorkerGitlabRepoMetadataEnabled: true},
 		"gitlab_commits":       {WorkerGitlabCommitsEnabled: true},
+		"gitlab_commit_stats":  {WorkerGitlabCommitStatsEnabled: true},
 		"github_cicd":          {WorkerGithubCICDEnabled: true},
 		"github_commits":       {WorkerGithubCommitsEnabled: true},
 		"github_deployments":   {WorkerGithubDeploymentsEnabled: true},
@@ -722,6 +734,34 @@ func TestBuildProviderSyncHandlerConstructsGitLabCommitsCapability(t *testing.T)
 		t.Fatalf("executor sink=%T", executor.Committer.Sink)
 	}
 	if _, ok := executor.Committer.Readback.(providersync.GitLabCommitsClickHouseEffects); !ok {
+		t.Fatalf("executor readback=%T", executor.Committer.Readback)
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsGitLabCommitStatsCapability(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(
+		nil,
+		providersync.CompleteRouteSwitches{GitlabCommitStats: true},
+		nil, nil, nil, nil, nil, nil, slog.Default(),
+	)
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "gitlab", Dataset: "commit-stats",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := executor.Handler.(providersync.GitLabCommitStatsRouteHandler); !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.GitLabCommitStatsClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+	if _, ok := executor.Committer.Readback.(providersync.GitLabCommitStatsClickHouseEffects); !ok {
 		t.Fatalf("executor readback=%T", executor.Committer.Readback)
 	}
 }

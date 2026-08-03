@@ -1,34 +1,45 @@
 """Shared execution-artifact machinery for CHAOS-3300 live acceptance smokes.
 
 Codex finding (HIGH, 2026-08-02, against wave31_manifest.py): a
-``proven_e2e`` claim required no machine-verifiable execution at all -- every
-``proven_e2e`` row had empty ``test_nodeids`` (the field ``execute_manifest``
-actually runs), so any row citing an existing evidence file with
-``requires_live_infra=True`` validated clean, *including a fabricated row
-that had never been run*. The manifest's own prose ("actually executed
-2026-08-02...") was unverifiable narrative, not a checked fact.
+``proven_e2e`` claim required no machine-verifiable execution at all --
+every ``proven_e2e`` row had empty ``test_nodeids`` (the field
+``execute_manifest`` actually runs), so any row citing an existing evidence
+file with ``requires_live_infra=True`` validated clean. The manifest's own
+prose ("actually executed 2026-08-02...") was unverifiable narrative.
 
-The fix: every ``proven_e2e`` claim now points at an execution artifact the
-smoke script itself writes as a side effect of running --
-``ScenarioRecorder`` below. The artifact records which git commit the run
-executed against, the exact bytes of the script that produced it (so an
-edit after the fact is detectable), when it ran, and the pass/fail result of
-every individual assertion the scenario made -- not just "the process
-exited 0". ``wave31_manifest.validate_execution_artifact`` checks the
-artifact exists, parses, records every assertion passing, and was generated
-from a commit that is an ancestor of (or equal to) the current HEAD --
-catching a fabricated, stale, or partially-failing claim the same way
-``execute_manifest`` already catches a fabricated ``test_nodeids`` claim.
+The response: every ``proven_e2e`` claim points at an execution artifact
+the smoke script itself writes as a side effect of running --
+``ScenarioRecorder`` below. The artifact records the pass/fail result of
+every individual assertion the scenario made (not just "the process exited
+0"), the exact bytes of the script that produced it, per-path digests of
+the shared fixture surface it ran against, whether the working tree was
+clean, and which commit HEAD was at.
 
-Commit-equality is deliberately NOT the check: the artifact necessarily
-records the commit HEAD was at *before* the commit that adds the artifact
-file itself (you cannot know a commit's own hash before creating it), so
-requiring exact equality would make every artifact permanently invalid the
-moment it is committed. ``git merge-base --is-ancestor <recorded> HEAD``
-is the check this codebase already uses elsewhere for "this state genuinely
-led to now, not fabricated or from an unrelated branch" (see the git-state
-verification discipline this repo follows). Whether the *code* still matches
-what was tested is a separate question, answered by the script_sha256 check.
+BE PRECISE ABOUT WHAT THIS PROVES, because the whole point of this machinery
+is that claims match evidence (codex finding, HIGH, 2026-08-03, which
+demonstrated a hand-written artifact validating clean):
+
+* It proves CURRENCY. ``script_sha256`` and ``runtime_digest`` are
+  recomputed from the tree being validated, so an artifact describing a
+  scenario whose script or fixture surface has since changed is detected
+  and reported stale.
+* It does NOT prove OCCURRENCE. Nothing here establishes that a live run
+  happened. The artifact is unsigned JSON, and the validator recomputes
+  exactly the values a forger would compute, so a fabricated artifact with
+  correct hashes validates clean. Occurrence rests on the recorded
+  per-assertion evidence being written by a real run, and on the policy of
+  re-running scenarios -- it is operator-asserted, not validator-proven.
+* ``commit_sha`` is METADATA. It is shape-checked but never resolved, so a
+  well-formed id naming no commit is accepted. Commit ANCESTRY was removed
+  as a validity gate on 2026-08-03: this repository squash-merges, so
+  artifact commits leave history on every land, and a rebase orphans them
+  just as thoroughly. Binding by content survives both.
+
+A narrower residual gap is CHAOS-3351: the digest is sampled on the host,
+while Compose built the containers earlier, so it cannot prove the
+containers ran this code. ``ScenarioRecorder`` narrows that window by
+digesting at scenario start and refusing to write if the tree moved
+mid-run.
 """
 
 from __future__ import annotations
@@ -129,16 +140,16 @@ class AssertionResult:
 #: it properly needs the built image digest.
 #:
 #: What is deliberately NOT in it, and why. Product code under ``src`` is
-#: excluded (apart from the fixture provider, which is a stand-in, not the
-#: system under test): an artifact's claim is "this scenario passed at the
-#: recorded commit", and ``commit_sha`` plus the ancestry check already
-#: pin that. Including product code would invalidate every artifact on
-#: every product commit, making a live re-mint a precondition for all
-#: work -- a gate that expensive gets switched off, which is a worse
-#: outcome than the drift it prevents. Individual smoke scripts are
-#: excluded too: each is already bound by its own ``script_sha256``, and
-#: folding them in here would make editing one scenario invalidate the
-#: other thirteen.
+#: excluded, apart from the fixture provider, which is a stand-in rather
+#: than the system under test. Nothing else pins it -- so for product-code
+#: changes these artifacts are HISTORICAL records of a past run, not proof
+#: about the current tree, and no row should be read as claiming otherwise.
+#: The trade is deliberate: including product code would invalidate every
+#: artifact on every product commit, making a live re-mint a precondition
+#: for all work, and a gate that expensive gets switched off. Individual
+#: smoke scripts are excluded too: each is already bound by its own
+#: ``script_sha256``, and folding them in here would make editing one
+#: scenario invalidate the other thirteen.
 RUNTIME_DEPENDENCY_PATHS: tuple[str, ...] = (
     "compose.yml",
     "docker/Dockerfile",
@@ -221,15 +232,12 @@ def _git_head_sha(start: Path) -> str:
     return result.stdout.strip()
 
 
-#: Codex finding (HIGH, 2026-08-02): the ancestor check alone accepts an
-#: artifact recorded against ANY ancestor commit, however old, with no way
-#: to tell whether unrelated production code had uncommitted local edits at
-#: record time that later got silently discarded -- the commit_sha would
-#: still be a true ancestor, but would not actually describe what ran.
-#: Recording whether the working tree was clean (ignoring the artifacts
-#: directory itself, which this same write necessarily touches) closes that
-#: gap: a dirty tree means "what ran might not be what commit_sha says",
-#: which validate_execution_artifact must reject just as it rejects a
+#: Codex finding (HIGH, 2026-08-02): a recorded commit alone says nothing
+#: about whether unrelated production code had uncommitted local edits at
+#: record time. Recording whether the working tree was clean (ignoring the
+#: artifacts directory itself, which this same write necessarily touches)
+#: closes that: a dirty tree means what ran might not be what the recorded
+#: state says, which validate_execution_artifact rejects as loudly as a
 #: missing artifact.
 _ARTIFACT_DIR = PurePosixPath("tests/acceptance/artifacts")
 

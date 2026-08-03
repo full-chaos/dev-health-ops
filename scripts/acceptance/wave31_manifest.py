@@ -16,7 +16,9 @@ this repository -- ``validate_manifest`` checks that at import/report time,
 so a claim that stops being true (a test file renamed or deleted) fails the
 manifest rather than silently going stale. This is not a claim that the
 referenced tests currently pass; running them is CI's job. It is a claim
-that the evidence a status rests on still exists and is not fabricated.
+that the evidence a status rests on still exists and still matches this
+tree. It cannot establish that a live run happened -- see
+acceptance_artifact.py's contract for what is and is not proven.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from typing import Literal, TypedDict
 from scripts.acceptance.acceptance_artifact import (
     RUNTIME_DEPENDENCY_PATHS,
     AcceptanceFailure,
+    aggregate_runtime_digest,
     runtime_dependency_hashes,
 )
 
@@ -135,7 +138,7 @@ class ManifestItem:
     #: validated exactly the same as a real one. ``validate_blocked_
     #: execution_artifact`` checks this the same way ``validate_execution_
     #: artifact`` checks a proven_e2e artifact (schema, non-dict rejection,
-    #: tree_clean, ancestry, script_sha256) but additionally REQUIRES
+    #: tree_clean, content digests, script_sha256) but additionally REQUIRES
     #: ``status == "failed"`` and the names in ``blocked_expected_failing_
     #: assertions`` to actually show ``passed: false`` -- a "passed"
     #: artifact backing a blocked claim would be self-contradictory. This
@@ -178,6 +181,9 @@ class ManifestReportJSON(TypedDict):
     #: Rows whose execution artifact no longer matches this tree, and the
     #: covered dependency paths that drifted. A separate dimension from
     #: status on purpose -- see DECLARED_STALE_ARTIFACTS.
+    #: See PROVEN_E2E_CLAIM_LIMITS -- emitted so a consumer reading the
+    #: rows cannot miss what "proven" does and does not assert.
+    proven_e2e_claim_limits: str
     stale_row_count: int
     stale_rows: dict[str, list[str]]
     items: list[ManifestItemJSON]
@@ -1883,7 +1889,8 @@ def _git_command(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 #: A full, canonical git object id. Codex finding (HIGH, 2026-08-03): the
-#: ancestry check passed ``commit_sha`` straight to ``git merge-base``,
+#: since-removed ancestry check passed ``commit_sha`` straight to
+#: ``git merge-base``,
 #: which happily accepts any revision expression -- so an artifact
 #: recording the literal string "HEAD" (or "HEAD^{commit}") validated
 #: clean, because the expression resolves at VALIDATION time to whatever
@@ -1894,53 +1901,101 @@ def _git_command(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 _CANONICAL_COMMIT_SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 
 
-#: Rows whose execution artifact is KNOWN stale, mapped to the exact set of
-#: covered dependency paths that have drifted since the scenario ran.
+#: What a ``proven_e2e`` row does and does not assert, stated once, here,
+#: and emitted into the report so no consumer can read the rows without it.
 #:
-#: A digest mismatch does not invalidate a row -- it makes it stale. The
+#: Codex finding (HIGH, 2026-08-03): individual row descriptions say a live
+#: scenario "proves" or "is proven", and a hand-written artifact carrying
+#: correct hashes validates clean -- so the word "proven" was doing more
+#: work than the machinery supports. Rewording nine descriptions would drift
+#: apart; one authoritative statement attached to the report cannot.
+PROVEN_E2E_CLAIM_LIMITS = (
+    "A proven_e2e row means: a live scenario was run by an operator, its "
+    "per-assertion results were recorded by the scenario itself, and the "
+    "script and shared fixture surface it ran against still match this "
+    "tree. It does NOT mean the validator has established that the run "
+    "happened. Execution artifacts are unsigned JSON and the validator "
+    "recomputes exactly the values a forger would compute, so a fabricated "
+    "artifact validates clean; occurrence rests on operator-recorded "
+    "evidence and on re-running scenarios, not on this check. commit_sha is "
+    "metadata only -- shape-checked, never resolved, so a well-formed id "
+    "naming no commit is accepted. Product code under src/ is outside the "
+    "digested surface, so for product changes these rows are historical "
+    "records of a past run rather than statements about the current tree."
+)
+
+#: Rows whose execution artifact is KNOWN stale, mapped to the drifted
+#: dependency paths AND the exact content hash being acknowledged for each.
+#:
+#: A digest mismatch does not invalidate a row -- it makes it stale. That
 #: distinction is what keeps this gate affordable: ``pyproject.toml`` and
 #: ``requirements.txt`` are covered dependencies, so without it every
 #: routine dependency bump would red the whole repository's CI until
 #: somebody found time to run live Compose. A gate with that tax gets
 #: switched off, and a gate that is off catches nothing.
 #:
-#: So: silent staleness FAILS, declared staleness PASSES and is reported
-#: loudly. Declaring is cheap -- add the row id and the drifted paths --
-#: but it cannot lie, because ``_runtime_digest_errors`` verifies the
-#: declared set matches the ACTUAL drift exactly. Naming a path that did
-#: not drift fails (you cannot pre-declare future drift to buy silence);
-#: omitting one that did fails (you cannot hide extra drift behind a
-#: partial declaration); and declaring a row with no drift at all fails,
-#: which is what makes a re-mint self-cleaning -- once the scenario is
-#: re-run the entry MUST be deleted or the manifest breaks, so a stale
-#: flag can never outlive the staleness it describes.
+#: Silent staleness FAILS; declared staleness passes and is reported.
+#: Declaring is cheap but cannot lie, because the declaration names the
+#: HASH it is acknowledging, not merely the path. Codex finding (MED,
+#: 2026-08-03): a path-only declaration permanently absorbed every later
+#: change to that same file -- once ``pyproject.toml`` was declared, any
+#: subsequent contents produced the identical path set and kept validating
+#: clean, so one declaration silenced that dependency forever. Binding the
+#: acknowledged hash means the next edit to an already-declared path fails
+#: again, which is the property "you cannot pre-declare future drift"
+#: actually requires.
+#:
+#: A declaration with no drift at all also fails, which makes a re-mint
+#: self-cleaning: once the scenario is re-run the entry MUST be deleted or
+#: the manifest breaks, so a stale flag can never outlive its staleness.
 #:
 #: Whether a stale row is ACCEPTABLE is a wave-close decision, not a CI
-#: one. CI's only job here is that nobody can be surprised by it.
-DECLARED_STALE_ARTIFACTS: Mapping[str, tuple[str, ...]] = {}
+#: one. CI's only job here is that nobody can be surprised by one.
+DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {}
+
+#: A sha256 hex digest, the only shape a recorded dependency hash may take.
+_SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")
 
 
-def _drifted_dependency_paths(
-    root: Path, recorded: Mapping[str, str]
-) -> tuple[list[str], list[str]]:
-    """Return (drifted paths, hard errors) comparing recorded vs current."""
+def _recorded_dependency_errors(recorded: object) -> tuple[dict[str, str], list[str]]:
+    """Structurally validate an artifact's ``runtime_dependencies`` map.
 
-    try:
-        current = runtime_dependency_hashes(root)
-    except AcceptanceFailure as exc:
-        return [], [str(exc)]
-    missing = [p for p in RUNTIME_DEPENDENCY_PATHS if p not in recorded]
-    if missing:
-        return [], [
-            f"records no digest for covered dependency path(s) {missing} -- "
-            "it cannot show they still match this tree"
+    Codex finding (MED, 2026-08-03): the map was consumed on trust, so an
+    artifact carrying extra keys, or ``None``/empty values for covered
+    paths, sailed through -- the malformed entries simply read as drift,
+    which a declaration could then absorb. A map that is not exactly the
+    covered set of well-formed digests is not evidence of anything.
+    """
+
+    if not isinstance(recorded, dict) or not recorded:
+        return {}, [
+            "records no runtime_dependencies -- it cannot show the "
+            "provider, recorder, launcher, image build inputs, and Compose "
+            "definitions it ran against still match this tree"
         ]
-    drifted = [
-        relative
-        for relative in RUNTIME_DEPENDENCY_PATHS
-        if recorded[relative] != current[relative]
-    ]
-    return drifted, []
+    covered = set(RUNTIME_DEPENDENCY_PATHS)
+    present = set(recorded)
+    errors: list[str] = []
+    if missing := sorted(covered - present):
+        errors.append(f"records no digest for covered dependency path(s) {missing}")
+    if extra := sorted(present - covered):
+        errors.append(
+            f"records digests for path(s) {extra} that are not covered "
+            "dependencies -- the recorded map must be exactly the covered set"
+        )
+    malformed = sorted(
+        path
+        for path, value in recorded.items()
+        if not isinstance(value, str) or not _SHA256_HEX.fullmatch(value)
+    )
+    if malformed:
+        errors.append(
+            f"records malformed (non-sha256) digests for {malformed} -- an "
+            "absent or empty hash is not a measurement"
+        )
+    if errors:
+        return {}, errors
+    return {str(k): str(v) for k, v in recorded.items()}, []
 
 
 def _runtime_digest_errors(
@@ -1948,52 +2003,70 @@ def _runtime_digest_errors(
 ) -> tuple[list[str], list[str]]:
     """Return ``(errors, drifted_paths)`` for one artifact's fixture surface.
 
-    An artifact with no per-path digests is rejected rather than
-    grandfathered: "recorded before the field existed" and "minted by
-    something that skipped it" are indistinguishable from here, and neither
-    is proof. A DRIFTED artifact is not an error if the drift is declared
-    in :data:`DECLARED_STALE_ARTIFACTS` and the declaration matches
-    exactly -- see that constant for why staleness is survivable and
+    See :data:`DECLARED_STALE_ARTIFACTS` for why drift is survivable and
     silence is not.
     """
 
-    recorded = artifact.get("runtime_dependencies")
-    declared = tuple(DECLARED_STALE_ARTIFACTS.get(item_id, ()))
-    if not isinstance(recorded, dict) or not recorded:
+    recorded, structural = _recorded_dependency_errors(
+        artifact.get("runtime_dependencies")
+    )
+    if structural:
+        return [f"{item_id}: {label} {structural[0]}"], []
+
+    recorded_aggregate = artifact.get("runtime_digest")
+    expected_aggregate = aggregate_runtime_digest(recorded)
+    if recorded_aggregate != expected_aggregate:
         return [
-            f"{item_id}: {label} records no runtime_dependencies -- it "
-            "cannot show the provider, recorder, launcher, image build "
-            "inputs, and Compose definitions it ran against still match "
-            "this tree. Re-run the scenario to mint them."
+            f"{item_id}: {label}'s runtime_digest does not agree with its "
+            "own per-path digests -- the two are written together by the "
+            "recorder, so a disagreement means the artifact was edited"
         ], []
 
-    drifted, hard = _drifted_dependency_paths(root, recorded)
-    if hard:
-        return [
-            f"{item_id}: {label}'s runtime digests cannot be checked: {hard[0]}"
-        ], []
+    try:
+        current = runtime_dependency_hashes(root)
+    except AcceptanceFailure as exc:
+        return [f"{item_id}: {label}'s runtime digests cannot be checked: {exc}"], []
+
+    drifted = [
+        relative
+        for relative in RUNTIME_DEPENDENCY_PATHS
+        if recorded[relative] != current[relative]
+    ]
+    declared = DECLARED_STALE_ARTIFACTS.get(item_id, {})
 
     if declared and not drifted:
         return [
-            f"{item_id}: declared stale against {list(declared)} but nothing "
-            "has drifted -- the artifact matches this tree. Remove the "
-            "DECLARED_STALE_ARTIFACTS entry; a stale flag must not outlive "
-            "the staleness it describes."
+            f"{item_id}: declared stale against {sorted(declared)} but "
+            "nothing has drifted. Remove the DECLARED_STALE_ARTIFACTS entry; "
+            "a stale flag must not outlive the staleness it describes."
         ], []
-    if drifted and tuple(sorted(declared)) != tuple(sorted(drifted)):
-        if not declared:
-            return [
-                f"{item_id}: {label} is STALE -- {drifted} changed since the "
-                "scenario ran, so the recorded run is not the run you would "
-                "get today. Re-run the scenario, or declare it in "
-                "DECLARED_STALE_ARTIFACTS with exactly that path list. "
-                "Staleness is allowed; silent staleness is not."
-            ], drifted
+    if not drifted:
+        return [], []
+    if not declared:
+        return [
+            f"{item_id}: {label} is STALE -- {drifted} changed since the "
+            "scenario ran, so the recorded run is not the run you would get "
+            "today. Re-run the scenario, or declare it in "
+            "DECLARED_STALE_ARTIFACTS naming each drifted path and the hash "
+            "you are acknowledging. Staleness is allowed; silence is not."
+        ], drifted
+    if sorted(declared) != drifted:
         return [
             f"{item_id}: stale declaration does not match reality -- "
-            f"declared {sorted(declared)}, actually drifted {drifted}. The "
-            "declared set must name exactly what changed, so it can neither "
-            "pre-declare drift that has not happened nor hide drift that has."
+            f"declared {sorted(declared)}, actually drifted {drifted}. It "
+            "must name exactly what changed, so it can neither pre-declare "
+            "drift that has not happened nor hide drift that has."
+        ], drifted
+    superseded = sorted(
+        path for path, acknowledged in declared.items() if acknowledged != current[path]
+    )
+    if superseded:
+        return [
+            f"{item_id}: stale declaration is itself out of date -- {superseded} "
+            "changed AGAIN since the drift was acknowledged. A declaration "
+            "acknowledges one specific content hash, not a permanent "
+            "exemption for that path; re-run the scenario or acknowledge the "
+            "new hash deliberately."
         ], drifted
     return [], drifted
 
@@ -2006,15 +2079,14 @@ def _commit_metadata_errors(*, item_id: str, label: str, commit_sha: str) -> lis
     merge, so every artifact's commit leaves main's history the moment the
     branch lands, and a rebase orphans them just as thoroughly (which is
     exactly what happened to all 14 artifacts on this branch). A binding
-    that a normal, sanctioned landing breaks is not a binding. Validity now
-    rests on content -- ``script_sha256`` for the scenario and
-    ``runtime_digest`` for the shared fixture surface -- which survives
-    both rebase and squash because it names bytes rather than provenance.
+    that a normal, sanctioned landing breaks is not a binding.
 
     The commit id is still recorded and still checked for SHAPE, so a
     reader can look up what the tree was, and so "HEAD" (which resolves at
-    read time to whatever HEAD is now, and therefore says nothing about
-    what ran) cannot sit where an immutable id belongs.
+    read time to whatever HEAD is now) cannot sit where an immutable id
+    belongs. It is NOT verified to exist: a well-formed id naming no real
+    commit is accepted, because nothing downstream relies on it. Treat it
+    as a pointer someone recorded, not as a checked fact.
     """
 
     if not _CANONICAL_COMMIT_SHA.fullmatch(commit_sha):
@@ -2043,13 +2115,17 @@ _ARTIFACT_JWT_PATTERN = re.compile(
 def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
     """Check one ``proven_e2e`` item's execution artifact is real, current,
     all-passing, and actually bound to this row's claim. See
-    ``acceptance_artifact.py`` for the artifact schema and why the commit
-    check is "is an ancestor of HEAD", not "equals HEAD".
+    ``acceptance_artifact.py`` for the artifact schema and for exactly
+    what these checks do and do not establish.
 
     Codex finding (HIGH, 2026-08-02): before this existed, a ``proven_e2e``
-    row needed no machine-verifiable execution -- an existing evidence file
-    plus ``requires_live_infra=True`` validated clean, including a row that
-    was fabricated and never run. Codex finding (HIGH, 2026-08-02, round 2):
+    row needed no machine-verifiable execution at all -- an existing
+    evidence file plus ``requires_live_infra=True`` validated clean. Note
+    what these checks do and do not establish: they bind a claim to
+    CONTENT that still matches this tree, and they cannot establish that a
+    live run occurred (the artifact is unsigned and the validator
+    recomputes exactly what a forger would). See ``acceptance_artifact``'s
+    module contract. Codex finding (HIGH, 2026-08-02, round 2):
     "an artifact exists and all-passes" still did not bind an artifact to
     the row citing it (an artifact swapped from a different scenario, or one
     whose ``assertions`` list contains non-dict junk that silently sorts out
@@ -2421,6 +2497,34 @@ def validate_manifest(
     """
 
     errors: list[str] = []
+    known_ids = {item.id for item in items}
+    for declared_id, declared_paths in DECLARED_STALE_ARTIFACTS.items():
+        # The declaration table is itself checked, or a typo becomes a
+        # silent no-op that reads like an acknowledged risk.
+        if declared_id not in known_ids:
+            errors.append(
+                f"{declared_id}: declared stale but no manifest item has "
+                "that id -- a stale declaration for a row that does not "
+                "exist acknowledges nothing"
+            )
+        uncovered = sorted(set(declared_paths) - set(RUNTIME_DEPENDENCY_PATHS))
+        if uncovered:
+            errors.append(
+                f"{declared_id}: stale declaration names {uncovered}, which "
+                "are not covered dependencies -- only paths in "
+                "RUNTIME_DEPENDENCY_PATHS can drift"
+            )
+        malformed = sorted(
+            path
+            for path, acknowledged in declared_paths.items()
+            if not isinstance(acknowledged, str)
+            or not _SHA256_HEX.fullmatch(acknowledged)
+        )
+        if malformed:
+            errors.append(
+                f"{declared_id}: stale declaration acknowledges malformed "
+                f"(non-sha256) hashes for {malformed}"
+            )
     seen_ids: set[str] = set()
     for item in items:
         if item.id in seen_ids:
@@ -2651,6 +2755,7 @@ def build_report(
         # can be proven_e2e and stale at once, and collapsing the two would
         # let "proven" quietly mean "proven against a tree that no longer
         # exists". Surfaced in the tally so it is impossible to miss.
+        "proven_e2e_claim_limits": PROVEN_E2E_CLAIM_LIMITS,
         "stale_row_count": len(stale),
         "stale_rows": {
             item_id: sorted(paths) for item_id, paths in sorted(stale.items())

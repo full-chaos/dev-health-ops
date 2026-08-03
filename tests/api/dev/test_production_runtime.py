@@ -20,9 +20,13 @@ from dev_health_ops.api.dev.tool_registry import (
 from dev_health_ops.llm.agent.budget_policy import BUDGET_POLICY_VERSION
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
 from dev_health_ops.llm.agent.policy import AgentProviderCandidate, AgentProviderSource
-from dev_health_ops.llm.agent.readiness import PLATFORM_READINESS_SETTING_KEY
+from dev_health_ops.llm.agent.readiness import (
+    PLATFORM_READINESS_SETTING_KEY,
+    READINESS_SETTING_KEY,
+)
 from dev_health_ops.llm.agent.roles import (
     PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
+    ROLE_CERTIFICATION_SETTING_KEY,
     AgentRole,
 )
 from dev_health_ops.llm.credentials import LLMCredentials
@@ -59,6 +63,7 @@ def _fingerprint(
     organization: str = "",
     project: str = "",
     custom_headers: tuple[tuple[str, str], ...] = (),
+    source: str = "platform",
 ) -> str:
     # CHAOS-3285: mirrors production_runtime._readiness_fingerprint's
     # extended formula. Every fixture in this file that builds a "current"
@@ -81,7 +86,7 @@ def _fingerprint(
     return hashlib.sha256(
         "\0".join(
             (
-                "platform",
+                source,
                 provider,
                 model,
                 base_url,
@@ -496,11 +501,16 @@ async def test_wire_policy_change_invalidates_stored_certification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """End-to-end: a certification stored under today's wire policy must be
-    invalidated -- selection fails closed -- once the policy changes for
-    this model, even though the candidate itself (model/provider/base_url)
-    never changed. Closes the loop codex asked for: fingerprint changes ->
-    stored certification invalidated, not just a digest changing in
-    isolation."""
+    invalidated once the policy changes for this model, even though the
+    candidate itself (model/provider/base_url) never changed. Closes the loop
+    codex asked for: fingerprint changes -> stored certification invalidated,
+    not just a digest changing in isolation.
+
+    CHAOS-3358: for the PLATFORM source that invalidation is now an
+    operator-facing diagnostic rather than a runtime block, so the assertion
+    is on the certification state itself; selection deliberately keeps
+    working. The equivalent BYO invalidation still fails closed -- see
+    test_byo_role_certification_is_still_a_hard_runtime_gate."""
 
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
@@ -532,17 +542,20 @@ async def test_wire_policy_change_invalidates_stored_certification(
         session, org_id="org_01"
     )
     assert resolved.model == "certified-model"
+    assert await _platform_certification_is_current(session) is True
 
     from dev_health_ops.llm.agent import openai_compatible
 
     monkeypatch.setattr(openai_compatible, "supports_temperature", lambda _model: False)
     production_runtime._wire_request_digest.cache_clear()
     try:
-        with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        assert await _platform_certification_is_current(session) is False
+        # Advisory, not a gate: the run still resolves.
+        assert (
             await production_runtime.resolve_production_provider(
                 session, org_id="org_01"
             )
-        assert exc_info.value.code == "provider_not_configured"
+        ).model == "certified-model"
     finally:
         production_runtime._wire_request_digest.cache_clear()
 
@@ -553,12 +566,14 @@ async def test_credential_rotation_invalidates_certification(
 ) -> None:
     """CHAOS-3285 round 5 (Codex HIGH), codex's exact repro: certify
     provider key A, then rotate to key B for the exact same
-    provider/model/base_url -- selection must fail closed until B is
-    re-certified. Before this fix, the certification key never depended on
-    WHICH credential was actually tested, so B's rotation silently
-    inherited A's certification while every real request already carried
-    B's Authorization header, never having demonstrated B can handle the
-    production request shape at all."""
+    provider/model/base_url -- the stored certification must not carry over.
+    Before that fix, the certification key never depended on WHICH credential
+    was actually tested, so B's rotation silently inherited A's certification
+    while every real request already carried B's Authorization header, never
+    having demonstrated B can handle the production request shape at all.
+
+    CHAOS-3358: on the operator-owned PLATFORM source this now reports as a
+    stale certification rather than a hard block."""
 
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
@@ -588,13 +603,12 @@ async def test_credential_rotation_invalidates_certification(
         session, org_id="org_01"
     )
     assert resolved.model == "certified-model"
+    assert await _platform_certification_is_current(session) is True
 
     # Rotate to key B -- same provider/model/base_url, a different
     # credential -- without re-running preflight.
     monkeypatch.setenv("OPENAI_API_KEY", "key-b")
-    with pytest.raises(DevRuntimeUnavailable) as exc_info:
-        await production_runtime.resolve_production_provider(session, org_id="org_01")
-    assert exc_info.value.code == "provider_not_configured"
+    assert await _platform_certification_is_current(session) is False
 
 
 @pytest.mark.asyncio
@@ -603,8 +617,8 @@ async def test_organization_rotation_invalidates_certification(
 ) -> None:
     """Same guard as credential (api_key) rotation, for organization:
     certify under org A, flip OPENAI_ORG_ID to org B for the exact same
-    provider/model/base_url/api_key -- selection must fail closed until B
-    is re-certified."""
+    provider/model/base_url/api_key -- the stored certification must not
+    carry over (CHAOS-3358: advisory on the platform source)."""
 
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
@@ -634,11 +648,10 @@ async def test_organization_rotation_invalidates_certification(
         session, org_id="org_01"
     )
     assert resolved.model == "certified-model"
+    assert await _platform_certification_is_current(session) is True
 
     monkeypatch.setenv("OPENAI_ORG_ID", "org-b")
-    with pytest.raises(DevRuntimeUnavailable) as exc_info:
-        await production_runtime.resolve_production_provider(session, org_id="org_01")
-    assert exc_info.value.code == "provider_not_configured"
+    assert await _platform_certification_is_current(session) is False
 
 
 @pytest.mark.asyncio
@@ -649,7 +662,7 @@ async def test_project_rotation_invalidates_certification(
     another for the exact same provider/model/base_url/api_key must
     invalidate certification -- previously this left the fingerprint
     byte-for-byte identical while the real OpenAI-Project wire header
-    changed."""
+    changed (CHAOS-3358: advisory on the platform source)."""
 
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
@@ -679,11 +692,10 @@ async def test_project_rotation_invalidates_certification(
         session, org_id="org_01"
     )
     assert resolved.model == "certified-model"
+    assert await _platform_certification_is_current(session) is True
 
     monkeypatch.setenv("OPENAI_PROJECT_ID", "project-b")
-    with pytest.raises(DevRuntimeUnavailable) as exc_info:
-        await production_runtime.resolve_production_provider(session, org_id="org_01")
-    assert exc_info.value.code == "provider_not_configured"
+    assert await _platform_certification_is_current(session) is False
 
 
 @pytest.mark.asyncio
@@ -692,7 +704,8 @@ async def test_custom_header_rotation_invalidates_certification(
 ) -> None:
     """Same guard, for custom identity headers: changing
     OPENAI_CUSTOM_HEADERS for the exact same provider/model/base_url/
-    api_key must invalidate certification."""
+    api_key must invalidate certification (CHAOS-3358: advisory on the
+    platform source)."""
 
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
@@ -722,11 +735,10 @@ async def test_custom_header_rotation_invalidates_certification(
         session, org_id="org_01"
     )
     assert resolved.model == "certified-model"
+    assert await _platform_certification_is_current(session) is True
 
     monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "X-Tenant: tenant-b")
-    with pytest.raises(DevRuntimeUnavailable) as exc_info:
-        await production_runtime.resolve_production_provider(session, org_id="org_01")
-    assert exc_info.value.code == "provider_not_configured"
+    assert await _platform_certification_is_current(session) is False
 
 
 def test_credential_fingerprint_never_leaks_the_raw_api_key() -> None:
@@ -793,9 +805,15 @@ def test_credential_fingerprint_has_no_concatenation_ambiguity() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_resolution_requires_current_certification(
+async def test_platform_certification_tracks_the_live_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The platform certification must follow the configuration it was taken
+    against: changing the model, or storing a fingerprint from a different
+    configuration, leaves it non-current. CHAOS-3358 makes that an operator
+    diagnostic rather than a runtime block, so selection keeps working
+    throughout."""
+
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
         production_runtime,
@@ -826,11 +844,13 @@ async def test_provider_resolution_requires_current_certification(
     assert resolved.source is AgentProviderSource.PLATFORM
     assert resolved.family == "openai"
     assert resolved.model == "certified-model"
+    assert await _platform_certification_is_current(session) is True
 
     monkeypatch.setenv("LLM_MODEL", "changed-model")
-    with pytest.raises(DevRuntimeUnavailable) as model_change:
+    assert await _platform_certification_is_current(session) is False
+    assert (
         await production_runtime.resolve_production_provider(session, org_id="org_01")
-    assert model_change.value.code == "provider_not_configured"
+    ).model == "changed-model"
     monkeypatch.setenv("LLM_MODEL", "certified-model")
 
     FakeSettingsService.values[PLATFORM_READINESS_SETTING_KEY] = json.dumps(
@@ -842,13 +862,54 @@ async def test_provider_resolution_requires_current_certification(
             "safe_error_code": None,
         }
     )
-    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+    assert await _platform_certification_is_current(session) is False
+    assert (
         await production_runtime.resolve_production_provider(session, org_id="org_01")
-    assert exc_info.value.code == "provider_not_configured"
+    ).model == "certified-model"
 
 
 @pytest.mark.asyncio
-async def test_echo_only_certification_does_not_restore_live_selection(
+def _byo_settings(*, role_state: str | None) -> dict[str, str]:
+    """A BYO organization whose binary readiness is CURRENT, parameterised on
+    the legacy_agent role certification: absent (``None``) or present with the
+    given state. Platform fallback is switched off so the BYO verdict is the
+    only thing under test."""
+
+    byo_fingerprint = _fingerprint(
+        source="byo",
+        provider="openai",
+        model="gpt-5-mini",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-org",
+    )
+    values = {
+        "provider": "openai",
+        "model": "gpt-5-mini",
+        "api_key": "sk-org",
+        "base_url": "https://api.openai.com/v1",
+        "ask_dev_platform_fallback": "fail_closed",
+        READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": byo_fingerprint,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+    }
+    if role_state is not None:
+        role_key, role_value = _role_certification_setting(
+            key_prefix=ROLE_CERTIFICATION_SETTING_KEY,
+            certification_key=byo_fingerprint,
+            state=role_state,
+        )
+        values[role_key] = role_value
+    return values
+
+
+@pytest.mark.asyncio
+async def test_echo_only_certification_does_not_restore_live_byo_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """CHAOS-3285 (Codex HIGH): the old binary AgentReadinessRecord being
@@ -857,9 +918,70 @@ async def test_echo_only_certification_does_not_restore_live_selection(
     ever runs the old 512-token echo probe (or the new role probe simply
     never having run at all), the binary store would read current, and this
     candidate would become selectable for real traffic having never
-    demonstrated it can handle the production request shape. This is the RED
-    half: binary readiness alone, with NO legacy_agent role certification on
-    record, must fail closed."""
+    demonstrated it can handle the production request shape.
+
+    CHAOS-3358 moved this gate off the operator-owned platform source, so the
+    control now runs where it is still a runtime gate: a customer's BYO
+    endpoint, whose binary readiness is current but which has NO legacy_agent
+    role certification on record, must fail closed."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setattr(
+        production_runtime, "attach_agent_budget_guard", lambda value, **_: value
+    )
+    FakeSettingsService.values = _byo_settings(role_state=None)
+
+    session = cast(Any, object())
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+    # The GREEN half: the same configuration with a compatible legacy_agent
+    # role certification does resolve -- so the block above is the role gate
+    # firing, not the fixture failing to configure BYO at all.
+    FakeSettingsService.values = _byo_settings(role_state="compatible")
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+    assert resolved.source is AgentProviderSource.BYO
+    assert resolved.model == "gpt-5-mini"
+
+
+@pytest.mark.asyncio
+async def test_incompatible_legacy_agent_role_does_not_restore_live_byo_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same gate, with a role record present but INCOMPATIBLE (e.g. the
+    production-sized probe reproduced output exhaustion) rather than absent
+    -- an INCOMPATIBLE verdict must never be silently treated as good
+    enough for live BYO selection either."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setattr(
+        production_runtime, "attach_agent_budget_guard", lambda value, **_: value
+    )
+    FakeSettingsService.values = _byo_settings(role_state="incompatible")
+
+    session = cast(Any, object())
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_platform_role_certification_is_advisory_not_a_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3358: the platform-side counterpart of the two BYO controls
+    above -- binary readiness current, legacy_agent role certification absent
+    -- reports as a stale certification to the operator while the run
+    proceeds."""
 
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
@@ -882,47 +1004,12 @@ async def test_echo_only_certification_does_not_restore_live_selection(
     }
 
     session = cast(Any, object())
-    with pytest.raises(DevRuntimeUnavailable) as exc_info:
-        await production_runtime.resolve_production_provider(session, org_id="org_01")
-    assert exc_info.value.code == "provider_not_configured"
-
-
-@pytest.mark.asyncio
-async def test_incompatible_legacy_agent_role_does_not_restore_live_selection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The same gate, with a role record present but INCOMPATIBLE (e.g. the
-    production-sized probe reproduced output exhaustion) rather than absent
-    -- an INCOMPATIBLE verdict must never be silently treated as good
-    enough for live selection either."""
-
-    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
-    monkeypatch.setattr(
-        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    assert await _platform_certification_is_current(session) is False
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
     )
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
-    monkeypatch.setenv("LLM_MODEL", "certified-model")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    role_key, role_value = _role_certification_setting(
-        certification_key=_fingerprint(), state="incompatible"
-    )
-    FakeSettingsService.values = {
-        PLATFORM_READINESS_SETTING_KEY: json.dumps(
-            {
-                "fingerprint": _fingerprint(),
-                "readiness_version": READINESS_VERSION,
-                "checked_at": "2026-07-29T12:00:00+00:00",
-                "outcome": "ready",
-                "safe_error_code": None,
-            }
-        ),
-        role_key: role_value,
-    }
-
-    session = cast(Any, object())
-    with pytest.raises(DevRuntimeUnavailable) as exc_info:
-        await production_runtime.resolve_production_provider(session, org_id="org_01")
-    assert exc_info.value.code == "provider_not_configured"
+    assert resolved.source is AgentProviderSource.PLATFORM
+    assert resolved.model == "certified-model"
 
 
 @pytest.mark.asyncio
@@ -1304,3 +1391,261 @@ async def test_runtime_construction_failure_closes_provider(
             clickhouse=cast(Any, object()),
         )
     assert provider.closed is True
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3358: the platform provider's stored certification is an operator
+# diagnostic, not a runtime gate.
+#
+# The platform provider is operator-owned and assumed to work. Every
+# READINESS_VERSION bump and every readiness-fingerprint format change
+# invalidates the stored PLATFORM certification by construction, and before
+# this change that invalidation hard-blocked Ask Dev for every organization
+# without BYO ("No certified Ask Dev model is ready.") until a superadmin
+# re-ran platform preflight. The stored record still drives the Platform Admin
+# readiness badge and its "run preflight" copy -- it just no longer decides
+# whether a run may select the platform endpoint. BYO gating is unchanged.
+# ---------------------------------------------------------------------------
+
+
+async def _platform_certification_is_current(session: Any) -> bool:
+    """The operator-facing diagnostic on its own: is the stored platform
+    certification still current for today's fingerprint?
+
+    This is what the Platform Admin badge reports. Since CHAOS-3358 it is no
+    longer the same question as "may a run use the platform provider", so the
+    invalidation tests below assert it directly instead of inferring it from a
+    runtime block that no longer happens.
+    """
+
+    readiness = await production_runtime._platform_readiness_store(session).load()
+    role_profile = await production_runtime._platform_role_store(session).load()
+    candidate, _ = production_runtime._platform_candidate(
+        readiness=readiness, role_profile=role_profile
+    )
+    assert candidate is not None
+    # The whole point of CHAOS-3358: a stale certification never costs the
+    # candidate its usability.
+    assert candidate.usable is True
+    return candidate.readiness_current
+
+
+def _certified_platform_settings(fingerprint: str) -> dict[str, str]:
+    role_key, role_value = _role_certification_setting(certification_key=fingerprint)
+    return {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": fingerprint,
+                "readiness_version": READINESS_VERSION,
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        ),
+        role_key: role_value,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stale_platform_certification_does_not_block_an_org_without_byo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3358 primary control: a platform certification stored under an
+    older fingerprint/readiness version -- exactly what every READINESS_VERSION
+    bump produces -- must not hard-block an organization that has no BYO
+    configuration."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = {
+        PLATFORM_READINESS_SETTING_KEY: json.dumps(
+            {
+                "fingerprint": "fingerprint-from-the-previous-readiness-version",
+                "readiness_version": "ask-dev-readiness.v0",
+                "checked_at": "2026-07-29T12:00:00+00:00",
+                "outcome": "ready",
+                "safe_error_code": None,
+            }
+        )
+    }
+    session = cast(Any, object())
+
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+
+    assert resolved.source is AgentProviderSource.PLATFORM
+    assert resolved.family == "openai"
+    assert resolved.model == "certified-model"
+    # The operator diagnostic still reads "stale" -- the badge and the "run
+    # preflight" copy are unchanged; only the runtime block is gone.
+    assert await _platform_certification_is_current(session) is False
+
+
+@pytest.mark.asyncio
+async def test_absent_platform_certification_does_not_block_an_org_without_byo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same control for a platform provider that was never certified at
+    all (fresh deploy, or the readiness slot cleared): still selectable."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = {}
+    session = cast(Any, object())
+
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+
+    assert resolved.source is AgentProviderSource.PLATFORM
+    assert resolved.model == "certified-model"
+    assert await _platform_certification_is_current(session) is False
+
+
+@pytest.mark.asyncio
+async def test_stale_platform_certification_still_serves_the_byo_fallback_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An org WITH BYO whose own certification is stale, under the default
+    platform-fallback policy, lands on the platform provider rather than
+    hard-blocking -- the platform's own stale certification is irrelevant."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setattr(
+        production_runtime, "attach_agent_budget_guard", lambda value, **_: value
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = {
+        # BYO is configured but has no certification on record.
+        "provider": "openai",
+        "model": "gpt-5-mini",
+        "api_key": "sk-org",
+        "base_url": "https://api.openai.com/v1",
+        "ask_dev_platform_fallback": "platform",
+    }
+    session = cast(Any, object())
+
+    resolved = await production_runtime.resolve_production_provider(
+        session, org_id="org_01"
+    )
+
+    assert resolved.source is AgentProviderSource.PLATFORM
+    assert resolved.model == "certified-model"
+
+
+@pytest.mark.asyncio
+async def test_byo_certification_is_still_a_hard_runtime_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative control: BYO gating is unchanged. An uncertified BYO
+    configuration under an explicit fail-closed policy still blocks, and it
+    blocks even though the PLATFORM candidate beside it is fully certified --
+    so the block is demonstrably BYO's, not a side effect of platform state."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = {
+        **_certified_platform_settings(_fingerprint()),
+        "provider": "openai",
+        "model": "gpt-5-mini",
+        "api_key": "sk-org",
+        "base_url": "https://api.openai.com/v1",
+        "ask_dev_platform_fallback": "fail_closed",
+    }
+    session = cast(Any, object())
+
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_platform_without_operator_credentials_is_still_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative control -- the gate that remains, observed failing: dropping
+    the readiness conjunct must not admit a platform provider that has no
+    operator credentials at all."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    for name in (
+        "OPENAI_API_KEY",
+        "LLM_API_KEY",
+        "OPENAI_BASE_URL",
+        "LLM_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    FakeSettingsService.values = {}
+    session = cast(Any, object())
+
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_operator_none_provider_is_still_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative control: the operator's explicit "no LLM" switch still
+    disables Ask Dev outright."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "none")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = {}
+    session = cast(Any, object())
+
+    with pytest.raises(DevRuntimeUnavailable) as exc_info:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert exc_info.value.code == "provider_not_configured"
+
+
+def test_acceptance_candidate_still_fails_closed_without_current_readiness() -> None:
+    """Negative control: the deterministic acceptance stack's pre-admitted
+    endpoint keeps its strict readiness requirement -- it exists to fail
+    closed, and CHAOS-3358 must not relax it via the shared base class."""
+
+    def acceptance(*, readiness_current: bool) -> Any:
+        return production_runtime._AcceptanceOpenAICandidate(
+            provider="openai",
+            model=production_runtime.ACCEPTANCE_OPENAI_MODEL,
+            credentials=LLMCredentials(
+                api_key="acceptance-key", base_url="http://127.0.0.1:8001/v1"
+            ),
+            source=AgentProviderSource.PLATFORM,
+            readiness_current=readiness_current,
+        )
+
+    assert acceptance(readiness_current=False).usable is False
+    assert acceptance(readiness_current=True).usable is True

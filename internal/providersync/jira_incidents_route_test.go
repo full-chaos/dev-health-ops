@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -225,7 +226,18 @@ func TestJiraIncidentsRouteRejectsDisabledEntitlementBeforeProviderFetch(t *test
 	}
 }
 
-func TestJiraIncidentsRouteRechecksRevokedEntitlementBeforePersistenceHandoff(t *testing.T) {
+type recordingJiraIncidentBatchPreparer struct {
+	prepared int
+}
+
+func (writer *recordingJiraIncidentBatchPreparer) PrepareBatch(
+	context.Context, string, ...driver.PrepareBatchOption,
+) (driver.Batch, error) {
+	writer.prepared++
+	return nil, errors.New("ClickHouse batch preparation must not run")
+}
+
+func TestJiraIncidentsRouteRechecksRevokedEntitlementAtClickHouseWrite(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("jira", "incidents")
 	claim.SourceExternalID = "JSM"
@@ -244,9 +256,10 @@ func TestJiraIncidentsRouteRechecksRevokedEntitlementBeforePersistenceHandoff(t 
 		t.Fatal(err)
 	}
 	checks := 0
+	revoked := false
 	entitlement := jiraIncidentEntitlementFunc(func(context.Context, string) error {
 		checks++
-		if checks > 1 {
+		if revoked {
 			return ErrJiraIncidentEntitlementDisabled
 		}
 		return nil
@@ -255,8 +268,17 @@ func TestJiraIncidentsRouteRechecksRevokedEntitlementBeforePersistenceHandoff(t 
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
-	if !errors.Is(err, ErrJiraIncidentEntitlementDisabled) || checks != 2 ||
-		len(batch.Effects) != 0 || batch.Watermark != nil {
-		t.Fatalf("entitlement checks=%d batch=%+v err=%v", checks, batch, err)
+	if err != nil || checks != 1 || len(batch.Effects) != 1 || batch.Watermark == nil {
+		t.Fatalf("collect checks=%d batch=%+v err=%v", checks, batch, err)
+	}
+	revoked = true
+	writer := &recordingJiraIncidentBatchPreparer{}
+	err = (JiraIncidentClickHouseEffects{
+		Writer:      writer,
+		Lease:       providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		Entitlement: entitlement,
+	}).WriteEffect(context.Background(), claim, batch.Effects[0])
+	if !errors.Is(err, ErrJiraIncidentEntitlementDisabled) || checks != 2 || writer.prepared != 0 {
+		t.Fatalf("write checks=%d prepared=%d err=%v", checks, writer.prepared, err)
 	}
 }

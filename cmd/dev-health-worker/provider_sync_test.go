@@ -443,7 +443,8 @@ func TestBuildProviderSyncHandlerConstructsGitHubCommitStatsCapability(t *testin
 }
 
 func TestBuildProviderSyncHandlerConstructsJiraIncidentsCapability(t *testing.T) {
-	entitlement := providerSyncEntitlementFunc(func(context.Context, string) error { return nil })
+	entitlementFunc := providerSyncEntitlementFunc(func(context.Context, string) error { return nil })
+	entitlement := &entitlementFunc
 	handler, _ := buildProviderSyncHandler(
 		nil, providersync.CompleteRouteSwitches{JiraIncidents: true},
 		nil, nil, nil, nil, entitlement, nil, slog.Default(),
@@ -459,11 +460,19 @@ func TestBuildProviderSyncHandlerConstructsJiraIncidentsCapability(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := executor.Handler.(providersync.JiraIncidentRouteHandler); !ok {
+	route, ok := executor.Handler.(providersync.JiraIncidentRouteHandler)
+	if !ok {
 		t.Fatalf("executor handler=%T", executor.Handler)
 	}
-	if _, ok := executor.Committer.Sink.(providersync.JiraIncidentClickHouseEffects); !ok {
+	sink, ok := executor.Committer.Sink.(providersync.JiraIncidentClickHouseEffects)
+	if !ok {
 		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+	if route.Entitlement != entitlement || sink.Entitlement != entitlement {
+		t.Fatal("Jira route and writer do not share the constructed entitlement")
+	}
+	if _, ok := executor.Committer.Readback.(providersync.JiraIncidentClickHouseReadback); !ok {
+		t.Fatalf("executor readback=%T", executor.Committer.Readback)
 	}
 }
 

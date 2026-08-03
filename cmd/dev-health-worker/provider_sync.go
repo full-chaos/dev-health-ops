@@ -287,12 +287,16 @@ func buildProviderSyncHandler(
 						errWorkerDependencyUnavailable
 				}
 				jiraSink := providersync.JiraIncidentClickHouseEffects{
+					Writer: clickhouseConnection, Lease: session,
+					Entitlement: jiraIncidentEntitlement,
+				}
+				jiraReadback := providersync.JiraIncidentClickHouseReadback{
 					Conn: clickhouseConnection, Lease: session,
 				}
 				routeHandler = providersync.JiraIncidentRouteHandler{
 					Entitlement: jiraIncidentEntitlement,
 				}
-				sink, readback = jiraSink, jiraSink
+				sink, readback = jiraSink, jiraReadback
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already

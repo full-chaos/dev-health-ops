@@ -31,7 +31,14 @@ CREATE TABLE operational_incidents (
 ) ENGINE = ReplacingMergeTree(source_revision) ORDER BY (org_id, id)`
 
 func TestJiraIncidentReadbackIsExactAndTenantScoped(t *testing.T) {
-	ctx, sink := newJiraIncidentIntegrationSink(t)
+	ctx, sink, readback := newJiraIncidentIntegrationSink(t)
+	revoked := false
+	sink.Entitlement = jiraIncidentEntitlementFunc(func(context.Context, string) error {
+		if revoked {
+			return ErrJiraIncidentEntitlementDisabled
+		}
+		return nil
+	})
 	claim := nativeTestClaim("jira", "incidents")
 	claim.SourceExternalID = "JSM"
 	row := jiraIncidentReadbackFixture(t)
@@ -46,20 +53,23 @@ func TestJiraIncidentReadbackIsExactAndTenantScoped(t *testing.T) {
 	if err := sink.WriteEffect(ctx, otherClaim, jiraIncidentEffect(t, otherRow)); err != nil {
 		t.Fatal(err)
 	}
-	inspection, err := sink.InspectEffect(ctx, claim, jiraIncidentEffect(t, row))
+	inspection, err := readback.InspectEffect(ctx, claim, jiraIncidentEffect(t, row))
 	if err != nil || inspection != EffectAbsent {
 		t.Fatalf("foreign-only inspection=%s error=%v", inspection, err)
 	}
 	if err := sink.WriteEffect(ctx, claim, jiraIncidentEffect(t, row)); err != nil {
 		t.Fatal(err)
 	}
-	inspection, err = sink.InspectEffect(ctx, claim, jiraIncidentEffect(t, row))
+	revoked = true
+	inspection, err = readback.InspectEffect(ctx, claim, jiraIncidentEffect(t, row))
 	if err != nil || inspection != EffectExact {
 		t.Fatalf("inspection=%s error=%v", inspection, err)
 	}
 }
 
-func newJiraIncidentIntegrationSink(t *testing.T) (context.Context, JiraIncidentClickHouseEffects) {
+func newJiraIncidentIntegrationSink(
+	t *testing.T,
+) (context.Context, JiraIncidentClickHouseEffects, JiraIncidentClickHouseReadback) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
@@ -82,10 +92,10 @@ func newJiraIncidentIntegrationSink(t *testing.T) (context.Context, JiraIncident
 	if err := conn.Exec(ctx, jiraIncidentsDDL); err != nil {
 		t.Fatal(err)
 	}
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	return ctx, JiraIncidentClickHouseEffects{
-		Conn:  conn,
-		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
-	}
+		Writer: conn, Lease: lease, Entitlement: allowJiraIncidentEntitlement,
+	}, JiraIncidentClickHouseReadback{Conn: conn, Lease: lease}
 }
 
 func jiraIncidentEffect(t *testing.T, row jiraIncidentRow) EffectBatch {

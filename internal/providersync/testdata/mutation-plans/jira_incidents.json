@@ -46,11 +46,11 @@
     },
     {
       "id": "entitlement-recheck-before-write",
-      "file": "internal/providersync/jira_incidents_route.go",
-      "find": "\twriteAuthorizationErr := handler.Entitlement.Require(ctx, claim.OrgID)\n\tif writeAuthorizationErr != nil {\n\t\treturn CompleteRouteBatch{}, writeAuthorizationErr\n\t}",
-      "replace": "\twriteAuthorizationErr := handler.Entitlement.Require(ctx, claim.OrgID)\n\tif writeAuthorizationErr != nil && false {\n\t\treturn CompleteRouteBatch{}, writeAuthorizationErr\n\t}",
-      "rationale": "an entitlement revoked during provider traversal must fail before the collected batch is handed to persistence",
-      "proof": [["go", "test", "-run", "^TestJiraIncidentsRouteRechecksRevokedEntitlementBeforePersistenceHandoff$", "./internal/providersync/"]]
+      "file": "internal/providersync/jira_incidents_effects_clickhouse.go",
+      "find": "\tif err := sink.Entitlement.Require(ctx, claim.OrgID); err != nil {\n\t\treturn err\n\t}",
+      "replace": "\tif err := sink.Entitlement.Require(ctx, claim.OrgID); err != nil && false {\n\t\treturn err\n\t}",
+      "rationale": "an entitlement revoked after collection and ledger preparation must fail before ClickHouse batch preparation",
+      "proof": [["go", "test", "-run", "^TestJiraIncidentsRouteRechecksRevokedEntitlementAtClickHouseWrite$", "./internal/providersync/"]]
     },
     {
       "id": "entitlement-policy-org-override",
@@ -68,6 +68,15 @@
       "rationale": "a route-ready Jira incidents worker cannot be constructed without an entitlement dependency",
       "build": ["go", "test", "-run", "^$", "./cmd/dev-health-worker/"],
       "proof": [["go", "test", "-run", "^TestBuildProviderSyncHandlerRejectsJiraIncidentsWithoutEntitlement$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "worker-wires-write-entitlement",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "\t\t\t\tjiraSink := providersync.JiraIncidentClickHouseEffects{\n\t\t\t\t\tWriter: clickhouseConnection, Lease: session,\n\t\t\t\t\tEntitlement: jiraIncidentEntitlement,",
+      "replace": "\t\t\t\tjiraSink := providersync.JiraIncidentClickHouseEffects{\n\t\t\t\t\tWriter: clickhouseConnection, Lease: session,\n\t\t\t\t\tEntitlement: nil,",
+      "rationale": "the Jira collector and ClickHouse writer must share the same entitlement dependency while recovery readback remains separate",
+      "build": ["go", "test", "-run", "^$", "./cmd/dev-health-worker/"],
+      "proof": [["go", "test", "-run", "^TestBuildProviderSyncHandlerConstructsJiraIncidentsCapability$", "./cmd/dev-health-worker/"]]
     },
     {
       "id": "readback-whole-row-content",

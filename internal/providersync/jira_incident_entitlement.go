@@ -18,12 +18,11 @@ var ErrJiraIncidentEntitlementDisabled = errors.New(
 	"canonical Jira incident ingestion entitlement is disabled",
 )
 
-// JiraIncidentEntitlement is checked twice for one Jira incident occurrence:
-// before provider fetch and immediately after collection before the batch is
-// handed to persistence. This deliberately mirrors Python's
-// _require_jira_incident_entitlement calls on both sides of
-// JsmIncidentProducer.collect so a revoked entitlement cannot be bypassed by a
-// long-running fetch.
+// A fresh Jira incident write checks JiraIncidentEntitlement before provider
+// fetch and again at the ClickHouse write boundary. This deliberately mirrors
+// Python's _require_jira_incident_entitlement calls on both sides of
+// JsmIncidentProducer.collect while also covering Go effect-ledger work between
+// collection and persistence.
 type JiraIncidentEntitlement interface {
 	Require(context.Context, string) error
 }

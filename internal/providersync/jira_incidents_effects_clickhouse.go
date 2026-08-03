@@ -13,8 +13,23 @@ import (
 const jiraIncidentColumns = "org_id,provider,provider_instance_id,source_entity_type,external_id,source_version_at,source_revision,source_conflict_key,ingest_revision,ordering_contract,id,source_id,source_url,source_event_at,source_event_id,observed_at,last_synced,raw_status,raw_severity,raw_priority,normalized_status,normalized_severity,normalized_priority,relationship_provenance,relationship_confidence,service_id,service_external_id,escalation_policy_id,title,description,started_at,resolved_at,is_deleted,deleted_at"
 
 type JiraIncidentClickHouseEffects struct {
+	Writer      jiraIncidentBatchPreparer
+	Lease       providerfoundation.LeaseGuard
+	Entitlement JiraIncidentEntitlement
+}
+
+// JiraIncidentClickHouseReadback deliberately has no entitlement dependency.
+// Recovery must remain able to classify a write that was authorized when it
+// began even if the organization entitlement is revoked before a retry.
+type JiraIncidentClickHouseReadback struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
+}
+
+type jiraIncidentBatchPreparer interface {
+	PrepareBatch(
+		context.Context, string, ...driver.PrepareBatchOption,
+	) (driver.Batch, error)
 }
 
 func (sink JiraIncidentClickHouseEffects) WriteEffect(
@@ -30,13 +45,16 @@ func (sink JiraIncidentClickHouseEffects) WriteEffect(
 	if err := validateJiraIncidentScope(claim, rows); err != nil {
 		return err
 	}
+	// Preserve Python's second entitlement check at the actual persistence
+	// boundary. Provider collection and effect-ledger preparation can take long
+	// enough for an earlier grant to be revoked.
+	if err := sink.Entitlement.Require(ctx, claim.OrgID); err != nil {
+		return err
+	}
 	if len(rows) == 0 {
 		return nil
 	}
-	if sink.Conn == nil {
-		return ErrInvalidConfiguration
-	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_incidents ("+jiraIncidentColumns+")")
+	batch, err := sink.Writer.PrepareBatch(ctx, "INSERT INTO operational_incidents ("+jiraIncidentColumns+")")
 	if err != nil {
 		return err
 	}
@@ -52,10 +70,10 @@ func (sink JiraIncidentClickHouseEffects) WriteEffect(
 	return batch.Send()
 }
 
-func (sink JiraIncidentClickHouseEffects) InspectEffect(
+func (readback JiraIncidentClickHouseReadback) InspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
-	if err := sink.validateRequest(ctx, claim, effect); err != nil {
+	if err := readback.validateRequest(ctx, claim, effect); err != nil {
 		return EffectConflict, err
 	}
 	expected, err := decodeEffectRows[jiraIncidentRow](effect)
@@ -68,12 +86,12 @@ func (sink JiraIncidentClickHouseEffects) InspectEffect(
 	if len(expected) == 0 {
 		return EffectAbsent, nil
 	}
-	if sink.Conn == nil {
+	if readback.Conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
 	exact, absent := 0, 0
 	for _, row := range expected {
-		inspection, err := sink.inspectIncident(ctx, row)
+		inspection, err := readback.inspectIncident(ctx, row)
 		if err != nil {
 			return EffectConflict, err
 		}
@@ -100,10 +118,22 @@ func (sink JiraIncidentClickHouseEffects) validateRequest(
 ) error {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
 		claim.Provider != "jira" || claim.Dataset != "incidents" ||
-		effect.Destination != "operational_incidents" {
+		effect.Destination != "operational_incidents" || sink.Writer == nil ||
+		sink.Entitlement == nil {
 		return ErrInvalidConfiguration
 	}
 	return sink.Lease.Assert(ctx)
+}
+
+func (readback JiraIncidentClickHouseReadback) validateRequest(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) error {
+	if ctx == nil || readback.Lease == nil || claim.Validate() != nil ||
+		claim.Provider != "jira" || claim.Dataset != "incidents" ||
+		effect.Destination != "operational_incidents" {
+		return ErrInvalidConfiguration
+	}
+	return readback.Lease.Assert(ctx)
 }
 
 func validateJiraIncidentScope(claim Claim, rows []jiraIncidentRow) error {
@@ -145,10 +175,10 @@ func jiraIncidentValues(row jiraIncidentRow) []any {
 	}
 }
 
-func (sink JiraIncidentClickHouseEffects) inspectIncident(
+func (readback JiraIncidentClickHouseReadback) inspectIncident(
 	ctx context.Context, expected jiraIncidentRow,
 ) (EffectInspection, error) {
-	rows, err := sink.Conn.Query(
+	rows, err := readback.Conn.Query(
 		ctx, "SELECT "+jiraIncidentColumns+" FROM operational_incidents FINAL WHERE org_id = ? AND id = ? LIMIT 1",
 		expected.OrgID, expected.ID,
 	)
@@ -210,4 +240,4 @@ func compareJiraIncidentVersion(
 }
 
 var _ EffectSink = JiraIncidentClickHouseEffects{}
-var _ EffectReadback = JiraIncidentClickHouseEffects{}
+var _ EffectReadback = JiraIncidentClickHouseReadback{}

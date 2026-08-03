@@ -194,13 +194,6 @@ func (handler JiraIncidentRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	// Mirror Python's second check after provider collection and immediately
-	// before handing the batch to the persistence pipeline. A grant may be
-	// revoked while Jira pagination is in flight.
-	writeAuthorizationErr := handler.Entitlement.Require(ctx, claim.OrgID)
-	if writeAuthorizationErr != nil {
-		return CompleteRouteBatch{}, writeAuthorizationErr
-	}
 	watermark := claim.BeforeAt.UTC()
 	return CompleteRouteBatch{
 		Effects:   []EffectBatch{effect},

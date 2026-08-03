@@ -7,15 +7,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from internal.providersync.testdata import oracle_registry
+from internal.providersync.testdata.python_oracle_loader import load_live_module
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
-sys.path.insert(0, str(REPO_ROOT / "src"))
-
-from dev_health_ops.licensing import feature_policy  # noqa: E402
-from dev_health_ops.licensing.types import LicenseTier  # noqa: E402
-
 _SOURCE = REPO_ROOT / "src/dev_health_ops/licensing/feature_policy.py"
 _EVALUATED_AT = datetime(2026, 7, 23, 12, 30, tzinfo=timezone.utc)
+feature_policy = load_live_module(_SOURCE)
+LicenseTier = sys.modules["dev_health_ops.licensing.types"].LicenseTier
 
 
 def _reflected_fields() -> frozenset[str]:

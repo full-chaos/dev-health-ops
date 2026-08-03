@@ -258,6 +258,71 @@ func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
 		assertMaterializerOutboxCount(t, ctx, pool, materializerDispatchMissing, "dispatch_sync_run", 1)
 		assertMaterializerOutboxCount(t, ctx, pool, materializerExpiredClaim, "dispatch_sync_run", 0)
 	})
+
+	t.Run("scheduled graph waits for committed occurrence readiness", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 23, 23, 0, 0, 0, time.UTC)
+		seedRun(t, ctx, pool, materializerDispatchMissing, "planned", now.Add(-time.Hour))
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-000000004401",
+			materializerDispatchMissing, "planned", nil, now.Add(-time.Hour))
+		if _, err := pool.Exec(ctx, `UPDATE public.sync_runs SET triggered_by='schedule' WHERE id=$1`, materializerDispatchMissing); err != nil {
+			t.Fatal(err)
+		}
+
+		result, err := materializer.Step(ctx, now, now.Add(-15*time.Minute), 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 0 || result.Finalize != 0 {
+			t.Fatalf("unready scheduled graph materialized a wakeup: %#v", result)
+		}
+		assertMaterializerOutboxCount(t, ctx, pool, materializerDispatchMissing, "dispatch_sync_run", 0)
+
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO public.scheduled_sync_occurrences
+				(occurrence_id,sync_run_id,job_run_id,reconcile_status)
+			VALUES ('ready-occurrence',$1,'00000000-0000-4000-8000-000000004499','completed')`, materializerDispatchMissing); err != nil {
+			t.Fatal(err)
+		}
+		result, err = materializer.Step(ctx, now, now.Add(-15*time.Minute), 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 1 {
+			t.Fatalf("ready scheduled graph did not materialize exactly one dispatch: %#v", result)
+		}
+		assertMaterializerOutboxCount(t, ctx, pool, materializerDispatchMissing, "dispatch_sync_run", 1)
+	})
+
+	t.Run("scheduled zero-unit graph cannot finalize before readiness", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 0, 0, 0, 0, time.UTC)
+		seedRun(t, ctx, pool, materializerFinalize, "planned", now.Add(-time.Hour))
+		if _, err := pool.Exec(ctx, `UPDATE public.sync_runs SET triggered_by='schedule' WHERE id=$1`, materializerFinalize); err != nil {
+			t.Fatal(err)
+		}
+		result, err := materializer.Step(ctx, now, now.Add(-15*time.Minute), 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Finalize != 0 {
+			t.Fatalf("unready zero-unit scheduled graph finalized: %#v", result)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO public.scheduled_sync_occurrences
+				(occurrence_id,sync_run_id,job_run_id,reconcile_status)
+			VALUES ('ready-zero-occurrence',$1,'00000000-0000-4000-8000-000000004498','completed')`, materializerFinalize); err != nil {
+			t.Fatal(err)
+		}
+		result, err = materializer.Step(ctx, now, now.Add(-15*time.Minute), 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Finalize != 1 {
+			t.Fatalf("ready zero-unit scheduled graph finalize count=%d, want 1", result.Finalize)
+		}
+		assertMaterializerOutboxCount(t, ctx, pool, materializerFinalize, "finalize_sync_run", 1)
+	})
 }
 
 func createMaterializerIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
@@ -266,8 +331,15 @@ func createMaterializerIntegrationFixture(ctx context.Context, pool *pgxpool.Poo
 		`CREATE TABLE public.sync_runs (
 			id uuid PRIMARY KEY,
 			org_id text NOT NULL,
+			triggered_by text NOT NULL DEFAULT 'manual',
 			status text NOT NULL,
 			created_at timestamptz NOT NULL
+		)`,
+		`CREATE TABLE public.scheduled_sync_occurrences (
+			occurrence_id text PRIMARY KEY,
+			sync_run_id uuid,
+			job_run_id uuid,
+			reconcile_status text NOT NULL
 		)`,
 		`CREATE TABLE public.sync_run_units (
 			id uuid PRIMARY KEY,
@@ -341,6 +413,7 @@ func resetMaterializerIntegrationTables(t *testing.T, ctx context.Context, pool 
 	for _, statement := range []string{
 		"TRUNCATE public.materializer_failures",
 		"TRUNCATE public.sync_dispatch_outbox",
+		"TRUNCATE public.scheduled_sync_occurrences",
 		"TRUNCATE public.sync_run_post_dispatches",
 		"TRUNCATE public.sync_run_reference_discoveries",
 		"TRUNCATE public.sync_run_units",

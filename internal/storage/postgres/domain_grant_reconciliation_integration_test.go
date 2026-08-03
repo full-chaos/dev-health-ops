@@ -261,7 +261,10 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
+		`CREATE TABLE public.integration_credentials (
+			id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL,
+			is_active boolean NOT NULL, config json, credentials_encrypted text
+		)`,
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
 		// Carries the columns syncroute's real route-mutation statements name,
 		// so a privilege denial cannot be mistaken for an undefined column
@@ -332,7 +335,11 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		)`,
 		`CREATE TABLE public.org_licenses (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), org_id uuid NOT NULL UNIQUE,
-			tier text NOT NULL, features_override json
+			tier text NOT NULL, features_override json, limits_override json
+		)`,
+		`CREATE TABLE public.tier_limits (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tier text NOT NULL,
+			limit_key text NOT NULL, limit_value text
 		)`,
 		"CREATE TABLE public.dev_conversations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.dev_conversation_tombstones (id uuid PRIMARY KEY)",
@@ -340,6 +347,11 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
+		`CREATE TABLE public.job_runs (
+			id uuid PRIMARY KEY, job_id uuid NOT NULL, status integer NOT NULL,
+			result json, triggered_by text NOT NULL, completed_at timestamptz,error text,
+			created_at timestamptz NOT NULL
+		)`,
 	} {
 		setup = append(setup, ddl)
 	}

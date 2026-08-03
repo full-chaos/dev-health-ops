@@ -95,6 +95,9 @@ _module(
     get_watermark_with_overlap=lambda *_args: None,
 )
 planner = _load("dev_health_ops.sync.planner", SOURCE / "sync/planner.py")
+trigger_routing = _load(
+    "dev_health_ops.sync.trigger_routing", SOURCE / "sync/trigger_routing.py"
+)
 
 
 def _instant(value: str | None) -> datetime | None:
@@ -151,6 +154,37 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
         triggered_by="schedule",
         before=_instant(case.get("before")),
     )
+    route = case.get("route")
+    if route is not None:
+        route = dict(route)
+        config = SimpleNamespace(
+            id="00000000-0000-4000-8000-000000009001",
+            integration_id=case["integration_id"],
+            org_id=case["org_id"],
+            provider=case["provider"],
+            source_id=route.get("source_id"),
+            sync_targets=list(route.get("sync_targets") or []),
+            sync_options={},
+            planner_managed=False,
+        )
+        routed = trigger_routing.plan_request_for_config(
+            config, triggered_by="schedule", mode=str(case["mode"])
+        )
+        if routed is None:
+            raise RuntimeError(f"routing case {case['id']} produced no request")
+        request = routed
+        if routed.source_ids is not None:
+            allowed_sources = set(routed.source_ids)
+            sources = [
+                source for source in sources if str(source.id) in allowed_sources
+            ]
+        if routed.dataset_keys is not None:
+            allowed_datasets = set(routed.dataset_keys)
+            plan_datasets = [
+                dataset
+                for dataset in plan_datasets
+                if str(dataset.dataset_key) in allowed_datasets
+            ]
     units = planner._build_planned_units(
         session=object(),
         request=request,

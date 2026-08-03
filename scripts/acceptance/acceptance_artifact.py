@@ -103,9 +103,27 @@ class AssertionResult:
 #: What is in this tuple: the recorder that writes artifacts, the API client
 #: and fixture preparation, the launcher that decides the fixture shape
 #: (seed, repo count, window), the scripted OpenAI-compatible provider that
-#: stands in for the model, and the Compose definitions that build the
-#: stack. Change any of these and a recorded run is no longer the run you
-#: would get today.
+#: stands in for the model, the Compose definitions that build the stack,
+#: and the image build inputs Compose feeds them (``docker/Dockerfile``,
+#: ``pyproject.toml``, ``requirements.txt`` -- codex finding, HIGH,
+#: 2026-08-03: the API image is BUILT from that Dockerfile, so leaving it
+#: out meant a changed base image or dependency pin moved the runtime while
+#: the digest sat still). Change any of these and a recorded run is no
+#: longer the run you would get today.
+#:
+#: WHAT THIS DIGEST DOES AND DOES NOT PROVE. It proves CURRENCY: the inputs
+#: that determined a recorded run still match this tree, so a stale claim is
+#: detectable. It does NOT prove OCCURRENCE -- that the run happened at all
+#: -- and it is NOT tamper-resistance. The validator recomputes the digest
+#: from the same tree it is checking, so anyone hand-writing an artifact can
+#: compute the identical value; the artifact is unsigned JSON. What carries
+#: occurrence is the recorded per-assertion results plus the policy of
+#: re-running scenarios. A second, narrower gap is recorded in CHAOS-3351:
+#: this digest is sampled on the HOST after the scenario finishes, while
+#: Compose built the containers earlier, so it cannot prove the containers
+#: ran this code. ``ScenarioRecorder`` narrows that window by digesting at
+#: scenario start and refusing to write if the tree moved mid-run; closing
+#: it properly needs the built image digest.
 #:
 #: What is deliberately NOT in it, and why. Product code under ``src`` is
 #: excluded (apart from the fixture provider, which is a stand-in, not the
@@ -120,6 +138,9 @@ class AssertionResult:
 #: other thirteen.
 RUNTIME_DEPENDENCY_PATHS: tuple[str, ...] = (
     "compose.yml",
+    "docker/Dockerfile",
+    "pyproject.toml",
+    "requirements.txt",
     "scripts/acceptance/acceptance_artifact.py",
     "scripts/acceptance/prepare_ask_dev_acceptance.py",
     "scripts/acceptance/run_ask_dev_compose.sh",
@@ -267,6 +288,14 @@ class ScenarioRecorder:
     script_path: Path
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     assertions: list[AssertionResult] = field(default_factory=list)
+    #: Digest of the fixture surface as it was when this scenario STARTED.
+    #: Codex finding (HIGH, 2026-08-03): sampling only at write time meant a
+    #: covered file edited mid-run produced an artifact whose digest matched
+    #: the tree while the containers had run the older code. Capturing at
+    #: start and re-checking at write turns that silent mismatch into a
+    #: refusal. It does not close the build-vs-start window (Compose built
+    #: the images before this object existed) -- that is CHAOS-3351.
+    started_digest: str | None = field(default=None)
 
     def check(self, name: str, condition: bool, detail: str) -> None:
         redacted_detail = redact_secrets(detail)
@@ -276,11 +305,33 @@ class ScenarioRecorder:
         if not condition:
             raise AcceptanceFailure(f"{name}: {redacted_detail}")
 
+    def capture_runtime_digest(self, root: Path) -> str:
+        """Record the fixture surface as of scenario start, once."""
+
+        if self.started_digest is None:
+            self.started_digest = runtime_dependency_digest(root)
+        return self.started_digest
+
     def write(self, artifact_path: Path, *, error: str | None = None) -> dict[str, Any]:
         finished_at = datetime.now(UTC)
         root = _repo_root(self.script_path)
         commit_sha = _git_head_sha(self.script_path)
         script_sha256 = hashlib.sha256(self.script_path.read_bytes()).hexdigest()
+        # A scenario that never captured a start digest is treated as having
+        # started now: the scripts call check() long before write(), so the
+        # realistic drift window is start-to-write, and defaulting here keeps
+        # a caller that forgot the explicit capture honest rather than
+        # silently unbound.
+        started_digest = self.capture_runtime_digest(root)
+        finished_digest = runtime_dependency_digest(root)
+        if started_digest != finished_digest:
+            raise AcceptanceFailure(
+                "the fixture surface changed while this scenario was running "
+                f"(start {started_digest[:12]}, end {finished_digest[:12]}) -- "
+                "the containers ran one version and the tree now holds "
+                "another, so no artifact written here could describe what "
+                "actually executed. Re-run against a settled tree."
+            )
         status_porcelain = _git_status_porcelain(self.script_path, root=root)
         tree_clean = status_porcelain == ""
         tree_digest = hashlib.sha256(status_porcelain.encode("utf-8")).hexdigest()
@@ -294,7 +345,7 @@ class ScenarioRecorder:
             "tree_digest": tree_digest,
             "script": str(self.script_path.resolve().relative_to(root)),
             "script_sha256": script_sha256,
-            "runtime_digest": runtime_dependency_digest(root),
+            "runtime_digest": started_digest,
             "commit_sha": commit_sha,
             "command": f"{Path(sys.executable).name} {self.script_path.name}",
             "started_at": self.started_at.isoformat(),

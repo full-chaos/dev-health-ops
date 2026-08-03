@@ -108,8 +108,9 @@ class ManifestItem:
     #: row that was never actually run. Every ``proven_e2e`` item must now
     #: set this; ``validate_manifest`` checks the artifact exists, parses,
     #: reports every assertion passing, and was generated from a commit that
-    #: is an ancestor of (or equal to) current HEAD -- see
-    #: ``acceptance_artifact.py`` for why ancestry, not equality.
+    #: still matches this tree by content (``script_sha256`` plus the
+    #: shared-fixture ``runtime_digest``) -- see ``acceptance_artifact.py``
+    #: for why content, not commit ancestry.
     execution_artifact: str | None = None
     #: Exact assertion names (``acceptance_artifact.AssertionResult.name``)
     #: that must appear in ``execution_artifact`` with ``passed: true``.
@@ -462,7 +463,7 @@ def _core_defect_reproductions() -> tuple[ManifestItem, ...]:
             # is now redundant with, and superseded by, the machine-checked
             # execution_artifact above: see validate_execution_artifact for
             # what it actually verifies (artifact exists and parses, every
-            # recorded assertion passed, the recorded commit is an ancestor
+            # recorded assertion passed, the recorded content digests match
             # of current HEAD, and the recorded script bytes still match).
         ),
         ManifestItem(
@@ -1874,16 +1875,6 @@ def _git_command(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _history_is_truncated(root: Path) -> bool:
-    """True when ``root``'s object store cannot answer reachability questions
-    about older commits -- a shallow clone, or not a usable git repo at all."""
-
-    result = _git_command(root, "rev-parse", "--is-shallow-repository")
-    if result.returncode != 0:
-        return True
-    return result.stdout.strip() == "true"
-
-
 #: A full, canonical git object id. Codex finding (HIGH, 2026-08-03): the
 #: ancestry check passed ``commit_sha`` straight to ``git merge-base``,
 #: which happily accepts any revision expression -- so an artifact
@@ -1929,48 +1920,34 @@ def _runtime_digest_errors(
     return []
 
 
-def _ancestry_binding_errors(
-    root: Path, *, item_id: str, label: str, commit_sha: str
-) -> list[str]:
-    """Bind an artifact's recorded ``commit_sha`` to the current HEAD.
+def _commit_metadata_errors(*, item_id: str, label: str, commit_sha: str) -> list[str]:
+    """Validate the recorded commit id as METADATA, not as a binding.
 
-    ``git merge-base --is-ancestor`` exits 1 for "genuinely unreachable" but
-    128 for "I have never heard of that object", and a shallow checkout
-    produces 128 for a perfectly real commit whose history was simply not
-    fetched -- the two are indistinguishable from the exit status alone.
-    Both remain FAILURES (this check never degrades to a skip: an unmeasured
-    ancestry binding is not a satisfied one), but a truncated checkout gets
-    its own message so the fix is "fetch the history", not "hunt a
-    fabrication that isn't there". CI must therefore check out with full
-    history (``actions/checkout`` ``fetch-depth: 0``); see
-    ``.github/workflows/test.yml``.
+    Ancestry (``git merge-base --is-ancestor``) used to gate validity here.
+    It was removed on 2026-08-03: this repository lands PRs by squash
+    merge, so every artifact's commit leaves main's history the moment the
+    branch lands, and a rebase orphans them just as thoroughly (which is
+    exactly what happened to all 14 artifacts on this branch). A binding
+    that a normal, sanctioned landing breaks is not a binding. Validity now
+    rests on content -- ``script_sha256`` for the scenario and
+    ``runtime_digest`` for the shared fixture surface -- which survives
+    both rebase and squash because it names bytes rather than provenance.
+
+    The commit id is still recorded and still checked for SHAPE, so a
+    reader can look up what the tree was, and so "HEAD" (which resolves at
+    read time to whatever HEAD is now, and therefore says nothing about
+    what ran) cannot sit where an immutable id belongs.
     """
 
     if not _CANONICAL_COMMIT_SHA.fullmatch(commit_sha):
         return [
             f"{item_id}: {label}'s commit_sha {commit_sha!r} is not a "
             "canonical 40-character hexadecimal commit id. A symbolic ref, "
-            "tag, abbreviation, or revision expression resolves at "
-            "validation time instead of naming the immutable commit that "
-            "actually ran, so it can never bind an artifact to anything."
+            "tag, abbreviation, or revision expression resolves at read "
+            "time rather than naming the commit the scenario ran against, "
+            "so it is not usable even as metadata."
         ]
-
-    check = _git_command(root, "merge-base", "--is-ancestor", commit_sha, "HEAD")
-    if check.returncode == 0:
-        return []
-    if _history_is_truncated(root):
-        return [
-            f"{item_id}: {label}'s commit {commit_sha} could not be checked "
-            "against HEAD because this checkout's git history is truncated "
-            "(shallow clone) -- the ancestry binding was NOT measured, which "
-            "is a failure, never a pass. Check out with full history "
-            "(actions/checkout fetch-depth: 0) and re-run."
-        ]
-    return [
-        f"{item_id}: {label}'s commit {commit_sha} is not an ancestor of (or "
-        "equal to) current HEAD -- fabricated, from an unrelated branch, or "
-        "history was rewritten"
-    ]
+    return []
 
 
 #: Same JWT-shaped pattern acceptance_artifact.redact_secrets guards against
@@ -2138,8 +2115,7 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
         errors.append(f"{item.id}: execution artifact has no commit_sha recorded")
     else:
         errors.extend(
-            _ancestry_binding_errors(
-                root,
+            _commit_metadata_errors(
                 item_id=item.id,
                 label="execution artifact",
                 commit_sha=commit_sha,
@@ -2304,8 +2280,7 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
         )
     else:
         errors.extend(
-            _ancestry_binding_errors(
-                root,
+            _commit_metadata_errors(
                 item_id=item.id,
                 label="blocked_execution_artifact",
                 commit_sha=commit_sha,
@@ -2361,7 +2336,7 @@ def validate_manifest(
     thing actually executed must agree); a ``proven_e2e`` item's execution
     artifact (see :func:`validate_execution_artifact`) missing, unparseable,
     reporting anything other than every assertion passing, generated from a
-    commit that is not an ancestor of current HEAD, or citing a script whose
+    artifact whose recorded content digests no longer match this tree, or citing a script whose
     bytes have changed since.
 
     This function is deliberately fast and offline -- it does NOT run any

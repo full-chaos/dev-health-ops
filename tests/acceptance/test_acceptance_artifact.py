@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -53,18 +54,69 @@ def _init_throwaway_git_repo(root: Path) -> None:
 # changed fixture provider left every artifact validating clean ---
 
 
+#: An INDEPENDENT literal restatement of the covered set. Codex finding
+#: (MED, 2026-08-03): the checks below used to iterate
+#: RUNTIME_DEPENDENCY_PATHS itself, so deleting an entry removed it from
+#: both the setup and the assertions and every test stayed green -- a test
+#: self-oracling against the very list it exists to protect. Written out
+#: here by hand, so dropping a path from the production tuple fails.
+_EXPECTED_RUNTIME_DEPENDENCIES = (
+    "compose.yml",
+    "docker/Dockerfile",
+    "pyproject.toml",
+    "requirements.txt",
+    "scripts/acceptance/acceptance_artifact.py",
+    "scripts/acceptance/prepare_ask_dev_acceptance.py",
+    "scripts/acceptance/run_ask_dev_compose.sh",
+    "src/dev_health_ops/llm/agent/scripted_openai_service.py",
+    "tests/acceptance/compose.ask-dev-provider-profile.yml",
+    "tests/acceptance/compose.ask-dev.yml",
+)
+
+
+def test_the_covered_dependency_set_matches_its_independent_inventory() -> None:
+    """Deleting a path from RUNTIME_DEPENDENCY_PATHS must fail here. This
+    is deliberately a second, hand-maintained copy: a check derived from
+    the thing it checks cannot detect that thing shrinking."""
+
+    assert tuple(RUNTIME_DEPENDENCY_PATHS) == _EXPECTED_RUNTIME_DEPENDENCIES
+
+
 def test_every_runtime_dependency_path_exists_in_this_repo() -> None:
     """The digest is only worth what it covers. A path that has been moved
     or renamed must fail here, loudly, rather than quietly dropping out of
     the covered set the next time someone reorganizes the harness."""
 
-    assert RUNTIME_DEPENDENCY_PATHS
+    assert _EXPECTED_RUNTIME_DEPENDENCIES
     missing = [
         relative
-        for relative in RUNTIME_DEPENDENCY_PATHS
+        for relative in _EXPECTED_RUNTIME_DEPENDENCIES
         if not (_REPO_ROOT / relative).is_file()
     ]
     assert not missing, f"runtime dependency paths no longer exist: {missing}"
+
+
+def test_dropping_a_dependency_from_the_set_changes_the_digest(
+    tmp_path: Path,
+) -> None:
+    """The mutation the inventory test exists to catch, proven directly:
+    a digest computed over a SHORTER set must differ from the real one, so
+    silently narrowing coverage cannot produce a matching digest."""
+
+    for relative in _EXPECTED_RUNTIME_DEPENDENCIES:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("original\n")
+    full = runtime_dependency_digest(tmp_path)
+    narrowed = hashlib.sha256()
+    for relative in _EXPECTED_RUNTIME_DEPENDENCIES[:-1]:
+        narrowed.update(relative.encode("utf-8"))
+        narrowed.update(b"\0")
+        narrowed.update(
+            hashlib.sha256((tmp_path / relative).read_bytes()).hexdigest().encode()
+        )
+        narrowed.update(b"\0")
+    assert full != narrowed.hexdigest()
 
 
 def test_runtime_digest_changes_when_a_covered_dependency_changes(
@@ -74,9 +126,9 @@ def test_runtime_digest_changes_when_a_covered_dependency_changes(
     covered file must produce a different digest. Asserted per path, so a
     dependency silently dropped from the hashed set fails here."""
 
-    for relative in RUNTIME_DEPENDENCY_PATHS:
+    for relative in _EXPECTED_RUNTIME_DEPENDENCIES:
         root = tmp_path / relative.replace("/", "_")
-        for candidate in RUNTIME_DEPENDENCY_PATHS:
+        for candidate in _EXPECTED_RUNTIME_DEPENDENCIES:
             path = root / candidate
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("original\n")
@@ -108,6 +160,46 @@ def test_runtime_digest_refuses_to_cover_less_than_it_claims(tmp_path: Path) -> 
     with pytest.raises(AcceptanceFailure) as excinfo:
         runtime_dependency_digest(tmp_path)
     assert RUNTIME_DEPENDENCY_PATHS[0] in str(excinfo.value)
+
+
+def test_write_refuses_when_the_fixture_surface_moved_mid_run(
+    tmp_path: Path,
+) -> None:
+    """codex finding (HIGH, 2026-08-03): sampling the digest only at write
+    time meant a covered file edited WHILE the scenario ran produced an
+    artifact whose digest matched the tree, though the containers had run
+    the older code. The recorder must refuse rather than record that."""
+
+    _init_throwaway_git_repo(tmp_path)
+    script_path = tmp_path / "smoke_throwaway.py"
+    script_path.write_text("# throwaway\n")
+    recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
+    recorder.capture_runtime_digest(tmp_path)
+    # The provider changes underneath a scenario that is already running.
+    (tmp_path / "src/dev_health_ops/llm/agent/scripted_openai_service.py").write_text(
+        "# edited while the scenario was still running\n"
+    )
+    with pytest.raises(AcceptanceFailure) as excinfo:
+        recorder.write(tmp_path / "artifacts" / "throwaway.json")
+    assert "changed while this scenario was running" in str(excinfo.value)
+
+
+def test_write_records_the_start_digest_not_a_later_one(tmp_path: Path) -> None:
+    """The control: when nothing moves, the recorded digest is the one
+    captured at start and equals the tree's own."""
+
+    _init_throwaway_git_repo(tmp_path)
+    script_path = tmp_path / "smoke_throwaway.py"
+    script_path.write_text("# throwaway\n")
+    subprocess.run(["git", "add", "smoke_throwaway.py"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add script"], cwd=tmp_path, check=True
+    )
+    recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
+    started = recorder.capture_runtime_digest(tmp_path)
+    artifact = recorder.write(tmp_path / "artifacts" / "throwaway.json")
+    assert artifact["runtime_digest"] == started
+    assert artifact["runtime_digest"] == runtime_dependency_digest(tmp_path)
 
 
 # --- redact_secrets: codex finding (HIGH, 2026-08-02) -- the primary fix ---

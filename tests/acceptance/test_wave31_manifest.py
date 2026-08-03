@@ -739,78 +739,6 @@ def test_validate_execution_artifact_rejects_a_failing_assertion(
     assert any("status is 'failed'" in error for error in errors)
 
 
-def test_validate_execution_artifact_rejects_a_commit_not_reachable_from_head(
-    tmp_path: Path,
-) -> None:
-    """A fabricated or copied artifact citing a commit SHA that never led to
-    the current tree -- e.g. a hex string that simply doesn't exist."""
-
-    _init_throwaway_git_repo(tmp_path)
-    artifact_path = _write_valid_artifact(
-        tmp_path,
-        scenario_id="bad_commit",
-        script_relative="smoke_bad_commit.py",
-        commit_sha="0" * 40,
-    )
-    item = _proven_e2e_item(
-        execution_artifact=str(artifact_path.relative_to(tmp_path)),
-        evidence="smoke_bad_commit.py",
-    )
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("is not an ancestor of" in error for error in errors)
-    # ...and it is reported as a fabrication, not misattributed to a
-    # truncated checkout: this repo has its full history.
-    assert not any("truncated" in error for error in errors)
-
-
-def test_validate_execution_artifact_fails_loudly_in_a_truncated_checkout(
-    tmp_path: Path,
-) -> None:
-    """CI checks out at depth 1 by default, so the object for a genuine
-    ancestor commit is simply absent and ``merge-base --is-ancestor`` exits
-    128 -- indistinguishable from a fabricated SHA by exit status alone.
-    An unmeasured ancestry binding must FAIL (never skip, never pass), and
-    must say so plainly enough that the fix is "fetch the history"."""
-
-    origin = tmp_path / "origin"
-    origin.mkdir()
-    older_commit = _init_throwaway_git_repo(origin)
-    (origin / "later.txt").write_text("y")
-    subprocess.run(["git", "add", "later.txt"], cwd=origin, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "later"], cwd=origin, check=True)
-
-    shallow = tmp_path / "shallow"
-    subprocess.run(
-        ["git", "clone", "-q", "--depth", "1", origin.as_uri(), str(shallow)],
-        check=True,
-    )
-    # The premise of the test, asserted rather than assumed: this checkout
-    # genuinely cannot see the commit the artifact was recorded against.
-    assert (
-        subprocess.run(
-            ["git", "cat-file", "-e", f"{older_commit}^{{commit}}"],
-            cwd=shallow,
-            capture_output=True,
-        ).returncode
-        != 0
-    )
-
-    artifact_path = _write_valid_artifact(
-        shallow,
-        scenario_id="truncated",
-        script_relative="smoke_truncated.py",
-        commit_sha=older_commit,
-    )
-    item = _proven_e2e_item(
-        execution_artifact=str(artifact_path.relative_to(shallow)),
-        evidence="smoke_truncated.py",
-    )
-    errors = validate_execution_artifact(shallow, item)
-    assert errors, "an unmeasurable ancestry binding must never validate clean"
-    assert any("git history is truncated" in error for error in errors)
-    assert any("fetch-depth: 0" in error for error in errors)
-
-
 @pytest.mark.parametrize(
     "commit_ish",
     ["HEAD", "HEAD^{commit}", "HEAD~0", "main", "v1.0.0", "e395de5", ""],
@@ -818,11 +746,12 @@ def test_validate_execution_artifact_fails_loudly_in_a_truncated_checkout(
 def test_validate_execution_artifact_rejects_a_non_immutable_commit_ish(
     tmp_path: Path, commit_ish: str
 ) -> None:
-    """codex finding (HIGH, 2026-08-03): commit_sha went straight to
-    `git merge-base`, which accepts any revision expression -- so an
-    artifact recording the literal "HEAD" resolved at VALIDATION time and
-    validated clean no matter what it had actually run against. Every
-    mutable or abbreviated spelling must be rejected before git sees it."""
+    """The commit id is metadata now, not a binding, but it still has to be
+    an immutable one. codex finding (HIGH, 2026-08-03): it went straight to
+    `git merge-base`, which accepts any revision expression, so an artifact
+    recording the literal "HEAD" resolved at read time to whatever HEAD is
+    now and said nothing about what ran. Every mutable or abbreviated
+    spelling is rejected."""
 
     _init_throwaway_git_repo(tmp_path)
     artifact_path = _write_valid_artifact(
@@ -926,33 +855,6 @@ def test_validate_execution_artifact_still_accepts_a_real_full_sha(
         evidence="smoke_real_sha.py",
     )
     assert validate_execution_artifact(tmp_path, item) == []
-
-
-def test_a_fabricated_commit_still_fails_in_a_truncated_checkout(
-    tmp_path: Path,
-) -> None:
-    """The security property survives the fix: naming the shallow case does
-    not give a fabricated SHA anywhere to hide -- it fails there too."""
-
-    origin = tmp_path / "origin"
-    origin.mkdir()
-    _init_throwaway_git_repo(origin)
-    shallow = tmp_path / "shallow"
-    subprocess.run(
-        ["git", "clone", "-q", "--depth", "1", origin.as_uri(), str(shallow)],
-        check=True,
-    )
-    artifact_path = _write_valid_artifact(
-        shallow,
-        scenario_id="fabricated_shallow",
-        script_relative="smoke_fabricated_shallow.py",
-        commit_sha="0" * 40,
-    )
-    item = _proven_e2e_item(
-        execution_artifact=str(artifact_path.relative_to(shallow)),
-        evidence="smoke_fabricated_shallow.py",
-    )
-    assert validate_execution_artifact(shallow, item) != []
 
 
 def test_validate_execution_artifact_rejects_a_script_edited_since_it_ran(

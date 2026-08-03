@@ -28,13 +28,11 @@ jobs:
         with:
           filters: |
             code:
-              # This workflow itself is a proof-gate prerequisite: the
-              # manifest's ancestry binding is only measurable because the
-              # checkout below asks for full history. Without this pattern a
-              # PR that changed ONLY this file (deleting `fetch-depth: 0`,
-              # say) set code=false, skipped both test jobs, and the required
-              # `test` aggregator counted the skip as a pass -- the gate
-              # could be disabled through a green required check.
+              # This workflow decides whether the proof gate runs at all.
+              # Without this pattern a PR that changed ONLY this file set
+              # code=false, skipped both test jobs, and the required `test`
+              # aggregator counted the skip as a pass -- the gate could be
+              # disabled through a green required check.
               - '.github/workflows/**'
               - 'src/**'
               - 'tests/**'
@@ -95,15 +93,7 @@ jobs:
           --health-cmd "clickhouse-client --user ch --password ch --query 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
-      # Full history, not the default depth-1 clone: the CHAOS-3300 proof
-      # manifest binds every execution artifact to the commit it ran against
-      # with `git merge-base --is-ancestor`, and a shallow checkout has no
-      # object for that commit, so the binding cannot be measured (and the
-      # check fails loudly rather than skipping — see
-      # scripts/acceptance/wave31_manifest.py::_ancestry_binding_errors).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -215,12 +205,7 @@ jobs:
           --health-cmd "clickhouse-client --user ch --password ch --query 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
-      # Full history for the same reason as test-matrix above: the proof
-      # manifest's artifact-to-commit ancestry binding is unmeasurable in a
-      # shallow checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

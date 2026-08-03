@@ -1262,15 +1262,19 @@ async def test_an_unserializable_terminal_error_rewrite_is_never_silent(
     assert getattr(records[0], "rejected_code")
 
     after = _counter_value(exception_type="ValidationError")
-    if after == after:  # False only for the no-op-counter build (NaN)
-        assert after == before + 1
+    assert after == before + 1
 
 
 def _counter_value(**labels: str) -> float:
     labelled = ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(**labels)
     value = getattr(labelled, "_value", None)
     if value is None:
-        return float("nan")
+        # prometheus_client is a declared test dependency; an unobservable
+        # counter means this test is not measuring anything.
+        pytest.fail(
+            "ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL is the no-op build; the "
+            "counter assertion cannot run in this environment"
+        )
     return float(value.get())
 
 

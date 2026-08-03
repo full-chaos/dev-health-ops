@@ -18,12 +18,24 @@ import (
 )
 
 // marshalRepositoryJSON matches the canonical Python ClickHouse repository
-// encoder: compact separators, UTF-8 preserved, and no HTML-only escaping.
+// encoder: sorted keys, compact separators, UTF-8 preserved, and no HTML-only
+// escaping. The marshal/decode step deliberately turns structs into maps so
+// the final encoder applies the same key ordering as Python's sort_keys=True.
 func marshalRepositoryJSON(value any) ([]byte, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var canonical any
+	if err := decoder.Decode(&canonical); err != nil {
+		return nil, err
+	}
 	var encoded bytes.Buffer
 	encoder := json.NewEncoder(&encoded)
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
+	if err := encoder.Encode(canonical); err != nil {
 		return nil, err
 	}
 	return bytes.TrimSuffix(encoded.Bytes(), []byte{'\n'}), nil
@@ -44,10 +56,8 @@ type repositoryRow struct {
 	LastSynced time.Time `json:"last_synced"`
 }
 
-// repositorySettings preserves the Python insertion order of the settings
-// document. Python writes a dict literal, and dict order is preserved by
-// json.dumps, so an alphabetically sorted Go map would not round-trip
-// byte-identically.
+// repositorySettings defines the GitHub repository settings fields. The
+// shared encoder canonicalizes their persisted order across runtimes.
 type repositorySettings struct {
 	Source            string `json:"source"`
 	GitHubInstanceURL string `json:"github_instance_url"`

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 import pytest
@@ -402,21 +403,28 @@ def _assert_least_privilege_domain_grants(domain_script: str) -> None:
     # scripts back in contradiction with domain readiness.
     expected_read_only_tables = {
         "integrations",
-        "integration_sources",
-        "integration_datasets",
         "integration_credentials",
-        "sync_runs",
         "sync_dispatch_transport_routes",
     }
-    configured_read_only_tables = {
-        line.strip().removeprefix("('").removesuffix("'),").removesuffix("')")
-        for line in domain_script.splitlines()
-        if line.strip().startswith("('")
-    }
+    configured_read_only_tables = _tables_for_formatted_grant(
+        domain_script, "GRANT SELECT ON TABLE public.%I TO %I"
+    )
     assert configured_read_only_tables == expected_read_only_tables
+    # These tables are mutable domain state, so they deliberately live in the
+    # separate read/write grant rather than the read-only VALUES list above.
+    expected_read_write_tables = {
+        "integration_sources",
+        "integration_datasets",
+        "sync_runs",
+        "sync_run_units",
+    }
+    configured_read_write_tables = _tables_for_formatted_grant(
+        domain_script, "GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I"
+    )
+    assert configured_read_write_tables == expected_read_write_tables
     for grant in (
         "GRANT SELECT ON TABLE public.%I TO %I",
-        "GRANT SELECT, UPDATE ON TABLE public.sync_run_units",
+        "GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I",
         "GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks",
         "GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox",
         "GRANT SELECT, INSERT ON TABLE public.worker_job_outbox",
@@ -428,6 +436,42 @@ def _assert_least_privilege_domain_grants(domain_script: str) -> None:
         "DELETE ON TABLE",
     ):
         assert forbidden not in domain_script
+
+
+def _tables_for_formatted_grant(domain_script: str, grant: str) -> set[str]:
+    pattern = re.compile(
+        rf"SELECT\s+format\(\s*'{re.escape(grant)}'.*?"
+        r"FROM\s+\((.*?)\)\s+AS\s+required\(table_name\)",
+        re.DOTALL,
+    )
+    matches = pattern.findall(domain_script)
+    assert len(matches) == 1, f"expected exactly one VALUES block for {grant!r}"
+    return set(re.findall(r"\('([^']+)'\)", matches[0]))
+
+
+@pytest.mark.parametrize(
+    "script_path",
+    (
+        _REPO_ROOT / "docker" / "init-extra-dbs.sh",
+        _REPO_ROOT / "scripts" / "worker" / "provision_river_roles.sql",
+    ),
+)
+def test_least_privilege_domain_grants_reject_swapped_privilege_blocks(
+    script_path: Path,
+) -> None:
+    domain_script = script_path.read_text(encoding="utf-8").split(
+        "-- The queue role", maxsplit=1
+    )[0]
+    read_only_grant = "GRANT SELECT ON TABLE public.%I TO %I"
+    read_write_grant = "GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I"
+    inverted = (
+        domain_script.replace(read_only_grant, "__READ_ONLY_GRANT__")
+        .replace(read_write_grant, read_only_grant)
+        .replace("__READ_ONLY_GRANT__", read_write_grant)
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_least_privilege_domain_grants(inverted)
 
 
 def test_legacy_compose_disables_ambient_migrations() -> None:

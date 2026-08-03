@@ -465,12 +465,12 @@
       "notes": "transport-routes.json kind finalize_sync_run, route=celery"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_reconciler.py:77",
+      "id": "celery_task:src/dev_health_ops/workers/sync_reconciler.py:78",
       "surface": "prune_rate_limit_observations",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 77
+        "line": 78
       },
       "queue_or_cadence": "sync",
       "dispatches": "self (Beat)",
@@ -489,12 +489,12 @@
       "notes": "Beat entry prune-rate-limit-observations, crontab(5,0) UTC"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_reconciler.py:124",
+      "id": "celery_task:src/dev_health_ops/workers/sync_reconciler.py:125",
       "surface": "reconcile_sync_dispatch",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 124
+        "line": 125
       },
       "queue_or_cadence": "sync",
       "dispatches": "self (Beat)",
@@ -2361,12 +2361,12 @@
       "notes": "grep-evading form"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:843",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:859",
       "surface": "getattr(run_sync_reference_discovery,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 843
+        "line": 859
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_sync_reference_discovery",
@@ -2385,12 +2385,12 @@
       "notes": "grep-evading form; reconciler repair redrive"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:861",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:877",
       "surface": "getattr(dispatch_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 861
+        "line": 877
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_sync_run",
@@ -2409,12 +2409,12 @@
       "notes": "grep-evading form; reconciler repair redrive"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:869",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:885",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 869
+        "line": 885
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",

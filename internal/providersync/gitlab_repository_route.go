@@ -10,9 +10,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// gitLabRepositorySettings preserves the insertion order of the Python
-// process_gitlab_project settings dict. ClickHouse stores this document as a
-// JSON string, so stable order also keeps effect digests stable across retry.
+// gitLabRepositorySettings defines the GitLab repository settings fields. The
+// shared encoder canonicalizes their persisted order across runtimes.
 type gitLabRepositorySettings struct {
 	Source            string  `json:"source"`
 	ProjectID         int64   `json:"project_id"`

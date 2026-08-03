@@ -443,13 +443,22 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 		t.Fatalf("domain role cannot UPDATE sync-dispatch outbox state: %v", err)
 	}
 	for _, statement := range []string{
+		"INSERT INTO public.integration_sources (id) VALUES ('00000000-0000-0000-0000-000000000010')",
+		"INSERT INTO public.integration_datasets (id) VALUES ('00000000-0000-0000-0000-000000000011')",
+		"INSERT INTO public.sync_runs (id) VALUES ('00000000-0000-0000-0000-000000000012')",
+		"INSERT INTO public.sync_run_units (id, state) VALUES ('00000000-0000-0000-0000-000000000013', 'planned')",
+	} {
+		if _, err := domainPool.Exec(ctx, statement); err != nil {
+			t.Fatalf("domain materializer privilege for %q: %v", statement, err)
+		}
+	}
+	for _, statement := range []string{
 		"SELECT count(*) FROM public.domain_runtime_probe",
 		"INSERT INTO public.domain_runtime_probe (value) VALUES ('forbidden')",
 		"UPDATE public.domain_runtime_probe SET value='forbidden'",
 		"DELETE FROM public.domain_runtime_probe",
 		"SELECT nextval('public.domain_runtime_probe_id_seq')",
 		"INSERT INTO public.integrations (id) VALUES ('00000000-0000-0000-0000-000000000010')",
-		"INSERT INTO public.sync_run_units (id, state) VALUES ('00000000-0000-0000-0000-000000000011', 'forbidden')",
 		"DELETE FROM public.sync_run_units",
 		"DELETE FROM public.sync_watermarks",
 		"DELETE FROM public.sync_dispatch_outbox",

@@ -79,6 +79,7 @@ from .persistence.service import (
     DevRateLimitExceeded,
     TranscriptRecord,
 )
+from .platform_auto_certification import schedule_platform_recertification
 from .production_runtime import (
     build_production_runtime,
     expand_production_evidence,
@@ -1247,6 +1248,24 @@ async def create_message(
             SettingsService(service.session, user.org_id)
         )
         provider_source = runtime.provider_source if runtime is not None else None
+        # CHAOS-3358: heal a stale platform certification automatically, so an
+        # operator never has to press the preflight button to recover from a
+        # READINESS_VERSION bump or a fingerprint-format change.
+        #
+        # This is the ONLY place that triggers it, and deliberately so. It sits
+        # after _require_ask_dev (entitlement AND emergency-disable both
+        # checked) and behind provider_source == "platform", so a run that
+        # selected BYO, a disabled or non-entitled organization, and the
+        # capabilities projection -- which resolves a provider before any Ask
+        # Dev authorization runs -- can never spend operator provider calls.
+        # Codex CHAOS-3358 review CONFIRMED that reachable path when this was
+        # scheduled from provider resolution instead.
+        if (
+            runtime is not None
+            and provider_source == "platform"
+            and runtime.platform_certification_stale
+        ):
+            schedule_platform_recertification()
         accepted = await service.append_user_message_and_run(
             org_id=org_id,
             user_id=user_id,

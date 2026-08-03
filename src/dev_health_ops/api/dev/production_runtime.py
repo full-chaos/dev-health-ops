@@ -118,7 +118,6 @@ from .native_team_workload import ClickHouseTeamWorkloadSource
 from .operational_deficiency_service import OperationalDeficiencyService
 from .orchestrator import DevRunLimits
 from .org_policy import load_ask_dev_org_policy
-from .platform_auto_certification import schedule_platform_recertification
 from .project_health_service import ProjectHealthService
 from .prompts import LEGACY_PROMPT_VERSION, PROMPT_VERSION
 from .question_interpreter import QuestionInterpreter
@@ -198,6 +197,15 @@ class ProductionProviderResolution:
     provider_label: str
     model_label: str
     readiness_fingerprint: str = ""
+    #: CHAOS-3358. True when the SELECTED provider is the platform one and its
+    #: stored certification is not current. Deliberately a fact, not a side
+    #: effect: resolution runs on unauthenticated-adjacent read paths (the
+    #: capabilities projection resolves a provider before Ask Dev entitlement
+    #: or emergency-disable is checked), and automatic re-certification spends
+    #: real operator provider calls. Only an authorized run that actually
+    #: selected the platform provider acts on this -- see the dev router's
+    #: message path. Codex CHAOS-3358 review, CONFIRMED reachable.
+    platform_certification_stale: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,15 +322,6 @@ async def resolve_production_provider(
         byo_role_profile=byo_role_profile,
         platform_role_profile=platform_role_profile,
     )
-    # CHAOS-3358: a stale platform record no longer blocks this run, so
-    # nothing else would ever notice it had gone stale -- the operator badge
-    # would sit on "stale, run preflight" until a human pressed the button.
-    # Heal it instead. Scheduling is non-blocking, single-flight and
-    # throttled; see platform_auto_certification. Gated on ``usable`` so a
-    # platform provider that is not configured at all (no credentials,
-    # uncertified family, operator "none") never triggers a pointless probe.
-    if platform is not None and platform.usable and not platform.readiness_current:
-        schedule_platform_recertification()
     return _resolve_provider_selection(
         byo=byo,
         platform=platform,
@@ -686,6 +685,19 @@ def _resolve_provider_selection(
         provider_label="OpenAI compatible",
         model_label=selected.model.replace("\r", "").replace("\n", "")[:256],
         readiness_fingerprint=_readiness_fingerprint(selected),
+        # The source check is redundant TODAY and deliberately kept: a BYO
+        # candidate is only ever selectable while readiness_current is true
+        # (AgentProviderCandidate.usable still requires it for BYO, and
+        # selection only returns candidates that are usable), so dropping it
+        # is currently an equivalent mutation -- no reachable input
+        # distinguishes the two. It is written explicitly anyway so this flag
+        # does not silently start meaning something else if BYO's own gate
+        # ever changes. Stated rather than claimed as covered: no test kills
+        # that mutant, because none can.
+        platform_certification_stale=(
+            selected.source is AgentProviderSource.PLATFORM
+            and not selected.readiness_current
+        ),
     )
 
 
@@ -2318,6 +2330,7 @@ async def _assemble_production_runtime(
         registry=registry,
         scope_resolver=scope_resolver,
         versions=versions,
+        platform_certification_stale=provider.platform_certification_stale,
         preflight=preflight,
         # CHAOS-3297 stack #3: the combined ten-plan lookup -- orchestrator.py's
         # own plan_registry.get(intent.intent_id) is intent-generic and needs

@@ -114,6 +114,9 @@ class DevApiContext:
 
 class FakeBoundedRuntime:
     provider_source = "platform"
+    # CHAOS-3358: BoundedDevRuntime carries this, so this double must too --
+    # the router's automatic-recertification trigger reads it on every run.
+    platform_certification_stale = False
 
     async def run(
         self,
@@ -2063,3 +2066,183 @@ async def test_org_policy_disables_both_surfaces_and_owns_retention(dev_api_cont
     )
     assert created.status_code == 201
     assert created.json()["retention_days"] == 0
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3358: automatic platform re-certification is triggered from exactly
+# one place -- an authorized Ask Dev run that actually selected the platform
+# provider.
+#
+# Codex CHAOS-3358 review, CONFIRMED reachable: when this was scheduled from
+# provider resolution instead, GET /api/v1/dev/capabilities reached it before
+# Ask Dev entitlement or emergency-disable was ever checked, so any
+# authenticated user -- including one from a disabled organization -- could
+# initiate up to six unmetered operator-paid provider calls from a read-only
+# request, and a run that ultimately selected BYO could too. These are the
+# negative controls for that, plus the positive one that keeps the healing
+# working.
+# ---------------------------------------------------------------------------
+
+
+class _StalePlatformRuntime(FakeBoundedRuntime):
+    provider_source = "platform"
+    platform_certification_stale = True
+
+
+class _StaleButByoRuntime(FakeBoundedRuntime):
+    """A BYO-selected run. The platform record may well be stale, but this
+    organization is not using the platform provider and must never spend the
+    operator's provider calls."""
+
+    provider_source = "byo"
+    platform_certification_stale = False
+
+
+class _CurrentPlatformRuntime(FakeBoundedRuntime):
+    provider_source = "platform"
+    platform_certification_stale = False
+
+
+def _capture_scheduling(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    scheduled: list[int] = []
+    monkeypatch.setattr(
+        dev_router_module,
+        "schedule_platform_recertification",
+        lambda: scheduled.append(1),
+    )
+    return scheduled
+
+
+async def _new_conversation(context: Any) -> str:
+    created = await context.client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(context.org_id)},
+    )
+    assert created.status_code == 201
+    return created.json()["conversation_id"]
+
+
+async def _post_one_message(
+    context: Any, runtime: Any, conversation_id: str | None = None
+) -> Any:
+    context.app.dependency_overrides[dev_router_module.get_dev_execution_runtime] = (
+        lambda: dev_router_module.DevExecutionRuntimeResolution(
+            runtime=cast(Any, runtime)
+        )
+    )
+    if conversation_id is None:
+        conversation_id = await _new_conversation(context)
+    return await context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_recert_01",
+            "client_message_id": "client_recert_01",
+            "conversation_id": conversation_id,
+            "question": "What changed?",
+            "question_class": "observed_change",
+            "scope": _scope_payload(context.org_id),
+            "requested_metric_ids": [],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_authorized_platform_run_heals_a_stale_certification(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+):
+    scheduled = _capture_scheduling(monkeypatch)
+
+    response = await _post_one_message(dev_api_context, _StalePlatformRuntime())
+
+    assert response.status_code == 200
+    assert scheduled == [1]
+
+
+@pytest.mark.asyncio
+async def test_a_byo_run_never_schedules_platform_recertification(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+):
+    scheduled = _capture_scheduling(monkeypatch)
+
+    response = await _post_one_message(dev_api_context, _StaleButByoRuntime())
+
+    assert response.status_code == 200
+    assert scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_a_current_platform_run_schedules_nothing(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+):
+    scheduled = _capture_scheduling(monkeypatch)
+
+    response = await _post_one_message(dev_api_context, _CurrentPlatformRuntime())
+
+    assert response.status_code == 200
+    assert scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_the_capabilities_projection_never_schedules_recertification(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+):
+    """The read-only capability request is the path codex CONFIRMED: it
+    resolves a provider before any Ask Dev authorization runs, so it must
+    stay entirely free of operator-paid side effects."""
+
+    scheduled = _capture_scheduling(monkeypatch)
+
+    response = await dev_api_context.client.get("/api/v1/dev/capabilities")
+
+    assert response.status_code == 200
+    assert scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_organization_never_schedules_recertification(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+):
+    """Emergency-disabled: the run is rejected at _require_ask_dev, so the
+    trigger -- which lives after it -- is never reached."""
+
+    scheduled = _capture_scheduling(monkeypatch)
+    # Created while still enabled -- disabling blocks conversation creation
+    # too, and this test is about the MESSAGE path's trigger.
+    conversation_id = await _new_conversation(dev_api_context)
+    async with dev_api_context.maker() as session:
+        await SettingsService(session, str(dev_api_context.org_id)).set(
+            ASK_DEV_EMERGENCY_DISABLED_KEY, "true", category="ask_dev"
+        )
+        await session.commit()
+
+    response = await _post_one_message(
+        dev_api_context, _StalePlatformRuntime(), conversation_id
+    )
+
+    assert response.status_code == 403
+    assert scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_a_non_entitled_organization_never_schedules_recertification(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+):
+    scheduled = _capture_scheduling(monkeypatch)
+    conversation_id = await _new_conversation(dev_api_context)
+
+    async def _deny(self, _org_id: str) -> None:
+        raise dev_router_module.AskDevEntitlementDeniedError(
+            FeatureDecisionReason.EXPLICIT_PURCHASE_REQUIRED
+        )
+
+    monkeypatch.setattr(
+        dev_router_module.CanonicalAskDevEntitlementAuthorizer, "require", _deny
+    )
+
+    response = await _post_one_message(
+        dev_api_context, _StalePlatformRuntime(), conversation_id
+    )
+
+    assert response.status_code == 403
+    assert scheduled == []

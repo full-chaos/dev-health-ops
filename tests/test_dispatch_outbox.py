@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import inspect
 import os
 import time
@@ -10,7 +11,9 @@ from datetime import datetime, timedelta, timezone
 from threading import Event
 
 import pytest
-from sqlalchemy import create_engine, event, update
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import create_engine, event, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -64,6 +67,44 @@ def _postgres_engine():
     return create_engine(
         normalize_sync_postgres_uri(os.environ[_POSTGRES_TEST_URI_ENV])
     )
+
+
+@contextmanager
+def _postgres_0049_migrated_session():
+    """Yield an isolated session whose schema was upgraded by migration 0049.
+
+    ``Base.metadata.create_all`` installs the current constraints, but cannot
+    install PostgreSQL functions or triggers. Rewinding and replaying 0049 in a
+    private schema makes the compatibility test exercise the actual migration
+    contract without depending on state left in the shared test database.
+    """
+    engine = _postgres_engine()
+    schema = f"chaos_3179_{uuid.uuid4().hex}"
+    connection = engine.connect()
+    try:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        connection.execute(text(f'SET search_path TO "{schema}"'))
+        connection.commit()
+        Base.metadata.create_all(connection)
+
+        migration = importlib.import_module(
+            "dev_health_ops.alembic.versions.0049_add_sync_dispatch_transport_fence"
+        )
+        context = MigrationContext.configure(connection)
+        with Operations.context(context):
+            migration.downgrade()
+            migration.upgrade()
+        connection.commit()
+
+        with Session(bind=connection) as session:
+            yield session
+    finally:
+        connection.rollback()
+        connection.execute(text("SET search_path TO public"))
+        connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        connection.commit()
+        connection.close()
+        engine.dispose()
 
 
 @pytest.fixture
@@ -919,102 +960,71 @@ def test_backoff_seconds_sequence_is_capped():
 
 @pytest.mark.usefixtures("require_postgres_test_uri")
 def test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible():
-    """A writer that sets only the pre-0049 lease columns still commits.
-
-    The trigger under test is ``trg_sync_dispatch_outbox_route_fence``. It
-    reaches production as migration 0049 and reaches the ``create_all``
-    schema this test builds through the ``after_create`` DDL registrations
-    in ``models/integrations.py`` -- same statement text, two install
-    paths. Naming only the migration would be a claim this test cannot
-    make, because ``create_all`` never runs one.
-    """
-    engine = create_engine(sync_postgres_test_url())
-    Base.metadata.create_all(engine)
-    run_id = None
-    integration_id = None
-    try:
-        with Session(engine) as session:
-            for kind in (
-                OUTBOX_KIND_DISPATCH,
-                OUTBOX_KIND_FINALIZE,
-                "post_sync",
-                "reference_discovery",
-            ):
-                if session.get(SyncDispatchTransportRoute, kind) is None:
-                    session.add(
-                        SyncDispatchTransportRoute(
-                            kind=kind,
-                            transport="celery",
-                            generation=1,
-                            paused=False,
-                            paused_at=None,
-                            rollback_transport="celery",
-                        )
-                    )
-            route = session.get(
-                SyncDispatchTransportRoute,
-                OUTBOX_KIND_DISPATCH,
-            )
-            assert route is not None
-            expected_generation = route.generation
-            now = datetime.now(timezone.utc)
-            row = _seed_outbox(session, available_at=now)
-            run_id = row.sync_run_id
-            run = session.get(SyncRun, run_id)
-            assert run is not None
-            integration_id = run.integration_id
-            session.flush()
-
-            # Simulate a pre-0049 worker: it writes only the original lease
-            # columns. The migration trigger binds the current Celery route.
-            session.execute(
-                update(SyncDispatchOutbox)
-                .where(SyncDispatchOutbox.id == row.id)
-                .values(
-                    claim_token="legacy-celery-token",
-                    claim_expires_at=now + timedelta(minutes=5),
+    with _postgres_0049_migrated_session() as session:
+        trigger_installed = session.execute(
+            text(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_trigger
+                    WHERE tgrelid = 'sync_dispatch_outbox'::regclass
+                      AND tgname = 'trg_sync_dispatch_outbox_route_fence'
+                      AND NOT tgisinternal
                 )
+                """
             )
-            session.expire_all()
-            claimed = session.get(SyncDispatchOutbox, row.id)
-            assert claimed is not None
-            assert claimed.claim_transport == "celery"
-            assert claimed.claim_route_generation == expected_generation
+        ).scalar_one()
+        assert trigger_installed is True
 
-            # The same old worker clears only its original lease columns when
-            # marking success. The trigger copies the old binding into the
-            # dispatched audit columns before clearing the claim tuple.
-            session.execute(
-                update(SyncDispatchOutbox)
-                .where(SyncDispatchOutbox.id == row.id)
-                .values(
-                    status=OUTBOX_STATUS_DISPATCHED,
-                    dispatched_at=now,
-                    claim_token=None,
-                    claim_expires_at=None,
-                )
+        route = session.get(
+            SyncDispatchTransportRoute,
+            OUTBOX_KIND_DISPATCH,
+        )
+        assert route is not None
+        assert route.transport == "celery"
+        assert route.paused is False
+        expected_generation = route.generation
+        now = datetime.now(timezone.utc)
+        row = _seed_outbox(session, available_at=now)
+        session.flush()
+
+        # Simulate a pre-0049 worker: it writes only the original lease
+        # columns. The migration trigger binds the current Celery route before
+        # the claim-route coherence constraint is evaluated.
+        session.execute(
+            update(SyncDispatchOutbox)
+            .where(SyncDispatchOutbox.id == row.id)
+            .values(
+                claim_token="legacy-celery-token",
+                claim_expires_at=now + timedelta(minutes=5),
             )
-            session.expire_all()
-            dispatched = session.get(SyncDispatchOutbox, row.id)
-            assert dispatched is not None
-            assert dispatched.claim_transport is None
-            assert dispatched.claim_route_generation is None
-            assert dispatched.dispatched_transport == "celery"
-            assert dispatched.dispatched_route_generation == expected_generation
-            session.commit()
-    finally:
-        if run_id is not None:
-            with Session(engine) as cleanup_session:
-                cleanup_session.query(SyncDispatchOutbox).filter_by(
-                    sync_run_id=run_id
-                ).delete()
-                cleanup_session.query(SyncRun).filter_by(id=run_id).delete()
-                if integration_id is not None:
-                    cleanup_session.query(Integration).filter_by(
-                        id=integration_id
-                    ).delete()
-                cleanup_session.commit()
-        engine.dispose()
+        )
+        session.expire_all()
+        claimed = session.get(SyncDispatchOutbox, row.id)
+        assert claimed is not None
+        assert claimed.claim_transport == "celery"
+        assert claimed.claim_route_generation == expected_generation
+
+        # The same old worker clears only its original lease columns when
+        # marking success. The trigger copies the old binding into the
+        # dispatched audit columns before clearing the claim tuple.
+        session.execute(
+            update(SyncDispatchOutbox)
+            .where(SyncDispatchOutbox.id == row.id)
+            .values(
+                status=OUTBOX_STATUS_DISPATCHED,
+                dispatched_at=now,
+                claim_token=None,
+                claim_expires_at=None,
+            )
+        )
+        session.expire_all()
+        dispatched = session.get(SyncDispatchOutbox, row.id)
+        assert dispatched is not None
+        assert dispatched.claim_transport is None
+        assert dispatched.claim_route_generation is None
+        assert dispatched.dispatched_transport == "celery"
+        assert dispatched.dispatched_route_generation == expected_generation
 
 
 @pytest.mark.usefixtures("require_postgres_test_uri")

@@ -91,6 +91,9 @@ func (handler GitHubCICDRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	if page.CapReached {
+		return CompleteRouteBatch{}, ErrPaginationCapExceeded
+	}
 	items := page.Items
 	if len(items) > maxRuns {
 		items = items[:maxRuns]

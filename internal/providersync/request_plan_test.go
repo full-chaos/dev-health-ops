@@ -17,6 +17,7 @@ func TestProviderRequestPlansMatchLivePythonBudgetFunctions(t *testing.T) {
 	output, err := exec.Command(
 		python,
 		filepath.Join(packageDir, "testdata", "python_provider_budget_oracle.py"),
+		filepath.Join(root, "src", "dev_health_ops", "providers", "github", "budget.py"),
 		filepath.Join(root, "src", "dev_health_ops", "providers", "linear", "budget.py"),
 		filepath.Join(root, "src", "dev_health_ops", "providers", "jira", "budget.py"),
 		filepath.Join(root, "src", "dev_health_ops", "providers", "launchdarkly", "budget.py"),

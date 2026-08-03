@@ -36,6 +36,7 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"github/prs":                 ExecutorNativeGo,
 	"github/cicd":                ExecutorNativeGo,
 	"github/commits":             ExecutorNativeGo,
+	"github/deployments":         ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -132,8 +133,9 @@ type CompleteRouteSwitches struct {
 	// deploy/go-workers/provider-sync-porting-recipe.md.
 	GithubPRs bool
 	// GithubCICD gates the isolated ci_pipeline_runs writer only.
-	GithubCICD    bool
-	GithubCommits bool
+	GithubCICD        bool
+	GithubCommits     bool
+	GithubDeployments bool
 }
 
 // Descriptor resolves the canonical capability descriptor for a claimed
@@ -232,6 +234,10 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = []string{"git_commits"}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubCommits
+	case provider == "github" && dataset == "deployments":
+		descriptor.Destinations = []string{"deployments"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubDeployments
 	}
 	return descriptor, true
 }

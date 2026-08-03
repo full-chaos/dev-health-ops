@@ -124,6 +124,9 @@ class DevCoverageV2(ContractModelV2, DevCoverage):
     stale_required_sources: tuple[SourceClass, ...] = Field(  # type: ignore[assignment]
         default_factory=tuple, max_length=25
     )
+    degraded_required_sources: tuple[SourceClass, ...] = Field(  # type: ignore[assignment]
+        default_factory=tuple, max_length=25
+    )
 
 
 class DevSurfaceContextV2(ContractModelV2, DevSurfaceContext):
@@ -288,11 +291,13 @@ _policy.register_no_answer_policy(
         "available_source_count": _policy.NoAnswerFieldPolicy.NON_TEXT,
         "unavailable_required_sources": (_policy.NoAnswerFieldPolicy.CLOSED_VOCABULARY),
         "stale_required_sources": _policy.NoAnswerFieldPolicy.CLOSED_VOCABULARY,
+        "degraded_required_sources": (_policy.NoAnswerFieldPolicy.CLOSED_VOCABULARY),
         "as_of": _policy.NoAnswerFieldPolicy.NON_TEXT,
     },
     canonical={},
     vocabularies={
         "unavailable_required_sources": _policy.SOURCE_CLASS_VOCABULARY,
         "stale_required_sources": _policy.SOURCE_CLASS_VOCABULARY,
+        "degraded_required_sources": _policy.SOURCE_CLASS_VOCABULARY,
     },
 )

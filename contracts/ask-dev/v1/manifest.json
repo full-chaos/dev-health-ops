@@ -74,7 +74,7 @@
       },
       "schema": {
         "path": "schemas/dev_conversation_transcript.v1.schema.json",
-        "sha256": "635befb43b9080a935d49df136f51508a5b5e1b152809cba67d42de27bc2b60a"
+        "sha256": "d0df8dccbf190a280412e6d4872006459072128d87c7cf8d9e9facc016ab62a3"
       },
       "schema_version": "dev_conversation_transcript.v1"
     },
@@ -150,7 +150,7 @@
       },
       "schema": {
         "path": "schemas/dev_answer.v1.schema.json",
-        "sha256": "5178e487e3d2b8cbcde7ffea08ea0d3121937db7357c861c3738b2c9120e9039"
+        "sha256": "e156ced39c676bae4e08f5c5e5acc86a4d7120b472ab628ba20f1a605a8ce6fc"
       },
       "schema_version": "dev_answer.v1"
     },
@@ -335,7 +335,7 @@
       },
       "schema": {
         "path": "schemas/dev_stream_event.v1.schema.json",
-        "sha256": "eeb3461c25d455140d30e7a779e1480ddd2773fdec29f67b8d053ae4b2cdcc6f"
+        "sha256": "694eeacf026c3c6abe6363625d1188fa59c3b1d194713acd8754babeeaa0dfad"
       },
       "schema_version": "dev_stream_event.v1"
     },

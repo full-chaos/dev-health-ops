@@ -20,10 +20,12 @@ from dev_health_ops.api.dev.investigation_plans.plan_documents import (
     CORE_PLANS_BY_INTENT,
 )
 from dev_health_ops.api.dev.status_change_service import StatusResultState
+from dev_health_ops.llm.agent.scripted import ScriptedStep
 from tests._chaos_3292_preflight import (
     ASK_DEV_PROJECT,
     ORG_ID,
     run_preflight_orchestrator,
+    status_then_answer,
 )
 from tests._chaos_3295_plan_executor import (
     FakePlanExecutorRuntime,
@@ -256,16 +258,39 @@ async def test_insufficient_evidence_status_snapshot_does_not_crash_the_run():
     (``DevSourceObservation``'s own zero-semantics validator raises inside
     the executor; the orchestrator's outer exception handler then converts
     that into the generic internal_error rather than ever calling
-    ``record_investigation_result``). Reverted; suite green again.
+    ``record_investigation_result``). Reverted; suite green again. **Kill site
+    re-verified on 2026-08-03** after the script change below, by planting the
+    same mutation again: the test still fails with
+    ``error.code == "internal_error"``, so the extra answer steps did not
+    weaken what this case measures.
+
+    Script note (CHAOS-3334): the default two-step script (one tool call, one
+    answer) is no longer enough here. ``INSUFFICIENT_EVIDENCE`` maps to an
+    unmeasured state on a *mandatory* plan source, which CHAOS-3334 now folds
+    into answer coverage -- so the fixture's ``complete`` answer is correctly
+    refused once, and the orchestrator spends a provider round asking for a
+    repair. With only one answer step the script would empty and the run would
+    end ``INVALID_RESPONSE``/``internal_error``, which reads exactly like the
+    defect this test guards while actually being a starved fixture. The spare
+    steps let the run reach its honest terminal
+    (``answer_validation_failed``), which is what "does not crash the run"
+    means now that a required-source failure is judged rather than discarded.
     """
 
     runtime = FakePlanExecutorRuntime(
         status_state=StatusResultState.INSUFFICIENT_EVIDENCE
     )
+
+    def script(script_id: str) -> list[ScriptedStep]:
+        steps = list(status_then_answer(script_id))
+        steps.extend(steps[-1:] * 5)
+        return steps
+
     output = await run_preflight_orchestrator(
         question="What's the status of the Ask Dev project?",
         entities=[(ORG_ID, ASK_DEV_PROJECT)],
         script_id="chaos3295-insufficient-evidence",
+        script=script,
         recorder_factory=InvestigationRecorder,
         plan_registry=CORE_PLANS_BY_INTENT,
         plan_executor=executor_for(runtime),

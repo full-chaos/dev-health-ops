@@ -17,8 +17,9 @@ import (
 const gitHubBlameMaxFiles = 500
 
 var (
-	ErrGitHubBlameTraversalFailed = errors.New("github blame traversal failed")
-	ErrGitHubBlameIncomplete      = errors.New("github blame inventory incomplete")
+	ErrGitHubBlameTraversalFailed     = errors.New("github blame traversal failed")
+	ErrGitHubBlameIncomplete          = errors.New("github blame inventory incomplete")
+	ErrGitHubBlameProgressUnavailable = errors.New("github blame incremental progress unavailable")
 )
 
 // gitBlameRow mirrors ClickHouseStore.insert_blame_data's complete git_blame
@@ -64,11 +65,11 @@ type gitHubBlameRange struct {
 	} `json:"commit"`
 }
 
-// GitHubBlameRouteHandler resolves the same bounded repository tree as the
-// active Python onboarding producer, fetches GraphQL blame for every selected
-// file, and expands ranges into the per-line git_blame rows Python persists.
-// A bound is a safety rail, never successful truncation: a repository with
-// more files than the one-unit cap remains retryable and cannot advance state.
+// GitHubBlameRouteHandler is deliberately unavailable until the complete-route
+// layer can read persisted per-path blame coverage. Python selects only the
+// next BLAME_BACKFILL_MAX_FILES unblamed paths on each run; this handler's
+// current interface has no equivalent read seam. Failing before the first HTTP
+// request prevents retries from reblaming the same prefix and burning quota.
 type GitHubBlameRouteHandler struct{}
 
 func (GitHubBlameRouteHandler) Collect(
@@ -78,10 +79,23 @@ func (GitHubBlameRouteHandler) Collect(
 	client *providerfoundation.HTTPClient,
 	normalizedAt time.Time,
 ) (CompleteRouteBatch, error) {
-	if ctx == nil || claim.Validate() != nil || claim.Provider != "github" ||
-		claim.Dataset != "blame" || client == nil || client.Provider != "github" ||
-		client.BaseURL == nil || normalizedAt.IsZero() {
-		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	if err := validateGitHubBlameCollectInputs(ctx, claim, client, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	return CompleteRouteBatch{}, ErrGitHubBlameProgressUnavailable
+}
+
+// collectGitHubBlameFoundation retains the bounded fetch and normalization
+// foundation for parity tests. Production must call GitHubBlameRouteHandler,
+// which remains fail-closed until persisted incremental selection is wired.
+func collectGitHubBlameFoundation(
+	ctx context.Context,
+	claim Claim,
+	client *providerfoundation.HTTPClient,
+	normalizedAt time.Time,
+) (CompleteRouteBatch, error) {
+	if err := validateGitHubBlameCollectInputs(ctx, claim, client, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
 	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	owner, repository, err := splitGitHubRepository(claim.SourceExternalID)
@@ -150,6 +164,20 @@ func (GitHubBlameRouteHandler) Collect(
 		}
 	}
 	return gitHubBlameBatch(claim, repoPayload.FullName, rows, requests, 1)
+}
+
+func validateGitHubBlameCollectInputs(
+	ctx context.Context,
+	claim Claim,
+	client *providerfoundation.HTTPClient,
+	normalizedAt time.Time,
+) error {
+	if ctx == nil || claim.Validate() != nil || claim.Provider != "github" ||
+		claim.Dataset != "blame" || client == nil || client.Provider != "github" ||
+		client.BaseURL == nil || normalizedAt.IsZero() {
+		return ErrInvalidConfiguration
+	}
+	return nil
 }
 
 func fetchGitHubBlame(

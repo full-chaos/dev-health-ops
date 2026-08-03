@@ -278,13 +278,6 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitHubCommitStatsRouteHandler{}
 				sink, readback = ghCommitStatsSink, ghCommitStatsSink
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "blame":
-				ghBlameSink := providersync.GitHubBlameClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubBlameRouteHandler{}
-				sink, readback = ghBlameSink, ghBlameSink
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
@@ -470,7 +463,7 @@ func providerSyncWorkerEnabled(cfg config.Config) bool {
 		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubCICDEnabled ||
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
 		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||
-		cfg.WorkerGithubCommitStatsEnabled || cfg.WorkerGithubBlameEnabled
+		cfg.WorkerGithubCommitStatsEnabled
 }
 
 func providerSyncRiverConfig(

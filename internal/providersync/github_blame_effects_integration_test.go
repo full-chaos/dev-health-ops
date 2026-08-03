@@ -187,8 +187,8 @@ func TestGitHubBlameCrashWindowRecoversWithoutDuplicateVersion(t *testing.T) {
 	harness := startBlameReadbackHarness(t, ctx)
 	claim, sink, now := harness.claim, harness.sink, harness.now
 	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, fileCount: 1}, "https://api.github.com")
-	firstBatch, err := (GitHubBlameRouteHandler{}).Collect(
-		ctx, claim, providerfoundation.Credential{}, client, now,
+	firstBatch, err := collectGitHubBlameFoundation(
+		ctx, claim, client, now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -231,8 +231,8 @@ func TestGitHubBlameCrashWindowRecoversWithoutDuplicateVersion(t *testing.T) {
 	if !persisted.CreatedAt.UTC().Equal(now.UTC()) {
 		t.Fatalf("persisted ledger CreatedAt=%s want=%s", persisted.CreatedAt, now)
 	}
-	recoveredBatch, err := (GitHubBlameRouteHandler{}).Collect(
-		ctx, recovered, providerfoundation.Credential{}, client, persisted.CreatedAt.UTC(),
+	recoveredBatch, err := collectGitHubBlameFoundation(
+		ctx, recovered, client, persisted.CreatedAt.UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)

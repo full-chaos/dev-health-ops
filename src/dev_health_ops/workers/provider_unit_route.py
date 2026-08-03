@@ -136,7 +136,6 @@ class ProviderUnitRouteSwitches:
     github_security: bool = False
     github_files: bool = False
     github_commit_stats: bool = False
-    github_blame: bool = False
 
     @classmethod
     def from_environment(
@@ -158,7 +157,6 @@ class ProviderUnitRouteSwitches:
             github_security=_flag(source, "WORKER_GITHUB_SECURITY_ENABLED"),
             github_files=_flag(source, "WORKER_GITHUB_FILES_ENABLED"),
             github_commit_stats=_flag(source, "WORKER_GITHUB_COMMIT_STATS_ENABLED"),
-            github_blame=_flag(source, "WORKER_GITHUB_BLAME_ENABLED"),
         )
         switches.require_complete_routes()
         return switches

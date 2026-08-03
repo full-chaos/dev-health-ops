@@ -40,7 +40,6 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"github/security":            ExecutorNativeGo,
 	"github/files":               ExecutorNativeGo,
 	"github/commit-stats":        ExecutorNativeGo,
-	"github/blame":               ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -146,8 +145,6 @@ type CompleteRouteSwitches struct {
 	GithubFiles bool
 	// GithubCommitStats gates the isolated git_commit_stats writer only.
 	GithubCommitStats bool
-	// GithubBlame gates the isolated git_blame writer only.
-	GithubBlame bool
 }
 
 // Descriptor resolves the canonical capability descriptor for a claimed
@@ -262,9 +259,6 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = []string{"git_commit_stats"}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubCommitStats
-	case provider == "github" && dataset == "blame":
-		descriptor.Destinations = []string{"git_blame"}
-		descriptor.RouteEnabled = switches.GithubBlame
 	}
 	return descriptor, true
 }

@@ -122,9 +122,8 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		GithubPRs: true, GithubCICD: true, GithubCommits: true,
 		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 		GithubCommitStats: true,
-		GithubBlame:       true,
 	}
-	if reflect.TypeOf(all).NumField() != 13 {
+	if reflect.TypeOf(all).NumField() != 12 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -140,6 +139,18 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		if routable := descriptor.RouteReady && descriptor.RouteEnabled; routable != wantRoutable {
 			t.Fatalf("%s routable=%v want %v descriptor=%+v", key, routable, wantRoutable, descriptor)
 		}
+	}
+}
+
+func TestGitHubBlameRemainsUnexecutableAndUnroutable(t *testing.T) {
+	t.Parallel()
+	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "blame")
+	if !ok {
+		t.Fatal("github/blame has no descriptor")
+	}
+	if descriptor.Executor != ExecutorNone || descriptor.RouteReady ||
+		descriptor.RouteEnabled || len(descriptor.Destinations) != 0 {
+		t.Fatalf("github/blame descriptor=%+v", descriptor)
 	}
 }
 
@@ -239,7 +250,6 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"github/security":            GitHubSecurityRouteHandler{},
 		"github/files":               GitHubFilesRouteHandler{},
 		"github/commit-stats":        GitHubCommitStatsRouteHandler{},
-		"github/blame":               GitHubBlameRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

@@ -388,10 +388,6 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 			cfg:  config.Config{WorkerGithubCommitStatsEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubCommitStats: true},
 		},
-		"github_blame": {
-			cfg:  config.Config{WorkerGithubBlameEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubBlame: true},
-		},
 		"linear": {
 			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},
 			want: providersync.CompleteRouteSwitches{LinearWorkItems: true},
@@ -435,31 +431,6 @@ func TestBuildProviderSyncHandlerConstructsGitHubCommitStatsCapability(t *testin
 		t.Fatalf("executor handler=%T", executor.Handler)
 	}
 	if _, ok := executor.Committer.Sink.(providersync.GitHubCommitStatsClickHouseEffects); !ok {
-		t.Fatalf("executor sink=%T", executor.Committer.Sink)
-	}
-}
-
-func TestBuildProviderSyncHandlerConstructsGitHubBlameCapability(t *testing.T) {
-	handler, _ := buildProviderSyncHandler(
-		nil,
-		providersync.CompleteRouteSwitches{GithubBlame: true},
-		nil, nil, nil, nil, nil, slog.Default(),
-	)
-	if handler == nil || handler.BuildExecutor == nil {
-		t.Fatal("provider sync handler is not constructed")
-	}
-	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
-		Claim: providersync.Claim{Unit: providersync.Unit{
-			Provider: "github", Dataset: "blame",
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := executor.Handler.(providersync.GitHubBlameRouteHandler); !ok {
-		t.Fatalf("executor handler=%T", executor.Handler)
-	}
-	if _, ok := executor.Committer.Sink.(providersync.GitHubBlameClickHouseEffects); !ok {
 		t.Fatalf("executor sink=%T", executor.Committer.Sink)
 	}
 }

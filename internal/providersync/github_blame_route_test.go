@@ -16,6 +16,7 @@ import (
 
 type gitHubBlameDoer struct {
 	t          *testing.T
+	requests   *int
 	fileCount  int
 	graphQLErr bool
 	emptyBound bool
@@ -24,6 +25,9 @@ type gitHubBlameDoer struct {
 
 func (doer gitHubBlameDoer) Do(request *http.Request) (*http.Response, error) {
 	doer.t.Helper()
+	if doer.requests != nil {
+		*doer.requests++
+	}
 	body := `{"full_name":"acme/api","default_branch":"main"}`
 	switch request.URL.Path {
 	case "/repos/acme/api":
@@ -67,21 +71,35 @@ func (doer gitHubBlameDoer) Do(request *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-func TestGitHubBlameRouteExpandsLiveBlameRangesIntoRows(t *testing.T) {
+func TestGitHubBlameRouteFailsBeforeProviderWorkWithoutPersistedProgress(t *testing.T) {
+	claim := nativeTestClaim("github", "blame")
+	requests := 0
+	client := gitHubRepositoryClient(t, gitHubBlameDoer{
+		t: t, requests: &requests, fileCount: 1,
+	}, "https://api.github.com")
+	batch, err := (GitHubBlameRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+	)
+	if !errors.Is(err, ErrGitHubBlameProgressUnavailable) {
+		t.Fatalf("progress error=%v, want ErrGitHubBlameProgressUnavailable", err)
+	}
+	if requests != 0 {
+		t.Fatalf("provider requests=%d, want zero before persisted progress is available", requests)
+	}
+	if len(batch.Effects) != 0 || batch.Watermark != nil {
+		t.Fatalf("partial batch=%+v", batch)
+	}
+}
+
+func TestGitHubBlameFoundationExpandsLiveBlameRangesIntoRows(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
 	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, fileCount: 1}, "https://api.github.com")
 	normalizedAt := time.Date(2026, 7, 23, 12, 30, 0, 987654321, time.UTC)
-	batch, err := (GitHubBlameRouteHandler{}).Collect(
-		context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt,
+	batch, err := collectGitHubBlameFoundation(
+		context.Background(), claim, client, normalizedAt,
 	)
 	if err != nil {
-		t.Fatal(err)
-	}
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "blame")
-	if !ok {
-		t.Fatal("github/blame descriptor missing")
-	}
-	if err := batch.validate(descriptor); err != nil {
 		t.Fatal(err)
 	}
 	if len(batch.Effects) != 1 || batch.Effects[0].Destination != "git_blame" || len(batch.Effects[0].Rows) != 2 {
@@ -105,11 +123,11 @@ func TestGitHubBlameRouteExpandsLiveBlameRangesIntoRows(t *testing.T) {
 	}
 }
 
-func TestGitHubBlameRouteFailsClosedBeforeFetchingPartialInventory(t *testing.T) {
+func TestGitHubBlameFoundationFailsClosedBeforeFetchingPartialInventory(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
 	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, fileCount: gitHubBlameMaxFiles + 1}, "https://api.github.com")
-	_, err := (GitHubBlameRouteHandler{}).Collect(
-		context.Background(), claim, providerfoundation.Credential{}, client,
+	_, err := collectGitHubBlameFoundation(
+		context.Background(), claim, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrGitHubBlameIncomplete) {
@@ -117,11 +135,11 @@ func TestGitHubBlameRouteFailsClosedBeforeFetchingPartialInventory(t *testing.T)
 	}
 }
 
-func TestGitHubBlameRouteKeepsGraphQLErrorsRetryable(t *testing.T) {
+func TestGitHubBlameFoundationKeepsGraphQLErrorsRetryable(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
 	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, fileCount: 1, graphQLErr: true}, "https://api.github.com")
-	_, err := (GitHubBlameRouteHandler{}).Collect(
-		context.Background(), claim, providerfoundation.Credential{}, client,
+	_, err := collectGitHubBlameFoundation(
+		context.Background(), claim, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrGitHubBlameTraversalFailed) {
@@ -129,11 +147,11 @@ func TestGitHubBlameRouteKeepsGraphQLErrorsRetryable(t *testing.T) {
 	}
 }
 
-func TestGitHubBlameRouteRejectsOversizedGraphQLPayload(t *testing.T) {
+func TestGitHubBlameFoundationRejectsOversizedGraphQLPayload(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
 	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, fileCount: 1, oversized: true}, "https://api.github.com")
-	_, err := (GitHubBlameRouteHandler{}).Collect(
-		context.Background(), claim, providerfoundation.Credential{}, client,
+	_, err := collectGitHubBlameFoundation(
+		context.Background(), claim, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrGitHubBlameTraversalFailed) {
@@ -141,11 +159,11 @@ func TestGitHubBlameRouteRejectsOversizedGraphQLPayload(t *testing.T) {
 	}
 }
 
-func TestGitHubBlameRouteDistinguishesNoCommitAtBound(t *testing.T) {
+func TestGitHubBlameFoundationDistinguishesNoCommitAtBound(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
 	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t, emptyBound: true}, "https://api.github.com")
-	batch, err := (GitHubBlameRouteHandler{}).Collect(
-		context.Background(), claim, providerfoundation.Credential{}, client,
+	batch, err := collectGitHubBlameFoundation(
+		context.Background(), claim, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -156,11 +174,11 @@ func TestGitHubBlameRouteDistinguishesNoCommitAtBound(t *testing.T) {
 	}
 }
 
-func TestGitHubBlameRouteReportsLegitimateEmptyTree(t *testing.T) {
+func TestGitHubBlameFoundationReportsLegitimateEmptyTree(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
 	client := gitHubRepositoryClient(t, gitHubBlameDoer{t: t}, "https://api.github.com")
-	batch, err := (GitHubBlameRouteHandler{}).Collect(
-		context.Background(), claim, providerfoundation.Credential{}, client,
+	batch, err := collectGitHubBlameFoundation(
+		context.Background(), claim, client,
 		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	if err != nil {

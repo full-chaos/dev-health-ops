@@ -22,12 +22,10 @@
         "blame_only": true,
         "sync_blame": true
       },
-      "go_executor": "native_go",
+      "go_executor": "none",
       "native_shadow": false,
       "route_dataset": "blame",
-      "route_destinations": [
-        "git_blame"
-      ],
+      "route_destinations": [],
       "route_ready": false,
       "credential_modes": [
         "personal_access_token",

@@ -141,8 +141,7 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 		cfg.WorkerGithubRepoMetadataEnabled || cfg.WorkerGithubPRsEnabled ||
 		cfg.WorkerGithubCICDEnabled || cfg.WorkerGithubCommitsEnabled ||
 		cfg.WorkerGithubDeploymentsEnabled || cfg.WorkerGithubSecurityEnabled ||
-		cfg.WorkerGithubFilesEnabled || cfg.WorkerGithubCommitStatsEnabled ||
-		cfg.WorkerGithubBlameEnabled {
+		cfg.WorkerGithubFilesEnabled || cfg.WorkerGithubCommitStatsEnabled {
 		t.Fatal("provider route switches must default off")
 	}
 }
@@ -176,7 +175,6 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITHUB_SECURITY_ENABLED":            "true",
 		"WORKER_GITHUB_FILES_ENABLED":               "true",
 		"WORKER_GITHUB_COMMIT_STATS_ENABLED":        "true",
-		"WORKER_GITHUB_BLAME_ENABLED":               "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -208,8 +206,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		!cfg.WorkerGithubRepoMetadataEnabled || !cfg.WorkerGithubPRsEnabled ||
 		!cfg.WorkerGithubCICDEnabled || !cfg.WorkerGithubCommitsEnabled ||
 		!cfg.WorkerGithubDeploymentsEnabled || !cfg.WorkerGithubSecurityEnabled ||
-		!cfg.WorkerGithubFilesEnabled || !cfg.WorkerGithubCommitStatsEnabled ||
-		!cfg.WorkerGithubBlameEnabled {
+		!cfg.WorkerGithubFilesEnabled || !cfg.WorkerGithubCommitStatsEnabled {
 		t.Fatal("expected independent provider route opt-ins")
 	}
 
@@ -233,7 +230,6 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITHUB_PRS_ENABLED":                 "sometimes",
 		"WORKER_GITHUB_COMMITS_ENABLED":             "sometimes",
 		"WORKER_GITHUB_COMMIT_STATS_ENABLED":        "sometimes",
-		"WORKER_GITHUB_BLAME_ENABLED":               "sometimes",
 	} {
 		if _, err := Load(workerSpec(map[string]string{key: value})); err == nil {
 			t.Fatalf("expected %s=%q to fail", key, value)

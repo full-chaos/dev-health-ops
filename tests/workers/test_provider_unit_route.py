@@ -265,23 +265,6 @@ def test_github_commit_stats_invalid_switch_fails_closed() -> None:
         )
 
 
-def test_github_blame_foundation_remains_unroutable() -> None:
-    assert not ProviderUnitRouteSwitches.is_route_ready("github", "blame")
-    assert not ProviderUnitRouteSwitches.from_environment({}).routes_to_river(
-        "github", "blame"
-    )
-    assert not ProviderUnitRouteSwitches.from_environment(
-        {"WORKER_GITHUB_BLAME_ENABLED": "true"}
-    ).routes_to_river("github", "blame")
-
-
-def test_github_blame_invalid_switch_fails_closed() -> None:
-    with pytest.raises(ProviderUnitRouteError):
-        ProviderUnitRouteSwitches.from_environment(
-            {"WORKER_GITHUB_BLAME_ENABLED": "sometimes"}
-        )
-
-
 # ---------------------------------------------------------------------------
 # CHAOS-3131: routability is derived from the checked-in matrix, not from a
 # hardcoded provider/dataset literal.

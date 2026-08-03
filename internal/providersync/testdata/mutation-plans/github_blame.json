@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "github/blame complete route (CHAOS-3335 + CHAOS-3343)",
   "build": ["go", "build", "./..."],
-  "$limitation": "The plan targets each implemented correctness class independently: complete-inventory foundation capping, resumable persisted selection, retryable provider errors, timestamp precision, live-Python normalization and selection parity, complete readback comparison, FINAL tenant-scoped lookup, and production construction. The independent route switch remains default-off. The PostgreSQL plus ClickHouse crash window is exercised as an integration gate but is not mutated here because the effect-committer and ledger guards are shared foundation covered by their owning plans.",
+  "$limitation": "The plan targets each implemented correctness class independently: complete-inventory capping, resumable persisted selection, per-file error and rate-limit semantics, empty-path progress, timestamp precision, live-Python parity, complete readback comparison, tenant/repository isolation, explicit progress-before-blame ordering, and production construction. The independent route switch remains default-off. The full production-executor PostgreSQL plus ClickHouse crash window remains an integration proof because its cross-store process-death setup is not a single-clause source predicate.",
   "mutations": [
     {
       "id": "B1-cap-must-fail-closed",
@@ -15,13 +15,13 @@
       ]
     },
     {
-      "id": "B2-graphql-errors-remain-retryable",
+      "id": "B2-non-rate-errors-remain-per-file",
       "file": "internal/providersync/github_blame_route.go",
-      "find": "if len(envelope.Errors) > 0 {",
-      "replace": "if false {",
-      "rationale": "a GraphQL application error is a broken provider fetch, not a legitimate empty blame result, and must keep the unit retryable",
+      "find": "if isRateLimited(err) {",
+      "replace": "if true {",
+      "rationale": "only a provider rate limit aborts the unit; a non-rate GraphQL error must be recorded for that path while later files continue",
       "proof": [
-        ["go", "test", "-run", "^TestGitHubBlameFoundationKeepsGraphQLErrorsRetryable$", "./internal/providersync/"]
+        ["go", "test", "-run", "^TestGitHubBlameRouteContinuesAfterPerFileGraphQLError$", "./internal/providersync/"]
       ]
     },
     {
@@ -79,8 +79,8 @@
     {
       "id": "B8-persisted-paths-must-be-filtered",
       "file": "internal/providersync/github_blame_route.go",
-      "find": "if _, exists := blamed[path]; !exists {",
-      "replace": "if true {",
+      "find": "if _, exists := completed[path]; exists {",
+      "replace": "if false {",
       "rationale": "each successful bounded sync must exclude paths already durable for the owning tenant or every retry will burn quota on the same prefix",
       "proof": [
         ["go", "test", "-run", "^TestGitHubBlameRouteSelectsTheNextPersistedCoverageBatch$", "./internal/providersync/"]
@@ -89,8 +89,8 @@
     {
       "id": "B9-progress-tenant-predicate",
       "file": "internal/providersync/github_blame_coverage_clickhouse.go",
-      "find": "WHERE org_id = ? AND repo_id = ?",
-      "replace": "WHERE org_id != ? AND repo_id = ?",
+      "find": "WHERE org_id = ? AND repo_id = ?\nLIMIT ?",
+      "replace": "WHERE org_id != ? AND repo_id = ?\nLIMIT ?",
       "rationale": "a colliding repository UUID under another tenant must never suppress the owning tenant's unblamed path",
       "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
       "proof": [
@@ -110,12 +110,55 @@
     {
       "id": "B11-progress-inventory-must-be-bounded",
       "file": "internal/providersync/github_blame_coverage_clickhouse.go",
-      "find": "if len(paths) > maxPaths {",
-      "replace": "if false {",
+      "find": "state.BlamedPaths = append(state.BlamedPaths, path)\n\t\tif gitHubBlameProgressPathCount(state) > maxPaths {",
+      "replace": "state.BlamedPaths = append(state.BlamedPaths, path)\n\t\tif false {",
       "rationale": "the progress read must fail closed when persisted coverage exceeds its explicit memory bound instead of loading an unbounded repository inventory into the worker",
       "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
       "proof": [
         ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameCoverageReadsOnlyTheOwningTenant$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B12-progress-repository-predicate",
+      "file": "internal/providersync/github_blame_coverage_clickhouse.go",
+      "find": "WHERE org_id = ? AND repo_id = ? AND tree_ref = ?",
+      "replace": "WHERE org_id = ? AND repo_id != ? AND tree_ref = ?",
+      "rationale": "progress for a second repository in the same organization must not suppress or reconstruct paths for the claimed repository",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [
+        ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameProgressIsolatedAcrossRepositoriesInOneOrganization$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B13-progress-effect-must-commit-first",
+      "file": "internal/providersync/effect_committer.go",
+      "find": "if destination == \"github_blame_path_progress\" {",
+      "replace": "if false {",
+      "rationale": "the progress identity must be committed before git_blame even when a caller supplies effects in reverse order",
+      "proof": [
+        ["go", "test", "-run", "^TestGitHubBlameProgressEffectCommitsBeforeBlame$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B14-empty-path-marker-is-completion",
+      "file": "internal/providersync/github_blame_coverage_clickhouse.go",
+      "find": "if completedEmpty {",
+      "replace": "if false {",
+      "rationale": "a zero-range path marker must become durable completion without inventing a git_blame row or selecting the path forever",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [
+        ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameZeroRangeProgressPreventsReselection$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B15-recovery-must-run-before-reselection",
+      "file": "internal/providersync/complete_route.go",
+      "find": "if recovering, ok := executor.Handler.(RecoveringCompleteRouteHandler); ok {",
+      "replace": "if recovering, ok := executor.Handler.(RecoveringCompleteRouteHandler); false && ok {",
+      "rationale": "an existing effect ledger must invoke generation-aware collection before ordinary coverage can exclude accepted rows and change the manifest",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [
+        ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameCrashWindowRecoversWithoutDuplicateVersion$", "./internal/providersync/"]
       ]
     }
   ]

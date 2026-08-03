@@ -268,7 +268,10 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubCommitStats
 	case provider == "github" && dataset == "blame":
-		descriptor.Destinations = []string{"git_blame"}
+		// The path-progress effect sorts before git_blame in EffectCommitter.
+		// That ordering is the crash-safety contract: accepted blame rows must
+		// always have a durable selection identity available for recovery.
+		descriptor.Destinations = []string{"github_blame_path_progress", "git_blame"}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubBlame
 	}

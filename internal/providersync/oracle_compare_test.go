@@ -204,6 +204,7 @@ func oracleDivergences(
 	if err != nil {
 		t.Fatalf("execute Python generic row oracle for %s: %v: %s", pairID, err, output)
 	}
+	recordGenericOracleProof(t, packageDir, pairID)
 
 	// UseNumber, defensively: every leaf this oracle emits is type-tagged
 	// (codex finding #2) so no bare JSON number should reach this decode at
@@ -261,6 +262,28 @@ func oracleDivergences(
 		pythonRowsByCase, goRowsByCase, decoded.ExcludedFields, goOnlyFields,
 	)...)
 	return messages
+}
+
+// recordGenericOracleProof records one successfully executed checked-in pair.
+// ci/check_go.sh derives the complete expected inventory from oracle_pairs/*.py
+// and requires every corresponding marker after the package passes. Keeping
+// this after CombinedOutput succeeds means selecting the interpreter, running
+// an unrelated Python test, or failing to import a pair cannot satisfy the
+// dedicated live-oracle gate.
+func recordGenericOracleProof(t *testing.T, packageDir, pairID string) {
+	t.Helper()
+	pairFilename := strings.ReplaceAll(pairID, "/", "_") + ".py"
+	if filepath.Base(pairFilename) != pairFilename {
+		t.Fatalf("pair %q does not map to a safe oracle proof filename", pairID)
+	}
+	pairSource := filepath.Join(packageDir, "testdata", "oracle_pairs", pairFilename)
+	if info, err := os.Stat(pairSource); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("pair %q does not map to a checked-in oracle source %s", pairID, pairSource)
+	}
+	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), pairFilename)
+	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
+		t.Fatalf("write live Python oracle proof for %s: %v", pairID, err)
+	}
 }
 
 // checkExclusionIntegrity is CHAOS-3162's third-review fix: a declared

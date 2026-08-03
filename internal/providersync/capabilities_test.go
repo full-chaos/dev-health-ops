@@ -13,9 +13,8 @@ import (
 )
 
 const (
-	livePythonOraclesEnv      = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
-	livePythonOracleProofDir  = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
-	livePythonOracleProofFile = "providersync"
+	livePythonOraclesEnv     = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
+	livePythonOracleProofDir = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
 )
 
 func requireLivePythonOracles(t *testing.T) {
@@ -78,13 +77,6 @@ type registryEntry struct {
 func pythonExecutable(t *testing.T) string {
 	t.Helper()
 	requireLivePythonOracles(t)
-	// The shell gate checks this only after the package succeeds. Recording the
-	// proof here makes it impossible for a standalone marker test to pass after
-	// every real Python oracle invocation has been removed or renamed.
-	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), livePythonOracleProofFile)
-	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
-		t.Fatalf("write live Python oracle proof: %v", err)
-	}
 	if configured := os.Getenv("PYTHON"); configured != "" {
 		return configured
 	}

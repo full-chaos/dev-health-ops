@@ -71,7 +71,11 @@ def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:
     assert api["depends_on"]["ask-dev-scripted-openai"] == {
         "condition": "service_healthy"
     }
-    assert api["ports"] == ["127.0.0.1:18080:8000"]
+    # Host port is parameterized so this stack can coexist with the normal
+    # dev-health stack (which already publishes 18080). The default must
+    # stay 18080, and the bind must stay loopback-only -- a bare "PORT:8000"
+    # would expose the acceptance API on every interface.
+    assert api["ports"] == ["127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-18080}:8000"]
 
 
 def test_web_is_compose_owned_and_points_only_at_the_ops_service() -> None:
@@ -91,7 +95,9 @@ def test_only_api_and_web_publish_host_ports() -> None:
     for service_name in ("postgres", "pgbouncer", "clickhouse", "valkey"):
         assert document["services"][service_name]["ports"] == []
     assert "ports" not in document["services"]["ask-dev-scripted-openai"]
-    assert document["services"]["api"]["ports"] == ["127.0.0.1:18080:8000"]
+    assert document["services"]["api"]["ports"] == [
+        "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-18080}:8000"
+    ]
     assert document["services"]["web"]["ports"] == ["127.0.0.1:3002:3000"]
 
 

@@ -34,6 +34,11 @@ expected_evidence_entity_fragment="$(read_oracle_field expected_evidence_entity_
 expected_claim_kind="$(read_oracle_field expected_claim_kind)"
 
 export ASK_DEV_WEB_CONTEXT="${web_root}"
+# 18080 collides with the normal dev-health stack's ACR API, which means a
+# developer with that stack up cannot run acceptance at all. Overridable so
+# both can coexist; the default preserves existing behaviour exactly.
+export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-18080}"
+acceptance_api_url="http://127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT}"
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-ask-dev-acceptance-unused}"
 
 compose=(
@@ -79,7 +84,7 @@ trap report_failure EXIT
   --with-work-graph
 
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
@@ -92,7 +97,7 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 # the same way run_ask_dev_provider_profile.sh's smoke invocation does.
 PYTHONPATH="${ops_root}/src:${ops_root}" \
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
@@ -102,7 +107,7 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 # the positive control the not-found negative control needs to hold against.
 PYTHONPATH="${ops_root}/src:${ops_root}" \
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
@@ -112,7 +117,7 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 # proven the same way -- real HTTP/SSE API, no web/Playwright.
 PYTHONPATH="${ops_root}/src:${ops_root}" \
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
@@ -123,7 +128,7 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 # proves web/window equivalence separately).
 PYTHONPATH="${ops_root}/src:${ops_root}" \
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
@@ -132,7 +137,7 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 # CHAOS-3300: organization-wide multi-metric comparison (metric.comparison.v1).
 PYTHONPATH="${ops_root}/src:${ops_root}" \
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
@@ -143,7 +148,7 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 # honest) answer instead of crashing to internal_error.
 PYTHONPATH="${ops_root}/src:${ops_root}" \
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
@@ -154,7 +159,7 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 # fallback proof.
 PYTHONPATH="${ops_root}/src:${ops_root}" \
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
@@ -172,7 +177,7 @@ ASK_DEV_ACCEPTANCE_QUESTION="${acceptance_question}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_METRIC_ID="${expected_metric_id}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_EVIDENCE_FRAGMENT="${expected_evidence_entity_fragment}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_CLAIM_KIND="${expected_claim_kind}" \
-PLAYWRIGHT_LIVE_BACKEND_URL=http://127.0.0.1:18080 \
+PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${web_root}/node_modules/.bin/playwright" test \

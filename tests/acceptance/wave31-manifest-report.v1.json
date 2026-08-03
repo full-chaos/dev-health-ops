@@ -15,6 +15,7 @@
     "original_defect_reproduction": 5,
     "real_project_positive_control": 1
   },
+  "proven_e2e_claim_limits": "A proven_e2e row means: a live scenario was run by an operator, its per-assertion results were recorded by the scenario itself, and the script and shared fixture surface it ran against still match this tree. It does NOT mean the validator has established that the run happened. Execution artifacts are unsigned JSON and the validator recomputes exactly the values a forger would compute, so a fabricated artifact validates clean; occurrence rests on operator-recorded evidence and on re-running scenarios, not on this check. commit_sha is metadata only -- shape-checked, never resolved, so a well-formed id naming no commit is accepted. Product code under src/ is outside the digested surface, so for product changes these rows are historical records of a past run rather than statements about the current tree.",
   "stale_row_count": 0,
   "stale_rows": {},
   "items": [

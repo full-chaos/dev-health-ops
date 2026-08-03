@@ -613,7 +613,8 @@ class DevRunSourceObservation(Base):
         CheckConstraint(
             "source_class IN ('status_change', 'work_item', 'work_graph', "
             "'pull_request', 'code_change', 'review', 'ci_run', 'test_report', "
-            "'deployment', 'incident', 'operational_control', 'source_health')",
+            "'deployment', 'incident', 'operational_control', 'source_health', "
+            "'health_profile', 'deficiency_inventory')",
             name="ck_dev_run_source_observations_source_class",
         ),
         CheckConstraint(

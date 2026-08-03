@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session
 
 from dev_health_ops.db import normalize_sync_postgres_uri
@@ -654,32 +654,66 @@ def test_tier_cap_unlimited_tier_does_not_cap_depth(db_session, monkeypatch):
 
 
 def test_tier_limit_service_returns_empty_on_missing_table():
-    """TierLimitService._get_db_tier_limits returns {} when tier_limits is absent.
+    """A real missing-table query rolls back only its SQLite SAVEPOINT.
 
-    When the table is missing the query raises; the service swallows it and
-    falls through to hardcoded defaults. It must NOT call session.rollback()
-    here — the service is invoked from async callers via run_sync and a sync
-    rollback there breaks the greenlet context (MissingGreenlet). The caller's
-    session must remain usable.
+    SQLite's driver does not provide reliable SAVEPOINT semantics unless
+    SQLAlchemy takes over transaction control. Configure that production-like
+    contract explicitly, then prove the tier_limits query—not SAVEPOINT setup—
+    is what fails and that the outer session remains usable afterward.
     """
     from dev_health_ops.api.services.licensing import TierLimitService
     from dev_health_ops.licensing.types import LicenseTier
-    from dev_health_ops.models.git import Base as GitBase
-    from tests._helpers import tables_of
 
-    # Schema with NO tier_limits table
     engine = create_engine("sqlite:///:memory:")
-    GitBase.metadata.create_all(engine, tables=tables_of(Integration))
+    statements: list[str] = []
+    errors: list[str] = []
+
+    @event.listens_for(engine, "connect")
+    def _disable_sqlite_driver_transaction_control(dbapi_connection, _record):
+        dbapi_connection.isolation_level = None
+
+    @event.listens_for(engine, "begin")
+    def _emit_explicit_begin(connection):
+        connection.exec_driver_sql("BEGIN")
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _record_statement(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        statements.append(statement)
+
+    @event.listens_for(engine, "handle_error")
+    def _record_error(exception_context):
+        errors.append(str(exception_context.original_exception))
 
     with Session(engine) as session:
         svc = TierLimitService(session)
-        # Must not raise; must return {} (fall through to hardcoded defaults)
         result = svc._get_db_tier_limits(LicenseTier.COMMUNITY.value)
         assert result == {}, (
             "Missing tier_limits must return empty dict (use hardcoded defaults)"
         )
-        # Session must remain usable (no rollback needed on this backend)
-        session.execute(__import__("sqlalchemy").text("SELECT 1"))
+
+        mechanism = []
+        for statement in statements:
+            normalized = " ".join(statement.upper().split())
+            if normalized.startswith("SAVEPOINT "):
+                mechanism.append("savepoint")
+            elif " FROM TIER_LIMITS " in f" {normalized} ":
+                mechanism.append("tier_limits query")
+            elif normalized.startswith("ROLLBACK TO SAVEPOINT "):
+                mechanism.append("savepoint rollback")
+        assert mechanism == [
+            "savepoint",
+            "tier_limits query",
+            "savepoint rollback",
+        ]
+        assert errors == ["no such table: tier_limits"]
+        assert session.execute(text("SELECT 1")).scalar_one() == 1
 
     engine.dispose()
 

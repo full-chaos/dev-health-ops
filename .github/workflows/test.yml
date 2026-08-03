@@ -116,17 +116,29 @@ jobs:
           # 4 vCPUs, so this matches `-n auto` there while staying predictable on
           # larger runners. Override PYTEST_XDIST_WORKERS to tune.
           PYTEST_XDIST_WORKERS: "4"
-          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py
+          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --ignore=tests/test_chaos_3337_source_class_postgres_migration.py
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs
           set -o pipefail
           ./ci/run_tests.sh unit 2>&1 | tee test-results/logs/unit-${{ matrix.python-version }}.log
 
-      - name: Run PostgreSQL 0066 migration tests
+      # These files carry their own `isolated_postgres`/`require_postgres_test_uri`
+      # fixtures that pytest.fail() (not skip) when CI/GITHUB_ACTIONS is set but
+      # the needed URI is missing, so they cannot run in "Run parallel unit test
+      # contract" above (no admin-privileged Postgres URI there) and are ignored
+      # from it instead. DEV_HEALTH_TEST_POSTGRES_ADMIN_URI's database component
+      # must be literally `postgres`: the fixture connects to it to CREATE/DROP a
+      # throwaway per-test database on the same server.
+      - name: Run PostgreSQL migration tests
         env:
           DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
-        run: pytest -q tests/test_0066_celery_river_cutover_postgres.py
+          DEV_HEALTH_TEST_POSTGRES_ADMIN_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
+        run: |
+          pytest -q \
+            tests/test_0066_celery_river_cutover_postgres.py \
+            tests/test_chaos_3337_source_class_postgres_migration.py \
+            tests/test_canonical_incident_feature_flag_postgres_migration.py
 
       - name: Upload junit test reports
         if: always()
@@ -209,6 +221,12 @@ jobs:
           SECONDARY_DATABASE_URI: mongodb://localhost:27017
           COVERAGE_THRESHOLD: "70"
           DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          # ci_tests() (ci/run_tests.sh) does not --ignore the postgres-gated
+          # migration test files, so they run inline here; without the admin
+          # URI they would pytest.fail() under CI (see the dedicated
+          # "Run PostgreSQL migration tests" step above for why `postgres` is
+          # required as the database component).
+          DEV_HEALTH_TEST_POSTGRES_ADMIN_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
           OTEL_ENABLED: "false"
           PYTEST_XDIST_WORKERS: "4"
         run: |

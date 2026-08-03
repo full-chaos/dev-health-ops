@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import pathlib
-import sys
 from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from typing import Any
 
 from internal.providersync.testdata import oracle_registry
+from internal.providersync.testdata.python_oracle_loader import load_live_module
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE = REPO_ROOT / "src/dev_health_ops/providers/jira/jsm_incidents.py"
 _OBSERVED_AT = datetime(2026, 7, 23, 12, 30, tzinfo=timezone.utc)
-sys.path.insert(0, str(REPO_ROOT / "src"))
-
-from dev_health_ops.providers.jira import jsm_incidents  # noqa: E402
+jsm_incidents = load_live_module(_SOURCE)
 
 
 def _module() -> Any:

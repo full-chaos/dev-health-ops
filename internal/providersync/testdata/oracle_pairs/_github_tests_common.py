@@ -2,20 +2,32 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
+import sys
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from dev_health_ops.metrics.testops_schemas import (
-    CoverageSnapshotRow,
-    TestCaseResultRow,
-    TestSuiteResultRow,
-)
-from dev_health_ops.processors.testops_ingest import ingest_report_members
 from internal.providersync.testdata.field_reflection import typed_dict_field_names
+from internal.providersync.testdata.python_oracle_loader import load_live_module
+
+if TYPE_CHECKING:
+    from dev_health_ops.metrics.testops_schemas import (
+        CoverageSnapshotRow,
+        TestCaseResultRow,
+        TestSuiteResultRow,
+    )
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 SCHEMA_SOURCE = REPO_ROOT / "src/dev_health_ops/metrics/testops_schemas.py"
+INGEST_SOURCE = REPO_ROOT / "src/dev_health_ops/processors/testops_ingest.py"
+
+_ingest_module = load_live_module(INGEST_SOURCE)
+_schemas_module = sys.modules["dev_health_ops.metrics.testops_schemas"]
+if not TYPE_CHECKING:
+    CoverageSnapshotRow = _schemas_module.CoverageSnapshotRow
+    TestCaseResultRow = _schemas_module.TestCaseResultRow
+    TestSuiteResultRow = _schemas_module.TestSuiteResultRow
+ingest_report_members = _ingest_module.ingest_report_members
 
 JUNIT = """<testsuites><testsuite name="api" time="3.5">
 <testcase name="passes" classname="tests/test_api.py::TestAPI" file="services/api/test_api.py" time="1.25"/>

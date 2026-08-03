@@ -218,7 +218,7 @@ check_live_python_oracles() {
   # `test` run) on every package in the tree instead of only the one that
   # structurally needs it, and it would make skipping this specific
   # coverage possible again by construction.
-  local proof_dir proof_file
+  local pair_count pair_file pair_source proof_dir proof_file
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-live-python-oracles.XXXXXX")"
 
   printf 'go test -count=1: internal/providersync (live Python oracle sources are outside the Go embed/cache boundary)\n'
@@ -233,9 +233,23 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  proof_file="${proof_dir}/providersync"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: providersync live Python oracle measurement did not occur\n' >&2
+  pair_count=0
+  while IFS= read -r pair_source; do
+    pair_count=$((pair_count + 1))
+    pair_file="${pair_source##*/}"
+    proof_file="${proof_dir}/${pair_file}"
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: live Python oracle pair %s was not executed successfully\n' \
+        "${pair_file}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done < <(
+    find "${ROOT}/internal/providersync/testdata/oracle_pairs" \
+      -maxdepth 1 -type f -name '*.py' ! -name '_*' -print | LC_ALL=C sort
+  )
+  if [ "${pair_count}" -eq 0 ]; then
+    printf 'ERROR: no checked-in live Python oracle pairs were discovered\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

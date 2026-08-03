@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "LaunchDarkly fail-closed hardening (CHAOS-3192)",
+  "build": ["go", "build", "./..."],
+  "mutations": [
+    {
+      "id": "CHAOS-3192-flag-cap-must-fail-closed",
+      "file": "internal/providersync/launchdarkly_route.go",
+      "find": "\tif flagsPage.CapReached {\n\t\treturn CompleteRouteBatch{}, ErrPaginationCapExceeded\n\t}",
+      "replace": "\tif false {\n\t\treturn CompleteRouteBatch{}, ErrPaginationCapExceeded\n\t}",
+      "rationale": "a 100-page flag fetch with a 101st full page must fail the unit before effects are built or the watermark advances",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestLaunchDarklyRouteFailsClosedOnFlagPaginationCap$",
+          "./internal/providersync/"
+        ]
+      ]
+    }
+  ]
+}

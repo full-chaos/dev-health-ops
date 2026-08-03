@@ -141,6 +141,9 @@ func (handler LaunchDarklyRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, fmt.Errorf("launchdarkly flags pagination: %w", err)
 	}
+	if flagsPage.CapReached {
+		return CompleteRouteBatch{}, ErrPaginationCapExceeded
+	}
 	auditPage, err := providerfoundation.CollectLaunchDarklyAuditPages(
 		ctx,
 		client,

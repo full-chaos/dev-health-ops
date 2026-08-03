@@ -25,8 +25,10 @@ the actual evidence entity ids returned (all ``meridian/web-app-*``, zero
 subject" -- it does NOT independently prove "multi-repository evidence
 actually appears," which would need the scripted provider extended with a
 non-hardcoded search step (not done here, time-boxed per wrap directive).
-The negative control's exclusion proof is unaffected by this limitation:
-it holds regardless of what the positive control can or can't show.
+This is reflected in the artifact's assertion names ("org_wide_not_scope_
+blocked", not "org_wide_multi_repo_evidence_present") and in
+``attack.unrelated-evidence.availability`` staying its own ``deferred``
+manifest row rather than folded into this one's ``proven_e2e`` claim.
 
 This scenario needs its OWN bring-up with ``--repo-count 2`` -- the shared
 ``run_ask_dev_compose.sh`` launcher seeds exactly one repository
@@ -35,6 +37,10 @@ lane's other smoke scripts depend on that single-repo shape. This script is
 therefore NOT wired into that launcher; run it against a standalone
 ``--repo-count 2`` bring-up instead (see the manifest entry for the exact
 compose invocation used to validate it).
+
+Writes a machine-checkable execution artifact to
+``tests/acceptance/artifacts/unrelated_evidence.json`` -- see
+``acceptance_artifact.py``.
 """
 
 from __future__ import annotations
@@ -44,15 +50,14 @@ import os
 import sys
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from dev_health_ops.api.dev.contracts import DevStreamEvent, StreamEventType
-from scripts.acceptance.prepare_ask_dev_acceptance import (
-    AcceptanceApi,
-    AcceptanceFailure,
-)
+from scripts.acceptance.acceptance_artifact import AcceptanceFailure, ScenarioRecorder
+from scripts.acceptance.prepare_ask_dev_acceptance import AcceptanceApi
 
 NAMED_REPO = "meridian/web-app"
 UNRELATED_REPO = "meridian/core-api"
@@ -61,32 +66,52 @@ ORG_WIDE_QUESTION = "What's the status of the organization's repositories?"
 
 _WAVE_3_1_FEATURE_KEY = "ask_dev_wave_3_1"
 
+SCENARIO_ID = "unrelated_evidence"
+_ARTIFACT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "acceptance"
+    / "artifacts"
+    / f"{SCENARIO_ID}.json"
+)
 
-def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise AcceptanceFailure(message)
 
-
-def _authenticate(api: AcceptanceApi, *, email: str, password: str) -> str:
+def _authenticate(
+    api: AcceptanceApi, recorder: ScenarioRecorder, *, email: str, password: str
+) -> str:
     login = api.request(
         "POST",
         "/api/v1/auth/login",
         {"email": email, "password": password},
     )
-    _require(isinstance(login, dict), "login response was not an object")
+    recorder.check("login_response_is_object", isinstance(login, dict), str(login))
     token = login.get("access_token")
     user = login.get("user")
-    _require(isinstance(token, str) and bool(token), "login returned no access token")
-    _require(isinstance(user, dict), "login returned no user")
+    recorder.check(
+        "login_returned_access_token",
+        isinstance(token, str) and bool(token),
+        "login returned no access token",
+    )
+    recorder.check(
+        "login_returned_user", isinstance(user, dict), "login returned no user"
+    )
     org_id = user.get("org_id")
-    _require(isinstance(org_id, str) and bool(org_id), "login returned no org_id")
+    recorder.check(
+        "login_returned_org_id",
+        isinstance(org_id, str) and bool(org_id),
+        "login returned no org_id",
+    )
     api.token = token
     return org_id
 
 
-def _enable_wave_3_1(api: AcceptanceApi, *, org_id: str) -> None:
+def _enable_wave_3_1(
+    api: AcceptanceApi, recorder: ScenarioRecorder, *, org_id: str
+) -> None:
     flags = api.request("GET", "/api/v1/admin/feature-flags")
-    _require(isinstance(flags, list), "feature flag response was not a list")
+    recorder.check(
+        "feature_flags_is_list", isinstance(flags, list), "response was not a list"
+    )
     flag = next(
         (
             item
@@ -95,13 +120,19 @@ def _enable_wave_3_1(api: AcceptanceApi, *, org_id: str) -> None:
         ),
         None,
     )
-    _require(
-        flag is not None, f"feature flag {_WAVE_3_1_FEATURE_KEY} is not registered"
+    recorder.check(
+        "wave_3_1_flag_registered",
+        flag is not None,
+        f"feature flag {_WAVE_3_1_FEATURE_KEY} is not registered",
     )
     assert flag is not None
     override_path = f"/api/v1/admin/orgs/{org_id}/feature-overrides"
     overrides = api.request("GET", override_path)
-    _require(isinstance(overrides, list), "feature override response was not a list")
+    recorder.check(
+        "feature_overrides_is_list",
+        isinstance(overrides, list),
+        "response was not a list",
+    )
     existing = next(
         (
             item
@@ -121,14 +152,17 @@ def _enable_wave_3_1(api: AcceptanceApi, *, org_id: str) -> None:
                 "reason": "CHAOS-3300 unrelated-evidence acceptance scenario",
             },
         )
-        _require(
+        recorder.check(
+            "wave_3_1_override_created",
             isinstance(created, dict) and created.get("is_enabled") is True,
             f"failed to enable {_WAVE_3_1_FEATURE_KEY}",
         )
     elif existing.get("is_enabled") is not True:
         override_id = existing.get("id")
-        _require(
-            isinstance(override_id, str), f"{_WAVE_3_1_FEATURE_KEY} override has no id"
+        recorder.check(
+            "wave_3_1_override_has_id",
+            isinstance(override_id, str),
+            f"{_WAVE_3_1_FEATURE_KEY} override has no id",
         )
         updated = api.request(
             "PATCH",
@@ -138,7 +172,8 @@ def _enable_wave_3_1(api: AcceptanceApi, *, org_id: str) -> None:
                 "reason": "CHAOS-3300 unrelated-evidence acceptance scenario",
             },
         )
-        _require(
+        recorder.check(
+            "wave_3_1_override_updated",
             isinstance(updated, dict) and updated.get("is_enabled") is True,
             f"failed to enable {_WAVE_3_1_FEATURE_KEY}",
         )
@@ -175,9 +210,16 @@ def _scope(org_id: str) -> dict[str, Any]:
 
 
 def _sse_request(
-    api: AcceptanceApi, path: str, payload: dict[str, Any]
+    api: AcceptanceApi,
+    recorder: ScenarioRecorder,
+    path: str,
+    payload: dict[str, Any],
 ) -> list[DevStreamEvent]:
-    _require(api.token is not None, "SSE request requires authentication")
+    recorder.check(
+        "sse_request_authenticated",
+        api.token is not None,
+        "SSE request requires authentication",
+    )
     request = Request(
         f"{api.base_url}{path}",
         data=json.dumps(payload, separators=(",", ":")).encode(),
@@ -200,7 +242,11 @@ def _sse_request(
     except URLError as exc:
         raise AcceptanceFailure(f"POST {path} failed: {exc.reason}") from exc
 
-    _require(content_type == "text/event-stream", f"unexpected SSE type {content_type}")
+    recorder.check(
+        "sse_content_type",
+        content_type == "text/event-stream",
+        f"unexpected SSE type {content_type}",
+    )
     events: list[DevStreamEvent] = []
     for frame in body.split("\n\n"):
         if not frame.strip():
@@ -212,15 +258,27 @@ def _sse_request(
                 event_name = line.removeprefix("event: ")
             elif line.startswith("data: "):
                 data_lines.append(line.removeprefix("data: "))
-        _require(event_name is not None, "SSE frame omitted event name")
-        _require(bool(data_lines), f"SSE {event_name} frame omitted data")
+        recorder.check(
+            "sse_frame_has_event_name",
+            event_name is not None,
+            "SSE frame omitted event name",
+        )
+        recorder.check(
+            "sse_frame_has_data",
+            bool(data_lines),
+            f"SSE {event_name} frame omitted data",
+        )
         raw = json.loads("\n".join(data_lines))
         events.append(DevStreamEvent.model_validate(raw))
     return events
 
 
 def _ask(
-    api: AcceptanceApi, *, scope: dict[str, Any], question: str
+    api: AcceptanceApi,
+    recorder: ScenarioRecorder,
+    *,
+    scope: dict[str, Any],
+    question: str,
 ) -> list[DevStreamEvent]:
     conversation = api.request(
         "POST",
@@ -231,14 +289,20 @@ def _ask(
             "title": "CHAOS-3300 unrelated-evidence acceptance",
         },
     )
-    _require(isinstance(conversation, dict), "conversation response was not an object")
+    recorder.check(
+        "conversation_response_is_object",
+        isinstance(conversation, dict),
+        "conversation response was not an object",
+    )
     conversation_id = conversation.get("conversation_id")
-    _require(
+    recorder.check(
+        "conversation_id_present",
         isinstance(conversation_id, str) and bool(conversation_id),
         "conversation response returned no conversation_id",
     )
     return _sse_request(
         api,
+        recorder,
         f"/api/v1/dev/conversations/{conversation_id}/messages",
         {
             "schema_version": "dev_message_request.v1",
@@ -252,13 +316,15 @@ def _ask(
     )
 
 
-def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
-    org_id = _authenticate(api, email=email, password=password)
-    _enable_wave_3_1(api, org_id=org_id)
+def smoke(
+    api: AcceptanceApi, recorder: ScenarioRecorder, *, email: str, password: str
+) -> tuple[str, str]:
+    org_id = _authenticate(api, recorder, email=email, password=password)
+    _enable_wave_3_1(api, recorder, org_id=org_id)
     scope = _scope(org_id)
 
     # --- negative control: named subject must exclude the unrelated repo ---
-    named_events = _ask(api, scope=scope, question=NAMED_QUESTION)
+    named_events = _ask(api, recorder, scope=scope, question=NAMED_QUESTION)
     named_scope_resolved = next(
         (
             event
@@ -267,7 +333,8 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
         ),
         None,
     )
-    _require(
+    recorder.check(
+        "named_scope_resolved_event_present",
         named_scope_resolved is not None
         and named_scope_resolved.scope_resolution is not None,
         "expected a scope.resolved event committing the named repository subject",
@@ -276,7 +343,8 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
         named_scope_resolved is not None
         and named_scope_resolved.scope_resolution is not None
     )
-    _require(
+    recorder.check(
+        "named_repository_committed",
         len(named_scope_resolved.scope_resolution.authorized_repository_ids) > 0,
         "the named repository subject was never committed to the resolved scope",
     )
@@ -288,13 +356,15 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
         ),
         None,
     )
-    _require(
+    recorder.check(
+        "named_answer_completed_event_present",
         named_completed is not None and named_completed.answer is not None,
         "named-subject question did not produce an answer",
     )
     assert named_completed is not None and named_completed.answer is not None
     named_answer = named_completed.answer
-    _require(
+    recorder.check(
+        "named_answer_status_not_error",
         named_answer.status.value != "error",
         "named-subject question returned an error-status answer",
     )
@@ -303,7 +373,8 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
         for item in named_answer.evidence
         if UNRELATED_REPO in str(item.entity_id)
     ]
-    _require(
+    recorder.check(
+        "unrelated_repo_excluded_from_named_answer",
         not leaked,
         f"unrelated repository {UNRELATED_REPO} leaked into the named-subject "
         f"answer's evidence: {leaked}",
@@ -311,7 +382,7 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
 
     # --- positive control: organization-wide question is not scope-blocked
     # (weaker than "multi-repo evidence appears" -- see module docstring) ---
-    org_events = _ask(api, scope=scope, question=ORG_WIDE_QUESTION)
+    org_events = _ask(api, recorder, scope=scope, question=ORG_WIDE_QUESTION)
     org_completed = next(
         (
             event
@@ -320,13 +391,15 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
         ),
         None,
     )
-    _require(
+    recorder.check(
+        "org_wide_answer_completed_event_present",
         org_completed is not None and org_completed.answer is not None,
         "organization-wide question did not produce an answer",
     )
     assert org_completed is not None and org_completed.answer is not None
     org_answer = org_completed.answer
-    _require(
+    recorder.check(
+        "org_wide_not_scope_blocked",
         org_answer.status.value != "error",
         "organization-wide question returned an error-status answer",
     )
@@ -342,18 +415,29 @@ def main() -> int:
     )
     email = os.getenv("TEST_SUPERUSER_EMAIL", "admin@devhealth.example")
     password = os.getenv("TEST_SUPERUSER_PASSWORD", "devhealth123")
+    recorder = ScenarioRecorder(
+        scenario_id=SCENARIO_ID, script_path=Path(__file__).resolve()
+    )
+    error_detail: str | None = None
+    named_run_id: str | None = None
+    org_run_id: str | None = None
     try:
-        named_run_id, org_run_id = smoke(api, email=email, password=password)
+        named_run_id, org_run_id = smoke(api, recorder, email=email, password=password)
     except AcceptanceFailure as exc:
+        error_detail = str(exc)
+    artifact = recorder.write(_ARTIFACT_PATH, error=error_detail)
+    if error_detail is not None:
         print(
-            f"Ask Dev unrelated-evidence acceptance smoke failed: {exc}",
+            f"Ask Dev unrelated-evidence acceptance smoke failed: {error_detail}",
             file=sys.stderr,
         )
+        print(f"wrote {_ARTIFACT_PATH} (status={artifact['status']})", file=sys.stderr)
         return 1
     print(
         "Ask Dev unrelated-evidence acceptance smoke completed "
         f"(named_run={named_run_id}, org_run={org_run_id})"
     )
+    print(f"wrote {_ARTIFACT_PATH} (status={artifact['status']})")
     return 0
 
 

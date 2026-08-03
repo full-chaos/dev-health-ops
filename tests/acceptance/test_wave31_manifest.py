@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
 import textwrap
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -9,15 +12,85 @@ import pytest
 from scripts.acceptance.wave31_manifest import (
     MANIFEST,
     MANIFEST_SCHEMA_VERSION,
+    MIGRATION_COEXISTENCE_REASON,
+    STACK3_WIRING_GAP_REASON,
+    TEAM_ATTRIBUTION_LIVE_DEFECT_REASON,
     ManifestIntegrityError,
     ManifestItem,
     build_report,
     execute_manifest,
     run_evidence_tests,
+    validate_execution_artifact,
     validate_manifest,
 )
 
 _ROOT = Path(__file__).resolve().parents[2]
+
+#: Independent literal snapshot of the golden reason constants -- see
+#: golden_reason_snapshots.json's own "_note" for why this file exists and
+#: is deliberately never imported by scripts/acceptance/wave31_manifest.py.
+_GOLDEN_REASON_SNAPSHOT: dict[str, str] = json.loads(
+    (Path(__file__).parent / "golden_reason_snapshots.json").read_text(encoding="utf-8")
+)
+
+
+def _init_throwaway_git_repo(root: Path) -> str:
+    """A minimal git repo in ``root`` with one commit, returning its SHA --
+    ``validate_execution_artifact``'s ancestry check needs a real repo."""
+
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+    (root / "placeholder.txt").write_text("x")
+    subprocess.run(["git", "add", "placeholder.txt"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=root, check=True)
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _write_valid_artifact(
+    root: Path,
+    *,
+    scenario_id: str,
+    script_relative: str,
+    commit_sha: str,
+    tree_clean: bool = True,
+    assertion_names: tuple[str, ...] = ("it_worked",),
+) -> Path:
+    script_path = root / script_relative
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("# a throwaway smoke script\n")
+    script_sha256 = hashlib.sha256(script_path.read_bytes()).hexdigest()
+    now = datetime.now(UTC).isoformat()
+    artifact = {
+        "schema_version": "ask_dev_acceptance_artifact.v1",
+        "scenario_id": scenario_id,
+        "tree_clean": tree_clean,
+        "tree_digest": hashlib.sha256(b"" if tree_clean else b"dirty").hexdigest(),
+        "script": script_relative,
+        "script_sha256": script_sha256,
+        "commit_sha": commit_sha,
+        "command": "python throwaway.py",
+        "started_at": now,
+        "finished_at": now,
+        "status": "passed",
+        "error": None,
+        "assertions": [
+            {"name": name, "passed": True, "detail": "yes"} for name in assertion_names
+        ],
+    }
+    artifact_path = root / "artifacts" / f"{scenario_id}.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+    return artifact_path
 
 
 def test_the_landed_manifest_has_no_integrity_errors() -> None:
@@ -88,25 +161,19 @@ def test_health_workload_deficiency_portfolio_items_are_honestly_blocked() -> No
     for item_id in blocked_ids:
         item = by_id[item_id]
         assert item.status == "blocked", f"{item_id} is not blocked: {item.status}"
-        assert item.blocked_reason is not None
-        assert "CORE_PLANS_BY_INTENT" in item.blocked_reason
-        assert "production_runtime.py" in item.blocked_reason
-        # Must read as sequenced-to-stack-3, not silently dropped: pointer to
-        # the ratified CHAOS-3303 deferral comment.
-        assert "SEQUENCED" in item.blocked_reason
-        assert "d0985e79-051d-4b6f-8833-6137e8511aec" in item.blocked_reason
-        assert "stack-3" in item.blocked_reason
+        # Codex finding (MED, 2026-08-02): substring checks here ("X" in
+        # reason) still pass after appending "SILENTLY REWORDED" to the
+        # string -- codex demonstrated this live. Exact equality against the
+        # named golden constant the manifest itself uses is the only check
+        # that fails on ANY wording change, not just a removed substring.
+        assert item.blocked_reason == STACK3_WIRING_GAP_REASON
 
 
 def test_migration_coexistence_gate_reflects_chaos_3306_decision() -> None:
     by_id = {item.id: item for item in MANIFEST}
     item = by_id["gate.migration-coexistence"]
     assert item.status == "blocked"
-    assert item.blocked_reason is not None
-    assert "CHAOS-3306" in item.blocked_reason
-    assert "no implementation or decommission work is authorized" in (
-        item.blocked_reason
-    )
+    assert item.blocked_reason == MIGRATION_COEXISTENCE_REASON
 
 
 def test_repeated_provider_gate_is_deferred_not_silently_green() -> None:
@@ -117,39 +184,89 @@ def test_repeated_provider_gate_is_deferred_not_silently_green() -> None:
     assert "credentials" in item.blocked_reason
 
 
-def test_team_status_live_defect_is_pinned_not_silently_folded_into_the_wiring_gap() -> (
-    None
-):
-    """Locks in the 2026-08-02 live-discovered team-attribution blocker.
+def test_team_attribution_flipped_to_proven_after_chaos_3332_fix() -> None:
+    """Locks in the 2026-08-02 team-attribution flip.
 
-    This is a DIFFERENT root cause from the 13 stack-3-sequenced items:
-    TEAM is a supported_subject_kind on status.entity.v2, a WIRED plan, so
-    this defect must never get silently merged into or explained away by
-    the CORE_PLANS_BY_INTENT wiring-gap reason -- doing so would hide a
-    live, 100%-reproducible bug behind an unrelated, already-tracked one.
+    The item started ``blocked`` behind a newly discovered, 100%-
+    reproducible live defect (CHAOS-3332) -- a DIFFERENT root cause from the
+    13 stack-3-sequenced items, since TEAM is a supported_subject_kind on
+    status.entity.v2, a WIRED plan. Once ops #1382 fixed the crash and this
+    lane re-ran the exact-commit pattern against a named team subject on the
+    fixed code, it flipped to ``proven_e2e`` with a real execution artifact.
+    This test locks the flip in: a regression back to ``blocked`` without a
+    corresponding new defect reason, or a silent switch to some other
+    status, must fail here.
     """
 
     by_id = {item.id: item for item in MANIFEST}
     item = by_id["attack.team-attribution.e2e-blocked-by-live-defect"]
-    assert item.status == "blocked"
-    assert item.blocked_reason is not None
-    assert "internal_error" in item.blocked_reason
-    assert "proceeded_committed_subject" in item.blocked_reason
-    assert "tool_call_count=0" in item.blocked_reason
-    # Routed by team-lead 2026-08-02: filed as CHAOS-3332. The manifest must
-    # point at the tracker, not just the raw repro.
-    assert "CHAOS-3332" in item.blocked_reason
-    # Explicitly distinguishes itself from the stack-3 wiring gap rather
-    # than silently reusing that shared reason string.
-    assert "NOT the CORE_PLANS_BY_INTENT gap" in item.blocked_reason
-    stack3_blocked_ids = {
-        "matrix.legitimate-org-wide-status",
-        "matrix.organization-portfolio-status",
-    }
-    stack3_reasons = {
-        by_id[stack3_id].blocked_reason for stack3_id in stack3_blocked_ids
-    }
-    assert item.blocked_reason not in stack3_reasons
+    assert item.status == "proven_e2e"
+    assert item.blocked_reason is None
+    assert item.requires_live_infra is True
+    assert item.execution_artifact == "tests/acceptance/artifacts/team_attribution.json"
+    assert "scripts/acceptance/smoke_ask_dev_team_attribution.py" in item.evidence
+    assert "CHAOS-3332" in item.description
+    assert "#1382" in item.description
+    # Codex finding (MED, 2026-08-02, round 2): the row's claim is exactly
+    # the CHAOS-3333 characterization (degraded, metrics empty, limitation
+    # named) -- asserted directly by the smoke script and bound here so a
+    # future change cannot silently widen or narrow what this row proves.
+    assert item.required_assertion_names == (
+        "named_team_committed",
+        "no_internal_error_event",
+        "answer_completed_event_present",
+        "answer_status_is_degraded",
+        "metrics_empty_for_team_scope",
+        "limitation_names_unavailable_metric_source",
+    )
+    # The original repro is preserved as a historical record, not deleted --
+    # this proves the constant still exists and still documents what was
+    # found, even though it is no longer this item's blocked_reason.
+    assert "CHAOS-3332" in TEAM_ATTRIBUTION_LIVE_DEFECT_REASON
+    assert "NOT the CORE_PLANS_BY_INTENT gap" in TEAM_ATTRIBUTION_LIVE_DEFECT_REASON
+    assert TEAM_ATTRIBUTION_LIVE_DEFECT_REASON != STACK3_WIRING_GAP_REASON
+
+
+def test_golden_reason_constants_match_independent_snapshot() -> None:
+    """Codex finding (MED, 2026-08-02, round 2): the tests above import
+    STACK3_WIRING_GAP_REASON etc. from the SAME module that constructs the
+    manifest, so a mutation to one of these constants moves both the
+    production value and this test's comparison value together -- codex
+    demonstrated live that appending "SILENTLY REWORDED" to a constant and
+    re-running the suite stays green, because ``item.blocked_reason ==
+    CONSTANT`` is trivially true when both sides are literally the same
+    mutated object. ``golden_reason_snapshots.json`` is a manually
+    maintained, independent literal copy that
+    ``scripts/acceptance/wave31_manifest.py`` never reads -- comparing the
+    live constant against it is the only check with the SILENTLY-REWORDED
+    property: a wording change here without a matching edit to the JSON
+    snapshot must fail.
+    """
+
+    assert (
+        STACK3_WIRING_GAP_REASON == _GOLDEN_REASON_SNAPSHOT["STACK3_WIRING_GAP_REASON"]
+    )
+    assert (
+        MIGRATION_COEXISTENCE_REASON
+        == _GOLDEN_REASON_SNAPSHOT["MIGRATION_COEXISTENCE_REASON"]
+    )
+    assert (
+        TEAM_ATTRIBUTION_LIVE_DEFECT_REASON
+        == _GOLDEN_REASON_SNAPSHOT["TEAM_ATTRIBUTION_LIVE_DEFECT_REASON"]
+    )
+
+
+def test_golden_reason_mutation_is_actually_caught_not_just_theoretically() -> None:
+    """RED-then-GREEN proof for the fix above, not just an assertion that
+    could pass by construction. Simulates codex's exact demonstrated bypass
+    (append "SILENTLY REWORDED" to a golden constant) against a COPY of the
+    live value, and proves that copy no longer matches the independent
+    snapshot -- the specific failure mode
+    test_golden_reason_constants_match_independent_snapshot exists to catch.
+    """
+
+    mutated = STACK3_WIRING_GAP_REASON + " SILENTLY REWORDED"
+    assert mutated != _GOLDEN_REASON_SNAPSHOT["STACK3_WIRING_GAP_REASON"]
 
 
 # --- guard behavior: validate_manifest must actually catch every defect it
@@ -227,17 +344,353 @@ def test_validate_manifest_catches_unknown_status() -> None:
     assert any("unknown status" in error for error in errors)
 
 
-def test_validate_manifest_is_clean_over_a_single_well_formed_item() -> None:
+def test_validate_manifest_is_clean_over_a_single_well_formed_item(
+    tmp_path: Path,
+) -> None:
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="well_formed",
+        script_relative="smoke_well_formed.py",
+        commit_sha=commit_sha,
+    )
     clean = ManifestItem(
         id="test.well-formed",
         category="blocking_matrix",
         description="a correctly evidenced item",
         status="proven_e2e",
-        evidence=("tests/acceptance/ask-dev-oracle.v1.json",),
-        content_markers=("ask_dev_acceptance_oracle.v1",),
+        evidence=("smoke_well_formed.py",),
         requires_live_infra=True,
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
     )
-    assert validate_manifest(_ROOT, (clean,)) == []
+    assert validate_manifest(tmp_path, (clean,)) == []
+
+
+# --- validate_execution_artifact: codex finding (HIGH, 2026-08-02) --
+# a proven_e2e claim previously needed no machine-verifiable execution at
+# all; every check below closes one specific way that could still be true ---
+
+
+def _proven_e2e_item(
+    *,
+    execution_artifact: str | None,
+    evidence: str,
+    required_assertion_names: tuple[str, ...] = (),
+) -> ManifestItem:
+    return ManifestItem(
+        id="test.e2e-claim",
+        category="blocking_matrix",
+        description="a proven_e2e claim under test",
+        status="proven_e2e",
+        evidence=(evidence,),
+        requires_live_infra=True,
+        execution_artifact=execution_artifact,
+        required_assertion_names=required_assertion_names,
+    )
+
+
+def test_validate_execution_artifact_accepts_a_real_passing_artifact(
+    tmp_path: Path,
+) -> None:
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path, scenario_id="ok", script_relative="smoke_ok.py", commit_sha=commit_sha
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_ok.py",
+    )
+    assert validate_execution_artifact(tmp_path, item) == []
+
+
+def test_validate_execution_artifact_rejects_a_fabricated_row_with_no_artifact(
+    tmp_path: Path,
+) -> None:
+    """The exact codex repro: an evidence file exists and
+    requires_live_infra=True, but the row was never actually run."""
+
+    (tmp_path / "smoke_fabricated.py").write_text("# never run\n")
+    item = _proven_e2e_item(execution_artifact=None, evidence="smoke_fabricated.py")
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("no execution_artifact" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_a_missing_artifact_file(
+    tmp_path: Path,
+) -> None:
+    item = _proven_e2e_item(
+        execution_artifact="artifacts/does_not_exist.json",
+        evidence="smoke_missing.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("does not exist" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_malformed_json(tmp_path: Path) -> None:
+    artifact_path = tmp_path / "artifacts" / "broken.json"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("{not valid json")
+    item = _proven_e2e_item(
+        execution_artifact="artifacts/broken.json", evidence="smoke_broken.py"
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("not valid JSON" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_a_failing_assertion(
+    tmp_path: Path,
+) -> None:
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="has_failure",
+        script_relative="smoke_has_failure.py",
+        commit_sha=commit_sha,
+    )
+    artifact = json.loads(artifact_path.read_text())
+    artifact["assertions"].append(
+        {"name": "it_actually_broke", "passed": False, "detail": "nope"}
+    )
+    artifact["status"] = "failed"
+    artifact_path.write_text(json.dumps(artifact))
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_has_failure.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("failing assertion" in error for error in errors)
+    assert any("status is 'failed'" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_a_commit_not_reachable_from_head(
+    tmp_path: Path,
+) -> None:
+    """A fabricated or copied artifact citing a commit SHA that never led to
+    the current tree -- e.g. a hex string that simply doesn't exist."""
+
+    _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="bad_commit",
+        script_relative="smoke_bad_commit.py",
+        commit_sha="0" * 40,
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_bad_commit.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("is not an ancestor of" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_a_script_edited_since_it_ran(
+    tmp_path: Path,
+) -> None:
+    """The scenario the row cites was validated against different code than
+    what exists now -- codex's "stale" case."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="edited",
+        script_relative="smoke_edited.py",
+        commit_sha=commit_sha,
+    )
+    (tmp_path / "smoke_edited.py").write_text(
+        "# edited after the artifact was minted\n"
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_edited.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("script_sha256 does not match" in error for error in errors)
+
+
+# --- artifact-integrity round 2: codex finding (HIGH, 2026-08-02, round 2)
+# -- "artifact exists and all-passes" did not bind the artifact to the row
+# citing it, nor prove the tree that produced it was clean. Each test below
+# plants exactly the mutation codex named and proves it fails now. ---
+
+
+def test_validate_execution_artifact_rejects_an_artifact_swap(tmp_path: Path) -> None:
+    """codex mutation: swap scenario_a's artifact content onto scenario_b's
+    row (e.g. a copy-paste or a stale symlink) -- both artifacts are
+    individually all-passing, but this row expects ITS OWN scenario."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    other_artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="scenario_a",
+        script_relative="smoke_scenario_a.py",
+        commit_sha=commit_sha,
+    )
+    # This row's execution_artifact filename says "scenario_b", but the
+    # file's own recorded scenario_id (copied wholesale from scenario_a)
+    # says "scenario_a" -- exactly what an artifact swap looks like.
+    swapped_path = tmp_path / "artifacts" / "scenario_b.json"
+    swapped_path.write_text(other_artifact_path.read_text(encoding="utf-8"))
+    item = _proven_e2e_item(
+        execution_artifact="artifacts/scenario_b.json",
+        evidence="smoke_scenario_a.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("scenario_id" in error and "does not match" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_an_ancient_but_dirty_tree(
+    tmp_path: Path,
+) -> None:
+    """codex mutation: the recorded commit IS a genuine ancestor of HEAD (the
+    ancestor check alone would pass), but the tree was dirty when the
+    artifact was minted -- commit_sha being a true ancestor does not prove
+    commit_sha actually describes what ran."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="dirty",
+        script_relative="smoke_dirty.py",
+        commit_sha=commit_sha,
+        tree_clean=False,
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_dirty.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("tree_clean" in error for error in errors)
+    # Confirms the ancestor check by itself is NOT what is failing here --
+    # tree_clean is a genuinely independent gate, not a restatement.
+    assert not any("is not an ancestor of" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_an_unrecorded_tree_state(
+    tmp_path: Path,
+) -> None:
+    """A legacy artifact minted before tree_clean existed must be treated as
+    unrecorded, not silently accepted as clean by default."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="legacy",
+        script_relative="smoke_legacy.py",
+        commit_sha=commit_sha,
+    )
+    artifact = json.loads(artifact_path.read_text())
+    del artifact["tree_clean"]
+    artifact_path.write_text(json.dumps(artifact))
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_legacy.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("tree_clean" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_a_fabricated_assertions_list(
+    tmp_path: Path,
+) -> None:
+    """codex mutation: assertions is a list of bare strings, not dicts. The
+    original ``isinstance(entry, dict)`` filter silently excluded these from
+    the "failing" check, so ``["fabricated"]`` validated clean as long as
+    status=="passed" -- this must now be rejected outright."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="fabricated",
+        script_relative="smoke_fabricated_list.py",
+        commit_sha=commit_sha,
+    )
+    artifact = json.loads(artifact_path.read_text())
+    artifact["assertions"] = ["fabricated"]
+    artifact_path.write_text(json.dumps(artifact))
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_fabricated_list.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("non-dict assertion" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_a_missing_required_assertion(
+    tmp_path: Path,
+) -> None:
+    """An artifact can be real, current, and all-passing, and still not
+    prove THIS row's specific claim if the load-bearing assertion this row
+    names never ran (e.g. only boilerplate auth/SSE-plumbing checks fired)."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="incomplete",
+        script_relative="smoke_incomplete.py",
+        commit_sha=commit_sha,
+        assertion_names=("login_response_is_object",),
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_incomplete.py",
+        required_assertion_names=("the_actual_claim_this_row_makes",),
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("missing required" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_a_leaked_jwt(tmp_path: Path) -> None:
+    """Codex finding (HIGH, 2026-08-02): six committed artifacts leaked live
+    JWTs via ``str(response)`` assertion details. Redaction at the recorder
+    is the primary fix; this is the independent backstop -- an artifact
+    whose raw bytes still contain a JWT-shaped token must fail the manifest
+    even if every assertion otherwise passes."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="leaky",
+        script_relative="smoke_leaky.py",
+        commit_sha=commit_sha,
+    )
+    artifact = json.loads(artifact_path.read_text())
+    fake_jwt = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        ".eyJzdWIiOiJ0ZXN0In0"
+        ".c2lnbmF0dXJlLXBsYWNlaG9sZGVyLWJ5dGVz"
+    )
+    artifact["assertions"][0]["detail"] = f"leaked token: {fake_jwt}"
+    artifact_path.write_text(json.dumps(artifact))
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_leaky.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("JWT-shaped token" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_a_script_outside_its_own_evidence(
+    tmp_path: Path,
+) -> None:
+    """The script that produced the artifact must be one of THIS row's cited
+    evidence paths -- otherwise a row could bind to any script's artifact by
+    filename alone, regardless of what evidence it actually names."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="wrong_script",
+        script_relative="smoke_actually_ran.py",
+        commit_sha=commit_sha,
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_something_else_entirely.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any(
+        "is not among this item's own evidence paths" in error for error in errors
+    )
 
 
 def test_validate_manifest_catches_proven_unit_with_no_test_nodeids() -> None:
@@ -349,6 +802,115 @@ def test_run_evidence_tests_over_a_mixed_pass_fail_error_file(tmp_path: Path) ->
     }
 
 
+def test_run_evidence_tests_marks_a_skipped_test_as_skipped_not_passed(
+    tmp_path: Path,
+) -> None:
+    """Codex finding (MED, 2026-08-02): a measurement that never ran must
+    never read as passed. A skip is exactly that -- the assertion body
+    never executed."""
+
+    (tmp_path / "test_throwaway_skip.py").write_text(
+        textwrap.dedent(
+            """\
+            import pytest
+
+            @pytest.mark.skip(reason="deliberately never measured")
+            def test_it_skips() -> None:
+                assert True
+            """
+        )
+    )
+    outcomes = run_evidence_tests(tmp_path, ("test_throwaway_skip.py::test_it_skips",))
+    assert outcomes == {"test_throwaway_skip.py::test_it_skips": "skipped"}
+
+
+def test_run_evidence_tests_marks_an_xfail_test_as_xfail_not_passed(
+    tmp_path: Path,
+) -> None:
+    """Codex finding (MED, 2026-08-02): the original code mapped XFAIL to
+    "passed". An xfail means the behavior the manifest cites as proof is
+    documented as EXPECTED TO FAIL -- the opposite of proof it works."""
+
+    (tmp_path / "test_throwaway_xfail.py").write_text(
+        textwrap.dedent(
+            """\
+            import pytest
+
+            @pytest.mark.xfail(reason="known broken, not fixed yet")
+            def test_it_xfails() -> None:
+                assert False
+            """
+        )
+    )
+    outcomes = run_evidence_tests(
+        tmp_path, ("test_throwaway_xfail.py::test_it_xfails",)
+    )
+    assert outcomes == {"test_throwaway_xfail.py::test_it_xfails": "xfail"}
+
+
+def test_run_evidence_tests_marks_an_xpass_test_as_xpass_not_passed(
+    tmp_path: Path,
+) -> None:
+    """An xpass (an xfail-marked test that unexpectedly passed) is a claim
+    that something is STILL documented as broken, not live proof it works --
+    must not be coerced into "passed" either."""
+
+    (tmp_path / "test_throwaway_xpass.py").write_text(
+        textwrap.dedent(
+            """\
+            import pytest
+
+            @pytest.mark.xfail(reason="thought this was broken")
+            def test_it_xpasses() -> None:
+                assert True
+            """
+        )
+    )
+    outcomes = run_evidence_tests(
+        tmp_path, ("test_throwaway_xpass.py::test_it_xpasses",)
+    )
+    assert outcomes == {"test_throwaway_xpass.py::test_it_xpasses": "xpass"}
+
+
+def test_execute_manifest_rejects_skipped_xfail_and_xpass_cited_tests(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "test_throwaway_nonpassing.py").write_text(
+        textwrap.dedent(
+            """\
+            import pytest
+
+            @pytest.mark.skip(reason="never measured")
+            def test_skipped() -> None:
+                assert True
+
+            @pytest.mark.xfail(reason="known broken")
+            def test_xfailed() -> None:
+                assert False
+
+            @pytest.mark.xfail(reason="thought broken")
+            def test_xpassed() -> None:
+                assert True
+            """
+        )
+    )
+    claims = tuple(
+        ManifestItem(
+            id=f"test.nonpassing-{name}",
+            category="blocking_matrix",
+            description="a claim resting on a non-passing pytest outcome",
+            status="proven_unit",
+            evidence=("test_throwaway_nonpassing.py",),
+            test_nodeids=(f"test_throwaway_nonpassing.py::{name}",),
+        )
+        for name in ("test_skipped", "test_xfailed", "test_xpassed")
+    )
+    errors = execute_manifest(tmp_path, claims)
+    assert any("test_skipped -> skipped" in error for error in errors)
+    assert any("test_xfailed -> xfail" in error for error in errors)
+    assert any("test_xpassed -> xpass" in error for error in errors)
+
+
 def test_execute_manifest_reports_a_failing_cited_test(tmp_path: Path) -> None:
     (tmp_path / "test_throwaway_broken_claim.py").write_text(
         "def test_the_claim() -> None:\n    assert False\n"
@@ -436,6 +998,8 @@ def test_build_report_shape_over_the_real_manifest() -> None:
             "blocked_reason",
             "test_nodeids",
             "requires_live_infra",
+            "execution_artifact",
+            "required_assertion_names",
         }
     # JSON-round-trippable -- a report a downstream tool cannot parse is not
     # a machine-readable deliverable.

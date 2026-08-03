@@ -9,6 +9,11 @@ same scripted-provider default flow the existing positive-control oracle
 already proves safe, but for two more of CHAOS-3300's 6 wired core question
 classes (``QuestionClass.DATA_TRUST`` / ``QuestionClass.REMAINING_WORK``)
 rather than only the oracle's single ``observed_change`` question.
+
+Writes one machine-checkable execution artifact per scenario --
+``tests/acceptance/artifacts/data_trust_organization_wide.json`` and
+``tests/acceptance/artifacts/remaining_work_organization_wide.json`` -- see
+``acceptance_artifact.py``.
 """
 
 from __future__ import annotations
@@ -19,14 +24,18 @@ import sys
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from dev_health_ops.api.dev.contracts import DevStreamEvent, StreamEventType
-from scripts.acceptance.prepare_ask_dev_acceptance import (
-    AcceptanceApi,
-    AcceptanceFailure,
+from dev_health_ops.llm.agent.scripted_openai_service import LIST_METRICS_QUESTION
+from scripts.acceptance.acceptance_artifact import AcceptanceFailure, ScenarioRecorder
+from scripts.acceptance.prepare_ask_dev_acceptance import AcceptanceApi
+
+_ARTIFACT_DIR = (
+    Path(__file__).resolve().parents[2] / "tests" / "acceptance" / "artifacts"
 )
 
 
@@ -39,36 +48,51 @@ class Scenario:
 
 SCENARIOS: tuple[Scenario, ...] = (
     Scenario(
-        scenario_id="data_trust.organization_wide",
+        scenario_id="data_trust_organization_wide",
         question="Can we trust the data in this scope, or is anything stale or unconfigured?",
         question_class="data_trust",
     ),
     Scenario(
-        scenario_id="remaining_work.organization_wide",
+        scenario_id="remaining_work_organization_wide",
         question="What work remains in this scope right now?",
         question_class="remaining_work",
+    ),
+    # The literal CHAOS-3262 reproduction question -- scripted_openai_
+    # service.py special-cases exactly this string to drive a deterministic
+    # list_metrics.v1 tool call (see LIST_METRICS_QUESTION's docstring).
+    Scenario(
+        scenario_id="registered_metrics_organization_wide",
+        question=LIST_METRICS_QUESTION,
+        question_class="registered_statistics",
     ),
 )
 
 
-def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise AcceptanceFailure(message)
-
-
-def _authenticate(api: AcceptanceApi, *, email: str, password: str) -> str:
+def _authenticate(
+    api: AcceptanceApi, recorder: ScenarioRecorder, *, email: str, password: str
+) -> str:
     login = api.request(
         "POST",
         "/api/v1/auth/login",
         {"email": email, "password": password},
     )
-    _require(isinstance(login, dict), "login response was not an object")
+    recorder.check("login_response_is_object", isinstance(login, dict), str(login))
     token = login.get("access_token")
     user = login.get("user")
-    _require(isinstance(token, str) and bool(token), "login returned no access token")
-    _require(isinstance(user, dict), "login returned no user")
+    recorder.check(
+        "login_returned_access_token",
+        isinstance(token, str) and bool(token),
+        "login returned no access token",
+    )
+    recorder.check(
+        "login_returned_user", isinstance(user, dict), "login returned no user"
+    )
     org_id = user.get("org_id")
-    _require(isinstance(org_id, str) and bool(org_id), "login returned no org_id")
+    recorder.check(
+        "login_returned_org_id",
+        isinstance(org_id, str) and bool(org_id),
+        "login returned no org_id",
+    )
     api.token = token
     return org_id
 
@@ -103,9 +127,16 @@ def _scope(org_id: str) -> dict[str, Any]:
 
 
 def _sse_request(
-    api: AcceptanceApi, path: str, payload: dict[str, Any]
+    api: AcceptanceApi,
+    recorder: ScenarioRecorder,
+    path: str,
+    payload: dict[str, Any],
 ) -> list[DevStreamEvent]:
-    _require(api.token is not None, "SSE request requires authentication")
+    recorder.check(
+        "sse_request_authenticated",
+        api.token is not None,
+        "SSE request requires authentication",
+    )
     request = Request(
         f"{api.base_url}{path}",
         data=json.dumps(payload, separators=(",", ":")).encode(),
@@ -128,7 +159,11 @@ def _sse_request(
     except URLError as exc:
         raise AcceptanceFailure(f"POST {path} failed: {exc.reason}") from exc
 
-    _require(content_type == "text/event-stream", f"unexpected SSE type {content_type}")
+    recorder.check(
+        "sse_content_type",
+        content_type == "text/event-stream",
+        f"unexpected SSE type {content_type}",
+    )
     events: list[DevStreamEvent] = []
     for frame in body.split("\n\n"):
         if not frame.strip():
@@ -140,15 +175,28 @@ def _sse_request(
                 event_name = line.removeprefix("event: ")
             elif line.startswith("data: "):
                 data_lines.append(line.removeprefix("data: "))
-        _require(event_name is not None, "SSE frame omitted event name")
-        _require(bool(data_lines), f"SSE {event_name} frame omitted data")
+        recorder.check(
+            "sse_frame_has_event_name",
+            event_name is not None,
+            "SSE frame omitted event name",
+        )
+        recorder.check(
+            "sse_frame_has_data",
+            bool(data_lines),
+            f"SSE {event_name} frame omitted data",
+        )
         raw = json.loads("\n".join(data_lines))
         events.append(DevStreamEvent.model_validate(raw))
     return events
 
 
 def _run_scenario(
-    api: AcceptanceApi, scenario: Scenario, *, org_id: str, scope: dict[str, Any]
+    api: AcceptanceApi,
+    recorder: ScenarioRecorder,
+    scenario: Scenario,
+    *,
+    org_id: str,
+    scope: dict[str, Any],
 ) -> str:
     conversation = api.request(
         "POST",
@@ -159,14 +207,20 @@ def _run_scenario(
             "title": f"CHAOS-3300 core-intent acceptance: {scenario.scenario_id}",
         },
     )
-    _require(isinstance(conversation, dict), "conversation response was not an object")
+    recorder.check(
+        "conversation_response_is_object",
+        isinstance(conversation, dict),
+        "conversation response was not an object",
+    )
     conversation_id = conversation.get("conversation_id")
-    _require(
+    recorder.check(
+        "conversation_id_present",
         isinstance(conversation_id, str) and bool(conversation_id),
         "conversation response returned no conversation_id",
     )
     events = _sse_request(
         api,
+        recorder,
         f"/api/v1/dev/conversations/{conversation_id}/messages",
         {
             "schema_version": "dev_message_request.v1",
@@ -182,42 +236,76 @@ def _run_scenario(
         (event for event in events if event.event is StreamEventType.ANSWER_COMPLETED),
         None,
     )
+    detail = "no answer completed"
     if completed is None or completed.answer is None:
         failed = next(
             (event for event in events if event.event is StreamEventType.ERROR), None
         )
-        detail = "no answer completed"
         if failed is not None and failed.error is not None:
             detail = (
                 f"Ask Dev run failed with {failed.error.code}: "
                 f"{failed.error.safe_message}"
             )
-        raise AcceptanceFailure(f"{scenario.scenario_id}: {detail}")
+    # Codex finding (MED, 2026-08-02, round 2): unconditional so this
+    # assertion can appear passed=True in a real successful artifact -- see
+    # smoke_ask_dev_exact_commit.py's identical fix for the full rationale.
+    recorder.check(
+        "answer_completed_event_present",
+        completed is not None and completed.answer is not None,
+        detail,
+    )
+    assert completed is not None and completed.answer is not None
     answer = completed.answer
-    _require(
+    recorder.check(
+        "answer_status_not_error",
         answer.status.value != "error",
-        f"{scenario.scenario_id}: Ask Dev returned an error-status answer",
+        "Ask Dev returned an error-status answer",
     )
-    _require(
+    recorder.check(
+        "answer_summary_not_empty",
         bool(answer.direct_summary.strip()),
-        f"{scenario.scenario_id}: answer summary was empty",
+        "answer summary was empty",
     )
-    _require(
+    recorder.check(
+        "stream_terminated_as_answer",
         events[-1].terminal_kind == "answer",
-        f"{scenario.scenario_id}: stream did not terminate as answer",
+        "stream did not terminate as answer",
     )
     return conversation_id
 
 
-def smoke(api: AcceptanceApi, *, email: str, password: str) -> dict[str, str]:
-    org_id = _authenticate(api, email=email, password=password)
+def smoke(
+    api: AcceptanceApi, *, email: str, password: str
+) -> dict[str, dict[str, Any]]:
+    """Runs every scenario, writing one artifact each, and returns
+    ``{scenario_id: artifact}``. Does not stop at the first scenario's
+    failure -- each scenario's recorder and artifact are independent, so one
+    broken scenario does not prevent the others from being measured."""
+
+    bootstrap_recorder = ScenarioRecorder(
+        scenario_id="core_intents_bootstrap", script_path=Path(__file__).resolve()
+    )
+    org_id = _authenticate(api, bootstrap_recorder, email=email, password=password)
     scope = _scope(org_id)
-    results: dict[str, str] = {}
+    artifacts: dict[str, dict[str, Any]] = {}
+    failures: list[str] = []
     for scenario in SCENARIOS:
-        results[scenario.scenario_id] = _run_scenario(
-            api, scenario, org_id=org_id, scope=scope
+        recorder = ScenarioRecorder(
+            scenario_id=scenario.scenario_id, script_path=Path(__file__).resolve()
         )
-    return results
+        error_detail: str | None = None
+        try:
+            _run_scenario(api, recorder, scenario, org_id=org_id, scope=scope)
+        except AcceptanceFailure as exc:
+            error_detail = str(exc)
+            failures.append(f"{scenario.scenario_id}: {error_detail}")
+        artifact_path = _ARTIFACT_DIR / f"{scenario.scenario_id}.json"
+        artifacts[scenario.scenario_id] = recorder.write(
+            artifact_path, error=error_detail
+        )
+    if failures:
+        raise AcceptanceFailure("; ".join(failures))
+    return artifacts
 
 
 def main() -> int:
@@ -230,13 +318,13 @@ def main() -> int:
     email = os.getenv("TEST_SUPERUSER_EMAIL", "admin@devhealth.example")
     password = os.getenv("TEST_SUPERUSER_PASSWORD", "devhealth123")
     try:
-        results = smoke(api, email=email, password=password)
+        artifacts = smoke(api, email=email, password=password)
     except AcceptanceFailure as exc:
         print(f"Ask Dev core-intents acceptance smoke failed: {exc}", file=sys.stderr)
         return 1
     print("Ask Dev core-intents acceptance smoke completed:")
-    for scenario_id, conversation_id in results.items():
-        print(f"  {scenario_id}: conversation={conversation_id}")
+    for scenario_id, artifact in artifacts.items():
+        print(f"  {scenario_id}: status={artifact['status']}")
     return 0
 
 

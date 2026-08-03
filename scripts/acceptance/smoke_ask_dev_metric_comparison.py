@@ -12,6 +12,10 @@ provider's answer narrative is intent-blind (it always narrates
 ``items_completed`` regardless of what was actually compared), so the
 plan-governed investigation result is the only place this scenario is
 actually observable end to end today.
+
+Writes a machine-checkable execution artifact to
+``tests/acceptance/artifacts/metric_comparison.json`` -- see
+``acceptance_artifact.py``.
 """
 
 from __future__ import annotations
@@ -21,15 +25,14 @@ import os
 import sys
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from dev_health_ops.api.dev.contracts import DevStreamEvent, StreamEventType
-from scripts.acceptance.prepare_ask_dev_acceptance import (
-    AcceptanceApi,
-    AcceptanceFailure,
-)
+from scripts.acceptance.acceptance_artifact import AcceptanceFailure, ScenarioRecorder
+from scripts.acceptance.prepare_ask_dev_acceptance import AcceptanceApi
 
 #: Exact-alias phrasing (see question_interpreter._metric_aliases): each
 #: metric name must appear verbatim (registry value-with-spaces or label,
@@ -39,32 +42,52 @@ REQUESTED_METRIC_IDS = ("items_completed", "cyclomatic_per_kloc")
 
 _WAVE_3_1_FEATURE_KEY = "ask_dev_wave_3_1"
 
+SCENARIO_ID = "metric_comparison"
+_ARTIFACT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "acceptance"
+    / "artifacts"
+    / f"{SCENARIO_ID}.json"
+)
 
-def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise AcceptanceFailure(message)
 
-
-def _authenticate(api: AcceptanceApi, *, email: str, password: str) -> str:
+def _authenticate(
+    api: AcceptanceApi, recorder: ScenarioRecorder, *, email: str, password: str
+) -> str:
     login = api.request(
         "POST",
         "/api/v1/auth/login",
         {"email": email, "password": password},
     )
-    _require(isinstance(login, dict), "login response was not an object")
+    recorder.check("login_response_is_object", isinstance(login, dict), str(login))
     token = login.get("access_token")
     user = login.get("user")
-    _require(isinstance(token, str) and bool(token), "login returned no access token")
-    _require(isinstance(user, dict), "login returned no user")
+    recorder.check(
+        "login_returned_access_token",
+        isinstance(token, str) and bool(token),
+        "login returned no access token",
+    )
+    recorder.check(
+        "login_returned_user", isinstance(user, dict), "login returned no user"
+    )
     org_id = user.get("org_id")
-    _require(isinstance(org_id, str) and bool(org_id), "login returned no org_id")
+    recorder.check(
+        "login_returned_org_id",
+        isinstance(org_id, str) and bool(org_id),
+        "login returned no org_id",
+    )
     api.token = token
     return org_id
 
 
-def _enable_wave_3_1(api: AcceptanceApi, *, org_id: str) -> None:
+def _enable_wave_3_1(
+    api: AcceptanceApi, recorder: ScenarioRecorder, *, org_id: str
+) -> None:
     flags = api.request("GET", "/api/v1/admin/feature-flags")
-    _require(isinstance(flags, list), "feature flag response was not a list")
+    recorder.check(
+        "feature_flags_is_list", isinstance(flags, list), "response was not a list"
+    )
     flag = next(
         (
             item
@@ -73,13 +96,19 @@ def _enable_wave_3_1(api: AcceptanceApi, *, org_id: str) -> None:
         ),
         None,
     )
-    _require(
-        flag is not None, f"feature flag {_WAVE_3_1_FEATURE_KEY} is not registered"
+    recorder.check(
+        "wave_3_1_flag_registered",
+        flag is not None,
+        f"feature flag {_WAVE_3_1_FEATURE_KEY} is not registered",
     )
     assert flag is not None
     override_path = f"/api/v1/admin/orgs/{org_id}/feature-overrides"
     overrides = api.request("GET", override_path)
-    _require(isinstance(overrides, list), "feature override response was not a list")
+    recorder.check(
+        "feature_overrides_is_list",
+        isinstance(overrides, list),
+        "response was not a list",
+    )
     existing = next(
         (
             item
@@ -99,14 +128,17 @@ def _enable_wave_3_1(api: AcceptanceApi, *, org_id: str) -> None:
                 "reason": "CHAOS-3300 metric-comparison acceptance scenario",
             },
         )
-        _require(
+        recorder.check(
+            "wave_3_1_override_created",
             isinstance(created, dict) and created.get("is_enabled") is True,
             f"failed to enable {_WAVE_3_1_FEATURE_KEY}",
         )
     elif existing.get("is_enabled") is not True:
         override_id = existing.get("id")
-        _require(
-            isinstance(override_id, str), f"{_WAVE_3_1_FEATURE_KEY} override has no id"
+        recorder.check(
+            "wave_3_1_override_has_id",
+            isinstance(override_id, str),
+            f"{_WAVE_3_1_FEATURE_KEY} override has no id",
         )
         updated = api.request(
             "PATCH",
@@ -116,7 +148,8 @@ def _enable_wave_3_1(api: AcceptanceApi, *, org_id: str) -> None:
                 "reason": "CHAOS-3300 metric-comparison acceptance scenario",
             },
         )
-        _require(
+        recorder.check(
+            "wave_3_1_override_updated",
             isinstance(updated, dict) and updated.get("is_enabled") is True,
             f"failed to enable {_WAVE_3_1_FEATURE_KEY}",
         )
@@ -155,9 +188,16 @@ def _scope(org_id: str) -> dict[str, Any]:
 
 
 def _sse_request(
-    api: AcceptanceApi, path: str, payload: dict[str, Any]
+    api: AcceptanceApi,
+    recorder: ScenarioRecorder,
+    path: str,
+    payload: dict[str, Any],
 ) -> list[DevStreamEvent]:
-    _require(api.token is not None, "SSE request requires authentication")
+    recorder.check(
+        "sse_request_authenticated",
+        api.token is not None,
+        "SSE request requires authentication",
+    )
     request = Request(
         f"{api.base_url}{path}",
         data=json.dumps(payload, separators=(",", ":")).encode(),
@@ -180,7 +220,11 @@ def _sse_request(
     except URLError as exc:
         raise AcceptanceFailure(f"POST {path} failed: {exc.reason}") from exc
 
-    _require(content_type == "text/event-stream", f"unexpected SSE type {content_type}")
+    recorder.check(
+        "sse_content_type",
+        content_type == "text/event-stream",
+        f"unexpected SSE type {content_type}",
+    )
     events: list[DevStreamEvent] = []
     for frame in body.split("\n\n"):
         if not frame.strip():
@@ -192,14 +236,24 @@ def _sse_request(
                 event_name = line.removeprefix("event: ")
             elif line.startswith("data: "):
                 data_lines.append(line.removeprefix("data: "))
-        _require(event_name is not None, "SSE frame omitted event name")
-        _require(bool(data_lines), f"SSE {event_name} frame omitted data")
+        recorder.check(
+            "sse_frame_has_event_name",
+            event_name is not None,
+            "SSE frame omitted event name",
+        )
+        recorder.check(
+            "sse_frame_has_data",
+            bool(data_lines),
+            f"SSE {event_name} frame omitted data",
+        )
         raw = json.loads("\n".join(data_lines))
         events.append(DevStreamEvent.model_validate(raw))
     return events
 
 
-def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
+def smoke(
+    api: AcceptanceApi, recorder: ScenarioRecorder, *, email: str, password: str
+) -> tuple[str, str]:
     """Returns ``(conversation_id, run_id)``.
 
     ``run_id`` is printed so a caller who wants to inspect the persisted
@@ -209,8 +263,8 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
     no public API to read that table.
     """
 
-    org_id = _authenticate(api, email=email, password=password)
-    _enable_wave_3_1(api, org_id=org_id)
+    org_id = _authenticate(api, recorder, email=email, password=password)
+    _enable_wave_3_1(api, recorder, org_id=org_id)
     scope = _scope(org_id)
     conversation = api.request(
         "POST",
@@ -221,14 +275,20 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
             "title": "CHAOS-3300 metric-comparison acceptance",
         },
     )
-    _require(isinstance(conversation, dict), "conversation response was not an object")
+    recorder.check(
+        "conversation_response_is_object",
+        isinstance(conversation, dict),
+        "conversation response was not an object",
+    )
     conversation_id = conversation.get("conversation_id")
-    _require(
+    recorder.check(
+        "conversation_id_present",
         isinstance(conversation_id, str) and bool(conversation_id),
         "conversation response returned no conversation_id",
     )
     events = _sse_request(
         api,
+        recorder,
         f"/api/v1/dev/conversations/{conversation_id}/messages",
         {
             "schema_version": "dev_message_request.v1",
@@ -245,29 +305,46 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> tuple[str, str]:
         (event for event in events if event.event is StreamEventType.RUN_STARTED),
         None,
     )
-    _require(run_started is not None, "expected a run.started event")
+    recorder.check(
+        "run_started_event_present",
+        run_started is not None,
+        "expected a run.started event",
+    )
     assert run_started is not None
     completed = next(
         (event for event in events if event.event is StreamEventType.ANSWER_COMPLETED),
         None,
     )
+    detail = "no answer completed"
     if completed is None or completed.answer is None:
         failed = next(
             (event for event in events if event.event is StreamEventType.ERROR), None
         )
-        detail = "no answer completed"
         if failed is not None and failed.error is not None:
             detail = (
                 f"Ask Dev run failed with {failed.error.code}: "
                 f"{failed.error.safe_message}"
             )
-        raise AcceptanceFailure(detail)
+    # Codex finding (MED, 2026-08-02, round 2): unconditional so this
+    # assertion can appear passed=True in a real successful artifact -- see
+    # smoke_ask_dev_exact_commit.py's identical fix for the full rationale.
+    recorder.check(
+        "answer_completed_event_present",
+        completed is not None and completed.answer is not None,
+        detail,
+    )
+    assert completed is not None and completed.answer is not None
     answer = completed.answer
-    _require(
+    recorder.check(
+        "answer_status_not_error",
         answer.status.value != "error",
         "Ask Dev returned an error-status answer for a multi-metric comparison",
     )
-    _require(events[-1].terminal_kind == "answer", "stream did not terminate as answer")
+    recorder.check(
+        "stream_terminated_as_answer",
+        events[-1].terminal_kind == "answer",
+        "stream did not terminate as answer",
+    )
     return conversation_id, run_started.run_id
 
 
@@ -280,17 +357,29 @@ def main() -> int:
     )
     email = os.getenv("TEST_SUPERUSER_EMAIL", "admin@devhealth.example")
     password = os.getenv("TEST_SUPERUSER_PASSWORD", "devhealth123")
+    recorder = ScenarioRecorder(
+        scenario_id=SCENARIO_ID, script_path=Path(__file__).resolve()
+    )
+    error_detail: str | None = None
+    conversation_id: str | None = None
+    run_id: str | None = None
     try:
-        conversation_id, run_id = smoke(api, email=email, password=password)
+        conversation_id, run_id = smoke(api, recorder, email=email, password=password)
     except AcceptanceFailure as exc:
+        error_detail = str(exc)
+    artifact = recorder.write(_ARTIFACT_PATH, error=error_detail)
+    if error_detail is not None:
         print(
-            f"Ask Dev metric-comparison acceptance smoke failed: {exc}", file=sys.stderr
+            f"Ask Dev metric-comparison acceptance smoke failed: {error_detail}",
+            file=sys.stderr,
         )
+        print(f"wrote {_ARTIFACT_PATH} (status={artifact['status']})", file=sys.stderr)
         return 1
     print(
         "Ask Dev metric-comparison acceptance smoke completed "
         f"(conversation={conversation_id}, run={run_id})"
     )
+    print(f"wrote {_ARTIFACT_PATH} (status={artifact['status']})")
     return 0
 
 

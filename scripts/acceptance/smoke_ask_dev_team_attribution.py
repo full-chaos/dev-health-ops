@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
-"""Live acceptance smoke: the Ask Dev "exact commit" original defect
-reproduction.
+"""Live acceptance smoke: the team-attribution attack, re-verified after the
+CHAOS-3332 fix (ops #1382).
 
-Runs purely over the public Ask Dev REST/SSE API (no Playwright, no
-dev-health-web), same shape as ``smoke_ask_dev_not_found.py``. Complements
-the not-found scenario: seeding a real, authorized, named subject (the
-fixture-generated repository ``meridian/web-app``) and asking about it must
-commit that subject before investigation and return a substantive,
-non-error answer -- the positive control ``smoke_ask_dev_not_found.py``'s
-negative control needs to hold against.
+Before #1382, ANY status question naming a real team (tried core/growth/
+platform) returned a terminal ERROR/internal_error, 100% reproducible, with
+zero corresponding server-side log line -- see
+attack.team-attribution.e2e-blocked-by-live-defect's original repro. #1382
+fixed the crash; this script re-runs the exact same shape of question
+(smoke_ask_dev_exact_commit.py's pattern, a named TEAM subject instead of a
+repository) against the fixed code and asserts the honest outcome CHAOS-3333
+predicts: the named team subject still commits correctly (scope.resolved
+with a non-empty authorized_entity_ids), and the run completes as an
+ANSWER (not error) -- but the answer's metrics come back empty
+(query_metric.v1 unavailable for a TEAM-scoped request today, tracked
+separately as CHAOS-3333) so the answer is honestly ``degraded``, not a
+fabricated success. A crash is a failure here; a degraded-but-honest answer
+is not.
 
 Writes a machine-checkable execution artifact to
-``tests/acceptance/artifacts/exact_commit.json`` -- see
+``tests/acceptance/artifacts/team_attribution.json`` -- see
 ``acceptance_artifact.py``.
 """
 
@@ -31,14 +38,15 @@ from dev_health_ops.api.dev.contracts import DevStreamEvent, StreamEventType
 from scripts.acceptance.acceptance_artifact import AcceptanceFailure, ScenarioRecorder
 from scripts.acceptance.prepare_ask_dev_acceptance import AcceptanceApi
 
-#: The fixture-generated repository this Compose profile's
-#: `dev-hops fixtures generate --repo-name meridian/web-app` always seeds
-#: (see run_ask_dev_compose.sh) -- a real, authorized, named subject.
-EXACT_COMMIT_QUESTION = "What's the status of meridian/web-app?"
+#: A real fixture-generated team (see docker exec ... clickhouse-client
+#: --query "SELECT id, name FROM default.teams" -- core/growth/platform,
+#: confirmed live 2026-08-02).
+NAMED_TEAM = "Core"
+TEAM_ATTRIBUTION_QUESTION = f"What's the status of the {NAMED_TEAM} team?"
 
 _WAVE_3_1_FEATURE_KEY = "ask_dev_wave_3_1"
 
-SCENARIO_ID = "exact_commit"
+SCENARIO_ID = "team_attribution"
 _ARTIFACT_PATH = (
     Path(__file__).resolve().parents[2]
     / "tests"
@@ -121,7 +129,7 @@ def _enable_wave_3_1(
             {
                 "feature_id": flag["id"],
                 "is_enabled": True,
-                "reason": "CHAOS-3300 exact-commit acceptance scenario",
+                "reason": "CHAOS-3300 team-attribution re-verify (CHAOS-3332)",
             },
         )
         recorder.check(
@@ -141,7 +149,7 @@ def _enable_wave_3_1(
             f"{override_path}/{override_id}",
             {
                 "is_enabled": True,
-                "reason": "CHAOS-3300 exact-commit acceptance scenario",
+                "reason": "CHAOS-3300 team-attribution re-verify (CHAOS-3332)",
             },
         )
         recorder.check(
@@ -153,8 +161,8 @@ def _enable_wave_3_1(
 
 def _scope(org_id: str) -> dict[str, Any]:
     now = datetime.now(UTC).replace(microsecond=0)
-    current_start = now - timedelta(days=28)
-    comparison_start = current_start - timedelta(days=28)
+    current_start = now - timedelta(days=14)
+    comparison_start = current_start - timedelta(days=14)
 
     def time_range(start: datetime, end: datetime) -> dict[str, str]:
         return {
@@ -175,7 +183,7 @@ def _scope(org_id: str) -> dict[str, Any]:
         "surface_context": {
             "route_id": "diagnose_overview",
             "entity_refs": [],
-            "filter_fingerprint": "exact_commit_acceptance",
+            "filter_fingerprint": "team_attribution_acceptance",
         },
     }
 
@@ -256,7 +264,7 @@ def smoke(
         {
             "current_scope": scope,
             "retention_days": 30,
-            "title": "CHAOS-3300 exact-commit acceptance",
+            "title": "CHAOS-3300 team-attribution re-verify",
         },
     )
     recorder.check(
@@ -279,7 +287,7 @@ def smoke(
             "request_id": str(uuid.uuid4()),
             "client_message_id": str(uuid.uuid4()),
             "conversation_id": conversation_id,
-            "question": EXACT_COMMIT_QUESTION,
+            "question": TEAM_ATTRIBUTION_QUESTION,
             "question_class": "status",
             "scope": scope,
         },
@@ -291,64 +299,75 @@ def smoke(
     recorder.check(
         "scope_resolved_event_present",
         scope_resolved is not None and scope_resolved.scope_resolution is not None,
-        "expected a scope.resolved event committing the named repository subject",
+        "expected a scope.resolved event committing the named team subject",
     )
     assert scope_resolved is not None and scope_resolved.scope_resolution is not None
-    authorized_repos = scope_resolved.scope_resolution.authorized_repository_ids
+    authorized_entities = scope_resolved.scope_resolution.authorized_entity_ids
     recorder.check(
-        "named_repository_committed",
-        len(authorized_repos) > 0,
-        "the named repository subject was never committed to the resolved scope",
+        "named_team_committed",
+        len(authorized_entities) > 0,
+        "the named team subject was never committed to the resolved scope",
     )
+
+    # The pre-#1382 defect: a terminal ERROR/internal_error instead of any
+    # answer. Assert directly that this specific failure mode is gone.
+    error_event = next(
+        (event for event in events if event.event is StreamEventType.ERROR), None
+    )
+    recorder.check(
+        "no_internal_error_event",
+        error_event is None
+        or error_event.error is None
+        or error_event.error.code != "internal_error",
+        "CHAOS-3332 regression: team-subject question crashed to "
+        f"internal_error again ({error_event.error if error_event else None!r})",
+    )
+
     completed = next(
         (event for event in events if event.event is StreamEventType.ANSWER_COMPLETED),
         None,
     )
-    detail = "no answer completed"
-    if completed is None or completed.answer is None:
-        failed = next(
-            (event for event in events if event.event is StreamEventType.ERROR), None
-        )
-        if failed is not None and failed.error is not None:
-            detail = (
-                f"Ask Dev run failed with {failed.error.code}: "
-                f"{failed.error.safe_message}"
-            )
-    # Codex finding (MED, 2026-08-02, round 2): this used to only ever be
-    # recorded on the failure branch, so "answer_completed_event_present"
-    # could never appear with passed=True in a real successful artifact --
-    # a manifest row requiring it as proof would always be unsatisfiable.
-    # Recording it unconditionally (matching smoke_ask_dev_team_attribution
-    # .py's pattern) makes it a real positive assertion.
     recorder.check(
         "answer_completed_event_present",
         completed is not None and completed.answer is not None,
-        detail,
+        "expected a real answer (possibly degraded) for a named team "
+        "subject, not a blank/refused/error result",
     )
     assert completed is not None and completed.answer is not None
     answer = completed.answer
     recorder.check(
-        "answer_status_not_error",
+        "answer_status_not_hard_error",
         answer.status.value != "error",
-        "Ask Dev returned an error-status answer for a real authorized subject",
+        f"expected a degraded-but-honest answer, got status={answer.status.value!r}",
+    )
+    # Codex finding (MED, 2026-08-02, round 2): "not error" alone does not
+    # prove the CHAOS-3333 characterization this row's description claims --
+    # a status of "complete" or "partial" would also pass that check. Assert
+    # the specific state CHAOS-3333 predicts: degraded (not some other
+    # non-error status), metrics genuinely empty (not just an unrelated
+    # partial answer), and the limitation named as an unavailable required
+    # source rather than silently absent. This is the state the system
+    # exists to reach for a TEAM subject today, not merely "did not crash";
+    # if CHAOS-3333 later adds TEAM-scoped metric support, this assertion
+    # SHOULD start failing -- that is the correct, honest outcome, and the
+    # row's claim must be updated alongside the fix, not loosened in
+    # advance to survive it.
+    recorder.check(
+        "answer_status_is_degraded",
+        answer.status.value == "degraded",
+        f"expected status='degraded' per CHAOS-3333, got {answer.status.value!r}",
     )
     recorder.check(
-        "answer_summary_not_empty",
-        bool(answer.direct_summary.strip()),
-        "answer summary was empty",
+        "metrics_empty_for_team_scope",
+        len(answer.metrics) == 0,
+        f"expected no metrics for a TEAM-scoped answer, got {len(answer.metrics)}",
     )
-    subject_linked_evidence = [
-        item
-        for item in answer.evidence
-        if set(item.repository_ids) & set(authorized_repos)
-    ]
+    unavailable_sources = [str(s) for s in answer.coverage.unavailable_required_sources]
     recorder.check(
-        "evidence_is_linked_to_the_committed_subject",
-        bool(subject_linked_evidence),
-        "the answer's evidence cited no item whose repository_ids overlap "
-        "the committed, authorized subject -- an answer could satisfy "
-        "'non-empty summary' while citing facts about something else "
-        "entirely",
+        "limitation_names_unavailable_metric_source",
+        any("metric" in source.lower() for source in unavailable_sources),
+        "expected coverage.unavailable_required_sources to name the "
+        f"unavailable metric source, got {unavailable_sources!r}",
     )
     recorder.check(
         "stream_terminated_as_answer",
@@ -379,13 +398,13 @@ def main() -> int:
     artifact = recorder.write(_ARTIFACT_PATH, error=error_detail)
     if error_detail is not None:
         print(
-            f"Ask Dev exact-commit acceptance smoke failed: {error_detail}",
+            f"Ask Dev team-attribution re-verify failed: {error_detail}",
             file=sys.stderr,
         )
         print(f"wrote {_ARTIFACT_PATH} (status={artifact['status']})", file=sys.stderr)
         return 1
     print(
-        f"Ask Dev exact-commit acceptance smoke completed (conversation={conversation_id})"
+        f"Ask Dev team-attribution re-verify completed (conversation={conversation_id})"
     )
     print(f"wrote {_ARTIFACT_PATH} (status={artifact['status']})")
     return 0

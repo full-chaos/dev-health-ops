@@ -138,6 +138,17 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
   "${ops_root}/scripts/acceptance/smoke_ask_dev_metric_comparison.py"
 
+# CHAOS-3300/CHAOS-3332: the team-attribution attack, re-verified on the
+# fixed code -- a named TEAM subject now completes as a real (degraded but
+# honest) answer instead of crashing to internal_error.
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_team_attribution.py"
+
 "${compose[@]}" up -d --build --wait web
 
 ASK_DEV_LIVE_ACCEPTANCE=1 \

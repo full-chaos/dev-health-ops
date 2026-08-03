@@ -6,10 +6,19 @@ question the Playwright leg of ``run_ask_dev_compose.sh`` asks through the
 web UI. This script asks the SAME exact question over the real Ask Dev
 REST/SSE API instead (no Playwright/web dependency) and asserts the same
 three claims the oracle file encodes: which metric grounds the answer, which
-evidence entity it cites, and what claim kind it makes. This is what
-upgrades ``positive-control.real-project-status`` from "inherited, not
-independently re-confirmed by this lane" to lane-verified -- or surfaces
-that the inherited harness rotted, which is equally worth knowing.
+evidence entity it cites, and what claim kind it makes.
+
+This scenario is organization-wide (the oracle names no subject), so it does
+NOT independently prove a named-project claim -- see
+``smoke_ask_dev_project_status.py`` for that (codex finding HIGH,
+2026-08-02: this script's prior use as evidence for
+``positive-control.real-project-status``/``matrix.exact-project-complete``
+overclaimed "exact project" from an org-wide run with no SCOPE_RESOLVED
+assertion).
+
+Writes a machine-checkable execution artifact to
+``tests/acceptance/artifacts/inherited_oracle.json`` -- see
+``acceptance_artifact.py``.
 """
 
 from __future__ import annotations
@@ -25,10 +34,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from dev_health_ops.api.dev.contracts import DevStreamEvent, StreamEventType
-from scripts.acceptance.prepare_ask_dev_acceptance import (
-    AcceptanceApi,
-    AcceptanceFailure,
-)
+from scripts.acceptance.acceptance_artifact import AcceptanceFailure, ScenarioRecorder
+from scripts.acceptance.prepare_ask_dev_acceptance import AcceptanceApi
 
 _ORACLE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -37,25 +44,41 @@ _ORACLE_PATH = (
     / "ask-dev-oracle.v1.json"
 )
 
+SCENARIO_ID = "inherited_oracle"
+_ARTIFACT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "acceptance"
+    / "artifacts"
+    / f"{SCENARIO_ID}.json"
+)
 
-def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise AcceptanceFailure(message)
 
-
-def _authenticate(api: AcceptanceApi, *, email: str, password: str) -> str:
+def _authenticate(
+    api: AcceptanceApi, recorder: ScenarioRecorder, *, email: str, password: str
+) -> str:
     login = api.request(
         "POST",
         "/api/v1/auth/login",
         {"email": email, "password": password},
     )
-    _require(isinstance(login, dict), "login response was not an object")
+    recorder.check("login_response_is_object", isinstance(login, dict), str(login))
     token = login.get("access_token")
     user = login.get("user")
-    _require(isinstance(token, str) and bool(token), "login returned no access token")
-    _require(isinstance(user, dict), "login returned no user")
+    recorder.check(
+        "login_returned_access_token",
+        isinstance(token, str) and bool(token),
+        "login returned no access token",
+    )
+    recorder.check(
+        "login_returned_user", isinstance(user, dict), "login returned no user"
+    )
     org_id = user.get("org_id")
-    _require(isinstance(org_id, str) and bool(org_id), "login returned no org_id")
+    recorder.check(
+        "login_returned_org_id",
+        isinstance(org_id, str) and bool(org_id),
+        "login returned no org_id",
+    )
     api.token = token
     return org_id
 
@@ -97,9 +120,16 @@ def _scope(org_id: str) -> dict[str, Any]:
 
 
 def _sse_request(
-    api: AcceptanceApi, path: str, payload: dict[str, Any]
+    api: AcceptanceApi,
+    recorder: ScenarioRecorder,
+    path: str,
+    payload: dict[str, Any],
 ) -> list[DevStreamEvent]:
-    _require(api.token is not None, "SSE request requires authentication")
+    recorder.check(
+        "sse_request_authenticated",
+        api.token is not None,
+        "SSE request requires authentication",
+    )
     request = Request(
         f"{api.base_url}{path}",
         data=json.dumps(payload, separators=(",", ":")).encode(),
@@ -122,7 +152,11 @@ def _sse_request(
     except URLError as exc:
         raise AcceptanceFailure(f"POST {path} failed: {exc.reason}") from exc
 
-    _require(content_type == "text/event-stream", f"unexpected SSE type {content_type}")
+    recorder.check(
+        "sse_content_type",
+        content_type == "text/event-stream",
+        f"unexpected SSE type {content_type}",
+    )
     events: list[DevStreamEvent] = []
     for frame in body.split("\n\n"):
         if not frame.strip():
@@ -134,21 +168,31 @@ def _sse_request(
                 event_name = line.removeprefix("event: ")
             elif line.startswith("data: "):
                 data_lines.append(line.removeprefix("data: "))
-        _require(event_name is not None, "SSE frame omitted event name")
-        _require(bool(data_lines), f"SSE {event_name} frame omitted data")
+        recorder.check(
+            "sse_frame_has_event_name",
+            event_name is not None,
+            "SSE frame omitted event name",
+        )
+        recorder.check(
+            "sse_frame_has_data",
+            bool(data_lines),
+            f"SSE {event_name} frame omitted data",
+        )
         raw = json.loads("\n".join(data_lines))
         events.append(DevStreamEvent.model_validate(raw))
     return events
 
 
-def smoke(api: AcceptanceApi, *, email: str, password: str) -> str:
+def smoke(
+    api: AcceptanceApi, recorder: ScenarioRecorder, *, email: str, password: str
+) -> str:
     oracle = json.loads(_ORACLE_PATH.read_text(encoding="utf-8"))
     question = oracle["question"]
     expected_metric_id = oracle["expected_metric_id"]
     expected_evidence_fragment = oracle["expected_evidence_entity_fragment"]
     expected_claim_kind = oracle["expected_claim_kind"]
 
-    org_id = _authenticate(api, email=email, password=password)
+    org_id = _authenticate(api, recorder, email=email, password=password)
     scope = _scope(org_id)
     conversation = api.request(
         "POST",
@@ -159,14 +203,20 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> str:
             "title": "CHAOS-3300 inherited-oracle re-verification",
         },
     )
-    _require(isinstance(conversation, dict), "conversation response was not an object")
+    recorder.check(
+        "conversation_response_is_object",
+        isinstance(conversation, dict),
+        "conversation response was not an object",
+    )
     conversation_id = conversation.get("conversation_id")
-    _require(
+    recorder.check(
+        "conversation_id_present",
         isinstance(conversation_id, str) and bool(conversation_id),
         "conversation response returned no conversation_id",
     )
     events = _sse_request(
         api,
+        recorder,
         f"/api/v1/dev/conversations/{conversation_id}/messages",
         {
             "schema_version": "dev_message_request.v1",
@@ -193,14 +243,21 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> str:
                 f"Ask Dev run failed with {failed.error.code}: "
                 f"{failed.error.safe_message}"
             )
-        raise AcceptanceFailure(detail)
+        recorder.check("answer_completed_event_present", False, detail)
+        raise AcceptanceFailure(detail)  # pragma: no cover - recorder already raised
     answer = completed.answer
-    _require(answer.status.value != "error", "Ask Dev returned an error-status answer")
-    _require(
+    recorder.check(
+        "answer_status_not_error",
+        answer.status.value != "error",
+        "Ask Dev returned an error-status answer",
+    )
+    recorder.check(
+        "expected_metric_present",
         any(metric.metric_id == expected_metric_id for metric in answer.metrics),
         f"expected metric {expected_metric_id!r} not present in the answer",
     )
-    _require(
+    recorder.check(
+        "expected_evidence_fragment_present",
         any(
             expected_evidence_fragment in str(item.entity_id)
             for item in answer.evidence
@@ -208,12 +265,21 @@ def smoke(api: AcceptanceApi, *, email: str, password: str) -> str:
         f"expected evidence entity fragment {expected_evidence_fragment!r} not "
         "present in the answer",
     )
-    _require(
+    recorder.check(
+        "expected_claim_kind_present",
         any(claim.kind.value == expected_claim_kind for claim in answer.claims),
         f"expected claim kind {expected_claim_kind!r} not present in the answer",
     )
-    _require(bool(answer.direct_summary.strip()), "answer summary was empty")
-    _require(events[-1].terminal_kind == "answer", "stream did not terminate as answer")
+    recorder.check(
+        "answer_summary_not_empty",
+        bool(answer.direct_summary.strip()),
+        "answer summary was empty",
+    )
+    recorder.check(
+        "stream_terminated_as_answer",
+        events[-1].terminal_kind == "answer",
+        "stream did not terminate as answer",
+    )
     return conversation_id
 
 
@@ -226,17 +292,28 @@ def main() -> int:
     )
     email = os.getenv("TEST_SUPERUSER_EMAIL", "admin@devhealth.example")
     password = os.getenv("TEST_SUPERUSER_PASSWORD", "devhealth123")
+    recorder = ScenarioRecorder(
+        scenario_id=SCENARIO_ID, script_path=Path(__file__).resolve()
+    )
+    error_detail: str | None = None
+    conversation_id: str | None = None
     try:
-        conversation_id = smoke(api, email=email, password=password)
+        conversation_id = smoke(api, recorder, email=email, password=password)
     except AcceptanceFailure as exc:
+        error_detail = str(exc)
+    artifact = recorder.write(_ARTIFACT_PATH, error=error_detail)
+    if error_detail is not None:
         print(
-            f"Ask Dev inherited-oracle re-verification failed: {exc}", file=sys.stderr
+            f"Ask Dev inherited-oracle re-verification failed: {error_detail}",
+            file=sys.stderr,
         )
+        print(f"wrote {_ARTIFACT_PATH} (status={artifact['status']})", file=sys.stderr)
         return 1
     print(
         "Ask Dev inherited-oracle re-verification completed "
         f"(conversation={conversation_id})"
     )
+    print(f"wrote {_ARTIFACT_PATH} (status={artifact['status']})")
     return 0
 
 

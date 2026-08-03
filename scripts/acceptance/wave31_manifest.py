@@ -21,7 +21,9 @@ that the evidence a status rests on still exists and is not fabricated.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -32,6 +34,9 @@ from typing import Literal, TypedDict
 __all__ = [
     "MANIFEST",
     "MANIFEST_SCHEMA_VERSION",
+    "MIGRATION_COEXISTENCE_REASON",
+    "STACK3_WIRING_GAP_REASON",
+    "TEAM_ATTRIBUTION_LIVE_DEFECT_REASON",
     "ManifestIntegrityError",
     "ManifestItem",
     "ManifestItemJSON",
@@ -40,6 +45,7 @@ __all__ = [
     "build_report",
     "execute_manifest",
     "run_evidence_tests",
+    "validate_execution_artifact",
     "validate_manifest",
 ]
 
@@ -85,6 +91,30 @@ class ManifestItem:
     #: HTTP/SSE Compose acceptance run, not something ``execute_manifest``
     #: can invoke inside a plain pytest process.
     requires_live_infra: bool = False
+    #: Repository-relative path to the execution artifact
+    #: (``acceptance_artifact.ScenarioRecorder.write``'s output) the smoke
+    #: script itself produced when this scenario last ran. Codex finding
+    #: (HIGH, 2026-08-02): before this field existed, a ``proven_e2e`` item
+    #: needed no machine-verifiable execution at all -- any existing evidence
+    #: file plus ``requires_live_infra=True`` validated clean, including a
+    #: row that was never actually run. Every ``proven_e2e`` item must now
+    #: set this; ``validate_manifest`` checks the artifact exists, parses,
+    #: reports every assertion passing, and was generated from a commit that
+    #: is an ancestor of (or equal to) current HEAD -- see
+    #: ``acceptance_artifact.py`` for why ancestry, not equality.
+    execution_artifact: str | None = None
+    #: Exact assertion names (``acceptance_artifact.AssertionResult.name``)
+    #: that must appear in ``execution_artifact`` with ``passed: true``.
+    #: Codex finding (HIGH, 2026-08-02, round 2): "every assertion passed"
+    #: alone does not bind an artifact to what THIS row claims -- a
+    #: proven_e2e row citing an artifact full of unrelated boilerplate
+    #: assertions (or one swapped from a different scenario, if only the
+    #: filename were checked) would still validate clean. Naming the
+    #: specific assertions load-bearing for this row's claim closes that:
+    #: an artifact swap between two scenarios fails here even when both
+    #: artifacts are individually all-passing, because each row demands the
+    #: names its own claim actually rests on.
+    required_assertion_names: tuple[str, ...] = ()
 
 
 class ManifestIntegrityError(RuntimeError):
@@ -100,6 +130,8 @@ class ManifestItemJSON(TypedDict):
     blocked_reason: str | None
     test_nodeids: list[str]
     requires_live_infra: bool
+    execution_artifact: str | None
+    required_assertion_names: list[str]
 
 
 class ManifestReportJSON(TypedDict):
@@ -108,6 +140,95 @@ class ManifestReportJSON(TypedDict):
     status_counts: dict[str, int]
     category_counts: dict[str, int]
     items: list[ManifestItemJSON]
+
+
+#: Golden, exact-match reason text for the manifest's most load-bearing
+#: ``blocked`` claims. Codex finding (MED, 2026-08-02): the tests that lock
+#: these reasons previously used substring checks (``"X" in reason``), which
+#: a reason silently reworded to add or remove meaning still satisfies as
+#: long as the checked substrings survive -- codex demonstrated this by
+#: appending "SILENTLY REWORDED" to each string and watching every lock stay
+#: green. Promoting the reason text to a named module-level constant lets the
+#: test compare with ``==`` instead: ANY wording change, not just a removed
+#: substring, now requires a deliberate edit to the same constant the
+#: manifest itself uses, so the golden text and the shipped text can never
+#: drift apart.
+STACK3_WIRING_GAP_REASON = (
+    "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/"
+    "OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in "
+    "investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no "
+    "StepRegistry registration; production_runtime.py:2169 wires only "
+    "CORE_PLANS_BY_INTENT as the live plan_registry, so these intents "
+    "cannot reach ProjectHealthService/TeamHealthService/"
+    "PortfolioStatusService/TeamWorkloadService/"
+    "OperationalDeficiencyService in production today even though all "
+    "five services are implemented and unit-tested. This is SEQUENCED, "
+    "not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec "
+    "(2026-08-02) ratifies deferring plan/step registry wiring to the "
+    "CHAOS-3297 stack-3 lane, which owns landing "
+    "DevInvestigationPlan+StepRegistry entries for these five intents "
+    "once its own s2/flags prerequisites merge; re-run this manifest "
+    "after stack-3 lands to flip these rows to real evidence"
+)
+
+MIGRATION_COEXISTENCE_REASON = (
+    "CHAOS-3306 resolved as Backlog/Low with an explicit "
+    "decision to keep the Ask Dev runtime permanently on Python "
+    "in dev-health-ops (people-facing) alongside Go acr-api/"
+    "acr-mcp (agents/MCP) -- 'not part of Wave 3.1', 'does not "
+    "block any active Ask Dev, Web, Ops, or ACR implementation "
+    "issue', and 'no implementation or decommission work is "
+    "authorized by this backlog item today'. This gate assumes "
+    "an active cutover with a sunset date, which 3306 did not "
+    "approve; treated as not-applicable-by-decision rather than "
+    "unmet, but the report must say so explicitly rather than "
+    "silently skip it"
+)
+
+#: Historical record of the original CHAOS-3332 repro. The item this reason
+#: was attached to (attack.team-attribution.e2e-blocked-by-live-defect) has
+#: since flipped to proven_e2e after ops #1382 fixed the crash -- this
+#: constant is kept, and still exported and tested, so the fact that a real
+#: 100%-reproducible live defect was found and fixed here does not silently
+#: disappear from the manifest's history.
+TEAM_ATTRIBUTION_LIVE_DEFECT_REASON = (
+    "ANY status question naming a real, resolvable team subject "
+    "(tried all 3 fixture teams: core/growth/platform) returns "
+    "a terminal ERROR/internal_error over the live HTTP/SSE API "
+    "with ask_dev_wave_3_1 enabled -- 100% reproducible, zero "
+    "flake. This is NOT the CORE_PLANS_BY_INTENT gap: TEAM is a "
+    "supported_subject_kind on status.entity.v2 (a WIRED plan), "
+    "so this is a distinct, previously-unknown defect in an "
+    "intent CHAOS-3300 counted as working. Live diagnosis "
+    "(dev_runs row for one repro, org "
+    "0a155cab-8833-42ac-a4ef-0d121725a7b0, run_id "
+    "36ef85a2-960a-4223-a699-333270b74c70): "
+    "preflight_outcome=proceeded_committed_subject (team-name "
+    "resolution and commit work correctly); "
+    'plan_step_partition={"failed": [], "skipped": '
+    '["evidence_expansion", "work_graph_expansion"], '
+    '"completed": ["required_source_health", '
+    '"status_snapshot"]} (the plan-governed investigation '
+    "itself completes cleanly, 0 failed steps); "
+    "tool_call_count=0 (crashes before or during the legacy "
+    "model-round loop / frame emission that follows a "
+    "successful plan-governed investigation); safe_error_code= "
+    "internal_error with zero corresponding stderr/stdout log "
+    "line in the API container across three separate repro "
+    "runs (a silent server-side failure -- the exception is "
+    "caught and mapped to internal_error without being logged "
+    "anywhere this lane could find). team_repo_ownership was "
+    "empty for all 3 fixture teams in this run, so an "
+    "unattributed-team edge case is a plausible trigger, but "
+    "not confirmed without reading the frame-emission code "
+    "path directly, which this lane did not do (team-lead "
+    "condition: report and stop rather than debug an hour). "
+    "Filed as CHAOS-3332 (parent CHAOS-3293, Ask Dev project) "
+    "with the full repro plus the silent-catch as a second fix "
+    "requirement -- this item flips once CHAOS-3332 ships and a "
+    "live re-run of smoke_ask_dev_exact_commit.py's pattern "
+    "against a named team subject confirms it."
+)
 
 
 def _core_defect_reproductions() -> tuple[ManifestItem, ...]:
@@ -185,20 +306,22 @@ def _core_defect_reproductions() -> tuple[ManifestItem, ...]:
                 "tests/acceptance/test_ask_dev_not_found_smoke.py",
             ),
             requires_live_infra=True,
-            # Actually executed by this lane 2026-08-02 15:32 UTC against a
-            # live `docker compose` run of this exact Compose overlay
-            # (ask-dev-acceptance-{postgres,pgbouncer,clickhouse,valkey,
-            # migrate,scripted-openai,api}, fixtures generated for
-            # meridian/web-app, ask_dev_wave_3_1 enabled): terminal SSE
-            # event was ERROR/scope_not_found, no ANSWER_COMPLETED event,
-            # safe_message did not echo "Ask Dev" back. Exit code 0. Stack
-            # torn down cleanly after (`down --volumes --remove-orphans`,
-            # confirmed zero residual ask-dev-acceptance-* containers).
-            # This is a point-in-time confirmation, not an
-            # automatically-reverified one (execute_manifest cannot run
-            # docker compose) -- re-validate before relying on it again
-            # after any change to preflight_outcomes.py, the scripted
-            # provider, or this Compose overlay.
+            execution_artifact="tests/acceptance/artifacts/not_found.json",
+            required_assertion_names=(
+                "terminal_error_event_present",
+                "error_code_is_scope_not_found",
+                "no_answer_produced",
+                "safe_message_does_not_name_subject",
+            ),
+            # Codex finding (HIGH, 2026-08-02): this used to be a prose
+            # narrative claiming a specific past run -- unverifiable by
+            # validate_manifest, and a fabricated row citing only existing
+            # files validated exactly the same as a real one. The narrative
+            # is now redundant with, and superseded by, the machine-checked
+            # execution_artifact above: see validate_execution_artifact for
+            # what it actually verifies (artifact exists and parses, every
+            # recorded assertion passed, the recorded commit is an ancestor
+            # of current HEAD, and the recorded script bytes still match).
         ),
         ManifestItem(
             id="defect.ask-dev-exact-commit.e2e-live-validated",
@@ -216,17 +339,14 @@ def _core_defect_reproductions() -> tuple[ManifestItem, ...]:
                 "tests/acceptance/test_ask_dev_exact_commit_smoke.py",
             ),
             requires_live_infra=True,
-            # Actually executed by this lane 2026-08-02 15:52 UTC (third
-            # live compose run, same session, images warm): "What's the
-            # status of meridian/web-app?" (the fixture-generated
-            # repository) produced a scope.resolved event with a non-empty
-            # authorized_repository_ids and a terminal ANSWER_COMPLETED
-            # event with a non-empty, non-error direct_summary. Exit code
-            # 0. Regression-checked alongside the not-found and
-            # core-intents smokes in the same run; all three green. Stack
-            # torn down clean after, zero residual containers. Dated,
-            # non-auto-reverified evidence, same caveat as the not-found
-            # item above.
+            execution_artifact="tests/acceptance/artifacts/exact_commit.json",
+            required_assertion_names=(
+                "scope_resolved_event_present",
+                "named_repository_committed",
+                "answer_completed_event_present",
+                "answer_status_not_error",
+                "stream_terminated_as_answer",
+            ),
         ),
     )
 
@@ -237,47 +357,56 @@ def _real_project_positive_control() -> tuple[ManifestItem, ...]:
             id="positive-control.real-project-status",
             category="real_project_positive_control",
             description=(
-                "A seeded exact project with known status, required work, "
-                "and evidence must reliably resolve and answer -- the "
-                "CHAOS-3289 1-useful-answer-in-10 result fails this issue "
-                "even if the other nine runs are described as safe."
+                "A seeded exact NAMED SUBJECT with known status, required "
+                "work, and subject-linked evidence must reliably resolve "
+                "and answer -- the CHAOS-3289 1-useful-answer-in-10 result "
+                "fails this issue even if the other nine runs are "
+                "described as safe. Proven against a repository subject, "
+                "not literally a PROJECT-kind entity: this Compose "
+                "profile's `dev-hops fixtures generate` never populates "
+                "default.projects (confirmed live 2026-08-02 -- 0 rows; "
+                "PROJECT-kind entities are sourced from an external "
+                "issue-tracker's project_key, e.g. Jira/Linear, which "
+                "these synthetic fixtures do not simulate), so no "
+                "PROJECT-kind subject exists to name. Codex finding "
+                "(HIGH, 2026-08-02) explicitly allows this: 'if the "
+                "fixture profile genuinely can't support it, downgrade/"
+                "rename ... to what the ... run proves -- honest downgrade "
+                "over overclaim'. A named repository is the strongest "
+                "real, resolvable, named subject this fixture profile "
+                "offers, and the underlying claim this row exists to "
+                "prove (a real named subject reliably resolves and "
+                "substantively answers, unlike CHAOS-3289's 1-in-10) is "
+                "satisfied by it."
             ),
             status="proven_e2e",
             evidence=(
-                "tests/acceptance/ask-dev-oracle.v1.json",
-                "tests/acceptance/test_ask_dev_compose.py",
-                "scripts/acceptance/run_ask_dev_compose.sh",
-                "scripts/acceptance/smoke_ask_dev_inherited_oracle.py",
-                "tests/acceptance/test_ask_dev_inherited_oracle_smoke.py",
+                "scripts/acceptance/smoke_ask_dev_exact_commit.py",
+                "tests/acceptance/test_ask_dev_exact_commit_smoke.py",
             ),
             requires_live_infra=True,
-            # Lane-verified 2026-08-02 16:04 UTC (per team-lead direction):
-            # smoke_ask_dev_inherited_oracle.py asks the exact oracle
-            # question over the real HTTP/SSE API (no Playwright) and
-            # confirmed all three oracle claims -- expected_metric_id,
-            # expected_evidence_entity_fragment, expected_claim_kind -- were
-            # present in a real answer. The inherited harness did NOT rot;
-            # the ops-side substance holds. One real finding surfaced along
-            # the way: a naive 28-day-current + 28-day-comparison window
-            # (matching what the original Playwright/oracle harness and this
-            # lane's own earlier smoke scripts all use) returns
-            # comparison_value=null and an ungrounded "could not be
-            # established" answer, because
-            # `dev-hops fixtures generate --days 28` only backfills 28 days
-            # total -- the comparison half of a 28+28 window has no seeded
-            # data. smoke_ask_dev_inherited_oracle.py uses 14+14 (inside the
-            # backfill) and passes; this lane's earlier not-found/
-            # exact-commit/core-intents scripts still use 28+28, which is
-            # harmless for THEIR assertions (they only check "no error,
-            # non-empty summary", which the degraded/ungrounded answer still
-            # satisfies) but means those three prove "safe non-crashing
-            # behavior," not "a fully grounded correct answer" -- narrower
-            # than this item's claim. Not fixed retroactively (time-boxed
-            # per team-lead's wrap directive); worth a follow-up pass.
-            # Playwright leg itself (whether the web UI's own date-range
-            # picker defaults inside or outside the 28-day backfill) was NOT
-            # independently re-checked -- out of scope per team-lead
-            # ("skip the Playwright half if it drags").
+            execution_artifact="tests/acceptance/artifacts/exact_commit.json",
+            required_assertion_names=(
+                "named_repository_committed",
+                "answer_completed_event_present",
+                "answer_status_not_error",
+                "answer_summary_not_empty",
+            ),
+            # Re-pointed from smoke_ask_dev_inherited_oracle.py (an org-wide
+            # run with no SCOPE_RESOLVED assertion, previously overclaiming
+            # "exact project") to smoke_ask_dev_exact_commit.py per codex
+            # finding HIGH 2026-08-02 -- see the description above. Separate
+            # finding preserved here since it no longer lives on this row's
+            # evidence: `dev-hops fixtures generate --days 28` only backfills
+            # 28 days, so a naive 28-day-current + 28-day-comparison window
+            # (used by smoke_ask_dev_not_found.py/smoke_ask_dev_exact_commit
+            # .py/smoke_ask_dev_core_intents.py) returns comparison_value=
+            # null; smoke_ask_dev_inherited_oracle.py and
+            # smoke_ask_dev_metric_comparison.py use 14+14 instead. The
+            # 28+28 scripts' own assertions don't depend on comparison_value
+            # so this doesn't invalidate them, but it does mean they prove
+            # "safe non-crashing behavior," not "a fully grounded numeric
+            # comparison" -- not retrofitted, time-boxed per wrap directive.
         ),
     )
 
@@ -285,13 +414,12 @@ def _real_project_positive_control() -> tuple[ManifestItem, ...]:
 def _attacks() -> tuple[ManifestItem, ...]:
     return (
         ManifestItem(
-            id="attack.unrelated-evidence",
+            id="attack.unrelated-evidence.exclusion",
             category="attack",
             description=(
-                "Seed recent organization deployments, PRs, incidents, and "
-                "metrics unrelated to the named target. They must be absent "
-                "from the named-target answer but available in an explicit "
-                "organization-wide answer."
+                "Recent organization deployments, PRs, incidents, and "
+                "metrics unrelated to the named target must be absent from "
+                "the named-target answer."
             ),
             status="proven_unit",
             evidence=("tests/api/dev/test_chaos_3296_relationship_closure.py",),
@@ -301,6 +429,35 @@ def _attacks() -> tuple[ManifestItem, ...]:
             test_nodeids=(
                 "tests/api/dev/test_chaos_3296_relationship_closure.py::"
                 "test_an_edge_unrelated_to_the_committed_subject_fails_closed",
+            ),
+        ),
+        ManifestItem(
+            id="attack.unrelated-evidence.availability",
+            category="attack",
+            description=(
+                "The same unrelated-org facts must be available in an "
+                "explicit organization-wide answer (the other half of the "
+                "attack -- exclusion when named, availability when not)."
+            ),
+            status="deferred",
+            blocked_reason=(
+                "Codex finding (HIGH, 2026-08-02): this half of the claim "
+                "was previously folded into attack.unrelated-evidence's "
+                "single description alongside the exclusion half, but "
+                "neither the cited unit test "
+                "(test_an_edge_unrelated_to_the_committed_subject_fails_closed, "
+                "which only proves exclusion) nor the live smoke "
+                "(smoke_ask_dev_unrelated_evidence.py, whose org-wide "
+                "positive control is disclosed as weaker than intended -- "
+                "the scripted provider's search_evidence.v1 call hardcodes "
+                "its query to one repository name regardless of question) "
+                "actually proves organization-wide availability. Split into "
+                "its own row rather than silently overclaimed alongside the "
+                "real exclusion proof. Closing this needs either a unit "
+                "test asserting the organization-wide (no committed "
+                "subject) case surfaces unrelated facts, or a live scenario "
+                "using a provider that does not hardcode its evidence "
+                "search -- neither exists yet."
             ),
         ),
         ManifestItem(
@@ -317,24 +474,24 @@ def _attacks() -> tuple[ManifestItem, ...]:
                 "tests/acceptance/test_ask_dev_unrelated_evidence_smoke.py",
             ),
             requires_live_infra=True,
-            # Actually executed 2026-08-02 16:19-16:21 UTC against a
-            # standalone --repo-count 2 bring-up (meridian/web-app +
-            # meridian/core-api, confirmed via direct default.repos query
-            # rather than assumed naming). Negative control: asking about
-            # meridian/web-app by name -- scope.resolved committed it, and
-            # zero evidence entities from meridian/core-api appeared in the
-            # answer. Positive control is WEAKER than intended and disclosed
-            # as such in the script docstring: the scripted provider's
-            # search_evidence.v1 call hardcodes its query to
-            # "meridian/web-app" regardless of question, so the org-wide
-            # control can only prove "not scope-blocked," not "multi-repo
-            # evidence actually appears" -- confirmed live by inspecting the
-            # returned evidence entity ids (all meridian/web-app-*, zero
-            # meridian/core-api-*). The negative control's exclusion proof
-            # is unaffected by this limitation. This scenario is NOT wired
-            # into the shared run_ask_dev_compose.sh launcher (which seeds
-            # exactly one repository for the other proven_e2e scripts) --
-            # run standalone against its own --repo-count 2 bring-up.
+            execution_artifact="tests/acceptance/artifacts/unrelated_evidence.json",
+            # Codex finding (MED, 2026-08-02, round 2): required_assertion_
+            # names is deliberately scoped to ONLY the exclusion (negative
+            # control) assertions -- "org_wide_not_scope_blocked" (the
+            # weaker positive control this row's description never claims)
+            # is intentionally NOT required here, so a future change cannot
+            # silently widen what this row is bound to prove without a
+            # deliberate edit to this tuple. See
+            # attack.unrelated-evidence.availability for the disclosed
+            # positive-control gap and its own reason. Requires a standalone
+            # --repo-count 2 bring-up (meridian/web-app + meridian/core-api)
+            # -- NOT wired into the shared run_ask_dev_compose.sh launcher,
+            # which seeds exactly one repository for the other proven_e2e
+            # scripts.
+            required_assertion_names=(
+                "named_repository_committed",
+                "unrelated_repo_excluded_from_named_answer",
+            ),
         ),
         ManifestItem(
             id="attack.team-attribution",
@@ -360,48 +517,42 @@ def _attacks() -> tuple[ManifestItem, ...]:
             category="attack",
             description=(
                 "Live end-to-end team-attribution proof, attempted per "
-                "team-lead priority 2026-08-02 -- blocked by a newly "
-                "discovered, 100%-reproducible live defect, not by the "
-                "already-known stack-3 plan-wiring gap."
+                "team-lead priority 2026-08-02. Originally blocked by a "
+                "newly discovered, 100%-reproducible live defect (see "
+                "TEAM_ATTRIBUTION_LIVE_DEFECT_REASON for the full original "
+                "repro) -- flipped to proven after ops #1382 (CHAOS-3332) "
+                "merged to main and this lane re-ran the exact-commit "
+                "pattern against a named team subject on the fixed code. "
+                "The named team subject still commits correctly "
+                "(scope.resolved with a non-empty authorized_entity_ids) "
+                "and the run now completes as a real ANSWER instead of a "
+                "terminal ERROR/internal_error. This row's claim is exactly "
+                "the CHAOS-3333 characterization, asserted directly rather "
+                "than implied by 'not error': status is precisely "
+                "``degraded`` (not complete/partial), metrics come back "
+                "genuinely empty (query_metric.v1 does not yet support a "
+                "TEAM-scoped request), and the limitation is named in "
+                "coverage.unavailable_required_sources rather than silently "
+                "dropped. A future CHAOS-3333 fix that adds TEAM-scoped "
+                "metric support is expected to break this row's assertions "
+                "-- that is the correct outcome, and the claim must be "
+                "updated alongside the fix, not loosened in advance."
             ),
-            status="blocked",
-            blocked_reason=(
-                "ANY status question naming a real, resolvable team subject "
-                "(tried all 3 fixture teams: core/growth/platform) returns "
-                "a terminal ERROR/internal_error over the live HTTP/SSE API "
-                "with ask_dev_wave_3_1 enabled -- 100% reproducible, zero "
-                "flake. This is NOT the CORE_PLANS_BY_INTENT gap: TEAM is a "
-                "supported_subject_kind on status.entity.v2 (a WIRED plan), "
-                "so this is a distinct, previously-unknown defect in an "
-                "intent CHAOS-3300 counted as working. Live diagnosis "
-                "(dev_runs row for one repro, org "
-                "0a155cab-8833-42ac-a4ef-0d121725a7b0, run_id "
-                "36ef85a2-960a-4223-a699-333270b74c70): "
-                "preflight_outcome=proceeded_committed_subject (team-name "
-                "resolution and commit work correctly); "
-                'plan_step_partition={"failed": [], "skipped": '
-                '["evidence_expansion", "work_graph_expansion"], '
-                '"completed": ["required_source_health", '
-                '"status_snapshot"]} (the plan-governed investigation '
-                "itself completes cleanly, 0 failed steps); "
-                "tool_call_count=0 (crashes before or during the legacy "
-                "model-round loop / frame emission that follows a "
-                "successful plan-governed investigation); safe_error_code= "
-                "internal_error with zero corresponding stderr/stdout log "
-                "line in the API container across three separate repro "
-                "runs (a silent server-side failure -- the exception is "
-                "caught and mapped to internal_error without being logged "
-                "anywhere this lane could find). team_repo_ownership was "
-                "empty for all 3 fixture teams in this run, so an "
-                "unattributed-team edge case is a plausible trigger, but "
-                "not confirmed without reading the frame-emission code "
-                "path directly, which this lane did not do (team-lead "
-                "condition: report and stop rather than debug an hour). "
-                "Filed as CHAOS-3332 (parent CHAOS-3293, Ask Dev project) "
-                "with the full repro plus the silent-catch as a second fix "
-                "requirement -- this item flips once CHAOS-3332 ships and a "
-                "live re-run of smoke_ask_dev_exact_commit.py's pattern "
-                "against a named team subject confirms it."
+            status="proven_e2e",
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_team_attribution.py",
+                "scripts/acceptance/run_ask_dev_compose.sh",
+                "tests/acceptance/test_ask_dev_team_attribution_smoke.py",
+            ),
+            requires_live_infra=True,
+            execution_artifact="tests/acceptance/artifacts/team_attribution.json",
+            required_assertion_names=(
+                "named_team_committed",
+                "no_internal_error_event",
+                "answer_completed_event_present",
+                "answer_status_is_degraded",
+                "metrics_empty_for_team_scope",
+                "limitation_names_unavailable_metric_source",
             ),
         ),
         ManifestItem(
@@ -461,15 +612,25 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
         ManifestItem(
             id="matrix.exact-project-complete",
             category="blocking_matrix",
-            description="Exact named project status with complete current data.",
+            description=(
+                "Exact named subject status with complete current data -- "
+                "proven against a repository subject, not literally "
+                "PROJECT-kind; see positive-control.real-project-status for "
+                "why (this fixture profile seeds zero rows in "
+                "default.projects, confirmed live)."
+            ),
             status="proven_e2e",
             evidence=(
-                "tests/acceptance/ask-dev-oracle.v1.json",
-                "scripts/acceptance/smoke_ask_dev_inherited_oracle.py",
+                "scripts/acceptance/smoke_ask_dev_exact_commit.py",
+                "tests/acceptance/test_ask_dev_exact_commit_smoke.py",
             ),
             requires_live_infra=True,
-            # Lane-verified 2026-08-02 via smoke_ask_dev_inherited_oracle.py
-            # -- see positive-control.real-project-status for the run detail.
+            execution_artifact="tests/acceptance/artifacts/exact_commit.json",
+            required_assertion_names=(
+                "named_repository_committed",
+                "evidence_is_linked_to_the_committed_subject",
+                "answer_status_not_error",
+            ),
         ),
         ManifestItem(
             id="matrix.project-incomplete-required-children",
@@ -548,10 +709,25 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
             status="proven_e2e",
             evidence=(
                 "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-                "tests/acceptance/test_ask_dev_compose.py",
+                "scripts/acceptance/smoke_ask_dev_core_intents.py",
+                "tests/acceptance/test_ask_dev_core_intents_smoke.py",
             ),
             content_markers=("LIST_METRICS_QUESTION",),
             requires_live_infra=True,
+            execution_artifact=(
+                "tests/acceptance/artifacts/registered_metrics_organization_wide.json"
+            ),
+            required_assertion_names=(
+                "answer_completed_event_present",
+                "answer_status_not_error",
+                "answer_summary_not_empty",
+            ),
+            # Previously cited only the scripted-provider source + the
+            # (Playwright-only) inherited-oracle test file, with no
+            # execution artifact of its own -- this lane had never actually
+            # run the LIST_METRICS_QUESTION flow independently. Added as a
+            # third scenario to smoke_ask_dev_core_intents.py and executed
+            # live 2026-08-02 to close that gap.
         ),
         ManifestItem(
             id="matrix.multi-metric-comparison-organization-wide",
@@ -566,14 +742,19 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
                 "tests/acceptance/test_ask_dev_metric_comparison_smoke.py",
             ),
             requires_live_infra=True,
-            # Actually executed 2026-08-02 16:08 UTC: a comparison-shaped
-            # question with two requested_metric_ids routed through the
-            # real, wired metric.comparison.v1 plan (confirmed via direct
-            # dev_runs inspection: plan_step_partition showed
-            # registered_metric_query completed, 0 failed) and returned a
-            # non-error terminal answer. First live proof this plan runs at
-            # all for a real multi-metric request -- previously untested at
-            # any level beyond the plan document's own existence.
+            execution_artifact="tests/acceptance/artifacts/metric_comparison.json",
+            required_assertion_names=(
+                "run_started_event_present",
+                "answer_completed_event_present",
+                "answer_status_not_error",
+                "stream_terminated_as_answer",
+            ),
+            # First live proof the wired metric.comparison.v1 plan runs at
+            # all for a real multi-metric request -- confirmed separately
+            # via direct dev_runs inspection (plan_step_partition showed
+            # registered_metric_query completed, 0 failed), not something
+            # this script's own artifact can assert since it has no public
+            # API to read that table.
         ),
         ManifestItem(
             id="matrix.multi-metric-comparison-stale-source",
@@ -611,14 +792,14 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
                 "tests/acceptance/test_ask_dev_core_intents_smoke.py",
             ),
             requires_live_infra=True,
-            # Actually executed by this lane 2026-08-02 15:42 UTC (second
-            # live compose run, same session): "What work remains in this
-            # scope right now?" (question_class=remaining_work,
-            # organization-wide) returned a non-error, non-empty,
-            # answer-terminated SSE stream. Point-in-time evidence, not
-            # auto-reverified (execute_manifest cannot run docker compose).
-            # Previously miscited ask-dev-oracle.v1.json, which is actually
-            # the observed_change/entity_status scenario -- fixed here.
+            execution_artifact=(
+                "tests/acceptance/artifacts/remaining_work_organization_wide.json"
+            ),
+            required_assertion_names=(
+                "answer_completed_event_present",
+                "answer_status_not_error",
+                "answer_summary_not_empty",
+            ),
         ),
         ManifestItem(
             id="matrix.data-trust-organization-wide",
@@ -633,10 +814,14 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
                 "tests/acceptance/test_ask_dev_core_intents_smoke.py",
             ),
             requires_live_infra=True,
-            # Actually executed alongside matrix.remaining-work-exact-project
-            # in the same live run: "Can we trust the data in this scope, or
-            # is anything stale or unconfigured?" returned a non-error,
-            # non-empty, answer-terminated SSE stream.
+            execution_artifact=(
+                "tests/acceptance/artifacts/data_trust_organization_wide.json"
+            ),
+            required_assertion_names=(
+                "answer_completed_event_present",
+                "answer_status_not_error",
+                "answer_summary_not_empty",
+            ),
         ),
         ManifestItem(
             id="matrix.observed-change-comparison-windows",
@@ -723,23 +908,7 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
     no manifest changes: only ``status``/``evidence`` on each row flips.
     """
 
-    reason = (
-        "PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/TEAM_WORKLOAD_BALANCE/"
-        "OPERATIONAL_DEFICIENCY_INVENTORY have no DevInvestigationPlan in "
-        "investigation_plans/plan_documents.py:CORE_PLANS_BY_INTENT and no "
-        "StepRegistry registration; production_runtime.py:2169 wires only "
-        "CORE_PLANS_BY_INTENT as the live plan_registry, so these intents "
-        "cannot reach ProjectHealthService/TeamHealthService/"
-        "PortfolioStatusService/TeamWorkloadService/"
-        "OperationalDeficiencyService in production today even though all "
-        "five services are implemented and unit-tested. This is SEQUENCED, "
-        "not dropped: CHAOS-3303 comment d0985e79-051d-4b6f-8833-6137e8511aec "
-        "(2026-08-02) ratifies deferring plan/step registry wiring to the "
-        "CHAOS-3297 stack-3 lane, which owns landing "
-        "DevInvestigationPlan+StepRegistry entries for these five intents "
-        "once its own s2/flags prerequisites merge; re-run this manifest "
-        "after stack-3 lands to flip these rows to real evidence"
-    )
+    reason = STACK3_WIRING_GAP_REASON
     return (
         ManifestItem(
             id="matrix.legitimate-org-wide-status",
@@ -945,19 +1114,7 @@ def _gates() -> tuple[ManifestItem, ...]:
                 "decommission per the CHAOS-3306 selected design."
             ),
             status="blocked",
-            blocked_reason=(
-                "CHAOS-3306 resolved as Backlog/Low with an explicit "
-                "decision to keep the Ask Dev runtime permanently on Python "
-                "in dev-health-ops (people-facing) alongside Go acr-api/"
-                "acr-mcp (agents/MCP) -- 'not part of Wave 3.1', 'does not "
-                "block any active Ask Dev, Web, Ops, or ACR implementation "
-                "issue', and 'no implementation or decommission work is "
-                "authorized by this backlog item today'. This gate assumes "
-                "an active cutover with a sunset date, which 3306 did not "
-                "approve; treated as not-applicable-by-decision rather than "
-                "unmet, but the report must say so explicitly rather than "
-                "silently skip it"
-            ),
+            blocked_reason=MIGRATION_COEXISTENCE_REASON,
         ),
         ManifestItem(
             id="gate.web-default-ci",
@@ -1191,6 +1348,207 @@ def _build_manifest() -> tuple[ManifestItem, ...]:
 MANIFEST: tuple[ManifestItem, ...] = _build_manifest()
 
 
+def _git_command(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, check=False
+    )
+
+
+#: Same JWT-shaped pattern acceptance_artifact.redact_secrets guards against
+#: at write time. This is the independent backstop codex asked for (HIGH,
+#: 2026-08-02): redaction happening at write time does not by itself prove
+#: no artifact on disk has a leaked secret -- an artifact could predate the
+#: fix, or a future bypass could write one directly. validate_manifest scans
+#: every proven_e2e artifact's raw bytes on every run, offline, so a leaked
+#: credential fails the manifest the same way a fabricated claim does.
+_ARTIFACT_JWT_PATTERN = re.compile(
+    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
+)
+
+
+def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
+    """Check one ``proven_e2e`` item's execution artifact is real, current,
+    all-passing, and actually bound to this row's claim. See
+    ``acceptance_artifact.py`` for the artifact schema and why the commit
+    check is "is an ancestor of HEAD", not "equals HEAD".
+
+    Codex finding (HIGH, 2026-08-02): before this existed, a ``proven_e2e``
+    row needed no machine-verifiable execution -- an existing evidence file
+    plus ``requires_live_infra=True`` validated clean, including a row that
+    was fabricated and never run. Codex finding (HIGH, 2026-08-02, round 2):
+    "an artifact exists and all-passes" still did not bind an artifact to
+    the row citing it (an artifact swapped from a different scenario, or one
+    whose ``assertions`` list contains non-dict junk that silently sorts out
+    of the failing check, both validated clean), nor prove the tree that
+    produced it was actually clean (an artifact recorded against a dirty
+    working tree does not reliably describe what commit_sha contains). Every
+    check here closes one specific way a claim could still be false: no
+    artifact at all, unparseable, a raw JWT/bearer token leaked into it,
+    non-dict assertion entries, a failing or missing required assertion,
+    generated from a commit that never led to the current tree, generated
+    against a dirty tree, a script edited since it ran, or an artifact that
+    belongs to a different scenario than the one this row cites.
+    """
+
+    errors: list[str] = []
+    if item.execution_artifact is None:
+        errors.append(
+            f"{item.id}: proven_e2e with no execution_artifact -- an "
+            "evidence file existing is not proof the scenario was ever run"
+        )
+        return errors
+
+    artifact_path = root / item.execution_artifact
+    if not artifact_path.exists():
+        errors.append(
+            f"{item.id}: execution artifact does not exist: {item.execution_artifact}"
+        )
+        return errors
+
+    raw_text = artifact_path.read_text(encoding="utf-8")
+    if _ARTIFACT_JWT_PATTERN.search(raw_text):
+        errors.append(
+            f"{item.id}: execution artifact {item.execution_artifact} "
+            "contains a JWT-shaped token -- a committed artifact must never "
+            "carry a live credential; redact at the recorder and re-mint"
+        )
+
+    try:
+        artifact = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        errors.append(
+            f"{item.id}: execution artifact {item.execution_artifact} is not "
+            f"valid JSON: {exc}"
+        )
+        return errors
+
+    if not isinstance(artifact, dict):
+        errors.append(
+            f"{item.id}: execution artifact {item.execution_artifact} is not "
+            "a JSON object"
+        )
+        return errors
+
+    if artifact.get("schema_version") != "ask_dev_acceptance_artifact.v1":
+        errors.append(
+            f"{item.id}: execution artifact schema_version is "
+            f"{artifact.get('schema_version')!r}, expected "
+            "'ask_dev_acceptance_artifact.v1'"
+        )
+
+    expected_scenario_id = Path(item.execution_artifact).stem
+    actual_scenario_id = artifact.get("scenario_id")
+    if actual_scenario_id != expected_scenario_id:
+        errors.append(
+            f"{item.id}: execution artifact scenario_id "
+            f"{actual_scenario_id!r} does not match {expected_scenario_id!r} "
+            "expected from its own filename -- possible artifact swap"
+        )
+
+    assertions = artifact.get("assertions")
+    if not isinstance(assertions, list) or not assertions:
+        errors.append(
+            f"{item.id}: execution artifact records no assertions -- a "
+            "run that measured nothing is not proof"
+        )
+    else:
+        non_dict_entries = [
+            entry for entry in assertions if not isinstance(entry, dict)
+        ]
+        if non_dict_entries:
+            errors.append(
+                f"{item.id}: execution artifact contains non-dict assertion "
+                f"entries: {non_dict_entries!r} -- a malformed or fabricated "
+                "assertions list is not proof"
+            )
+        dict_entries = [entry for entry in assertions if isinstance(entry, dict)]
+        failing = [
+            entry.get("name")
+            for entry in dict_entries
+            if entry.get("passed") is not True
+        ]
+        if failing:
+            errors.append(
+                f"{item.id}: execution artifact records failing assertion(s): {failing}"
+            )
+        if item.required_assertion_names:
+            passed_names = {
+                entry.get("name")
+                for entry in dict_entries
+                if entry.get("passed") is True
+            }
+            missing_required = [
+                name
+                for name in item.required_assertion_names
+                if name not in passed_names
+            ]
+            if missing_required:
+                errors.append(
+                    f"{item.id}: execution artifact is missing required "
+                    f"passed assertion(s) {missing_required} -- present "
+                    "assertions do not bind this artifact to this row's "
+                    "specific claim"
+                )
+
+    if artifact.get("status") != "passed":
+        errors.append(
+            f"{item.id}: execution artifact status is "
+            f"{artifact.get('status')!r}, expected 'passed'"
+        )
+
+    if artifact.get("tree_clean") is not True:
+        errors.append(
+            f"{item.id}: execution artifact does not record a clean "
+            f"working tree at run time (tree_clean={artifact.get('tree_clean')!r}) "
+            "-- a dirty or unrecorded tree means commit_sha may not "
+            "actually describe what ran"
+        )
+
+    commit_sha = artifact.get("commit_sha")
+    if not isinstance(commit_sha, str) or not commit_sha:
+        errors.append(f"{item.id}: execution artifact has no commit_sha recorded")
+    else:
+        ancestor_check = _git_command(
+            root, "merge-base", "--is-ancestor", commit_sha, "HEAD"
+        )
+        if ancestor_check.returncode != 0:
+            errors.append(
+                f"{item.id}: execution artifact's commit {commit_sha} is not "
+                "an ancestor of (or equal to) current HEAD -- fabricated, "
+                "from an unrelated branch, or history was rewritten"
+            )
+
+    script_relative = artifact.get("script")
+    script_sha256 = artifact.get("script_sha256")
+    if not isinstance(script_relative, str) or not script_relative:
+        errors.append(f"{item.id}: execution artifact has no script recorded")
+    elif not isinstance(script_sha256, str) or not script_sha256:
+        errors.append(f"{item.id}: execution artifact has no script_sha256 recorded")
+    else:
+        if script_relative not in item.evidence:
+            errors.append(
+                f"{item.id}: execution artifact's script {script_relative!r} "
+                f"is not among this item's own evidence paths {item.evidence!r}"
+                " -- the artifact must belong to a script this row cites"
+            )
+        script_path = root / script_relative
+        if not script_path.exists():
+            errors.append(
+                f"{item.id}: execution artifact's script no longer exists: "
+                f"{script_relative}"
+            )
+        else:
+            current_hash = hashlib.sha256(script_path.read_bytes()).hexdigest()
+            if current_hash != script_sha256:
+                errors.append(
+                    f"{item.id}: execution artifact's script_sha256 does not "
+                    f"match the current bytes of {script_relative} -- the "
+                    "script changed since this artifact was generated; "
+                    "re-run to refresh"
+                )
+    return errors
+
+
 def validate_manifest(
     root: Path, items: tuple[ManifestItem, ...] = MANIFEST
 ) -> list[str]:
@@ -1204,12 +1562,17 @@ def validate_manifest(
     resting on "a file with this name exists" rather than "this specific
     test currently passes" is not proof); a ``test_nodeids`` entry whose file
     half is not one of the item's own ``evidence`` paths (evidence and the
-    thing actually executed must agree).
+    thing actually executed must agree); a ``proven_e2e`` item's execution
+    artifact (see :func:`validate_execution_artifact`) missing, unparseable,
+    reporting anything other than every assertion passing, generated from a
+    commit that is not an ancestor of current HEAD, or citing a script whose
+    bytes have changed since.
 
     This function is deliberately fast and offline -- it does NOT run any
-    test. That is :func:`execute_manifest`'s job; keeping them separate means
-    every commit's normal test run still gets this cheap structural check
-    even when the slower execution proof is invoked separately.
+    live scenario itself, only checks artifacts scenarios already wrote and
+    runs cheap local ``git`` queries. That keeps every commit's normal test
+    run able to catch a stale or fabricated ``proven_e2e`` claim without
+    needing Docker/Compose.
     """
 
     errors: list[str] = []
@@ -1245,6 +1608,9 @@ def validate_manifest(
                 "can run without Compose/Docker it should carry test_nodeids "
                 "and be executed like any other claim"
             )
+
+        if item.status == "proven_e2e":
+            errors.extend(validate_execution_artifact(root, item))
 
         for node_id in item.test_nodeids:
             file_part = node_id.split("::", 1)[0]
@@ -1293,15 +1659,23 @@ def run_evidence_tests(root: Path, node_ids: tuple[str, ...]) -> dict[str, str]:
     # has no venv of its own but does need pytest on its path -- the
     # interpreter already running this process (started via .venv/bin/pytest
     # in the real case) is always correct.
+    #
+    # -v (verbose per-test result lines), not -rA (the short summary at the
+    # end): codex finding (MED, 2026-08-02) -- pytest's short-summary SKIPPED
+    # line has the form "SKIPPED [1] file:line: reason", which carries no
+    # parseable node id at all, so a skipped test's real outcome silently
+    # fell through to the "not_collected" default instead of being reported
+    # as "skipped". -v's per-test line is "<nodeid> <OUTCOME> ... [pct%]" for
+    # every outcome (PASSED/FAILED/ERROR/SKIPPED/XFAIL/XPASS alike), always
+    # carrying the full node id.
     process = subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
             *unique_ids,
-            "-q",
+            "-v",
             "--no-header",
-            "-rA",
             "--no-cov",
         ],
         cwd=root,
@@ -1310,18 +1684,36 @@ def run_evidence_tests(root: Path, node_ids: tuple[str, ...]) -> dict[str, str]:
         check=False,
     )
     outcomes: dict[str, str] = {}
-    _OUTCOME_PREFIXES = {
+    # Only "passed" is passing. XFAIL/XPASS/SKIPPED are real pytest outcomes
+    # a cited test can report without the underlying claim actually being
+    # proven -- an XFAIL means the test is *expected* to fail (i.e. the
+    # behavior the manifest claims is proven is documented as broken);
+    # XPASS means an expected failure unexpectedly passed (a claim that
+    # something is still broken, not evidence it works); SKIPPED means the
+    # measurement never happened at all. Mapping any of these to "passed"
+    # is exactly the false-green failure mode this function exists to
+    # prevent, so every non-PASSED marker maps to its own distinct,
+    # non-passing outcome string rather than being coerced into "passed" or
+    # silently absorbed into the "not_collected" default.
+    _OUTCOMES = {
         "PASSED": "passed",
         "FAILED": "failed",
         "ERROR": "error",
-        "XFAIL": "passed",
+        "SKIPPED": "skipped",
+        "XFAIL": "xfail",
+        "XPASS": "xpass",
     }
+    node_id_set = set(unique_ids)
     for line in process.stdout.splitlines():
-        for prefix, outcome in _OUTCOME_PREFIXES.items():
-            marker = f"{prefix} "
-            if line.startswith(marker):
-                reported_id = line[len(marker) :].split(" - ", 1)[0].strip()
-                outcomes[reported_id] = outcome
+        if "::" not in line:
+            continue
+        first_token = line.split(" ", 1)[0]
+        if first_token not in node_id_set:
+            continue
+        remainder = line[len(first_token) :].lstrip()
+        for marker, outcome in _OUTCOMES.items():
+            if remainder.startswith(marker):
+                outcomes[first_token] = outcome
                 break
     for node_id in unique_ids:
         outcomes.setdefault(node_id, "not_collected")
@@ -1383,6 +1775,8 @@ def build_report(
                 "blocked_reason": item.blocked_reason,
                 "test_nodeids": list(item.test_nodeids),
                 "requires_live_infra": item.requires_live_infra,
+                "execution_artifact": item.execution_artifact,
+                "required_assertion_names": list(item.required_assertion_names),
             }
             for item in sorted(items, key=lambda i: (i.category, i.id))
         ],

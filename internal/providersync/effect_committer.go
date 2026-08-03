@@ -62,7 +62,7 @@ func (committer EffectCommitter) Commit(
 	normalizedAt = normalizedAt.UTC()
 	ordered := append([]EffectBatch(nil), batches...)
 	sort.Slice(ordered, func(left, right int) bool {
-		return ordered[left].Destination < ordered[right].Destination
+		return effectBatchLess(ordered[left], ordered[right])
 	})
 	desired, err := NewEffectLedgerState(claim, ordered, normalizedAt)
 	if err != nil {
@@ -154,4 +154,23 @@ func (committer EffectCommitter) Commit(
 		result.Written++
 	}
 	return result, nil
+}
+
+func effectBatchLess(left, right EffectBatch) bool {
+	leftPriority := effectCommitPriority(left.Destination)
+	rightPriority := effectCommitPriority(right.Destination)
+	if leftPriority != rightPriority {
+		return leftPriority < rightPriority
+	}
+	return left.Destination < right.Destination
+}
+
+func effectCommitPriority(destination string) int {
+	// GitHub blame path identity must be durable before any blame row can be
+	// accepted. A later retry can then reconstruct the exact in-flight batch
+	// before coverage excludes those accepted rows.
+	if destination == "github_blame_path_progress" {
+		return -1
+	}
+	return 0
 }

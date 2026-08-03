@@ -48,6 +48,24 @@ type CompleteRouteHandler interface {
 	) (CompleteRouteBatch, error)
 }
 
+// RecoveringCompleteRouteHandler lets a route rebuild an in-flight provider
+// batch from durable effect identity before ordinary source reselection. Most
+// routes only need the stable normalization instant above. Bounded routes
+// whose selection depends on already-written analytics rows (GitHub blame is
+// the first) need the persisted generation as well, otherwise an accepted
+// write can disappear from coverage and produce a new manifest before
+// readback has a chance to reconcile the old one.
+type RecoveringCompleteRouteHandler interface {
+	CollectRecovery(
+		context.Context,
+		Claim,
+		providerfoundation.Credential,
+		*providerfoundation.HTTPClient,
+		time.Time,
+		EffectLedgerState,
+	) (CompleteRouteBatch, error)
+}
+
 type CompleteRouteComparator interface {
 	CompareCompleteRoute(
 		context.Context,
@@ -144,6 +162,7 @@ func (executor CompleteRouteExecutor) Execute(
 		}
 		client.Metrics = executor.Metrics
 		normalizedAt := executor.now()
+		var recoveredEffects *EffectLedgerState
 		// Every attempt for this unit occurrence must rebuild byte-identical
 		// rows, not just expired-lease recoveries. Effect digests cover the
 		// serialized rows, so a wall-clock timestamp regenerated on an ordinary
@@ -164,14 +183,29 @@ func (executor CompleteRouteExecutor) Execute(
 					return ErrEffectLedgerConflict
 				}
 				normalizedAt = state.CreatedAt.UTC()
+				recoveredEffects = &state
 			case errors.Is(loadErr, ErrEffectLedgerNotFound):
 			default:
 				return loadErr
 			}
 		}
-		batch, err := executor.Handler.Collect(
-			workContext, session.Claim, credential, client, normalizedAt,
-		)
+		var batch CompleteRouteBatch
+		if recoveredEffects != nil {
+			if recovering, ok := executor.Handler.(RecoveringCompleteRouteHandler); ok {
+				batch, err = recovering.CollectRecovery(
+					workContext, session.Claim, credential, client, normalizedAt,
+					*recoveredEffects,
+				)
+			} else {
+				batch, err = executor.Handler.Collect(
+					workContext, session.Claim, credential, client, normalizedAt,
+				)
+			}
+		} else {
+			batch, err = executor.Handler.Collect(
+				workContext, session.Claim, credential, client, normalizedAt,
+			)
+		}
 		if err != nil {
 			return err
 		}

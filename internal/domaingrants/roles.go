@@ -84,21 +84,7 @@ type KnownOpenCritical struct {
 }
 
 // knownOpenCriticals is the accepted-and-ticketed set. See KnownOpenCritical.
-var knownOpenCriticals = []KnownOpenCritical{
-	{
-		Role:      RoleCoordinator,
-		Table:     "sync_dispatch_outbox",
-		Privilege: PrivInsert,
-		Ticket:    "CHAOS-3079",
-		Why: "syncreconciler.Materializer.Step runs on the coordinator pool " +
-			"(cmd/dev-health-reconciler/dependencies.go:208 NewMaterializer(coordinatorPool)) and executes four " +
-			"INSERT INTO public.sync_dispatch_outbox (materializer.go:125/235/345/450), but coordinatorPosture() " +
-			"declares {\"sync_dispatch_outbox\", false, true, false} -- allow_insert=false. Latent only because " +
-			"checkedInReconcilerActivation.syncMutation is false today; a 42501 the moment that flag flips. " +
-			"This gate's first run found it, independently confirming the CUT-06 lane's hand-derived row. " +
-			"The fix is a coordinatorPosture edit, which belongs to the posture lane, not to this checker.",
-	},
-}
+var knownOpenCriticals []KnownOpenCritical
 
 // matches reports whether f is this known-open entry.
 func (k KnownOpenCritical) matches(f Finding) bool {

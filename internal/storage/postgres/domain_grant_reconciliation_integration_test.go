@@ -277,7 +277,21 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		)`,
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
-		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		// Production-shaped enough for the reconciler materializer privilege proof:
+		// PostgreSQL resolves every named column and the ON CONFLICT arbiter before
+		// checking INSERT, so a one-column stand-in could only prove a 42703.
+		`CREATE TABLE public.sync_dispatch_outbox (
+			id uuid PRIMARY KEY,
+			org_id uuid NOT NULL,
+			sync_run_id uuid NOT NULL,
+			kind text NOT NULL,
+			status text NOT NULL,
+			available_at timestamptz NOT NULL,
+			attempts integer NOT NULL,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			UNIQUE (sync_run_id, kind)
+		)`,
 		// Production column shape, not a stub: the fixed-schedule engine's
 		// handoff INSERT names every one of these columns, and an undefined
 		// column (42703) is raised during parse analysis BEFORE the permission

@@ -37,6 +37,7 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"github/cicd":                ExecutorNativeGo,
 	"github/commits":             ExecutorNativeGo,
 	"github/deployments":         ExecutorNativeGo,
+	"github/security":            ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -136,6 +137,8 @@ type CompleteRouteSwitches struct {
 	GithubCICD        bool
 	GithubCommits     bool
 	GithubDeployments bool
+	// GithubSecurity gates the isolated tenant-scoped security_alerts writer.
+	GithubSecurity bool
 }
 
 // Descriptor resolves the canonical capability descriptor for a claimed
@@ -238,6 +241,10 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = []string{"deployments"}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubDeployments
+	case provider == "github" && dataset == "security":
+		descriptor.Destinations = []string{"security_alerts"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubSecurity
 	}
 	return descriptor, true
 }

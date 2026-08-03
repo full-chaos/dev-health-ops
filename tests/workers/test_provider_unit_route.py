@@ -227,6 +227,16 @@ def test_github_cicd_invalid_value_fails_closed() -> None:
         )
 
 
+def test_github_security_switch_is_the_second_required_key() -> None:
+    assert ProviderUnitRouteSwitches.is_route_ready("github", "security")
+    assert not ProviderUnitRouteSwitches.from_environment({}).routes_to_river(
+        "github", "security"
+    )
+    assert ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_SECURITY_ENABLED": "true"}
+    ).routes_to_river("github", "security")
+
+
 # ---------------------------------------------------------------------------
 # CHAOS-3131: routability is derived from the checked-in matrix, not from a
 # hardcoded provider/dataset literal.

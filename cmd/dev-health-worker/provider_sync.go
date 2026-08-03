@@ -111,6 +111,17 @@ type providerSyncRepository interface {
 	providersync.EffectLedger
 }
 
+type providerSyncWorkerConstructor func(
+	context.Context,
+	config.Config,
+	workerDatabase,
+	*jobruntime.Registry,
+	jobruntime.Observer,
+	*slog.Logger,
+) (workerFamily, error)
+
+var constructProviderSyncWorker providerSyncWorkerConstructor = constructProviderSyncWorkerWithDependencies
+
 // buildProviderSyncHandler constructs the provider-unit handler and the one
 // providerfoundation.Metrics instance its executor is wired to reference.
 //
@@ -181,9 +192,9 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Four route-ready pairs can reach this closure today
+			// Five route-ready pairs can reach this closure today
 			// (launchdarkly/feature-flags, github/repo-metadata, github/prs,
-			// github/cicd — see CompleteRouteSwitches.Descriptor), and each
+			// github/cicd, github/security — see CompleteRouteSwitches.Descriptor), and each
 			// has its own CompleteRouteHandler and effect sink. session.Claim
 			// is already known here — providerunit.Handler.Work only calls
 			// BuildExecutor after its own descriptor gate passed for THIS
@@ -246,6 +257,13 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitHubDeploymentsRouteHandler{}
 				sink, readback = ghDeploymentsSink, ghDeploymentsSink
+			case session.Claim.Provider == "github" &&
+				session.Claim.Dataset == "security":
+				ghSecuritySink := providersync.GitHubSecurityClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitHubSecurityRouteHandler{}
+				sink, readback = ghSecuritySink, ghSecuritySink
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
@@ -323,9 +341,20 @@ func buildProviderSyncWorker(
 		(!cfg.WorkerLaunchDarklyFeatureFlagsEnabled &&
 			!cfg.WorkerGithubRepoMetadataEnabled && !cfg.WorkerGithubPRsEnabled &&
 			!cfg.WorkerGithubCICDEnabled && !cfg.WorkerGithubCommitsEnabled &&
-			!cfg.WorkerGithubDeploymentsEnabled) {
+			!cfg.WorkerGithubDeploymentsEnabled && !cfg.WorkerGithubSecurityEnabled) {
 		return workerFamily{}, nil
 	}
+	return constructProviderSyncWorker(ctx, cfg, database, registry, observer, logger)
+}
+
+func constructProviderSyncWorkerWithDependencies(
+	ctx context.Context,
+	cfg config.Config,
+	database workerDatabase,
+	registry *jobruntime.Registry,
+	observer jobruntime.Observer,
+	logger *slog.Logger,
+) (workerFamily, error) {
 	if registry == nil || observer == nil || logger == nil ||
 		!cfg.SettingsEncryptionKey.Configured() {
 		return workerFamily{}, errWorkerDependencyUnavailable

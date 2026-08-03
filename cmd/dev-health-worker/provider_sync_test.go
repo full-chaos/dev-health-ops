@@ -224,11 +224,12 @@ func disjointHandlerSets(left, right map[string]struct{}) bool {
 func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string]providersync.CompleteRouteSwitches{
-		"none":        {},
-		"github":      {GithubRepoMetadata: true},
-		"github_prs":  {GithubPRs: true},
-		"github_cicd": {GithubCICD: true},
-		"both":        {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
+		"none":            {},
+		"github":          {GithubRepoMetadata: true},
+		"github_prs":      {GithubPRs: true},
+		"github_cicd":     {GithubCICD: true},
+		"github_security": {GithubSecurity: true},
+		"both":            {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -240,6 +241,82 @@ func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
 			}
 			if handler.Switches != want {
 				t.Fatalf("handler.Switches = %+v, want %+v", handler.Switches, want)
+			}
+		})
+	}
+}
+
+func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T) {
+	originalConstructor := constructProviderSyncWorker
+	t.Cleanup(func() {
+		constructProviderSyncWorker = originalConstructor
+	})
+
+	constructProviderSyncWorker = func(
+		_ context.Context,
+		_ config.Config,
+		_ workerDatabase,
+		_ *jobruntime.Registry,
+		_ jobruntime.Observer,
+		_ *slog.Logger,
+	) (workerFamily, error) {
+		return workerFamily{
+			queues: []jobruntime.QueueBudget{{
+				Queue: providerUnitQueue, MaxWorkers: providerUnitQueueWorkers,
+			}},
+		}, nil
+	}
+
+	for _, test := range []struct {
+		name string
+		cfg  config.Config
+	}{
+		{
+			name: "launchdarkly feature flags",
+			cfg: config.Config{
+				Profile: "sync", WorkerLaunchDarklyFeatureFlagsEnabled: true,
+			},
+		},
+		{
+			name: "github repo metadata",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubRepoMetadataEnabled: true,
+			},
+		},
+		{
+			name: "github cicd",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubCICDEnabled: true,
+			},
+		},
+		{
+			name: "github commits",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubCommitsEnabled: true,
+			},
+		},
+		{
+			name: "github deployments",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubDeploymentsEnabled: true,
+			},
+		},
+		{
+			name: "github security",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubSecurityEnabled: true,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			family, err := buildProviderSyncWorker(
+				context.Background(), test.cfg, nil, nil, nil, nil,
+			)
+			if err != nil {
+				t.Fatalf("buildProviderSyncWorker() error = %v", err)
+			}
+			if len(family.queues) == 0 {
+				t.Fatal("buildProviderSyncWorker returned an empty worker family")
 			}
 		})
 	}
@@ -280,6 +357,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 		"github_deployments": {
 			cfg:  config.Config{WorkerGithubDeploymentsEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubDeployments: true},
+		},
+		"github_security": {
+			cfg:  config.Config{WorkerGithubSecurityEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubSecurity: true},
 		},
 		"linear": {
 			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},
@@ -363,6 +444,23 @@ func TestBuildProviderSyncHandlerConstructsGitHubDeploymentsCapability(t *testin
 		t.Fatalf("executor handler=%T", executor.Handler)
 	}
 	if _, ok := executor.Committer.Sink.(providersync.GitHubDeploymentsClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsGitHubSecurityCapability(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubSecurity: true}, nil, nil, nil, nil, nil, slog.Default())
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{Claim: providersync.Claim{Unit: providersync.Unit{Provider: "github", Dataset: "security"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := executor.Handler.(providersync.GitHubSecurityRouteHandler); !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.GitHubSecurityClickHouseEffects); !ok {
 		t.Fatalf("executor sink=%T", executor.Committer.Sink)
 	}
 }

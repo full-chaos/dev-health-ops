@@ -38,6 +38,7 @@ import pytest
 from pydantic import ValidationError
 
 from dev_health_ops.api.dev import orchestrator as orchestrator_module
+from dev_health_ops.api.dev import terminal_frames as tf
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import (
     AnswerStatus,
@@ -903,6 +904,79 @@ def test_every_coverage_bucket_survives_v1_to_v2_projection() -> None:
     assert tool_frame.coverage.unavailable_required_sources == (
         SourceClass.STATUS_CHANGE,
     )
+
+
+def test_the_two_legacy_token_grammars_cannot_collide() -> None:
+    """``_source_class_for_legacy_token`` tries ToolID then SourceClass.
+
+    Ordering is only safe if no string satisfies both. It does not today, and
+    the reason is structural rather than coincidental: every ``ToolID`` is
+    dotted-and-versioned (``status_snapshot.v1``) and no ``SourceClass`` value
+    contains a dot. This pins both facts, so adding a ``SourceClass`` that
+    happens to spell an existing tool id -- the one way the resolver could
+    silently return the wrong class -- fails here instead of misdisclosing in
+    production.
+    """
+
+    tool_values = {member.value for member in ToolID}
+    source_values = {member.value for member in SourceClass}
+    assert tool_values & source_values == set()
+    assert all("." in value for value in tool_values)
+    assert all("." not in value for value in source_values)
+
+
+def test_widening_the_token_resolver_is_a_strict_extension() -> None:
+    """No token that already resolved keeps a different answer.
+
+    The resolver gained a ``SourceClass`` arm, and the review's replay
+    question is whether anything ALREADY persisted now projects differently.
+    This reconstructs the pre-change implementation and diffs it across every
+    token shape that can reach a stored v1 coverage list.
+
+    The only inputs whose result changed are ``SourceClass`` values, and
+    every one of them previously collapsed to the ``source_health`` fallback
+    -- i.e. the widening rescues tokens that were being misreported and
+    touches nothing else. Combined with the fact that the sole producer of
+    ``SourceClass``-valued tokens is ``_coverage_with_plan_sources`` (added on
+    this branch, so no pre-existing row can carry one) and that
+    ``_coverage_from_tool_results`` emits ``tool_id.value`` exclusively,
+    replay of anything stored before this branch is byte-identical.
+    """
+
+    fallback = tf._LEGACY_COVERAGE_FALLBACK
+
+    def pre_change_resolver(token: str) -> SourceClass:
+        try:
+            tool_id = ToolID(token)
+        except ValueError:
+            return fallback
+        return tf.SOURCE_CLASS_BY_TOOL_ID[tool_id]
+
+    corpus = (
+        [member.value for member in ToolID]
+        + [member.value for member in SourceClass]
+        + ["private/Nightfall", "Nightfall-deployments", "status_snapshot", ""]
+    )
+    changed = [
+        (token, pre_change_resolver(token), tf._source_class_for_legacy_token(token))
+        for token in corpus
+        if pre_change_resolver(token) is not tf._source_class_for_legacy_token(token)
+    ]
+
+    # Nothing that previously produced a real (non-fallback) class moved.
+    assert [item for item in changed if item[1] is not fallback] == []
+    # And everything that did move is a SourceClass value now resolving truthfully.
+    assert changed, "the widening must actually change something, or it is dead code"
+    for token, _before, after in changed:
+        assert token in {member.value for member in SourceClass}
+        assert after is SourceClass(token)
+
+    # The tool-id grammar is untouched, member by member.
+    for member in ToolID:
+        assert (
+            tf._source_class_for_legacy_token(member.value)
+            is (tf.SOURCE_CLASS_BY_TOOL_ID[member])
+        )
 
 
 def _observation(

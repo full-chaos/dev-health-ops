@@ -12,23 +12,29 @@ about ``meridian/web-app`` by name and asserts NO evidence entity or
 repository id belonging to ``meridian/core-api`` appears in the answer or
 its scope resolution.
 
-The positive control is WEAKER than originally intended and this is
-disclosed rather than hidden: the scripted OpenAI-compatible provider's
-default ``search_evidence.v1`` call (see ``scripted_openai_service.py``)
-hardcodes its query argument to the literal string ``"meridian/web-app"``
-regardless of the question asked, so an organization-wide question through
-this fixture can never surface ``meridian/core-api`` evidence even though
-the real product has no such restriction -- confirmed live by inspecting
-the actual evidence entity ids returned (all ``meridian/web-app-*``, zero
-``meridian/core-api-*``). The positive control here therefore only proves
-"the organization-wide question still succeeds, unrestricted by any named
-subject" -- it does NOT independently prove "multi-repository evidence
-actually appears," which would need the scripted provider extended with a
-non-hardcoded search step (not done here, time-boxed per wrap directive).
-This is reflected in the artifact's assertion names ("org_wide_not_scope_
-blocked", not "org_wide_multi_repo_evidence_present") and in
-``attack.unrelated-evidence.availability`` staying its own ``deferred``
-manifest row rather than folded into this one's ``proven_e2e`` claim.
+The positive control proves less than its name suggests, and that is
+disclosed here rather than hidden. Until 2026-08-03 the scripted
+OpenAI-compatible provider hardcoded its ``search_evidence.v1`` query to
+the literal string ``"meridian/web-app"`` regardless of the question
+asked, so an organization-wide question through this fixture could never
+surface ``meridian/core-api`` evidence even though the real product has no
+such restriction -- confirmed live at the time by inspecting the evidence
+entity ids returned (all ``meridian/web-app-*``, zero
+``meridian/core-api-*``). That fixture limitation is fixed: the provider
+now derives the query from the question (see
+``scripted_openai_service._evidence_query_from_question``), using the named
+repository identity verbatim when the question names one -- so the negative
+control above is unaffected -- and an organization-wide query otherwise.
+
+This script's own assertions are unchanged and still only prove "the
+organization-wide question still succeeds, unrestricted by any named
+subject", which is why the artifact's assertion name is
+``org_wide_not_scope_blocked`` and not
+``org_wide_multi_repo_evidence_present``. The multi-repository availability
+property itself is proven at the unit layer, against
+``EvidenceService.search`` (see
+``attack.unrelated-evidence.availability`` in the manifest for exactly what
+that does and does not cover -- notably not the ClickHouse SQL beneath it).
 
 This scenario needs its OWN bring-up with ``--repo-count 2`` -- the shared
 ``run_ask_dev_compose.sh`` launcher seeds exactly one repository

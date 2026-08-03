@@ -49,10 +49,12 @@ ARTIFACT_SCHEMA_VERSION = "ask_dev_acceptance_artifact.v1"
 
 __all__ = [
     "ARTIFACT_SCHEMA_VERSION",
+    "RUNTIME_DEPENDENCY_PATHS",
     "AcceptanceFailure",
     "AssertionResult",
     "ScenarioRecorder",
     "redact_secrets",
+    "runtime_dependency_digest",
 ]
 
 #: Codex finding (HIGH, 2026-08-02): a smoke script recorded ``str(login)``
@@ -89,6 +91,68 @@ class AssertionResult:
     name: str
     passed: bool
     detail: str
+
+
+#: The shared fixture surface a live scenario actually executes, beyond its
+#: own smoke script. Codex finding (HIGH, 2026-08-03): ``script_sha256``
+#: bound the smoke script's bytes and NOTHING else, so changing the scripted
+#: provider left all 14 artifacts validating clean while the runs they
+#: describe were no longer reproducible -- a false green from an untouched
+#: smoke script.
+#:
+#: What is in this tuple: the recorder that writes artifacts, the API client
+#: and fixture preparation, the launcher that decides the fixture shape
+#: (seed, repo count, window), the scripted OpenAI-compatible provider that
+#: stands in for the model, and the Compose definitions that build the
+#: stack. Change any of these and a recorded run is no longer the run you
+#: would get today.
+#:
+#: What is deliberately NOT in it, and why. Product code under ``src`` is
+#: excluded (apart from the fixture provider, which is a stand-in, not the
+#: system under test): an artifact's claim is "this scenario passed at the
+#: recorded commit", and ``commit_sha`` plus the ancestry check already
+#: pin that. Including product code would invalidate every artifact on
+#: every product commit, making a live re-mint a precondition for all
+#: work -- a gate that expensive gets switched off, which is a worse
+#: outcome than the drift it prevents. Individual smoke scripts are
+#: excluded too: each is already bound by its own ``script_sha256``, and
+#: folding them in here would make editing one scenario invalidate the
+#: other thirteen.
+RUNTIME_DEPENDENCY_PATHS: tuple[str, ...] = (
+    "compose.yml",
+    "scripts/acceptance/acceptance_artifact.py",
+    "scripts/acceptance/prepare_ask_dev_acceptance.py",
+    "scripts/acceptance/run_ask_dev_compose.sh",
+    "src/dev_health_ops/llm/agent/scripted_openai_service.py",
+    "tests/acceptance/compose.ask-dev-provider-profile.yml",
+    "tests/acceptance/compose.ask-dev.yml",
+)
+
+
+def runtime_dependency_digest(root: Path) -> str:
+    """Digest the shared fixture surface named in ``RUNTIME_DEPENDENCY_PATHS``.
+
+    A missing path raises rather than being skipped. Digesting over
+    "whatever happened to be present" would let a deleted or renamed
+    dependency produce a stable-looking digest that silently covers less
+    than it claims -- the measurement would not have happened, and the
+    result would still look like a pass.
+    """
+
+    hasher = hashlib.sha256()
+    for relative in RUNTIME_DEPENDENCY_PATHS:
+        path = root / relative
+        if not path.is_file():
+            raise AcceptanceFailure(
+                f"runtime dependency {relative} does not exist under {root} -- "
+                "refusing to compute a digest that would silently cover less "
+                "than RUNTIME_DEPENDENCY_PATHS claims"
+            )
+        hasher.update(relative.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(hashlib.sha256(path.read_bytes()).hexdigest().encode("ascii"))
+        hasher.update(b"\0")
+    return hasher.hexdigest()
 
 
 def _repo_root(start: Path) -> Path:
@@ -230,6 +294,7 @@ class ScenarioRecorder:
             "tree_digest": tree_digest,
             "script": str(self.script_path.resolve().relative_to(root)),
             "script_sha256": script_sha256,
+            "runtime_digest": runtime_dependency_digest(root),
             "commit_sha": commit_sha,
             "command": f"{Path(sys.executable).name} {self.script_path.name}",
             "started_at": self.started_at.isoformat(),

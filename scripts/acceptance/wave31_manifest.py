@@ -31,6 +31,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypedDict
 
+from scripts.acceptance.acceptance_artifact import (
+    RUNTIME_DEPENDENCY_PATHS,
+    AcceptanceFailure,
+    runtime_dependency_digest,
+)
+
 __all__ = [
     "MANIFEST",
     "MANIFEST_SCHEMA_VERSION",
@@ -1890,6 +1896,39 @@ def _history_is_truncated(root: Path) -> bool:
 _CANONICAL_COMMIT_SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 
 
+def _runtime_digest_errors(
+    root: Path, *, item_id: str, label: str, recorded: object
+) -> list[str]:
+    """Check the shared fixture surface has not drifted since the run.
+
+    An artifact with no ``runtime_digest`` at all is rejected rather than
+    grandfathered: "recorded before this field existed" and "minted by
+    something that skipped the field" are indistinguishable from here, and
+    the whole point of the check is that an unbound artifact is not proof.
+    """
+
+    if not isinstance(recorded, str) or not recorded:
+        return [
+            f"{item_id}: {label} records no runtime_digest -- it cannot show "
+            "the scripted provider, recorder, launcher, and Compose "
+            "definitions it ran against still match this tree. Re-run the "
+            "scenario to mint one."
+        ]
+    try:
+        current = runtime_dependency_digest(root)
+    except AcceptanceFailure as exc:
+        return [f"{item_id}: {label}'s runtime_digest cannot be checked: {exc}"]
+    if current != recorded:
+        return [
+            f"{item_id}: {label}'s runtime_digest does not match this tree "
+            f"(recorded {recorded[:12]}, current {current[:12]}) -- one of "
+            f"{list(RUNTIME_DEPENDENCY_PATHS)} changed since the scenario "
+            "ran, so the recorded run is not the run you would get today; "
+            "re-run to refresh"
+        ]
+    return []
+
+
 def _ancestry_binding_errors(
     root: Path, *, item_id: str, label: str, commit_sha: str
 ) -> list[str]:
@@ -1969,21 +2008,15 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
     against a dirty tree, a script edited since it ran, or an artifact that
     belongs to a different scenario than the one this row cites.
 
-    KNOWN LIMITATION, disclosed rather than hidden (codex finding, HIGH,
-    2026-08-03, and NOT closed by this changeset). ``script_sha256`` binds
-    the artifact to the smoke script's own bytes, and nothing else. A live
-    scenario also executes a great deal of code the artifact does not
-    fingerprint -- the scripted OpenAI-compatible provider it drives, the
-    ``acceptance_artifact`` recorder itself, and the whole API image -- so
-    a commit that changes any of those leaves every existing artifact
-    validating clean while the run it describes is no longer reproducible.
-    That is a false green: the gate reports 0 errors when an executed
-    dependency has genuinely drifted. Closing it means binding artifacts to
-    a runtime-dependency digest (or the tested tree), which by construction
-    invalidates all 14 current artifacts at once and therefore cannot land
-    without a live re-mint of every scenario -- a session with Compose, not
-    an edit. Until then, read a ``proven_e2e`` row as "this scenario passed
-    at the recorded commit", not as "this scenario passes today".
+    ``runtime_digest`` closes what ``script_sha256`` alone could not (codex
+    finding, HIGH, 2026-08-03): the smoke script's bytes said nothing about
+    the scripted provider, the recorder, the launcher, or the Compose
+    definitions the run also executed, so changing any of them left every
+    artifact validating clean while the recorded run was no longer
+    reproducible. Both are checked now -- the script individually, the
+    shared fixture surface collectively. See
+    ``acceptance_artifact.RUNTIME_DEPENDENCY_PATHS`` for exactly what is
+    covered and, just as importantly, what is deliberately not.
     """
 
     errors: list[str] = []
@@ -2141,6 +2174,15 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
                     "script changed since this artifact was generated; "
                     "re-run to refresh"
                 )
+
+    errors.extend(
+        _runtime_digest_errors(
+            root,
+            item_id=item.id,
+            label="execution artifact",
+            recorded=artifact.get("runtime_digest"),
+        )
+    )
     return errors
 
 

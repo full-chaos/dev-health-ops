@@ -10,6 +10,11 @@ from typing import Any
 
 import pytest
 
+from scripts.acceptance.acceptance_artifact import (
+    RUNTIME_DEPENDENCY_PATHS,
+    AcceptanceFailure,
+    runtime_dependency_digest,
+)
 from scripts.acceptance.wave31_manifest import (
     MANIFEST,
     MANIFEST_SCHEMA_VERSION,
@@ -63,7 +68,14 @@ def _init_throwaway_git_repo(root: Path) -> str:
     )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
     (root / "placeholder.txt").write_text("x")
-    subprocess.run(["git", "add", "placeholder.txt"], cwd=root, check=True)
+    # validate_execution_artifact digests the shared fixture surface, so a
+    # throwaway root needs those paths present for an artifact to validate
+    # at all -- committed, so the tree still starts clean.
+    for relative in RUNTIME_DEPENDENCY_PATHS:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("throwaway runtime dependency\n")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=root, check=True)
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -75,6 +87,17 @@ def _init_throwaway_git_repo(root: Path) -> str:
     return result.stdout.strip()
 
 
+def _runtime_digest_or_placeholder(root: Path) -> str:
+    """Most guard tests build a throwaway root with no fixture surface at
+    all; those cases are not about the digest, so they get a value that is
+    simply never compared against a real tree."""
+
+    try:
+        return runtime_dependency_digest(root)
+    except AcceptanceFailure:
+        return "0" * 64
+
+
 def _write_valid_artifact(
     root: Path,
     *,
@@ -83,6 +106,7 @@ def _write_valid_artifact(
     commit_sha: str,
     tree_clean: bool = True,
     assertion_names: tuple[str, ...] = ("it_worked",),
+    runtime_digest: str | None = None,
 ) -> Path:
     script_path = root / script_relative
     script_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,6 +120,11 @@ def _write_valid_artifact(
         "tree_digest": hashlib.sha256(b"" if tree_clean else b"dirty").hexdigest(),
         "script": script_relative,
         "script_sha256": script_sha256,
+        "runtime_digest": (
+            runtime_digest
+            if runtime_digest is not None
+            else _runtime_digest_or_placeholder(root)
+        ),
         "commit_sha": commit_sha,
         "command": "python throwaway.py",
         "started_at": now,
@@ -813,6 +842,69 @@ def test_validate_execution_artifact_rejects_a_non_immutable_commit_ish(
         or "no commit_sha" in error
         for error in errors
     )
+
+
+def test_validate_execution_artifact_rejects_a_drifted_runtime_dependency(
+    tmp_path: Path,
+) -> None:
+    """codex finding (HIGH, 2026-08-03): script_sha256 covered the smoke
+    script and nothing else, so changing the scripted provider left every
+    artifact validating clean while the recorded run was no longer
+    reproducible. Editing ONE covered dependency must now fail the row."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    for relative in RUNTIME_DEPENDENCY_PATHS:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("original\n")
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="drifted",
+        script_relative="smoke_drifted.py",
+        commit_sha=commit_sha,
+        runtime_digest=runtime_dependency_digest(tmp_path),
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_drifted.py",
+    )
+    # Control: the artifact validates while the fixture surface is intact.
+    assert validate_execution_artifact(tmp_path, item) == []
+
+    provider = tmp_path / "src/dev_health_ops/llm/agent/scripted_openai_service.py"
+    provider.write_text("# the fixture provider changed after the run\n")
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("runtime_digest does not match" in error for error in errors)
+
+
+def test_validate_execution_artifact_rejects_an_artifact_with_no_runtime_digest(
+    tmp_path: Path,
+) -> None:
+    """An artifact predating the field is not grandfathered: from here,
+    "minted before runtime_digest existed" and "minted by something that
+    skipped it" are indistinguishable, and neither is proof."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    for relative in RUNTIME_DEPENDENCY_PATHS:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("original\n")
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="legacy_digest",
+        script_relative="smoke_legacy_digest.py",
+        commit_sha=commit_sha,
+        runtime_digest=runtime_dependency_digest(tmp_path),
+    )
+    artifact = json.loads(artifact_path.read_text())
+    del artifact["runtime_digest"]
+    artifact_path.write_text(json.dumps(artifact))
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_legacy_digest.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("records no runtime_digest" in error for error in errors)
 
 
 def test_validate_execution_artifact_still_accepts_a_real_full_sha(

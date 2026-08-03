@@ -4,11 +4,17 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from scripts.acceptance.acceptance_artifact import (
+    RUNTIME_DEPENDENCY_PATHS,
     AcceptanceFailure,
     ScenarioRecorder,
     redact_secrets,
+    runtime_dependency_digest,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _FAKE_JWT = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
@@ -31,8 +37,77 @@ def _init_throwaway_git_repo(root: Path) -> None:
         ["git", "config", "status.showUntrackedFiles", "normal"], cwd=root, check=True
     )
     (root / "placeholder.txt").write_text("x")
-    subprocess.run(["git", "add", "placeholder.txt"], cwd=root, check=True)
+    # ScenarioRecorder.write digests the shared fixture surface and refuses
+    # to run without it, so a throwaway repo needs those paths present --
+    # committed, so the tree still starts clean.
+    for relative in RUNTIME_DEPENDENCY_PATHS:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("throwaway runtime dependency\n")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=root, check=True)
+
+
+# --- runtime_dependency_digest: codex finding (HIGH, 2026-08-03) --
+# script_sha256 bound the smoke script's bytes and nothing else, so a
+# changed fixture provider left every artifact validating clean ---
+
+
+def test_every_runtime_dependency_path_exists_in_this_repo() -> None:
+    """The digest is only worth what it covers. A path that has been moved
+    or renamed must fail here, loudly, rather than quietly dropping out of
+    the covered set the next time someone reorganizes the harness."""
+
+    assert RUNTIME_DEPENDENCY_PATHS
+    missing = [
+        relative
+        for relative in RUNTIME_DEPENDENCY_PATHS
+        if not (_REPO_ROOT / relative).is_file()
+    ]
+    assert not missing, f"runtime dependency paths no longer exist: {missing}"
+
+
+def test_runtime_digest_changes_when_a_covered_dependency_changes(
+    tmp_path: Path,
+) -> None:
+    """The property the digest exists for, asserted directly: editing a
+    covered file must produce a different digest. Asserted per path, so a
+    dependency silently dropped from the hashed set fails here."""
+
+    for relative in RUNTIME_DEPENDENCY_PATHS:
+        root = tmp_path / relative.replace("/", "_")
+        for candidate in RUNTIME_DEPENDENCY_PATHS:
+            path = root / candidate
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original\n")
+        before = runtime_dependency_digest(root)
+        (root / relative).write_text("edited\n")
+        assert runtime_dependency_digest(root) != before, (
+            f"{relative} is listed in RUNTIME_DEPENDENCY_PATHS but changing "
+            "it does not change the digest"
+        )
+
+
+def test_runtime_digest_is_stable_for_unchanged_inputs(tmp_path: Path) -> None:
+    for relative in RUNTIME_DEPENDENCY_PATHS:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("original\n")
+    assert runtime_dependency_digest(tmp_path) == runtime_dependency_digest(tmp_path)
+
+
+def test_runtime_digest_refuses_to_cover_less_than_it_claims(tmp_path: Path) -> None:
+    """A missing dependency must raise, not digest over what happens to be
+    present -- a measurement that did not happen must fail, not return a
+    stable-looking hash covering fewer files."""
+
+    for relative in RUNTIME_DEPENDENCY_PATHS[1:]:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("original\n")
+    with pytest.raises(AcceptanceFailure) as excinfo:
+        runtime_dependency_digest(tmp_path)
+    assert RUNTIME_DEPENDENCY_PATHS[0] in str(excinfo.value)
 
 
 # --- redact_secrets: codex finding (HIGH, 2026-08-02) -- the primary fix ---

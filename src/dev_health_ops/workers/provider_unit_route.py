@@ -162,7 +162,7 @@ class ProviderUnitRouteSwitches:
         return switches
 
     def require_complete_routes(self) -> None:
-        if self.linear_work_items or self.jira_work_items or self.jira_incidents:
+        if self.linear_work_items or self.jira_work_items:
             raise ProviderUnitRouteError("enabled provider unit route is incomplete")
 
     def routes_to_river(self, provider: str, dataset: str) -> bool:

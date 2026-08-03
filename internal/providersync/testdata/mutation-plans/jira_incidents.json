@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "name": "jira/incidents native route (CHAOS-3127)",
+  "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
+  "$limitation": "The plan pins native admission, whole-row normalization, tenant scope, readback content, and route readiness. The integration-tagged ClickHouse test separately proves the SQL schema and FINAL tenant-scoped readback against a real server.",
+  "mutations": [
+    {
+      "id": "admission-404-must-exclude",
+      "file": "internal/providersync/jira_incidents_route.go",
+      "find": "\t\tif !admitted {\n\t\t\tcontinue\n\t\t}",
+      "replace": "\t\tif admitted && false {\n\t\t\tcontinue\n\t\t}",
+      "rationale": "an enhanced-JQL candidate is an incident only after the fixed-host JSM Incidents API admits it; a native 404 must be excluded",
+      "proof": [["go", "test", "-run", "^TestJiraIncidentsRouteCollectsOnlyNativelyAdmittedJSMIncidents$", "./internal/providersync/"]]
+    },
+    {
+      "id": "indeterminate-status-parity",
+      "file": "internal/providersync/jira_incidents_route.go",
+      "find": "\t\t\"new\": \"open\", \"open\": \"open\", \"indeterminate\": \"active\", \"done\": \"resolved\",",
+      "replace": "\t\t\"new\": \"open\", \"open\": \"open\", \"indeterminate\": \"open\", \"done\": \"resolved\",",
+      "rationale": "Jira's stable indeterminate status category maps to canonical active exactly as the live Python producer does",
+      "proof": [["go", "test", "-run", "^TestGenericOracleMatchesLivePythonForJiraIncidentRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "null-issue-inventory-must-fail",
+      "file": "internal/providersync/jira_incidents_route.go",
+      "find": "\t\t\tbytes.Equal(bytes.TrimSpace(page.Issues), []byte(\"null\")) ||",
+      "replace": "\t\t\tfalse ||",
+      "rationale": "a null enhanced-JQL issues value is not an empty successful list and must never advance the watermark",
+      "proof": [["go", "test", "-run", "^TestJiraIncidentsRouteRejectsNullIssueInventory$", "./internal/providersync/"]]
+    },
+    {
+      "id": "effect-tenant-scope",
+      "file": "internal/providersync/jira_incidents_effects_clickhouse.go",
+      "find": "\t\tif row.OrgID != claim.OrgID || row.Provider != \"jira\" ||",
+      "replace": "\t\tif false || row.Provider != \"jira\" ||",
+      "rationale": "the effect sink must reject a row whose tenant differs from the claimed unit",
+      "proof": [["go", "test", "-run", "^TestJiraIncidentScopeRejectsCrossTenantRows$", "./internal/providersync/"]]
+    },
+    {
+      "id": "readback-whole-row-content",
+      "file": "internal/providersync/jira_incidents_effects_clickhouse.go",
+      "find": "\tif expectedErr != nil || actualErr != nil || !bytes.Equal(expectedJSON, actualJSON) {",
+      "replace": "\tif expectedErr != nil || actualErr != nil || (!bytes.Equal(expectedJSON, actualJSON) && false) {",
+      "rationale": "a row at the same source revision with different content must be a conflict, not an exact recovery",
+      "proof": [["go", "test", "-run", "^TestJiraIncidentReadbackClassifiesVersionAndContent$", "./internal/providersync/"]]
+    },
+    {
+      "id": "descriptor-route-ready",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "\t\tdescriptor.RouteReady = true\n\t\tdescriptor.RouteEnabled = switches.JiraIncidents",
+      "replace": "\t\tdescriptor.RouteReady = false\n\t\tdescriptor.RouteEnabled = switches.JiraIncidents",
+      "rationale": "the completed Jira incidents handler must remain represented as route-ready while the independent switch remains the second gate",
+      "proof": [["go", "test", "-run", "^TestJiraIncidentsRouteCollectsOnlyNativelyAdmittedJSMIncidents$", "./internal/providersync/"]]
+    }
+  ]
+}

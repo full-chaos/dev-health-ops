@@ -75,6 +75,8 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 //     tenant-qualified FINAL readback.
 //   - github/commit-stats: CHAOS-3033, live producer oracle parity plus
 //     tenant-scoped FINAL readback and production-worker construction.
+//   - jira/incidents: CHAOS-3127, native JSM admission plus live whole-row
+//     OperationalIncident parity and tenant-scoped FINAL readback.
 //
 // github/prs (CHAOS-3122) is deliberately NOT in this set despite having a
 // real CompleteRouteHandler and passing fixture-level parity evidence: codex
@@ -97,6 +99,7 @@ var routeReadyPairs = map[string]struct{}{
 	"github/security":            {},
 	"github/files":               {},
 	"github/commit-stats":        {},
+	"jira/incidents":             {},
 }
 
 // TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the freeze guard:
@@ -250,6 +253,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"github/security":            GitHubSecurityRouteHandler{},
 		"github/files":               GitHubFilesRouteHandler{},
 		"github/commit-stats":        GitHubCommitStatsRouteHandler{},
+		"jira/incidents":             JiraIncidentRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

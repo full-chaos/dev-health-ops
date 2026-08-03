@@ -435,6 +435,30 @@ func TestBuildProviderSyncHandlerConstructsGitHubCommitStatsCapability(t *testin
 	}
 }
 
+func TestBuildProviderSyncHandlerConstructsJiraIncidentsCapability(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(
+		nil, providersync.CompleteRouteSwitches{JiraIncidents: true},
+		nil, nil, nil, nil, nil, slog.Default(),
+	)
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "jira", Dataset: "incidents",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := executor.Handler.(providersync.JiraIncidentRouteHandler); !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.JiraIncidentClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+}
+
 func TestBuildProviderSyncHandlerConstructsGitHubCICDCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,
@@ -543,6 +567,7 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 		"github_security":      {WorkerGithubSecurityEnabled: true},
 		"github_files":         {WorkerGithubFilesEnabled: true},
 		"github_commit_stats":  {WorkerGithubCommitStatsEnabled: true},
+		"jira_incidents":       {WorkerJiraIncidentsEnabled: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !providerSyncWorkerEnabled(cfg) {

@@ -192,9 +192,10 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Eight route-ready pairs can reach this closure today:
+			// Nine route-ready pairs can reach this closure today:
 			// launchdarkly/feature-flags plus github/repo-metadata, cicd,
-			// commits, deployments, security, files, and commit-stats. Each
+			// commits, deployments, security, files, commit-stats, and
+			// jira/incidents. Each
 			// has its own CompleteRouteHandler and effect sink. session.Claim
 			// is already known here — providerunit.Handler.Work only calls
 			// BuildExecutor after its own descriptor gate passed for THIS
@@ -278,6 +279,13 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitHubCommitStatsRouteHandler{}
 				sink, readback = ghCommitStatsSink, ghCommitStatsSink
+			case session.Claim.Provider == "jira" &&
+				session.Claim.Dataset == "incidents":
+				jiraSink := providersync.JiraIncidentClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.JiraIncidentRouteHandler{}
+				sink, readback = jiraSink, jiraSink
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
@@ -295,7 +303,12 @@ func buildProviderSyncHandler(
 					},
 					Decryptor: decryptor,
 				},
-				Doer:  &http.Client{Timeout: 45 * time.Second},
+				Doer: &http.Client{
+					Timeout: 45 * time.Second,
+					CheckRedirect: func(*http.Request, []*http.Request) error {
+						return http.ErrUseLastResponse
+					},
+				},
 				Retry: providerfoundation.DefaultRetryPolicy(),
 				Budget: providerfoundation.ValkeyBudgetStore{
 					Client:   valkeyClient,
@@ -463,7 +476,7 @@ func providerSyncWorkerEnabled(cfg config.Config) bool {
 		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubCICDEnabled ||
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
 		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||
-		cfg.WorkerGithubCommitStatsEnabled
+		cfg.WorkerGithubCommitStatsEnabled || cfg.WorkerJiraIncidentsEnabled
 }
 
 func providerSyncRiverConfig(

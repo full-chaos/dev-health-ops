@@ -40,6 +40,7 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"github/security":            ExecutorNativeGo,
 	"github/files":               ExecutorNativeGo,
 	"github/commit-stats":        ExecutorNativeGo,
+	"jira/incidents":             ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -178,6 +179,8 @@ func (switches CompleteRouteSwitches) Descriptor(
 		// handler is not wired yet. Preserve the manifest while failing closed.
 	case provider == "jira" && dataset == "incidents":
 		descriptor.Destinations = []string{"operational_incidents"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.JiraIncidents
 	case provider == "launchdarkly" && dataset == "feature-flags":
 		descriptor.Destinations = launchDarklyRouteDestinations()
 		descriptor.RouteReady = true

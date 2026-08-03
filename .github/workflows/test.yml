@@ -321,18 +321,12 @@ jobs:
           DEV_HEALTH_TEST_POSTGRES_ADMIN_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
           OTEL_ENABLED: "false"
           PYTEST_XDIST_WORKERS: "4"
-          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --deselect=tests/test_dispatch_outbox.py::test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible
+          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs
           set -o pipefail
           ./ci/run_tests.sh ci 2>&1 | tee test-results/logs/ci-3.14.log
-
-      - name: Run quarantined PostgreSQL legacy dispatch test (CHAOS-3179)
-        continue-on-error: true
-        env:
-          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
-        run: pytest -q tests/test_dispatch_outbox.py::test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible
 
       - name: Upload junit test reports
         if: always()

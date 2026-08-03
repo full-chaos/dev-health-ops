@@ -116,11 +116,13 @@
       "processor_flags": {
         "sync_deployments": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "deployments",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "deployments"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"

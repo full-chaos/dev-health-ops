@@ -3,6 +3,7 @@ package sync
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,41 @@ import (
 	"testing"
 	"time"
 )
+
+const (
+	livePythonOraclesEnv      = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
+	livePythonOracleProofDir  = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
+	livePythonOracleProofFile = "scheduler-sync"
+)
+
+func requireLivePythonOracles(t *testing.T) {
+	t.Helper()
+	if os.Getenv(livePythonOraclesEnv) != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	if os.Getenv(livePythonOracleProofDir) == "" {
+		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
+	}
+}
+
+func livePythonExecutable(t *testing.T) string {
+	t.Helper()
+	requireLivePythonOracles(t)
+	// The shell gate checks this only after the package succeeds. Recording the
+	// proof here makes a missing real Python oracle invocation fail closed.
+	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), livePythonOracleProofFile)
+	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
+		t.Fatalf("write live Python oracle proof: %v", err)
+	}
+	if configured := os.Getenv("PYTHON"); configured != "" {
+		return configured
+	}
+	if path, err := exec.LookPath("python3"); err == nil {
+		return path
+	}
+	t.Fatal("python3 is required for the live scheduled planner oracle")
+	return ""
+}
 
 type plannerOracleSource struct {
 	ID         string `json:"id"`
@@ -198,6 +234,7 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 
 func runPythonPlannerOracle(t *testing.T, cases []plannerOracleCase) map[string][]map[string]any {
 	t.Helper()
+	python := livePythonExecutable(t)
 	encoded, err := json.Marshal(cases)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +243,7 @@ func runPythonPlannerOracle(t *testing.T, cases []plannerOracleCase) map[string]
 	if !ok {
 		t.Fatal("cannot locate Python planner oracle")
 	}
-	command := exec.Command("python3", filepath.Join(filepath.Dir(currentFile), "testdata", "python_planner_oracle.py"))
+	command := exec.Command(python, filepath.Join(filepath.Dir(currentFile), "testdata", "python_planner_oracle.py"))
 	command.Stdin = bytes.NewReader(encoded)
 	output, err := command.CombinedOutput()
 	if err != nil {

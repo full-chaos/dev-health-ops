@@ -93,12 +93,12 @@ def _gitlab_cases(gitlab: Any) -> list[dict[str, object]]:
     return [
         {
             "provider": "gitlab",
-            "dataset": "commits",
+            "dataset": dataset,
             "span_days": span_days,
             "flags": {},
             "estimates": _render(
                 gitlab._dataset_estimates(
-                    dataset_key="commits",
+                    dataset_key=dataset,
                     flags={},
                     org_id="org",
                     host="fixture.example",
@@ -108,6 +108,7 @@ def _gitlab_cases(gitlab: Any) -> list[dict[str, object]]:
             ),
         }
         for span_days in (1, 3)
+        for dataset in ("commits", "commit-stats")
     ]
 
 

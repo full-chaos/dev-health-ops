@@ -53,6 +53,7 @@ from dev_health_ops.processors.testops_ingest import (
     ingest_report_members,
 )
 from dev_health_ops.processors.testops_tests import process_gitlab_test_report
+from dev_health_ops.providers.gitlab.commit_stats import build_gitlab_commit_stat_values
 from dev_health_ops.providers.gitlab.commits import build_gitlab_commit_values
 from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.gitlab.repository import build_gitlab_repository_values
@@ -194,13 +195,10 @@ def _fetch_gitlab_commit_stats_sync(
                         )
                         stats_objects.append(
                             GitCommitStat(
-                                repo_id=repo_id,
-                                commit_hash=commit_hash,
-                                file_path=AGGREGATE_STATS_MARKER,
-                                additions=detailed_stats.additions,
-                                deletions=detailed_stats.deletions,
-                                old_file_mode="unknown",
-                                new_file_mode="unknown",
+                                **build_gitlab_commit_stat_values(
+                                    detailed_stats,
+                                    repo_id,
+                                )
                             )
                         )
                     except Exception as e:

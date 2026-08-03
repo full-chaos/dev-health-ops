@@ -82,6 +82,8 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 //     tenant-scoped persisted progress and crash-safe FINAL readback.
 //   - gitlab/commits: CHAOS-3346, live producer oracle parity plus paginated
 //     no-partial-success collection and tenant-scoped FINAL readback.
+//   - gitlab/commit-stats: live producer oracle parity plus accepted Python
+//     budget provenance and tenant-scoped FINAL retry convergence.
 //
 // github/prs (CHAOS-3122) is deliberately NOT in this set despite having a
 // real CompleteRouteHandler and passing fixture-level parity evidence: codex
@@ -107,6 +109,7 @@ var routeReadyPairs = map[string]struct{}{
 	"jira/incidents":             {},
 	"gitlab/repo-metadata":       {},
 	"gitlab/commits":             {},
+	"gitlab/commit-stats":        {},
 	"github/blame":               {},
 }
 
@@ -132,12 +135,13 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		LaunchDarklyFeatureFlags: true, GithubRepoMetadata: true,
 		GitlabRepoMetadata: true,
 		GitlabCommits:      true,
+		GitlabCommitStats:  true,
 		GithubPRs:          true, GithubCICD: true, GithubCommits: true,
 		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 		GithubCommitStats: true,
 		GithubBlame:       true,
 	}
-	if reflect.TypeOf(all).NumField() != 15 {
+	if reflect.TypeOf(all).NumField() != 16 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -217,6 +221,23 @@ func TestGitLabCommitsRequiresItsOwnSwitch(t *testing.T) {
 	github, _ := (CompleteRouteSwitches{GitlabCommits: true}).Descriptor("github", "commits")
 	if github.RouteEnabled {
 		t.Fatalf("gitlab switch opened github/commits: %+v", github)
+	}
+}
+
+func TestGitLabCommitStatsRequiresItsOwnSwitch(t *testing.T) {
+	t.Parallel()
+	off, ok := (CompleteRouteSwitches{GithubCommitStats: true}).Descriptor("gitlab", "commit-stats")
+	if !ok || !off.RouteReady || off.RouteEnabled || off.Executor != ExecutorNativeGo {
+		t.Fatalf("gitlab/commit-stats with github switch descriptor=%+v ok=%v", off, ok)
+	}
+	on, ok := (CompleteRouteSwitches{GitlabCommitStats: true}).Descriptor("gitlab", "commit-stats")
+	if !ok || !on.RouteReady || !on.RouteEnabled || on.Executor != ExecutorNativeGo ||
+		!slices.Equal(on.Destinations, []string{"git_commit_stats"}) {
+		t.Fatalf("gitlab/commit-stats descriptor=%+v ok=%v", on, ok)
+	}
+	github, _ := (CompleteRouteSwitches{GitlabCommitStats: true}).Descriptor("github", "commit-stats")
+	if github.RouteEnabled {
+		t.Fatalf("gitlab switch opened github/commit-stats: %+v", github)
 	}
 }
 
@@ -303,6 +324,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"jira/incidents":             JiraIncidentRouteHandler{},
 		"gitlab/repo-metadata":       GitLabRepositoryRouteHandler{},
 		"gitlab/commits":             GitLabCommitsRouteHandler{},
+		"gitlab/commit-stats":        GitLabCommitStatsRouteHandler{},
 		"github/blame":               GitHubBlameRouteHandler{},
 	}
 	native := map[string]struct{}{}

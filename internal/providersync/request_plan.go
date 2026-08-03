@@ -59,17 +59,24 @@ func ProviderRequestPlan(
 }
 
 func gitLabRequestPlan(dataset string, spanDays int) []RequestEstimate {
-	if dataset != "commits" {
+	switch dataset {
+	case "commits":
+		// Ported from providers/gitlab/budget.py::_dataset_estimates. The
+		// canonical Python estimator groups project metadata and repository
+		// commit pages under the project REST family and scales its two-request
+		// floor linearly with the requested window.
+		return []RequestEstimate{{
+			Dimension: BudgetRESTCore, Units: max(2, 2*spanDays),
+			Confidence: "medium", RouteFamily: "project",
+		}}
+	case "commit-stats":
+		return []RequestEstimate{{
+			Dimension: BudgetRESTCore, Units: max(4, 4*spanDays),
+			Confidence: "low", RouteFamily: "project",
+		}}
+	default:
 		return nil
 	}
-	// Ported from providers/gitlab/budget.py::_dataset_estimates. The
-	// canonical Python estimator groups project metadata and repository
-	// commit pages under the project REST family and scales its two-request
-	// floor linearly with the requested window.
-	return []RequestEstimate{{
-		Dimension: BudgetRESTCore, Units: max(2, 2*spanDays),
-		Confidence: "medium", RouteFamily: "project",
-	}}
 }
 
 func githubRequestPlan(dataset string, spanDays int) []RequestEstimate {

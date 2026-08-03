@@ -118,6 +118,27 @@ for both the Python producer gate and Go worker. Every checked-in deployment
 keeps it false. This route-readiness change therefore transfers no live unit,
 does not activate a River scheduler path, and does not change migration 0066.
 
+## Activation status for `(gitlab, commits)`
+
+CHAOS-3346 makes this pair `native_go` / `route_ready: true` without changing
+the shared `git_commits` schema or claiming a provider-instance dimension.
+The handler resolves the canonical GitLab project, retains self-managed URL
+roots, paginates the repository commits endpoint, and fails the whole unit on
+an HTTP error or safety-cap hit; no partial batch or watermark is committed.
+Nullable commit messages remain nullable.
+
+Row parity is checked against the live production `_map_commit` function and
+the exact Python row builder used by `_fetch_gitlab_commits_sync`, with the
+complete `GitCommit` field set reflected from the production model. The
+ClickHouse effect requires recovery readback and compares the tenant-scoped
+winning row through `SELECT ... FINAL`; the integration fixture uses the same
+natural key under two organizations and verifies both directions.
+
+Routing remains off unless `WORKER_GITLAB_COMMITS_ENABLED=true` is set for
+both the Python producer gate and Go worker. Every checked-in deployment keeps
+it false. This route-readiness change therefore transfers no live unit, does
+not activate a River scheduler path, and does not change migration 0066.
+
 ## Effect timestamp stabilization (applies to every complete route)
 
 `BuildEffectBatch` digests the serialized rows, so any wall-clock value inside

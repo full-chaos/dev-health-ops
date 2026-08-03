@@ -128,6 +128,8 @@ class ProviderUnitRouteSwitches:
     # Independent producer half of the native GitLab repository route. It
     # shares neither switch nor instance-normalization semantics with GitHub.
     gitlab_repo_metadata: bool = False
+    # Independent producer half of the native GitLab commits route.
+    gitlab_commits: bool = False
     # github_prs is the producer half of the (github, prs) gate (CHAOS-3122,
     # following CHAOS-3123's precedent). Its Go counterpart is
     # config.Config.WorkerGithubPRsEnabled, read from the same
@@ -155,6 +157,7 @@ class ProviderUnitRouteSwitches:
             ),
             github_repo_metadata=_flag(source, "WORKER_GITHUB_REPO_METADATA_ENABLED"),
             gitlab_repo_metadata=_flag(source, "WORKER_GITLAB_REPO_METADATA_ENABLED"),
+            gitlab_commits=_flag(source, "WORKER_GITLAB_COMMITS_ENABLED"),
             github_prs=_flag(source, "WORKER_GITHUB_PRS_ENABLED"),
             github_cicd=_flag(source, "WORKER_GITHUB_CICD_ENABLED"),
             github_commits=_flag(source, "WORKER_GITHUB_COMMITS_ENABLED"),

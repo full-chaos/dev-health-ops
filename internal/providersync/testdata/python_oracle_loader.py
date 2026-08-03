@@ -34,6 +34,7 @@ _BUDGET_TYPES_SOURCE = _source("dev_health_ops/sync/budget_types.py")
 _DATASETS_SOURCE = _source("dev_health_ops/sync/datasets.py")
 _USAGE_SOURCE = _source("dev_health_ops/providers/usage.py")
 _LAUNCHDARKLY_PROCESSOR_SOURCE = _source("dev_health_ops/processors/launchdarkly.py")
+_GITHUB_BUDGET_SOURCE = _source("dev_health_ops/providers/github/budget.py")
 _LINEAR_BUDGET_SOURCE = _source("dev_health_ops/providers/linear/budget.py")
 _JIRA_BUDGET_SOURCE = _source("dev_health_ops/providers/jira/budget.py")
 _LAUNCHDARKLY_BUDGET_SOURCE = _source("dev_health_ops/providers/launchdarkly/budget.py")
@@ -461,6 +462,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.processors.launchdarkly",
         _LAUNCHDARKLY_PROCESSOR_SOURCE,
         _target_launchdarkly_processor,
+    ),
+    _GITHUB_BUDGET_SOURCE: (
+        "dev_health_ops.providers.github.budget",
+        _GITHUB_BUDGET_SOURCE,
+        _target_budget,
     ),
     _LINEAR_BUDGET_SOURCE: (
         "dev_health_ops.providers.linear.budget",

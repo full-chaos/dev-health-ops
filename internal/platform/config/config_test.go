@@ -144,8 +144,19 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 		cfg.WorkerGithubCICDEnabled || cfg.WorkerGithubCommitsEnabled ||
 		cfg.WorkerGithubDeploymentsEnabled || cfg.WorkerGithubSecurityEnabled ||
 		cfg.WorkerGithubFilesEnabled || cfg.WorkerGithubCommitStatsEnabled ||
-		cfg.WorkerGithubBlameEnabled {
+		cfg.WorkerGithubBlameEnabled || cfg.WorkerGithubTestsEnabled {
 		t.Fatal("provider route switches must default off")
+	}
+}
+
+func TestGitHubCompleteUnitAliasesAreMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	_, err := Load(workerSpec(map[string]string{
+		"WORKER_GITHUB_CICD_ENABLED":  "true",
+		"WORKER_GITHUB_TESTS_ENABLED": "true",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("error=%v", err)
 	}
 }
 
@@ -175,13 +186,14 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITLAB_COMMITS_ENABLED":             "true",
 		"WORKER_GITLAB_COMMIT_STATS_ENABLED":        "true",
 		"WORKER_GITHUB_PRS_ENABLED":                 "true",
-		"WORKER_GITHUB_CICD_ENABLED":                "true",
+		"WORKER_GITHUB_CICD_ENABLED":                "false",
 		"WORKER_GITHUB_COMMITS_ENABLED":             "true",
 		"WORKER_GITHUB_DEPLOYMENTS_ENABLED":         "true",
 		"WORKER_GITHUB_SECURITY_ENABLED":            "true",
 		"WORKER_GITHUB_FILES_ENABLED":               "true",
 		"WORKER_GITHUB_COMMIT_STATS_ENABLED":        "true",
 		"WORKER_GITHUB_BLAME_ENABLED":               "true",
+		"WORKER_GITHUB_TESTS_ENABLED":               "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -214,10 +226,10 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		!cfg.WorkerGitlabCommitsEnabled ||
 		!cfg.WorkerGitlabCommitStatsEnabled ||
 		!cfg.WorkerGithubPRsEnabled ||
-		!cfg.WorkerGithubCICDEnabled || !cfg.WorkerGithubCommitsEnabled ||
+		cfg.WorkerGithubCICDEnabled || !cfg.WorkerGithubCommitsEnabled ||
 		!cfg.WorkerGithubDeploymentsEnabled || !cfg.WorkerGithubSecurityEnabled ||
 		!cfg.WorkerGithubFilesEnabled || !cfg.WorkerGithubCommitStatsEnabled ||
-		!cfg.WorkerGithubBlameEnabled {
+		!cfg.WorkerGithubBlameEnabled || !cfg.WorkerGithubTestsEnabled {
 		t.Fatal("expected independent provider route opt-ins")
 	}
 

@@ -80,12 +80,16 @@ func gitLabRequestPlan(dataset string, spanDays int) []RequestEstimate {
 }
 
 func githubRequestPlan(dataset string, spanDays int) []RequestEstimate {
-	if dataset != "cicd" {
+	if dataset != "cicd" && dataset != "tests" && dataset != "deployments" {
 		return nil
 	}
+	routeFamily := dataset
+	if dataset == "cicd" {
+		routeFamily = "tests"
+	}
 	return []RequestEstimate{
-		{BudgetRESTCore, 4 * spanDays, "low", "cicd"},
-		{BudgetContentsBlob, 2 * spanDays, "low", "cicd"},
+		{BudgetRESTCore, 4 * spanDays, "low", routeFamily},
+		{BudgetContentsBlob, 2 * spanDays, "low", routeFamily},
 	}
 }
 

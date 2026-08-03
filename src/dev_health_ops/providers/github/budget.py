@@ -159,18 +159,23 @@ def _dataset_estimates(
         DatasetKey.TESTS.value,
         DatasetKey.DEPLOYMENTS.value,
     }:
+        route_family = (
+            DatasetKey.TESTS.value
+            if dataset_key == DatasetKey.CICD.value
+            else dataset_key
+        )
         return (
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
                 _scaled_units(4, span_days),
                 _CONFIDENCE_LOW,
-                dataset_key,
+                route_family,
             ),
             _estimate(
                 bucket(BudgetDimension.CONTENTS_BLOB),
                 _scaled_units(2, span_days),
                 _CONFIDENCE_LOW,
-                dataset_key,
+                route_family,
                 notes=("workflow artifact expansion varies by repository activity",),
             ),
         )
@@ -346,7 +351,8 @@ def _fallback_credential_scope(
 # `work_item_prs`' SECONDARY_ABUSE_RISK sibling), so its marker stays empty.
 #
 # `repo` (REST_CORE), `git` (REST_CORE), `commit_stats` (REST_CORE), `security`
-# (REST_CORE), and deployments REST_CORE now fetch through
+# (REST_CORE), the shared `tests` CICD workflow route, and deployments REST_CORE
+# now fetch through
 # `providers/github/code_client.py::GitHubCodeClient`, labeling operations
 # with explicit family prefixes so CS1's resolver short-circuit resolves them
 # directly. `commit_stats` CONTENTS_BLOB and deployments CONTENTS_BLOB remain
@@ -393,9 +399,7 @@ GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
         "pr_social", BudgetDimension.GRAPHQL_COST, operation_markers=("pr_social:",)
     ),
     UsageRouteFamily("pr_social", BudgetDimension.SECONDARY_ABUSE_RISK),
-    UsageRouteFamily("cicd", BudgetDimension.REST_CORE),
-    UsageRouteFamily("cicd", BudgetDimension.CONTENTS_BLOB),
-    UsageRouteFamily("tests", BudgetDimension.REST_CORE),
+    UsageRouteFamily("tests", BudgetDimension.REST_CORE, operation_markers=("tests:",)),
     UsageRouteFamily("tests", BudgetDimension.CONTENTS_BLOB),
     UsageRouteFamily(
         "deployments", BudgetDimension.REST_CORE, operation_markers=("deployments:",)

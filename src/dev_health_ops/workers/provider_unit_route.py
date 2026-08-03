@@ -144,6 +144,7 @@ class ProviderUnitRouteSwitches:
     github_files: bool = False
     github_commit_stats: bool = False
     github_blame: bool = False
+    github_tests: bool = False
 
     @classmethod
     def from_environment(
@@ -169,6 +170,7 @@ class ProviderUnitRouteSwitches:
             github_files=_flag(source, "WORKER_GITHUB_FILES_ENABLED"),
             github_commit_stats=_flag(source, "WORKER_GITHUB_COMMIT_STATS_ENABLED"),
             github_blame=_flag(source, "WORKER_GITHUB_BLAME_ENABLED"),
+            github_tests=_flag(source, "WORKER_GITHUB_TESTS_ENABLED"),
         )
         switches.require_complete_routes()
         return switches
@@ -176,6 +178,10 @@ class ProviderUnitRouteSwitches:
     def require_complete_routes(self) -> None:
         if self.linear_work_items or self.jira_work_items:
             raise ProviderUnitRouteError("enabled provider unit route is incomplete")
+        if self.github_cicd and self.github_tests:
+            raise ProviderUnitRouteError(
+                "github cicd and tests switches are mutually exclusive complete-unit aliases"
+            )
 
     def routes_to_river(self, provider: str, dataset: str) -> bool:
         self.require_complete_routes()

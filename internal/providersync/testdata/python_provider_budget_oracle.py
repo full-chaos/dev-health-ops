@@ -71,12 +71,12 @@ def _github_cases(github: Any) -> list[dict[str, object]]:
     return [
         {
             "provider": "github",
-            "dataset": "cicd",
+            "dataset": dataset,
             "span_days": span_days,
             "flags": {},
             "estimates": _render(
                 github._dataset_estimates(
-                    dataset_key="cicd",
+                    dataset_key=dataset,
                     flags={},
                     org_id="org",
                     host="fixture.example",
@@ -86,6 +86,7 @@ def _github_cases(github: Any) -> list[dict[str, object]]:
             ),
         }
         for span_days in (1, 3)
+        for dataset in ("cicd", "tests", "deployments")
     ]
 
 

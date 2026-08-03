@@ -56,6 +56,11 @@ _COVERAGE_PARSER_SOURCE = _source("dev_health_ops/parsers/coverage.py")
 _TESTOPS_TESTS_SOURCE = _source("dev_health_ops/processors/testops_tests.py")
 _TESTOPS_COVERAGE_SOURCE = _source("dev_health_ops/processors/testops_coverage.py")
 _TESTOPS_INGEST_SOURCE = _source("dev_health_ops/processors/testops_ingest.py")
+_PIPELINE_BASE_SOURCE = _source("dev_health_ops/providers/_base.py")
+_CI_ACCEPTANCE_SOURCE = _source("dev_health_ops/providers/ci_acceptance.py")
+_GITHUB_TESTOPS_PIPELINE_SOURCE = _source(
+    "dev_health_ops/providers/github/testops_pipeline.py"
+)
 _OPERATIONAL_ORDERING_SOURCE = _source(
     "dev_health_ops/models/operational_ordering_types.py"
 )
@@ -531,6 +536,35 @@ def _target_testops_ingest() -> None:
     )
 
 
+def _target_github_testops_pipeline() -> None:
+    """Load the active GitHub TestOps adapter and its executable dependencies."""
+    _load_safe_source("dev_health_ops.sync.budget_types")
+    _load_safe_source("dev_health_ops.sync.datasets")
+    _load_safe_source("dev_health_ops.providers.usage")
+    _install_module(
+        "dev_health_ops.workers.sync_bootstrap", {"SyncTaskContext": object}
+    )
+    _install_module(
+        "dev_health_ops.exceptions",
+        {
+            "APIException": type("APIException", (Exception,), {}),
+            "AuthenticationException": type(
+                "AuthenticationException", (Exception,), {}
+            ),
+        },
+    )
+    _load_source_module(
+        "dev_health_ops.metrics.testops_schemas", _TESTOPS_SCHEMAS_SOURCE
+    )
+    _install_module(
+        "dev_health_ops.providers._http",
+        {"GITHUB_DIAGNOSTIC_HEADER_NAMES": ()},
+    )
+    _load_source_module("dev_health_ops.providers.github.budget", _GITHUB_BUDGET_SOURCE)
+    _load_source_module("dev_health_ops.providers._base", _PIPELINE_BASE_SOURCE)
+    _load_source_module("dev_health_ops.providers.ci_acceptance", _CI_ACCEPTANCE_SOURCE)
+
+
 def _target_jsm_incidents() -> None:
     """Load the incident dataclasses and JSM boundary model without ORM init."""
     _load_source_module(
@@ -648,6 +682,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.processors.testops_ingest",
         _TESTOPS_INGEST_SOURCE,
         _target_testops_ingest,
+    ),
+    _GITHUB_TESTOPS_PIPELINE_SOURCE: (
+        "dev_health_ops.providers.github.testops_pipeline",
+        _GITHUB_TESTOPS_PIPELINE_SOURCE,
+        _target_github_testops_pipeline,
     ),
     _JSM_INCIDENTS_SOURCE: (
         "dev_health_ops.providers.jira.jsm_incidents",

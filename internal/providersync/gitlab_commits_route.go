@@ -35,14 +35,6 @@ type gitLabCommitPayload struct {
 type GitLabCommitsRouteHandler struct {
 	PerPage  int
 	MaxPages int
-	Now      func() time.Time
-}
-
-func (handler GitLabCommitsRouteHandler) now() time.Time {
-	if handler.Now != nil {
-		return handler.Now().UTC()
-	}
-	return time.Now().UTC()
 }
 
 func (handler GitLabCommitsRouteHandler) Collect(
@@ -70,10 +62,7 @@ func (handler GitLabCommitsRouteHandler) Collect(
 	if err != nil || parsedProjectID < 1 || strconv.FormatInt(parsedProjectID, 10) != projectID {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
-	fullName := project.PathWithNS
-	if fullName == "" {
-		fullName = project.Name
-	}
+	fullName := gitLabProjectFullName(project)
 	repoID, err := repositoryIdentity(fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -169,13 +158,11 @@ func (handler GitLabCommitsRouteHandler) normalizeCommit(
 ) (gitCommitRow, error) {
 	authorWhen := parseCommitTime(payload.AuthoredDate)
 	if authorWhen == nil {
-		now := handler.now()
-		authorWhen = &now
+		authorWhen = &normalizedAt
 	}
 	committerWhen := parseCommitTime(payload.CommittedDate)
 	if committerWhen == nil {
-		now := handler.now()
-		committerWhen = &now
+		committerWhen = &normalizedAt
 	}
 	authorName := "Unknown"
 	if payload.AuthorName != nil && *payload.AuthorName != "" {

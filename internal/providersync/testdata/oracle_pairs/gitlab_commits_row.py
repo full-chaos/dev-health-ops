@@ -22,11 +22,11 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
     code_client = load_live_module(_CODE_CLIENT_SOURCE)
     commit = code_client._map_commit(case["raw_commit"])
     commit_builder = load_live_module(_COMMIT_SOURCE)
-    fixed_now = datetime.fromisoformat(case["now"].replace("Z", "+00:00"))
+    normalized_at = datetime.fromisoformat(case["normalized_at"].replace("Z", "+00:00"))
     values = commit_builder.build_gitlab_commit_values(
         commit,
         case["repo_id"],
-        now=lambda: fixed_now.astimezone(timezone.utc),
+        now=lambda: normalized_at.astimezone(timezone.utc),
     )
     return values
 

@@ -24,15 +24,15 @@ func buildGitLabCommitRowForOracle(t *testing.T, input map[string]any) gitCommit
 	if err := decoder.Decode(&raw); err != nil {
 		t.Fatal(err)
 	}
-	fixedNow, err := time.Parse(time.RFC3339Nano, input["now"].(string))
+	normalizedAt, err := time.Parse(time.RFC3339Nano, input["normalized_at"].(string))
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, err := (GitLabCommitsRouteHandler{Now: func() time.Time { return fixedNow }}).normalizeCommit(
+	row, err := (GitLabCommitsRouteHandler{}).normalizeCommit(
 		nativeTestClaim("gitlab", "commits"),
 		input["repo_id"].(string),
 		raw,
-		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -45,8 +45,8 @@ func TestGenericOracleMatchesLivePythonForGitLabCommitsRowConstruction(t *testin
 		{
 			ID: "nullable_and_fallback_values",
 			Input: map[string]any{
-				"repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
-				"now":     "2026-08-03T11:12:13.456Z",
+				"repo_id":       "c7198fbc-1945-3717-05d8-eb78866b4e79",
+				"normalized_at": "2026-08-03T11:12:13.456Z",
 				"raw_commit": map[string]any{
 					"id": "abc", "message": nil, "author_name": nil,
 					"authored_date": nil, "committer_name": "", "committed_date": "invalid",
@@ -57,8 +57,8 @@ func TestGenericOracleMatchesLivePythonForGitLabCommitsRowConstruction(t *testin
 		{
 			ID: "canonical_values_and_short_id_fallback",
 			Input: map[string]any{
-				"repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
-				"now":     "2026-08-03T11:12:13.456Z",
+				"repo_id":       "c7198fbc-1945-3717-05d8-eb78866b4e79",
+				"normalized_at": "2026-08-03T11:12:13.456Z",
 				"raw_commit": map[string]any{
 					"id": nil, "short_id": "def", "message": "preserved",
 					"author_name": "Author", "authored_date": "2026-08-01T10:00:00Z",

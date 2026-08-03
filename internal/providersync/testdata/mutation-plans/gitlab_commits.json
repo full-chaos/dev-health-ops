@@ -2,6 +2,7 @@
   "schema_version": 1,
   "name": "GitLab commits native route structural closure (CHAOS-3346)",
   "build": ["go", "test", "-run", "^$", "./internal/providersync/", "./cmd/dev-health-worker/"],
+  "$limitation": "This plan directly targets the GitLab commits claim/client guards, project binding, pagination and window boundaries, nullable row fields, persisted occurrence-time fallback, repository identity precedence and hash input, tenant-scoped exact readback, accepted Python budget, route readiness, and worker activation. The real ClickHouse tenant collision remains an integration-tagged mutation proof. The generic live-Python oracles execute the canonical Python project and commit mappers plus production row builders; this plan does not claim live credentialed GitLab traffic, scheduler activation, schema redesign, or provider-instance semantics.",
   "mutations": [
     {
       "id": "G1-claim-provider-guard",
@@ -107,6 +108,38 @@
       "replace": "false ||",
       "rationale": "enabling only GitLab commits must construct the provider-unit worker family rather than dispatching to no handler",
       "proof": [["go", "test", "-count=1", "-run", "^TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch$/gitlab_commits$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "G14-project-path-precedence",
+      "file": "internal/providersync/gitlab_repository_route.go",
+      "find": "if payload.Path != \"\" {\n\t\treturn payload.Path\n\t}",
+      "replace": "if payload.Path != \"\" {\n\t\treturn payload.Name\n\t}",
+      "rationale": "when path_with_namespace is absent, GitLab's path remains identity-bearing and must win before a display name shared by projects in different groups",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGenericOracleMatchesLivePythonForGitLabRepositoryRow$/path_fallback$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G15-repository-identity-input",
+      "file": "internal/providersync/gitlab_commits_route.go",
+      "find": "repoID, err := repositoryIdentity(fullName)",
+      "replace": "repoID, err := repositoryIdentity(project.Name)",
+      "rationale": "the commit foreign key must hash the canonical namespaced project path, not the ambiguous display name",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabCommitsRouteUsesProjectPathBeforeAmbiguousName$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G16-author-time-occurrence-fallback",
+      "file": "internal/providersync/gitlab_commits_route.go",
+      "find": "authorWhen = &normalizedAt",
+      "replace": "now := time.Now().UTC()\n\t\tauthorWhen = &now",
+      "rationale": "a missing or invalid authored timestamp must reuse the persisted occurrence instant so retry rows and effect digests remain byte-identical",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabCommitsRouteRetryReusesNormalizedAtForMissingTimestamps$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G17-committer-time-occurrence-fallback",
+      "file": "internal/providersync/gitlab_commits_route.go",
+      "find": "committerWhen = &normalizedAt",
+      "replace": "now := time.Now().UTC()\n\t\tcommitterWhen = &now",
+      "rationale": "a missing or invalid committed timestamp must reuse the persisted occurrence instant so retry rows and effect digests remain byte-identical",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabCommitsRouteRetryReusesNormalizedAtForMissingTimestamps$", "./internal/providersync/"]]
     }
   ]
 }

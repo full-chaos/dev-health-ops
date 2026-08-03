@@ -181,18 +181,28 @@ def _frame_with_one_metric(**extra_metric_fields: Any) -> DevAnswerFrame:
     )
 
 
-def test_metric_evidence_ref_ids_are_stripped_from_the_brief():
+def test_metric_evidence_provenance_is_stripped_from_the_brief():
+    """F10 (CHAOS-3297 stack #3, landed d823c747d): every metric now
+    carries evidence_ref_ids XOR evidence_classification
+    (MetricEvidenceClassification.LEGACY_V1_UNMINTED here, via the
+    contract_fixtures_v2._metric_ref() producer default). Both are
+    provenance, not narrative content -- stripped per the orchestrator's
+    ruling and the module's pre-existing evidence_ref_ids rationale."""
+
     frame = _frame_with_one_metric()
     brief = build_narrative_brief(frame)
-    assert "evidence_ref_ids" not in brief["metrics"][0]
+    metric_brief = brief["metrics"][0]
+    assert "evidence_ref_ids" not in metric_brief
+    assert "evidence_classification" not in metric_brief
+    # Narratable content survives the strip.
+    assert metric_brief["label"] == "Cycle time (p50)"
+    assert metric_brief["value"] == 12.5
 
 
-def test_a_future_metric_evidence_classification_field_would_also_be_stripped():
-    """Forward-compat proof for the orchestrator's ruling on stack #3's
-    incoming ``DevMetricRefV2.evidence_classification`` field: exercises the
-    stripping mechanism directly (the real contract does not carry this
-    field yet), so the exclusion is proven correct ahead of the field's
-    landing rather than discovered broken on rebase."""
+def test_metric_stripping_mechanism_is_exercised_directly_too():
+    """Unit-level proof of the stripping function itself, independent of
+    the live contract shape, per rule 3 (mutate/verify the specific
+    clause)."""
 
     metric_dict = {
         "metric_ref_id": "metric_01",

@@ -39,20 +39,20 @@ check would let an unvalidated narrative describe a finding no check
 verifies it got right. Revisit to ``INCLUDED`` only alongside a finding-
 grounding validator, not before.
 
-Sub-field note (orchestrator ruling, 2026-08-02): stack #3 is adding
-``DevMetricRefV2.evidence_classification`` (closed vocabulary,
-exclusive-or with ``evidence_ref_ids``; distinguishes a legacy-v1-sourced
-metric's explicit unminted marker from a plan-minted metric that never sets
-it). ``metrics`` stays ``INCLUDED`` as a *frame* field -- a narrative still
-needs metric values/labels/comparisons to write grounded prose -- but
-``evidence_classification`` itself is provenance metadata, not narrative
-content, and is stripped per-metric by ``_project_metric_for_brief`` before
-it can reach the provider. This is a targeted sub-field exclusion, not a
-second totality-checked policy: ``metrics`` is a bounded, closed contract
-(``DevMetricRefV2``) with a small field count, and the two provenance
-fields it can carry (``evidence_ref_ids``, now also
-``evidence_classification``) are named explicitly rather than projected
-through an allowlist of their own.
+Sub-field note (orchestrator ruling, 2026-08-02; field landed by stack #3 in
+d823c747d, F10): ``DevMetricRefV2.evidence_classification``
+(``MetricEvidenceClassification``, closed vocabulary, exclusive-or with
+``evidence_ref_ids`` -- distinguishes a legacy-v1-sourced metric's explicit
+unminted marker from a plan-minted metric that never sets it) is
+provenance metadata, not narrative content. ``metrics`` stays ``INCLUDED``
+as a *frame* field -- a narrative still needs metric values/labels/
+comparisons to write grounded prose -- but ``evidence_classification`` and
+``evidence_ref_ids`` are stripped per-metric by
+``_project_metric_for_brief`` before either can reach the provider. This is
+a targeted sub-field exclusion, not a second totality-checked policy:
+``metrics`` is a bounded, closed contract (``DevMetricRefV2``) with a small
+field count, and the two provenance fields it can carry are named
+explicitly rather than projected through an allowlist of their own.
 """
 
 from __future__ import annotations
@@ -208,10 +208,9 @@ _METRIC_BRIEF_EXCLUDED_SUBFIELDS: frozenset[str] = frozenset(
 def _project_metric_for_brief(metric: dict[str, Any]) -> dict[str, Any]:
     """Strip provenance sub-fields from one dumped ``DevMetricRefV2``.
 
-    ``dict.pop(key, None)`` on a key that does not exist yet (e.g.
-    ``evidence_classification`` before stack #3 lands it) is a no-op, so
-    this is safe to ship ahead of the field's landing and takes effect
-    automatically once it exists -- no second edit required.
+    Excludes both the pre-existing ``evidence_ref_ids`` and F10's
+    ``evidence_classification`` (``MetricEvidenceClassification``, landed
+    by stack #3 in d823c747d) -- neither is narrative content.
     """
 
     return {

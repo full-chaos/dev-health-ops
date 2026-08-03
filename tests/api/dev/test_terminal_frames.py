@@ -54,6 +54,7 @@ from dev_health_ops.api.dev.contracts_v2.base import (
     PublicOutcome,
     SourceClass,
 )
+from dev_health_ops.api.dev.contracts_v2.compat import _ERROR_OUTCOME_CODES
 from dev_health_ops.api.dev.contracts_v2.frame import DevAnswerFrame as _FrameV2
 from dev_health_ops.api.dev.contracts_v2.plan import PLAN_REGISTRY
 from dev_health_ops.api.dev.orchestrator_states import RunState
@@ -664,4 +665,130 @@ def test_replay_coherence_guard_is_load_bearing() -> None:
     assert guarded.error is not None
     assert guarded.error.code == code, (
         "the CHAOS-3297 guard must override the divergent projection"
+    )
+
+
+# ---------------------------------------------------------------------------
+# F-ORIGIN (CHAOS-3297 stack #5) -- an orchestrator-origin frame is never
+# authoritative for the v1 error wire shape, even when its projected code
+# coincides with the live one.
+# ---------------------------------------------------------------------------
+
+#: The orchestrator codes whose frame projection reconstructs the SAME v1
+#: code, so the pre-stack-5 code-comparison guard passed while the replayed
+#: *message* was still canonical preflight copy the live run never sent.
+#: Derived, not hand-listed: a future table change that adds or removes a
+#: coinciding code is picked up here rather than silently narrowing the
+#: case set.
+_COINCIDING_CODES = sorted(
+    code
+    for code in tf.ORCHESTRATOR_ERROR_CODES
+    if _ERROR_OUTCOME_CODES.get(tf.PUBLIC_OUTCOME_BY_ERROR_CODE[code], (None, None))[0]
+    == code
+)
+
+
+def test_the_coinciding_code_set_is_not_empty() -> None:
+    """Anti-vacuity: without at least one such code the cases below would
+    parametrize over nothing and report as coverage.
+    """
+
+    assert _COINCIDING_CODES
+
+
+@pytest.mark.parametrize("code", _COINCIDING_CODES)
+def test_replay_of_an_orchestrator_frame_never_substitutes_canonical_copy(
+    code: str,
+) -> None:
+    """RED before stack #5: the code matched, so the guard stood down and
+    the user saw a *different sentence* on retry than the one live streamed.
+    """
+
+    outcome = tf.PUBLIC_OUTCOME_BY_ERROR_CODE[code]
+    run_id = uuid.uuid4()
+    frame = tf.build_error_frame(
+        code=code, run_id=str(run_id), generated_at=datetime.now(UTC)
+    )
+    run = _fake_run(run_id=run_id, code=code, public_outcome=outcome)
+
+    result = _replayed_result(
+        run=run,
+        answer_payload=None,
+        frame_payload=frame.model_dump(mode="json"),
+        organization_id="org_fullchaos",
+        time_range=_TIME_RANGE,
+    )
+
+    assert result.error is not None
+    # The code is still exact (F-COHERENCE's property, unchanged)...
+    assert result.error.code == code
+    # ...and the message is the honest generic replay shape, never the
+    # preflight's canonical no-answer copy for this outcome.
+    assert result.error.safe_message == (
+        "The prior Ask Dev request did not complete with an answer."
+    )
+
+
+def test_the_origin_test_does_not_reject_a_foreign_frame_wholesale() -> None:
+    """Anti-vacuity for the origin clause: it must identify *this* mint, not
+    return True for anything.
+
+    A frame carrying some other frame_id (a preflight-origin one, or any
+    row this module did not mint) is not claimed as orchestrator-origin, so
+    the clause cannot collapse into "always fall back", which would make
+    the whole frame-projection branch dead code.
+    """
+
+    run_id = str(uuid.uuid4())
+    assert tf.is_orchestrator_error_frame(
+        frame_id=tf.orchestrator_error_frame_id(run_id=run_id, code="scope_not_found"),
+        run_id=run_id,
+        code="scope_not_found",
+    )
+    assert not tf.is_orchestrator_error_frame(
+        frame_id=str(uuid.uuid4()), run_id=run_id, code="scope_not_found"
+    )
+    # Same run, different code -> a different mint, so not this frame.
+    assert not tf.is_orchestrator_error_frame(
+        frame_id=tf.orchestrator_error_frame_id(run_id=run_id, code="internal_error"),
+        run_id=run_id,
+        code="scope_not_found",
+    )
+
+
+def test_a_preflight_origin_frame_still_projects_through_the_frame() -> None:
+    """The other side of the partition: the branch is not dead.
+
+    A frame whose id this module did not mint keeps replaying through
+    ``project_preflight_error`` -- which for a genuinely preflight-sourced
+    row reproduces the exact copy live streamed. If this stopped holding,
+    every legacy preflight-terminated run would silently degrade to the
+    generic fallback on replay.
+    """
+
+    from dev_health_ops.api.dev.preflight_outcomes import _server_handle
+
+    code = "scope_not_found"
+    outcome = tf.PUBLIC_OUTCOME_BY_ERROR_CODE[code]
+    run_id = uuid.uuid4()
+    payload = tf.build_error_frame(
+        code=code, run_id=str(run_id), generated_at=datetime.now(UTC)
+    ).model_dump(mode="json")
+    # Re-key it the way preflight_outcomes.build_preflight_answer mints its
+    # own frame ids, leaving every other field alone.
+    payload["frame_id"] = _server_handle(f"frame:{run_id}")
+    run = _fake_run(run_id=run_id, code=code, public_outcome=outcome)
+
+    result = _replayed_result(
+        run=run,
+        answer_payload=None,
+        frame_payload=payload,
+        organization_id="org_fullchaos",
+        time_range=_TIME_RANGE,
+    )
+
+    assert result.error is not None
+    assert result.error.code == code
+    assert result.error.safe_message != (
+        "The prior Ask Dev request did not complete with an answer."
     )

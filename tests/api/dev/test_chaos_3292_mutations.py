@@ -20,7 +20,10 @@ import pytest
 from dev_health_ops.api.dev.contracts import QuestionClass, ToolID
 from dev_health_ops.api.dev.contracts_v2 import ResolutionOutcome, no_answer_policy
 from dev_health_ops.api.dev.contracts_v2.validators import scan_public_text
-from dev_health_ops.api.dev.orchestrator import DevOrchestrator
+from dev_health_ops.api.dev.orchestrator import (
+    SERVER_GROUNDED_SUMMARY,
+    DevOrchestrator,
+)
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.question_interpreter import (
     ClassifierProposal,
@@ -371,13 +374,27 @@ async def test_m4_ledger_overwrite_instead_of_append_is_rejected(
 
 
 @pytest.mark.asyncio
-async def test_m5_legacy_guard_must_not_terminate_a_preflight_run(
+async def test_m5_legacy_guard_must_not_decide_a_preflight_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Letting the backstop decide must still change what the user gets.
+
+    Pre-CHAOS-3297-stack-5 the mutation was observable as a terminal state
+    flip (COMPLETED -> INSUFFICIENT_EVIDENCE). The guard cutover removed
+    that particular consequence *on purpose*: a rejection no longer erases a
+    run holding server-verified material. So the mutation is killed here on
+    the sharper observation it always should have used -- what the run
+    actually ships. With the seam defeated, the model's own answer is
+    replaced by the server-grounded one, which is a different answer for a
+    user, not merely a different internal state.
+    """
+
     baseline = await case_a4()
     assert baseline.result.state is RunState.COMPLETED
     # The guard did fire — it just did not decide anything.
     assert baseline.guard_reasons() == ("no_evidence_backed_claims",)
+    assert baseline.result.answer is not None
+    baseline_summary = baseline.result.answer.direct_summary
 
     monkeypatch.setattr(
         DevOrchestrator,
@@ -386,7 +403,9 @@ async def test_m5_legacy_guard_must_not_terminate_a_preflight_run(
     )
     mutated = await case_a4()
 
-    assert mutated.result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert mutated.result.answer is not None
+    assert mutated.result.answer.direct_summary != baseline_summary
+    assert mutated.result.answer.direct_summary == SERVER_GROUNDED_SUMMARY
 
 
 # ---------------------------------------------------------------------------

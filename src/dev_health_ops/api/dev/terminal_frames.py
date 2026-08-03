@@ -112,6 +112,8 @@ __all__ = [
     "SOURCE_CLASS_BY_TOOL_ID",
     "UnregisteredTerminalCode",
     "build_error_frame",
+    "is_orchestrator_error_frame",
+    "orchestrator_error_frame_id",
     "tolerant_parse_legacy_frame_payload",
     "wrap_legacy_answer_as_frame",
 ]
@@ -459,6 +461,47 @@ def _looks_like_platform_token(value: str) -> bool:
     return bool(_PLATFORM_TOKEN_RE.match(value))
 
 
+def orchestrator_error_frame_id(*, run_id: str, code: str) -> str:
+    """The deterministic ``frame_id`` ``build_error_frame`` mints.
+
+    Split out so ``build_error_frame`` and ``router._replayed_result``'s
+    origin test derive it from ONE function (P3: deterministic identity). A
+    second, hand-copied uuid5 expression in the router would be a mint that
+    could silently drift from the real one -- and the failure mode of that
+    drift is the router deciding a frame it *did* build is foreign, which is
+    exactly the misclassification the origin test exists to prevent.
+    """
+
+    return str(uuid.uuid5(_NAMESPACE, f"error_frame:{run_id}:{code}"))
+
+
+def is_orchestrator_error_frame(*, frame_id: str, run_id: str, code: str) -> bool:
+    """Whether this stored frame is one ``build_error_frame`` produced.
+
+    CHAOS-3297 stack #5 (router reconciliation). "Frames are authoritative"
+    is a statement about *content*, not about the v1 wire error -- and it is
+    only true of a frame that actually authored what the live run streamed.
+    A preflight-origin frame did (``project_preflight_error`` is the same
+    projection live preflight uses, so replaying through it reproduces the
+    live copy exactly). An orchestrator-origin frame never did: stack #1
+    made ``finish()`` persist one purely so ``record_frame`` /
+    ``contract_generation = 'v2'`` / the CHAOS-3299 replay gate became
+    universally reachable, while the user-visible v1 message stayed the call
+    site's own ``error(code, message, ...)`` object (see the module
+    docstring). Projecting one of those back through the fixed,
+    outcome-keyed table substitutes canonical preflight copy for copy the
+    orchestrator authored -- a message the live run never sent.
+
+    Identity is recomputed rather than stored: the frame_id is a pure uuid5
+    of ``(namespace, run_id, code)``, so given the run row's own id and
+    ``safe_error_code`` the origin is decidable from data every affected row
+    already has -- no new column, no migration, and no reliance on a
+    heuristic like "the projected code happens to differ".
+    """
+
+    return frame_id == orchestrator_error_frame_id(run_id=run_id, code=code)
+
+
 def build_error_frame(
     *,
     code: str,
@@ -509,7 +552,7 @@ def build_error_frame(
         )
     return DevAnswerFrame(
         schema_version="dev_answer_frame.v1",
-        frame_id=str(uuid.uuid5(_NAMESPACE, f"error_frame:{run_id}:{code}")),
+        frame_id=orchestrator_error_frame_id(run_id=run_id, code=code),
         run_id=_canonical_run_id(run_id),
         generated_at=generated_at,
         public_outcome=outcome,

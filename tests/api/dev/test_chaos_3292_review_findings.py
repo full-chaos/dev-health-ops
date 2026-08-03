@@ -456,12 +456,22 @@ async def test_a_page_scoped_run_with_a_resolvable_name_still_commits_that_name(
 
 
 @pytest.mark.asyncio
-async def test_an_answer_narrating_an_unresolved_bare_name_is_terminated() -> None:
+async def test_an_answer_narrating_an_unresolved_bare_name_is_rejected() -> None:
     """The re-armed backstop must be able to *see* a bare name.
 
     ``_named_entity_phrases`` only recognizes a name adjacent to an entity
     noun, so re-arming it for a bare name was inert: a grounded answer
     narrating "Nightfall" completed with zero guard reasons.
+
+    That property -- the guard sees the bare name and the narrating answer
+    is rejected -- is what this case pins, and it is unchanged. CHAOS-3297
+    stack #5 changed the *consequence* of the rejection: the model's prose
+    is still discarded, but the run's own server-verified material is no
+    longer discarded with it. Asserted here on what the user is left
+    holding (never the narration), with the terminal-vs-ship partition
+    covered on all three sides in
+    ``test_chaos_3297_s5_guard_cutover.py`` -- C1 with material, C2 without,
+    C3 outside the ``ask_dev_wave_3_1`` cohort.
     """
 
     from dev_health_ops.llm.agent.contracts import AgentFinalAnswer
@@ -492,9 +502,13 @@ async def test_an_answer_narrating_an_unresolved_bare_name_is_terminated() -> No
         script_id="narrate-bare",
     )
 
-    assert output.result.state is RunState.INSUFFICIENT_EVIDENCE
-    assert output.result.error is not None
-    assert output.result.error.code == "insufficient_evidence"
+    # The guard saw the bare name -- the whole point of this case. A run
+    # where the grammar stayed blind records no reason at all.
+    assert output.guard_reasons() == ("narrated_unresolved_entity",)
+    # And the narration it rejected reaches the user nowhere.
+    assert output.result.answer is not None
+    assert "nightfall" not in output.result.answer.model_dump_json().casefold()
+    assert list(output.result.answer.claims) == []
 
 
 @pytest.mark.asyncio

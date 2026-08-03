@@ -33,6 +33,8 @@ func ProviderRequestPlan(
 	switch provider {
 	case "github":
 		estimates = githubRequestPlan(dataset, spanDays)
+	case "gitlab":
+		estimates = gitLabRequestPlan(dataset, spanDays)
 	case "linear":
 		estimates = linearRequestPlan(dataset, spanDays)
 	case "jira":
@@ -54,6 +56,20 @@ func ProviderRequestPlan(
 		return estimates[left].RouteFamily < estimates[right].RouteFamily
 	})
 	return estimates
+}
+
+func gitLabRequestPlan(dataset string, spanDays int) []RequestEstimate {
+	if dataset != "commits" {
+		return nil
+	}
+	// Ported from providers/gitlab/budget.py::_dataset_estimates. The
+	// canonical Python estimator groups project metadata and repository
+	// commit pages under the project REST family and scales its two-request
+	// floor linearly with the requested window.
+	return []RequestEstimate{{
+		Dimension: BudgetRESTCore, Units: max(2, 2*spanDays),
+		Confidence: "medium", RouteFamily: "project",
+	}}
 }
 
 func githubRequestPlan(dataset string, spanDays int) []RequestEstimate {

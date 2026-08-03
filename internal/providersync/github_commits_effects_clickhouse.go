@@ -13,11 +13,24 @@ type GitHubCommitsClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
+type GitLabCommitsClickHouseEffects struct {
+	Conn  driver.Conn
+	Lease providerfoundation.LeaseGuard
+}
+
 func (sink GitHubCommitsClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
-	if ctx == nil || sink.Lease == nil || claim.Validate() != nil || claim.Provider != "github" || claim.Dataset != "commits" || effect.Destination != "git_commits" {
+	return writeGitCommitsEffect(ctx, sink.Conn, sink.Lease, "github", claim, effect)
+}
+
+func (sink GitLabCommitsClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
+	return writeGitCommitsEffect(ctx, sink.Conn, sink.Lease, "gitlab", claim, effect)
+}
+
+func writeGitCommitsEffect(ctx context.Context, conn driver.Conn, lease providerfoundation.LeaseGuard, provider string, claim Claim, effect EffectBatch) error {
+	if ctx == nil || lease == nil || claim.Validate() != nil || claim.Provider != provider || claim.Dataset != "commits" || effect.Destination != "git_commits" {
 		return ErrInvalidConfiguration
 	}
-	if err := sink.Lease.Assert(ctx); err != nil {
+	if err := lease.Assert(ctx); err != nil {
 		return err
 	}
 	rows, err := decodeEffectRows[gitCommitRow](effect)
@@ -32,10 +45,10 @@ func (sink GitHubCommitsClickHouseEffects) WriteEffect(ctx context.Context, clai
 	if len(rows) == 0 {
 		return nil
 	}
-	if sink.Conn == nil {
+	if conn == nil {
 		return ErrInvalidConfiguration
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO git_commits (org_id, repo_id, hash, message, author_name, author_email, author_when, committer_name, committer_email, committer_when, parents, last_synced)`)
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO git_commits (org_id, repo_id, hash, message, author_name, author_email, author_when, committer_name, committer_email, committer_when, parents, last_synced)`)
 	if err != nil {
 		return err
 	}
@@ -45,17 +58,25 @@ func (sink GitHubCommitsClickHouseEffects) WriteEffect(ctx context.Context, clai
 			return err
 		}
 	}
-	if err := sink.Lease.Assert(ctx); err != nil {
+	if err := lease.Assert(ctx); err != nil {
 		return err
 	}
 	return batch.Send()
 }
 
 func (sink GitHubCommitsClickHouseEffects) InspectEffect(ctx context.Context, claim Claim, effect EffectBatch) (EffectInspection, error) {
-	if ctx == nil || sink.Lease == nil || claim.Validate() != nil || claim.Provider != "github" || claim.Dataset != "commits" || effect.Destination != "git_commits" {
+	return inspectGitCommitsEffect(ctx, sink.Conn, sink.Lease, "github", claim, effect)
+}
+
+func (sink GitLabCommitsClickHouseEffects) InspectEffect(ctx context.Context, claim Claim, effect EffectBatch) (EffectInspection, error) {
+	return inspectGitCommitsEffect(ctx, sink.Conn, sink.Lease, "gitlab", claim, effect)
+}
+
+func inspectGitCommitsEffect(ctx context.Context, conn driver.Conn, lease providerfoundation.LeaseGuard, provider string, claim Claim, effect EffectBatch) (EffectInspection, error) {
+	if ctx == nil || lease == nil || claim.Validate() != nil || claim.Provider != provider || claim.Dataset != "commits" || effect.Destination != "git_commits" {
 		return EffectConflict, ErrInvalidConfiguration
 	}
-	if err := sink.Lease.Assert(ctx); err != nil {
+	if err := lease.Assert(ctx); err != nil {
 		return EffectConflict, err
 	}
 	expected, err := decodeEffectRows[gitCommitRow](effect)
@@ -65,7 +86,7 @@ func (sink GitHubCommitsClickHouseEffects) InspectEffect(ctx context.Context, cl
 	if len(expected) == 0 {
 		return EffectAbsent, nil
 	}
-	if sink.Conn == nil {
+	if conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
 	exact, absent := 0, 0
@@ -73,7 +94,7 @@ func (sink GitHubCommitsClickHouseEffects) InspectEffect(ctx context.Context, cl
 		if err := row.validate(claim); err != nil {
 			return EffectConflict, err
 		}
-		inspected, inspectErr := sink.inspectCommit(ctx, row)
+		inspected, inspectErr := inspectGitCommit(ctx, conn, row)
 		if inspectErr != nil {
 			return EffectConflict, inspectErr
 		}
@@ -94,8 +115,8 @@ func (sink GitHubCommitsClickHouseEffects) InspectEffect(ctx context.Context, cl
 	return EffectConflict, nil
 }
 
-func (sink GitHubCommitsClickHouseEffects) inspectCommit(ctx context.Context, expected gitCommitRow) (EffectInspection, error) {
-	rows, err := sink.Conn.Query(ctx, `SELECT org_id, repo_id, hash, message, author_name, author_email, author_when, committer_name, committer_email, committer_when, parents, last_synced FROM git_commits FINAL WHERE org_id = ? AND repo_id = ? AND hash = ?`, expected.OrgID, expected.RepoID, expected.Hash)
+func inspectGitCommit(ctx context.Context, conn driver.Conn, expected gitCommitRow) (EffectInspection, error) {
+	rows, err := conn.Query(ctx, `SELECT org_id, repo_id, hash, message, author_name, author_email, author_when, committer_name, committer_email, committer_when, parents, last_synced FROM git_commits FINAL WHERE org_id = ? AND repo_id = ? AND hash = ?`, expected.OrgID, expected.RepoID, expected.Hash)
 	if err != nil {
 		return EffectConflict, err
 	}
@@ -125,7 +146,8 @@ func compareCommitVersion(expected gitCommitRow, actual gitCommitVersion) Effect
 	}
 	if actual.LastSynced.UTC().After(expected.LastSynced.UTC()) ||
 		actual.Row.OrgID != expected.OrgID || actual.Row.RepoID != expected.RepoID ||
-		actual.Row.Hash != expected.Hash || actual.Row.Message != expected.Message ||
+		actual.Row.Hash != expected.Hash ||
+		!stringPointersEqual(actual.Row.Message, expected.Message) ||
 		actual.Row.AuthorName != expected.AuthorName ||
 		!stringPointersEqual(actual.Row.AuthorEmail, expected.AuthorEmail) ||
 		!actual.Row.AuthorWhen.UTC().Equal(expected.AuthorWhen.UTC()) ||
@@ -140,3 +162,5 @@ func compareCommitVersion(expected gitCommitRow, actual gitCommitVersion) Effect
 
 var _ EffectSink = GitHubCommitsClickHouseEffects{}
 var _ EffectReadback = GitHubCommitsClickHouseEffects{}
+var _ EffectSink = GitLabCommitsClickHouseEffects{}
+var _ EffectReadback = GitLabCommitsClickHouseEffects{}

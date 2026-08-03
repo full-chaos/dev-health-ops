@@ -16,7 +16,7 @@ type gitCommitRow struct {
 	OrgID          string    `json:"org_id"`
 	RepoID         string    `json:"repo_id"`
 	Hash           string    `json:"hash"`
-	Message        string    `json:"message"`
+	Message        *string   `json:"message"`
 	AuthorName     string    `json:"author_name"`
 	AuthorEmail    *string   `json:"author_email"`
 	AuthorWhen     time.Time `json:"author_when"`
@@ -131,7 +131,8 @@ func normalizeGitHubCommit(claim Claim, repoID string, commit gitHubCommitPayloa
 		now := time.Now().UTC()
 		committerWhen = &now
 	}
-	return gitCommitRow{OrgID: claim.OrgID, RepoID: repoID, Hash: hash, Message: stringValue(commit.Commit.Message), AuthorName: preferredName(commit.Author.Login, commit.Commit.Author.Name), AuthorEmail: preferredEmail(commit.Commit.Author.Email, commit.Author.Email), AuthorWhen: *authorWhen, CommitterName: preferredName(commit.Committer.Login, commit.Commit.Committer.Name), CommitterEmail: preferredEmail(commit.Commit.Committer.Email, commit.Committer.Email), CommitterWhen: *committerWhen, Parents: uint32(len(commit.Parents)), LastSynced: normalizedAt.UTC().Truncate(time.Millisecond)}, true
+	message := stringValue(commit.Commit.Message)
+	return gitCommitRow{OrgID: claim.OrgID, RepoID: repoID, Hash: hash, Message: &message, AuthorName: preferredName(commit.Author.Login, commit.Commit.Author.Name), AuthorEmail: preferredEmail(commit.Commit.Author.Email, commit.Author.Email), AuthorWhen: *authorWhen, CommitterName: preferredName(commit.Committer.Login, commit.Commit.Committer.Name), CommitterEmail: preferredEmail(commit.Commit.Committer.Email, commit.Committer.Email), CommitterWhen: *committerWhen, Parents: uint32(len(commit.Parents)), LastSynced: normalizedAt.UTC().Truncate(time.Millisecond)}, true
 }
 
 func preferredName(primary, fallback any) string {

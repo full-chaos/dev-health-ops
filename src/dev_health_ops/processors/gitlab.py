@@ -53,6 +53,7 @@ from dev_health_ops.processors.testops_ingest import (
     ingest_report_members,
 )
 from dev_health_ops.processors.testops_tests import process_gitlab_test_report
+from dev_health_ops.providers.gitlab.commits import build_gitlab_commit_values
 from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.gitlab.repository import build_gitlab_repository_values
 from dev_health_ops.providers.operational_migration import (
@@ -161,20 +162,7 @@ def _fetch_gitlab_commits_sync(
             if committed_when.astimezone(timezone.utc) < since:
                 break
 
-        commit_objects.append(
-            GitCommit(
-                repo_id=repo_id,
-                hash=commit.commit_id,
-                message=commit.message,
-                author_name=commit.author_name or "Unknown",
-                author_email=None,
-                author_when=commit.authored_date or datetime.now(timezone.utc),
-                committer_name=commit.committer_name or "Unknown",
-                committer_email=None,
-                committer_when=commit.committed_date or datetime.now(timezone.utc),
-                parents=len(commit.parent_ids),
-            )
-        )
+        commit_objects.append(GitCommit(**build_gitlab_commit_values(commit, repo_id)))
         commit_hashes.append(commit.commit_id)
 
     return commit_hashes, commit_objects

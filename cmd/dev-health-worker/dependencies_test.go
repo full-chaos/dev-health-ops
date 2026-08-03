@@ -136,6 +136,20 @@ func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing
 			wantErr: true,
 		},
 		{
+			name: "gitlab commits complete",
+			config: config.Config{
+				WorkerGitlabCommitsEnabled: true,
+			},
+			runtime: true,
+		},
+		{
+			name: "gitlab commits missing runtime",
+			config: config.Config{
+				WorkerGitlabCommitsEnabled: true,
+			},
+			wantErr: true,
+		},
+		{
 			// (github, prs) is NOT RouteReady (codex H1: the pair's own
 			// destination table has three columns owned by github/pr-reviews,
 			// which does not exist yet -- see execution_registry.go's

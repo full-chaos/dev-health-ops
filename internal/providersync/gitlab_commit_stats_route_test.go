@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -295,8 +296,50 @@ func TestGitLabCommitStatsFatalDetailErrorClassification(t *testing.T) {
 		{"credential invalid", providerfoundation.ErrCredentialInvalid, true},
 		{"transient detail", &providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient}, false},
 		{"not found detail", &providerfoundation.ProviderError{Class: providerfoundation.ErrorNotFound}, false},
+		{"conflict detail", &providerfoundation.ProviderError{Class: providerfoundation.ErrorConflict}, false},
+		{"permanent detail", &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent}, false},
 		{"malformed detail", providerfoundation.ErrNormalizationInvalid, false},
+		{
+			"wrapped malformed detail",
+			fmt.Errorf("decode detail: %w", providerfoundation.ErrNormalizationInvalid),
+			false,
+		},
+		{
+			"joined malformed details",
+			errors.Join(
+				providerfoundation.ErrNormalizationInvalid,
+				providerfoundation.ErrNormalizationInvalid,
+			),
+			false,
+		},
 		{"unknown provider class", &providerfoundation.ProviderError{Class: "future-control-plane-class"}, true},
+		{
+			"joined transient and budget",
+			errors.Join(
+				&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient},
+				providerfoundation.ErrBudgetUnavailable,
+			),
+			true,
+		},
+		{
+			"nested not found and lease",
+			fmt.Errorf(
+				"detail request: %w",
+				errors.Join(
+					&providerfoundation.ProviderError{Class: providerfoundation.ErrorNotFound},
+					fmt.Errorf("release reservation: %w", providerfoundation.ErrLeaseLost),
+				),
+			),
+			true,
+		},
+		{
+			"joined normalization and budget",
+			errors.Join(
+				providerfoundation.ErrNormalizationInvalid,
+				providerfoundation.ErrBudgetUnavailable,
+			),
+			true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := gitLabCommitStatsFatalDetailError(context.Background(), test.err)

@@ -264,6 +264,103 @@ async def test_the_candidate_bound_holds_against_more_matches_than_the_limit() -
 
 
 @pytest.mark.asyncio
+async def test_one_question_costs_exactly_one_fallback_search() -> None:
+    """Codex review (medium): the amplification bound.
+
+    Only the lowest-ordinal unresolved mention can terminate the run, so only
+    that mention's fallback result is ever read. Searching every unresolved
+    mention meant a 25-mention question issued 25 serialized wide catalog
+    searches -- each one a watermark query plus six per-kind ClickHouse
+    queries -- and discarded 24 of the answers unread.
+    """
+
+    named = " and ".join(f'project "Ghost {index:02d}"' for index in range(8))
+    catalog = LimitRecordingCatalog([(ORG_ID, issue) for issue in go_workers_issues(3)])
+    result = await _run(
+        _preflight(None, catalog=catalog),
+        request_for(f"Compare {named}"),
+    )
+
+    assert len(result.interpretation.mentions) == 8, "the fixture must be multi-mention"
+    assert result.decision is PreflightDecision.TERMINATE
+    wide_searches = [
+        limit for kind_count, limit in catalog.search_limits if kind_count > 1
+    ]
+    assert len(wide_searches) <= 1, (
+        "at most one bounded fallback search may be issued per question, "
+        f"got {len(wide_searches)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_same_kind_close_match_is_not_described_as_another_kind() -> None:
+    """Codex review (low): the context-ref path returns same-kind candidates.
+
+    A stale context ref resolves with ``exact=True``, so the mention's own
+    kind never ran a fuzzy search -- and the fallback, which searches every
+    searchable kind, can then legitimately return a candidate of exactly the
+    kind the user named. A reason string asserting "under a different kind"
+    would be a false statement persisted onto canonical v2 state.
+    """
+
+    beacon = AuthorizedEntity(
+        kind=EntityKind.PROJECT,
+        canonical_id="project-beacon-migration",
+        label="Beacon Migration",
+        repository_id=None,
+    )
+    result = await _run(
+        _preflight([(ORG_ID, beacon)]),
+        request_for(
+            'What is the status of the "beacon" project?',
+            scope_overrides={
+                "direct_scope": "project",
+                "entity_refs": [
+                    {
+                        "entity_type": "project",
+                        "entity_id": "beacon",
+                        "display_label": "Beacon",
+                        "repository_id": None,
+                    }
+                ],
+            },
+        ),
+    )
+
+    assert result.outcome is PublicOutcome.NEEDS_CLARIFICATION
+    assert result.answer is not None
+    (candidate,) = result.answer.frame.clarification_candidates
+    assert candidate.entity_ref.entity_kind.value == "project", (
+        "this fixture must exercise the same-kind path, or it proves nothing"
+    )
+    assert "kind" not in candidate.reason.casefold()
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_ambiguous_mention_is_never_re_searched() -> None:
+    """The fallback is gated on ``no_authorized_match`` specifically.
+
+    An ambiguous mention already holds real candidates; re-searching it would
+    replace the entities that actually carry the typed name with substring
+    near-misses, and spend a catalog round trip to do it.
+    """
+
+    catalog = LimitRecordingCatalog(
+        [(ORG_ID, ATLAS_PROJECT_ONE), (ORG_ID, ATLAS_PROJECT_TWO)]
+    )
+    result = await _run(
+        _preflight(None, catalog=catalog),
+        request_for("What is the status of the Atlas project?"),
+    )
+
+    assert result.diagnostic == "unresolved_ambiguous_candidates"
+    # Both Atlas projects match on exact label, so ``resolve_mention`` never
+    # reaches its own fuzzy search either -- this run must issue no catalog
+    # ``search`` at all.
+    assert catalog.search_limits == []
+
+
+@pytest.mark.asyncio
 async def test_the_tenant_assertion_would_catch_a_leaking_catalog() -> None:
     """Negative control for the test below.
 

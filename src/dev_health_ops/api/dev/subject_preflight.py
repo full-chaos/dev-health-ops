@@ -160,11 +160,15 @@ NOT_FOUND_FALLBACK_LIMIT = 5
 _UNAVAILABLE_WATERMARK = "catalog-watermark-unavailable"
 
 #: Why a fallback candidate is being offered. Distinct from the same-name
-#: ambiguity reason: these entities do **not** carry the name the user typed
-#: under the kind they typed, and saying so is the honest disclosure.
-_CLOSE_MATCH_REASON = (
-    "This is a close match to the name in the question, under a different kind."
-)
+#: ambiguity reason: nothing carried the typed name exactly, so what is being
+#: offered is a near miss rather than one of several equal readings.
+#:
+#: Deliberately silent about entity *kind* (Codex review, low). The obvious
+#: phrasing — "under a different kind" — is false on the context-ref path,
+#: where the mention's own kind was never fuzzy-searched and the closest match
+#: can legitimately be the same kind the user named. One reason string covers
+#: every candidate on the entry, so it must be true for all of them.
+_CLOSE_MATCH_REASON = "This is a close match to the name in the question."
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,19 +424,6 @@ class SubjectPreflight:
             authorized_scope=authorized_scope,
             resolved_at=generated_at,
         )
-        # Last of the three amenders, and the only one that can *add*
-        # candidates rather than commit: it reads the outcomes the first two
-        # already settled, so a mention the catalog-reuse path just committed
-        # is never re-searched.
-        ledger, close_matched_ids = await self._apply_not_found_fallback(
-            ledger=ledger,
-            mentions=mentions,
-            org_id=org_id,
-            permission_fingerprint=permission_fingerprint,
-            untyped_ids=untyped_ids,
-            resolved_at=generated_at,
-        )
-
         latest = ledger.latest_by_mention()
         blocking_ids = frozenset(
             mention.mention_id
@@ -478,50 +469,87 @@ class SubjectPreflight:
             and len(blocking_committed_entities) >= 2
         )
         if not cohort_may_proceed_partial:
-            for mention in mentions:
-                if mention.mention_id not in blocking_ids:
-                    continue
-                entry = latest[mention.mention_id]
-                if entry.outcome in UNRESOLVED_OUTCOMES:
-                    # CHAOS-3366: a mention the fallback amended reaches this
-                    # loop as AMBIGUOUS_CANDIDATES like any other, so the
-                    # outcome mapping and the clarification channel are
-                    # untouched -- only the diagnostic and the copy key
-                    # distinguish "we found nothing under that name, here is
-                    # what is close" from genuine same-name ambiguity.
-                    is_close_match = mention.mention_id in close_matched_ids
-                    return self._terminate(
-                        interpretation=interpretation,
+            # The lowest-ordinal unresolved blocking mention — "the first
+            # thing you named" — is the one and only mention that can
+            # terminate this run. Selecting it *before* the CHAOS-3366
+            # fallback, rather than searching every unresolved mention and
+            # then discovering which one mattered, is what keeps the fallback
+            # at exactly one bounded catalog round trip per question instead
+            # of up to MAX_MENTIONS of them (Codex review, medium: a
+            # 25-mention question issued 25 serialized wide searches, 24 of
+            # whose results were then discarded unread).
+            #
+            # Selecting it here is safe because none of the three amenders can
+            # change *which* mention it is: the first two only ever produce
+            # EXACT_MATCH (removing a mention from contention, never adding
+            # one) and they have already run; the fallback only ever rewrites
+            # NO_AUTHORIZED_MATCH to AMBIGUOUS_CANDIDATES, and both are
+            # unresolved outcomes, so the selected mention stays selected.
+            terminating = next(
+                (
+                    mention
+                    for mention in mentions
+                    if mention.mention_id in blocking_ids
+                    and latest[mention.mention_id].outcome in UNRESOLVED_OUTCOMES
+                ),
+                None,
+            )
+            if terminating is not None:
+                is_close_match = False
+                if (
+                    latest[terminating.mention_id].outcome
+                    is ResolutionOutcome.NO_AUTHORIZED_MATCH
+                ):
+                    # Last of the three ledger amenders, and the only one that
+                    # adds candidates rather than commits. Gated on
+                    # NO_AUTHORIZED_MATCH specifically: a mention that is
+                    # already ambiguous has real candidates, and one whose
+                    # catalog read failed has no successful answer to enrich.
+                    ledger, is_close_match = await self._apply_not_found_fallback(
                         ledger=ledger,
-                        outcome=PREFLIGHT_OUTCOME_BY_RESOLUTION[entry.outcome],
-                        diagnostic=(
-                            "unresolved_close_matches"
-                            if is_close_match
-                            else f"unresolved_{entry.outcome.value}"
-                        ),
-                        run_id=run_id,
-                        answer_id=answer_id,
-                        conversation_id=conversation_id,
-                        generated_at=generated_at,
-                        clarification_key=(
-                            NOT_FOUND_CLOSE_MATCHES_KEY
-                            if is_close_match
-                            else "ambiguous"
-                        ),
-                        # CHAOS-3325: only AMBIGUOUS_CANDIDATES carries real
-                        # candidates to persist/authorize (the other three
-                        # UNRESOLVED_OUTCOMES map to no-answer outcomes,
-                        # where clarification_candidates is ABSENT-forced
-                        # regardless) -- passing the whole entry, not just
-                        # its candidates, is what lets the orchestrator
-                        # persist the exact ledger row record_frame's new
-                        # cross-check authorizes against.
-                        terminating_resolution_entry=(
-                            entry
-                            if entry.outcome is ResolutionOutcome.AMBIGUOUS_CANDIDATES
-                            else None
-                        ),
+                        mention=terminating,
+                        org_id=org_id,
+                        permission_fingerprint=permission_fingerprint,
+                        resolved_at=generated_at,
                     )
+                    latest = ledger.latest_by_mention()
+                entry = latest[terminating.mention_id]
+                # CHAOS-3366: an amended mention reaches this point as
+                # AMBIGUOUS_CANDIDATES like any other, so the outcome mapping
+                # and the clarification channel are untouched -- only the
+                # diagnostic and the copy key distinguish "we found nothing
+                # under that name, here is what is close" from genuine
+                # same-name ambiguity.
+                return self._terminate(
+                    interpretation=interpretation,
+                    ledger=ledger,
+                    outcome=PREFLIGHT_OUTCOME_BY_RESOLUTION[entry.outcome],
+                    diagnostic=(
+                        "unresolved_close_matches"
+                        if is_close_match
+                        else f"unresolved_{entry.outcome.value}"
+                    ),
+                    run_id=run_id,
+                    answer_id=answer_id,
+                    conversation_id=conversation_id,
+                    generated_at=generated_at,
+                    clarification_key=(
+                        NOT_FOUND_CLOSE_MATCHES_KEY if is_close_match else "ambiguous"
+                    ),
+                    # CHAOS-3325: only AMBIGUOUS_CANDIDATES carries real
+                    # candidates to persist/authorize (the other three
+                    # UNRESOLVED_OUTCOMES map to no-answer outcomes,
+                    # where clarification_candidates is ABSENT-forced
+                    # regardless) -- passing the whole entry, not just
+                    # its candidates, is what lets the orchestrator
+                    # persist the exact ledger row record_frame's new
+                    # cross-check authorizes against.
+                    terminating_resolution_entry=(
+                        entry
+                        if entry.outcome is ResolutionOutcome.AMBIGUOUS_CANDIDATES
+                        else None
+                    ),
+                )
 
         if unresolved_untyped:
             # A bare name we could not resolve is not proof of a subject, so
@@ -955,12 +983,11 @@ class SubjectPreflight:
         self,
         *,
         ledger: DevResolutionLedger,
-        mentions: Sequence[DevSubjectMention],
+        mention: DevSubjectMention,
         org_id: str,
         permission_fingerprint: str,
-        untyped_ids: frozenset[str],
         resolved_at: datetime,
-    ) -> tuple[DevResolutionLedger, frozenset[str]]:
+    ) -> tuple[DevResolutionLedger, bool]:
         """Offer the closest authorized matches instead of a bare not-found.
 
         CHAOS-3366. A *typed* mention that matched nothing under the kind the
@@ -969,70 +996,66 @@ class SubjectPreflight:
         titled ``Go workers…`` and no project of that name, so "the Go workers
         project" dead-ends today with nothing to act on.
 
-        Three properties are load-bearing, and each has its own test:
+        Four properties are load-bearing, and each has its own test:
 
-        * **Never a commit.** Every appended entry is
-          ``AMBIGUOUS_CANDIDATES`` — including a *sole* result whose label
+        * **Never a commit.** The appended entry is always
+          ``AMBIGUOUS_CANDIDATES`` — including for a *sole* result whose label
           equals the typed name outright. That result is still not what was
-          asked for (the user named a different kind), and auto-committing it
-          would be exactly the "answer about one entity under another's name"
-          defect this module exists to prevent. The invariant is structural:
-          there is no branch here that constructs ``EXACT_MATCH``.
-        * **Bounded and tenant-scoped.** One search per unresolved mention,
-          capped at ``NOT_FOUND_FALLBACK_LIMIT``, through the same
-          ``ScopeResolutionService.search`` seam every other caller uses — so
+          asked for (the user named a kind it does not have), and
+          auto-committing it would be exactly the "answer about one entity
+          under another's name" defect this module exists to prevent. The
+          invariant is structural: there is no branch here that constructs
+          ``EXACT_MATCH``.
+        * **Bounded and tenant-scoped.** Exactly one search, for exactly one
+          mention — the caller has already established that this is the
+          mention that terminates the run — capped at
+          ``NOT_FOUND_FALLBACK_LIMIT`` and issued through the same
+          ``ScopeResolutionService.search`` seam every other caller uses, so
           it inherits the ``org_id`` filter every ``scope_catalog`` query
-          applies in SQL. There is no organization fallback and no widening.
+          applies in SQL. No organization fallback, no widening.
         * **Never worse than today.** No candidates, or a catalog that fails
           under us, leaves the mention exactly as ``NO_AUTHORIZED_MATCH`` and
           the run terminates ``not_found`` unchanged.
-
-        Untyped (bare-name) mentions are deliberately excluded: they were
-        already resolved across every searchable kind, so a second identical
-        search proves nothing, and turning one into a termination would break
-        the org-wide questions the untyped path exists to keep working.
+        * **Append-only.** Like both amenders above it, the new entry goes
+          through ``_append``/``validate_ledger_extends``, so the original
+          ``no_authorized_match`` entry survives as history.
 
         The search covers *every* searchable kind, not only the other five.
         For an ordinary mention the named kind is provably empty already (it
         is why we are here), so re-including it costs one no-op query; for a
         context-ref mention, which is resolved with ``exact=True`` and so
         never ran a fuzzy search at all, it is the only way its own kind gets
-        searched.
+        searched — and that path can legitimately return a *same-kind*
+        candidate, which is why the offered reason below says nothing about
+        kinds.
         """
 
-        latest = ledger.latest_by_mention()
-        appended: list[DevResolutionEntry] = []
-        close_matched: set[str] = set()
-        next_ordinal = len(ledger.entries)
-        for mention in mentions:
-            if mention.mention_id in untyped_ids:
-                continue
-            if latest[mention.mention_id].outcome is not (
-                ResolutionOutcome.NO_AUTHORIZED_MATCH
-            ):
-                continue
-            resolution = await self._close_matches(
-                org_id=org_id,
-                permission_fingerprint=permission_fingerprint,
-                lookup_text=mention.normalized_lookup_text,
-            )
-            if resolution is None:
-                continue
-            appended.append(
-                self._entry(
-                    ordinal=next_ordinal,
-                    mention=mention,
-                    resolution=resolution,
-                    resolved_at=resolved_at,
-                    candidate_reason=_CLOSE_MATCH_REASON,
-                )
-            )
-            close_matched.add(mention.mention_id)
-            next_ordinal += 1
-        return (
-            self._append(ledger, appended, resolved_at=resolved_at),
-            frozenset(close_matched),
+        resolution = await self._close_matches(
+            org_id=org_id,
+            permission_fingerprint=permission_fingerprint,
+            lookup_text=mention.normalized_lookup_text,
         )
+        if resolution is None:
+            return ledger, False
+        if resolution.outcome is not ResolutionOutcome.AMBIGUOUS_CANDIDATES:
+            # The ratified invariant, stated where it can be violated rather
+            # than left to be discovered three layers down. Unreachable today
+            # -- ``_close_matches`` has no branch that builds anything else --
+            # but "never auto-commit a fuzzy match" is the whole reason this
+            # amender is allowed to exist, and an unreachable state that is
+            # merely *implied* by construction stops being implied the moment
+            # someone edits the constructor.
+            raise RuntimeError(  # pragma: no cover - guarded by _close_matches
+                "the not-found fallback may never commit a subject"
+            )
+        entry = self._entry(
+            ordinal=len(ledger.entries),
+            mention=mention,
+            resolution=resolution,
+            resolved_at=resolved_at,
+            candidate_reason=_CLOSE_MATCH_REASON,
+        )
+        return self._append(ledger, [entry], resolved_at=resolved_at), True
 
     async def _close_matches(
         self,

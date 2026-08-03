@@ -4,6 +4,8 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from dev_health_ops.processors import github, gitlab
 
 
@@ -201,6 +203,43 @@ def test_github_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
     assert calls == {"commits": 1, "stats": 0, "backfill": []}
     assert store.sink.commits == ["commit-row"]
     assert store.sink.stats == []
+
+
+def test_github_files_run_does_not_swallow_traversal_failure(monkeypatch):
+    monkeypatch.setattr(github, "CONNECTORS_AVAILABLE", True)
+    monkeypatch.setattr(github, "GitHubConnector", _FakeGitHubConnector)
+    monkeypatch.setattr(github, "Repository", _SimpleRepository)
+    monkeypatch.setattr(github, "IngestionSink", _FakeSink)
+    monkeypatch.setattr(
+        github, "_fetch_github_repo_info_async", _fake_fetch_github_repo_info
+    )
+
+    traversal_failure = github.GitHubFilesTraversalFailed(
+        "github files traversal failed"
+    )
+
+    async def fail_backfill(**_kwargs):
+        raise traversal_failure
+
+    monkeypatch.setattr(github, "_backfill_github_missing_data", fail_backfill)
+
+    with pytest.raises(github.GitHubFilesTraversalFailed) as caught:
+        asyncio.run(
+            github.process_github_repo(
+                _FakeStore(),
+                "org",
+                "repo",
+                "token",
+                sync_git=False,
+                sync_commits=False,
+                sync_commit_stats=False,
+                sync_files=True,
+                sync_blame=False,
+                **_disable_non_git_flags(),
+            )
+        )
+
+    assert caught.value is traversal_failure
 
 
 def test_github_granular_stats_files_blame_and_legacy_bundle(monkeypatch):

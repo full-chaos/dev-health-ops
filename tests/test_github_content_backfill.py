@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -21,9 +22,11 @@ import pytest
 import dev_health_ops.connectors  # noqa: F401
 import dev_health_ops.metrics.job_complexity_db as job
 from dev_health_ops.exceptions import RateLimitException
+from dev_health_ops.models.git import Repo
 from dev_health_ops.processors.base_git import backfill_file_records
 from dev_health_ops.processors.github import (
     CONTENT_FETCH_MAX_BYTES,
+    GitHubFilesTraversalFailed,
     _fetch_scannable_contents,
 )
 from tests._complexity_readiness_fixtures import (
@@ -155,14 +158,15 @@ class TestFetchScannableContents:
         assert client.file_content_calls == []
 
     @pytest.mark.asyncio
-    async def test_api_error_degrades_to_empty(self):
+    async def test_api_error_fails_inventory(self):
         client = _FakeCodeClient(side_effect=RuntimeError("boom"))
 
-        result = await _fetch_scannable_contents(
-            client, "octo", "repo", "main", ["src/app.py"], {}, "octo/repo"
-        )
-
-        assert result == {}
+        with pytest.raises(
+            GitHubFilesTraversalFailed, match="github files content fetch failed"
+        ):
+            await _fetch_scannable_contents(
+                client, "octo", "repo", "main", ["src/app.py"], {}, "octo/repo"
+            )
 
     @pytest.mark.asyncio
     async def test_rate_limit_propagates_without_degrading(self):
@@ -340,6 +344,113 @@ class _FakeTreeEntry:
         self.path = path
         self.size = size
         self.type = type_
+
+
+def _missing_files_store() -> Mock:
+    store = Mock()
+    store.has_any_git_files = AsyncMock(return_value=False)
+    store.has_any_git_commit_stats = AsyncMock(return_value=True)
+    store.has_any_git_blame = AsyncMock(return_value=True)
+    return store
+
+
+def _github_backfill_connector(gh_repo: Mock) -> Mock:
+    connector = Mock()
+    connector.github.get_repo.return_value = gh_repo
+    return connector
+
+
+class TestFilesInventoryCompleteness:
+    @pytest.mark.asyncio
+    async def test_tree_failure_is_not_a_successful_empty_inventory(self, monkeypatch):
+        from dev_health_ops.processors import github
+        from dev_health_ops.processors.github import _backfill_github_missing_data
+
+        gh_repo = Mock()
+        gh_repo.get_branch.side_effect = RuntimeError("tree fetch failed")
+        connector = _github_backfill_connector(gh_repo)
+        code_client = _FakeCodeClient()
+        monkeypatch.setattr(
+            github, "_github_code_client_from_connector", lambda _connector: code_client
+        )
+
+        with pytest.raises(
+            GitHubFilesTraversalFailed, match="github files traversal failed"
+        ):
+            await _backfill_github_missing_data(
+                store=_missing_files_store(),
+                ingestion_sink=Mock(),
+                connector=connector,
+                db_repo=cast(Repo, SimpleNamespace(id=uuid.uuid4())),
+                repo_full_name="octo/repo",
+                default_branch="main",
+                max_commits=None,
+                include_files=True,
+                include_blame=False,
+                include_commit_stats=False,
+            )
+
+        code_client.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_completed_empty_tree_is_explicitly_empty(self, monkeypatch):
+        from dev_health_ops.processors import github
+        from dev_health_ops.processors.github import _backfill_github_missing_data
+
+        gh_repo = Mock()
+        gh_repo.get_branch.return_value = Mock(commit=Mock(sha="tree-sha"))
+        gh_repo.get_git_tree.return_value = Mock(tree=[])
+        connector = _github_backfill_connector(gh_repo)
+        code_client = _FakeCodeClient()
+        monkeypatch.setattr(
+            github, "_github_code_client_from_connector", lambda _connector: code_client
+        )
+
+        result = await _backfill_github_missing_data(
+            store=_missing_files_store(),
+            ingestion_sink=Mock(),
+            connector=connector,
+            db_repo=cast(Repo, SimpleNamespace(id=uuid.uuid4())),
+            repo_full_name="octo/repo",
+            default_branch="main",
+            max_commits=None,
+            include_files=True,
+            include_blame=False,
+            include_commit_stats=False,
+        )
+
+        assert result == "empty"
+        code_client.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_historical_bound_without_commit_is_explicit(self, monkeypatch):
+        from dev_health_ops.processors import github
+        from dev_health_ops.processors.github import _backfill_github_missing_data
+
+        gh_repo = Mock()
+        connector = _github_backfill_connector(gh_repo)
+        code_client = _FakeCodeClient(latest_commit_sha=None)
+        monkeypatch.setattr(
+            github, "_github_code_client_from_connector", lambda _connector: code_client
+        )
+
+        result = await _backfill_github_missing_data(
+            store=_missing_files_store(),
+            ingestion_sink=Mock(),
+            connector=connector,
+            db_repo=cast(Repo, SimpleNamespace(id=uuid.uuid4())),
+            repo_full_name="octo/repo",
+            default_branch="main",
+            max_commits=None,
+            include_files=True,
+            include_blame=False,
+            include_commit_stats=False,
+            until=datetime(2026, 1, 10, tzinfo=timezone.utc),
+        )
+
+        assert result == "no_commit_at_bound"
+        gh_repo.get_git_tree.assert_not_called()
+        code_client.close.assert_awaited_once()
 
 
 class TestPathsOnlyUpgrade:

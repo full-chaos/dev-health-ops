@@ -1455,6 +1455,167 @@ async def test_record_narrative_rejects_a_schema_only_junk_payload(persistence):
         assert narratives == 0, "a rejected junk payload must never be written"
 
 
+# -- codex NO-SHIP finding round 1 (HIGH #2b): record_narrative's SAVEPOINT
+# isolation. All three exercise the REAL PersistenceRunRecorder-facing
+# service layer against a real SQLite session -- the clean-RuntimeError
+# fake in test_orchestrator.py's Recorder cannot reproduce either failure
+# class, since neither a pre-insert Python-level rejection nor a genuine
+# flush-time IntegrityError behaves like a bare raise on a real session.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_narrative_pre_insert_rejection_never_poisons_the_session(
+    persistence,
+) -> None:
+    """The exact mismatch codex found: DevNarrative.body's contract bound
+    (LongText, 16,384 chars) is looser than persistence's own byte bound
+    (_NARRATIVE_TEXT_MAX_BYTES, 8 KiB) -- a contract-valid narrative can
+    still be rejected here. The rejection must be a clean, pre-insert
+    DevPersistenceValidationError (no DB write attempted at all), and the
+    session must stay fully usable for a subsequent real write on it --
+    proving this failure class was never the one needing a SAVEPOINT (the
+    Python-level bound check runs entirely before any flush)."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        real_frame_id = uuid.UUID(frame_payload["frame_id"])
+        await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=real_frame_id,
+            public_outcome="answered",
+            payload=frame_payload,
+        )
+
+        # 9,063 chars: comfortably inside DevNarrative.body's 16,384-char
+        # LongText bound, comfortably past persistence's 8,192-byte bound
+        # (pure ASCII, so char count == byte count here) -- codex's exact
+        # repro shape.
+        oversized_text = "n" * 9_063
+        narrative_id = uuid.uuid4()
+        narrative_payload, _text, provider_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=narrative_id,
+            mode="deterministic_fallback",
+        )
+        with pytest.raises(DevPersistenceValidationError):
+            await service.record_narrative(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                narrative_id=narrative_id,
+                frame_id=real_frame_id,
+                mode="deterministic_fallback",
+                provider_fingerprint=provider_fingerprint,
+                narrative_text=oversized_text,
+                payload=narrative_payload,
+            )
+
+        narratives = await session.scalar(
+            select(func.count()).select_from(DevRunNarrative)
+        )
+        assert narratives == 0, "an oversized narrative must never be written"
+
+        # The session must still be usable: a genuine follow-up write
+        # (mirrors terminal()'s own update_run call in production) must
+        # succeed, not raise PendingRollbackError.
+        run = await service.update_run(
+            org_id=org_id, user_id=user_id, run_id=run_id, state="insufficient_evidence"
+        )
+        assert run is not None
+        assert run.narrative_mode is None
+
+
+@pytest.mark.asyncio
+async def test_record_narrative_flush_failure_is_isolated_by_a_savepoint(
+    persistence,
+) -> None:
+    """A genuine DB-level flush failure (not a Python-level pre-insert
+    rejection): dev_run_narratives' own uq_dev_run_narratives_run
+    constraint rejects a second narrative row for the same run at flush
+    time. Before the SAVEPOINT fix, this would mark the whole session
+    rollback-only; after, only the savepoint rolls back and the session
+    stays usable for a real follow-up write on it -- the same coherence
+    property the pre-insert test above proves for the other failure
+    class, proven here for a failure that actually reaches the database."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        real_frame_id = uuid.UUID(frame_payload["frame_id"])
+        await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=real_frame_id,
+            public_outcome="answered",
+            payload=frame_payload,
+        )
+
+        first_narrative_id = uuid.uuid4()
+        first_payload, first_text, first_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=first_narrative_id,
+            mode="deterministic_fallback",
+        )
+        await service.record_narrative(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            narrative_id=first_narrative_id,
+            frame_id=real_frame_id,
+            mode="deterministic_fallback",
+            provider_fingerprint=first_fingerprint,
+            narrative_text=first_text,
+            payload=first_payload,
+        )
+
+        second_narrative_id = uuid.uuid4()
+        second_payload, second_text, second_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=second_narrative_id,
+            mode="deterministic_fallback",
+        )
+        with pytest.raises(IntegrityError):
+            await service.record_narrative(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                narrative_id=second_narrative_id,
+                frame_id=real_frame_id,
+                mode="deterministic_fallback",
+                provider_fingerprint=second_fingerprint,
+                narrative_text=second_text,
+                payload=second_payload,
+            )
+
+        # The savepoint rolled back the second (rejected) row -- exactly
+        # one narrative row remains, the first.
+        narratives = await session.scalars(select(DevRunNarrative))
+        remaining = narratives.all()
+        assert len(remaining) == 1
+        assert remaining[0].narrative_id == first_narrative_id
+
+        # And the session is not poisoned: a genuine follow-up write
+        # succeeds (this is the exact terminal()-after-narrative-flush
+        # coherence property codex's finding named).
+        run = await service.update_run(
+            org_id=org_id, user_id=user_id, run_id=run_id, state="completed"
+        )
+        assert run is not None
+        assert run.state == "completed"
+
+
 # -- dev_runs.terminal_error_payload (CHAOS-3297 Codex review round 3
 # CLASS A closure argument) -------------------------------------------------
 

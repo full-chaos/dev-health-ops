@@ -46,14 +46,15 @@ assertion immediately rather than shipping silently.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
 from typing import Any, Literal, Protocol
 
 from dev_health_ops.api.dev.contracts import DevModelMetadata
+from dev_health_ops.api.dev.contracts_v2 import base as _base
 from dev_health_ops.api.dev.contracts_v2 import validators as _validators
 from dev_health_ops.api.dev.contracts_v2.answer import (
     DevAnswerV2,
@@ -164,31 +165,14 @@ class NarrativeProvider(Protocol):
     ) -> NarrativeProviderResult: ...
 
 
-class NarrativeFailureCode(StrEnum):
-    """The closed, run-persisted vocabulary for ``dev_runs.narrative_failure_code``.
-
-    Migration 0078 reserved the column and its docstring names this module
-    as the owner of its vocabulary. Seven members are the issue's own
-    acceptance-criteria failure modes (timeout, refusal, empty content,
-    schema violation, output-budget exhaustion, unsafe prose, narrative
-    grounding failure); the eighth, ``PROVIDER_UNKNOWN_FAILURE``, is the
-    closed-vocabulary totality guard's catch-all -- see
-    ``classify_provider_exception``.
-    """
-
-    PROVIDER_TIMEOUT = "provider_timeout"
-    PROVIDER_REFUSED = "provider_refused"
-    PROVIDER_EMPTY_CONTENT = "provider_empty_content"
-    PROVIDER_SCHEMA_VIOLATION = "provider_schema_violation"
-    PROVIDER_OUTPUT_BUDGET_EXCEEDED = "provider_output_budget_exceeded"
-    PROVIDER_UNSAFE_CONTENT = "provider_unsafe_content"
-    NARRATIVE_GROUNDING_FAILED = "narrative_grounding_failed"
-    #: A provider raised something outside ``_KNOWN_PROVIDER_EXCEPTIONS``.
-    #: Always safe to fall back on (the fallback narrative never depends on
-    #: knowing *why* the provider failed) -- this member exists so an
-    #: unrecognized failure is still classified, counted, and answered
-    #: instead of propagating as an unhandled exception.
-    PROVIDER_UNKNOWN_FAILURE = "provider_unknown_failure"
+#: Re-exported from contracts_v2.base (codex NO-SHIP finding, round 1: the
+#: vocabulary must be importable from a dependency-safe leaf module both
+#: contracts_v2.stream and persistence.service can reach without depending
+#: on this orchestration-layer package). Kept importable from here too --
+#: this module's own name is what the issue's acceptance criteria and this
+#: file's own docstring/tests refer to -- but contracts_v2.base is now the
+#: one definition.
+NarrativeFailureCode = _base.NarrativeFailureCode
 
 
 _PROVIDER_EXCEPTION_FAILURE_CODES: dict[
@@ -249,11 +233,69 @@ def _mint_narrative_id(run_id: str, frame_id: str) -> str:
     return str(uuid.uuid5(_NARRATIVE_NAMESPACE, f"narrative:{run_id}:{frame_id}"))
 
 
+#: codex NO-SHIP finding round 1 (HIGH): a max-size frame (16,384-char
+#: ``direct_answer`` + up to 200 facts at up to 2,048 chars each + up to 20
+#: limitations at up to 2,048 chars each) concatenated with no bound
+#: whatsoever crashed the deterministic fallback -- the body's own
+#: ``LongText`` contract cap (16,384 chars) is smaller than the worst case
+#: by more than an order of magnitude, and even a body that fit that cap
+#: could still exceed persistence's own, *stricter* byte bound
+#: (``persistence.service._NARRATIVE_TEXT_MAX_BYTES``, 8 KiB), which
+#: finding 2 showed leaves the run's ``narrative_mode`` claiming a
+#: narrative that was never durably written. Building the fallback under
+#: ONE shared budget -- the smaller of the two, i.e. the persistence bound
+#: -- makes both failure modes structurally unreachable rather than
+#: separately patched. A pure UTF-8 byte budget (not char count) because
+#: persistence's own bound is byte-denominated and UTF-8 encoding can
+#: expand multi-byte characters past a char-count budget.
+FALLBACK_NARRATIVE_BODY_MAX_BYTES = 8 * 1024
+
+#: Same sentence-boundary discipline ``contracts_v2.validators`` already
+#: uses for narrative-body parsing (that module's own
+#: ``_SENTENCE_SPLIT_PATTERN``) -- a local copy rather than a cross-module
+#: private import, since the two modules' splitting needs are independent
+#: (this one drives truncation, that one drives per-sentence numeric
+#: admission) and should not silently couple.
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
+
+
+def _sentences(text: str) -> list[str]:
+    return [
+        sentence.strip()
+        for sentence in _SENTENCE_SPLIT_PATTERN.split(text)
+        if sentence.strip()
+    ]
+
+
+def _truncate_to_byte_budget(text: str, max_bytes: int) -> str:
+    """Cut ``text`` to fit within ``max_bytes`` of UTF-8, never mid-character.
+
+    Backs off byte-by-byte from a raw slice until the result decodes
+    cleanly -- a raw byte slice of a UTF-8 string can land inside a
+    multi-byte sequence, which would either raise or (silently, worse)
+    produce mojibake if decoded with ``errors="ignore"``.
+    """
+
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    truncated = encoded[:max_bytes]
+    while truncated:
+        try:
+            return truncated.decode("utf-8")
+        except UnicodeDecodeError:
+            truncated = truncated[:-1]
+    return ""
+
+
 def build_deterministic_fallback_narrative(
-    frame: DevAnswerFrame, *, generated_at: datetime
+    frame: DevAnswerFrame,
+    *,
+    generated_at: datetime,
+    max_body_bytes: int = FALLBACK_NARRATIVE_BODY_MAX_BYTES,
 ) -> DevNarrative:
     """Build a ``dev_narrative.v1`` (``mode="deterministic_fallback"``) from
-    ``frame`` alone.
+    ``frame`` alone, bounded to ``max_body_bytes`` of UTF-8.
 
     Structural guarantee, not a discipline one: this function's signature
     accepts no provider output whatsoever, so there is no parameter through
@@ -263,22 +305,74 @@ def build_deterministic_fallback_narrative(
     already treats as the frame's disclosed content -- in the order the
     renderer would present them: the direct answer, then every section's
     facts, then disclosed limitations.
+
+    Truncation is deterministic and never splits a sentence: ``direct_answer``
+    (the only field large enough to exceed the budget on its own) is split
+    into sentences so an oversized answer degrades to its own leading
+    sentences rather than being dropped whole or silently overflowing;
+    every subsequent fact/limitation is an atomic unit, included only if it
+    fits in the remaining budget. A ``fact_id``/``section_id`` is referenced
+    only if content from it actually made it into the body -- never a
+    section whose every fact was truncated out.
     """
 
-    sentences: list[str] = [frame.direct_answer]
+    body_parts: list[str] = []
+    used_bytes = 0
+
+    def _try_add(candidate: str) -> bool:
+        nonlocal used_bytes
+        candidate = candidate.strip()
+        if not candidate:
+            return False
+        additional = len(candidate.encode("utf-8")) + (1 if body_parts else 0)
+        if used_bytes + additional > max_body_bytes:
+            return False
+        body_parts.append(candidate)
+        used_bytes += additional
+        return True
+
+    truncated = False
+    for sentence in _sentences(frame.direct_answer):
+        if not _try_add(sentence):
+            truncated = True
+            break
+
     referenced_fact_ids: list[str] = []
     referenced_section_ids: list[str] = []
     for section in frame.sections:
-        referenced_section_ids.append(section.section_id)
+        section_included = False
         for fact_id in section.fact_ids:
             fact = next((f for f in frame.facts if f.fact_id == fact_id), None)
             if fact is None:
                 continue
-            sentences.append(fact.text)
-            referenced_fact_ids.append(fact.fact_id)
+            if _try_add(fact.text):
+                referenced_fact_ids.append(fact.fact_id)
+                section_included = True
+            else:
+                truncated = True
+        if section_included:
+            referenced_section_ids.append(section.section_id)
+
     for limitation in frame.limitations:
-        sentences.append(limitation)
-    body = " ".join(sentence.strip() for sentence in sentences if sentence.strip())
+        if not _try_add(limitation):
+            truncated = True
+
+    if not body_parts:
+        # direct_answer's own first sentence alone exceeded the budget --
+        # hard-truncate it at a byte-safe boundary rather than emit an
+        # empty body (DevNarrative.body is LongText, min_length=1).
+        body_parts = [_truncate_to_byte_budget(frame.direct_answer, max_body_bytes)]
+        truncated = True
+
+    body = " ".join(body_parts)
+    warnings = (
+        (
+            "The full answer content was too long to include in full; this "
+            "summary was shortened.",
+        )
+        if truncated
+        else ()
+    )
 
     return DevNarrative(
         schema_version="dev_narrative.v1",
@@ -291,7 +385,7 @@ def build_deterministic_fallback_narrative(
         referenced_section_ids=tuple(dict.fromkeys(referenced_section_ids)),
         provider_metadata=None,
         generated_at=generated_at,
-        validation_warnings=(),
+        validation_warnings=warnings,
     )
 
 

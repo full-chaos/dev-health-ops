@@ -894,25 +894,30 @@ class DevOrchestrator:
                             provider=self._narrative_provider,
                             generated_at=datetime.now(UTC),
                         )
-                        narrative_mode = narrative.mode
-                        narrative_failure_code = (
-                            failure_code.value if failure_code is not None else None
-                        )
                         try:
                             await self._recorder.record_narrative(narrative)
                         except Exception as narrative_write_fault:
-                            # Same posture as the record_frame failure above:
-                            # a narrative sub-artifact write failure must
+                            # codex NO-SHIP finding round 1 (HIGH #2b): a
+                            # narrative sub-artifact write failure must
                             # never strand or crash an otherwise-successful
-                            # run. Unlike that case, never roll back here --
-                            # the frame (and answer, if any) already
-                            # committed successfully in this flush (we are in
-                            # record_frame's `else`), and rolling back would
-                            # discard them over an unrelated narrative
-                            # failure. The run terminates without a
-                            # persisted narrative row; narrative_mode/
-                            # narrative_failure_code above still record what
-                            # would have been persisted.
+                            # run -- but dev_runs must also never CLAIM a
+                            # narrative_mode/narrative_failure_code for a
+                            # row that was never durably written (the
+                            # original defect: the contract's LongText body
+                            # cap is looser than persistence's own byte
+                            # bound, so a contract-valid narrative could be
+                            # rejected here while terminal() still recorded
+                            # "deterministic_fallback" as if it had
+                            # succeeded). narrative_mode/narrative_failure_code
+                            # are set ONLY in the success branch below, so
+                            # they stay at their None default here -- an
+                            # honest "no narrative recorded" signal, not a
+                            # false claim. No rollback needed: record_narrative
+                            # isolates its own flush behind a SAVEPOINT
+                            # (persistence/service.py), so the session is
+                            # already clean by the time this handler runs --
+                            # the frame/answer already committed earlier in
+                            # this flush are untouched.
                             logger.error(
                                 "ask_dev.orchestrator.narrative_persistence_failed",
                                 extra={
@@ -921,6 +926,11 @@ class DevOrchestrator:
                                         narrative_write_fault
                                     ).__name__,
                                 },
+                            )
+                        else:
+                            narrative_mode = narrative.mode
+                            narrative_failure_code = (
+                                failure_code.value if failure_code is not None else None
                             )
             await self._recorder.terminal(
                 state=state,

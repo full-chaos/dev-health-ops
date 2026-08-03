@@ -445,10 +445,13 @@ async def test_a_narrative_persistence_failure_never_strands_an_otherwise_comple
     applied to record_narrative: a persistence failure on the narrative
     sub-artifact must not crash or downgrade an otherwise-successful run --
     the frame (and the v1 answer) already committed in this flush and
-    remain authoritative. The run must still reach COMPLETED, and the
-    narrative_mode/narrative_failure_code the fallback selection actually
-    produced must still reach terminal() (only the DB row is missing, not
-    the operator-visible signal of what would have been persisted)."""
+    remain authoritative. The run must still reach COMPLETED.
+
+    codex NO-SHIP finding round 1 (HIGH #2b): narrative_mode/
+    narrative_failure_code must stay at their None default when the write
+    failed, not claim a mode the row never durably received -- the
+    original defect was exactly dev_runs asserting
+    'deterministic_fallback' for a narrative that was never written."""
 
     script_id = "narrative-write-failure"
     recorder = Recorder(fail_narrative_write=True)
@@ -479,7 +482,7 @@ async def test_a_narrative_persistence_failure_never_strands_an_otherwise_comple
     assert result.answer is not None
     assert recorder.narratives == []  # the failed write never landed
     assert len(recorder.terminal_calls) == 1
-    assert recorder.terminal_calls[0]["narrative_mode"] == "deterministic_fallback"
+    assert recorder.terminal_calls[0]["narrative_mode"] is None
     assert recorder.terminal_calls[0]["narrative_failure_code"] is None
 
 

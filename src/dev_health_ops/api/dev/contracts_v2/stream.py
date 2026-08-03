@@ -42,7 +42,7 @@ from typing import Annotated, Literal, Self
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from .answer import DevAnswerV2
-from .base import ContractModelV2, ServerHandle, ShortText
+from .base import ContractModelV2, NarrativeFailureCode, ServerHandle, ShortText
 from .embedded import DevErrorV2
 from .subject import DevResolutionLedger, validate_ledger_extends
 
@@ -107,13 +107,15 @@ class DevStreamEventV2(ContractModelV2):
     warning: ShortText | None = None
     error: DevErrorV2 | None = None
     terminal_kind: Literal["answer", "error"] | None = None
-    #: CHAOS-3297 stack #4: the safe NarrativeFailureCode value carried by
-    #: an ``answer.narrative_fallback`` event -- a closed-vocabulary token
-    #: (``answer_frames.narrative_fallback.NarrativeFailureCode``), never
-    #: raw provider content. Not imported from that module here: contracts
-    #: are the leaf of the dependency graph and do not depend on the
-    #: orchestration-layer package that produces this value.
-    narrative_failure_code: ShortText | None = None
+    #: CHAOS-3297 stack #4 (codex NO-SHIP finding round 1, MEDIUM #3): the
+    #: closed-vocabulary ``NarrativeFailureCode`` value carried by an
+    #: ``answer.narrative_fallback`` event, never raw provider content.
+    #: ``NarrativeFailureCode`` lives in ``.base`` -- not
+    #: ``answer_frames.narrative_fallback`` -- specifically so this leaf
+    #: contracts module can enforce the same closed vocabulary Pydantic
+    #: itself validates against, rather than accepting any ``ShortText``
+    #: and trusting the producer never sends an invented value.
+    narrative_failure_code: NarrativeFailureCode | None = None
 
     @model_validator(mode="after")
     def validate_event_payload(self) -> Self:

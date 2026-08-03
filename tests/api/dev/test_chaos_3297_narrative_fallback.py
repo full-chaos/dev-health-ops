@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from dev_health_ops.api.dev import contract_fixtures_v2
 from dev_health_ops.api.dev.answer_frames import narrative_fallback as _nf
@@ -51,6 +52,7 @@ from dev_health_ops.api.dev.answer_frames.narrative_request import (
 from dev_health_ops.api.dev.contract_fixtures_v2 import positive_fixtures
 from dev_health_ops.api.dev.contracts_v2 import validators as v2_validators
 from dev_health_ops.api.dev.contracts_v2.frame import DevAnswerFrame
+from dev_health_ops.api.dev.contracts_v2.narrative import DevNarrative
 from dev_health_ops.metrics.prometheus import ASK_DEV_NARRATIVE_FALLBACK_TOTAL
 
 _ANSWER_ID = "0f1a2b3c-0004-4a00-8000-000000000001"
@@ -650,6 +652,188 @@ async def test_provider_cannot_name_a_different_subject():
 # ---------------------------------------------------------------------------
 # Deterministic fallback narrative: built ONLY from the frame.
 # ---------------------------------------------------------------------------
+
+
+def _max_size_frame() -> DevAnswerFrame:
+    """A frame at every relevant contract size bound at once: a 16,384-char
+    direct_answer (LongText's own max), 200 facts (DevAnswerFrame.facts'
+    own max) at 2,048 chars each (ShortText's own max), one section citing
+    all 200, and 20 limitations (the field's own max) at 2,048 chars each.
+    codex NO-SHIP finding round 1: this is the exact shape that crashed
+    the naive-concatenation fallback builder."""
+
+    base = positive_fixtures()["dev_answer_frame.v1"]
+    fact_ids = [f"fact_{i:03d}" for i in range(200)]
+    facts = [
+        {
+            "fact_id": fact_id,
+            "text": "x" * 2048,
+            "kind": "observed",
+            # F10 grounding floor: every fact requires signer-minted
+            # evidence or an explicit disclosure -- a disclosure is
+            # cheaper than fabricating 200 unique evidence handles and
+            # is irrelevant to what this scenario is actually testing.
+            "evidence_ref_ids": [],
+            "relationship_path_ids": [],
+            "confidence": 1.0,
+            "disclosures": ["stale"],
+        }
+        for fact_id in fact_ids
+    ]
+    payload = {
+        **base,
+        # "answered" cannot carry limitations (validate_outcome_consistency);
+        # this scenario deliberately maxes out every content field at once.
+        "public_outcome": "answered_with_gaps",
+        "direct_answer": "d" * 16384,
+        "sections": [
+            {"section_id": "summary", "title": "Summary", "fact_ids": fact_ids}
+        ],
+        "facts": facts,
+        "metrics": [],
+        "comparisons": [],
+        "conflicts": [],
+        "limitations": ["l" * 2048 for _ in range(20)],
+        "relationship_paths": [],
+        "source_observations": [],
+        "evidence": [],
+        "completion": None,
+        "readiness": None,
+    }
+    return DevAnswerFrame.model_validate(payload)
+
+
+def _naive_concatenation_fallback_body(frame: DevAnswerFrame) -> str:
+    """The exact pre-fix logic (codex NO-SHIP finding round 1): every
+    sentence concatenated with no budget at all. Reproduced here, not
+    imported, so this test proves what the OLD code did without depending
+    on it still existing anywhere in the module."""
+
+    sentences: list[str] = [frame.direct_answer]
+    for section in frame.sections:
+        for fact_id in section.fact_ids:
+            fact = next((f for f in frame.facts if f.fact_id == fact_id), None)
+            if fact is not None:
+                sentences.append(fact.text)
+    for limitation in frame.limitations:
+        sentences.append(limitation)
+    return " ".join(s.strip() for s in sentences if s.strip())
+
+
+def test_old_naive_concatenation_would_have_crashed_on_a_max_size_frame():
+    """RED proof: the exact defect this fix closes. A max-size frame's
+    naive concatenation exceeds both DevNarrative.body's LongText cap
+    (16,384 chars) and persistence's own stricter byte bound (8 KiB) by
+    more than an order of magnitude."""
+
+    frame = _max_size_frame()
+    naive_body = _naive_concatenation_fallback_body(frame)
+    assert len(naive_body) > 16_384, (
+        "the planted scenario must actually overflow LongText"
+    )
+    with pytest.raises(
+        ValidationError, match="String should have at most 16384 characters"
+    ):
+        DevNarrative(
+            schema_version="dev_narrative.v1",
+            narrative_id="0f1a2b3c-0003-4a00-8000-000000000001",
+            run_id=frame.run_id,
+            frame_id=frame.frame_id,
+            mode="deterministic_fallback",
+            body=naive_body,
+            referenced_fact_ids=(),
+            referenced_section_ids=(),
+            provider_metadata=None,
+            generated_at=_GENERATED_AT,
+            validation_warnings=(),
+        )
+
+
+def test_max_size_frame_does_not_crash_the_fixed_fallback_builder():
+    """GREEN proof: the same max-size frame, through the real (fixed)
+    builder, produces a valid, budget-respecting narrative instead."""
+
+    frame = _max_size_frame()
+    narrative = build_deterministic_fallback_narrative(
+        frame, generated_at=_GENERATED_AT
+    )
+    assert len(narrative.body.encode("utf-8")) <= _nf.FALLBACK_NARRATIVE_BODY_MAX_BYTES
+    assert len(narrative.body) <= 16_384
+    assert narrative.validation_warnings, "truncation must be disclosed, not silent"
+    # Still a real, referentially-consistent narrative -- not just short.
+    v2_validators.validate_narrative_fact_references(narrative, frame)
+    known_facts = {fact.fact_id for fact in frame.facts}
+    known_sections = {section.section_id for section in frame.sections}
+    assert set(narrative.referenced_fact_ids) <= known_facts
+    assert set(narrative.referenced_section_ids) <= known_sections
+    # A section is referenced only if at least one of its facts survived
+    # truncation -- not every one of the 200 facts fits in 8 KiB, so this
+    # single-section frame's inclusion is non-trivial (proves the
+    # "references only for included content" rule, not vacuously true).
+    if narrative.referenced_fact_ids:
+        assert "summary" in narrative.referenced_section_ids
+
+
+def test_fallback_truncation_never_splits_mid_sentence():
+    """The truncated body must end exactly at a sentence boundary the
+    builder itself chose to include -- never a raw byte-budget cutoff mid
+    fact, which build_deterministic_fallback_narrative's docstring commits
+    to explicitly."""
+
+    frame = _max_size_frame()
+    narrative = build_deterministic_fallback_narrative(
+        frame, generated_at=_GENERATED_AT
+    )
+    # Every fact text is a uniform run of "x" characters with no sentence
+    # punctuation, so the body must be composed of whole, untruncated
+    # copies of frame.direct_answer / fact.text / limitation strings
+    # joined by single spaces -- never a partial "xxx...x" fragment of a
+    # different length than any real source string.
+    included_lengths = {len(part) for part in narrative.body.split(" ")}
+    known_lengths = {
+        len(frame.direct_answer),
+        2048,
+    }  # facts and limitations are both 2048
+    # direct_answer itself has no sentence punctuation either, so it is one
+    # single "d"*16384 token if included at all, or entirely absent.
+    assert included_lengths <= known_lengths | {0}
+
+
+def test_fallback_hard_truncates_when_even_the_first_sentence_alone_overflows():
+    """Distinct code path from the sentence/item-boundary truncation above:
+    a frame with an oversized direct_answer and nothing else at all still
+    must not emit an empty body (DevNarrative.body is LongText,
+    min_length=1) -- the builder's byte-safe hard-truncate fallback."""
+
+    base = positive_fixtures()["dev_answer_frame.v1"]
+    payload = {
+        **base,
+        # needs_clarification is the one outcome that both allows a
+        # non-canned direct_answer and requires empty sections/facts
+        # (validate_outcome_consistency) -- exactly the "nothing else to
+        # include" scenario this test needs.
+        "public_outcome": "needs_clarification",
+        "direct_answer": "e" * 16384,
+        "sections": [],
+        "facts": [],
+        "metrics": [],
+        "comparisons": [],
+        "conflicts": [],
+        "limitations": [],
+        "relationship_paths": [],
+        "source_observations": [],
+        "evidence": [],
+        "completion": None,
+        "readiness": None,
+    }
+    frame = DevAnswerFrame.model_validate(payload)
+    narrative = build_deterministic_fallback_narrative(
+        frame, generated_at=_GENERATED_AT
+    )
+    assert narrative.body  # never empty
+    assert len(narrative.body.encode("utf-8")) <= _nf.FALLBACK_NARRATIVE_BODY_MAX_BYTES
+    assert narrative.body == "e" * len(narrative.body)  # a clean prefix, not mojibake
+    assert narrative.validation_warnings
 
 
 def test_deterministic_fallback_is_pure():

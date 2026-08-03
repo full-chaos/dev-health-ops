@@ -113,14 +113,10 @@ func (database *postgresSchedulerDatabase) RiverSchemaReady(
 	return err
 }
 
-// DomainPool exists for the readiness identity, not for composition: since
-// CHAOS-3114 repointed the fixed engine, no loop in this process is built on
-// the domain pool at all. The pool is still opened and still gated by
-// DomainReady, because the process's own domain login must be proven to hold
-// exactly domainPosture -- cross-role attribution is distributed, so a
-// privilege wrongly granted to the domain login is caught only by the domain
-// login's own check. Anything wired onto this pool again would need its own
-// justification against coordinatorPosture first.
+// DomainPool is the native scheduled-sync materializer's persistence pool.
+// Policy locks and coordinator ledgers stay on CoordinatorPool; sync_runs,
+// sync_run_units, and FK-dependent provider inventory repair commit together
+// on the domain transaction.
 func (database *postgresSchedulerDatabase) DomainPool() *pgxpool.Pool {
 	if database == nil || database.pools == nil {
 		return nil
@@ -252,7 +248,7 @@ type schedulerRuntimeSources struct {
 	// hands off. It is constructed in the same process for the same reason:
 	// the marker advances on handoff, so an unconsumed occurrence is stranded
 	// work rather than a delayed one.
-	newOccurrences func(*pgxpool.Pool) (schedulersync.OccurrenceStepper, error)
+	newOccurrences func(*pgxpool.Pool, *pgxpool.Pool) (schedulersync.OccurrenceStepper, error)
 }
 
 var productionSchedulerRuntimeSources = schedulerRuntimeSources{
@@ -276,12 +272,12 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 	newCoordinator: schedulersync.NewOccurrenceCoordinator,
 	newLoop:        schedulersync.NewLoop,
 	newFixedLoop:   buildFixedScheduleLoop,
-	newOccurrences: func(pool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
-		// The native planner does not exist yet, so this is deliberately the
-		// explicit missing-planner seam rather than a stub that succeeds. A
-		// scheduler with no pending occurrences stays healthy; the first real
-		// pending occurrence closes readiness until CUT-09/CUT-10 lands.
-		return schedulersync.NewOccurrenceReconciler(pool, schedulersync.NewUnavailableMaterializer())
+	newOccurrences: func(coordinatorPool, domainPool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+		materializer, err := schedulersync.NewNativeMaterializer(domainPool)
+		if err != nil {
+			return nil, err
+		}
+		return schedulersync.NewOccurrenceReconciler(coordinatorPool, materializer)
 	},
 }
 
@@ -351,6 +347,10 @@ func buildSchedulerLoopWithSources(
 	if err != nil || coordinatorPool == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
+	domainPool := database.DomainPool()
+	if domainPool == nil {
+		return nil, errSchedulerActivationUnavailable
+	}
 	repository, err := sources.newRepository(coordinatorPool)
 	if err != nil || repository == nil {
 		return nil, errSchedulerActivationUnavailable
@@ -359,7 +359,7 @@ func buildSchedulerLoopWithSources(
 	if coordinator == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
-	occurrences, err := sources.newOccurrences(coordinatorPool)
+	occurrences, err := sources.newOccurrences(coordinatorPool, domainPool)
 	if err != nil || occurrences == nil {
 		return nil, errSchedulerActivationUnavailable
 	}

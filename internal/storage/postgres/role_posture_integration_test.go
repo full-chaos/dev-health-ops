@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -391,18 +392,18 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 		domainPassword  = "manifest_domain_role_password"
 		coordinatorPass = "manifest_coordinator_role_password"
 		schema          = "manifest_attribution_river"
-		domainExclusive = "integrations"
-		coordinatorOnly = "worker_job_routes"
 	)
 	domain := domainPosture()
 	coordinator := coordinatorPosture()
+	domainExclusive := firstExclusivePostureTable(t, domain, coordinator)
+	coordinatorOnly := firstExclusivePostureTable(t, coordinator, domain)
 
-	// Union of every table either posture requires, generically shaped: the
-	// exact production column shapes are exercised separately in
-	// domain_grant_reconciliation_integration_test.go. worker_job_completion_fences
-	// is the one exception, since its ColumnScoped grant needs both columns
-	// to actually exist.
+	// Union of every table either posture requires, generically shaped. Every
+	// column named by either generated ColumnScoped manifest is materialized
+	// below; otherwise a newly declared column grant makes this gate fail during
+	// setup instead of exercising posture verification.
 	tableNames := map[string]struct{}{}
+	columnNames := map[string]map[string]struct{}{}
 	for _, table := range domain.RequiredTables {
 		tableNames[table.TableName] = struct{}{}
 	}
@@ -411,6 +412,10 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 	}
 	for _, column := range domain.ColumnScoped {
 		tableNames[column.TableName] = struct{}{}
+		if columnNames[column.TableName] == nil {
+			columnNames[column.TableName] = map[string]struct{}{}
+		}
+		columnNames[column.TableName][column.ColumnName] = struct{}{}
 	}
 	// The coordinator's column-scoped half is unioned in too. Today it names
 	// the same relation the domain side does (worker_job_completion_fences,
@@ -420,6 +425,10 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 	// result.
 	for _, column := range coordinator.ColumnScoped {
 		tableNames[column.TableName] = struct{}{}
+		if columnNames[column.TableName] == nil {
+			columnNames[column.TableName] = map[string]struct{}{}
+		}
+		columnNames[column.TableName][column.ColumnName] = struct{}{}
 	}
 
 	setup := []string{
@@ -432,12 +441,23 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 		"CREATE SCHEMA " + schema,
 	}
 	for name := range tableNames {
-		if name == "worker_job_completion_fences" {
-			setup = append(setup, "CREATE TABLE public.worker_job_completion_fences "+
-				"(completion_key text PRIMARY KEY, completed_at timestamptz NOT NULL DEFAULT now())")
-			continue
+		columns := make([]string, 0, len(columnNames[name]))
+		for column := range columnNames[name] {
+			columns = append(columns, column)
 		}
-		setup = append(setup, "CREATE TABLE public."+name+" (id bigint PRIMARY KEY)")
+		sort.Strings(columns)
+		definitions := make([]string, 0, len(columns)+1)
+		if _, scopedID := columnNames[name]["id"]; !scopedID {
+			definitions = append(definitions, "id bigint PRIMARY KEY")
+		}
+		for _, column := range columns {
+			definition := column + " text"
+			if column == "id" {
+				definition = "id bigint PRIMARY KEY"
+			}
+			definitions = append(definitions, definition)
+		}
+		setup = append(setup, "CREATE TABLE public."+name+" ("+strings.Join(definitions, ", ")+")")
 	}
 	setup = append(setup, grantStatementsForPosture(domainRole, domain)...)
 	setup = append(setup, grantStatementsForPosture(coordinatorRole, coordinator)...)
@@ -490,4 +510,31 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 	if err := CheckRolePosture(ctx, domainConn, domainRole, schema, domain); err != nil {
 		t.Fatalf("domain role did not recover after revoking the misattributed %s: %v", coordinatorOnly, err)
 	}
+}
+
+func firstExclusivePostureTable(t *testing.T, owner, other RolePosture) string {
+	t.Helper()
+	declared := func(posture RolePosture) map[string]struct{} {
+		result := make(map[string]struct{}, len(posture.RequiredTables)+len(posture.ColumnScoped))
+		for _, table := range posture.RequiredTables {
+			result[table.TableName] = struct{}{}
+		}
+		for _, column := range posture.ColumnScoped {
+			result[column.TableName] = struct{}{}
+		}
+		return result
+	}
+	ownerTables := declared(owner)
+	otherTables := declared(other)
+	candidates := make([]string, 0, len(ownerTables))
+	for table := range ownerTables {
+		if _, shared := otherTables[table]; !shared {
+			candidates = append(candidates, table)
+		}
+	}
+	sort.Strings(candidates)
+	if len(candidates) == 0 {
+		t.Fatal("real posture has no exclusive table for attribution proof")
+	}
+	return candidates[0]
 }

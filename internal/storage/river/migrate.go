@@ -368,8 +368,8 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + domainRole,
 		"DO $$ BEGIN IF to_regclass('public.alembic_version') IS NOT NULL THEN REVOKE ALL PRIVILEGES ON TABLE public.alembic_version FROM " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integrations') IS NOT NULL THEN GRANT SELECT ON TABLE public.integrations TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_sources TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_datasets TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_datasets TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO " + domainRole + "; END IF; END $$",
 		// worker_job_routes, scheduled_jobs, scheduled_sync_occurrences, and
 		// fixed_schedule_occurrences are coordinator-exclusive under the
@@ -385,10 +385,11 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// domain role's own posture require UPDATE. sync_runs, by contrast,
 		// is one of the six dual-grant ("both") tables and genuinely needs
 		// UPDATE on the domain side (Fanout's FOR SHARE + the providersync
-		// hot path).
-		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_runs TO " + domainRole + "; END IF; END $$",
+		// hot path). CHAOS-3145 adds INSERT on sync_runs and sync_run_units
+		// for the native scheduler materializer's separate domain transaction.
+		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_units TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",

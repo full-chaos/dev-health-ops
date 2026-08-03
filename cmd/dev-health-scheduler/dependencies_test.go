@@ -84,7 +84,7 @@ func (stubOccurrenceStepper) Reconcile(
 	return schedulersync.OccurrenceReconcileResult{}, nil
 }
 
-func stubOccurrenceSource(*pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+func stubOccurrenceSource(*pgxpool.Pool, *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
 	return stubOccurrenceStepper{}, nil
 }
 
@@ -184,13 +184,16 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 			})
 		},
 		newLoop: schedulersync.NewLoop,
-		newOccurrences: func(pool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+		newOccurrences: func(pool, domainPool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
 			// CHAOS-3114: scheduled_sync_occurrences is coordinator-exclusive,
 			// so the reconciler must also run on the coordinator pool.
 			if pool != database.coordinatorPool {
 				t.Fatal("occurrence reconciler received the wrong pool; want the coordinator pool")
 			}
-			return stubOccurrenceSource(pool)
+			if domainPool != database.pool {
+				t.Fatal("materializer received the wrong pool; want the domain pool")
+			}
+			return stubOccurrenceSource(pool, domainPool)
 		},
 		newFixedLoop: func(pool *pgxpool.Pool, _ *health.Registry) (fixedScheduleRuntime, error) {
 			// CHAOS-3114 (second half): the fixed engine runs on the

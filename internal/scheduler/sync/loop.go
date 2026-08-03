@@ -19,7 +19,7 @@ const (
 	maxLoopPollInterval = 15 * time.Minute
 	minLoopStepTimeout  = 10 * time.Millisecond
 	maxLoopStepTimeout  = 30 * time.Second
-	defaultLoopTimeout  = 2 * time.Second
+	defaultLoopTimeout  = 15 * time.Second
 )
 
 var (

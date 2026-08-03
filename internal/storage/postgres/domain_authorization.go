@@ -474,7 +474,11 @@ type RolePosture struct {
 //     is a plain SELECT with no lock clause. The genuine row-locking write
 //     this table used to need UPDATE for belongs to the coordinator-side
 //     scheduler code, not the domain worker.
-//   - sync_runs tightens from {SELECT} to {SELECT, UPDATE}: it is one of the
+//   - integration_sources, integration_datasets, sync_runs, and sync_run_units
+//     require INSERT as of CHAOS-3145: the native scheduler materializer keeps
+//     PagerDuty inventory repair and its FK-dependent graph in one domain
+//     transaction. Existing worker-side UPDATE remains unchanged.
+//     sync_runs was previously widened from {SELECT} to {SELECT, UPDATE}: it is one of the
 //     six dual-grant ("both") tables — the domain side genuinely holds
 //     UPDATE via Fanout's `FOR SHARE` and the providersync hot path, not just
 //     an implied SELECT.
@@ -529,12 +533,12 @@ func domainPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
 			{"integrations", false, false, false},
-			{"integration_sources", false, false, false},
-			{"integration_datasets", false, false, false},
+			{"integration_sources", true, true, false},
+			{"integration_datasets", true, true, false},
 			{"integration_credentials", false, false, false},
-			{"sync_runs", false, true, false},
+			{"sync_runs", true, true, false},
 			{"sync_dispatch_transport_routes", false, false, false},
-			{"sync_run_units", false, true, false},
+			{"sync_run_units", true, true, false},
 			{"sync_watermarks", true, true, false},
 			{"sync_dispatch_outbox", true, true, false},
 			{"worker_job_outbox", true, false, false},
@@ -670,18 +674,27 @@ func domainPosture() RolePosture {
 //     the scheduler, the reconciler, and workerctl. Celery Beat, which this
 //     replaces, already spans both table sets under ONE identity.
 //
-//   - feature_flags, org_feature_overrides, org_licenses, dev_conversations:
-//     the fixed scheduler's Ask Dev retention admission reads the canonical
-//     explicit-entitlement inputs and an independent persisted-state existence
-//     fact inside the occurrence transaction. These are SELECT-only on the
-//     coordinator side. The domain retention handler separately owns the
-//     row-lock, tombstone insert, and conversation delete privileges.
+//   - feature_flags and org_feature_overrides require UPDATE solely for the
+//     native scheduled planner's `FOR UPDATE` entitlement locks. No statement
+//     mutates their columns. integrations/sources/datasets/watermarks,
+//     tier_limits, and the safe metadata columns of integration_credentials
+//     are its SELECT-only plan-time inputs; the encrypted credential column is
+//     deliberately absent. PagerDuty source/dataset INSERT+UPDATE happens on
+//     the domain transaction so unit foreign keys never depend on uncommitted
+//     coordinator rows.
+//     job_runs and sync_run_reference_discoveries are coordinator ledger
+//     INSERTs after the domain graph commit.
+//
+//   - organizations requires UPDATE only for the native scheduled planner's
+//     FOR KEY SHARE existence lock. org_licenses and dev_conversations remain
+//     SELECT-only coordinator inputs. The domain retention handler separately
+//     owns the conversation row-lock, tombstone insert, and delete privileges.
 func coordinatorPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
 			{"internal_service_credentials", false, true, false},
 			{"worker_operator_audits", true, true, false},
-			{"sync_run_reference_discoveries", false, false, false},
+			{"sync_run_reference_discoveries", true, false, false},
 			{"sync_run_post_dispatches", false, false, false},
 			{"worker_job_routes", false, true, false},
 			{"scheduled_jobs", false, true, false},
@@ -698,18 +711,29 @@ func coordinatorPosture() RolePosture {
 			{"sync_runs", false, true, false},
 			{"sync_dispatch_transport_routes", false, true, false},
 			{"worker_job_runs", false, true, false},
-			{"organizations", false, false, false},
-			{"feature_flags", false, false, false},
-			{"org_feature_overrides", false, false, false},
+			{"organizations", false, true, false},
+			{"feature_flags", false, true, false},
+			{"org_feature_overrides", false, true, false},
 			{"org_licenses", false, false, false},
 			{"dev_conversations", false, false, false},
 			{"sync_configurations", false, true, false},
+			{"integrations", false, false, false},
+			{"integration_sources", false, false, false},
+			{"integration_datasets", false, false, false},
+			{"sync_watermarks", false, false, false},
+			{"tier_limits", false, false, false},
+			{"job_runs", true, false, false},
 			{"worker_job_outbox", true, true, false},
 			{"remaining_metric_runs", true, false, false},
 			{"remaining_metric_partitions", true, false, false},
 			{"work_graph_execution_requests", true, false, false},
 		},
 		ColumnScoped: []ColumnPrivilege{
+			{"integration_credentials", "id", "SELECT"},
+			{"integration_credentials", "org_id", "SELECT"},
+			{"integration_credentials", "provider", "SELECT"},
+			{"integration_credentials", "is_active", "SELECT"},
+			{"integration_credentials", "config", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
 		},

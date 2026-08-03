@@ -40,7 +40,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from scripts.acceptance.prepare_ask_dev_acceptance import AcceptanceFailure
@@ -123,34 +123,67 @@ def _git_head_sha(start: Path) -> str:
 #: gap: a dirty tree means "what ran might not be what commit_sha says",
 #: which validate_execution_artifact must reject just as it rejects a
 #: missing artifact.
-_ARTIFACT_DIR_PREFIX = "tests/acceptance/artifacts/"
+_ARTIFACT_DIR = PurePosixPath("tests/acceptance/artifacts")
+
+
+def _is_under_artifact_dir(path: str) -> bool:
+    return PurePosixPath(path).is_relative_to(_ARTIFACT_DIR)
 
 
 def _git_status_porcelain(start: Path, *, root: Path) -> str:
-    # `--untracked-files=all` is load-bearing, not a nicety. Under git's
-    # default `normal` mode an entirely-untracked directory collapses to a
-    # single "?? tests/" line, so the artifacts-directory exclusion below
-    # never matches its own path and a batch mint reports tree_clean=False
-    # for every scenario. It also pins the behaviour against the local
-    # `status.showUntrackedFiles` config, which otherwise makes this
-    # measurement differ between a developer's machine and CI.
+    """Serialize the working tree's dirty records, excluding only records
+    entirely inside the artifacts directory this write itself touches.
+
+    `--untracked-files=all` is load-bearing, not a nicety. Under git's
+    default `normal` mode an entirely-untracked directory collapses to a
+    single "?? tests/" record, so the artifacts-directory exclusion never
+    matches its own path and a batch mint reports tree_clean=False for
+    every scenario. It also pins the behaviour against the local
+    `status.showUntrackedFiles` config, which otherwise makes this
+    measurement differ between a developer's machine and CI.
+
+    `-z` is equally load-bearing. Codex finding (HIGH, 2026-08-03): the
+    exclusion used to be a substring test against the whole status line,
+    which silently discarded genuinely dirty PRODUCTION paths that merely
+    contained the artifact prefix somewhere -- `?? src/tests/acceptance/
+    artifacts/runtime_override.py` reported tree_clean=True -- and
+    discarded a rename whose destination escaped the artifacts directory
+    entirely. NUL-terminated records remove git's path quoting and make
+    a rename's two paths separate fields, so containment can be decided
+    per path instead of guessed from the rendered line.
+    """
+
     result = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
         cwd=root,
         capture_output=True,
         text=True,
         check=True,
     )
-    relevant_lines = [
-        line
-        for line in result.stdout.splitlines()
-        # porcelain status lines are "XY <path>" (rename lines add
-        # "-> <path>"); a plain substring check on the whole line is
-        # sufficient since the artifacts directory is the only thing this
-        # exclusion needs to cover.
-        if _ARTIFACT_DIR_PREFIX not in line
-    ]
-    return "\n".join(relevant_lines)
+    fields = result.stdout.split("\0")
+    records: list[str] = []
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if not entry:
+            continue
+        # "XY <path>"; git pads to a fixed 3-character prefix.
+        status, path = entry[:2], entry[3:]
+        paths = [path]
+        if "R" in status or "C" in status:
+            # A rename/copy's ORIGINAL path is the next NUL field.
+            if index < len(fields):
+                paths.append(fields[index])
+                index += 1
+        # Exclude only when EVERY path in the record is genuinely beneath
+        # the artifacts directory. A rename out of it still dirties the
+        # tree, and so does a production file whose path merely looks
+        # similar.
+        if all(_is_under_artifact_dir(candidate) for candidate in paths):
+            continue
+        records.append(f"{status} {' -> '.join(paths)}")
+    return "\n".join(records)
 
 
 @dataclass(slots=True)

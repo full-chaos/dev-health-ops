@@ -181,3 +181,71 @@ def test_write_still_reports_dirty_for_an_untracked_file_outside_the_artifacts_d
     recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
     artifact = recorder.write(tmp_path / "artifacts" / "throwaway.json")
     assert artifact["tree_clean"] is False
+
+
+def test_write_reports_dirty_for_a_production_path_that_merely_contains_the_prefix(
+    tmp_path: Path,
+) -> None:
+    """codex finding (HIGH, 2026-08-03): the exclusion was a substring test
+    against the whole status line, so a genuinely dirty PRODUCTION file
+    whose path happened to contain "tests/acceptance/artifacts/" anywhere
+    was discarded and the tree reported clean. This is the exact repro."""
+
+    _init_throwaway_git_repo(tmp_path)
+    script_path = tmp_path / "smoke_throwaway.py"
+    script_path.write_text("# throwaway\n")
+    subprocess.run(["git", "add", "smoke_throwaway.py"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add script"], cwd=tmp_path, check=True
+    )
+    impostor = tmp_path / "src" / "tests" / "acceptance" / "artifacts"
+    impostor.mkdir(parents=True, exist_ok=True)
+    (impostor / "runtime_override.py").write_text("# dirty production code\n")
+    recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
+    artifact = recorder.write(tmp_path / "artifacts" / "throwaway.json")
+    assert artifact["tree_clean"] is False
+
+
+def test_write_reports_dirty_for_a_rename_out_of_the_artifacts_directory(
+    tmp_path: Path,
+) -> None:
+    """codex finding (HIGH, 2026-08-03), second half: a rename record names
+    TWO paths. Excluding the whole record because its source is inside the
+    artifacts directory hid a destination that landed in production code."""
+
+    _init_throwaway_git_repo(tmp_path)
+    script_path = tmp_path / "smoke_throwaway.py"
+    script_path.write_text("# throwaway\n")
+    tracked_artifact = tmp_path / "tests" / "acceptance" / "artifacts" / "baseline.json"
+    tracked_artifact.parent.mkdir(parents=True, exist_ok=True)
+    tracked_artifact.write_text("{}")
+    subprocess.run(
+        [
+            "git",
+            "add",
+            "smoke_throwaway.py",
+            "tests/acceptance/artifacts/baseline.json",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add script and artifact"],
+        cwd=tmp_path,
+        check=True,
+    )
+    destination = tmp_path / "src" / "dev_health_ops" / "runtime_override.py"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "git",
+            "mv",
+            "tests/acceptance/artifacts/baseline.json",
+            "src/dev_health_ops/runtime_override.py",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
+    artifact = recorder.write(tmp_path / "artifacts" / "throwaway.json")
+    assert artifact["tree_clean"] is False

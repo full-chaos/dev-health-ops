@@ -2,10 +2,10 @@
   "schema_version": "wave_3_1_proof_gate_manifest.v1",
   "item_count": 64,
   "status_counts": {
-    "blocked": 2,
+    "blocked": 4,
     "deferred": 7,
     "proven_e2e": 14,
-    "proven_unit": 41
+    "proven_unit": 39
   },
   "category_counts": {
     "attack": 7,
@@ -227,16 +227,11 @@
     {
       "id": "matrix.light-on-feature-work",
       "category": "blocking_matrix",
-      "description": "'Which teams are light on feature work?' with adequate investment-classification coverage. Proven at the rule/finding layer this question is actually answered from, not the adapter layer: with adequate classification coverage a measured shift past the rule's threshold produces a real INVESTMENT_BALANCE finding at the rule's triggered state, a shift below it reports healthy, and an adequately-covered window with no comparison baseline reports unknown rather than a fabricated answer. Two things are deliberately NOT claimed. First, the finding is shadow-only today: health_rule.investment_allocation_shift.v1 is provisional and CHAOS-3331-blocked from promotion, so what is proven is the finding SHAPE, not that it reaches a launch surface. Second, the answer is magnitude-only by design (PRD 6.6/10) -- the rule renders no 'light on feature work' value judgment, and the assertion on its neutral remediation wording is what binds that. The live arm (matrix.team-workload-balance.e2e-live-validated) proves TEAM_WORKLOAD_BALANCE is reachable but asserts only a completed answer, not this finding's content.",
-      "status": "proven_unit",
-      "evidence": [
-        "tests/api/dev/test_chaos_3304_workload_health_rules.py"
-      ],
-      "blocked_reason": null,
-      "test_nodeids": [
-        "tests/api/dev/test_chaos_3304_workload_health_rules.py::test_investment_shift_with_adequate_coverage_produces_a_neutral_finding",
-        "tests/api/dev/test_chaos_3304_workload_health_rules.py::test_investment_shift_with_adequate_coverage_but_no_baseline_is_unknown"
-      ],
+      "description": "'Which teams are light on feature work?' with adequate investment-classification coverage.",
+      "status": "blocked",
+      "evidence": [],
+      "blocked_reason": "The health-rule layer cannot produce this row's finding through production code today. health_rule.investment_allocation_shift.v1 sets attribution_required=True, and its only production adapter, dimension_observation_adapters.investment_allocation_shift_observation, reports attribution_present=False unconditionally while CHAOS-3331 is open (the writer path cannot distinguish a canonically attributed row from a fail-open one on the read side). evaluate_rule checks attribution BEFORE cohort/sample/coverage/threshold, so every real evaluation returns UNKNOWN with missing_attribution -- never the 'light on feature work' finding this row claims. A rule-layer test that constructs attribution_present=True bypasses exactly the guard that makes the claim false, so citing one would overclaim. Closing this needs CHAOS-3331 to land and a test through TeamWorkloadService that produces the finding from real adapter output, or the row rewritten to claim the abstract rule-evaluator shape rather than an answer to the user's question.",
+      "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
       "required_assertion_names": []
@@ -440,15 +435,11 @@
     {
       "id": "matrix.project-health-unknown-not-applicable",
       "category": "blocking_matrix",
-      "description": "Project health with unknown and not-applicable dimensions. Proven at the synthesis layer for a PROJECT subject: a structurally inapplicable source and a never-queried one stay distinguishable in the profile's own observations (NOT_APPLICABLE vs UNAVAILABLE -- evaluate_rule collapses both to a DimensionState.UNKNOWN finding, so the observation is the only place the distinction survives), and neither contaminates a dimension that WAS measured. A literal PROJECT subject still cannot be live-verified: this fixture profile seeds zero PROJECT-kind rows (see positive-control.real-project-status), so the e2e arm of this cell remains unproven and is not claimed here.",
-      "status": "proven_unit",
-      "evidence": [
-        "tests/api/dev/test_chaos_3303_health_profile_synthesis.py"
-      ],
-      "blocked_reason": null,
-      "test_nodeids": [
-        "tests/api/dev/test_chaos_3303_health_profile_synthesis.py::test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly"
-      ],
+      "description": "Project health with unknown and not-applicable dimensions.",
+      "status": "blocked",
+      "evidence": [],
+      "blocked_reason": "No PROJECT-scoped proof exists that reaches both an UNKNOWN and a NOT_APPLICABLE dimension through production code. The only source that yields NOT_APPLICABLE at the synthesis layer is the change-failure-rate metric, and ProjectHealthService always computes change_failure_rate_not_applicable=False for a PROJECT subject (DirectScope.PROJECT is in CHANGE_FAILURE_RATE_SUPPORTED_SCOPES), so a NOT_APPLICABLE observation is unreachable for this subject kind through the real service. A synthesis-layer test can construct the flag by hand -- test_chaos_3303_health_profile_synthesis.py::test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly does, and it is a genuine test of the engine -- but citing it here would claim a production-reachable behaviour that does not exist. Closing this needs either a production input that genuinely yields both states for a PROJECT subject, or the row rewritten to claim the abstract synthesis property instead of project health. Separately, a literal PROJECT subject still cannot be live-verified: this fixture profile seeds zero PROJECT-kind rows (see positive-control.real-project-status).",
+      "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
       "required_assertion_names": []

@@ -28,6 +28,14 @@ jobs:
         with:
           filters: |
             code:
+              # This workflow itself is a proof-gate prerequisite: the
+              # manifest's ancestry binding is only measurable because the
+              # checkout below asks for full history. Without this pattern a
+              # PR that changed ONLY this file (deleting `fetch-depth: 0`,
+              # say) set code=false, skipped both test jobs, and the required
+              # `test` aggregator counted the skip as a pass -- the gate
+              # could be disabled through a green required check.
+              - '.github/workflows/**'
               - 'src/**'
               - 'tests/**'
               - 'ci/**'

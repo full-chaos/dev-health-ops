@@ -302,6 +302,70 @@ STACK3_PERSISTENCE_GAP_REASON = (
     "smoke_ask_dev_stack3_intents.py confirms it."
 )
 
+#: Codex finding (HIGH, 2026-08-03). This row was briefly flipped to
+#: proven_unit on a new synthesis-layer test, and that flip was WRONG in a
+#: way worth recording, because it is the same overclaim the row was
+#: originally blocked for, moved one layer down. The new test supplies
+#: change_failure_rate_not_applicable=True for a PROJECT subject directly
+#: to synthesize_health_profile. Production cannot reach that input:
+#: ProjectHealthService.evaluate_project accepts only PROJECT scopes,
+#: DirectScope.PROJECT is a member of CHANGE_FAILURE_RATE_SUPPORTED_SCOPES,
+#: so the flag is always computed False and the metric is always queried.
+#: The test therefore proves a property of the synthesis engine over an
+#: input no project-service call can produce -- true, but not a proof about
+#: project health. The test is kept (it is a legitimate synthesis-unit
+#: check and it does kill a real mutation); it is simply not evidence for
+#: THIS row.
+PROJECT_HEALTH_UNREACHABLE_INPUT_REASON = (
+    "No PROJECT-scoped proof exists that reaches both an UNKNOWN and a "
+    "NOT_APPLICABLE dimension through production code. The only source "
+    "that yields NOT_APPLICABLE at the synthesis layer is the "
+    "change-failure-rate metric, and ProjectHealthService always computes "
+    "change_failure_rate_not_applicable=False for a PROJECT subject "
+    "(DirectScope.PROJECT is in CHANGE_FAILURE_RATE_SUPPORTED_SCOPES), so "
+    "a NOT_APPLICABLE observation is unreachable for this subject kind "
+    "through the real service. A synthesis-layer test can construct the "
+    "flag by hand -- test_chaos_3303_health_profile_synthesis.py::"
+    "test_project_profile_reports_unknown_and_not_applicable_dimensions_"
+    "distinctly does, and it is a genuine test of the engine -- but citing "
+    "it here would claim a production-reachable behaviour that does not "
+    "exist. Closing this needs either a production input that genuinely "
+    "yields both states for a PROJECT subject, or the row rewritten to "
+    "claim the abstract synthesis property instead of project health. "
+    "Separately, a literal PROJECT subject still cannot be live-verified: "
+    "this fixture profile seeds zero PROJECT-kind rows (see "
+    "positive-control.real-project-status)."
+)
+
+#: Codex finding (HIGH, 2026-08-03), the same overclaim in the other
+#: direction: a rule-layer test can hand evaluate_rule an observation with
+#: attribution_present=True and watch it reach the triggered state, but the
+#: production adapter that feeds this rule
+#: (investment_allocation_shift_observation) sets attribution_present=False
+#: UNCONDITIONALLY pending CHAOS-3331, and the rule sets
+#: attribution_required=True. Real evaluation therefore short-circuits to
+#: UNKNOWN/missing_attribution before coverage or threshold is ever
+#: considered. Disclosing "shadow-only" was not enough: even the shadow
+#: finding shape cannot be produced by the real service today.
+FEATURE_WORK_ATTRIBUTION_BLOCKED_REASON = (
+    "The health-rule layer cannot produce this row's finding through "
+    "production code today. health_rule.investment_allocation_shift.v1 "
+    "sets attribution_required=True, and its only production adapter, "
+    "dimension_observation_adapters.investment_allocation_shift_"
+    "observation, reports attribution_present=False unconditionally while "
+    "CHAOS-3331 is open (the writer path cannot distinguish a canonically "
+    "attributed row from a fail-open one on the read side). evaluate_rule "
+    "checks attribution BEFORE cohort/sample/coverage/threshold, so every "
+    "real evaluation returns UNKNOWN with missing_attribution -- never the "
+    "'light on feature work' finding this row claims. A rule-layer test "
+    "that constructs attribution_present=True bypasses exactly the guard "
+    "that makes the claim false, so citing one would overclaim. Closing "
+    "this needs CHAOS-3331 to land and a test through TeamWorkloadService "
+    "that produces the finding from real adapter output, or the row "
+    "rewritten to claim the abstract rule-evaluator shape rather than an "
+    "answer to the user's question."
+)
+
 
 def _core_defect_reproductions() -> tuple[ManifestItem, ...]:
     return (
@@ -1075,29 +1139,9 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
         ManifestItem(
             id="matrix.project-health-unknown-not-applicable",
             category="blocking_matrix",
-            description=(
-                "Project health with unknown and not-applicable dimensions. "
-                "Proven at the synthesis layer for a PROJECT subject: a "
-                "structurally inapplicable source and a never-queried one "
-                "stay distinguishable in the profile's own observations "
-                "(NOT_APPLICABLE vs UNAVAILABLE -- evaluate_rule collapses "
-                "both to a DimensionState.UNKNOWN finding, so the "
-                "observation is the only place the distinction survives), "
-                "and neither contaminates a dimension that WAS measured. "
-                "A literal PROJECT subject still cannot be live-verified: "
-                "this fixture profile seeds zero PROJECT-kind rows (see "
-                "positive-control.real-project-status), so the e2e arm of "
-                "this cell remains unproven and is not claimed here."
-            ),
-            status="proven_unit",
-            evidence=("tests/api/dev/test_chaos_3303_health_profile_synthesis.py",),
-            content_markers=(
-                "test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly",
-            ),
-            test_nodeids=(
-                "tests/api/dev/test_chaos_3303_health_profile_synthesis.py::"
-                "test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly",
-            ),
+            description=("Project health with unknown and not-applicable dimensions."),
+            status="blocked",
+            blocked_reason=PROJECT_HEALTH_UNREACHABLE_INPUT_REASON,
         ),
         ManifestItem(
             id="matrix.team-health-complete-attribution",
@@ -1205,37 +1249,10 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
             category="blocking_matrix",
             description=(
                 "'Which teams are light on feature work?' with adequate "
-                "investment-classification coverage. Proven at the rule/"
-                "finding layer this question is actually answered from, not "
-                "the adapter layer: with adequate classification coverage a "
-                "measured shift past the rule's threshold produces a real "
-                "INVESTMENT_BALANCE finding at the rule's triggered state, a "
-                "shift below it reports healthy, and an adequately-covered "
-                "window with no comparison baseline reports unknown rather "
-                "than a fabricated answer. Two things are deliberately NOT "
-                "claimed. First, the finding is shadow-only today: "
-                "health_rule.investment_allocation_shift.v1 is provisional "
-                "and CHAOS-3331-blocked from promotion, so what is proven is "
-                "the finding SHAPE, not that it reaches a launch surface. "
-                "Second, the answer is magnitude-only by design (PRD 6.6/10) "
-                "-- the rule renders no 'light on feature work' value "
-                "judgment, and the assertion on its neutral remediation "
-                "wording is what binds that. The live arm "
-                "(matrix.team-workload-balance.e2e-live-validated) proves "
-                "TEAM_WORKLOAD_BALANCE is reachable but asserts only a "
-                "completed answer, not this finding's content."
+                "investment-classification coverage."
             ),
-            status="proven_unit",
-            evidence=("tests/api/dev/test_chaos_3304_workload_health_rules.py",),
-            content_markers=(
-                "test_investment_shift_with_adequate_coverage_produces_a_neutral_finding",
-            ),
-            test_nodeids=(
-                "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
-                "test_investment_shift_with_adequate_coverage_produces_a_neutral_finding",
-                "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
-                "test_investment_shift_with_adequate_coverage_but_no_baseline_is_unknown",
-            ),
+            status="blocked",
+            blocked_reason=FEATURE_WORK_ATTRIBUTION_BLOCKED_REASON,
         ),
         ManifestItem(
             id="matrix.light-on-feature-work-unclassified",
@@ -1861,6 +1878,18 @@ def _history_is_truncated(root: Path) -> bool:
     return result.stdout.strip() == "true"
 
 
+#: A full, canonical git object id. Codex finding (HIGH, 2026-08-03): the
+#: ancestry check passed ``commit_sha`` straight to ``git merge-base``,
+#: which happily accepts any revision expression -- so an artifact
+#: recording the literal string "HEAD" (or "HEAD^{commit}") validated
+#: clean, because the expression resolves at VALIDATION time to whatever
+#: HEAD is now rather than naming the commit that allegedly ran. An
+#: artifact must name an immutable object, so only a 40-character hex id
+#: is accepted; symbolic refs, tags, and abbreviations are rejected before
+#: git is consulted at all.
+_CANONICAL_COMMIT_SHA = re.compile(r"\A[0-9a-f]{40}\Z")
+
+
 def _ancestry_binding_errors(
     root: Path, *, item_id: str, label: str, commit_sha: str
 ) -> list[str]:
@@ -1877,6 +1906,15 @@ def _ancestry_binding_errors(
     history (``actions/checkout`` ``fetch-depth: 0``); see
     ``.github/workflows/test.yml``.
     """
+
+    if not _CANONICAL_COMMIT_SHA.fullmatch(commit_sha):
+        return [
+            f"{item_id}: {label}'s commit_sha {commit_sha!r} is not a "
+            "canonical 40-character hexadecimal commit id. A symbolic ref, "
+            "tag, abbreviation, or revision expression resolves at "
+            "validation time instead of naming the immutable commit that "
+            "actually ran, so it can never bind an artifact to anything."
+        ]
 
     check = _git_command(root, "merge-base", "--is-ancestor", commit_sha, "HEAD")
     if check.returncode == 0:
@@ -1930,6 +1968,22 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
     generated from a commit that never led to the current tree, generated
     against a dirty tree, a script edited since it ran, or an artifact that
     belongs to a different scenario than the one this row cites.
+
+    KNOWN LIMITATION, disclosed rather than hidden (codex finding, HIGH,
+    2026-08-03, and NOT closed by this changeset). ``script_sha256`` binds
+    the artifact to the smoke script's own bytes, and nothing else. A live
+    scenario also executes a great deal of code the artifact does not
+    fingerprint -- the scripted OpenAI-compatible provider it drives, the
+    ``acceptance_artifact`` recorder itself, and the whole API image -- so
+    a commit that changes any of those leaves every existing artifact
+    validating clean while the run it describes is no longer reproducible.
+    That is a false green: the gate reports 0 errors when an executed
+    dependency has genuinely drifted. Closing it means binding artifacts to
+    a runtime-dependency digest (or the tested tree), which by construction
+    invalidates all 14 current artifacts at once and therefore cannot land
+    without a live re-mint of every scenario -- a session with Compose, not
+    an edit. Until then, read a ``proven_e2e`` row as "this scenario passed
+    at the recorded commit", not as "this scenario passes today".
     """
 
     errors: list[str] = []

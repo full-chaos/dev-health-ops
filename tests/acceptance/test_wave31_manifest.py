@@ -230,68 +230,63 @@ def test_health_workload_deficiency_portfolio_flip_after_stack3_wiring() -> None
 
 
 def test_health_workload_deficiency_portfolio_items_still_honestly_blocked() -> None:
-    """The row the 2026-08-03 map found no adequate citation for, and that
-    is deliberately out of scope this wave, must stay ``blocked`` rather
-    than force-fit to a weak analogue. A future change that flips it
-    without an actual StepContext-widening fix would be a false-green
-    regression this test exists to catch.
-
-    Two rows that were in this set (project-health-unknown-not-applicable,
-    light-on-feature-work) left it on 2026-08-03 when the specific missing
-    tests were written -- see
-    ``test_project_health_and_feature_work_rows_flipped_on_new_layer_tests``,
-    which locks that flip in the same way.
+    """The three rows the 2026-08-03 map found no adequate citation for --
+    or that are deliberately, permanently out of scope this wave -- must
+    stay ``blocked`` rather than force-fit to a weak analogue. A future
+    change that flips one of these without a genuinely matching test (or,
+    for the portfolio row, an actual StepContext-widening fix) would be a
+    false-green regression this test exists to catch.
     """
 
-    blocked_ids = {"matrix.organization-portfolio-status"}
+    blocked_ids = {
+        "matrix.organization-portfolio-status",
+        "matrix.project-health-unknown-not-applicable",
+        "matrix.light-on-feature-work",
+    }
     by_id = {item.id: item for item in MANIFEST}
     assert blocked_ids <= by_id.keys()
     for item_id in blocked_ids:
         item = by_id[item_id]
         assert item.status == "blocked", f"{item_id} is not blocked: {item.status}"
         assert item.blocked_reason, f"{item_id} is blocked with no reason"
-        # This row was blocked for a genuinely different cause from the
-        # stack-3 wiring/persistence gaps (it is deliberately unwired), so
-        # this pins distinguishing content rather than a shared constant.
+        # None of these three share a single golden reason anymore (each
+        # was blocked for a genuinely different cause -- deliberately
+        # unwired, no matching test, or a weak analogue), so this pins
+        # distinguishing content per row rather than one shared constant.
         assert item.blocked_reason != STACK3_WIRING_GAP_REASON
         assert item.blocked_reason != STACK3_PERSISTENCE_GAP_REASON
 
 
-def test_project_health_and_feature_work_rows_flipped_on_new_layer_tests() -> None:
-    """Locks in the 2026-08-03 flip of the two rows whose blocked_reason
-    named a specific missing test rather than a missing capability.
+def test_the_two_rows_that_were_briefly_flipped_name_their_unreachable_input() -> None:
+    """codex finding (HIGH, 2026-08-03). Both rows were flipped to
+    ``proven_unit`` earlier that day on newly written tests, and both flips
+    were wrong in the SAME way the rows were originally blocked for: the
+    new test reached the asserted state only through an input production
+    cannot produce -- a hand-set ``change_failure_rate_not_applicable``
+    for a PROJECT subject, and a hand-set ``attribution_present=True`` for
+    a rule whose only adapter reports ``False`` unconditionally.
 
-    Each was blocked because the closest existing test proved the claim at
-    the WRONG layer -- a TEAM-scoped profile standing in for a PROJECT one,
-    and an adapter-layer neutrality check standing in for the rule/finding
-    layer. Each is now backed by a test written at the layer the row
-    actually claims. A regression to ``blocked``, or a flip that drops the
-    node ids and rests on the evidence file merely existing, fails here.
+    Reverting is not enough on its own: a future reader needs the reason to
+    say WHY a plausible-looking test does not close the row, or the same
+    flip happens again. This pins that the reason names the specific
+    production guard, not just "no test exists".
     """
 
-    expected_nodeids = {
-        "matrix.project-health-unknown-not-applicable": {
-            "tests/api/dev/test_chaos_3303_health_profile_synthesis.py::"
-            "test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly",
-        },
-        "matrix.light-on-feature-work": {
-            "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
-            "test_investment_shift_with_adequate_coverage_produces_a_neutral_finding",
-            "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
-            "test_investment_shift_with_adequate_coverage_but_no_baseline_is_unknown",
-        },
-    }
     by_id = {item.id: item for item in MANIFEST}
-    for item_id, node_ids in expected_nodeids.items():
-        item = by_id[item_id]
-        assert item.status == "proven_unit", (
-            f"{item_id} is not proven_unit: {item.status}"
-        )
-        assert item.blocked_reason is None
-        # The exact node ids, not merely "some node ids": the previously
-        # cited wrong-layer tests must not be able to come back as the
-        # citation for these rows.
-        assert set(item.test_nodeids) == node_ids, item_id
+
+    project_health = by_id["matrix.project-health-unknown-not-applicable"]
+    assert project_health.status == "blocked"
+    assert project_health.test_nodeids == ()
+    assert "CHANGE_FAILURE_RATE_SUPPORTED_SCOPES" in (
+        project_health.blocked_reason or ""
+    )
+
+    feature_work = by_id["matrix.light-on-feature-work"]
+    assert feature_work.status == "blocked"
+    assert feature_work.test_nodeids == ()
+    reason = feature_work.blocked_reason or ""
+    assert "attribution_present=False" in reason
+    assert "CHAOS-3331" in reason
 
 
 def test_migration_coexistence_gate_reflects_chaos_3306_decision() -> None:
@@ -785,6 +780,60 @@ def test_validate_execution_artifact_fails_loudly_in_a_truncated_checkout(
     assert errors, "an unmeasurable ancestry binding must never validate clean"
     assert any("git history is truncated" in error for error in errors)
     assert any("fetch-depth: 0" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "commit_ish",
+    ["HEAD", "HEAD^{commit}", "HEAD~0", "main", "v1.0.0", "e395de5", ""],
+)
+def test_validate_execution_artifact_rejects_a_non_immutable_commit_ish(
+    tmp_path: Path, commit_ish: str
+) -> None:
+    """codex finding (HIGH, 2026-08-03): commit_sha went straight to
+    `git merge-base`, which accepts any revision expression -- so an
+    artifact recording the literal "HEAD" resolved at VALIDATION time and
+    validated clean no matter what it had actually run against. Every
+    mutable or abbreviated spelling must be rejected before git sees it."""
+
+    _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="mutable_ref",
+        script_relative="smoke_mutable_ref.py",
+        commit_sha=commit_ish,
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_mutable_ref.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert errors, f"{commit_ish!r} was accepted as an immutable commit id"
+    assert any(
+        "canonical 40-character hexadecimal commit id" in error
+        or "no commit_sha" in error
+        for error in errors
+    )
+
+
+def test_validate_execution_artifact_still_accepts_a_real_full_sha(
+    tmp_path: Path,
+) -> None:
+    """The control for the check above: tightening the input format must
+    not reject the genuine, correctly-recorded case."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    assert len(commit_sha) == 40
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="real_sha",
+        script_relative="smoke_real_sha.py",
+        commit_sha=commit_sha,
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_real_sha.py",
+    )
+    assert validate_execution_artifact(tmp_path, item) == []
 
 
 def test_a_fabricated_commit_still_fails_in_a_truncated_checkout(

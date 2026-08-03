@@ -27,11 +27,13 @@ func TestProviderRequestPlansMatchLivePythonBudgetFunctions(t *testing.T) {
 		t.Fatalf("execute Python provider budget oracle: %v: %s", err, output)
 	}
 	var cases []struct {
-		Provider  string            `json:"provider"`
-		Dataset   string            `json:"dataset"`
-		SpanDays  int               `json:"span_days"`
-		Flags     map[string]bool   `json:"flags"`
-		Estimates []RequestEstimate `json:"estimates"`
+		Provider          string            `json:"provider"`
+		Dataset           string            `json:"dataset"`
+		SpanDays          int               `json:"span_days"`
+		Flags             map[string]bool   `json:"flags"`
+		Estimates         []RequestEstimate `json:"estimates"`
+		ActualRouteFamily string            `json:"actual_route_family"`
+		ActualDimension   string            `json:"actual_dimension"`
 	}
 	if err := json.Unmarshal(output, &cases); err != nil {
 		t.Fatalf("decode Python provider budget oracle: %v: %s", err, output)
@@ -51,6 +53,16 @@ func TestProviderRequestPlansMatchLivePythonBudgetFunctions(t *testing.T) {
 				got,
 				test.Estimates,
 			)
+		}
+		if test.ActualRouteFamily != "" {
+			if len(got) != 1 || got[0].RouteFamily != test.ActualRouteFamily ||
+				got[0].Dimension != test.ActualDimension {
+				t.Fatalf(
+					"%s/%s actual resolver=(%s,%s) request plan=%+v",
+					test.Provider, test.Dataset, test.ActualRouteFamily,
+					test.ActualDimension, got,
+				)
+			}
 		}
 	}
 }

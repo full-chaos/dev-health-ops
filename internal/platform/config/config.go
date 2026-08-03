@@ -116,6 +116,8 @@ type Config struct {
 	WorkerGitlabCommitsEnabled bool
 	// WorkerGitlabCommitStatsEnabled gates the isolated aggregate commit-stat route.
 	WorkerGitlabCommitStatsEnabled bool
+	// WorkerGitlabCICDEnabled gates the isolated Python-owned ci_pipeline_runs route.
+	WorkerGitlabCICDEnabled bool
 	// WorkerGithubPRsEnabled is the (github, prs) half of the two-key route
 	// gate (CHAOS-3122, following CHAOS-3123's precedent). The matrix marking
 	// the pair route_ready is the other half; neither alone moves traffic.
@@ -225,6 +227,10 @@ func Load(spec Spec) (Config, error) {
 		{
 			name:   "WORKER_GITLAB_COMMIT_STATS_ENABLED",
 			target: &cfg.WorkerGitlabCommitStatsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_CICD_ENABLED",
+			target: &cfg.WorkerGitlabCICDEnabled,
 		},
 		{
 			name:   "WORKER_GITHUB_PRS_ENABLED",
@@ -531,6 +537,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("worker_gitlab_repo_metadata_enabled", c.WorkerGitlabRepoMetadataEnabled),
 		slog.Bool("worker_gitlab_commits_enabled", c.WorkerGitlabCommitsEnabled),
 		slog.Bool("worker_gitlab_commit_stats_enabled", c.WorkerGitlabCommitStatsEnabled),
+		slog.Bool("worker_gitlab_cicd_enabled", c.WorkerGitlabCICDEnabled),
 		slog.Bool("worker_github_prs_enabled", c.WorkerGithubPRsEnabled),
 		slog.Bool("worker_github_commits_enabled", c.WorkerGithubCommitsEnabled),
 		slog.Bool("worker_github_security_enabled", c.WorkerGithubSecurityEnabled),

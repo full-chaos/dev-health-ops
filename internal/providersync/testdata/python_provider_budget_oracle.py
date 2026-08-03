@@ -91,26 +91,34 @@ def _github_cases(github: Any) -> list[dict[str, object]]:
 
 
 def _gitlab_cases(gitlab: Any) -> list[dict[str, object]]:
-    return [
-        {
-            "provider": "gitlab",
-            "dataset": dataset,
-            "span_days": span_days,
-            "flags": {},
-            "estimates": _render(
-                gitlab._dataset_estimates(
-                    dataset_key=dataset,
-                    flags={},
-                    org_id="org",
-                    host="fixture.example",
-                    credential_fingerprint="fingerprint",
-                    span_days=span_days,
+    cases: list[dict[str, object]] = []
+    for span_days in (1, 3):
+        for dataset in ("commits", "commit-stats", "cicd"):
+            case: dict[str, object] = {
+                "provider": "gitlab",
+                "dataset": dataset,
+                "span_days": span_days,
+                "flags": {},
+                "estimates": _render(
+                    gitlab._dataset_estimates(
+                        dataset_key=dataset,
+                        flags={},
+                        org_id="org",
+                        host="fixture.example",
+                        credential_fingerprint="fingerprint",
+                        span_days=span_days,
+                    )
+                ),
+            }
+            if dataset == "cicd":
+                route_family, dimension = gitlab.GITLAB_USAGE_RESOLVER.resolve(
+                    transport="rest",
+                    operation="pipelines:GET /projects/{id}/pipelines",
                 )
-            ),
-        }
-        for span_days in (1, 3)
-        for dataset in ("commits", "commit-stats")
-    ]
+                case["actual_route_family"] = route_family
+                case["actual_dimension"] = dimension.value
+            cases.append(case)
+    return cases
 
 
 def _jira_cases(jira: Any) -> list[dict[str, object]]:

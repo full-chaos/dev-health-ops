@@ -254,6 +254,13 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitLabCommitStatsRouteHandler{}
 				sink, readback = glCommitStatsSink, glCommitStatsSink
+			case session.Claim.Provider == "gitlab" &&
+				session.Claim.Dataset == "cicd":
+				glCICDSink := providersync.GitLabCICDClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitLabCICDRouteHandler{}
+				sink, readback = glCICDSink, glCICDSink
 			case session.Claim.Provider == "github" &&
 				session.Claim.Dataset == "prs":
 				ghPRSink := providersync.GitHubPullRequestClickHouseEffects{
@@ -531,6 +538,7 @@ func providerSyncWorkerEnabled(cfg config.Config) bool {
 		cfg.WorkerGitlabRepoMetadataEnabled ||
 		cfg.WorkerGitlabCommitsEnabled ||
 		cfg.WorkerGitlabCommitStatsEnabled ||
+		cfg.WorkerGitlabCICDEnabled ||
 		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubCICDEnabled ||
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
 		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||

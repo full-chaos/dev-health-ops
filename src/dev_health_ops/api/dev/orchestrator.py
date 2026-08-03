@@ -192,6 +192,40 @@ _NAME_SPECIFIC_GUARD_REASONS = frozenset(
     }
 )
 
+#: CHAOS-3297 stack #5 (guard cutover). The server-owned copy a run ships
+#: when a demoted legacy guard rejected the model's own summary but the run
+#: still holds server-verified material.
+#:
+#: Deliberately says what the server did and why, and names no source, no
+#: entity, and no domain fact -- it is the same class of copy as
+#: ``_budget_answer``'s summary (a server statement about the *shape* of what
+#: follows), never a claim about the subject. The substance lives in the
+#: canonical metrics/evidence beside it and, once the frame is built, in the
+#: plan's own findings.
+SERVER_GROUNDED_SUMMARY = (
+    "This result was assembled by the server from the sources it could "
+    "verify for this request. The model's own summary was withheld because "
+    "it did not pass a server-side answer check."
+)
+SERVER_GROUNDED_WARNING = (
+    "A server-side answer check rejected the model's own summary; only "
+    "server-verified data is reported here."
+)
+
+#: ``dev_runs.grounding_validation_status`` values for the two demoted
+#: guards (a ``String(32)`` column, no CHECK constraint -- both fit).
+#:
+#: Distinct values rather than one shared "demoted" marker: the two guards
+#: answer different questions (did the answer narrate a name the server never
+#: resolved / did it carry any checkable grounding at all), and an operator
+#: triaging a cutover regression needs to know which one fired without
+#: joining another table. ``legacy_guard_reason`` still carries the
+#: CHAOS-3289 backstop's own closed-vocabulary reason code alongside the
+#: first of these -- this column says the verdict was *demoted*, that one
+#: says what the verdict was.
+GUARD_DEMOTED_NAMED_ENTITY_STATUS = "advisory_named_entity"
+GUARD_DEMOTED_GROUNDING_FLOOR_STATUS = "advisory_grounding_floor"
+
 _LEGACY_GUARD_TERMINALS: dict[str, tuple[str, str]] = {
     "resolve_scope_ambiguous": (
         "scope_ambiguous",
@@ -421,6 +455,7 @@ class RunRecorder(Protocol):
         prompt_version: str | None,
         narrative_mode: str | None = None,
         narrative_failure_code: str | None = None,
+        grounding_validation_status: str | None = None,
     ) -> None: ...
 
 
@@ -481,6 +516,7 @@ class NullRunRecorder:
         prompt_version: str | None,
         narrative_mode: str | None = None,
         narrative_failure_code: str | None = None,
+        grounding_validation_status: str | None = None,
     ) -> None:
         del (
             state,
@@ -494,6 +530,7 @@ class NullRunRecorder:
             prompt_version,
             narrative_mode,
             narrative_failure_code,
+            grounding_validation_status,
         )
 
 
@@ -698,6 +735,7 @@ class DevOrchestrator:
             answer: DevAnswer | None = None,
             error: DevError | None = None,
             frame_already_recorded: bool = False,
+            grounding_validation_status: str | None = None,
         ) -> OrchestratorResult:
             nonlocal terminal_written
             if terminal_written:
@@ -968,6 +1006,13 @@ class DevOrchestrator:
                 prompt_version=prompt_version,
                 narrative_mode=narrative_mode,
                 narrative_failure_code=narrative_failure_code,
+                # CHAOS-3297 stack #5: ``None`` on every ordinary path, which
+                # keeps the recorder's own "passed"/"not_applicable" default.
+                # Only a demoted-guard terminal names a value here -- a run
+                # that shipped a server-grounded result *because* a guard
+                # rejected the model's summary must not be recorded as
+                # having simply "passed" grounding validation.
+                grounding_validation_status=grounding_validation_status,
             )
             terminal_written = True
             event = OrchestratorEvent(
@@ -1681,6 +1726,18 @@ class DevOrchestrator:
                         )
                     canonical_metrics, canonical_evidence = canonical_data
                     now = datetime.now(UTC)
+                    # CHAOS-3297 stack #5: computed once, into a local, because
+                    # the demoted-guard path below builds a server-owned answer
+                    # from the SAME coverage this candidate is judged against.
+                    # Recomputing it there would be a second producer of the
+                    # run's coverage accounting that could silently disagree
+                    # with the one the validator saw.
+                    server_coverage = self._coverage_with_plan_sources(
+                        self._coverage_from_tool_results(
+                            tuple(tool_requests), tuple(tool_results), now
+                        ),
+                        investigation_result,
+                    )
                     candidate.update(
                         {
                             "schema_version": "dev_answer.v1",
@@ -1704,12 +1761,7 @@ class DevOrchestrator:
                             # required step is judged by the answer contract's
                             # existing completeness invariant rather than
                             # being silently discarded.
-                            "coverage": self._coverage_with_plan_sources(
-                                self._coverage_from_tool_results(
-                                    tuple(tool_requests), tuple(tool_results), now
-                                ),
-                                investigation_result,
-                            ).model_dump(mode="json"),
+                            "coverage": server_coverage.model_dump(mode="json"),
                             "versions": self._versions.model_dump(mode="json"),
                             "model": model.model_dump(mode="json"),
                         }
@@ -1778,6 +1830,41 @@ class DevOrchestrator:
                             # elsewhere (AgentDisambiguation/AgentRefusal
                             # below), not the scarier "validation failed"
                             # error a real grounding violation gets.
+                            #
+                            # CHAOS-3297 stack #5 (guard cutover): demoted
+                            # from answer-blocking to advisory wherever the
+                            # server still holds material of its own. Note
+                            # what this can and cannot reach: `answer.metrics`
+                            # and `answer.evidence` are OVERWRITTEN above with
+                            # the canonical tuples, so this guard only fires
+                            # when BOTH are empty -- the demotion is therefore
+                            # never about the model's citations, and the only
+                            # thing left to ship is the plan's own findings
+                            # (health/deficiency), which ride on the frame.
+                            # When the plan produced none either, there is
+                            # genuinely nothing server-verified to show and
+                            # the run terminates exactly as it does today.
+                            demoted = self._server_grounded_answer(
+                                answer_id=answer_id,
+                                conversation_id=conversation_id,
+                                resolution=resolution,
+                                coverage=server_coverage,
+                                tool_results=tuple(tool_results),
+                                investigation_result=investigation_result,
+                                model=model,
+                                now=now,
+                                cutover_active=self._frame_cutover_active(
+                                    preflight_result
+                                ),
+                            )
+                            if demoted is not None:
+                                return await finish(
+                                    RunState.COMPLETED,
+                                    answer=demoted,
+                                    grounding_validation_status=(
+                                        GUARD_DEMOTED_GROUNDING_FLOOR_STATUS
+                                    ),
+                                )
                             return await finish(
                                 RunState.INSUFFICIENT_EVIDENCE,
                                 error=error(
@@ -1839,10 +1926,68 @@ class DevOrchestrator:
                                 legacy_guard_reason=guard_reason,
                             )
                         else:
-                            code, message = _LEGACY_GUARD_TERMINALS[guard_reason]
+                            # CHAOS-3297 stack #5 (guard cutover, TRD §15
+                            # Phase D). This is the branch where the CHAOS-3289
+                            # backstop still *decides*: a name-specific reason
+                            # on a preflight run that saw an unresolved bare
+                            # name, or any reason at all on the flag-off path.
+                            #
+                            # Frames are now proven end to end (stack #1 makes
+                            # every terminal persist one, stack #3 builds it,
+                            # stack #4 renders it deterministically), so the
+                            # remaining question is no longer "is the model's
+                            # answer trustworthy" -- it is "does the server
+                            # hold anything of its own to show instead". The
+                            # model's prose stays rejected either way; what
+                            # changes is that its rejection no longer erases
+                            # the run's server-verified material.
+                            #
+                            # ``_frame_cutover_active`` is the flag gate:
+                            # ``preflight_result`` is None exactly when
+                            # ``ask_dev_wave_3_1`` is off for this
+                            # organization (production_runtime builds
+                            # preflight/plan_registry/plan_executor together
+                            # or not at all), and that path has no proven
+                            # frame path behind it -- so it keeps every reason
+                            # terminal, exactly as today.
+                            demoted = self._server_grounded_answer(
+                                answer_id=answer_id,
+                                conversation_id=conversation_id,
+                                resolution=resolution,
+                                coverage=server_coverage,
+                                tool_results=tuple(tool_results),
+                                investigation_result=investigation_result,
+                                model=model,
+                                now=now,
+                                cutover_active=self._frame_cutover_active(
+                                    preflight_result
+                                ),
+                            )
+                            if demoted is None:
+                                code, message = _LEGACY_GUARD_TERMINALS[guard_reason]
+                                return await finish(
+                                    RunState.INSUFFICIENT_EVIDENCE,
+                                    error=error(code, message),
+                                )
+                            # Demoted, not deleted: the verdict is recorded on
+                            # the run as a content-free diagnostic (the same
+                            # closed vocabulary the telemetry branch above
+                            # writes), and the terminal marks grounding
+                            # validation as advisory rather than "passed".
+                            await self._recorder.record_preflight(
+                                preflight_outcome=(
+                                    preflight_result.diagnostic
+                                    if preflight_result is not None
+                                    else None
+                                ),
+                                legacy_guard_reason=guard_reason,
+                            )
                             return await finish(
-                                RunState.INSUFFICIENT_EVIDENCE,
-                                error=error(code, message),
+                                RunState.COMPLETED,
+                                answer=demoted,
+                                grounding_validation_status=(
+                                    GUARD_DEMOTED_NAMED_ENTITY_STATUS
+                                ),
                             )
                     return await finish(RunState.COMPLETED, answer=answer)
 
@@ -2531,6 +2676,133 @@ class DevOrchestrator:
                 ):
                     return "narrated_unresolved_entity"
         return None
+
+    @staticmethod
+    def _frame_cutover_active(preflight: SubjectPreflightResult | None) -> bool:
+        """Whether CHAOS-3297's server-owned frame path governs this run.
+
+        A named seam rather than an inline condition, for the same reason
+        ``_legacy_guard_is_terminal`` is one: a mutation test can defeat
+        exactly this decision and observe which acceptance case notices.
+
+        The gate is ``ask_dev_wave_3_1``, not a new flag of this stack's own.
+        ``production_runtime.build_runtime`` constructs ``preflight``,
+        ``plan_registry`` and ``plan_executor`` together under that one org
+        flag or not at all (and ``_wave_3_1_enabled`` fails *closed* to the
+        flag-off path on any error), so ``preflight_result is not None`` is
+        precisely "this organization is in the Wave 3.1 cohort". The
+        flag-off path has no preflight, no plan, and no proven frame
+        pipeline behind it -- demoting its backstop there would widen the
+        cutover past the cohort the rollout gate defines.
+        """
+
+        return preflight is not None
+
+    @staticmethod
+    def _plan_findings_present(
+        investigation_result: DevInvestigationResult | None,
+    ) -> bool:
+        """Whether the plan executor produced any finding the frame carries.
+
+        The health/deficiency findings are server-computed and completely
+        independent of the model's answer -- ``terminal_frames.
+        wrap_legacy_answer_as_frame`` embeds them additively -- so they are
+        substantive material a demoted-guard run can ship even when the
+        model's own answer contributed nothing citable.
+        """
+
+        if investigation_result is None:
+            return False
+        return any(
+            observation.content is not None
+            and (
+                observation.content.health_findings
+                or observation.content.deficiency_findings
+            )
+            for observation in investigation_result.observations
+        )
+
+    def _server_grounded_answer(
+        self,
+        *,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        coverage: DevCoverage,
+        tool_results: tuple[DevToolResult, ...],
+        investigation_result: DevInvestigationResult | None,
+        model: DevModelMetadata,
+        now: datetime,
+        cutover_active: bool,
+    ) -> DevAnswer | None:
+        """The answer a demoted guard firing ships, or ``None`` to fail safe.
+
+        CHAOS-3297 stack #5. Carries ONLY server-owned material: the
+        canonical metrics/evidence the tool registry itself returned (the
+        same tuples ``_canonical_answer_data`` hands the validator, so they
+        are the objects the run actually retrieved, not a re-derivation),
+        the server's own coverage accounting, and -- once ``finish()`` wraps
+        this into a frame -- the plan's health/deficiency findings. The
+        model's ``claims`` and ``direct_summary`` are exactly what the guard
+        rejected and are structurally unreachable from here: this function
+        takes no ``DevAnswer`` parameter at all, so no reviewed-and-rejected
+        prose has a path into what it returns. That mirrors
+        ``narrative_fallback.build_deterministic_fallback_narrative``'s own
+        signature-level guarantee one layer down.
+
+        Returns ``None`` -- meaning "terminate exactly as the pre-cutover
+        code did" -- in three cases, each of which is a case where shipping
+        would be worse than failing:
+
+        * the cutover is not active for this run (``ask_dev_wave_3_1`` off);
+        * the tool results disagree about a canonical object
+          (``_canonical_answer_data`` returns ``None``), which is an
+          integrity failure, not a grounding one;
+        * there is no server-verified material at all -- no canonical
+          metric, no canonical evidence, and no plan finding. An "answer"
+          built from nothing but this module's own copy would be a
+          substantive-looking shell, which is the precise failure the
+          CHAOS-3290 floor exists to prevent.
+        """
+
+        if not cutover_active:
+            return None
+        canonical_data = self._canonical_answer_data(tool_results)
+        if canonical_data is None:
+            return None
+        canonical_metrics, canonical_evidence = canonical_data
+        if not (
+            canonical_metrics
+            or canonical_evidence
+            or self._plan_findings_present(investigation_result)
+        ):
+            return None
+        degraded = any(
+            result.status in {"unavailable", "error"} for result in tool_results
+        )
+        return DevAnswer(
+            schema_version="dev_answer.v1",
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            generated_at=now,
+            resolved_scope=resolution,
+            as_of=now,
+            # Never COMPLETE: a run whose model summary was withheld has by
+            # construction not reported everything it could have, and
+            # COMPLETE additionally asserts every required source was fresh
+            # and available (DevAnswer.validate_answer_invariants).
+            status=AnswerStatus.DEGRADED if degraded else AnswerStatus.PARTIAL,
+            direct_summary=SERVER_GROUNDED_SUMMARY,
+            claims=[],
+            metrics=canonical_metrics,
+            evidence=canonical_evidence,
+            conflicts=[],
+            coverage=coverage,
+            warnings=[SERVER_GROUNDED_WARNING],
+            suggested_follow_up_questions=[],
+            versions=self._versions,
+            model=model,
+        )
 
     @staticmethod
     def _legacy_guard_is_terminal(

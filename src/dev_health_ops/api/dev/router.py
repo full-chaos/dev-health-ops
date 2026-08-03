@@ -684,7 +684,10 @@ def _replayed_result(
         from .contracts_v2.frame import DevAnswerFrame as _DevAnswerFrameV2
         from .contracts_v2.no_answer_policy import NO_ANSWER_OUTCOMES
         from .preflight_outcomes import project_preflight_error
-        from .terminal_frames import tolerant_parse_legacy_frame_payload
+        from .terminal_frames import (
+            is_orchestrator_error_frame,
+            tolerant_parse_legacy_frame_payload,
+        )
 
         # project_preflight_error is only total over the no-answer outcomes
         # plus needs_clarification (CHAOS-3292's ratified vocabulary for a
@@ -758,7 +761,41 @@ def _replayed_result(
                 # object -- so if the frame's fixed reconstruction disagrees
                 # with it, the frame is not authoritative for this run and
                 # the exact-fidelity fallback below wins instead.
-                if run.safe_error_code and error.code != run.safe_error_code:
+                #
+                # CHAOS-3297 stack #5 -- reconciling that rule with
+                # frames-authoritative semantics. Two clauses, deliberately
+                # separate so a mutation can defeat either alone:
+                #
+                # * the ORIGIN clause. "Disagreeing codes" was only ever a
+                #   proxy for "this frame did not author the live copy", and
+                #   it is a coincidence-prone one: `scope_not_found`,
+                #   `internal_error` and `feature_not_enabled` each project
+                #   back to their own code, so the code check passed while
+                #   the replayed *message* was canonical preflight copy the
+                #   orchestrator's own call site never sent (live: "The
+                #   requested scope was not found."; replayed: "No matching
+                #   subject was found for this question."). An
+                #   orchestrator-origin frame is now identified structurally
+                #   -- its frame_id is a pure uuid5 over (run_id, code), see
+                #   terminal_frames.is_orchestrator_error_frame -- and never
+                #   speaks for the v1 error, regardless of whether the
+                #   projected code happens to match.
+                # * the CODE clause, kept as-is: a frame whose origin cannot
+                #   be established but whose projection disagrees is still
+                #   not authoritative.
+                #
+                # What this does NOT change: the frame remains the source of
+                # truth for content wherever content is what is being read.
+                # This branch is specifically the v1 *error* wire shape,
+                # which stack #1 ruled the frame never owns.
+                if run.safe_error_code and (
+                    error.code != run.safe_error_code
+                    or is_orchestrator_error_frame(
+                        frame_id=frame_obj.frame_id,
+                        run_id=str(run.id),
+                        code=run.safe_error_code,
+                    )
+                ):
                     error = _replay_fallback_error(run)
         except ValidationError:
             error = _replay_fallback_error(run)

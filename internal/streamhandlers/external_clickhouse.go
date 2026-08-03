@@ -1,6 +1,7 @@
 package streamhandlers
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -118,11 +119,11 @@ func externalRecordValues(
 		repositorySystem := externalStringDefault(payload, "sourceSystem", system)
 		repoID := externalRepoUUID(repositorySystem, instance, stringField(payload, "externalId"))
 		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
-		settings, err := externalPythonJSON(objectField(payload, "settings"))
+		settings, err := externalPythonCompactJSON(objectField(payload, "settings"))
 		if err != nil {
 			return nil, err
 		}
-		tags, err := externalPythonJSON(stringArrayField(payload, "tags"))
+		tags, err := externalPythonCompactJSON(stringArrayField(payload, "tags"))
 		if err != nil {
 			return nil, err
 		}
@@ -589,6 +590,17 @@ func externalIdentity(provider, raw string) string {
 // JSON is data in ClickHouse rather than a native JSON column, so equivalent
 // but byte-different encodings would otherwise create false parity drift.
 func externalPythonJSON(value any) (string, error) {
+	return externalPythonJSONWithSeparators(value, ", ", ": ")
+}
+
+// externalPythonCompactJSON matches repository_json_or_none, whose explicit
+// separators=(",", ":") contract differs from the default json.dumps shape
+// used by the other Python external-ingest writers.
+func externalPythonCompactJSON(value any) (string, error) {
+	return externalPythonJSONWithSeparators(value, ",", ":")
+}
+
+func externalPythonJSONWithSeparators(value any, itemSeparator, keySeparator string) (string, error) {
 	var output strings.Builder
 	var encode func(any) error
 	encode = func(item any) error {
@@ -598,8 +610,14 @@ func externalPythonJSON(value any) (string, error) {
 		case bool:
 			output.WriteString(strconv.FormatBool(typed))
 		case string:
-			encoded, _ := json.Marshal(typed)
-			output.Write(encoded)
+			var encoded bytes.Buffer
+			encoder := json.NewEncoder(&encoded)
+			encoder.SetEscapeHTML(false)
+			if err := encoder.Encode(typed); err != nil {
+				return err
+			}
+			encodedBytes := bytes.TrimSuffix(encoded.Bytes(), []byte{'\n'})
+			output.Write(encodedBytes)
 		case json.Number:
 			if _, err := typed.Float64(); err != nil {
 				return err
@@ -613,7 +631,7 @@ func externalPythonJSON(value any) (string, error) {
 			output.WriteByte('[')
 			for index, element := range typed {
 				if index > 0 {
-					output.WriteString(", ")
+					output.WriteString(itemSeparator)
 				}
 				if err := encode(element); err != nil {
 					return err
@@ -624,7 +642,7 @@ func externalPythonJSON(value any) (string, error) {
 			output.WriteByte('[')
 			for index, element := range typed {
 				if index > 0 {
-					output.WriteString(", ")
+					output.WriteString(itemSeparator)
 				}
 				if err := encode(element); err != nil {
 					return err
@@ -640,12 +658,12 @@ func externalPythonJSON(value any) (string, error) {
 			output.WriteByte('{')
 			for index, key := range keys {
 				if index > 0 {
-					output.WriteString(", ")
+					output.WriteString(itemSeparator)
 				}
 				if err := encode(key); err != nil {
 					return err
 				}
-				output.WriteString(": ")
+				output.WriteString(keySeparator)
 				if err := encode(typed[key]); err != nil {
 					return err
 				}

@@ -289,24 +289,23 @@ checklist for the remaining 16 GitHub pairs, and difficulty tiers, are in
 
 ## Implementation status for `(github, blame)`
 
-CHAOS-3335 keeps this pair `go_executor: none` and `route_ready: false`.
-Python remains its sole owner; there is no Go route switch or production-binary
-constructor for blame.
+CHAOS-3343 moves this pair to `go_executor: native_go` and
+`route_ready: true`. The independent `WORKER_GITHUB_BLAME_ENABLED` switch is
+false by default in both Python and Go, so landing the capability does not move
+traffic or change deployment ownership.
 
 The checked-in Go foundation can resolve a commit at the claim bound, walk the
 recursive tree, fetch GraphQL blame ranges, expand them to the production
 `git_blame` row shape, and exercise the sink/readback contract. Its 500-file
-resource cap remains unchanged. It is not a complete executor because the
-complete-route collector interface cannot read persisted `git_blame` path
-coverage. Python calls `select_unblamed_paths`, diffs the live tree against
-already-blamed paths, and selects the next 500; blindly fetching every blob or
-retrying the same prefix would diverge and burn provider quota.
-
-The public Go collector therefore fails with
-`ErrGitHubBlameProgressUnavailable` before its first provider request and
-returns no effect or watermark. The pair can claim `native_go` only after a
-tenant-scoped persisted-coverage read seam makes bounded retries advance across
-successive runs and differential cases prove the selection/progress contract.
+resource cap remains unchanged. `GitHubBlameClickHouseCoverage` now reads the
+persisted `(org_id, repo_id, path)` coverage set from `git_blame FINAL`, and the
+handler diffs the live tree against that set before selecting the next 500.
+Successive syncs therefore choose disjoint batches after the preceding effect
+is durable, while an effect failure leaves the same batch eligible for retry.
+Missing, failed, or over-bound coverage reads fail with
+`ErrGitHubBlameProgressUnavailable` before any blame GraphQL request, effect, or
+watermark. A live Python oracle executes `select_unblamed_paths` for empty,
+partial, complete, and bounded inventories.
 
 Readback is a full-order-key point lookup over `git_blame FINAL`, including
 `org_id`; integration tests plant the same natural key under two tenants and
@@ -318,8 +317,9 @@ Foundation normalization parity is executed against the active Python
 `_backfill_github_missing_data` producer rather than a hand-authored expected
 row. The generic oracle derives the compared fields from the live `GitBlame`
 model and executes the real range-expansion/constructor path while replacing
-only provider and sink seams. These proofs make the dormant foundation
-reviewable; they do not constitute an executor or authorize activation.
+only provider and sink seams. Production construction pins the coverage reader,
+handler, effect sink, and readback together under the live lease. Deployment,
+scheduler activation, and migration 0066 remain unchanged.
 
 ## Implementation status for `(github, tests)`
 

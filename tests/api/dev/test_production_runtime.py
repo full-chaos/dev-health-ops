@@ -1649,3 +1649,124 @@ def test_acceptance_candidate_still_fails_closed_without_current_readiness() -> 
 
     assert acceptance(readiness_current=False).usable is False
     assert acceptance(readiness_current=True).usable is True
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3358 (second half): a stale platform record heals itself. The
+# mechanism -- single-flight, throttle, what it writes -- is covered in
+# tests/api/dev/test_platform_auto_certification.py. These are the wiring
+# controls: does live provider resolution actually trigger it, and only when
+# it should.
+# ---------------------------------------------------------------------------
+
+
+def _record_scheduling(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    scheduled: list[int] = []
+
+    def schedule() -> None:
+        scheduled.append(1)
+        return None
+
+    monkeypatch.setattr(
+        production_runtime, "schedule_platform_recertification", schedule
+    )
+    return scheduled
+
+
+@pytest.mark.asyncio
+async def test_a_stale_platform_record_schedules_recertification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    scheduled = _record_scheduling(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = {}
+
+    await production_runtime.resolve_production_provider(
+        cast(Any, object()), org_id="org_01"
+    )
+
+    assert scheduled == [1]
+
+
+@pytest.mark.asyncio
+async def test_a_current_platform_record_schedules_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No pointless probes: a certification that is already current must not
+    re-certify on every question."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    scheduled = _record_scheduling(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = _certified_platform_settings(_fingerprint())
+
+    resolved = await production_runtime.resolve_production_provider(
+        cast(Any, object()), org_id="org_01"
+    )
+
+    assert resolved.source is AgentProviderSource.PLATFORM
+    assert scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_an_unusable_platform_candidate_schedules_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A platform provider with no operator credentials cannot be certified,
+    so scheduling an attempt would just burn a throttle window on a probe
+    that is guaranteed to fail for a reason certification cannot fix."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    scheduled = _record_scheduling(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    for name in ("OPENAI_API_KEY", "LLM_API_KEY", "OPENAI_BASE_URL", "LLM_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    FakeSettingsService.values = {}
+
+    with pytest.raises(DevRuntimeUnavailable):
+        await production_runtime.resolve_production_provider(
+            cast(Any, object()), org_id="org_01"
+        )
+
+    assert scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_certification_paths_never_schedule_recertification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The preflight/certification resolution paths pass certification=True,
+    which makes every candidate read as current -- but they must not be the
+    thing that triggers automatic re-certification either, or a readiness
+    page load would kick off a probe."""
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    monkeypatch.setattr(
+        production_runtime, "_provider", lambda _candidate: FakeProvider()
+    )
+    scheduled = _record_scheduling(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = {}
+
+    await production_runtime.resolve_certification_provider(
+        cast(Any, object()), org_id="org_01"
+    )
+
+    assert scheduled == []

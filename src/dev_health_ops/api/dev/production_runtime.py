@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import logging
 import os
 import uuid
 from collections.abc import Mapping, Sequence
@@ -43,8 +44,10 @@ from dev_health_ops.llm.agent.probes.legacy_agent import _probe_registry, _probe
 from dev_health_ops.llm.agent.readiness import (
     PLATFORM_READINESS_SETTING_KEY,
     PLATFORM_SETTINGS_ORG_ID,
+    AgentReadinessService,
     SettingsAgentReadinessStore,
 )
+from dev_health_ops.llm.agent.role_readiness import RoleReadinessService
 from dev_health_ops.llm.agent.roles import (
     PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
     AgentRole,
@@ -115,6 +118,7 @@ from .native_team_workload import ClickHouseTeamWorkloadSource
 from .operational_deficiency_service import OperationalDeficiencyService
 from .orchestrator import DevRunLimits
 from .org_policy import load_ask_dev_org_policy
+from .platform_auto_certification import schedule_platform_recertification
 from .project_health_service import ProjectHealthService
 from .prompts import LEGACY_PROMPT_VERSION, PROMPT_VERSION
 from .question_interpreter import QuestionInterpreter
@@ -162,6 +166,8 @@ from .work_graph_neighbors_service import (
 from .work_graph_neighbors_service import (
     SCHEMA_VERSION as _WORK_GRAPH_SCHEMA_VERSION,
 )
+
+logger = logging.getLogger(__name__)
 
 _LLM_CATEGORY = SettingCategory.LLM.value
 _METRIC_REGISTRY_VERSION = "ask-dev-metrics.v1"
@@ -308,6 +314,15 @@ async def resolve_production_provider(
         byo_role_profile=byo_role_profile,
         platform_role_profile=platform_role_profile,
     )
+    # CHAOS-3358: a stale platform record no longer blocks this run, so
+    # nothing else would ever notice it had gone stale -- the operator badge
+    # would sit on "stale, run preflight" until a human pressed the button.
+    # Heal it instead. Scheduling is non-blocking, single-flight and
+    # throttled; see platform_auto_certification. Gated on ``usable`` so a
+    # platform provider that is not configured at all (no credentials,
+    # uncertified family, operator "none") never triggers a pointless probe.
+    if platform is not None and platform.usable and not platform.readiness_current:
+        schedule_platform_recertification()
     return _resolve_provider_selection(
         byo=byo,
         platform=platform,
@@ -369,6 +384,104 @@ async def resolve_platform_certification_provider() -> ProductionProviderResolut
     raise DevRuntimeUnavailable(
         "provider_not_configured", "No certified Ask Dev model is ready."
     )
+
+
+async def certify_platform_resolution(
+    session: AsyncSession, resolution: ProductionProviderResolution
+) -> None:
+    """Probe an already-resolved platform provider and persist the verdict.
+
+    This is the ONE implementation of "certify the platform-owned provider
+    and write the record". Both callers share it deliberately: the Platform
+    Admin preflight button (a force-refresh) and the automatic
+    re-certification that CHAOS-3358 triggers when the stored record has gone
+    stale. Two copies of this sequence would be two things to keep in
+    agreement, and the whole point of the automatic path is that the record
+    it writes is indistinguishable from the one the button writes -- same
+    binary ``AgentReadinessRecord``, same per-role ``legacy_agent`` record,
+    same fingerprint.
+
+    The provider probed and the fingerprint written both come off the SAME
+    ``ProductionProviderResolution``, so the record cannot claim a
+    configuration other than the one actually exercised.
+    """
+
+    try:
+        await AgentReadinessService(_platform_readiness_store(session)).certify(
+            resolution.provider,
+            provider_name=resolution.family,
+            model=resolution.model,
+            fingerprint=resolution.readiness_fingerprint,
+        )
+        try:
+            # CHAOS-3285: certify the legacy_agent role in the new per-role
+            # store too, on the same already-resolved provider, so the
+            # per-role projection reflects real preflight results rather
+            # than staying "not_yet_certified" forever. Best-effort: a bug
+            # here must never regress the existing (tested, relied-upon)
+            # binary certify() call above -- certify_legacy_agent already
+            # turns every AgentProviderError into a FAILED/INCOMPATIBLE
+            # record internally, so only a genuinely unexpected failure
+            # (e.g. store I/O) reaches this except.
+            #
+            # CHAOS-3285 round 2 (Codex MEDIUM): the whole attempt runs
+            # inside a SAVEPOINT (begin_nested), never bare. A DB error
+            # caught by a plain except -- without a rollback or savepoint --
+            # leaves the session's transaction unable to accept further
+            # operations; the NEXT query on it raises PendingRollbackError,
+            # and when the request's own session dependency later tries to
+            # commit, THAT failure rolls back the whole transaction --
+            # silently discarding the binary certify() write just above,
+            # despite this being "caught". begin_nested()'s __aexit__ rolls
+            # back only to the savepoint on an exception, leaving the outer
+            # transaction (and the binary write already flushed into it)
+            # intact and the session usable for the rest of this request.
+            async with session.begin_nested():
+                await RoleReadinessService(_platform_role_store(session)).certify_role(
+                    AgentRole.LEGACY_AGENT,
+                    resolution.provider,
+                    certification_key=resolution.readiness_fingerprint,
+                )
+        except Exception:
+            logger.warning(
+                "Failed to certify the legacy_agent role during platform "
+                "Ask Dev preflight",
+                exc_info=True,
+            )
+    finally:
+        try:
+            await resolution.provider.aclose()
+        except Exception:
+            # Best-effort cleanup only: the certify() call above has already
+            # persisted the readiness result (or its own failure state), so a
+            # transport-close error here must never mask that outcome or fail
+            # this request. Still worth knowing about (a leaked connection is
+            # an operational signal), so log it rather than swallow it.
+            logger.warning(
+                "Failed to close platform Ask Dev provider connection after preflight",
+                exc_info=True,
+            )
+
+
+async def certify_platform_provider(session: AsyncSession) -> bool:
+    """Resolve the platform provider and certify it. False when there was
+    nothing to certify.
+
+    The entry point for automatic re-certification (CHAOS-3358), which -- unlike
+    the admin route -- has no request to answer and so resolves the provider
+    itself. A provider that will not resolve at all (unconfigured, or an
+    explicit operator "none") leaves the stored record untouched: the badge
+    already reports that state from the resolution failure itself, and
+    overwriting a real prior verdict with a synthetic one would lose
+    information.
+    """
+
+    try:
+        resolution = await resolve_platform_certification_provider()
+    except DevRuntimeUnavailable:
+        return False
+    await certify_platform_resolution(session, resolution)
+    return True
 
 
 async def resolve_byo_certification_provider(

@@ -287,7 +287,11 @@ async def test_post_succeeds_and_logs_when_provider_close_fails(
     mask the readiness result the caller already committed (CHAOS-3265 /
     CodeQL empty-except finding) -- and must be logged, not silently
     swallowed. Deleting the try/except's log call (or reverting it to a bare
-    `pass`) makes this test fail on the caplog assertion below."""
+    `pass`) makes this test fail on the caplog assertion below.
+
+    CHAOS-3358 moved the certify sequence (and therefore this log call) into
+    production_runtime.certify_platform_resolution, shared with automatic
+    re-certification; the logger name below follows it."""
 
     class CloseFailsProvider(FakeReadinessProvider):
         async def aclose(self) -> None:
@@ -303,9 +307,7 @@ async def test_post_succeeds_and_logs_when_provider_close_fails(
         platform_ask_dev, "resolve_platform_certification_provider", resolve
     )
 
-    with caplog.at_level(
-        "WARNING", logger="dev_health_ops.api.admin.routers.platform_ask_dev"
-    ):
+    with caplog.at_level("WARNING", logger="dev_health_ops.api.dev.production_runtime"):
         posted = await platform_context.client.post(
             "/api/v1/admin/platform/ask-dev/readiness"
         )

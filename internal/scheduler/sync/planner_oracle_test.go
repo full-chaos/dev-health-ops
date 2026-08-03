@@ -30,6 +30,11 @@ type plannerOracleWatermark struct {
 	At         string `json:"at"`
 }
 
+type plannerOracleRoute struct {
+	SourceID    *string  `json:"source_id"`
+	SyncTargets []string `json:"sync_targets"`
+}
+
 type plannerOracleCase struct {
 	ID                      string                   `json:"id"`
 	OrgID                   string                   `json:"org_id"`
@@ -44,6 +49,7 @@ type plannerOracleCase struct {
 	Sources                 []plannerOracleSource    `json:"sources"`
 	Datasets                []plannerOracleDataset   `json:"datasets"`
 	Watermarks              []plannerOracleWatermark `json:"watermarks"`
+	Route                   *plannerOracleRoute      `json:"route,omitempty"`
 }
 
 func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
@@ -80,6 +86,29 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 			Sources:  []plannerOracleSource{{ID: "source-jira", ExternalID: "project", Provider: "jira", FullName: "project"}},
 			Datasets: []plannerOracleDataset{{DatasetKey: "incidents"}},
 		},
+	}
+	routeSource := "source-a"
+	for _, routeCase := range []struct {
+		id      string
+		source  *string
+		targets []string
+	}{
+		{id: "routing_parent_all_enabled", targets: []string{"work-items"}},
+		{id: "routing_child_recognized", source: &routeSource, targets: []string{"work-items"}},
+		{id: "routing_child_unrecognized_fallback", source: &routeSource, targets: []string{"not-a-provider-target"}},
+	} {
+		cases = append(cases, plannerOracleCase{
+			ID: routeCase.id, OrgID: "org-routing", IntegrationID: "integration-routing", Provider: "jira",
+			Mode: SyncModeIncremental, Now: "2026-07-30T12:00:00Z", TierCap: &cap30,
+			Sources: []plannerOracleSource{
+				{ID: "source-a", ExternalID: "project-a", Provider: "jira", FullName: "project-a"},
+				{ID: "source-b", ExternalID: "project-b", Provider: "jira", FullName: "project-b"},
+			},
+			Datasets: []plannerOracleDataset{
+				{DatasetKey: "incidents"}, {DatasetKey: "work-items"}, {DatasetKey: "work-item-labels"},
+			},
+			Route: &plannerOracleRoute{SourceID: routeCase.source, SyncTargets: routeCase.targets},
+		})
 	}
 	allDatasets := []string{
 		"repo-metadata", "commits", "commit-stats", "files", "blame", "prs", "pr-reviews", "pr-comments",
@@ -121,10 +150,20 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 			TierBackfillDaysCap: test.TierCap, WatermarkOverlap: time.Duration(test.WatermarkOverlapSeconds) * time.Second,
 			Watermarks: make(map[WatermarkKey]time.Time),
 		}
+		requested := map[string]bool(nil)
+		if test.Route != nil {
+			requested = requestedDatasetKeys(test.Provider, test.Route.SyncTargets, test.Route.SourceID)
+		}
 		for _, source := range test.Sources {
+			if test.Route != nil && test.Route.SourceID != nil && source.ID != *test.Route.SourceID {
+				continue
+			}
 			input.Sources = append(input.Sources, PlanSource(source))
 		}
 		for _, dataset := range test.Datasets {
+			if requested != nil && !requested[dataset.DatasetKey] {
+				continue
+			}
 			input.Datasets = append(input.Datasets, PlanDataset{Key: dataset.DatasetKey, InitialDepthDays: dataset.InitialDepth})
 		}
 		for _, watermark := range test.Watermarks {

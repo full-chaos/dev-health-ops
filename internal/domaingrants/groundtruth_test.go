@@ -11,7 +11,7 @@ import "testing"
 // Updated for the Option B two-role split. Three things moved:
 // worker_job_routes left the domain role entirely (it is coordinator-exclusive
 // now, so it must be absent from BOTH lists); sync_runs became one of the
-// dual-grant tables and carries UPDATE on the domain side; and DELETE became
+// dual-grant tables and carries INSERT+UPDATE on the domain side; and DELETE became
 // expressible, so the DELETE tables are asserted here rather than being
 // permanently unrepresentable.
 func TestLoadGroundTruth_MatchesKnownShape(t *testing.T) {
@@ -21,7 +21,7 @@ func TestLoadGroundTruth_MatchesKnownShape(t *testing.T) {
 	}
 
 	wantSelectOnly := []string{
-		"integrations", "integration_sources", "integration_datasets",
+		"integrations",
 		"integration_credentials", "sync_dispatch_transport_routes",
 		"sync_configurations", "organizations",
 	}
@@ -52,11 +52,16 @@ func TestLoadGroundTruth_MatchesKnownShape(t *testing.T) {
 		}
 	}
 
-	wantSelectUpdate := []string{"sync_run_units", "sync_runs"}
-	for _, table := range wantSelectUpdate {
-		set := gt.RequiredTablePrivileges[table]
-		if !set.Has(PrivSelect) || !set.Has(PrivUpdate) || set.Has(PrivInsert) {
-			t.Errorf("required: table %q = %+v, want SELECT+UPDATE only", table, set)
+	wantMaterializerDomainWrites := []string{"integration_sources", "integration_datasets", "sync_run_units", "sync_runs"}
+	for _, table := range wantMaterializerDomainWrites {
+		for _, src := range []struct {
+			name string
+			m    map[string]PrivilegeSet
+		}{{"grants", gt.Grants}, {"required", gt.RequiredTablePrivileges}} {
+			set := src.m[table]
+			if !set.Has(PrivSelect) || !set.Has(PrivInsert) || !set.Has(PrivUpdate) || set.Has(PrivDelete) {
+				t.Errorf("%s: table %q = %+v, want SELECT+INSERT+UPDATE", src.name, table, set)
+			}
 		}
 	}
 

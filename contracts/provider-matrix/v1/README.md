@@ -297,21 +297,26 @@ traffic or change deployment ownership.
 The checked-in Go foundation can resolve a commit at the claim bound, walk the
 recursive tree, fetch GraphQL blame ranges, expand them to the production
 `git_blame` row shape, and exercise the sink/readback contract. Its 500-file
-resource cap remains unchanged. `GitHubBlameClickHouseCoverage` now reads the
-persisted `(org_id, repo_id, path)` coverage set from `git_blame FINAL`, and the
-handler diffs the live tree against that set before selecting the next 500.
-Successive syncs therefore choose disjoint batches after the preceding effect
-is durable, while an effect failure leaves the same batch eligible for retry.
+resource cap remains unchanged. `GitHubBlameClickHouseCoverage` reads both the
+persisted `(org_id, repo_id, path)` coverage set from `git_blame FINAL` and the
+separate `github_blame_path_progress` journal. The progress effect is committed
+before `git_blame`, so a retry reconstructs the exact in-flight path set by the
+PostgreSQL effect generation before ordinary coverage selection. Empty files
+advance durably without fabricated line rows. Non-rate-limit per-file failures
+stay retryable and rotate behind never-attempted paths; provider rate limits
+still abort the whole unit. Successive syncs therefore advance without either
+manifest conflicts or permanently unblameable-path starvation.
 Missing, failed, or over-bound coverage reads fail with
 `ErrGitHubBlameProgressUnavailable` before any blame GraphQL request, effect, or
 watermark. A live Python oracle executes `select_unblamed_paths` for empty,
 partial, complete, and bounded inventories.
 
 Readback is a full-order-key point lookup over `git_blame FINAL`, including
-`org_id`; integration tests plant the same natural key under two tenants and
-prove each owner sees only its row. A separate PostgreSQL + ClickHouse crash
-test proves that a write accepted before process death is reconciled as exact
-and marked committed without inserting a duplicate physical version.
+`org_id`; integration tests cover both cross-tenant natural-key collisions and
+same-organization cross-repository progress isolation. A separate PostgreSQL +
+ClickHouse production-executor crash test proves that ordered progress and
+blame writes accepted before process death are reconciled as exact without
+inserting a duplicate physical version.
 
 Foundation normalization parity is executed against the active Python
 `_backfill_github_missing_data` producer rather than a hand-authored expected

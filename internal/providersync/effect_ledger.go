@@ -118,7 +118,7 @@ func NewEffectLedgerState(
 	}
 	batches = append([]EffectBatch(nil), batches...)
 	sort.Slice(batches, func(left, right int) bool {
-		return batches[left].Destination < batches[right].Destination
+		return effectBatchLess(batches[left], batches[right])
 	})
 	state := EffectLedgerState{
 		SchemaVersion: "v1", Generation: claim.GenerationKey(),

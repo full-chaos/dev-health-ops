@@ -15,6 +15,8 @@
     "original_defect_reproduction": 5,
     "real_project_positive_control": 1
   },
+  "stale_row_count": 0,
+  "stale_rows": {},
   "items": [
     {
       "id": "attack.missing-data",
@@ -32,7 +34,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "attack.runtime-divergence",
@@ -44,7 +47,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "attack.team-attribution",
@@ -60,7 +64,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "attack.team-attribution.e2e-blocked-by-live-defect",
@@ -83,7 +88,8 @@
         "answer_status_is_degraded",
         "metrics_empty_for_team_scope",
         "limitation_names_unavailable_metric_source"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "attack.unrelated-evidence.availability",
@@ -102,7 +108,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "attack.unrelated-evidence.e2e-live-validated",
@@ -120,7 +127,8 @@
       "required_assertion_names": [
         "named_repository_committed",
         "unrelated_repo_excluded_from_named_answer"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "attack.unrelated-evidence.exclusion",
@@ -136,7 +144,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.ambiguous-candidate-selection",
@@ -152,7 +161,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.cross-tenant-identifier-change",
@@ -168,7 +178,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.data-trust-organization-wide",
@@ -187,7 +198,8 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "answer_summary_not_empty"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.exact-project-complete",
@@ -206,7 +218,8 @@
         "named_repository_committed",
         "evidence_is_linked_to_the_committed_subject",
         "answer_status_not_error"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.legitimate-org-wide-status",
@@ -222,7 +235,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.light-on-feature-work",
@@ -234,7 +248,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.light-on-feature-work-unclassified",
@@ -250,7 +265,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.multi-metric-comparison-organization-wide",
@@ -270,7 +286,8 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "stream_terminated_as_answer"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.multi-metric-comparison-stale-source",
@@ -282,7 +299,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.no-authorized-match",
@@ -298,7 +316,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.observed-change-comparison-windows",
@@ -314,7 +333,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.operational-deficiencies-mixed",
@@ -331,7 +351,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.operational-deficiency.e2e-live-validated",
@@ -354,7 +375,8 @@
         "preflight_proceeded_committed_subject",
         "claimed_plan_step_completed",
         "stream_terminated_as_answer"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.organization-portfolio-status",
@@ -366,7 +388,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.overburdened-teams-with-denominators",
@@ -382,7 +405,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.pressure-without-denominator",
@@ -398,7 +422,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.prohibited-write-request",
@@ -414,7 +439,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.project-health-mixed-dimensions",
@@ -430,7 +456,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.project-health-unknown-not-applicable",
@@ -442,7 +469,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.project-incomplete-required-children",
@@ -458,7 +486,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.project-source-unavailable-qualified",
@@ -474,7 +503,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.project-stale-required-source",
@@ -490,7 +520,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.provider-narrative-failure-after-frame",
@@ -507,7 +538,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.registered-metric-catalog",
@@ -527,7 +559,8 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "answer_summary_not_empty"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.remaining-work-exact-project",
@@ -546,7 +579,8 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "answer_summary_not_empty"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.struggling-teams-insufficient-sample",
@@ -562,7 +596,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.struggling-teams-positive",
@@ -578,7 +613,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.team-health-complete-attribution",
@@ -594,7 +630,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.team-health-unattributable-signals",
@@ -610,7 +647,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.team-health.e2e-live-validated",
@@ -633,7 +671,8 @@
         "preflight_proceeded_committed_subject",
         "claimed_plan_step_completed",
         "stream_terminated_as_answer"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.team-workload-balance.e2e-live-validated",
@@ -656,7 +695,8 @@
         "preflight_proceeded_committed_subject",
         "claimed_plan_step_completed",
         "stream_terminated_as_answer"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "matrix.unwired-intent-safe-fallback",
@@ -673,7 +713,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "gate.content-security-audit",
@@ -685,7 +726,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "gate.deterministic",
@@ -701,7 +743,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "gate.migration-coexistence",
@@ -713,7 +756,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "gate.plan-registry-gap-is-loud",
@@ -730,7 +774,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "gate.plan-registry-gap-is-loud.e2e-live-validated",
@@ -751,7 +796,8 @@
         "answer_status_is_exactly_partial",
         "stream_terminated_as_answer",
         "warnings_present_but_not_a_plan_registry_gap_signal"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "gate.repeated-certified-provider",
@@ -763,7 +809,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "gate.web-default-ci",
@@ -775,7 +822,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.burden-without-denominator",
@@ -792,7 +840,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.bypass-subject-preflight",
@@ -809,7 +858,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.completion-without-denominator",
@@ -825,7 +875,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.disable-deterministic-fallback",
@@ -842,7 +893,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.duplicate-run-on-reconnect",
@@ -854,7 +906,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.expose-forbidden-or-not-found",
@@ -870,7 +923,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.mutate-fixture-differently-go-python",
@@ -882,7 +936,8 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.no-data-to-zero",
@@ -898,7 +953,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.remove-mention-from-set",
@@ -914,7 +970,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.remove-relationship-filtering",
@@ -930,7 +987,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.restore-org-fallback",
@@ -946,7 +1004,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "mutation.single-signal-struggling-team",
@@ -962,7 +1021,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "defect.ask-dev-exact-commit",
@@ -978,7 +1038,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "defect.ask-dev-exact-commit.e2e-live-validated",
@@ -1000,7 +1061,8 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "stream_terminated_as_answer"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "defect.ask-dev-not-found",
@@ -1017,7 +1079,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "defect.ask-dev-not-found.e2e-live-validated",
@@ -1038,7 +1101,8 @@
         "error_code_is_scope_not_found",
         "no_answer_produced",
         "safe_message_does_not_name_subject"
-      ]
+      ],
+      "stale_dependencies": []
     },
     {
       "id": "defect.no-org-fallback-or-blank",
@@ -1056,7 +1120,8 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": []
+      "required_assertion_names": [],
+      "stale_dependencies": []
     },
     {
       "id": "positive-control.real-project-status",
@@ -1076,7 +1141,8 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "answer_summary_not_empty"
-      ]
+      ],
+      "stale_dependencies": []
     }
   ]
 }

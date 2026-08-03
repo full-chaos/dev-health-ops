@@ -1540,7 +1540,13 @@ def test_build_report_shape_over_the_real_manifest() -> None:
             "requires_live_infra",
             "execution_artifact",
             "required_assertion_names",
+            "stale_dependencies",
         }
+    # Staleness is reported at the top level too, so a reader scanning the
+    # tally cannot miss it -- see DECLARED_STALE_ARTIFACTS.
+    assert isinstance(report["stale_row_count"], int)
+    assert isinstance(report["stale_rows"], dict)
+    assert report["stale_row_count"] == len(report["stale_rows"])
     # JSON-round-trippable -- a report a downstream tool cannot parse is not
     # a machine-readable deliverable.
     json.dumps(report)

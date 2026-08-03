@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from dev_health_ops.db import normalize_sync_postgres_uri
 from dev_health_ops.models import (
     Base,
     Integration,
@@ -24,6 +25,7 @@ from dev_health_ops.models import (
     SyncWatermark,
 )
 from dev_health_ops.models.licensing import OrgLicense
+from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.models.users import Organization
 from dev_health_ops.sync import planner
 from dev_health_ops.sync.dispatch_outbox import (
@@ -33,7 +35,21 @@ from dev_health_ops.sync.dispatch_outbox import (
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
+_POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 ORG_ID = "planner-org"
+
+
+def _require_postgres_test_uri() -> None:
+    if os.getenv(_POSTGRES_TEST_URI_ENV):
+        return
+    if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+        pytest.fail(f"{_POSTGRES_TEST_URI_ENV} must be configured for PostgreSQL tests")
+    pytest.skip(f"requires {_POSTGRES_TEST_URI_ENV}")
+
+
+@pytest.fixture(scope="module")
+def require_postgres_test_uri() -> None:
+    _require_postgres_test_uri()
 
 
 @pytest.fixture
@@ -970,10 +986,7 @@ def test_plan_sync_run_succeeds_when_tier_limits_unavailable(db_session, monkeyp
     )
 
 
-@pytest.mark.skipif(
-    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
-    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
-)
+@pytest.mark.usefixtures("require_postgres_test_uri")
 def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
     """CHAOS-2580: a pre-migration Postgres tier_limits miss must not poison planning.
 

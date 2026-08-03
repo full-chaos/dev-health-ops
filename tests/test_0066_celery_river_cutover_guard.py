@@ -112,3 +112,24 @@ def test_missing_postgres_test_uri_fails_in_ci(
 
     with pytest.raises(pytest.fail.Exception, match=_POSTGRES_TEST_URI_ENV):
         postgres_tests._require_postgres_test_uri()
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    (
+        "tests.test_dispatch_outbox",
+        "tests.test_sync_reconciler",
+        "tests.test_sync_planner",
+        "tests.test_service_credentials_cli",
+    ),
+)
+def test_known_postgres_tests_fail_in_ci_without_uri(
+    monkeypatch: pytest.MonkeyPatch,
+    module_name: str,
+) -> None:
+    postgres_tests = importlib.import_module(module_name)
+    monkeypatch.delenv(_POSTGRES_TEST_URI_ENV, raising=False)
+    monkeypatch.setenv("CI", "true")
+
+    with pytest.raises(pytest.fail.Exception, match=_POSTGRES_TEST_URI_ENV):
+        postgres_tests._require_postgres_test_uri()

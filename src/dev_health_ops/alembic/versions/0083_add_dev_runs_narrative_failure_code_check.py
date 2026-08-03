@@ -80,9 +80,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
-        op.execute(
+        op.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"ALTER TABLE {_TABLE} DROP CONSTRAINT {_CONSTRAINT}"
-        )  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        )
     else:
         with op.batch_alter_table(_TABLE) as batch:
             batch.drop_constraint(_CONSTRAINT, type_="check")

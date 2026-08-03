@@ -83,13 +83,16 @@ func openLoopReadiness(t *testing.T, registry *health.Registry) {
 	}
 }
 
-func waitForLoopReadiness(t *testing.T, registry *health.Registry, wantReady bool) health.Readiness {
+func waitForLoopReadiness(t *testing.T, loop *Loop, registry *health.Registry, wantReady bool) health.Readiness {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	var status health.Readiness
 	for time.Now().Before(deadline) {
 		status = registry.Readiness(context.Background())
-		if status.Ready == wantReady {
+		loop.mu.Lock()
+		up := loop.up
+		loop.mu.Unlock()
+		if status.Ready == wantReady && up == wantReady {
 			return status
 		}
 		time.Sleep(time.Millisecond)
@@ -224,7 +227,8 @@ func TestLoopFailureBacksOffClosesReadinessAndRecovers(t *testing.T) {
 	clock.mu.Unlock()
 	ticker.ticks <- firstTick
 	<-failed
-	if status := waitForLoopReadiness(t, registry, false); !strings.Contains(strings.Join(status.Failed, ","), "scheduler_loop") {
+	status := waitForLoopReadiness(t, loop, registry, false)
+	if status.Ready || !strings.Contains(strings.Join(status.Failed, ","), "scheduler_loop") {
 		t.Fatalf("failed readiness = %#v", status)
 	}
 	var failedMetrics bytes.Buffer
@@ -247,7 +251,7 @@ func TestLoopFailureBacksOffClosesReadinessAndRecovers(t *testing.T) {
 	clock.mu.Unlock()
 	ticker.ticks <- retryTick
 	<-recovered
-	waitForLoopReadiness(t, registry, true)
+	waitForLoopReadiness(t, loop, registry, true)
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}

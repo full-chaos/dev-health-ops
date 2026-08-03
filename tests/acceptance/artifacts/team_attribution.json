@@ -1,0 +1,266 @@
+{
+  "schema_version": "ask_dev_acceptance_artifact.v1",
+  "scenario_id": "team_attribution",
+  "tree_clean": true,
+  "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "script": "scripts/acceptance/smoke_ask_dev_team_attribution.py",
+  "script_sha256": "2254cefd6798085e1a3e4766f14e6beb9c14a5f158ef808abc6eef31eaecfc63",
+  "commit_sha": "ef7e977215b14beed604383eb22c739c322d8c6d",
+  "command": "python smoke_ask_dev_team_attribution.py",
+  "started_at": "2026-08-03T01:19:31.494554+00:00",
+  "finished_at": "2026-08-03T01:19:32.528122+00:00",
+  "status": "passed",
+  "error": null,
+  "assertions": [
+    {
+      "name": "login_response_is_object",
+      "passed": true,
+      "detail": "{'access_token': '[REDACTED_JWT]', 'refresh_token': '[REDACTED_JWT]', 'token_type': 'bearer', 'expires_in': 3600, 'needs_onboarding': False, 'user': {'id': 'dcf27b0d-59ff-5f45-b094-fccbe1e7aa1b', 'email': 'admin@devhealth.example', 'username': 'admin', 'full_name': 'Onboarded Admin Fixture User', 'org_id': '0a155cab-8833-42ac-a4ef-0d121725a7b0', 'role': 'owner', 'is_superuser': True}}"
+    },
+    {
+      "name": "login_returned_access_token",
+      "passed": true,
+      "detail": "login returned no access token"
+    },
+    {
+      "name": "login_returned_user",
+      "passed": true,
+      "detail": "login returned no user"
+    },
+    {
+      "name": "login_returned_org_id",
+      "passed": true,
+      "detail": "login returned no org_id"
+    },
+    {
+      "name": "feature_flags_is_list",
+      "passed": true,
+      "detail": "response was not a list"
+    },
+    {
+      "name": "wave_3_1_flag_registered",
+      "passed": true,
+      "detail": "feature flag ask_dev_wave_3_1 is not registered"
+    },
+    {
+      "name": "feature_overrides_is_list",
+      "passed": true,
+      "detail": "response was not a list"
+    },
+    {
+      "name": "conversation_response_is_object",
+      "passed": true,
+      "detail": "conversation response was not an object"
+    },
+    {
+      "name": "conversation_id_present",
+      "passed": true,
+      "detail": "conversation response returned no conversation_id"
+    },
+    {
+      "name": "sse_request_authenticated",
+      "passed": true,
+      "detail": "SSE request requires authentication"
+    },
+    {
+      "name": "sse_content_type",
+      "passed": true,
+      "detail": "unexpected SSE type text/event-stream"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE run.started frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE scope.resolved frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE warning frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE warning frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE answer.completed frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE done frame omitted data"
+    },
+    {
+      "name": "scope_resolved_event_present",
+      "passed": true,
+      "detail": "expected a scope.resolved event committing the named team subject"
+    },
+    {
+      "name": "named_team_committed",
+      "passed": true,
+      "detail": "the named team subject was never committed to the resolved scope"
+    },
+    {
+      "name": "no_internal_error_event",
+      "passed": true,
+      "detail": "CHAOS-3332 regression: team-subject question crashed to internal_error again (None)"
+    },
+    {
+      "name": "answer_completed_event_present",
+      "passed": true,
+      "detail": "expected a real answer (possibly degraded) for a named team subject, not a blank/refused/error result"
+    },
+    {
+      "name": "answer_status_not_hard_error",
+      "passed": true,
+      "detail": "expected a degraded-but-honest answer, got status='degraded'"
+    },
+    {
+      "name": "answer_status_is_degraded",
+      "passed": true,
+      "detail": "expected status='degraded' per CHAOS-3333, got 'degraded'"
+    },
+    {
+      "name": "metrics_empty_for_team_scope",
+      "passed": true,
+      "detail": "expected no metrics for a TEAM-scoped answer, got 0"
+    },
+    {
+      "name": "limitation_names_unavailable_metric_source",
+      "passed": true,
+      "detail": "expected coverage.unavailable_required_sources to name the unavailable metric source, got ['query_metric.v1']"
+    },
+    {
+      "name": "stream_terminated_as_answer",
+      "passed": true,
+      "detail": "stream did not terminate as answer"
+    }
+  ]
+}

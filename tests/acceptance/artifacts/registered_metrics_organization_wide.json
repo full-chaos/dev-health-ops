@@ -1,0 +1,136 @@
+{
+  "schema_version": "ask_dev_acceptance_artifact.v1",
+  "scenario_id": "registered_metrics_organization_wide",
+  "tree_clean": true,
+  "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "script": "scripts/acceptance/smoke_ask_dev_core_intents.py",
+  "script_sha256": "d433ff3432b7415609a1a7231fb8a80ccf7ad86de28260f566a61e9dd073cbd1",
+  "commit_sha": "ef7e977215b14beed604383eb22c739c322d8c6d",
+  "command": "python smoke_ask_dev_core_intents.py",
+  "started_at": "2026-08-03T01:19:05.109041+00:00",
+  "finished_at": "2026-08-03T01:19:05.531366+00:00",
+  "status": "passed",
+  "error": null,
+  "assertions": [
+    {
+      "name": "conversation_response_is_object",
+      "passed": true,
+      "detail": "conversation response was not an object"
+    },
+    {
+      "name": "conversation_id_present",
+      "passed": true,
+      "detail": "conversation response returned no conversation_id"
+    },
+    {
+      "name": "sse_request_authenticated",
+      "passed": true,
+      "detail": "SSE request requires authentication"
+    },
+    {
+      "name": "sse_content_type",
+      "passed": true,
+      "detail": "unexpected SSE type text/event-stream"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE run.started frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE scope.resolved frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE answer.completed frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE done frame omitted data"
+    },
+    {
+      "name": "answer_completed_event_present",
+      "passed": true,
+      "detail": "no answer completed"
+    },
+    {
+      "name": "answer_status_not_error",
+      "passed": true,
+      "detail": "Ask Dev returned an error-status answer"
+    },
+    {
+      "name": "answer_summary_not_empty",
+      "passed": true,
+      "detail": "answer summary was empty"
+    },
+    {
+      "name": "stream_terminated_as_answer",
+      "passed": true,
+      "detail": "stream did not terminate as answer"
+    }
+  ]
+}

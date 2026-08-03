@@ -664,6 +664,16 @@ class DevCoverage(ContractModel):
         default_factory=list, max_length=25
     )
     stale_required_sources: list[OpaqueID] = Field(default_factory=list, max_length=25)
+    #: Required sources that returned real data whose completeness cannot be
+    #: established -- distinct from stale, which asserts the data is old
+    #: (CHAOS-3334 codex review). A degraded status snapshot means one of its
+    #: contributing sources was *unavailable*, and a metric reporting
+    #: insufficient evidence can carry ``FreshnessState.FRESH``; filing either
+    #: under ``stale_required_sources`` tells a client the wrong failure
+    #: cause. Blocks a ``complete`` answer exactly as the other two lists do.
+    degraded_required_sources: list[OpaqueID] = Field(
+        default_factory=list, max_length=25
+    )
     as_of: AwareDatetime
 
     @model_validator(mode="after")
@@ -734,6 +744,7 @@ class DevAnswer(ContractModel):
             self.coverage.available_source_count != self.coverage.required_source_count
             or self.coverage.unavailable_required_sources
             or self.coverage.stale_required_sources
+            or self.coverage.degraded_required_sources
         ):
             raise ValueError(
                 "complete answer requires all required sources fresh and available"

@@ -149,8 +149,28 @@ def test_tolerant_parse_changes_nothing_else() -> None:
     frame = DevAnswerFrame.model_validate(patched)
     reserialized = frame.model_dump(mode="json")
     for key, value in original.items():
-        if key != "metrics":
-            assert reserialized[key] == value, key
+        if key in {"metrics", "coverage"}:
+            continue
+        assert reserialized[key] == value, key
+
+    # ``coverage`` gained ``degraded_required_sources`` additively in
+    # CHAOS-3334 -- the same shape as this branch's own
+    # ``evidence_classification``: a new optional field with a default, no
+    # ``schema_version`` bump. The version-skew posture this suite exists to
+    # protect is that a pre-existing payload still *validates and replays*,
+    # not that serialization is frozen; so the check here is the stronger,
+    # more specific one rather than a blanket skip -- every original coverage
+    # key keeps its exact value, and the only addition is the new key at its
+    # empty default (a legacy frame cannot have known about a degraded
+    # required source, so anything else here would be fabricated disclosure).
+    original_coverage = original["coverage"]
+    reserialized_coverage = reserialized["coverage"]
+    for key, value in original_coverage.items():
+        assert reserialized_coverage[key] == value, f"coverage.{key}"
+    assert set(reserialized_coverage) - set(original_coverage) == {
+        "degraded_required_sources"
+    }
+    assert reserialized_coverage["degraded_required_sources"] == []
 
 
 def test_tolerant_parse_does_not_touch_a_metric_with_real_evidence() -> None:

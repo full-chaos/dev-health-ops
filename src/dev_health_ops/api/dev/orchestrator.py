@@ -2280,7 +2280,8 @@ class DevOrchestrator:
 
         unavailable = list(coverage.unavailable_required_sources)
         stale = list(coverage.stale_required_sources)
-        seen = set(unavailable) | set(stale)
+        degraded = list(coverage.degraded_required_sources)
+        seen = set(unavailable) | set(stale) | set(degraded)
         required_added = 0
         available_added = 0
         for observation in investigation_result.observations:
@@ -2297,13 +2298,15 @@ class DevOrchestrator:
                 if label not in seen:
                     unavailable.append(label)
                     seen.add(label)
-            elif observation.observed_state in {
-                SourceRequirementState.AVAILABLE_STALE,
-                SourceRequirementState.AVAILABLE_UNKNOWN,
-            }:
+            elif observation.observed_state is SourceRequirementState.AVAILABLE_STALE:
                 available_added += 1
                 if label not in seen:
                     stale.append(label)
+                    seen.add(label)
+            elif observation.observed_state is SourceRequirementState.AVAILABLE_UNKNOWN:
+                available_added += 1
+                if label not in seen:
+                    degraded.append(label)
                     seen.add(label)
             else:
                 available_added += 1
@@ -2332,6 +2335,7 @@ class DevOrchestrator:
             ),
             unavailable_required_sources=unavailable[:25],
             stale_required_sources=stale[:25],
+            degraded_required_sources=degraded[:25],
             as_of=coverage.as_of,
         )
 

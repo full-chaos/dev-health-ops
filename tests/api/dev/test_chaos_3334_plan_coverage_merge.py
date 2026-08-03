@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import tempfile
 import uuid
 from collections.abc import Callable
 from copy import deepcopy
@@ -37,8 +38,10 @@ import pytest
 from pydantic import ValidationError
 
 from dev_health_ops.api.dev import orchestrator as orchestrator_module
+from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import (
     AnswerStatus,
+    DevAnswer,
     DevCoverage,
     DevError,
     FreshnessState,
@@ -67,6 +70,7 @@ from dev_health_ops.api.dev.orchestrator import DevOrchestrator
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.scope_service import AuthorizedEntity, EntityKind
 from dev_health_ops.api.dev.status_change_service import StatusResultState
+from dev_health_ops.api.dev.terminal_frames import wrap_legacy_answer_as_frame
 from dev_health_ops.api.dev.work_graph_neighbors_service import WorkGraphResultState
 from dev_health_ops.llm.agent.contracts import (
     AgentFinalAnswer,
@@ -150,6 +154,22 @@ class _MetricRuntime(FakePlanExecutorRuntime):
     def __init__(self, state: MetricDataState) -> None:
         super().__init__()
         self._metric_state = state
+
+    def sample_result(self) -> MetricQueryResult:
+        """The exact result ``query_metric`` returns, for assertions."""
+        return MetricQueryResult(
+            definition=METRIC_REGISTRY[MetricID.ITEMS_COMPLETED],
+            state=self._metric_state,
+            freshness=FreshnessState.FRESH,
+            values=(),
+            coverage=1.0,
+            current_window_start=_METRIC_WINDOW,
+            current_window_end=_METRIC_WINDOW,
+            comparison_window_start=None,
+            comparison_window_end=None,
+            watermark=_METRIC_WINDOW,
+            source_refs=(),
+        )
 
     async def query_metric(self, **kwargs: Any) -> MetricQueryResult:
         self.query_metric_calls += 1
@@ -638,6 +658,44 @@ async def test_metric_insufficient_evidence_refuses_complete(
     assert output.result.state is expected_state
 
 
+def _production_callers_of(root: Path, symbol: str) -> list[str]:
+    """Modules under ``root`` that import or reference ``symbol``.
+
+    Alias-proof by keying on ``ImportFrom``'s ``alias.name`` -- the AST
+    records the *imported* symbol even when ``as`` rebinds it locally -- plus
+    direct ``Name``/``Attribute`` references for module-qualified calls
+    (``state_mapping.symbol(...)``). The module that defines the symbol is
+    excluded; every other reference counts, because importing it at all is
+    the coupling this pin cares about.
+    """
+
+    callers: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        defines = any(
+            isinstance(node, ast.FunctionDef) and node.name == symbol
+            for node in ast.walk(tree)
+        )
+        if defines:
+            continue
+        referenced = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and any(
+                alias.name == symbol for alias in node.names
+            ):
+                referenced = True
+                break
+            if isinstance(node, ast.Name) and node.id == symbol:
+                referenced = True
+                break
+            if isinstance(node, ast.Attribute) and node.attr == symbol:
+                referenced = True
+                break
+        if referenced:
+            callers.append(path.relative_to(root).as_posix())
+    return callers
+
+
 def test_available_unknown_has_no_healthy_producer() -> None:
     """The trace behind choosing BLOCK over split-by-cause (codex finding 2).
 
@@ -674,28 +732,176 @@ def test_available_unknown_has_no_healthy_producer() -> None:
 
     # The freshness mapper is the only one whose AVAILABLE_UNKNOWN would mean
     # "healthy", so its reachability is the whole basis for blocking. Assert
-    # it is still uncalled -- via the AST, not a text scan: this module's own
-    # docstrings name the function while explaining the decision, and a
-    # substring search counts that prose as a caller (it did, on the first
-    # attempt).
-    package = Path(orchestrator_module.__file__).parent
-    callers = []
-    for path in sorted(package.rglob("*.py")):
-        if path.name == "state_mapping.py":
-            continue
-        tree = ast.parse(path.read_text())
-        referenced = any(
-            (isinstance(node, ast.Name) and node.id == _FRESHNESS_MAPPER)
-            or (isinstance(node, ast.Attribute) and node.attr == _FRESHNESS_MAPPER)
-            for node in ast.walk(tree)
-        )
-        if referenced:
-            callers.append(path.relative_to(package).as_posix())
+    # it is still uncalled across the ENTIRE src tree.
+    #
+    # Detection is via the AST, not a text scan: this module's own docstrings
+    # name the function while explaining the decision, and a substring search
+    # counts that prose as a caller (it did, on the first attempt).
+    #
+    # And it keys on ``alias.name`` in ImportFrom, not on the local binding.
+    # A plain ``import ... as map_freshness`` rebinds the symbol, so a
+    # detector that only looks for Name/Attribute nodes matching the original
+    # spelling returns False on it -- verified against a synthetic module
+    # below, because a pin that cannot see the most obvious evasion is not a
+    # pin. The ImportFrom node still records the *imported* name regardless of
+    # the alias, which is what makes this alias-proof.
+    #
+    # tests/ is deliberately out of scope: this suite itself calls the mapper
+    # through ``_STATE_MAPPERS`` to build the producer table above. What the
+    # blocking decision depends on is whether *production* can emit the state.
+    src_root = Path(orchestrator_module.__file__).parents[3]
+    assert src_root.name == "src", f"expected the src root, got {src_root}"
+    callers = _production_callers_of(src_root, _FRESHNESS_MAPPER)
+
     assert callers == [], (
         "freshness_state_to_requirement_state now has callers; an "
         "AVAILABLE_UNKNOWN that means 'healthy but unproven freshness' is "
         "reachable, so _coverage_with_plan_sources must split the state by "
         "cause instead of blocking it wholesale"
+    )
+
+    # Non-vacuity: the same scan must FIND an aliased caller when one exists,
+    # otherwise a broken scan (wrong root, silent parse failure) reads as
+    # "no callers" forever.
+    with tempfile.TemporaryDirectory() as raw:
+        probe_root = Path(raw)
+        package = probe_root / "some_other_package"
+        package.mkdir()
+        (package / "__init__.py").write_text("")
+        (package / "aliased.py").write_text(
+            "from dev_health_ops.api.dev.investigation_plans.state_mapping "
+            f"import {_FRESHNESS_MAPPER} as map_freshness\n\n"
+            "def use(x):\n    return map_freshness(x)\n"
+        )
+        assert _production_callers_of(probe_root, _FRESHNESS_MAPPER) == [
+            "some_other_package/aliased.py"
+        ]
+
+
+@pytest.mark.parametrize(
+    ("label", "runtime_factory", "source_label"),
+    [
+        pytest.param(
+            "degraded-status",
+            lambda: FakePlanExecutorRuntime(status_state=StatusResultState.DEGRADED),
+            STATUS_SOURCE_LABEL,
+            id="degraded-status-snapshot",
+        ),
+        pytest.param(
+            "insufficient-metric",
+            lambda: _MetricRuntime(MetricDataState.INSUFFICIENT_EVIDENCE),
+            "work_item",
+            id="fresh-insufficient-evidence-metric",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_degraded_source_is_disclosed_as_degraded_not_stale(
+    label: str, runtime_factory: Any, source_label: str
+) -> None:
+    """The disclosure must name the real failure cause (codex re-verify MED 1).
+
+    Both producers below block a ``complete`` answer, which the tests above
+    already prove. This one is about *what the client is told*: filing them
+    under ``stale_required_sources`` asserts the data is old, and for neither
+    of them is that true.
+
+    * a DEGRADED status snapshot means one of its contributing sources was
+      **unavailable** -- nothing about age;
+    * a metric reporting INSUFFICIENT_EVIDENCE can carry
+      ``FreshnessState.FRESH``, which this test pins directly rather than
+      assuming, so "stale" would be flatly contradicted by the run's own
+      freshness value.
+
+    Mutation kill site: routing AVAILABLE_UNKNOWN back into
+    ``stale_required_sources`` fails this at the stale-list assertion.
+    """
+
+    runtime = runtime_factory()
+    is_metric = isinstance(runtime, _MetricRuntime)
+    if is_metric:
+        # Pinned, not assumed: the whole finding rests on this result being
+        # fresh while reporting insufficient evidence.
+        assert runtime.sample_result().freshness is FreshnessState.FRESH
+        output = await run_preflight_orchestrator(
+            question=(
+                "How does items completed compare to the previous period "
+                "for the Ask Dev project?"
+            ),
+            entities=[(ORG_ID, ASK_DEV_PROJECT)],
+            script_id=f"chaos3334-truthful-{label}",
+            script=_script("partial"),
+            requested_metric_ids=["items_completed"],
+            recorder_factory=InvestigationRecorder,
+            plan_registry=CORE_PLANS_BY_INTENT,
+            plan_executor=executor_for(runtime),
+        )
+    else:
+        output = await _plan_run(
+            runtime=runtime,
+            status="partial",
+            script_id=f"chaos3334-truthful-{label}",
+        )
+
+    result = output.result
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    coverage = result.answer.coverage
+    assert source_label in coverage.degraded_required_sources
+    assert source_label not in coverage.stale_required_sources
+    assert source_label not in coverage.unavailable_required_sources
+
+
+def test_every_coverage_bucket_survives_v1_to_v2_projection() -> None:
+    """Each bucket reaches the v2 frame naming the source that actually failed.
+
+    Codex's finding was that the *bucket* must be preserved through
+    projection; measuring it turned up a second defect one layer down.
+    ``_source_class_for_legacy_token`` understood only ``ToolID`` tokens, so
+    every plan-sourced label -- which is a ``SourceClass`` value, not a tool
+    id -- fell through to the fallback and every frame reported
+    ``source_health`` regardless of which source degraded. Both grammars are
+    now resolved, and this pins each bucket carrying a *distinct* class so a
+    regression that collapses them cannot pass.
+
+    Built on the canonical ``dev_answer.v1`` fixture with its content
+    collections emptied: the fixture's own evidence ids are shorter than the
+    v2 contract's minimum, so a content-bearing answer cannot be projected at
+    all today (a pre-existing gap, reported separately -- it is what makes
+    ``frame_construction_failed`` fire in this harness). Coverage projection
+    is what this test measures, and it needs no facts.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    for collection in ("claims", "metrics", "evidence", "conflicts"):
+        payload[collection] = []
+    payload["coverage"]["unavailable_required_sources"] = ["work_item"]
+    payload["coverage"]["stale_required_sources"] = ["work_graph"]
+    payload["coverage"]["degraded_required_sources"] = ["status_change"]
+
+    frame = wrap_legacy_answer_as_frame(
+        DevAnswer.model_validate(payload),
+        run_id="11111111-1111-4111-8111-111111111111",
+        investigation_result=None,
+    )
+
+    assert frame.coverage.unavailable_required_sources == (SourceClass.WORK_ITEM,)
+    assert frame.coverage.stale_required_sources == (SourceClass.WORK_GRAPH,)
+    assert frame.coverage.degraded_required_sources == (SourceClass.STATUS_CHANGE,)
+
+    # The pre-existing tool-id grammar still resolves through the same helper.
+    tool_payload = deepcopy(payload)
+    tool_payload["coverage"]["unavailable_required_sources"] = ["status_snapshot.v1"]
+    tool_payload["coverage"]["stale_required_sources"] = []
+    tool_payload["coverage"]["degraded_required_sources"] = []
+    tool_frame = wrap_legacy_answer_as_frame(
+        DevAnswer.model_validate(tool_payload),
+        run_id="11111111-1111-4111-8111-111111111111",
+        investigation_result=None,
+    )
+    assert tool_frame.coverage.unavailable_required_sources == (
+        SourceClass.STATUS_CHANGE,
     )
 
 
@@ -810,7 +1016,9 @@ def test_the_blocking_partition_is_total_over_level_and_state(level: str) -> Non
             ),
         )
         blocks = bool(
-            merged.unavailable_required_sources or merged.stale_required_sources
+            merged.unavailable_required_sources
+            or merged.stale_required_sources
+            or merged.degraded_required_sources
         )
         expected_block = state not in _NON_BLOCKING[level]
         assert blocks is expected_block, (
@@ -873,14 +1081,18 @@ def test_every_source_requirement_state_is_classified() -> None:
     this test for the classification.
     """
 
-    stale_states = {
-        SourceRequirementState.AVAILABLE_STALE,
-        # CHAOS-3334 codex finding 2: grouped with stale, not available --
-        # every reachable producer is a degradation.
-        SourceRequirementState.AVAILABLE_UNKNOWN,
-    }
+    stale_states = {SourceRequirementState.AVAILABLE_STALE}
+    # CHAOS-3334 codex re-verify: its own bucket, not stale. A degraded status
+    # snapshot means a contributor was UNAVAILABLE and an insufficient-evidence
+    # metric can be FRESH -- calling either "stale" reports the wrong cause.
+    degraded_states = {SourceRequirementState.AVAILABLE_UNKNOWN}
     available_states = {SourceRequirementState.AVAILABLE_CURRENT}
-    classified = UNMEASURED_REQUIREMENT_STATES | stale_states | available_states
+    classified = (
+        UNMEASURED_REQUIREMENT_STATES
+        | stale_states
+        | degraded_states
+        | available_states
+    )
     assert set(SourceRequirementState) == classified, (
         "a SourceRequirementState member is unclassified for coverage merging; "
         "decide whether it blocks a complete answer instead of inheriting the "
@@ -888,9 +1100,15 @@ def test_every_source_requirement_state_is_classified() -> None:
     )
     # The three buckets must be disjoint, or a state's treatment would depend
     # on branch order rather than on the vocabulary.
-    assert not (UNMEASURED_REQUIREMENT_STATES & stale_states)
-    assert not (UNMEASURED_REQUIREMENT_STATES & available_states)
-    assert not (stale_states & available_states)
+    buckets = (
+        UNMEASURED_REQUIREMENT_STATES,
+        stale_states,
+        degraded_states,
+        available_states,
+    )
+    for index, first in enumerate(buckets):
+        for second in buckets[index + 1 :]:
+            assert not (first & second)
 
 
 @pytest.mark.asyncio

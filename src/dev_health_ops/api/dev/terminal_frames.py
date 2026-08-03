@@ -404,11 +404,33 @@ def tolerant_parse_legacy_frame_payload(payload: Mapping[str, Any]) -> dict[str,
 
 
 def _source_class_for_legacy_token(token: str) -> SourceClass:
+    """Resolve one v1 coverage token to its ``SourceClass``.
+
+    Two token grammars reach these lists, and both must survive projection:
+
+    * a ``ToolID`` (``"status_snapshot.v1"``), written by
+      ``_coverage_from_tool_results`` for sources the *model* asked for;
+    * a ``SourceClass`` value (``"status_change"``), written by
+      ``_coverage_with_plan_sources`` for the plan's own required sources
+      (CHAOS-3334).
+
+    The second arm is not cosmetic. Without it every plan-sourced label fell
+    through to ``_LEGACY_COVERAGE_FALLBACK``, so a frame reported
+    ``source_health`` no matter which source actually degraded -- the client
+    was told the wrong source, which is the same misdisclosure the degraded
+    bucket exists to prevent, one layer down.
+    """
+
     try:
         tool_id = _ToolID(token)
     except ValueError:
+        pass
+    else:
+        return SOURCE_CLASS_BY_TOOL_ID[tool_id]
+    try:
+        return SourceClass(token)
+    except ValueError:
         return _LEGACY_COVERAGE_FALLBACK
-    return SOURCE_CLASS_BY_TOOL_ID[tool_id]
 
 
 def _platform_token(
@@ -713,6 +735,10 @@ def wrap_legacy_answer_as_frame(
             stale_required_sources=tuple(
                 _source_class_for_legacy_token(token)
                 for token in answer.coverage.stale_required_sources
+            )[:25],
+            degraded_required_sources=tuple(
+                _source_class_for_legacy_token(token)
+                for token in answer.coverage.degraded_required_sources
             )[:25],
             as_of=answer.coverage.as_of,
         ),

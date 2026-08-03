@@ -321,7 +321,7 @@ jobs:
           DEV_HEALTH_TEST_POSTGRES_ADMIN_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
           OTEL_ENABLED: "false"
           PYTEST_XDIST_WORKERS: "4"
-          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --deselect=tests/test_dispatch_outbox.py::test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible --deselect=tests/test_sync_planner.py::test_postgres_missing_tier_limits_stays_inside_planner_savepoint
+          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --deselect=tests/test_dispatch_outbox.py::test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs
@@ -333,12 +333,6 @@ jobs:
         env:
           DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
         run: pytest -q tests/test_dispatch_outbox.py::test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible
-
-      - name: Run quarantined PostgreSQL planner test (CHAOS-3180)
-        continue-on-error: true
-        env:
-          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
-        run: pytest -q tests/test_sync_planner.py::test_postgres_missing_tier_limits_stays_inside_planner_savepoint
 
       - name: Upload junit test reports
         if: always()

@@ -354,6 +354,14 @@ def test_team_scope_negative_examples_fail_for_their_named_reason(
         DevScope.model_validate(payload)
 
 
+def test_team_resolution_negative_example_fails_for_its_named_reason() -> None:
+    payload = dict(negative_fixtures()["dev_scope_resolution.v1"])[
+        "team_resolution_scope_with_repository_list"
+    ]
+    with pytest.raises(ValidationError, match="cannot carry a repository list"):
+        DevScopeResolution.model_validate(payload)
+
+
 def test_checked_in_contract_artifacts_have_no_drift() -> None:
     check_artifacts(expected_artifacts())
 

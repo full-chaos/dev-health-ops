@@ -242,6 +242,7 @@ services:
       WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
       WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED: ${WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED:-false}
       WORKER_GITHUB_REPO_METADATA_ENABLED: ${WORKER_GITHUB_REPO_METADATA_ENABLED:-false}
+      WORKER_GITLAB_REPO_METADATA_ENABLED: ${WORKER_GITLAB_REPO_METADATA_ENABLED:-false}
       # sync.team_autoimport's post-sync bridge is constructed unconditionally
       # for the sync profile, and the HTTP bridge fails closed on an empty
       # base URL or token, so both are required for this service to start even

@@ -69,7 +69,8 @@ reviewed route release says otherwise.
 
 Porting a provider/dataset pair to a `route_ready` Go complete-route handler
 (the `CompleteRouteHandler`/`EffectSink` pattern `launchdarkly/feature-flags`,
-`github/repo-metadata`, and `github/prs` already ship) is a separate,
+`github/repo-metadata`, `github/prs`, and `gitlab/repo-metadata` already ship)
+is a separate,
 code-level recipe, not a deployment-manifest concern — see
 [`provider-sync-porting-recipe.md`](./provider-sync-porting-recipe.md) and
 `contracts/provider-matrix/v1/README.md`'s per-pair "Activation status"
@@ -276,18 +277,19 @@ was actually constructed and the full job-kind/queue set the `sync`
 deployment profile declares
 (`cmd/dev-health-worker/dependencies.go`'s `profileReady` — the CUT-02
 "exact startup validation" gate) — which also declares
-`sync.provider_unit`. With `WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED` and
-`WORKER_GITHUB_REPO_METADATA_ENABLED` both at their secure default of
-`false`, `sync.provider_unit` is never constructed, the match fails, and the
+`sync.provider_unit`. With `WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED`,
+`WORKER_GITHUB_REPO_METADATA_ENABLED`, and
+`WORKER_GITLAB_REPO_METADATA_ENABLED` all at their secure default of `false`,
+`sync.provider_unit` is never constructed, the match fails, and the
 process exits non-zero — which crash-loops under `restart: unless-stopped`.
 The container never binds `:8080`, so `/readyz` never even becomes reachable
 to show *why*; the reason is in the container's own log line:
 `{"level":"ERROR","msg":"configure runtime dependencies","error_category":"dependency_configuration_failed"}`.
 
-This is fail-closed by design — a worker dispatching `github`/`repo-metadata`
-units into River while refusing to build the handler for them would strand
-every one of those units, which is worse than not starting at all. **To get
-`go-worker`'s `sync` profile to a ready state, set one of the two switches
+This is fail-closed by design — a worker dispatching a route-ready provider
+unit into River while refusing to build its handler would strand every one of
+those units, which is worse than not starting at all. **To get `go-worker`'s
+`sync` profile to a ready state, set one of the route switches
 to `true`** (for example `WORKER_GITHUB_REPO_METADATA_ENABLED=true`) in
 whatever environment file feeds that compose project. The default stays
 `false` in every checked-in file; this is a per-environment operator choice,

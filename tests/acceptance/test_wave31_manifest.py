@@ -6,6 +6,7 @@ import subprocess
 import textwrap
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -21,6 +22,7 @@ from scripts.acceptance.wave31_manifest import (
     build_report,
     execute_manifest,
     run_evidence_tests,
+    validate_blocked_execution_artifact,
     validate_execution_artifact,
     validate_manifest,
 )
@@ -30,9 +32,25 @@ _ROOT = Path(__file__).resolve().parents[2]
 #: Independent literal snapshot of the golden reason constants -- see
 #: golden_reason_snapshots.json's own "_note" for why this file exists and
 #: is deliberately never imported by scripts/acceptance/wave31_manifest.py.
-_GOLDEN_REASON_SNAPSHOT: dict[str, str] = json.loads(
+#: Values are either a plain reason string (the constant-keyed entries) or
+#: a nested {item_id: reason} dict (BLOCKED_REASON_BY_ITEM_ID) -- see the
+#: two typed accessors below rather than indexing this dict directly with
+#: a `str` expectation.
+_GOLDEN_REASON_SNAPSHOT: dict[str, Any] = json.loads(
     (Path(__file__).parent / "golden_reason_snapshots.json").read_text(encoding="utf-8")
 )
+
+
+def _golden_reason(key: str) -> str:
+    value = _GOLDEN_REASON_SNAPSHOT[key]
+    assert isinstance(value, str)
+    return value
+
+
+def _golden_blocked_reasons_by_item_id() -> dict[str, str]:
+    value = _GOLDEN_REASON_SNAPSHOT["BLOCKED_REASON_BY_ITEM_ID"]
+    assert isinstance(value, dict)
+    return value
 
 
 def _init_throwaway_git_repo(root: Path) -> str:
@@ -86,6 +104,53 @@ def _write_valid_artifact(
         "error": None,
         "assertions": [
             {"name": name, "passed": True, "detail": "yes"} for name in assertion_names
+        ],
+    }
+    artifact_path = root / "artifacts" / f"{scenario_id}.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+    return artifact_path
+
+
+def _write_failed_artifact(
+    root: Path,
+    *,
+    scenario_id: str,
+    script_relative: str,
+    commit_sha: str,
+    failing_assertion_names: tuple[str, ...],
+    tree_clean: bool = True,
+) -> Path:
+    """A blocked row's supporting evidence: a real live attempt that
+    genuinely failed on the named assertions -- mirrors _write_valid_
+    artifact's shape but with status="failed" and specific passed=False
+    entries, matching what smoke_ask_dev_stack3_intents.py's pre-CHAOS-3337
+    artifacts actually looked like."""
+
+    script_path = root / script_relative
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("# a throwaway smoke script\n")
+    script_sha256 = hashlib.sha256(script_path.read_bytes()).hexdigest()
+    now = datetime.now(UTC).isoformat()
+    artifact = {
+        "schema_version": "ask_dev_acceptance_artifact.v1",
+        "scenario_id": scenario_id,
+        "tree_clean": tree_clean,
+        "tree_digest": hashlib.sha256(b"" if tree_clean else b"dirty").hexdigest(),
+        "script": script_relative,
+        "script_sha256": script_sha256,
+        "commit_sha": commit_sha,
+        "command": "python throwaway.py",
+        "started_at": now,
+        "finished_at": now,
+        "status": "failed",
+        "error": "the live attempt failed as expected",
+        "assertions": [
+            {"name": "login_response_is_object", "passed": True, "detail": "ok"},
+            *(
+                {"name": name, "passed": False, "detail": "expected failure"}
+                for name in failing_assertion_names
+            ),
         ],
     }
     artifact_path = root / "artifacts" / f"{scenario_id}.json"
@@ -266,20 +331,15 @@ def test_golden_reason_constants_match_independent_snapshot() -> None:
     snapshot must fail.
     """
 
-    assert (
-        STACK3_WIRING_GAP_REASON == _GOLDEN_REASON_SNAPSHOT["STACK3_WIRING_GAP_REASON"]
+    assert STACK3_WIRING_GAP_REASON == _golden_reason("STACK3_WIRING_GAP_REASON")
+    assert MIGRATION_COEXISTENCE_REASON == _golden_reason(
+        "MIGRATION_COEXISTENCE_REASON"
     )
-    assert (
-        MIGRATION_COEXISTENCE_REASON
-        == _GOLDEN_REASON_SNAPSHOT["MIGRATION_COEXISTENCE_REASON"]
+    assert TEAM_ATTRIBUTION_LIVE_DEFECT_REASON == _golden_reason(
+        "TEAM_ATTRIBUTION_LIVE_DEFECT_REASON"
     )
-    assert (
-        TEAM_ATTRIBUTION_LIVE_DEFECT_REASON
-        == _GOLDEN_REASON_SNAPSHOT["TEAM_ATTRIBUTION_LIVE_DEFECT_REASON"]
-    )
-    assert (
-        STACK3_PERSISTENCE_GAP_REASON
-        == _GOLDEN_REASON_SNAPSHOT["STACK3_PERSISTENCE_GAP_REASON"]
+    assert STACK3_PERSISTENCE_GAP_REASON == _golden_reason(
+        "STACK3_PERSISTENCE_GAP_REASON"
     )
 
 
@@ -293,26 +353,98 @@ def test_golden_reason_mutation_is_actually_caught_not_just_theoretically() -> N
     """
 
     mutated = STACK3_WIRING_GAP_REASON + " SILENTLY REWORDED"
-    assert mutated != _GOLDEN_REASON_SNAPSHOT["STACK3_WIRING_GAP_REASON"]
+    assert mutated != _golden_reason("STACK3_WIRING_GAP_REASON")
 
 
-def test_stack3_intents_e2e_attempt_is_pinned_to_chaos_3337() -> None:
-    """Locks in the 2026-08-03 live-discovered persistence allowlist gap.
+def test_stack3_persistence_gap_reason_is_preserved_as_history() -> None:
+    """CHAOS-3337 (persistence-layer _SOURCE_CLASSES allowlist gap) shipped
+    2026-08-03 (ops #1402) -- nothing in the current MANIFEST is blocked by
+    it anymore, but the constant documenting the original repro is kept,
+    still exported and tested, as the historical record."""
 
-    This is a DIFFERENT root cause from the 3 remaining honestly-blocked
-    matrix rows above (deliberate/no-citation/weak-analogue): the plan
-    wiring is real and correct, but the persistence layer crashes on the
-    first mandatory-step write. Must never get silently merged into or
-    explained away by the resolved STACK3_WIRING_GAP_REASON.
-    """
-
-    by_id = {item.id: item for item in MANIFEST}
-    item = by_id["matrix.stack3-intents.e2e-blocked-by-live-defect"]
-    assert item.status == "blocked"
-    assert item.blocked_reason == STACK3_PERSISTENCE_GAP_REASON
     assert "CHAOS-3337" in STACK3_PERSISTENCE_GAP_REASON
     assert "invalid source_class" in STACK3_PERSISTENCE_GAP_REASON
     assert STACK3_PERSISTENCE_GAP_REASON != STACK3_WIRING_GAP_REASON
+    by_id = {item.id: item for item in MANIFEST}
+    assert "matrix.stack3-intents.e2e-blocked-by-live-defect" not in by_id, (
+        "superseded by the three per-intent proven_e2e rows below -- a "
+        "single row cannot bind three distinct execution artifacts"
+    )
+
+
+def test_stack3_team_scoped_intents_flip_to_proven_e2e_after_chaos_3337() -> None:
+    """Locks in the 2026-08-03 CHAOS-3337 flip: all three TEAM-subject
+    stack-3 intents now complete live, each with its own execution
+    artifact. PROJECT_HEALTH stays unverified live (zero PROJECT-kind
+    fixture rows), so it has no row here."""
+
+    by_id = {item.id: item for item in MANIFEST}
+    expected = {
+        "matrix.team-health.e2e-live-validated": (
+            "tests/acceptance/artifacts/team_health.json"
+        ),
+        "matrix.team-workload-balance.e2e-live-validated": (
+            "tests/acceptance/artifacts/team_workload_balance.json"
+        ),
+        "matrix.operational-deficiency.e2e-live-validated": (
+            "tests/acceptance/artifacts/operational_deficiency_team.json"
+        ),
+    }
+    assert expected.keys() <= by_id.keys()
+    for item_id, artifact_path in expected.items():
+        item = by_id[item_id]
+        assert item.status == "proven_e2e", f"{item_id}: {item.status}"
+        assert item.requires_live_infra is True
+        assert item.execution_artifact == artifact_path
+        assert item.required_assertion_names == (
+            "scope_resolved_event_present",
+            "named_team_committed",
+            "answer_completed_event_present",
+            "answer_status_not_hard_error",
+            "stream_terminated_as_answer",
+        )
+        assert "CHAOS-3337" in item.description
+
+
+def test_every_blocked_item_reason_matches_independent_snapshot() -> None:
+    """Codex finding (MED, 2026-08-03, round 3): a blocked_reason with no
+    independent binding validates clean however it is reworded --
+    validate_manifest's only check is "non-empty". BLOCKED_REASON_BY_
+    ITEM_ID snapshots every currently-blocked item by id; a blocked item
+    missing from it, or present with drifted text, both fail here.
+    """
+
+    blocked_snapshot = _golden_blocked_reasons_by_item_id()
+    by_id = {item.id: item for item in MANIFEST}
+    blocked_ids = {item.id for item in MANIFEST if item.status == "blocked"}
+    missing = blocked_ids - set(blocked_snapshot.keys())
+    assert not missing, f"blocked items with no golden-snapshot entry: {missing}"
+    stale = set(blocked_snapshot.keys()) - blocked_ids
+    assert not stale, f"golden snapshot entries for items no longer blocked: {stale}"
+    for item_id in blocked_ids:
+        assert by_id[item_id].blocked_reason == blocked_snapshot[item_id], item_id
+
+
+def test_blocked_reason_mutation_is_actually_caught() -> None:
+    """RED-then-GREEN proof for the fix above: plant codex's exact
+    demonstrated bypass (a reason that is 'fabricated but nonempty') on a
+    real blocked item and confirm the independent-snapshot check -- not
+    validate_manifest's non-empty check -- is what catches it.
+    """
+
+    fabricated = ManifestItem(
+        id="matrix.organization-portfolio-status",
+        category="blocking_matrix",
+        description="mutated",
+        status="blocked",
+        blocked_reason="fabricated but nonempty",
+    )
+    # validate_manifest's own check (non-empty blocked_reason) does NOT
+    # catch this -- proving the independent snapshot is doing real work,
+    # not restating an existing guard.
+    assert validate_manifest(_ROOT, (fabricated,)) == []
+    blocked_snapshot = _golden_blocked_reasons_by_item_id()
+    assert fabricated.blocked_reason != blocked_snapshot[fabricated.id]
 
 
 def test_plan_registry_gap_gates_are_proven_at_unit_and_e2e_level() -> None:
@@ -334,9 +466,11 @@ def test_plan_registry_gap_gates_are_proven_at_unit_and_e2e_level() -> None:
         == "tests/acceptance/artifacts/portfolio_status_gap.json"
     )
     assert e2e_item.required_assertion_names == (
+        "scope_resolved_event_present",
         "answer_completed_event_present",
-        "answer_status_not_hard_error",
+        "answer_status_is_exactly_partial",
         "stream_terminated_as_answer",
+        "warnings_present_but_not_a_plan_registry_gap_signal",
     )
 
 
@@ -762,6 +896,165 @@ def test_validate_execution_artifact_rejects_a_script_outside_its_own_evidence(
     assert any(
         "is not among this item's own evidence paths" in error for error in errors
     )
+
+
+# --- blocked-artifact binding: codex finding (MED, 2026-08-03, round 3) --
+# a blocked row citing a failed live attempt had NOTHING checking that
+# evidence -- a nonexistent artifact, or one recording status="passed",
+# validated exactly the same as a real one. Every check below closes one
+# specific way that could still be true, and confirms the mechanism can
+# NEVER be used to promote a row's status. ---
+
+
+def _blocked_item(
+    *,
+    blocked_execution_artifact: str | None,
+    evidence: tuple[str, ...] = (),
+    blocked_expected_failing_assertions: tuple[str, ...] = (),
+) -> ManifestItem:
+    return ManifestItem(
+        id="test.blocked-claim",
+        category="blocking_matrix",
+        description="a blocked claim with supporting live evidence",
+        status="blocked",
+        blocked_reason="a real, checkable reason",
+        evidence=evidence,
+        blocked_execution_artifact=blocked_execution_artifact,
+        blocked_expected_failing_assertions=blocked_expected_failing_assertions,
+    )
+
+
+def test_validate_blocked_execution_artifact_accepts_a_real_failed_artifact(
+    tmp_path: Path,
+) -> None:
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_failed_artifact(
+        tmp_path,
+        scenario_id="genuinely_failed",
+        script_relative="smoke_genuinely_failed.py",
+        commit_sha=commit_sha,
+        failing_assertion_names=("scope_resolved_event_present",),
+    )
+    item = _blocked_item(
+        blocked_execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence=("smoke_genuinely_failed.py",),
+        blocked_expected_failing_assertions=("scope_resolved_event_present",),
+    )
+    assert validate_blocked_execution_artifact(tmp_path, item) == []
+
+
+def test_validate_blocked_execution_artifact_rejects_a_missing_artifact(
+    tmp_path: Path,
+) -> None:
+    """codex mutation: a nonexistent artifact reference must fail, not
+    validate clean the way it did before this mechanism existed."""
+
+    item = _blocked_item(
+        blocked_execution_artifact="artifacts/does_not_exist.json",
+    )
+    errors = validate_blocked_execution_artifact(tmp_path, item)
+    assert any("does not exist" in error for error in errors)
+
+
+def test_validate_blocked_execution_artifact_rejects_a_passed_status(
+    tmp_path: Path,
+) -> None:
+    """codex mutation: a 'passed' artifact backing a blocked claim is
+    self-contradictory -- the exact scenario a proven row citing failed
+    evidence via the wrong field mirrors from the other direction."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="secretly_passed",
+        script_relative="smoke_secretly_passed.py",
+        commit_sha=commit_sha,
+    )
+    item = _blocked_item(
+        blocked_execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence=("smoke_secretly_passed.py",),
+    )
+    errors = validate_blocked_execution_artifact(tmp_path, item)
+    assert any("expected 'failed'" in error for error in errors)
+
+
+def test_validate_blocked_execution_artifact_rejects_when_set_on_a_non_blocked_item() -> (
+    None
+):
+    """codex mutation: this field must never appear on a non-blocked
+    item -- it exists only to back a staying-blocked claim, never as an
+    alternate path to "proven"."""
+
+    proven_with_blocked_artifact = ManifestItem(
+        id="test.proven-with-blocked-artifact",
+        category="blocking_matrix",
+        description="a proven claim that also sets blocked_execution_artifact",
+        status="proven_unit",
+        evidence=("tests/acceptance/ask-dev-oracle.v1.json",),
+        test_nodeids=(
+            "tests/api/dev/test_tool_registry.py::"
+            "test_manifest_is_the_exact_nine_tool_server_allowlist",
+        ),
+        blocked_execution_artifact="artifacts/whatever.json",
+    )
+    errors = validate_blocked_execution_artifact(_ROOT, proven_with_blocked_artifact)
+    assert any(
+        "blocked_execution_artifact set on a non-blocked item" in error
+        for error in errors
+    )
+
+
+def test_validate_blocked_execution_artifact_rejects_a_missing_expected_failure(
+    tmp_path: Path,
+) -> None:
+    """An artifact can be real, current, and genuinely status='failed', and
+    still not prove THIS row's specific expected failure if the assertion
+    it names never actually failed (e.g. it failed on something else
+    entirely)."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_failed_artifact(
+        tmp_path,
+        scenario_id="wrong_failure",
+        script_relative="smoke_wrong_failure.py",
+        commit_sha=commit_sha,
+        failing_assertion_names=("some_unrelated_assertion",),
+    )
+    item = _blocked_item(
+        blocked_execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence=("smoke_wrong_failure.py",),
+        blocked_expected_failing_assertions=("scope_resolved_event_present",),
+    )
+    errors = validate_blocked_execution_artifact(tmp_path, item)
+    assert any(
+        "does not record the expected failing assertion" in error for error in errors
+    )
+
+
+def test_validate_execution_artifact_rejects_a_failed_artifact_on_a_proven_row(
+    tmp_path: Path,
+) -> None:
+    """codex mutation, explicitly planted: a genuinely-failed live-attempt
+    artifact (the same shape a blocked row's supporting evidence uses)
+    cited via execution_artifact -- the proven_e2e field -- on a proven
+    row. This is the mirror image of a 'passed' artifact backing a blocked
+    claim, and must be rejected just as loudly."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_failed_artifact(
+        tmp_path,
+        scenario_id="failed_but_cited_as_proof",
+        script_relative="smoke_failed_but_cited_as_proof.py",
+        commit_sha=commit_sha,
+        failing_assertion_names=("scope_resolved_event_present",),
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_failed_but_cited_as_proof.py",
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("expected 'passed'" in error for error in errors)
+    assert any("failing assertion" in error for error in errors)
 
 
 def test_validate_manifest_catches_proven_unit_with_no_test_nodeids() -> None:

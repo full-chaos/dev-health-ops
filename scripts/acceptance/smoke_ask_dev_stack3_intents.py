@@ -331,22 +331,32 @@ def _run_scenario(
             "scope": scope,
         },
     )
-    if scenario.team_scoped:
-        scope_resolved = next(
-            (e for e in events if e.event is StreamEventType.SCOPE_RESOLVED), None
-        )
+    # Codex finding (HIGH, 2026-08-03, round 3): scope resolution was only
+    # checked for team_scoped scenarios -- portfolio_status_gap's row claims
+    # "committed scope" as part of its contract too (a real scope.resolved
+    # event, not merely "some answer came back"), and the prior code let
+    # that go unasserted. Every scenario here resolves a real scope
+    # (organization-wide for portfolio, team-committed for the other
+    # three), so this check now runs unconditionally.
+    scope_resolved = next(
+        (e for e in events if e.event is StreamEventType.SCOPE_RESOLVED), None
+    )
+    recorder.check(
+        "scope_resolved_event_present",
+        scope_resolved is not None and scope_resolved.scope_resolution is not None,
+        "expected a scope.resolved event",
+    )
+    if (
+        scenario.team_scoped
+        and scope_resolved is not None
+        and scope_resolved.scope_resolution is not None
+    ):
+        authorized_entities = scope_resolved.scope_resolution.authorized_entity_ids
         recorder.check(
-            "scope_resolved_event_present",
-            scope_resolved is not None and scope_resolved.scope_resolution is not None,
-            "expected a scope.resolved event committing the named team subject",
+            "named_team_committed",
+            len(authorized_entities) > 0,
+            "the named team subject was never committed to the resolved scope",
         )
-        if scope_resolved is not None and scope_resolved.scope_resolution is not None:
-            authorized_entities = scope_resolved.scope_resolution.authorized_entity_ids
-            recorder.check(
-                "named_team_committed",
-                len(authorized_entities) > 0,
-                "the named team subject was never committed to the resolved scope",
-            )
 
     detail = "no answer completed"
     completed = next(
@@ -378,6 +388,43 @@ def _run_scenario(
         "kind would mean the newly-wired plan or the deliberate portfolio "
         "fallback broke the run rather than completing it",
     )
+    if scenario.scenario_id == "portfolio_status_gap":
+        # Codex finding (HIGH, 2026-08-03, round 3): "not error" alone
+        # passes for status in {complete, partial, degraded} -- the row's
+        # own claim is specifically that the legacy-fallback answer lands
+        # as PARTIAL (a provider-budget-exhaustion outcome from running
+        # many progress rounds, per production_runtime.py's fallback
+        # answer builder), not any other non-error status. Assert the
+        # exact value the row claims, not a category that would also
+        # accept a lucky "complete".
+        recorder.check(
+            "answer_status_is_exactly_partial",
+            answer.status.value == "partial",
+            f"expected status='partial' per the legacy-fallback contract, "
+            f"got {answer.status.value!r}",
+        )
+        # Live-confirmed 2026-08-03: answer.warnings for this scenario are
+        # ["Deterministic scripted acceptance response.", "Provider health
+        # was measured through data_health.v1."] -- generic scripted-
+        # provider boilerplate present on every scenario this harness runs,
+        # NOT text tied to the plan_registry_gap signal. The WARNING stream
+        # events mirror answer.warnings 1:1 (streaming.py's public_event
+        # loop), so there is no client-observable signal distinguishing
+        # "this run hit the plan_registry_gap fallback" from any other
+        # reason the legacy loop's warnings might fire -- the structured
+        # WARNING log record + ASK_DEV_PLAN_REGISTRY_GAP_TOTAL counter this
+        # row's other half of the claim depends on are server-side only,
+        # with no public API surface. Recorded here as an assertion so a
+        # future change to that boilerplate text is visible, NOT as a
+        # stand-in for the signal itself -- gate.plan-registry-gap-is-loud
+        # proves the signal at the unit level, through the real
+        # orchestrator seam, which is the only place it is observable.
+        recorder.check(
+            "warnings_present_but_not_a_plan_registry_gap_signal",
+            len(answer.warnings) > 0,
+            f"expected the scripted provider's boilerplate warnings, got "
+            f"{answer.warnings!r}",
+        )
     return conversation_id
 
 

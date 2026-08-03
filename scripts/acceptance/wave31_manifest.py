@@ -46,6 +46,7 @@ __all__ = [
     "build_report",
     "execute_manifest",
     "run_evidence_tests",
+    "validate_blocked_execution_artifact",
     "validate_execution_artifact",
     "validate_manifest",
 ]
@@ -116,6 +117,31 @@ class ManifestItem:
     #: artifacts are individually all-passing, because each row demands the
     #: names its own claim actually rests on.
     required_assertion_names: tuple[str, ...] = ()
+    #: Repository-relative path to an execution artifact backing a
+    #: ``blocked`` item's claim that a live attempt genuinely happened and
+    #: genuinely failed -- e.g. "we tried this live and hit CHAOS-3337",
+    #: not a fabricated or merely-asserted repro. Codex finding (MED,
+    #: 2026-08-03, round 3): before this field existed, a blocked row
+    #: citing a failed live attempt had NOTHING checking that evidence --
+    #: a nonexistent artifact path, or one recording ``status: "passed"``,
+    #: validated exactly the same as a real one. ``validate_blocked_
+    #: execution_artifact`` checks this the same way ``validate_execution_
+    #: artifact`` checks a proven_e2e artifact (schema, non-dict rejection,
+    #: tree_clean, ancestry, script_sha256) but additionally REQUIRES
+    #: ``status == "failed"`` and the names in ``blocked_expected_failing_
+    #: assertions`` to actually show ``passed: false`` -- a "passed"
+    #: artifact backing a blocked claim would be self-contradictory. This
+    #: field must only ever appear on a ``blocked`` item; validate_manifest
+    #: rejects it on any other status. Critically, nothing in this module
+    #: ever reads this field to promote a row's status -- it exists purely
+    #: to bind the SUPPORTING evidence for staying blocked to something
+    #: real, never as an alternate path to "proven".
+    blocked_execution_artifact: str | None = None
+    #: Assertion names that must appear in ``blocked_execution_artifact``
+    #: with ``passed: false`` -- proves the artifact failed in the
+    #: SPECIFIC expected way, not merely that ``status == "failed"``
+    #: (which a completely unrelated failure would also satisfy).
+    blocked_expected_failing_assertions: tuple[str, ...] = ()
 
 
 class ManifestIntegrityError(RuntimeError):
@@ -1033,12 +1059,13 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "test_chaos_3303_health_profile_synthesis.py::"
                 "test_team_profile_without_cohort_suppresses_every_applicable_rule, "
                 "proves this pair for a TEAM-scoped profile, not PROJECT. "
-                "Live e2e is separately blocked by CHAOS-3337 (see "
-                "STACK3_PERSISTENCE_GAP_REASON) and, for a literal PROJECT "
-                "subject, by this fixture profile's zero PROJECT-kind rows "
-                "(see positive-control.real-project-status). Closing this "
-                "needs either a new PROJECT-scoped unit test or both of "
-                "those infrastructure gaps closed."
+                "CHAOS-3337 (the persistence-layer allowlist gap that "
+                "separately blocked ALL live stack-3 e2e attempts) shipped "
+                "2026-08-03 (ops #1402) and no longer applies, but a "
+                "literal PROJECT subject still cannot be live-verified: "
+                "this fixture profile seeds zero PROJECT-kind rows (see "
+                "positive-control.real-project-status). Closing this needs "
+                "a new PROJECT-scoped unit test."
             ),
         ),
         ManifestItem(
@@ -1159,10 +1186,15 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "health-rule layer produces the launch-level 'light on "
                 "feature work' finding this row claims. Citing it would "
                 "overclaim what a passing adapter test proves about the "
-                "rule/finding layer. Live e2e is separately blocked by "
-                "CHAOS-3337 (see STACK3_PERSISTENCE_GAP_REASON). Closing "
-                "this needs either a rule/finding-layer unit test or "
-                "CHAOS-3337 fixed plus a live re-run."
+                "rule/finding layer. CHAOS-3337 shipped 2026-08-03 (ops "
+                "#1402), removing the separate live-e2e blocker: "
+                "matrix.team-workload-balance.e2e-live-validated now "
+                "proves TEAM_WORKLOAD_BALANCE is live-reachable, but that "
+                "smoke only asserts a real completed answer, not the "
+                "specific launch-level 'light on feature work' finding "
+                "shape this row claims -- closing this needs a rule/"
+                "finding-layer unit test, or a live smoke that asserts the "
+                "specific finding content."
             ),
         ),
         ManifestItem(
@@ -1257,21 +1289,107 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
             # UNSUPPORTED short-circuit rather than relying on the legacy
             # loop's grounding guard as the only backstop.
         ),
+        # matrix.stack3-intents.e2e-blocked-by-live-defect (2026-08-03,
+        # historical): live end-to-end proof attempt for the four
+        # CHAOS-3297 stack-3 newly-wired intents, blocked by CHAOS-3337 (a
+        # persistence-layer _SOURCE_CLASSES allowlist gap one layer beneath
+        # the resolved wiring gap). CHAOS-3337 shipped (ops #1402, both the
+        # Python allowlist and the mirrored Postgres CHECK constraint,
+        # migrations 0081/0082) the same day -- re-run confirmed all three
+        # TEAM-subject intents now complete live. Replaced below by three
+        # proven_e2e rows rather than flipped in place: this row's single
+        # claim covered three distinct intents with three distinct
+        # artifacts, which the execution_artifact field (one path per row)
+        # cannot represent as one row. STACK3_PERSISTENCE_GAP_REASON is
+        # kept, still exported and tested, as the historical record of the
+        # defect this row existed to track.
         ManifestItem(
-            id="matrix.stack3-intents.e2e-blocked-by-live-defect",
+            id="matrix.team-health.e2e-live-validated",
             category="blocking_matrix",
             description=(
-                "Live end-to-end proof attempt for the four CHAOS-3297 "
-                "stack-3 newly-wired intents (PROJECT_HEALTH/TEAM_HEALTH/"
-                "TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY), "
-                "per team-lead priority 2026-08-03 following ops #1383/"
-                "#1387 merging the wiring to main. Blocked by a newly "
-                "discovered, 100%-reproducible live defect one layer "
-                "beneath the wiring itself -- not by the wiring gap that "
-                "STACK3_WIRING_GAP_REASON described, which is now resolved."
+                "TEAM_HEALTH live end-to-end: health.team.v1 (CHAOS-3297 "
+                "stack-3, wired via ops #1383/#1387) reachable and "
+                "answering for a named team subject, over the real "
+                "Compose stack. Proven only after CHAOS-3337 shipped (ops "
+                "#1402) -- before that fix this crashed with "
+                "DevPersistenceValidationError('invalid source_class') on "
+                "every run; see STACK3_PERSISTENCE_GAP_REASON for the "
+                "original repro."
             ),
-            status="blocked",
-            blocked_reason=STACK3_PERSISTENCE_GAP_REASON,
+            status="proven_e2e",
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+                "tests/acceptance/test_ask_dev_stack3_intents_smoke.py",
+            ),
+            requires_live_infra=True,
+            execution_artifact="tests/acceptance/artifacts/team_health.json",
+            required_assertion_names=(
+                "scope_resolved_event_present",
+                "named_team_committed",
+                "answer_completed_event_present",
+                "answer_status_not_hard_error",
+                "stream_terminated_as_answer",
+            ),
+        ),
+        ManifestItem(
+            id="matrix.team-workload-balance.e2e-live-validated",
+            category="blocking_matrix",
+            description=(
+                "TEAM_WORKLOAD_BALANCE live end-to-end: balance.team_"
+                "workload.v1 reachable and answering for a named team "
+                "subject, over the real Compose stack. Proven only after "
+                "CHAOS-3337 shipped (ops #1402) -- same root cause and "
+                "fix as matrix.team-health.e2e-live-validated. Proves "
+                "reachability, not the specific 'overburdened'/'light on "
+                "feature work' launch-finding shapes -- those stay at "
+                "matrix.overburdened-teams-with-denominators/matrix."
+                "pressure-without-denominator's existing proven_unit level "
+                "and matrix.light-on-feature-work's honest blocked state."
+            ),
+            status="proven_e2e",
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+                "tests/acceptance/test_ask_dev_stack3_intents_smoke.py",
+            ),
+            requires_live_infra=True,
+            execution_artifact="tests/acceptance/artifacts/team_workload_balance.json",
+            required_assertion_names=(
+                "scope_resolved_event_present",
+                "named_team_committed",
+                "answer_completed_event_present",
+                "answer_status_not_hard_error",
+                "stream_terminated_as_answer",
+            ),
+        ),
+        ManifestItem(
+            id="matrix.operational-deficiency.e2e-live-validated",
+            category="blocking_matrix",
+            description=(
+                "OPERATIONAL_DEFICIENCY_INVENTORY live end-to-end: "
+                "deficiency.operational.v1 reachable and answering for a "
+                "named team subject, over the real Compose stack. Proven "
+                "only after CHAOS-3337 shipped (ops #1402) -- same root "
+                "cause and fix as matrix.team-health.e2e-live-validated. "
+                "Proves reachability, not the specific mixed-rule-status "
+                "shape matrix.operational-deficiencies-mixed's proven_unit "
+                "citation covers."
+            ),
+            status="proven_e2e",
+            evidence=(
+                "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+                "tests/acceptance/test_ask_dev_stack3_intents_smoke.py",
+            ),
+            requires_live_infra=True,
+            execution_artifact=(
+                "tests/acceptance/artifacts/operational_deficiency_team.json"
+            ),
+            required_assertion_names=(
+                "scope_resolved_event_present",
+                "named_team_committed",
+                "answer_completed_event_present",
+                "answer_status_not_hard_error",
+                "stream_terminated_as_answer",
+            ),
         ),
     )
 
@@ -1366,14 +1484,29 @@ def _gates() -> tuple[ManifestItem, ...]:
                 "portfolio-shaped question (\"What's the status of all our "
                 'projects across the portfolio?") ran through many legacy '
                 "model-round progress events (confirming the fallback loop "
-                "actually engaged, not a fast-path), committed scope, and "
-                "completed as a real non-error answer (status='partial') "
-                "rather than hanging or terminating. This smoke has no "
-                "public API to observe the WARNING log line or the counter "
-                "directly, so it proves the externally-observable half of "
-                "the contract; gate.plan-registry-gap-is-loud proves the "
-                "signal half at the unit level, driven through the same "
-                "orchestrator seam."
+                "actually engaged, not a fast-path), committed a real "
+                "scope.resolved event, and completed as status EXACTLY "
+                "'partial' (the legacy-loop budget-exhaustion outcome, not "
+                "any non-error status a lucky 'complete' would also "
+                "satisfy) rather than hanging or terminating. Codex finding "
+                "(HIGH, 2026-08-03, round 3): the prior version of this row "
+                "passed without requiring any of that -- scope resolution "
+                "was only checked for team-scoped scenarios (portfolio is "
+                "not), no assertion pinned the exact status, and 'not "
+                "error' alone is satisfied by complete/partial/degraded "
+                "alike. Fixed by asserting the specific state directly. "
+                "Live-confirmed 2026-08-03 there is NO client-observable "
+                "signal for the WARNING log line or "
+                "ASK_DEV_PLAN_REGISTRY_GAP_TOTAL counter this row's other "
+                "half of the claim needs: answer.warnings for this "
+                "scenario is generic scripted-provider boilerplate "
+                '("Deterministic scripted acceptance response.", '
+                '"Provider health was measured through data_health.v1."), '
+                "identical regardless of question, not text tied to the "
+                "gap signal -- recorded as an informational assertion, not "
+                "claimed as proof of the signal. gate.plan-registry-gap-is-"
+                "loud proves that signal at the unit level, through the "
+                "real orchestrator seam, the only place it is observable."
             ),
             status="proven_e2e",
             evidence=(
@@ -1383,9 +1516,11 @@ def _gates() -> tuple[ManifestItem, ...]:
             requires_live_infra=True,
             execution_artifact="tests/acceptance/artifacts/portfolio_status_gap.json",
             required_assertion_names=(
+                "scope_resolved_event_present",
                 "answer_completed_event_present",
-                "answer_status_not_hard_error",
+                "answer_status_is_exactly_partial",
                 "stream_terminated_as_answer",
+                "warnings_present_but_not_a_plan_registry_gap_signal",
             ),
         ),
         ManifestItem(
@@ -1841,6 +1976,166 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
     return errors
 
 
+def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
+    """Check one ``blocked`` item's supporting failed-attempt evidence is
+    real, current, and genuinely records the specific expected failure --
+    never used to promote the item's status, only to bind its staying-
+    blocked claim to something checkable. See ``ManifestItem.blocked_
+    execution_artifact``'s docstring for the codex finding this closes.
+    """
+
+    errors: list[str] = []
+    if item.status != "blocked":
+        errors.append(
+            f"{item.id}: blocked_execution_artifact set on a non-blocked "
+            f"item (status={item.status!r}) -- this field exists only to "
+            "back a blocked claim, never to promote status"
+        )
+        return errors
+    assert item.blocked_execution_artifact is not None
+
+    artifact_path = root / item.blocked_execution_artifact
+    if not artifact_path.exists():
+        errors.append(
+            f"{item.id}: blocked_execution_artifact does not exist: "
+            f"{item.blocked_execution_artifact}"
+        )
+        return errors
+
+    raw_text = artifact_path.read_text(encoding="utf-8")
+    if _ARTIFACT_JWT_PATTERN.search(raw_text):
+        errors.append(
+            f"{item.id}: blocked_execution_artifact {item.blocked_execution_artifact} "
+            "contains a JWT-shaped token -- a committed artifact must never "
+            "carry a live credential; redact at the recorder and re-mint"
+        )
+
+    try:
+        artifact = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        errors.append(
+            f"{item.id}: blocked_execution_artifact "
+            f"{item.blocked_execution_artifact} is not valid JSON: {exc}"
+        )
+        return errors
+
+    if not isinstance(artifact, dict):
+        errors.append(
+            f"{item.id}: blocked_execution_artifact "
+            f"{item.blocked_execution_artifact} is not a JSON object"
+        )
+        return errors
+
+    if artifact.get("schema_version") != "ask_dev_acceptance_artifact.v1":
+        errors.append(
+            f"{item.id}: blocked_execution_artifact schema_version is "
+            f"{artifact.get('schema_version')!r}, expected "
+            "'ask_dev_acceptance_artifact.v1'"
+        )
+
+    # The one deliberate divergence from validate_execution_artifact: a
+    # blocked row's supporting evidence must be a FAILURE, not a pass --
+    # "status: passed" here would be self-contradictory (why is the row
+    # still blocked?) and is rejected exactly as loudly as a missing
+    # artifact would be for a proven_e2e claim.
+    if artifact.get("status") != "failed":
+        errors.append(
+            f"{item.id}: blocked_execution_artifact status is "
+            f"{artifact.get('status')!r}, expected 'failed' -- a blocked "
+            "row's supporting evidence must record a genuine failure"
+        )
+
+    assertions = artifact.get("assertions")
+    if not isinstance(assertions, list) or not assertions:
+        errors.append(
+            f"{item.id}: blocked_execution_artifact records no assertions "
+            "-- a run that measured nothing is not evidence of anything"
+        )
+    else:
+        non_dict_entries = [
+            entry for entry in assertions if not isinstance(entry, dict)
+        ]
+        if non_dict_entries:
+            errors.append(
+                f"{item.id}: blocked_execution_artifact contains non-dict "
+                f"assertion entries: {non_dict_entries!r}"
+            )
+        dict_entries = [entry for entry in assertions if isinstance(entry, dict)]
+        if item.blocked_expected_failing_assertions:
+            failing_names = {
+                entry.get("name")
+                for entry in dict_entries
+                if entry.get("passed") is False
+            }
+            missing_expected_failures = [
+                name
+                for name in item.blocked_expected_failing_assertions
+                if name not in failing_names
+            ]
+            if missing_expected_failures:
+                errors.append(
+                    f"{item.id}: blocked_execution_artifact does not record "
+                    f"the expected failing assertion(s) {missing_expected_failures} "
+                    "-- present failures do not bind this artifact to this "
+                    "row's specific expected failure"
+                )
+
+    if artifact.get("tree_clean") is not True:
+        errors.append(
+            f"{item.id}: blocked_execution_artifact does not record a "
+            f"clean working tree at run time (tree_clean="
+            f"{artifact.get('tree_clean')!r})"
+        )
+
+    commit_sha = artifact.get("commit_sha")
+    if not isinstance(commit_sha, str) or not commit_sha:
+        errors.append(
+            f"{item.id}: blocked_execution_artifact has no commit_sha recorded"
+        )
+    else:
+        ancestor_check = _git_command(
+            root, "merge-base", "--is-ancestor", commit_sha, "HEAD"
+        )
+        if ancestor_check.returncode != 0:
+            errors.append(
+                f"{item.id}: blocked_execution_artifact's commit {commit_sha} "
+                "is not an ancestor of (or equal to) current HEAD -- "
+                "fabricated, from an unrelated branch, or history was rewritten"
+            )
+
+    script_relative = artifact.get("script")
+    script_sha256 = artifact.get("script_sha256")
+    if not isinstance(script_relative, str) or not script_relative:
+        errors.append(f"{item.id}: blocked_execution_artifact has no script recorded")
+    elif not isinstance(script_sha256, str) or not script_sha256:
+        errors.append(
+            f"{item.id}: blocked_execution_artifact has no script_sha256 recorded"
+        )
+    else:
+        if item.evidence and script_relative not in item.evidence:
+            errors.append(
+                f"{item.id}: blocked_execution_artifact's script "
+                f"{script_relative!r} is not among this item's own evidence "
+                f"paths {item.evidence!r}"
+            )
+        script_path = root / script_relative
+        if not script_path.exists():
+            errors.append(
+                f"{item.id}: blocked_execution_artifact's script no longer "
+                f"exists: {script_relative}"
+            )
+        else:
+            current_hash = hashlib.sha256(script_path.read_bytes()).hexdigest()
+            if current_hash != script_sha256:
+                errors.append(
+                    f"{item.id}: blocked_execution_artifact's script_sha256 "
+                    f"does not match the current bytes of {script_relative} "
+                    "-- the script changed since this artifact was "
+                    "generated; re-run to refresh"
+                )
+    return errors
+
+
 def validate_manifest(
     root: Path, items: tuple[ManifestItem, ...] = MANIFEST
 ) -> list[str]:
@@ -1903,6 +2198,9 @@ def validate_manifest(
 
         if item.status == "proven_e2e":
             errors.extend(validate_execution_artifact(root, item))
+
+        if item.blocked_execution_artifact is not None:
+            errors.extend(validate_blocked_execution_artifact(root, item))
 
         for node_id in item.test_nodeids:
             file_part = node_id.split("::", 1)[0]

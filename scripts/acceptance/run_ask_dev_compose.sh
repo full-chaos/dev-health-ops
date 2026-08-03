@@ -158,13 +158,10 @@ ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
-  "${ops_root}/scripts/acceptance/smoke_ask_dev_stack3_intents.py" || true
-# ^ allowed to fail: CHAOS-3337 (persistence _SOURCE_CLASSES allowlist gap)
-# currently makes team_health/team_workload_balance/operational_deficiency_
-# team fail by design until it ships -- portfolio_status_gap's own artifact
-# still gets minted and is what gate.plan-registry-gap-is-loud.e2e-live-
-# validated actually cites; a hard launcher failure here would block every
-# OTHER scenario in this script from running for a known, tracked reason.
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_stack3_intents.py"
+# CHAOS-3337 shipped (ops #1402): this no longer needs `|| true` -- all four
+# scenarios are expected to pass, and a hard failure here should now abort
+# the launcher like every other scenario, not be silently swallowed.
 
 "${compose[@]}" up -d --build --wait web
 

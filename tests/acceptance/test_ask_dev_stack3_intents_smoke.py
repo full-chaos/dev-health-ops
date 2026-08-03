@@ -34,6 +34,41 @@ def test_smoke_asserts_a_real_answer_not_a_hang_or_crash() -> None:
     assert 'terminal_kind == "answer"' in smoke
 
 
+def test_smoke_asserts_scope_resolved_unconditionally() -> None:
+    """Codex finding (HIGH, 2026-08-03, round 3): scope resolution was only
+    checked for team-scoped scenarios -- portfolio's own row claims a
+    committed scope too, and that must be asserted for every scenario, not
+    only the ones that happen to name a team. The check site must precede
+    the team_scoped-gated named_team_committed check, not live inside it."""
+
+    smoke = _SMOKE.read_text(encoding="utf-8")
+    assert "scope_resolved_event_present" in smoke
+    scope_resolved_index = smoke.index('"scope_resolved_event_present"')
+    team_scoped_gate_index = smoke.index("scenario.team_scoped\n")
+    named_team_index = smoke.index('"named_team_committed"')
+    assert scope_resolved_index < team_scoped_gate_index < named_team_index
+
+
+def test_smoke_asserts_the_exact_partial_status_for_portfolio() -> None:
+    """'not error' alone is satisfied by complete/partial/degraded alike --
+    the portfolio row's claim is specifically the legacy-fallback PARTIAL
+    outcome."""
+
+    smoke = _SMOKE.read_text(encoding="utf-8")
+    assert 'answer.status.value == "partial"' in smoke
+    assert "answer_status_is_exactly_partial" in smoke
+
+
+def test_smoke_discloses_the_warning_signal_is_not_client_observable() -> None:
+    """The plan_registry_gap WARNING log line + counter have no public API
+    surface -- this must be disclosed, not silently implied by a generic
+    'a warning event fired' check standing in for the real signal."""
+
+    smoke = _SMOKE.read_text(encoding="utf-8")
+    assert "warnings_present_but_not_a_plan_registry_gap_signal" in smoke
+    assert "no client-observable signal" in smoke
+
+
 def test_smoke_writes_one_artifact_per_scenario_independently() -> None:
     """Each scenario gets its own recorder and artifact -- one broken
     scenario (e.g. CHAOS-3337) must not prevent the others (portfolio_
@@ -60,5 +95,6 @@ def test_launcher_runs_stack3_intents_smoke_after_team_attribution_before_web() 
     stack3_index = launcher.index("smoke_ask_dev_stack3_intents.py")
     web_index = launcher.index("up -d --build --wait web")
     assert team_attribution_index < stack3_index < web_index
-    # Allowed to fail (CHAOS-3337) without aborting the rest of the launcher.
-    assert 'smoke_ask_dev_stack3_intents.py" || true' in launcher
+    # CHAOS-3337 shipped: no longer allowed to fail silently -- a hard
+    # failure here now aborts the launcher like every other scenario.
+    assert 'smoke_ask_dev_stack3_intents.py" || true' not in launcher

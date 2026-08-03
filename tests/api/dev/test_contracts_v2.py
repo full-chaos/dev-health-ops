@@ -1237,6 +1237,23 @@ def test_stream_valid_with_narrative_fallback_round_trips() -> None:
     )
 
 
+def test_stream_rejects_an_invented_narrative_failure_code() -> None:
+    """CHAOS-3297 codex NO-SHIP finding round 1, MEDIUM #3: the closed
+    vocabulary is enforced at the schema layer itself, not only by
+    ``persistence.service`` and the DB CHECK constraint (migration 0083)
+    -- a value outside ``NarrativeFailureCode`` can never even construct a
+    valid ``DevStreamEventV2``, regardless of what produced it."""
+
+    payloads = deepcopy(stream_fixtures()["valid_with_narrative_fallback"])
+    narrative_fallback_events = [
+        item for item in payloads if item["event"] == "answer.narrative_fallback"
+    ]
+    assert narrative_fallback_events, "fixture must contain the event under test"
+    narrative_fallback_events[0]["narrative_failure_code"] = "an_invented_code"
+    with pytest.raises(ValidationError):
+        v2.DevStreamEventV2.model_validate(narrative_fallback_events[0])
+
+
 def test_stream_rejects_a_missing_frame_ready() -> None:
     payloads = stream_fixtures()["invalid_missing_frame_ready"]
     with pytest.raises(ValueError, match="exactly one answer.frame_ready"):

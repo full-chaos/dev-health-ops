@@ -47,6 +47,7 @@ from dev_health_ops.api.dev.contract_fixtures_v2 import (
     positive_fixtures as positive_fixtures_v2,
 )
 from dev_health_ops.api.dev.contracts import DevAnswer, DevError
+from dev_health_ops.api.dev.contracts_v2 import base as _base
 from dev_health_ops.api.dev.contracts_v2.narrative import (
     DevNarrative as DevNarrativeContract,
 )
@@ -1934,6 +1935,155 @@ async def test_update_run_rejects_an_oversized_narrative_failure_code(
                 state="failed",
                 narrative_failure_code="x" * 65,
             )
+
+
+@pytest.mark.asyncio
+async def test_update_run_rejects_a_narrative_failure_code_outside_the_closed_vocabulary(
+    persistence,
+) -> None:
+    """CHAOS-3297 codex NO-SHIP finding round 1, MEDIUM #3: the producer's
+    own check, mirroring narrative_mode's -- a shape/size-legal but
+    invented code (never a real ``NarrativeFailureCode`` member) must
+    reject here, not merely pass through to the DB CHECK constraint."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        with pytest.raises(
+            DevPersistenceValidationError, match="narrative failure code"
+        ):
+            await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="failed",
+                # one edit distance from a real member (narrative_grounding_failed)
+                narrative_failure_code="narrative_grounding_faile",
+            )
+
+
+# -- CHAOS-3297 codex NO-SHIP finding round 1, MEDIUM #3: dev_runs
+# .narrative_failure_code's closed vocabulary at the DB boundary (migration
+# 0083's ck_dev_runs_narrative_failure_code CHECK constraint). Unlike
+# dev_answer_frames/dev_run_narratives.payload (migration 0080), this
+# column has no Python-side ORM listener at all -- a scalar CHECK needs
+# none -- so every write shape below is rejected by the database itself,
+# with no session-level guard to disable first.
+
+
+@pytest.mark.asyncio
+async def test_db_check_rejects_a_direct_orm_attribute_assignment_bypass(
+    persistence,
+) -> None:
+    """Write shape 1/3: ``row.narrative_failure_code = x`` on an
+    already-persisted ORM instance, entirely outside ``update_run`` --
+    caught only by the DB CHECK constraint at flush time."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await session.commit()
+
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        run.narrative_failure_code = "an_invented_code"
+        with pytest.raises(IntegrityError):
+            await session.commit()
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevRun, run_id)
+        assert reloaded is not None
+        assert reloaded.narrative_failure_code is None, (
+            "the invalid attribute-assignment write must not persist"
+        )
+
+
+@pytest.mark.asyncio
+async def test_db_check_rejects_a_bulk_update_values_bypass(persistence) -> None:
+    """Write shape 2/3: ``update(DevRun).values(narrative_failure_code=x)``
+    -- a Core-style bulk statement issued through the Session, never going
+    through the ORM unit-of-work at all."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await session.commit()
+
+        with pytest.raises(IntegrityError):
+            await session.execute(
+                update(DevRun)
+                .where(DevRun.id == run_id)
+                .values(narrative_failure_code="an_invented_code")
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevRun, run_id)
+        assert reloaded is not None
+        assert reloaded.narrative_failure_code is None, (
+            "the invalid bulk-update write must not persist"
+        )
+
+
+@pytest.mark.asyncio
+async def test_db_check_rejects_a_raw_connection_write(persistence) -> None:
+    """Write shape 3/3: a ``Connection`` obtained via ``session.connection()``,
+    entirely outside the ORM/Session write surface -- confirms the
+    constraint is enforced by the database itself, not by anything this
+    application's own code executes."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await session.commit()
+
+        connection = await session.connection()
+        with pytest.raises(IntegrityError):
+            await connection.execute(
+                update(DevRun)
+                .where(DevRun.id == run_id)
+                .values(narrative_failure_code="an_invented_code")
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevRun, run_id)
+        assert reloaded is not None
+        assert reloaded.narrative_failure_code is None, (
+            "the raw-connection bypass attempt must not persist"
+        )
+
+
+@pytest.mark.asyncio
+async def test_db_check_permits_every_real_narrative_failure_code(
+    persistence,
+) -> None:
+    """Positive control for the CHECK constraint itself: every real
+    ``NarrativeFailureCode`` member -- not just the one fixture value the
+    happy-path test above uses -- must be writable at the DB boundary."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        for code in _base.NarrativeFailureCode:
+            _conv_id, run_id = await _accepted_run(
+                service, org_id=org_id, user_id=user_id
+            )
+            run = await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="failed",
+                narrative_failure_code=code.value,
+            )
+            assert run is not None
+            assert run.narrative_failure_code == code.value
 
 
 # -- force_terminal_fallback (CHAOS-3297 Codex review round 3 Finding 2) --

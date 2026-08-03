@@ -179,6 +179,7 @@ type repositoryPayload struct {
 	ID            json.Number `json:"id"`
 	Name          string      `json:"name"`
 	FullName      string      `json:"full_name"`
+	Path          string      `json:"path"`
 	PathWithNS    string      `json:"path_with_namespace"`
 	HTMLURL       string      `json:"html_url"`
 	WebURL        string      `json:"web_url"`

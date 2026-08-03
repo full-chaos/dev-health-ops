@@ -66,6 +66,8 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 //     Canary staging and live-traffic parity are waived for this program.
 //   - github/cicd: delegates to the same complete-row TestOps unit as
 //     github/tests; config enforces mutual exclusion between their switches.
+//   - gitlab/cicd: delegates to the same complete-row TestOps unit as
+//     gitlab/tests; config enforces mutual exclusion between their switches.
 //   - github/commits: CHAOS-3177, live producer oracle parity plus
 //     tenant-scoped FINAL readback.
 //   - github/deployments: CHAOS-3176, differential row parity against the live
@@ -112,6 +114,8 @@ var routeReadyPairs = map[string]struct{}{
 	"gitlab/repo-metadata":       {},
 	"gitlab/commits":             {},
 	"gitlab/commit-stats":        {},
+	"gitlab/cicd":                {},
+	"gitlab/tests":               {},
 	"github/blame":               {},
 	"github/tests":               {},
 }
@@ -140,13 +144,14 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		GitlabCommits:      true,
 		GitlabCommitStats:  true,
 		GitlabCICD:         true,
+		GitlabTests:        true,
 		GithubPRs:          true, GithubCICD: true, GithubCommits: true,
 		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 		GithubCommitStats: true,
 		GithubBlame:       true,
 		GithubTests:       true,
 	}
-	if reflect.TypeOf(all).NumField() != 18 {
+	if reflect.TypeOf(all).NumField() != 19 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -249,12 +254,12 @@ func TestGitLabCommitStatsRequiresItsOwnSwitch(t *testing.T) {
 func TestGitLabCICDRequiresItsOwnSwitch(t *testing.T) {
 	t.Parallel()
 	off, ok := (CompleteRouteSwitches{GithubCICD: true}).Descriptor("gitlab", "cicd")
-	if !ok || off.RouteReady || off.RouteEnabled || off.Executor != ExecutorNativeGo {
+	if !ok || !off.RouteReady || off.RouteEnabled || off.Executor != ExecutorNativeGo {
 		t.Fatalf("gitlab/cicd with github switch descriptor=%+v ok=%v", off, ok)
 	}
 	on, ok := (CompleteRouteSwitches{GitlabCICD: true}).Descriptor("gitlab", "cicd")
-	if !ok || on.RouteReady || !on.RouteEnabled || on.Executor != ExecutorNativeGo ||
-		!slices.Equal(on.Destinations, []string{"ci_pipeline_runs"}) {
+	if !ok || !on.RouteReady || !on.RouteEnabled || on.Executor != ExecutorNativeGo ||
+		!slices.Equal(on.Destinations, []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks", "test_suite_results", "test_case_results", "coverage_snapshots"}) {
 		t.Fatalf("gitlab/cicd descriptor=%+v ok=%v", on, ok)
 	}
 	github, _ := (CompleteRouteSwitches{GitlabCICD: true}).Descriptor("github", "cicd")
@@ -347,7 +352,8 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"gitlab/repo-metadata":       GitLabRepositoryRouteHandler{},
 		"gitlab/commits":             GitLabCommitsRouteHandler{},
 		"gitlab/commit-stats":        GitLabCommitStatsRouteHandler{},
-		"gitlab/cicd":                GitLabCICDRouteHandler{},
+		"gitlab/cicd":                GitLabTestsRouteHandler{},
+		"gitlab/tests":               GitLabTestsRouteHandler{},
 		"github/blame":               GitHubBlameRouteHandler{},
 		"github/tests":               GitHubTestsRouteHandler{},
 	}

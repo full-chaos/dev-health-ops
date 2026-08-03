@@ -194,25 +194,41 @@ def test_gitlab_commit_stats_invalid_value_fails_closed() -> None:
         )
 
 
-def test_gitlab_cicd_switch_cannot_route_before_companion_tests_port() -> None:
+def test_gitlab_complete_unit_aliases_route_independently() -> None:
     off = ProviderUnitRouteSwitches.from_environment({})
     assert off.gitlab_cicd is False
-    assert not ProviderUnitRouteSwitches.is_route_ready("gitlab", "cicd")
+    assert off.gitlab_tests is False
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "cicd")
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "tests")
     assert not off.routes_to_river("gitlab", "cicd")
+    assert not off.routes_to_river("gitlab", "tests")
 
-    on = ProviderUnitRouteSwitches.from_environment(
+    cicd = ProviderUnitRouteSwitches.from_environment(
         {"WORKER_GITLAB_CICD_ENABLED": "true"}
     )
-    assert on.gitlab_cicd is True
-    assert not on.routes_to_river("gitlab", "cicd")
-    assert not on.routes_to_river("github", "cicd")
+    assert cicd.routes_to_river("gitlab", "cicd")
+    assert not cicd.routes_to_river("gitlab", "tests")
+    tests = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITLAB_TESTS_ENABLED": "true"}
+    )
+    assert tests.routes_to_river("gitlab", "tests")
+    assert not tests.routes_to_river("gitlab", "cicd")
+
+
+def test_gitlab_complete_unit_aliases_are_mutually_exclusive() -> None:
+    with pytest.raises(ProviderUnitRouteError, match="mutually exclusive"):
+        ProviderUnitRouteSwitches.from_environment(
+            {
+                "WORKER_GITLAB_CICD_ENABLED": "true",
+                "WORKER_GITLAB_TESTS_ENABLED": "true",
+            }
+        )
 
 
 def test_gitlab_cicd_invalid_value_fails_closed() -> None:
-    with pytest.raises(ProviderUnitRouteError):
-        ProviderUnitRouteSwitches.from_environment(
-            {"WORKER_GITLAB_CICD_ENABLED": "sometimes"}
-        )
+    for name in ("WORKER_GITLAB_CICD_ENABLED", "WORKER_GITLAB_TESTS_ENABLED"):
+        with pytest.raises(ProviderUnitRouteError):
+            ProviderUnitRouteSwitches.from_environment({name: "sometimes"})
 
 
 # ---------------------------------------------------------------------------

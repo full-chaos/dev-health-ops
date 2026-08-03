@@ -193,13 +193,14 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Fourteen route-ready pairs can reach this closure today:
+			// Sixteen route-ready pairs can reach this closure today:
 			// launchdarkly/feature-flags plus github/repo-metadata, cicd,
 			// tests, commits, deployments, security, files, commit-stats, and
-			// blame, plus jira/incidents and gitlab/repo-metadata, commits, and
-			// commit-stats. The GitHub cicd/tests aliases intentionally share
-			// one complete handler and effect sink; every other route has its
-			// own. session.Claim
+			// blame, plus jira/incidents and gitlab/repo-metadata, commits,
+			// commit-stats, cicd, and tests. The GitHub cicd/tests aliases and
+			// the GitLab cicd/tests aliases intentionally share one complete
+			// handler and effect sink; every other route has its own.
+			// session.Claim
 			// is already known here — providerunit.Handler.Work only calls
 			// BuildExecutor after its own descriptor gate passed for THIS
 			// claim's provider/dataset — so select by claim rather than
@@ -255,12 +256,12 @@ func buildProviderSyncHandler(
 				routeHandler = providersync.GitLabCommitStatsRouteHandler{}
 				sink, readback = glCommitStatsSink, glCommitStatsSink
 			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "cicd":
-				glCICDSink := providersync.GitLabCICDClickHouseEffects{
+				(session.Claim.Dataset == "cicd" || session.Claim.Dataset == "tests"):
+				glTestsSink := providersync.TestOpsClickHouseEffects{
 					Conn: clickhouseConnection, Lease: session,
 				}
-				routeHandler = providersync.GitLabCICDRouteHandler{}
-				sink, readback = glCICDSink, glCICDSink
+				routeHandler = providersync.GitLabTestsRouteHandler{}
+				sink, readback = glTestsSink, glTestsSink
 			case session.Claim.Provider == "github" &&
 				session.Claim.Dataset == "prs":
 				ghPRSink := providersync.GitHubPullRequestClickHouseEffects{
@@ -539,6 +540,7 @@ func providerSyncWorkerEnabled(cfg config.Config) bool {
 		cfg.WorkerGitlabCommitsEnabled ||
 		cfg.WorkerGitlabCommitStatsEnabled ||
 		cfg.WorkerGitlabCICDEnabled ||
+		cfg.WorkerGitlabTestsEnabled ||
 		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubCICDEnabled ||
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
 		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||

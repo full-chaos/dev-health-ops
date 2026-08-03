@@ -310,32 +310,10 @@ func (handler GitHubTestsRouteHandler) Collect(
 			coverage = append(coverage, rows.Coverage...)
 		}
 	}
-	effects := make([]EffectBatch, 0, 6)
-	pipelineEffect, err := effectBatchFromValues("ci_pipeline_runs", EffectReadbackRequired, pipelines)
+	effects, err := testOpsEffects(pipelines, jobs, acceptance, suites, cases, coverage)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	jobEffect, err := effectBatchFromValues("ci_job_runs", EffectReadbackRequired, jobs)
-	if err != nil {
-		return CompleteRouteBatch{}, err
-	}
-	acceptanceEffect, err := effectBatchFromValues("ci_acceptance_checks", EffectReadbackRequired, acceptance)
-	if err != nil {
-		return CompleteRouteBatch{}, err
-	}
-	suiteEffect, err := effectBatchFromValues("test_suite_results", EffectReadbackRequired, suites)
-	if err != nil {
-		return CompleteRouteBatch{}, err
-	}
-	caseEffect, err := effectBatchFromValues("test_case_results", EffectReadbackRequired, cases)
-	if err != nil {
-		return CompleteRouteBatch{}, err
-	}
-	coverageEffect, err := effectBatchFromValues("coverage_snapshots", EffectReadbackRequired, coverage)
-	if err != nil {
-		return CompleteRouteBatch{}, err
-	}
-	effects = append(effects, pipelineEffect, jobEffect, acceptanceEffect, suiteEffect, caseEffect, coverageEffect)
 	return CompleteRouteBatch{Effects: effects, Watermark: claim.BeforeAt, Result: map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,
@@ -507,7 +485,7 @@ func projectGitHubTestsChecks(claim Claim, repoID string, pipeline githubTestsPi
 			}
 		}
 	}
-	slices.SortFunc(names, func(a, b string) int { return strings.Compare(strings.ToLower(a), strings.ToLower(b)) })
+	sortTestOpsAcceptanceNames(names)
 	result := make([]githubTestsAcceptanceRow, 0, len(names))
 	for _, name := range names {
 		job, exists := byName[name]

@@ -70,7 +70,8 @@ reviewed route release says otherwise.
 Porting a provider/dataset pair to a `route_ready` Go complete-route handler
 (the `CompleteRouteHandler`/`EffectSink` pattern `launchdarkly/feature-flags`,
 `github/repo-metadata`, `github/commits`, `github/prs`,
-`gitlab/repo-metadata`, `gitlab/commits`, and `gitlab/commit-stats` already ship)
+`gitlab/repo-metadata`, `gitlab/commits`, `gitlab/commit-stats`, and the
+mutually exclusive `gitlab/cicd` + `gitlab/tests` aliases already ship)
 is a separate,
 code-level recipe, not a deployment-manifest concern — see
 [`provider-sync-porting-recipe.md`](./provider-sync-porting-recipe.md) and
@@ -282,7 +283,9 @@ deployment profile declares
 `WORKER_GITHUB_REPO_METADATA_ENABLED`, and
 `WORKER_GITLAB_REPO_METADATA_ENABLED`, and
 `WORKER_GITLAB_COMMITS_ENABLED`, and
-`WORKER_GITLAB_COMMIT_STATS_ENABLED` all at their secure default of `false`,
+`WORKER_GITLAB_COMMIT_STATS_ENABLED`, and the mutually exclusive
+`WORKER_GITLAB_CICD_ENABLED` / `WORKER_GITLAB_TESTS_ENABLED` aliases all at
+their secure default of `false`,
 `sync.provider_unit` is never constructed, the match fails, and the
 process exits non-zero — which crash-loops under `restart: unless-stopped`.
 The container never binds `:8080`, so `/readyz` never even becomes reachable

@@ -132,9 +132,9 @@ class ProviderUnitRouteSwitches:
     gitlab_commits: bool = False
     # Independent producer half of the native GitLab aggregate commit-stat route.
     gitlab_commit_stats: bool = False
-    # Independent producer half of the native GitLab pipeline route. D16 keeps
-    # this separate from gitlab/tests so each dataset owns disjoint columns.
+    # Mutually-exclusive aliases for one complete GitLab TestOps writer.
     gitlab_cicd: bool = False
+    gitlab_tests: bool = False
     # github_prs is the producer half of the (github, prs) gate (CHAOS-3122,
     # following CHAOS-3123's precedent). Its Go counterpart is
     # config.Config.WorkerGithubPRsEnabled, read from the same
@@ -166,6 +166,7 @@ class ProviderUnitRouteSwitches:
             gitlab_commits=_flag(source, "WORKER_GITLAB_COMMITS_ENABLED"),
             gitlab_commit_stats=_flag(source, "WORKER_GITLAB_COMMIT_STATS_ENABLED"),
             gitlab_cicd=_flag(source, "WORKER_GITLAB_CICD_ENABLED"),
+            gitlab_tests=_flag(source, "WORKER_GITLAB_TESTS_ENABLED"),
             github_prs=_flag(source, "WORKER_GITHUB_PRS_ENABLED"),
             github_cicd=_flag(source, "WORKER_GITHUB_CICD_ENABLED"),
             github_commits=_flag(source, "WORKER_GITHUB_COMMITS_ENABLED"),
@@ -185,6 +186,10 @@ class ProviderUnitRouteSwitches:
         if self.github_cicd and self.github_tests:
             raise ProviderUnitRouteError(
                 "github cicd and tests switches are mutually exclusive complete-unit aliases"
+            )
+        if self.gitlab_cicd and self.gitlab_tests:
+            raise ProviderUnitRouteError(
+                "gitlab cicd and tests switches are mutually exclusive complete-unit aliases"
             )
 
     def routes_to_river(self, provider: str, dataset: str) -> bool:

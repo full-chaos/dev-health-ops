@@ -30,7 +30,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.dev.contracts import DevScope, DevTimeRange, DirectScope
@@ -53,10 +53,12 @@ from dev_health_ops.api.dev.investigation_plans.wave_3_1_plans import (
     build_registry_with_wave_3_1,
 )
 from dev_health_ops.api.dev.orchestrator_persistence import PersistenceRunRecorder
+from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.persistence import DevPersistenceService
 from dev_health_ops.api.dev.persistence.service import (
     _SOURCE_CLASSES as _PERSISTENCE_SOURCE_CLASSES,
 )
+from dev_health_ops.llm.agent.contracts import AgentUsage
 from dev_health_ops.models.dev_persistence import (
     DevAnswerFrame,
     DevConversation,
@@ -277,13 +279,26 @@ async def _run_real_plan(intent_id: QuestionIntentID, scope: DevScope):
     )
 
 
-async def _persist(maker, org_id, user_id, result) -> None:
+async def _persist(maker, org_id, user_id, result) -> uuid.UUID:
     """The exact real production write path
     (``orchestrator.run()`` -> ``PersistenceRunRecorder.
     record_investigation_result`` -> ``DevPersistenceService.
-    append_source_observation``) -- never a synthetic call, so success here
-    proves the fix genuinely closes the live crash, not just that the
-    executor's own in-memory objects look right.
+    append_source_observation``, followed by the terminal transition every
+    real run reaches) -- never a synthetic call, so success here proves the
+    fix genuinely closes the live crash, not just that the executor's own
+    in-memory objects look right.
+
+    Codex full-branch review (CHAOS-3337, 2026-08-03) MED finding: the
+    original version of this helper never called ``session.commit()`` --
+    the ``async with maker() as session`` block's exit closes the session
+    without committing, so the transaction rolled back and every assertion
+    that followed ("must not raise") proved only that the writes didn't
+    ERROR, never that they PERSISTED (rule 1: assert the state the system
+    exists to reach; rule 4: a measurement that did not happen must FAIL).
+    Fixed: commits here, and the caller re-opens a FRESH session
+    (``_load_persisted_state`` below) to query the committed rows back --
+    the only way to prove this is real persistence, not merely a
+    same-transaction round-trip an uncommitted INSERT would also satisfy.
     """
 
     async with maker() as session:
@@ -299,15 +314,60 @@ async def _persist(maker, org_id, user_id, result) -> None:
             question="What is the health of this project?",
             scope_snapshot={},
         )
+        run_id = accepted.run.id
         recorder = PersistenceRunRecorder(
             service,
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation.id,
-            run_id=accepted.run.id,
+            run_id=run_id,
             provider_source="platform",
         )
         await recorder.record_investigation_result(result)
+        # Every real run reaches a terminal state -- record_investigation_
+        # result alone never sets one (PersistenceRunRecorder.transition
+        # deliberately no-ops for terminal states; only orchestrator.
+        # finish()'s own terminal() call, mirrored here, actually persists
+        # one).
+        await recorder.terminal(
+            state=RunState.COMPLETED,
+            answer=None,
+            error=None,
+            usage=AgentUsage(),
+            tool_call_count=0,
+            provider_fingerprint=None,
+            model_fingerprint=None,
+            prompt_checksum=None,
+        )
+        await session.commit()
+    return run_id
+
+
+async def _load_persisted_state(maker, org_id, user_id, run_id):
+    """Re-open a FRESH session (never the one that wrote the data) and
+    query the committed rows back -- the only way to prove ``_persist``'s
+    writes are real persistence, not an uncommitted transaction a same-
+    session read would also satisfy."""
+
+    async with maker() as session:
+        run = await session.get(DevRun, run_id)
+        assert run is not None, "run must exist in a fresh session after commit"
+        observations = (
+            (
+                await session.execute(
+                    select(DevRunSourceObservation)
+                    .where(
+                        DevRunSourceObservation.run_id == run_id,
+                        DevRunSourceObservation.org_id == org_id,
+                        DevRunSourceObservation.user_id == user_id,
+                    )
+                    .order_by(DevRunSourceObservation.ordinal)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return run, observations
 
 
 _INTENT_SCOPES = {
@@ -322,6 +382,17 @@ _WAVE_3_1_INTENT_IDS: list[QuestionIntentID] = sorted(
     WAVE_3_1_PLANS_BY_INTENT.keys(), key=lambda intent: intent.value
 )
 
+#: The exact SourceClass every WAVE_3_1_PLANS_BY_INTENT plan's step(s) emit
+#: -- health.project.v1/health.team.v1/balance.team_workload.v1 all wire
+#: HealthProfileResult through HEALTH_PROFILE; deficiency.operational.v1
+#: wires OperationalDeficiencyInventory through DEFICIENCY_INVENTORY.
+_EXPECTED_SOURCE_CLASS = {
+    QuestionIntentID.PROJECT_HEALTH: "health_profile",
+    QuestionIntentID.TEAM_HEALTH: "health_profile",
+    QuestionIntentID.TEAM_WORKLOAD_BALANCE: "health_profile",
+    QuestionIntentID.OPERATIONAL_DEFICIENCY_INVENTORY: "deficiency_inventory",
+}
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("intent_id", _WAVE_3_1_INTENT_IDS)
@@ -330,7 +401,11 @@ async def test_every_wave_3_1_intent_persists_through_the_real_write_path(
 ) -> None:
     """The live crash, reproduced and closed: a REAL plan-governed run for
     each of the four newly-wired intents must persist cleanly through the
-    REAL DevPersistenceService, not raise DevPersistenceValidationError.
+    REAL DevPersistenceService, not raise DevPersistenceValidationError --
+    and (codex MED finding) the committed rows must be independently
+    re-readable afterward, with the exact observation source_class/count,
+    the completed step partition, and a terminal run state, not merely
+    "the write call didn't raise".
     """
 
     maker, org_id, user_id = persistence
@@ -338,7 +413,21 @@ async def test_every_wave_3_1_intent_persists_through_the_real_write_path(
     result = await _run_real_plan(intent_id, scope_factory())
 
     assert len(result.observations) >= 1
-    await _persist(maker, org_id, user_id, result)  # must not raise
+    run_id = await _persist(maker, org_id, user_id, result)
+
+    run, observations = await _load_persisted_state(maker, org_id, user_id, run_id)
+
+    assert len(observations) == len(result.observations)
+    expected_class = _EXPECTED_SOURCE_CLASS[intent_id]
+    assert {observation.source_class for observation in observations} == {
+        expected_class
+    }
+    assert run.state == "completed"
+    assert run.plan_step_partition is not None
+    assert sorted(run.plan_step_partition.get("completed", [])) == sorted(
+        result.completed_steps
+    )
+    assert run.relationship_closure_verified == result.relationship_closure_verified
 
 
 # ---------------------------------------------------------------------------

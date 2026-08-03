@@ -23,6 +23,13 @@ def _init_throwaway_git_repo(root: Path) -> None:
         ["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True
     )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+    # Pin the untracked-file reporting mode to git's own default. A developer
+    # with `status.showUntrackedFiles=all` set globally would otherwise never
+    # reproduce the directory-collapsing behaviour CI gets, and the
+    # artifacts-exclusion test below would pass locally for the wrong reason.
+    subprocess.run(
+        ["git", "config", "status.showUntrackedFiles", "normal"], cwd=root, check=True
+    )
     (root / "placeholder.txt").write_text("x")
     subprocess.run(["git", "add", "placeholder.txt"], cwd=root, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=root, check=True)
@@ -150,3 +157,27 @@ def test_write_ignores_the_artifacts_directory_itself_when_judging_clean(
     recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
     artifact = recorder.write(tmp_path / "artifacts" / "throwaway.json")
     assert artifact["tree_clean"] is True
+
+
+def test_write_still_reports_dirty_for_an_untracked_file_outside_the_artifacts_dir(
+    tmp_path: Path,
+) -> None:
+    """The negative control for the exclusion above: ignoring the artifacts
+    directory must not become ignoring untracked files in general. An
+    untracked source file nested inside an otherwise-untracked directory --
+    the case git's default status output collapses -- is exactly what
+    tree_clean exists to catch."""
+
+    _init_throwaway_git_repo(tmp_path)
+    script_path = tmp_path / "smoke_throwaway.py"
+    script_path.write_text("# throwaway\n")
+    subprocess.run(["git", "add", "smoke_throwaway.py"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add script"], cwd=tmp_path, check=True
+    )
+    stray = tmp_path / "src" / "dev_health_ops" / "never_committed.py"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_text("# uncommitted production code that a run would execute\n")
+    recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
+    artifact = recorder.write(tmp_path / "artifacts" / "throwaway.json")
+    assert artifact["tree_clean"] is False

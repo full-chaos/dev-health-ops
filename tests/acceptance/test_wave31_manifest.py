@@ -230,31 +230,68 @@ def test_health_workload_deficiency_portfolio_flip_after_stack3_wiring() -> None
 
 
 def test_health_workload_deficiency_portfolio_items_still_honestly_blocked() -> None:
-    """The three rows the 2026-08-03 map found no adequate citation for --
-    or that are deliberately, permanently out of scope this wave -- must
-    stay ``blocked`` rather than force-fit to a weak analogue. A future
-    change that flips one of these without a genuinely matching test (or,
-    for the portfolio row, an actual StepContext-widening fix) would be a
-    false-green regression this test exists to catch.
+    """The row the 2026-08-03 map found no adequate citation for, and that
+    is deliberately out of scope this wave, must stay ``blocked`` rather
+    than force-fit to a weak analogue. A future change that flips it
+    without an actual StepContext-widening fix would be a false-green
+    regression this test exists to catch.
+
+    Two rows that were in this set (project-health-unknown-not-applicable,
+    light-on-feature-work) left it on 2026-08-03 when the specific missing
+    tests were written -- see
+    ``test_project_health_and_feature_work_rows_flipped_on_new_layer_tests``,
+    which locks that flip in the same way.
     """
 
-    blocked_ids = {
-        "matrix.organization-portfolio-status",
-        "matrix.project-health-unknown-not-applicable",
-        "matrix.light-on-feature-work",
-    }
+    blocked_ids = {"matrix.organization-portfolio-status"}
     by_id = {item.id: item for item in MANIFEST}
     assert blocked_ids <= by_id.keys()
     for item_id in blocked_ids:
         item = by_id[item_id]
         assert item.status == "blocked", f"{item_id} is not blocked: {item.status}"
         assert item.blocked_reason, f"{item_id} is blocked with no reason"
-        # None of these three share a single golden reason anymore (each
-        # was blocked for a genuinely different cause -- deliberately
-        # unwired, no matching test, or a weak analogue), so this pins
-        # distinguishing content per row rather than one shared constant.
+        # This row was blocked for a genuinely different cause from the
+        # stack-3 wiring/persistence gaps (it is deliberately unwired), so
+        # this pins distinguishing content rather than a shared constant.
         assert item.blocked_reason != STACK3_WIRING_GAP_REASON
         assert item.blocked_reason != STACK3_PERSISTENCE_GAP_REASON
+
+
+def test_project_health_and_feature_work_rows_flipped_on_new_layer_tests() -> None:
+    """Locks in the 2026-08-03 flip of the two rows whose blocked_reason
+    named a specific missing test rather than a missing capability.
+
+    Each was blocked because the closest existing test proved the claim at
+    the WRONG layer -- a TEAM-scoped profile standing in for a PROJECT one,
+    and an adapter-layer neutrality check standing in for the rule/finding
+    layer. Each is now backed by a test written at the layer the row
+    actually claims. A regression to ``blocked``, or a flip that drops the
+    node ids and rests on the evidence file merely existing, fails here.
+    """
+
+    expected_nodeids = {
+        "matrix.project-health-unknown-not-applicable": {
+            "tests/api/dev/test_chaos_3303_health_profile_synthesis.py::"
+            "test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly",
+        },
+        "matrix.light-on-feature-work": {
+            "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
+            "test_investment_shift_with_adequate_coverage_produces_a_neutral_finding",
+            "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
+            "test_investment_shift_with_adequate_coverage_but_no_baseline_is_unknown",
+        },
+    }
+    by_id = {item.id: item for item in MANIFEST}
+    for item_id, node_ids in expected_nodeids.items():
+        item = by_id[item_id]
+        assert item.status == "proven_unit", (
+            f"{item_id} is not proven_unit: {item.status}"
+        )
+        assert item.blocked_reason is None
+        # The exact node ids, not merely "some node ids": the previously
+        # cited wrong-layer tests must not be able to come back as the
+        # citation for these rows.
+        assert set(item.test_nodeids) == node_ids, item_id
 
 
 def test_migration_coexistence_gate_reflects_chaos_3306_decision() -> None:
@@ -697,6 +734,84 @@ def test_validate_execution_artifact_rejects_a_commit_not_reachable_from_head(
     )
     errors = validate_execution_artifact(tmp_path, item)
     assert any("is not an ancestor of" in error for error in errors)
+    # ...and it is reported as a fabrication, not misattributed to a
+    # truncated checkout: this repo has its full history.
+    assert not any("truncated" in error for error in errors)
+
+
+def test_validate_execution_artifact_fails_loudly_in_a_truncated_checkout(
+    tmp_path: Path,
+) -> None:
+    """CI checks out at depth 1 by default, so the object for a genuine
+    ancestor commit is simply absent and ``merge-base --is-ancestor`` exits
+    128 -- indistinguishable from a fabricated SHA by exit status alone.
+    An unmeasured ancestry binding must FAIL (never skip, never pass), and
+    must say so plainly enough that the fix is "fetch the history"."""
+
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    older_commit = _init_throwaway_git_repo(origin)
+    (origin / "later.txt").write_text("y")
+    subprocess.run(["git", "add", "later.txt"], cwd=origin, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "later"], cwd=origin, check=True)
+
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", origin.as_uri(), str(shallow)],
+        check=True,
+    )
+    # The premise of the test, asserted rather than assumed: this checkout
+    # genuinely cannot see the commit the artifact was recorded against.
+    assert (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{older_commit}^{{commit}}"],
+            cwd=shallow,
+            capture_output=True,
+        ).returncode
+        != 0
+    )
+
+    artifact_path = _write_valid_artifact(
+        shallow,
+        scenario_id="truncated",
+        script_relative="smoke_truncated.py",
+        commit_sha=older_commit,
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(shallow)),
+        evidence="smoke_truncated.py",
+    )
+    errors = validate_execution_artifact(shallow, item)
+    assert errors, "an unmeasurable ancestry binding must never validate clean"
+    assert any("git history is truncated" in error for error in errors)
+    assert any("fetch-depth: 0" in error for error in errors)
+
+
+def test_a_fabricated_commit_still_fails_in_a_truncated_checkout(
+    tmp_path: Path,
+) -> None:
+    """The security property survives the fix: naming the shallow case does
+    not give a fabricated SHA anywhere to hide -- it fails there too."""
+
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _init_throwaway_git_repo(origin)
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", origin.as_uri(), str(shallow)],
+        check=True,
+    )
+    artifact_path = _write_valid_artifact(
+        shallow,
+        scenario_id="fabricated_shallow",
+        script_relative="smoke_fabricated_shallow.py",
+        commit_sha="0" * 40,
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(shallow)),
+        evidence="smoke_fabricated_shallow.py",
+    )
+    assert validate_execution_artifact(shallow, item) != []
 
 
 def test_validate_execution_artifact_rejects_a_script_edited_since_it_ran(

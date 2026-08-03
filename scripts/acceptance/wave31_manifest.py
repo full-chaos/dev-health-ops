@@ -1051,21 +1051,28 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
         ManifestItem(
             id="matrix.project-health-unknown-not-applicable",
             category="blocking_matrix",
-            description=("Project health with unknown and not-applicable dimensions."),
-            status="blocked",
-            blocked_reason=(
-                "No PROJECT-scoped test asserts UNKNOWN and NOT_APPLICABLE "
-                "together -- the closest existing test, "
-                "test_chaos_3303_health_profile_synthesis.py::"
-                "test_team_profile_without_cohort_suppresses_every_applicable_rule, "
-                "proves this pair for a TEAM-scoped profile, not PROJECT. "
-                "CHAOS-3337 (the persistence-layer allowlist gap that "
-                "separately blocked ALL live stack-3 e2e attempts) shipped "
-                "2026-08-03 (ops #1402) and no longer applies, but a "
-                "literal PROJECT subject still cannot be live-verified: "
+            description=(
+                "Project health with unknown and not-applicable dimensions. "
+                "Proven at the synthesis layer for a PROJECT subject: a "
+                "structurally inapplicable source and a never-queried one "
+                "stay distinguishable in the profile's own observations "
+                "(NOT_APPLICABLE vs UNAVAILABLE -- evaluate_rule collapses "
+                "both to a DimensionState.UNKNOWN finding, so the "
+                "observation is the only place the distinction survives), "
+                "and neither contaminates a dimension that WAS measured. "
+                "A literal PROJECT subject still cannot be live-verified: "
                 "this fixture profile seeds zero PROJECT-kind rows (see "
-                "positive-control.real-project-status). Closing this needs "
-                "a new PROJECT-scoped unit test."
+                "positive-control.real-project-status), so the e2e arm of "
+                "this cell remains unproven and is not claimed here."
+            ),
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3303_health_profile_synthesis.py",),
+            content_markers=(
+                "test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3303_health_profile_synthesis.py::"
+                "test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly",
             ),
         ),
         ManifestItem(
@@ -1174,27 +1181,36 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
             category="blocking_matrix",
             description=(
                 "'Which teams are light on feature work?' with adequate "
-                "investment-classification coverage."
+                "investment-classification coverage. Proven at the rule/"
+                "finding layer this question is actually answered from, not "
+                "the adapter layer: with adequate classification coverage a "
+                "measured shift past the rule's threshold produces a real "
+                "INVESTMENT_BALANCE finding at the rule's triggered state, a "
+                "shift below it reports healthy, and an adequately-covered "
+                "window with no comparison baseline reports unknown rather "
+                "than a fabricated answer. Two things are deliberately NOT "
+                "claimed. First, the finding is shadow-only today: "
+                "health_rule.investment_allocation_shift.v1 is provisional "
+                "and CHAOS-3331-blocked from promotion, so what is proven is "
+                "the finding SHAPE, not that it reaches a launch surface. "
+                "Second, the answer is magnitude-only by design (PRD 6.6/10) "
+                "-- the rule renders no 'light on feature work' value "
+                "judgment, and the assertion on its neutral remediation "
+                "wording is what binds that. The live arm "
+                "(matrix.team-workload-balance.e2e-live-validated) proves "
+                "TEAM_WORKLOAD_BALANCE is reachable but asserts only a "
+                "completed answer, not this finding's content."
             ),
-            status="blocked",
-            blocked_reason=(
-                "The closest existing test, "
-                "test_chaos_3304_workload_observation_adapters.py::"
-                "test_investment_shift_stable_high_ktlo_mix_reports_neutral_measured_zero, "
-                "is adapter-layer only -- it proves the observation adapter "
-                "reports a neutral, measured-zero shift, not that the "
-                "health-rule layer produces the launch-level 'light on "
-                "feature work' finding this row claims. Citing it would "
-                "overclaim what a passing adapter test proves about the "
-                "rule/finding layer. CHAOS-3337 shipped 2026-08-03 (ops "
-                "#1402), removing the separate live-e2e blocker: "
-                "matrix.team-workload-balance.e2e-live-validated now "
-                "proves TEAM_WORKLOAD_BALANCE is live-reachable, but that "
-                "smoke only asserts a real completed answer, not the "
-                "specific launch-level 'light on feature work' finding "
-                "shape this row claims -- closing this needs a rule/"
-                "finding-layer unit test, or a live smoke that asserts the "
-                "specific finding content."
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3304_workload_health_rules.py",),
+            content_markers=(
+                "test_investment_shift_with_adequate_coverage_produces_a_neutral_finding",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
+                "test_investment_shift_with_adequate_coverage_produces_a_neutral_finding",
+                "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
+                "test_investment_shift_with_adequate_coverage_but_no_baseline_is_unknown",
             ),
         ),
         ManifestItem(
@@ -1811,6 +1827,51 @@ def _git_command(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _history_is_truncated(root: Path) -> bool:
+    """True when ``root``'s object store cannot answer reachability questions
+    about older commits -- a shallow clone, or not a usable git repo at all."""
+
+    result = _git_command(root, "rev-parse", "--is-shallow-repository")
+    if result.returncode != 0:
+        return True
+    return result.stdout.strip() == "true"
+
+
+def _ancestry_binding_errors(
+    root: Path, *, item_id: str, label: str, commit_sha: str
+) -> list[str]:
+    """Bind an artifact's recorded ``commit_sha`` to the current HEAD.
+
+    ``git merge-base --is-ancestor`` exits 1 for "genuinely unreachable" but
+    128 for "I have never heard of that object", and a shallow checkout
+    produces 128 for a perfectly real commit whose history was simply not
+    fetched -- the two are indistinguishable from the exit status alone.
+    Both remain FAILURES (this check never degrades to a skip: an unmeasured
+    ancestry binding is not a satisfied one), but a truncated checkout gets
+    its own message so the fix is "fetch the history", not "hunt a
+    fabrication that isn't there". CI must therefore check out with full
+    history (``actions/checkout`` ``fetch-depth: 0``); see
+    ``.github/workflows/test.yml``.
+    """
+
+    check = _git_command(root, "merge-base", "--is-ancestor", commit_sha, "HEAD")
+    if check.returncode == 0:
+        return []
+    if _history_is_truncated(root):
+        return [
+            f"{item_id}: {label}'s commit {commit_sha} could not be checked "
+            "against HEAD because this checkout's git history is truncated "
+            "(shallow clone) -- the ancestry binding was NOT measured, which "
+            "is a failure, never a pass. Check out with full history "
+            "(actions/checkout fetch-depth: 0) and re-run."
+        ]
+    return [
+        f"{item_id}: {label}'s commit {commit_sha} is not an ancestor of (or "
+        "equal to) current HEAD -- fabricated, from an unrelated branch, or "
+        "history was rewritten"
+    ]
+
+
 #: Same JWT-shaped pattern acceptance_artifact.redact_secrets guards against
 #: at write time. This is the independent backstop codex asked for (HIGH,
 #: 2026-08-02): redaction happening at write time does not by itself prove
@@ -1965,15 +2026,14 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
     if not isinstance(commit_sha, str) or not commit_sha:
         errors.append(f"{item.id}: execution artifact has no commit_sha recorded")
     else:
-        ancestor_check = _git_command(
-            root, "merge-base", "--is-ancestor", commit_sha, "HEAD"
-        )
-        if ancestor_check.returncode != 0:
-            errors.append(
-                f"{item.id}: execution artifact's commit {commit_sha} is not "
-                "an ancestor of (or equal to) current HEAD -- fabricated, "
-                "from an unrelated branch, or history was rewritten"
+        errors.extend(
+            _ancestry_binding_errors(
+                root,
+                item_id=item.id,
+                label="execution artifact",
+                commit_sha=commit_sha,
             )
+        )
 
     script_relative = artifact.get("script")
     script_sha256 = artifact.get("script_sha256")
@@ -2123,15 +2183,14 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
             f"{item.id}: blocked_execution_artifact has no commit_sha recorded"
         )
     else:
-        ancestor_check = _git_command(
-            root, "merge-base", "--is-ancestor", commit_sha, "HEAD"
-        )
-        if ancestor_check.returncode != 0:
-            errors.append(
-                f"{item.id}: blocked_execution_artifact's commit {commit_sha} "
-                "is not an ancestor of (or equal to) current HEAD -- "
-                "fabricated, from an unrelated branch, or history was rewritten"
+        errors.extend(
+            _ancestry_binding_errors(
+                root,
+                item_id=item.id,
+                label="blocked_execution_artifact",
+                commit_sha=commit_sha,
             )
+        )
 
     script_relative = artifact.get("script")
     script_sha256 = artifact.get("script_sha256")

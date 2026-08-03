@@ -127,8 +127,15 @@ _ARTIFACT_DIR_PREFIX = "tests/acceptance/artifacts/"
 
 
 def _git_status_porcelain(start: Path, *, root: Path) -> str:
+    # `--untracked-files=all` is load-bearing, not a nicety. Under git's
+    # default `normal` mode an entirely-untracked directory collapses to a
+    # single "?? tests/" line, so the artifacts-directory exclusion below
+    # never matches its own path and a batch mint reports tree_clean=False
+    # for every scenario. It also pins the behaviour against the local
+    # `status.showUntrackedFiles` config, which otherwise makes this
+    # measurement differ between a developer's machine and CI.
     result = subprocess.run(
-        ["git", "status", "--porcelain=v1"],
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
         cwd=root,
         capture_output=True,
         text=True,

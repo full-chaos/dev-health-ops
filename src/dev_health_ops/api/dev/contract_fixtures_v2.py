@@ -11,6 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .contract_fixtures import committed_team_commit
 from .contracts_v2.validators import CANONICAL_NO_ANSWER_COPY
 
 NOW = "2026-07-28T12:00:00Z"
@@ -34,6 +35,22 @@ def _scope() -> dict[str, Any]:
         "comparison_range": None,
         "surface_context": None,
     }
+
+
+def _team_scope() -> dict[str, Any]:
+    """The committed TEAM scope, from the same real producer v1 exports.
+
+    CHAOS-3338. ``DevScopeV2`` subclasses ``DevScope``, so the one payload
+    ``ScopeResolutionService.committed_resolution_for`` emits is the golden
+    for both trees; deriving it here rather than restating it keeps the two
+    exported team examples from drifting apart (asserted in
+    ``tests/api/dev/test_contracts_v2.py``).
+    """
+
+    resolved = committed_team_commit().resolved_scope
+    if resolved is None:  # pragma: no cover - an exact commit always resolves
+        raise RuntimeError("committed team resolution produced no resolved scope")
+    return resolved.model_dump(mode="json")
 
 
 def _entity_ref() -> dict[str, Any]:
@@ -903,13 +920,46 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
     }
 
 
+def _team_message_request() -> dict[str, Any]:
+    """A request whose committed scope is a TEAM subject (CHAOS-3338).
+
+    The canonical ``dev_message_request.v2`` carries a ``repository``
+    scope, so no exported v2 example showed a consumer the team arm of
+    ``DevScopeV2``'s inherited ``validate_direct_scope``.
+    """
+
+    request = _message_request()
+    request["question"] = "How is the Platform team doing?"
+    request["scope"] = _team_scope()
+    return request
+
+
+def positive_variant_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
+    """Extra *valid* payloads for contracts with more than one shipped shape.
+
+    Mirrors ``contract_fixtures.positive_variant_fixtures`` (v1); exported
+    as ``examples/positive/{schema}.{label}.json`` and listed under
+    ``positive_variants`` in the v2 manifest.
+    """
+
+    return {"dev_message_request.v2": [("team_direct_scope", _team_message_request())]}
+
+
 def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     """Return intentional failures; case labels explain the invariant exercised."""
 
     positives = positive_fixtures()
+    variants = {
+        schema: dict(cases) for schema, cases in positive_variant_fixtures().items()
+    }
 
     def changed(schema: str, mutator: Any) -> dict[str, Any]:
         value = deepcopy(positives[schema])
+        mutator(value)
+        return value
+
+    def changed_variant(schema: str, label: str, mutator: Any) -> dict[str, Any]:
+        value = deepcopy(variants[schema][label])
         mutator(value)
         return value
 
@@ -1215,7 +1265,39 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                     "dev_message_request.v2",
                     lambda value: value.__setitem__("question", "é" * 4_097),
                 ),
-            )
+            ),
+            # CHAOS-3338: one case per clause of the TEAM branch of the
+            # inherited ``DevScope.validate_direct_scope``, mutating the
+            # shipped team golden so a clause that stops rejecting is
+            # attributable to that clause alone.
+            (
+                "team_scope_with_repository_list",
+                changed_variant(
+                    "dev_message_request.v2",
+                    "team_direct_scope",
+                    lambda value: value["scope"].__setitem__(
+                        "repositories", ["repo_dev_health"]
+                    ),
+                ),
+            ),
+            (
+                "team_scope_without_matching_team_id",
+                changed_variant(
+                    "dev_message_request.v2",
+                    "team_direct_scope",
+                    lambda value: value["scope"].__setitem__("team_ids", []),
+                ),
+            ),
+            (
+                "team_scope_entity_ref_is_not_a_team",
+                changed_variant(
+                    "dev_message_request.v2",
+                    "team_direct_scope",
+                    lambda value: value["scope"]["entity_refs"][0].__setitem__(
+                        "entity_type", "project"
+                    ),
+                ),
+            ),
         ],
         "dev_question_intent.v1": [
             (
@@ -1590,5 +1672,6 @@ __all__ = [
     "negative_fixtures",
     "no_answer_answer_fixture",
     "positive_fixtures",
+    "positive_variant_fixtures",
     "stream_fixtures",
 ]

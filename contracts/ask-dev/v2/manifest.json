@@ -7,12 +7,34 @@
           "case": "oversized_question",
           "path": "examples/negative/dev_message_request.v2.oversized_question.json",
           "sha256": "81efd3ddd7e22c8cf670f43f336858d0116d1506c9f615713c614a2d6333dc0a"
+        },
+        {
+          "case": "team_scope_with_repository_list",
+          "path": "examples/negative/dev_message_request.v2.team_scope_with_repository_list.json",
+          "sha256": "e1596a7ec462fde1e7122162fb38c5798368b46895ee26ead68e13b4329e0187"
+        },
+        {
+          "case": "team_scope_without_matching_team_id",
+          "path": "examples/negative/dev_message_request.v2.team_scope_without_matching_team_id.json",
+          "sha256": "f4b7eb1728a1e90b665cc73ec4defbaf3d46e212e8f37fbc6ecbe59b1c6305fd"
+        },
+        {
+          "case": "team_scope_entity_ref_is_not_a_team",
+          "path": "examples/negative/dev_message_request.v2.team_scope_entity_ref_is_not_a_team.json",
+          "sha256": "de8897c2283cd9d23e63553c4b73929e74bbac3c50d66d78e8359633d2f10bfd"
         }
       ],
       "positive": {
         "path": "examples/positive/dev_message_request.v2.json",
         "sha256": "d8f99c9d4195c18ee6068ac9fa752d7617469f013ad4fb28d977852313cd0648"
       },
+      "positive_variants": [
+        {
+          "case": "team_direct_scope",
+          "path": "examples/positive/dev_message_request.v2.team_direct_scope.json",
+          "sha256": "f2fe4ecfc242c5d69c31e1a477294b0ada6ebe0f78276b6121b0230806e06fca"
+        }
+      ],
       "schema": {
         "path": "schemas/dev_message_request.v2.schema.json",
         "sha256": "b36c98551b1905343f89a3435f899ddf51ae1a55123e39368438728cf0b86e7d"
@@ -31,6 +53,7 @@
         "path": "examples/positive/dev_question_intent.v1.json",
         "sha256": "ce47eebe099ff275e2bba158c26d3a127baa0b855de81c68d4eaf09b498e9599"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_question_intent.v1.schema.json",
         "sha256": "ab9aba605adc6d28366087aa1d543453e5fac7eae09b25adee806b63f62e492e"
@@ -49,6 +72,7 @@
         "path": "examples/positive/dev_subject_mention.v1.json",
         "sha256": "8084977cf007ef7c1bfd0f9fd346fc4e0df61555fb6c346fdfa92228655dbc32"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_subject_mention.v1.schema.json",
         "sha256": "2dd5ca6cc5e702e4a7777ee05149b998d3ad63afe65d9427d05d87b88d415b52"
@@ -67,6 +91,7 @@
         "path": "examples/positive/dev_resolution_ledger.v1.json",
         "sha256": "3278cc6345c352045132a724d8a50761e7d7eada6839b7f53182af191683ffef"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_resolution_ledger.v1.schema.json",
         "sha256": "e00c984352675b52678aa45d8a979c3d8112131c2e2923ea4b9e63a1e8bd16b9"
@@ -85,6 +110,7 @@
         "path": "examples/positive/dev_subject_set.v1.json",
         "sha256": "a74fb65e6be049eb1315d6a2308c1ae750a231b9d19b8eecf2b9a25c19997e15"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_subject_set.v1.schema.json",
         "sha256": "0f07946b84b605016db675d0c53a31a8dbd86e6db563886429ebfa55f53bb32e"
@@ -103,6 +129,7 @@
         "path": "examples/positive/dev_source_requirement.v1.json",
         "sha256": "2264235568e65602bc36315d5470fdb1d88177088274f666b3e15acac974a78d"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_source_requirement.v1.schema.json",
         "sha256": "50ee3376959280adbd82706fe9d35096d78d96c2ceeecf58a59701a24a1b19b7"
@@ -121,6 +148,7 @@
         "path": "examples/positive/dev_investigation_plan.v1.json",
         "sha256": "be5f6716a303ed6b92a5e6af553f885e16178d270224f9b61792c476fef0f3bb"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_investigation_plan.v1.schema.json",
         "sha256": "f483e4657f6527f51f42657028bc2d6603ac84699dde2b52d5b411d5d27d6415"
@@ -139,6 +167,7 @@
         "path": "examples/positive/dev_source_observation.v1.json",
         "sha256": "9bb4810aa32d1b032300ddd8817e981b543cbeabc36428e00f7e81ef272c4a01"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_source_observation.v1.schema.json",
         "sha256": "8afcc973ac4735763b2ddd50ccaea9eecb710aa6196dc1fbdfe0cbf366d2075c"
@@ -157,6 +186,7 @@
         "path": "examples/positive/dev_investigation_result.v1.json",
         "sha256": "70924280c51ffdd7788cfb3093a29f5ffb6df2c54b1ccffbd1686c1f5f5522f9"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_investigation_result.v1.schema.json",
         "sha256": "b085bcd237f8ba86151505c042f2e44061f07063435286e205f4bbb80dc57a66"
@@ -345,6 +375,7 @@
         "path": "examples/positive/dev_answer_frame.v1.json",
         "sha256": "91855e2829f628d96d4579576698b5cd941188975b416e3561fc32b97156da6a"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_answer_frame.v1.schema.json",
         "sha256": "a75875a8d9b159cc07f6be98c2296c73e48f5d1fcfe8f60a4f21ee7e52ce0b50"
@@ -363,6 +394,7 @@
         "path": "examples/positive/dev_narrative.v1.json",
         "sha256": "edfe5ed285b34b6787f448218119d06fc2b0bf01702c60526c33a7dfed7d5588"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_narrative.v1.schema.json",
         "sha256": "371753c6f2e33469b12c49814b86b6fbbc50ba928ffc4991b55f63e53bfb6585"
@@ -431,6 +463,7 @@
         "path": "examples/positive/dev_answer.v2.json",
         "sha256": "07c91f4fab5284ab3f12766f181cf416386f93a48553605b9bbdd72acde06adf"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_answer.v2.schema.json",
         "sha256": "8cb9dd96139a9db09664785e8556a3f9f678f2ae0d3ded5ed4c0e174975ac5db"
@@ -449,6 +482,7 @@
         "path": "examples/positive/dev_stream_event.v2.json",
         "sha256": "adfc1fce5cb44346ae3aa0c4e902bace2465a0ae241366fb4f149f13bf420269"
       },
+      "positive_variants": [],
       "schema": {
         "path": "schemas/dev_stream_event.v2.schema.json",
         "sha256": "4f9649b45d387d381d5e25de302ddc85e6e7e5c1092424f1c28acafb1f2370ab"

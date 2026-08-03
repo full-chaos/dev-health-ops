@@ -46,6 +46,28 @@ _GITLAB_REPOSITORY_SOURCE = _source("dev_health_ops/providers/gitlab/repository.
 _GIT_MODEL_SOURCE = _source("dev_health_ops/models/git.py")
 _REPOSITORY_ROWS_SOURCE = _source("dev_health_ops/storage/repository_rows.py")
 _RELEASE_REF_SOURCE = _source("dev_health_ops/processors/release_ref.py")
+_TESTOPS_SCHEMAS_SOURCE = _source("dev_health_ops/metrics/testops_schemas.py")
+_JUNIT_PARSER_SOURCE = _source("dev_health_ops/parsers/junit.py")
+_COVERAGE_PARSER_SOURCE = _source("dev_health_ops/parsers/coverage.py")
+_TESTOPS_TESTS_SOURCE = _source("dev_health_ops/processors/testops_tests.py")
+_TESTOPS_COVERAGE_SOURCE = _source("dev_health_ops/processors/testops_coverage.py")
+_TESTOPS_INGEST_SOURCE = _source("dev_health_ops/processors/testops_ingest.py")
+_OPERATIONAL_ORDERING_SOURCE = _source(
+    "dev_health_ops/models/operational_ordering_types.py"
+)
+_OPERATIONAL_ORDERING_CODEC_SOURCE = _source(
+    "dev_health_ops/models/operational_ordering_codec.py"
+)
+_OPERATIONAL_ORDERING_RULES_SOURCE = _source(
+    "dev_health_ops/models/operational_ordering.py"
+)
+_OPERATIONAL_SOURCE = _source("dev_health_ops/models/operational.py")
+_OPERATIONAL_IDENTITY_SOURCE = _source("dev_health_ops/models/operational_identity.py")
+_JSM_MODELS_SOURCE = _source("dev_health_ops/providers/jira/jsm_models.py")
+_JSM_INCIDENTS_SOURCE = _source("dev_health_ops/providers/jira/jsm_incidents.py")
+_LICENSE_TYPES_SOURCE = _source("dev_health_ops/licensing/types.py")
+_LICENSE_REGISTRY_SOURCE = _source("dev_health_ops/licensing/registry.py")
+_FEATURE_POLICY_SOURCE = _source("dev_health_ops/licensing/feature_policy.py")
 
 _SAFE_SOURCE_MODULES: dict[str, Path] = {
     "dev_health_ops.sync.budget_types": _BUDGET_TYPES_SOURCE,
@@ -447,6 +469,48 @@ def _target_github_processor() -> None:
     _install_module("github", {"RateLimitExceededException": Exception})
 
 
+def _target_testops_ingest() -> None:
+    """Load only the report schemas, parsers, and pure ingestion producers."""
+    _load_source_module(
+        "dev_health_ops.metrics.testops_schemas", _TESTOPS_SCHEMAS_SOURCE
+    )
+    _load_source_module("dev_health_ops.parsers.junit", _JUNIT_PARSER_SOURCE)
+    _load_source_module("dev_health_ops.parsers.coverage", _COVERAGE_PARSER_SOURCE)
+    _load_source_module(
+        "dev_health_ops.processors.testops_tests", _TESTOPS_TESTS_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.processors.testops_coverage", _TESTOPS_COVERAGE_SOURCE
+    )
+
+
+def _target_jsm_incidents() -> None:
+    """Load the incident dataclasses and JSM boundary model without ORM init."""
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering_types",
+        _OPERATIONAL_ORDERING_SOURCE,
+    )
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering_codec",
+        _OPERATIONAL_ORDERING_CODEC_SOURCE,
+    )
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering",
+        _OPERATIONAL_ORDERING_RULES_SOURCE,
+    )
+    _load_source_module("dev_health_ops.models.operational", _OPERATIONAL_SOURCE)
+    _load_source_module(
+        "dev_health_ops.models.operational_identity", _OPERATIONAL_IDENTITY_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers.jira.jsm_models", _JSM_MODELS_SOURCE)
+
+
+def _target_feature_policy() -> None:
+    """Load the policy's real type and registry inputs without licensing init."""
+    _load_source_module("dev_health_ops.licensing.types", _LICENSE_TYPES_SOURCE)
+    _load_source_module("dev_health_ops.licensing.registry", _LICENSE_REGISTRY_SOURCE)
+
+
 ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
     _BASE_GIT_SOURCE: (
         "dev_health_ops.processors.base_git",
@@ -513,6 +577,21 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         _DATASET_ADAPTERS_SOURCE,
         _target_dataset_adapters,
     ),
+    _TESTOPS_INGEST_SOURCE: (
+        "dev_health_ops.processors.testops_ingest",
+        _TESTOPS_INGEST_SOURCE,
+        _target_testops_ingest,
+    ),
+    _JSM_INCIDENTS_SOURCE: (
+        "dev_health_ops.providers.jira.jsm_incidents",
+        _JSM_INCIDENTS_SOURCE,
+        _target_jsm_incidents,
+    ),
+    _FEATURE_POLICY_SOURCE: (
+        "dev_health_ops.licensing.feature_policy",
+        _FEATURE_POLICY_SOURCE,
+        _target_feature_policy,
+    ),
 }
 
 
@@ -545,9 +624,11 @@ def _install_namespace() -> None:
         "dev_health_ops.analytics",
         "dev_health_ops.connectors",
         "dev_health_ops.credentials",
+        "dev_health_ops.licensing",
         "dev_health_ops.models",
         "dev_health_ops.metrics",
         "dev_health_ops.metrics.sinks",
+        "dev_health_ops.parsers",
         "dev_health_ops.processors",
         "dev_health_ops.providers",
         "dev_health_ops.providers.github",

@@ -32,12 +32,6 @@ func requireLivePythonOracles(t *testing.T) {
 func livePythonExecutable(t *testing.T) string {
 	t.Helper()
 	requireLivePythonOracles(t)
-	// The shell gate checks this only after the package succeeds. Recording the
-	// proof here makes a missing real Python oracle invocation fail closed.
-	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), livePythonOracleProofFile)
-	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
-		t.Fatalf("write live Python oracle proof: %v", err)
-	}
 	if configured := os.Getenv("PYTHON"); configured != "" {
 		return configured
 	}
@@ -248,6 +242,10 @@ func runPythonPlannerOracle(t *testing.T, cases []plannerOracleCase) map[string]
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute live Python planner oracle: %v\n%s", err, output)
+	}
+	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), livePythonOracleProofFile)
+	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
+		t.Fatalf("write live Python planner oracle proof: %v", err)
 	}
 	var result map[string][]map[string]any
 	if err := json.Unmarshal(output, &result); err != nil {

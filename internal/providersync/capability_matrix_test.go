@@ -71,6 +71,8 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 //     Python normalizer and builder plus tenant-scoped FINAL readback.
 //   - github/security: CHAOS-3178, differential row parity against the live
 //     production source mappings plus FINAL tenant-fenced ClickHouse effects.
+//   - github/files: live traversal/row parity against backfill_file_records plus
+//     tenant-qualified FINAL readback.
 //
 // github/prs (CHAOS-3122) is deliberately NOT in this set despite having a
 // real CompleteRouteHandler and passing fixture-level parity evidence: codex
@@ -91,6 +93,7 @@ var routeReadyPairs = map[string]struct{}{
 	"github/commits":             {},
 	"github/deployments":         {},
 	"github/security":            {},
+	"github/files":               {},
 }
 
 // TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the freeze guard:
@@ -114,9 +117,9 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
 		LaunchDarklyFeatureFlags: true, GithubRepoMetadata: true,
 		GithubPRs: true, GithubCICD: true, GithubCommits: true,
-		GithubDeployments: true, GithubSecurity: true,
+		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 	}
-	if reflect.TypeOf(all).NumField() != 10 {
+	if reflect.TypeOf(all).NumField() != 11 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -229,6 +232,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"github/commits":             GitHubCommitsRouteHandler{},
 		"github/deployments":         GitHubDeploymentsRouteHandler{},
 		"github/security":            GitHubSecurityRouteHandler{},
+		"github/files":               GitHubFilesRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

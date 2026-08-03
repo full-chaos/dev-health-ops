@@ -106,6 +106,29 @@ def _target_dataset_adapters() -> None:
     )
 
 
+class _OracleGitFile:
+    def __init__(self, **kwargs: Any) -> None:
+        self.__dict__.update(kwargs)
+
+
+class _OracleAsyncBatchCollector:
+    def __init__(self, callback: Callable[[list[Any]], Any]) -> None:
+        self._callback = callback
+        self._items: list[Any] = []
+
+    async def __aenter__(self) -> _OracleAsyncBatchCollector:
+        return self
+
+    async def __aexit__(self, *_args: Any) -> None:
+        await self._callback(self._items)
+
+    def add(self, item: Any) -> None:
+        self._items.append(item)
+
+    async def maybe_flush(self) -> None:
+        return None
+
+
 def _target_base_git() -> None:
     """Stub base_git.py's heavy, unrelated imports (CHAOS-3122).
 
@@ -144,7 +167,7 @@ def _target_base_git() -> None:
             ),
             "GitBlame": object,
             "GitCommitStat": object,
-            "GitFile": object,
+            "GitFile": _OracleGitFile,
             "GitPullRequest": type(
                 "GitPullRequest",
                 (),
@@ -153,7 +176,8 @@ def _target_base_git() -> None:
         },
     )
     _install_module(
-        "dev_health_ops.processors.fetch_utils", {"AsyncBatchCollector": object}
+        "dev_health_ops.processors.fetch_utils",
+        {"AsyncBatchCollector": _OracleAsyncBatchCollector},
     )
     # False keeps base_git.py's `elif CONNECTORS_AVAILABLE:` branch from firing,
     # so it never needs dev_health_ops.connectors.utils stubbed too.

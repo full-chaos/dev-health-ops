@@ -66,6 +66,7 @@ import re
 import uuid
 from collections.abc import Mapping
 from datetime import datetime
+from typing import Any
 
 from .contracts import (
     ClaimKind,
@@ -111,6 +112,7 @@ __all__ = [
     "SOURCE_CLASS_BY_TOOL_ID",
     "UnregisteredTerminalCode",
     "build_error_frame",
+    "tolerant_parse_legacy_frame_payload",
     "wrap_legacy_answer_as_frame",
 ]
 
@@ -339,6 +341,66 @@ def _wrap_legacy_metric(metric: DevMetricRef) -> DevMetricRefV2:
             "evidence_classification": MetricEvidenceClassification.LEGACY_V1_UNMINTED,
         }
     )
+
+
+def tolerant_parse_legacy_frame_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Patch a raw ``dev_answer_frame.v1`` payload read back from storage so
+    it validates against today's ``DevAnswerFrame``, when the row predates a
+    field this branch (CHAOS-3297 stack #3) added additively without a
+    ``schema_version`` bump (version-skew read posture, team-lead ruling
+    2026-08-02).
+
+    Scope, deliberately narrow: this is a READ-time shim for a payload
+    freshly loaded from storage, never a substitute for constructing a
+    ``DevMetricRefV2`` correctly in application code. It must never run
+    before a payload is WRITTEN (``persistence/service.py``'s
+    ``record_frame`` stays strict -- a caller passing a metric with neither
+    ``evidence_ref_ids`` nor ``evidence_classification`` is a caller bug,
+    not data to quietly patch), and it is deliberately NOT implemented as a
+    ``DevMetricRefV2`` validator: putting this logic in the type itself
+    would silently default every future construction call that is missing
+    the classification by a genuine bug to ``LEGACY_V1_UNMINTED`` instead of
+    raising -- defeating F10's floor for every caller, not just replay.
+
+    Today's one skew case: every row ``wrap_legacy_answer_as_frame``
+    persisted before this branch's ``DevMetricRefV2.evidence_classification``
+    field existed has metrics with ``evidence_ref_ids: []`` and no
+    ``evidence_classification`` key at all (``production_runtime.py``'s
+    ``query_metric.v1`` tool scrubs evidence on every call -- see
+    ``_wrap_legacy_metric``'s docstring -- so this was already the
+    universal legacy-answer metric shape, not a rare one). A metric dict is
+    treated as pre-s3-shaped, and patched, only when BOTH hold: the
+    ``evidence_classification`` key is entirely absent (never when it is
+    present and ``null`` -- that is a different, already-invalid shape
+    ``DevMetricRefV2``'s own XOR validator must keep rejecting) AND
+    ``evidence_ref_ids`` is empty. A metric that already carries real
+    evidence is passed through untouched.
+
+    The health/deficiency findings fields added in the same branch need no
+    equivalent shim: both are ``default_factory``-backed, so a payload that
+    predates them simply omits the keys and pydantic supplies the (correct,
+    empty) default -- see ``test_chaos_3297_s3_version_skew.py``.
+    """
+
+    patched: dict[str, Any] = dict(payload)
+    metrics = patched.get("metrics")
+    if isinstance(metrics, list) and metrics:
+        patched_metrics: list[Any] = []
+        for metric in metrics:
+            if (
+                isinstance(metric, Mapping)
+                and "evidence_classification" not in metric
+                and not metric.get("evidence_ref_ids")
+            ):
+                patched_metric = dict(metric)
+                patched_metric["evidence_classification"] = (
+                    MetricEvidenceClassification.LEGACY_V1_UNMINTED.value
+                )
+                patched_metrics.append(patched_metric)
+            else:
+                patched_metrics.append(metric)
+        patched["metrics"] = patched_metrics
+    return patched
 
 
 def _source_class_for_legacy_token(token: str) -> SourceClass:

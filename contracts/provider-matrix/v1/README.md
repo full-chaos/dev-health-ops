@@ -267,6 +267,40 @@ Full recipe, the (now fifteen) defect classes above generalized into a
 checklist for the remaining 16 GitHub pairs, and difficulty tiers, are in
 `deploy/go-workers/provider-sync-porting-recipe.md`.
 
+## Implementation status for `(github, blame)`
+
+CHAOS-3335 keeps this pair `go_executor: none` and `route_ready: false`.
+Python remains its sole owner; there is no Go route switch or production-binary
+constructor for blame.
+
+The checked-in Go foundation can resolve a commit at the claim bound, walk the
+recursive tree, fetch GraphQL blame ranges, expand them to the production
+`git_blame` row shape, and exercise the sink/readback contract. Its 500-file
+resource cap remains unchanged. It is not a complete executor because the
+complete-route collector interface cannot read persisted `git_blame` path
+coverage. Python calls `select_unblamed_paths`, diffs the live tree against
+already-blamed paths, and selects the next 500; blindly fetching every blob or
+retrying the same prefix would diverge and burn provider quota.
+
+The public Go collector therefore fails with
+`ErrGitHubBlameProgressUnavailable` before its first provider request and
+returns no effect or watermark. The pair can claim `native_go` only after a
+tenant-scoped persisted-coverage read seam makes bounded retries advance across
+successive runs and differential cases prove the selection/progress contract.
+
+Readback is a full-order-key point lookup over `git_blame FINAL`, including
+`org_id`; integration tests plant the same natural key under two tenants and
+prove each owner sees only its row. A separate PostgreSQL + ClickHouse crash
+test proves that a write accepted before process death is reconciled as exact
+and marked committed without inserting a duplicate physical version.
+
+Foundation normalization parity is executed against the active Python
+`_backfill_github_missing_data` producer rather than a hand-authored expected
+row. The generic oracle derives the compared fields from the live `GitBlame`
+model and executes the real range-expansion/constructor path while replacing
+only provider and sink seams. These proofs make the dormant foundation
+reviewable; they do not constitute an executor or authorize activation.
+
 ## Known Go/Python divergences (fail-closed by design)
 
 `repositoryIdentity` mirrors Python's `get_repo_uuid_from_repo` for the ASCII

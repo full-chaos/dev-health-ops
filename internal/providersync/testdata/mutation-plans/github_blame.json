@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "name": "github/blame complete route (CHAOS-3335)",
+  "build": ["go", "build", "./..."],
+  "$limitation": "The plan targets each implemented correctness class independently: complete-inventory capping, retryable provider errors, timestamp precision, live-Python normalization parity, complete readback comparison, and FINAL tenant-scoped lookup. The pair deliberately remains route_ready=false because the 500-file bound has no resumable subdivision yet, so worker-family reachability is not claimed or mutated. The PostgreSQL plus ClickHouse crash window is exercised as an integration gate but is not mutated here because the effect-committer and ledger guards are shared foundation covered by their owning plans.",
+  "mutations": [
+    {
+      "id": "B1-cap-must-fail-closed",
+      "file": "internal/providersync/github_blame_route.go",
+      "find": "if len(paths) > gitHubBlameMaxFiles {",
+      "replace": "if false {",
+      "rationale": "a repository exceeding the bounded complete unit must fail before any partial blame inventory can be written or its watermark advanced",
+      "proof": [
+        ["go", "test", "-run", "^TestGitHubBlameRouteFailsClosedBeforeFetchingPartialInventory$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B2-graphql-errors-remain-retryable",
+      "file": "internal/providersync/github_blame_route.go",
+      "find": "if len(envelope.Errors) > 0 {",
+      "replace": "if false {",
+      "rationale": "a GraphQL application error is a broken provider fetch, not a legitimate empty blame result, and must keep the unit retryable",
+      "proof": [
+        ["go", "test", "-run", "^TestGitHubBlameRouteKeepsGraphQLErrorsRetryable$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B3-normalized-time-millisecond-precision",
+      "file": "internal/providersync/github_blame_route.go",
+      "find": "normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)",
+      "replace": "normalizedAt = normalizedAt.UTC()",
+      "rationale": "last_synced must be stabilized to ClickHouse DateTime64(3) precision so exact crash readback does not classify the persisted row as divergent",
+      "proof": [
+        ["go", "test", "-run", "^TestGitHubBlameRouteExpandsLiveBlameRangesIntoRows$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B4-python-author-default-parity",
+      "file": "internal/providersync/github_blame_route.go",
+      "find": "unknown := \"Unknown\"",
+      "replace": "unknown := \"\"",
+      "rationale": "the Go row constructor must preserve the active Python producer's Unknown author-name fallback rather than silently emitting an empty author",
+      "proof": [
+        ["go", "test", "-run", "^TestGenericOracleMatchesLivePythonForGitHubBlameRowConstruction$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B5-readback-author-name-clause",
+      "file": "internal/providersync/github_blame_effects_clickhouse.go",
+      "find": "!stringPointersEqual(actual.Row.AuthorName, expected.AuthorName) ||",
+      "replace": "false ||",
+      "rationale": "a persisted author_name mismatch at the expected version must report EffectConflict instead of letting crash recovery mark a divergent row committed",
+      "proof": [
+        ["go", "test", "-run", "^TestCompareGitBlameVersionCoversEveryPersistedColumn$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B6-readback-tenant-predicate",
+      "file": "internal/providersync/github_blame_effects_clickhouse.go",
+      "find": "WHERE org_id = ? AND repo_id = ? AND path = ? AND line_no = ?",
+      "replace": "WHERE org_id != ? AND repo_id = ? AND path = ? AND line_no = ?",
+      "rationale": "readback must reconcile only the owning tenant's natural key; selecting another tenant's colliding row must never classify the local effect exact",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [
+        ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameReadbackSelectsBothOwningTenantsFromNaturalKeyCollision$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B7-readback-winning-version",
+      "file": "internal/providersync/github_blame_effects_clickhouse.go",
+      "find": "FROM git_blame FINAL",
+      "replace": "FROM git_blame",
+      "rationale": "readback must resolve the winning ReplacingMergeTree version; reading physical versions makes exact recovery ambiguous after an older row exists",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [
+        ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameReadbackResolvesWinningReplacingMergeTreeVersion$", "./internal/providersync/"]
+      ]
+    }
+  ]
+}

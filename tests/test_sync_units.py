@@ -1152,6 +1152,75 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     assert finalize_calls == [((str(run.id),), "sync")]
 
 
+def test_github_files_traversal_failure_cannot_succeed_or_advance_watermark(
+    db_session, monkeypatch
+):
+    """CHAOS-3189: exercise the real swallowed traversal boundary through the worker."""
+    from unittest.mock import AsyncMock, Mock
+
+    from dev_health_ops.processors import dataset_adapters, github
+    from dev_health_ops.processors.github import _backfill_github_missing_data
+    from dev_health_ops.workers.async_runner import run_async
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(
+        db_session,
+        dataset_key="files",
+        processor_flags={"sync_git": True, "sync_files": True},
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    store = Mock()
+    store.has_any_git_files = AsyncMock(return_value=False)
+    store.has_any_git_commit_stats = AsyncMock(return_value=True)
+    store.has_any_git_blame = AsyncMock(return_value=True)
+    gh_repo = Mock()
+    gh_repo.get_branch.side_effect = RuntimeError("tree fetch failed")
+    connector = Mock()
+    connector.github.get_repo.return_value = gh_repo
+    code_client = Mock()
+    code_client.drain_usage_observations.return_value = []
+    code_client.close = AsyncMock()
+    monkeypatch.setattr(
+        github, "_github_code_client_from_connector", lambda _connector: code_client
+    )
+
+    def run_files_dataset(_ctx, _runtime):
+        inventory_status = run_async(
+            _backfill_github_missing_data(
+                store=store,
+                ingestion_sink=Mock(),
+                connector=connector,
+                db_repo=Mock(id=uuid.uuid4()),
+                repo_full_name="full-chaos/dev-health",
+                default_branch="main",
+                max_commits=None,
+                include_files=True,
+                include_blame=False,
+                include_commit_stats=False,
+            )
+        )
+        return {"inventory_status": inventory_status}
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", run_files_dataset)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "failed"
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.error is not None
+    assert unit.error.startswith("GitHubFilesTraversalFailed:")
+    assert db_session.query(SyncWatermark).count() == 0
+    assert finalize_calls == [((str(run.id),), "sync")]
+
+
 def test_run_sync_unit_failure_sanitizes_credential_material(db_session, monkeypatch):
     """Mirrors CHAOS-2758's live-verify case B: a provider exception whose
     message embeds an Authorization header (e.g. "403 rate limited --

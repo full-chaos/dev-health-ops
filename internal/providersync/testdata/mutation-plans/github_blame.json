@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
-  "name": "github/blame complete route (CHAOS-3335)",
+  "name": "github/blame complete route (CHAOS-3335 + CHAOS-3343)",
   "build": ["go", "build", "./..."],
-  "$limitation": "The plan targets each implemented correctness class independently: complete-inventory capping, retryable provider errors, timestamp precision, live-Python normalization parity, complete readback comparison, and FINAL tenant-scoped lookup. The pair deliberately remains route_ready=false because the 500-file bound has no resumable subdivision yet, so worker-family reachability is not claimed or mutated. The PostgreSQL plus ClickHouse crash window is exercised as an integration gate but is not mutated here because the effect-committer and ledger guards are shared foundation covered by their owning plans.",
+  "$limitation": "The plan targets each implemented correctness class independently: complete-inventory foundation capping, resumable persisted selection, retryable provider errors, timestamp precision, live-Python normalization and selection parity, complete readback comparison, FINAL tenant-scoped lookup, and production construction. The independent route switch remains default-off. The PostgreSQL plus ClickHouse crash window is exercised as an integration gate but is not mutated here because the effect-committer and ledger guards are shared foundation covered by their owning plans.",
   "mutations": [
     {
       "id": "B1-cap-must-fail-closed",
       "file": "internal/providersync/github_blame_route.go",
-      "find": "if len(paths) > gitHubBlameMaxFiles {",
+      "find": "if requireCompleteInventory && len(paths) > maxFiles {",
       "replace": "if false {",
       "rationale": "a repository exceeding the bounded complete unit must fail before any partial blame inventory can be written or its watermark advanced",
       "proof": [
-        ["go", "test", "-run", "^TestGitHubBlameRouteFailsClosedBeforeFetchingPartialInventory$", "./internal/providersync/"]
+        ["go", "test", "-run", "^TestGitHubBlameFoundationFailsClosedBeforeFetchingPartialInventory$", "./internal/providersync/"]
       ]
     },
     {
@@ -21,7 +21,7 @@
       "replace": "if false {",
       "rationale": "a GraphQL application error is a broken provider fetch, not a legitimate empty blame result, and must keep the unit retryable",
       "proof": [
-        ["go", "test", "-run", "^TestGitHubBlameRouteKeepsGraphQLErrorsRetryable$", "./internal/providersync/"]
+        ["go", "test", "-run", "^TestGitHubBlameFoundationKeepsGraphQLErrorsRetryable$", "./internal/providersync/"]
       ]
     },
     {
@@ -31,7 +31,7 @@
       "replace": "normalizedAt = normalizedAt.UTC()",
       "rationale": "last_synced must be stabilized to ClickHouse DateTime64(3) precision so exact crash readback does not classify the persisted row as divergent",
       "proof": [
-        ["go", "test", "-run", "^TestGitHubBlameRouteExpandsLiveBlameRangesIntoRows$", "./internal/providersync/"]
+        ["go", "test", "-run", "^TestGitHubBlameFoundationExpandsLiveBlameRangesIntoRows$", "./internal/providersync/"]
       ]
     },
     {
@@ -74,6 +74,48 @@
       "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
       "proof": [
         ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameReadbackResolvesWinningReplacingMergeTreeVersion$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B8-persisted-paths-must-be-filtered",
+      "file": "internal/providersync/github_blame_route.go",
+      "find": "if _, exists := blamed[path]; !exists {",
+      "replace": "if true {",
+      "rationale": "each successful bounded sync must exclude paths already durable for the owning tenant or every retry will burn quota on the same prefix",
+      "proof": [
+        ["go", "test", "-run", "^TestGitHubBlameRouteSelectsTheNextPersistedCoverageBatch$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B9-progress-tenant-predicate",
+      "file": "internal/providersync/github_blame_coverage_clickhouse.go",
+      "find": "WHERE org_id = ? AND repo_id = ?",
+      "replace": "WHERE org_id != ? AND repo_id = ?",
+      "rationale": "a colliding repository UUID under another tenant must never suppress the owning tenant's unblamed path",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [
+        ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameCoverageReadsOnlyTheOwningTenant$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "B10-production-construction-includes-progress-reader",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "Coverage: providersync.GitHubBlameClickHouseCoverage{\n\t\t\t\t\t\tConn: clickhouseConnection, Lease: session,\n\t\t\t\t\t},",
+      "replace": "Coverage: nil,",
+      "rationale": "the production binary must construct the durable coverage reader with the same live lease as the blame effect sink",
+      "proof": [
+        ["go", "test", "-run", "^TestBuildProviderSyncHandlerConstructsGitHubBlameCapability$", "./cmd/dev-health-worker/"]
+      ]
+    },
+    {
+      "id": "B11-progress-inventory-must-be-bounded",
+      "file": "internal/providersync/github_blame_coverage_clickhouse.go",
+      "find": "if len(paths) > maxPaths {",
+      "replace": "if false {",
+      "rationale": "the progress read must fail closed when persisted coverage exceeds its explicit memory bound instead of loading an unbounded repository inventory into the worker",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [
+        ["go", "test", "-tags", "integration", "-run", "^TestGitHubBlameCoverageReadsOnlyTheOwningTenant$", "./internal/providersync/"]
       ]
     }
   ]

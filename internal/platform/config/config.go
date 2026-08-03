@@ -130,6 +130,8 @@ type Config struct {
 	WorkerGithubFilesEnabled bool
 	// WorkerGithubCommitStatsEnabled gates the isolated (github, commit-stats) route.
 	WorkerGithubCommitStatsEnabled bool
+	// WorkerGithubBlameEnabled gates the resumable (github, blame) route.
+	WorkerGithubBlameEnabled bool
 
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
@@ -237,6 +239,10 @@ func Load(spec Spec) (Config, error) {
 		{
 			name:   "WORKER_GITHUB_COMMIT_STATS_ENABLED",
 			target: &cfg.WorkerGithubCommitStatsEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_BLAME_ENABLED",
+			target: &cfg.WorkerGithubBlameEnabled,
 		},
 	} {
 		*item.target, err = boolEnv(lookup, item.name, false)
@@ -505,6 +511,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("worker_github_prs_enabled", c.WorkerGithubPRsEnabled),
 		slog.Bool("worker_github_commits_enabled", c.WorkerGithubCommitsEnabled),
 		slog.Bool("worker_github_security_enabled", c.WorkerGithubSecurityEnabled),
+		slog.Bool("worker_github_blame_enabled", c.WorkerGithubBlameEnabled),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.Bool("settings_encryption_key_configured", c.SettingsEncryptionKey.Configured()),

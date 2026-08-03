@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 type gitHubBlameDoer struct {
 	t          *testing.T
 	requests   *int
+	blamePaths *[]string
 	fileCount  int
 	graphQLErr bool
 	emptyBound bool
@@ -53,6 +55,9 @@ func (doer gitHubBlameDoer) Do(request *http.Request) (*http.Response, error) {
 		if requestBody.Variables["ref"] != "tree-sha" || requestBody.Variables["path"] == "" {
 			doer.t.Fatalf("graphql variables=%v", requestBody.Variables)
 		}
+		if doer.blamePaths != nil {
+			*doer.blamePaths = append(*doer.blamePaths, requestBody.Variables["path"])
+		}
 		if doer.graphQLErr {
 			body = `{"errors":[{"message":"blame unavailable"}]}`
 		} else if doer.oversized {
@@ -69,6 +74,19 @@ func (doer gitHubBlameDoer) Do(request *http.Request) (*http.Response, error) {
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    request,
 	}, nil
+}
+
+type staticGitHubBlameCoverage struct {
+	paths []string
+	err   error
+}
+
+func (coverage staticGitHubBlameCoverage) BlamedPaths(
+	context.Context,
+	Claim,
+	string,
+) ([]string, error) {
+	return append([]string(nil), coverage.paths...), coverage.err
 }
 
 func TestGitHubBlameRouteFailsBeforeProviderWorkWithoutPersistedProgress(t *testing.T) {
@@ -89,6 +107,71 @@ func TestGitHubBlameRouteFailsBeforeProviderWorkWithoutPersistedProgress(t *test
 	}
 	if len(batch.Effects) != 0 || batch.Watermark != nil {
 		t.Fatalf("partial batch=%+v", batch)
+	}
+}
+
+func TestGitHubBlameRouteSelectsTheNextPersistedCoverageBatch(t *testing.T) {
+	claim := nativeTestClaim("github", "blame")
+	normalizedAt := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+
+	firstPaths := []string{}
+	firstClient := gitHubRepositoryClient(t, gitHubBlameDoer{
+		t: t, blamePaths: &firstPaths, fileCount: 7,
+	}, "https://api.github.com")
+	first, err := (GitHubBlameRouteHandler{
+		Coverage: staticGitHubBlameCoverage{paths: []string{"src/file-000.go"}},
+		MaxFiles: 3,
+	}).Collect(context.Background(), claim, providerfoundation.Credential{}, firstClient, normalizedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFirst := []string{"src/file-001.go", "src/file-002.go", "src/file-003.go"}
+	if !slices.Equal(firstPaths, wantFirst) {
+		t.Fatalf("first blame paths=%v want=%v", firstPaths, wantFirst)
+	}
+	if first.Result["inventory_status"] != "partial" ||
+		first.Result["remaining_paths"] != 3 || first.Evidence.CapReached {
+		t.Fatalf("first result=%v evidence=%+v", first.Result, first.Evidence)
+	}
+
+	secondPaths := []string{}
+	secondClient := gitHubRepositoryClient(t, gitHubBlameDoer{
+		t: t, blamePaths: &secondPaths, fileCount: 7,
+	}, "https://api.github.com")
+	second, err := (GitHubBlameRouteHandler{
+		Coverage: staticGitHubBlameCoverage{paths: append([]string{"src/file-000.go"}, wantFirst...)},
+		MaxFiles: 3,
+	}).Collect(context.Background(), claim, providerfoundation.Credential{}, secondClient, normalizedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSecond := []string{"src/file-004.go", "src/file-005.go", "src/file-006.go"}
+	if !slices.Equal(secondPaths, wantSecond) {
+		t.Fatalf("second blame paths=%v want=%v", secondPaths, wantSecond)
+	}
+	if second.Result["inventory_status"] != "complete" ||
+		second.Result["remaining_paths"] != 0 || second.Evidence.CapReached {
+		t.Fatalf("second result=%v evidence=%+v", second.Result, second.Evidence)
+	}
+}
+
+func TestGitHubBlameRouteCoverageFailureHasNoBlameEffectsOrWatermark(t *testing.T) {
+	claim := nativeTestClaim("github", "blame")
+	blamePaths := []string{}
+	client := gitHubRepositoryClient(t, gitHubBlameDoer{
+		t: t, blamePaths: &blamePaths, fileCount: 2,
+	}, "https://api.github.com")
+	batch, err := (GitHubBlameRouteHandler{
+		Coverage: staticGitHubBlameCoverage{err: errors.New("coverage unavailable")},
+	}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+	)
+	if !errors.Is(err, ErrGitHubBlameProgressUnavailable) {
+		t.Fatalf("coverage error=%v, want ErrGitHubBlameProgressUnavailable", err)
+	}
+	if len(blamePaths) != 0 || len(batch.Effects) != 0 || batch.Watermark != nil {
+		t.Fatalf("blame paths=%v partial batch=%+v", blamePaths, batch)
 	}
 }
 

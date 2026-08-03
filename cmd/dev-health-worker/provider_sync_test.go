@@ -339,6 +339,12 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 				Profile: "sync", WorkerGithubCommitStatsEnabled: true,
 			},
 		},
+		{
+			name: "github blame",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubBlameEnabled: true,
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			family, err := buildProviderSyncWorker(
@@ -405,6 +411,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 		"github_commit_stats": {
 			cfg:  config.Config{WorkerGithubCommitStatsEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubCommitStats: true},
+		},
+		"github_blame": {
+			cfg:  config.Config{WorkerGithubBlameEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubBlame: true},
 		},
 		"linear": {
 			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},
@@ -499,6 +509,32 @@ func TestBuildProviderSyncHandlerRejectsJiraIncidentsWithoutEntitlement(t *testi
 	})
 	if !errors.Is(err, errWorkerDependencyUnavailable) {
 		t.Fatalf("error=%v want dependency unavailable", err)
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsGitHubBlameCapability(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(
+		nil,
+		providersync.CompleteRouteSwitches{GithubBlame: true},
+		nil, nil, nil, nil, nil, nil, slog.Default(),
+	)
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "github", Dataset: "blame",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blameHandler, ok := executor.Handler.(providersync.GitHubBlameRouteHandler)
+	if !ok || blameHandler.Coverage == nil {
+		t.Fatalf("executor handler=%T coverage=%v", executor.Handler, blameHandler.Coverage)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.GitHubBlameClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
 	}
 }
 
@@ -612,6 +648,7 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 		"github_files":         {WorkerGithubFilesEnabled: true},
 		"github_commit_stats":  {WorkerGithubCommitStatsEnabled: true},
 		"jira_incidents":       {WorkerJiraIncidentsEnabled: true},
+		"github_blame":         {WorkerGithubBlameEnabled: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !providerSyncWorkerEnabled(cfg) {

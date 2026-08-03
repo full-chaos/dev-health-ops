@@ -195,6 +195,15 @@ if _PROMETHEUS_AVAILABLE:
         ["exception_type"],
     )
 
+    ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_internal_token_leak_total",
+        "Ask Dev terminals rejected at the boundary because a user-visible "
+        "string carried an internal vocabulary token (CHAOS-3367). Every "
+        "increment is a producer defect that would otherwise have reached a "
+        "customer; this must stay at zero.",
+        ["token", "terminal_kind"],
+    )
+
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _prometheus_client_module.Counter(
         "devhealth_ask_dev_plan_registry_gap_total",
         "Ask Dev requests for an intent preflight_outcomes.PLAN_ID_BY_INTENT names "
@@ -233,6 +242,7 @@ else:
     ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL = _noop_counter()
     ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL = _noop_counter()
     ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL = _noop_counter()
+    ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL = _noop_counter()
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _noop_counter()
     ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _noop_counter()
 

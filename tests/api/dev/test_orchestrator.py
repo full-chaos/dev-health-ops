@@ -10,15 +10,18 @@ import pytest
 
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import (
+    AnswerStatus,
     DevAnswer,
     DevContractVersions,
     DevMessageRequest,
     DevScopeResolution,
     DevToolRequest,
     DevToolResult,
+    ScopeResolutionOutcome,
     ToolID,
 )
 from dev_health_ops.api.dev.contracts_v2 import DevInvestigationResult, DevSubjectSet
+from dev_health_ops.api.dev.no_match_terminal import user_visible_strings
 from dev_health_ops.api.dev.orchestrator import (
     DevOrchestrator,
     DevRunLimits,
@@ -1405,7 +1408,12 @@ async def test_unresolved_named_entity_never_falls_back_to_organization_scope() 
         )
     )
 
-    assert result.state is RunState.COMPLETED
+    # CHAOS-3367: this run used to terminate COMPLETED with the model's own
+    # answer. A named subject that resolved to not-found now terminates with
+    # the server-owned no-match result instead (PRD Wave 3.1 §12), so the
+    # terminal state changed -- what this test is actually about, the scope
+    # the intervening tool call received, is unchanged.
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
     # The not-found result must not clobber the previously authorized scope;
     # the status tool keeps executing against the last committed scope
     # rather than silently regressing to an unauthorized/ambiguous one.
@@ -1508,10 +1516,20 @@ async def test_status_answer_after_not_found_resolution_is_insufficient_evidence
         request=_status_request(),
     )
 
+    # CHAOS-3367: the run still terminates insufficient_evidence, but a
+    # no-match is now a rendered no-match RESULT rather than a bare
+    # scope_not_found error -- an error banner has no room for the PRD's
+    # required sentence, the closest-matches list, or an honest scope row,
+    # and "The requested scope was not found." was the copy the PRD replaced.
     assert result.state is RunState.INSUFFICIENT_EVIDENCE
-    assert result.error is not None
-    assert result.error.code == "scope_not_found"
-    assert result.answer is None
+    assert result.error is None
+    assert result.answer is not None
+    assert result.answer.resolved_scope.outcome is (
+        ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND
+    )
+    assert "I did not substitute organization-wide data." in (
+        result.answer.direct_summary
+    )
 
 
 @pytest.mark.asyncio
@@ -2974,3 +2992,181 @@ async def test_repair_turn_overflow_is_a_classified_budget_limit_not_internal_er
     assert result.state is RunState.FAILED
     assert result.error is not None
     assert result.error.code == "tool_limit_reached"
+
+
+# --- CHAOS-3367: a named-subject no-match is a no-match result, never a
+# --- refusal, and never carries an internal vocabulary token.
+
+
+def _refused_answer_leaking_the_scope_outcome(*, script_id: str) -> dict:
+    """The live payload, reproduced. A model that saw ``resolve_scope.v1``
+    return ``forbidden_or_not_found`` narrated the enum straight into
+    ``direct_summary`` and marked its own answer ``refused`` -- which walked
+    past the CHAOS-3289 backstop, because that backstop returns None for a
+    ``refused``/``insufficient_evidence``/``error`` answer by design."""
+
+    payload = _answer_with_no_claims(script_id=script_id)
+    payload["status"] = "refused"
+    payload["direct_summary"] = (
+        "Scope resolution for the requested entity returned "
+        "forbidden_or_not_found. No authorized entity matched the requested "
+        "name under the current authorization."
+    )
+    return payload
+
+
+def _no_match_run(*, script_id: str, final_step: ScriptedStep, question: str):
+    calls: list[DevToolRequest] = []
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    return _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Falcon", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                final_step,
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_not_found_resolution()
+            ),
+            scope_resolver=resolve,
+        ),
+        request=_status_request_naming_entity(question=question),
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_match_answer_never_carries_an_internal_scope_token() -> None:
+    """The reported live defect, asserted as the string-level prohibition the
+    PRD writes: no user-visible field may contain ``forbidden_or_not_found``
+    (or ``scope_forbidden``), whatever the model wrote."""
+
+    script_id = "no-match-token-leak"
+    result = await _no_match_run(
+        script_id=script_id,
+        final_step=ScriptedStep(
+            decision=AgentFinalAnswer(
+                _refused_answer_leaking_the_scope_outcome(script_id=script_id)
+            )
+        ),
+        question="What is the status of the Falcon project?",
+    )
+
+    assert result.answer is not None
+    rendered = user_visible_strings(answer=result.answer, error=result.error)
+    for token in ("forbidden_or_not_found", "scope_forbidden"):
+        assert not any(token in text for text in rendered), (token, rendered)
+
+
+@pytest.mark.asyncio
+async def test_no_match_answer_is_not_a_refusal_and_shows_no_exact_scope() -> None:
+    """PRD §12, all three remaining prohibitions at once: not labelled
+    ``refused``; no ``exact`` scope outcome beside a not-found subject; no
+    "1 of N sources" when no source plan ran."""
+
+    script_id = "no-match-shape"
+    result = await _no_match_run(
+        script_id=script_id,
+        final_step=ScriptedStep(
+            decision=AgentFinalAnswer(
+                _refused_answer_leaking_the_scope_outcome(script_id=script_id)
+            )
+        ),
+        question="What is the status of the Falcon project?",
+    )
+
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.answer is not None
+    assert result.answer.status is not AnswerStatus.REFUSED
+    assert (
+        result.answer.resolved_scope.outcome
+        is ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND
+    )
+    assert result.answer.coverage.required_source_count == 0
+    assert result.answer.coverage.available_source_count == 0
+    assert "I couldn't find an authorized project named" in (
+        result.answer.direct_summary
+    )
+    assert "Falcon" in result.answer.direct_summary
+    assert "I did not substitute organization-wide data." in (
+        result.answer.direct_summary
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_refusal_after_a_no_match_becomes_a_no_match_result() -> None:
+    """The other shape the model can close with. Previously this terminated
+    with the generic "not supported by Ask Dev" refusal, which is exactly the
+    "labelled a no-match result as refused" §12 prohibits."""
+
+    result = await _no_match_run(
+        script_id="no-match-refusal",
+        final_step=ScriptedStep(
+            decision=AgentRefusal(code="unsupported", message="no")
+        ),
+        question="What is the status of the Falcon project?",
+    )
+
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.error is None
+    assert result.answer is not None
+    assert "I couldn't find an authorized project named" in (
+        result.answer.direct_summary
+    )
+
+
+@pytest.mark.asyncio
+async def test_terminal_boundary_rejects_a_leaked_token_on_any_other_path() -> None:
+    """Defense in depth for every terminal the no-match branch does not own.
+    A run that never resolved a named subject, whose model still wrote an
+    internal token into its summary, must not reach the client at all -- the
+    boundary check in ``finish()`` fails closed rather than repairing the
+    payload in place."""
+
+    script_id = "boundary-token-leak"
+    calls: list[DevToolRequest] = []
+    payload = _answer_with_no_claims(script_id=script_id)
+    payload["direct_summary"] = (
+        "The request was rejected with scope_forbidden for this repository."
+    )
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    # A run that resolved its named subject EXACTLY, so the no-match branch
+    # above is not what rejects this -- only the boundary check is.
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Ask Dev project", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(payload)),
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_project_resolution()
+            ),
+            scope_resolver=resolve,
+        )
+    )
+
+    assert result.state is RunState.FAILED
+    assert result.answer is None
+    assert result.error is not None
+    assert result.error.code == "internal_error"
+    assert "scope_forbidden" not in result.error.safe_message

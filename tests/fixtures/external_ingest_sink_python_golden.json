@@ -1165,8 +1165,8 @@
         "defaultRef": "main",
         "externalId": "Acme/API",
         "settings": {
-          "private": true,
-          "stars": 7
+          "a": 1,
+          "z": "<caf\u00e9 &>"
         },
         "sourceSystem": "github",
         "tags": [
@@ -1180,8 +1180,8 @@
         "Acme/API",
         "main",
         "2026-07-23T12:00:00.000000Z",
-        "{\"private\": true, \"stars\": 7}",
-        "[\"go\", \"ops\"]",
+        "{\"a\":1,\"z\":\"<caf\u00e9 &>\"}",
+        "[\"go\",\"ops\"]",
         "github",
         "2026-07-23T12:00:00.000000Z",
         "9749bda0-fc9f-4076-b19d-7b26c4f306ff",

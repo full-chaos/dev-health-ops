@@ -102,7 +102,7 @@ func TestGitLabRepositoryRouteEmitsCompleteReposEffect(t *testing.T) {
 		!row.CreatedAt.Equal(wantAt) || !row.LastSynced.Equal(wantAt) {
 		t.Fatalf("row=%+v", row)
 	}
-	if row.Settings != `{"source":"gitlab","project_id":123,"url":"https://gitlab.example/Acme/API","default_branch":"main","gitlab_instance_url":"https://gitlab.example"}` {
+	if row.Settings != `{"default_branch":"main","gitlab_instance_url":"https://gitlab.example","project_id":123,"source":"gitlab","url":"https://gitlab.example/Acme/API"}` {
 		t.Fatalf("settings=%s", row.Settings)
 	}
 	if row.Tags != `["gitlab"]` {

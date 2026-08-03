@@ -2551,12 +2551,12 @@ def test_dispatch_sync_run_routes_only_enabled_launchdarkly_unit_to_river(
         integration_id=launchdarkly.integration_id,
         source_id=launchdarkly.source_id,
         provider="github",
-        dataset_key="tests",
+        dataset_key="prs",
         cost_class="medium",
         mode=SyncRunMode.INCREMENTAL.value,
         status=SyncRunUnitStatus.PLANNED.value,
         attempts=0,
-        processor_flags={"sync_tests": True},
+        processor_flags={"sync_prs": True},
     )
     run.total_units = 2
     db_session.add(celery_unit)
@@ -3084,12 +3084,12 @@ def test_dispatch_sync_run_concurrency_cap_defers_regardless_of_transport(
         integration_id=river_unit.integration_id,
         source_id=river_unit.source_id,
         provider="github",
-        dataset_key="tests",
+        dataset_key="prs",
         cost_class="medium",
         mode=SyncRunMode.INCREMENTAL.value,
         status=SyncRunUnitStatus.PLANNED.value,
         attempts=0,
-        processor_flags={"sync_tests": True},
+        processor_flags={"sync_prs": True},
     )
     run.total_units = 2
     db_session.add(celery_unit)
@@ -3156,12 +3156,12 @@ def test_dispatch_sync_run_reclaims_stale_units_of_both_transports_and_redecides
         integration_id=river_unit.integration_id,
         source_id=river_unit.source_id,
         provider="github",
-        dataset_key="tests",
+        dataset_key="prs",
         cost_class="medium",
         mode=SyncRunMode.INCREMENTAL.value,
         status=SyncRunUnitStatus.PLANNED.value,
         attempts=0,
-        processor_flags={"sync_tests": True},
+        processor_flags={"sync_prs": True},
     )
     stale = datetime.now(timezone.utc) - timedelta(minutes=30)
     river_unit.status = SyncRunUnitStatus.DISPATCHING.value

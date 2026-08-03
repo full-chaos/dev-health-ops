@@ -46,7 +46,17 @@ INGESTION_ID = uuid.UUID("11111111-2222-4333-8444-555555555555")
 class FrozenDateTime(datetime):
     @classmethod
     def now(cls, tz=None):
-        return NOW if tz is not None else NOW.replace(tzinfo=None)
+        if tz is None:
+            return cls(
+                NOW.year,
+                NOW.month,
+                NOW.day,
+                NOW.hour,
+                NOW.minute,
+                NOW.second,
+                NOW.microsecond,
+            )
+        return cls.fromtimestamp(NOW.timestamp(), tz=tz)
 
 
 def _canonical(value: Any) -> Any:
@@ -121,7 +131,7 @@ def legacy_records() -> list[RecordEnvelope]:
                 "externalId": repo,
                 "sourceSystem": "github",
                 "defaultRef": "main",
-                "settings": {"private": True, "stars": 7},
+                "settings": {"z": "<café &>", "a": 1},
                 "tags": ["go", "ops"],
             },
         ),
@@ -419,6 +429,7 @@ async def _capture_legacy() -> tuple[dict[str, Any], list[RecordEnvelope]]:
     with (
         patch.object(external_sinks, "datetime", FrozenDateTime),
         patch("dev_health_ops.storage.clickhouse.datetime", FrozenDateTime),
+        patch("dev_health_ops.storage.repository_rows.datetime", FrozenDateTime),
         patch(
             "dev_health_ops.metrics.sinks.clickhouse.work_graph.datetime",
             FrozenDateTime,

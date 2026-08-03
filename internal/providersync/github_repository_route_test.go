@@ -142,8 +142,8 @@ func TestGitHubRepositoryRouteEmitsOneBoundedReposEffect(t *testing.T) {
 		!row.LastSynced.Equal(now) || !row.CreatedAt.Equal(now) {
 		t.Fatalf("row=%+v", row)
 	}
-	if row.Settings != `{"source":"github","github_instance_url":"github.com",`+
-		`"repo_id":4567,"url":"https://github.com/Acme/API","default_branch":"main"}` {
+	if row.Settings != `{"default_branch":"main","github_instance_url":"github.com",`+
+		`"repo_id":4567,"source":"github","url":"https://github.com/Acme/API"}` {
 		t.Fatalf("settings=%s", row.Settings)
 	}
 	if row.Tags != `["github","Go"]` {

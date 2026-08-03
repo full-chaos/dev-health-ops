@@ -33,7 +33,8 @@ func TestGitHubCommitsReadbackUsesFinalAndTenantPredicate(t *testing.T) {
 	sink := GitHubCommitsClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
 	claim := nativeTestClaim("github", "commits")
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	row := gitCommitRow{OrgID: claim.OrgID, RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", Hash: "abc", Message: "message", AuthorName: "author", AuthorWhen: now, CommitterName: "committer", CommitterWhen: now, LastSynced: now}
+	message := "message"
+	row := gitCommitRow{OrgID: claim.OrgID, RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", Hash: "abc", Message: &message, AuthorName: "author", AuthorWhen: now, CommitterName: "committer", CommitterWhen: now, LastSynced: now}
 	effect, err := effectBatchFromValues("git_commits", EffectReadbackRequired, []gitCommitRow{row})
 	if err != nil {
 		t.Fatal(err)

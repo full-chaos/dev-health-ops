@@ -42,6 +42,7 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"github/commit-stats":        ExecutorNativeGo,
 	"jira/incidents":             ExecutorNativeGo,
 	"gitlab/repo-metadata":       ExecutorNativeGo,
+	"gitlab/commits":             ExecutorNativeGo,
 	"github/blame":               ExecutorNativeGo,
 }
 
@@ -131,6 +132,9 @@ type CompleteRouteSwitches struct {
 	// route. It intentionally does not share GithubRepoMetadata: the two pairs
 	// have different API and persisted-instance semantics.
 	GitlabRepoMetadata bool
+	// GitlabCommits independently gates the native GitLab commit route. It
+	// shares the git_commits destination with GitHub but not route ownership.
+	GitlabCommits bool
 	// GithubPRs gates (github, prs) only (CHAOS-3122/CHAOS-3123 follow-on).
 	// It must never gate github/pr-reviews or github/pr-comments: those two
 	// datasets share the "prs" legacy target and processor flag in Python
@@ -211,6 +215,10 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = []string{"repos"}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GitlabRepoMetadata
+	case provider == "gitlab" && dataset == "commits":
+		descriptor.Destinations = []string{"git_commits"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabCommits
 	case provider == "github" && dataset == "prs":
 		// GitHub has a native complete-route handler
 		// (GitHubPullRequestRouteHandler) and a git_pull_requests effect sink

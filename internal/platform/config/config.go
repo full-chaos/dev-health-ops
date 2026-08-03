@@ -112,6 +112,8 @@ type Config struct {
 	// (gitlab, repo-metadata) route. It defaults false and does not activate
 	// traffic merely because the capability matrix is ready.
 	WorkerGitlabRepoMetadataEnabled bool
+	// WorkerGitlabCommitsEnabled gates the isolated (gitlab, commits) route.
+	WorkerGitlabCommitsEnabled bool
 	// WorkerGithubPRsEnabled is the (github, prs) half of the two-key route
 	// gate (CHAOS-3122, following CHAOS-3123's precedent). The matrix marking
 	// the pair route_ready is the other half; neither alone moves traffic.
@@ -211,6 +213,10 @@ func Load(spec Spec) (Config, error) {
 		{
 			name:   "WORKER_GITLAB_REPO_METADATA_ENABLED",
 			target: &cfg.WorkerGitlabRepoMetadataEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_COMMITS_ENABLED",
+			target: &cfg.WorkerGitlabCommitsEnabled,
 		},
 		{
 			name:   "WORKER_GITHUB_PRS_ENABLED",
@@ -508,6 +514,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		),
 		slog.Bool("worker_github_repo_metadata_enabled", c.WorkerGithubRepoMetadataEnabled),
 		slog.Bool("worker_gitlab_repo_metadata_enabled", c.WorkerGitlabRepoMetadataEnabled),
+		slog.Bool("worker_gitlab_commits_enabled", c.WorkerGitlabCommitsEnabled),
 		slog.Bool("worker_github_prs_enabled", c.WorkerGithubPRsEnabled),
 		slog.Bool("worker_github_commits_enabled", c.WorkerGithubCommitsEnabled),
 		slog.Bool("worker_github_security_enabled", c.WorkerGithubSecurityEnabled),

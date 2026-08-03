@@ -31,7 +31,9 @@ from dev_health_ops.api.dev.status_change_service import (
     CIFact,
     CompletionState,
     DeploymentFact,
+    IncidentFact,
     ObservedChange,
+    PullRequestFact,
     RawChangeSummary,
     RawStatusSnapshot,
     SourceReference,
@@ -225,6 +227,12 @@ async def test_completed_parent_with_incomplete_required_child_is_not_ready() ->
         "ev-issue-1",
         "ev-issue-child",
     )
+    # CHAOS-3297 s2, case 5: one incomplete required child under a Done
+    # parent -- the complete denominator/numerator (1 total, 0 complete)
+    # must be reported, not just the presence of the incomplete child.
+    assert result.actual.required_child_total == 1
+    assert result.actual.required_child_complete == 0
+    assert result.actual.display_truncated is False
 
 
 @pytest.mark.asyncio
@@ -274,6 +282,13 @@ async def test_completed_parent_with_unknown_child_requirement_is_indeterminate(
     assert result.actual.required_children == ()
     assert result.children[0].required is None
     assert result.actual.conflicts == ()
+    # CHAOS-3297 s2, case 2: the requirement itself is unknown, so the
+    # denominator is honestly zero -- never fabricated as "0 required, so
+    # vacuously complete". Callers must gate on reason_codes/state, not on
+    # a bare 0/0 count.
+    assert result.actual.required_child_total == 0
+    assert result.actual.required_child_complete == 0
+    assert result.actual.display_truncated is False
 
 
 @pytest.mark.asyncio
@@ -470,10 +485,26 @@ async def test_completion_assesses_required_children_beyond_display_bound() -> N
     assert result.actual.state is CompletionState.NOT_READY
     assert "required_child_incomplete" in result.actual.reason_codes
     assert len(result.actual.required_children) == 100
+    # CHAOS-3297 s2, case 4a: the display list is bounded to 100, but the
+    # denominator/numerator must reflect the full 101-child assessment set
+    # -- this is the exact defect this stack fixes (the denominator was
+    # previously discarded along with the truncated display list).
+    assert result.actual.required_child_total == 101
+    assert result.actual.required_child_complete == 100
+    assert result.actual.display_truncated is True
 
 
 @pytest.mark.asyncio
-async def test_assessment_source_bound_never_false_passes_completion() -> None:
+async def test_children_exactly_at_bound_with_no_truncation_signal_keeps_the_denominator() -> (
+    None
+):
+    """CHAOS-3297 s2 round 3 (codex MEDIUM): exactly
+    MAX_STATUS_ASSESSMENT_ITEMS legitimate children, with the source
+    reporting no truncation, is a real, complete denominator -- it must
+    never be confused with a truncated one just because the count happens
+    to equal the bound. Truncation is a claim only the source can make
+    (``children_source_truncated``/``membership_source_truncated``), never
+    a length heuristic."""
     children = tuple(
         _fact(f"child-{index:04d}", "done", required=True) for index in range(1_000)
     )
@@ -482,7 +513,49 @@ async def test_assessment_source_bound_never_false_passes_completion() -> None:
             RawStatusSnapshot(
                 declared=_fact("issue-1", "done"),
                 children=children,
+                deployments=(_deployment(),),
                 source_refs=(_source_ref(),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(), max_items=100),
+    )
+
+    assert result.state is StatusResultState.COMPLETE
+    assert result.actual.state is CompletionState.READY
+    assert "assessment_source_limit_reached" not in result.actual.reason_codes
+    assert result.warnings == ()
+    assert result.actual.required_child_total == 1_000
+    assert result.actual.required_child_complete == 1_000
+    # The display bound is a separate, always-legitimate concern from
+    # source truncation -- 1,000 real children still only display 100.
+    assert result.actual.display_truncated is True
+    assert len(result.actual.required_children) == 100
+
+
+@pytest.mark.asyncio
+async def test_explicit_children_source_truncation_signal_withholds_the_denominator() -> (
+    None
+):
+    """The service test that used to encode the exactly-1,000-children
+    ambiguity (CHAOS-3297 s2 round 3, codex MEDIUM): truncation must be
+    driven by the source's own provenance flag, not inferred from a
+    count. A small, otherwise-unremarkable required-child set with
+    ``children_source_truncated=True`` must still withhold the
+    denominator and force non-READY, exactly like the 1,000-item case
+    used to (incorrectly) via the length heuristic."""
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=(_fact("child-a", "done", required=True),),
+                deployments=(_deployment(),),
+                source_refs=(_source_ref(),),
+                children_source_truncated=True,
             )
         )
     )
@@ -496,6 +569,202 @@ async def test_assessment_source_bound_never_false_passes_completion() -> None:
     assert result.actual.state is CompletionState.INDETERMINATE
     assert "assessment_source_limit_reached" in result.actual.reason_codes
     assert result.warnings == ("status assessment source bound reached",)
+    assert result.actual.required_child_total is None
+    assert result.actual.required_child_complete is None
+    assert result.actual.display_truncated is False
+
+
+@pytest.mark.asyncio
+async def test_membership_source_truncation_signal_also_withholds_the_denominator() -> (
+    None
+):
+    """CHAOS-3297 s2 round 3 (codex HIGH): membership truncation is a
+    distinct root cause one hop upstream of the children fetch itself
+    (native_status_change._WORK_UNIT_MEMBERS_SQL mixes issue and PR
+    members in one limited query) -- it must gate the denominator exactly
+    like a direct children-source truncation, not just fire a reason code
+    that happens to force INDETERMINATE for unrelated reasons."""
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=(_fact("child-a", "done", required=True),),
+                deployments=(_deployment(),),
+                source_refs=(_source_ref(),),
+                membership_source_truncated=True,
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(), max_items=100),
+    )
+
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert "assessment_source_limit_reached" in result.actual.reason_codes
+    assert result.actual.required_child_total is None
+    assert result.actual.required_child_complete is None
+
+
+def _many_blockers(n: int) -> tuple[StatusFact, ...]:
+    return tuple(_fact(f"blocker-{i:04d}", "resolved") for i in range(n))
+
+
+def _many_pull_requests(n: int) -> tuple[PullRequestFact, ...]:
+    return tuple(
+        PullRequestFact(
+            entity_id=f"pr-{i:04d}",
+            display_label=f"PR {i}",
+            state="merged",
+            review_state="APPROVED",
+            changes_requested=0,
+            merged=True,
+            observed_at=NOW,
+            source_ref_id="source:work-items",
+            evidence_ref_ids=(f"ev-pr-{i:04d}",),
+            required=False,
+        )
+        for i in range(n)
+    )
+
+
+def _many_ci(n: int) -> tuple[CIFact, ...]:
+    return tuple(
+        CIFact(
+            entity_id=f"ci-{i:04d}",
+            display_label=f"CI {i}",
+            conclusion="success",
+            required=False,
+            skipped_required_work=None,
+            observed_at=NOW,
+            source_ref_id="source:work-items",
+            evidence_ref_ids=(f"ev-ci-{i:04d}",),
+        )
+        for i in range(n)
+    )
+
+
+def _many_deployments(n: int) -> tuple[DeploymentFact, ...]:
+    return tuple(
+        DeploymentFact(
+            entity_id=f"deployment-{i:04d}",
+            display_label=f"Deployment {i}",
+            status="success",
+            environment="production",
+            required=True,
+            observed_at=NOW,
+            source_ref_id="source:work-items",
+            evidence_ref_ids=(f"ev-deployment-{i:04d}",),
+        )
+        for i in range(n)
+    )
+
+
+def _many_incidents(n: int) -> tuple[IncidentFact, ...]:
+    return tuple(
+        IncidentFact(
+            entity_id=f"incident-{i:04d}",
+            display_label=f"Incident {i}",
+            status="resolved",
+            active=False,
+            blocking=False,
+            observed_at=NOW,
+            source_ref_id="source:work-items",
+            evidence_ref_ids=(f"ev-incident-{i:04d}",),
+        )
+        for i in range(n)
+    )
+
+
+def _blockers_snapshot(n: int, *, truncated: bool) -> RawStatusSnapshot:
+    return RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        blockers=_many_blockers(n),
+        deployments=(_deployment(),),
+        source_refs=(_source_ref(),),
+        blockers_source_truncated=truncated,
+    )
+
+
+def _pull_requests_snapshot(n: int, *, truncated: bool) -> RawStatusSnapshot:
+    return RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        pull_requests=_many_pull_requests(n),
+        deployments=(_deployment(),),
+        source_refs=(_source_ref(),),
+        pull_requests_source_truncated=truncated,
+    )
+
+
+def _ci_snapshot(n: int, *, truncated: bool) -> RawStatusSnapshot:
+    return RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        ci=_many_ci(n),
+        deployments=(_deployment(),),
+        source_refs=(_source_ref(),),
+        ci_source_truncated=truncated,
+    )
+
+
+def _deployments_snapshot(n: int, *, truncated: bool) -> RawStatusSnapshot:
+    return RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        deployments=_many_deployments(n),
+        source_refs=(_source_ref(),),
+        deployments_source_truncated=truncated,
+    )
+
+
+def _incidents_snapshot(n: int, *, truncated: bool) -> RawStatusSnapshot:
+    return RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        incidents=_many_incidents(n),
+        deployments=(_deployment(),),
+        source_refs=(_source_ref(),),
+        incidents_source_truncated=truncated,
+    )
+
+
+_CATEGORY_SNAPSHOT_BUILDERS = {
+    "blockers_source_truncated": _blockers_snapshot,
+    "pull_requests_source_truncated": _pull_requests_snapshot,
+    "ci_source_truncated": _ci_snapshot,
+    "deployments_source_truncated": _deployments_snapshot,
+    "incidents_source_truncated": _incidents_snapshot,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag_name", sorted(_CATEGORY_SNAPSHOT_BUILDERS))
+async def test_category_truncation_is_explicit_provenance_only_not_a_length_count(
+    flag_name: str,
+) -> None:
+    """CHAOS-3297 s2 round 5 (codex MEDIUM): finish what round 3 started
+    for every remaining assessment category (blockers, pull_requests, ci,
+    deployments, incidents) -- ``assessment_source_limit_reached`` comes
+    ONLY from that category's own explicit truncation flag now, never from
+    ``len(category) >= MAX_STATUS_ASSESSMENT_ITEMS``. Parametrized: exactly
+    MAX_STATUS_ASSESSMENT_ITEMS (1,000) legitimate items with no signal
+    must NOT report truncation (the removed equality heuristic's false
+    positive); a small result set with the explicit flag set MUST.
+    """
+    build = _CATEGORY_SNAPSHOT_BUILDERS[flag_name]
+
+    result_at_cap = await StatusChangeService(
+        Source(build(1_000, truncated=False))
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+    assert "assessment_source_limit_reached" not in result_at_cap.actual.reason_codes
+
+    result_truncated = await StatusChangeService(
+        Source(build(1, truncated=True))
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+    assert "assessment_source_limit_reached" in result_truncated.actual.reason_codes
 
 
 def test_rejects_naive_as_of_and_out_of_bounds() -> None:
@@ -550,3 +819,64 @@ async def test_unsuccessful_required_release_is_not_ready() -> None:
 
     assert result.actual.state is CompletionState.NOT_READY
     assert result.actual.reason_codes == ("required_deployment_not_succeeded",)
+
+
+@pytest.mark.asyncio
+async def test_known_denominator_reports_total_and_complete_counts() -> None:
+    """CHAOS-3297 s2, case 1: a straightforward, well-below-bound required
+    child set -- the complete/total counts must match what a human counting
+    the raw facts would get."""
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=(
+                    _fact("child-a", "done", required=True),
+                    _fact("child-b", "done", required=True),
+                    _fact("child-c", "in_progress", required=True),
+                ),
+                deployments=(_deployment(),),
+                source_refs=(_source_ref(),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+
+    assert result.actual.required_child_total == 3
+    assert result.actual.required_child_complete == 2
+    assert result.actual.display_truncated is False
+    assert "required_child_incomplete" in result.actual.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_stale_denominator_counts_are_honest_but_state_withholds_trust() -> None:
+    """CHAOS-3297 s2, case 3: a stale source can still yield a
+    complete-looking 1/1 count. The count itself must stay honest (not
+    zeroed out just because the source is stale), but the result state
+    must never present that count as COMPLETE -- callers gate on
+    ``state``/``reason_codes``, never on the ratio alone."""
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=(_fact("issue-child", "done", required=True),),
+                deployments=(_deployment(),),
+                source_refs=(_source_ref(FreshnessState.STALE),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+
+    assert result.actual.required_child_total == 1
+    assert result.actual.required_child_complete == 1
+    assert result.actual.display_truncated is False
+    assert "required_source_not_fresh" in result.actual.reason_codes
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert result.state is StatusResultState.PARTIAL
+    assert result.state is not StatusResultState.COMPLETE

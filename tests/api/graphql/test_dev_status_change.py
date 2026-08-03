@@ -43,7 +43,11 @@ query Status($orgId: String!, $input: DevStatusSnapshotInput!) {
     contractVersion state asOf warnings
     scope { organizationId directScope repositoryIds currentStart currentEnd }
     declared { entityId status required evidenceRefIds }
-    actual { state ruleId ruleVersion reasonCodes evidenceRefIds }
+    actual {
+      state ruleId ruleVersion reasonCodes evidenceRefIds
+      requiredChildren { entityId status }
+      requiredChildTotal requiredChildComplete displayTruncated
+    }
     blockers { entityId status }
     sourceRefs { refId sourceSystem freshness evidenceRefIds }
   }
@@ -147,6 +151,22 @@ class FakeStatusChangeService:
             "source-work",
             ("evidence-a",),
         )
+        # CHAOS-3297 s2 round 2 (codex HIGH): a required_children fixture
+        # of () with total/complete of 0/0 lets a missing GraphQL field
+        # (or a resolver that silently drops it) pass unnoticed -- a
+        # nonzero required child forces the query and the assertion below
+        # to actually exercise the numerator/denominator, not just their
+        # absence.
+        required_child = StatusFact(
+            "issue",
+            "issue-child",
+            "Child A",
+            "done",
+            NOW,
+            "source-work",
+            ("evidence-child",),
+            True,
+        )
         source = SourceReference(
             "source-work",
             "work_items",
@@ -166,7 +186,10 @@ class FakeStatusChangeService:
                 "actual-completion",
                 "actual-completion.v4",
                 (),
-                (),
+                (required_child,),
+                1,
+                1,
+                False,
                 (),
                 ("source-work",),
                 ("evidence-a",),
@@ -232,6 +255,10 @@ async def test_status_snapshot_is_typed_and_uses_shared_service(
         "ruleVersion": "actual-completion.v4",
         "reasonCodes": [],
         "evidenceRefIds": ["evidence-a"],
+        "requiredChildren": [{"entityId": "issue-child", "status": "done"}],
+        "requiredChildTotal": 1,
+        "requiredChildComplete": 1,
+        "displayTruncated": False,
     }
     assert result.data["devStatusSnapshot"]["declared"]["status"] == "done"
 

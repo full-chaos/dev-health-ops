@@ -155,6 +155,21 @@ class ActualCompletion:
     rule_version: str
     reason_codes: tuple[str, ...]
     required_children: tuple[StatusFact, ...]
+    # Captured in ``_assess`` from the UNBOUNDED assessment set, before
+    # ``status_snapshot`` replaces ``required_children`` with the
+    # bounded display list -- these are the complete denominator/numerator,
+    # never the truncated-for-display counterparts. See
+    # ``docs`` note on CHAOS-3297 stack #2: the display bound must never
+    # silently become the completion denominator.
+    #
+    # Both are ``None`` (never a fabricated count) whenever the required-
+    # child *source* itself was truncated (round 2, codex HIGH): an
+    # undercounted total is worse than an admittedly unknown one, because
+    # it can look deceptively complete (e.g. 999/999) while genuinely
+    # omitting children the source never returned.
+    required_child_total: int | None
+    required_child_complete: int | None
+    display_truncated: bool
     conflicts: tuple[StatusConflict, ...]
     source_ref_ids: tuple[str, ...]
     evidence_ref_ids: tuple[str, ...]
@@ -171,6 +186,36 @@ class RawStatusSnapshot:
     incidents: tuple[IncidentFact, ...] = ()
     source_refs: tuple[SourceReference, ...] = ()
     warnings: tuple[str, ...] = ()
+    # True when the required-child *source query itself* returned more
+    # rows than the assessment bound before any parent/child split -- a
+    # signal distinct from ``len(children) >= MAX_STATUS_ASSESSMENT_ITEMS``
+    # because a source that fetches a declared parent and its children in
+    # one limited query (see native_status_change._WORK_ITEMS_SQL) can
+    # undercount children by exactly the parent's slot, letting the plain
+    # length check silently pass while real children were dropped.
+    children_source_truncated: bool = False
+    # Same shape of defect, one hop further upstream (round 3, codex
+    # HIGH): for WORK_UNIT scope, native_status_change._WORK_UNIT_MEMBERS_SQL
+    # mixes issue and PR members in one limited query, then splits them by
+    # node_type -- membership truncation can silently drop members of
+    # EITHER type without either post-split list ever reaching its own
+    # length bound. True only when the source itself reports truncation
+    # (see the sentinel fetch there); never inferred from a length check.
+    membership_source_truncated: bool = False
+    # Round 5 (codex MEDIUM): the same explicit-provenance-only rule,
+    # finished for every remaining assessment category. Each is True only
+    # when that category's source reports truncation via its own
+    # limit+1 sentinel (native_status_change._bounded_read) -- never
+    # inferred from ``len(category) >= MAX_STATUS_ASSESSMENT_ITEMS``,
+    # which both false-negatives (a bound shared with a collapsed/reduced
+    # set, e.g. CI runs collapsed to latest-per-PR after a global-order
+    # LIMIT) and false-positives (exactly MAX_STATUS_ASSESSMENT_ITEMS
+    # legitimate, untruncated results).
+    blockers_source_truncated: bool = False
+    pull_requests_source_truncated: bool = False
+    ci_source_truncated: bool = False
+    deployments_source_truncated: bool = False
+    incidents_source_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,16 +379,37 @@ class StatusChangeService:
             as_of=as_of,
             limit=MAX_STATUS_ASSESSMENT_ITEMS,
         )
-        assessment_source_limit_reached = any(
-            len(facts) >= MAX_STATUS_ASSESSMENT_ITEMS
-            for facts in (
-                raw.children,
-                raw.blockers,
-                raw.pull_requests,
-                raw.ci,
-                raw.deployments,
-                raw.incidents,
-            )
+        # CHAOS-3297 s2 round 2 (codex HIGH): a plain ``len(raw.children) >=
+        # MAX_STATUS_ASSESSMENT_ITEMS`` check can never fire for a source
+        # that fetches the declared parent and its children in one
+        # limited query (the parent consumes one row of that budget), so
+        # the source's own truncation signal -- computed before that split
+        # -- is required. Round 3 (codex MEDIUM): that length check is not
+        # just insufficient, it is actively wrong to keep as a fallback --
+        # exactly ``MAX_STATUS_ASSESSMENT_ITEMS`` legitimate children (no
+        # truncation at all) would trip it and falsely withhold a real,
+        # complete denominator. Truncation for children comes ONLY from
+        # explicit source-provided provenance now: the sentinel-detected
+        # ``children_source_truncated`` (native_status_change._WORK_ITEMS_SQL)
+        # and, one hop further upstream for WORK_UNIT scope,
+        # ``membership_source_truncated`` (_WORK_UNIT_MEMBERS_SQL) -- a
+        # dropped issue OR PR member there can undercount required work
+        # without either post-split list ever reaching its own bound.
+        children_source_truncated = (
+            raw.children_source_truncated or raw.membership_source_truncated
+        )
+        # Round 5 (codex MEDIUM): finish what round 3 started -- every
+        # remaining category's truncation signal is now explicit
+        # source-provided provenance too (see the RawStatusSnapshot field
+        # comments above); the ``len(category) >= MAX_STATUS_ASSESSMENT_ITEMS``
+        # equality inference is gone entirely, not just for children.
+        assessment_source_limit_reached = (
+            children_source_truncated
+            or raw.blockers_source_truncated
+            or raw.pull_requests_source_truncated
+            or raw.ci_source_truncated
+            or raw.deployments_source_truncated
+            or raw.incidents_source_truncated
         )
         bounded = replace(
             raw,
@@ -357,6 +423,7 @@ class StatusChangeService:
         actual = self._assess(
             raw,
             assessment_source_limit_reached=assessment_source_limit_reached,
+            children_source_truncated=children_source_truncated,
             # CHAOS-3303: a team subject has no single declared/children
             # completion tree (_WORK_ITEMS_SQL is never queried for team
             # scope -- see native_status_change.TEAM_NOT_APPLICABLE_SOURCES),
@@ -377,6 +444,11 @@ class StatusChangeService:
         )
         actual = replace(
             actual,
+            # Read from the still-unbounded ``actual.required_children``
+            # (set by ``_assess``) before it is overwritten below with the
+            # bounded display list -- both keyword arguments are evaluated
+            # against the pre-replace object.
+            display_truncated=len(actual.required_children) > request.max_items,
             required_children=self._bounded(
                 actual.required_children, request.max_items
             ),
@@ -602,6 +674,7 @@ class StatusChangeService:
         raw: RawStatusSnapshot,
         *,
         assessment_source_limit_reached: bool = False,
+        children_source_truncated: bool = False,
         declared_optional: bool = False,
         release_evidence_required: bool = False,
     ) -> ActualCompletion:
@@ -728,12 +801,30 @@ class StatusChangeService:
             else CompletionState.READY
         )
         used_source_ids = tuple(sorted(required_source_ids & source_by_id.keys()))
+        # The complete denominator/numerator: computed here, against the
+        # UNBOUNDED ``raw.children`` (``required_children`` above), before
+        # any display truncation is applied by the caller. Withheld
+        # (``None``, never a fabricated count) when the required-child
+        # source itself was truncated -- an honest "unknown" beats a
+        # count that looks complete only because the omitted children
+        # were never fetched.
+        required_child_total: int | None
+        required_child_complete: int | None
+        if children_source_truncated:
+            required_child_total = None
+            required_child_complete = None
+        else:
+            required_child_total = len(required_children)
+            required_child_complete = required_child_total - len(incomplete_children)
         return ActualCompletion(
             state=state,
             rule_id=STATUS_RULE_ID,
             rule_version=STATUS_RULE_VERSION,
             reason_codes=tuple(sorted(reasons)),
             required_children=required_children,
+            required_child_total=required_child_total,
+            required_child_complete=required_child_complete,
+            display_truncated=False,
             conflicts=tuple(conflicts),
             source_ref_ids=used_source_ids,
             evidence_ref_ids=self._fact_evidence(raw),

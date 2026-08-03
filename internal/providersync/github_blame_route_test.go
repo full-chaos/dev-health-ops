@@ -89,8 +89,10 @@ func (doer gitHubBlameDoer) Do(request *http.Request) (*http.Response, error) {
 }
 
 type staticGitHubBlameCoverage struct {
-	state GitHubBlameProgressState
-	err   error
+	state                 GitHubBlameProgressState
+	err                   error
+	hasGenerationProgress bool
+	probeErr              error
 }
 
 func (coverage staticGitHubBlameCoverage) Progress(
@@ -101,6 +103,59 @@ func (coverage staticGitHubBlameCoverage) Progress(
 	string,
 ) (GitHubBlameProgressState, error) {
 	return coverage.state, coverage.err
+}
+
+func (coverage staticGitHubBlameCoverage) HasGenerationProgress(
+	context.Context,
+	Claim,
+	string,
+) (bool, error) {
+	return coverage.hasGenerationProgress, coverage.probeErr
+}
+
+func TestGitHubBlameSafeReplanRequiresAbsentGenerationProgress(t *testing.T) {
+	claim := nativeTestClaim("github", "blame")
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	progress, err := effectBatchFromValues(
+		"github_blame_path_progress", EffectReadbackRequired,
+		[]gitHubBlamePathProgressRow{newGitHubBlamePathProgressRow(
+			claim, "c7198fbc-1945-3717-05d8-eb78866b4e79", "tree-sha", "a.go",
+			gitHubBlameOutcomeRetryableError, now,
+		)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blame, err := effectBatchFromValues(
+		"git_blame", EffectReadbackRequired, []gitBlameRow{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := NewEffectLedgerState(claim, []EffectBatch{progress, blame}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name        string
+		hasProgress bool
+		want        bool
+	}{
+		{name: "no durable progress permits conditional reset", want: true},
+		{name: "durable progress preserves manifest", hasProgress: true, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler := GitHubBlameRouteHandler{Coverage: staticGitHubBlameCoverage{
+				hasGenerationProgress: test.hasProgress,
+			}}
+			got, err := handler.CanReplanRecovery(
+				context.Background(), claim, state,
+			)
+			if err != nil || got != test.want {
+				t.Fatalf("CanReplanRecovery=%v error=%v want=%v", got, err, test.want)
+			}
+		})
+	}
 }
 
 func TestGitHubBlameRouteFailsBeforeProviderWorkWithoutPersistedProgress(t *testing.T) {

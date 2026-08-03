@@ -66,6 +66,18 @@ type RecoveringCompleteRouteHandler interface {
 	) (CompleteRouteBatch, error)
 }
 
+// SafeReplanningCompleteRouteHandler may authorize discarding a prepared
+// provider-dependent manifest only after proving that its first ordered
+// durable effect has no rows for this generation. The ledger performs a
+// second, transactional state check before it removes the manifest.
+type SafeReplanningCompleteRouteHandler interface {
+	CanReplanRecovery(
+		context.Context,
+		Claim,
+		EffectLedgerState,
+	) (bool, error)
+}
+
 type CompleteRouteComparator interface {
 	CompareCompleteRoute(
 		context.Context,
@@ -187,6 +199,30 @@ func (executor CompleteRouteExecutor) Execute(
 			case errors.Is(loadErr, ErrEffectLedgerNotFound):
 			default:
 				return loadErr
+			}
+		}
+		if recoveredEffects != nil {
+			if replanning, ok := executor.Handler.(SafeReplanningCompleteRouteHandler); ok {
+				canReplan, replanErr := replanning.CanReplanRecovery(
+					workContext, session.Claim, *recoveredEffects,
+				)
+				if replanErr != nil {
+					return replanErr
+				}
+				if canReplan {
+					ledger, ok := executor.Committer.Ledger.(EffectLedgerReplanner)
+					if !ok {
+						return ErrInvalidConfiguration
+					}
+					replannedAt := executor.now()
+					if err := ledger.ResetPreparedEffectsForReplan(
+						workContext, session.Claim, *recoveredEffects, replannedAt,
+					); err != nil {
+						return err
+					}
+					recoveredEffects = nil
+					normalizedAt = replannedAt
+				}
 			}
 		}
 		var batch CompleteRouteBatch

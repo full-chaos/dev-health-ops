@@ -10,10 +10,12 @@ from typing import Any
 
 import pytest
 
+from scripts.acceptance import wave31_manifest
 from scripts.acceptance.acceptance_artifact import (
     RUNTIME_DEPENDENCY_PATHS,
     AcceptanceFailure,
-    runtime_dependency_digest,
+    aggregate_runtime_digest,
+    runtime_dependency_hashes,
 )
 from scripts.acceptance.wave31_manifest import (
     MANIFEST,
@@ -87,15 +89,15 @@ def _init_throwaway_git_repo(root: Path) -> str:
     return result.stdout.strip()
 
 
-def _runtime_digest_or_placeholder(root: Path) -> str:
+def _runtime_hashes_or_placeholder(root: Path) -> dict[str, str]:
     """Most guard tests build a throwaway root with no fixture surface at
-    all; those cases are not about the digest, so they get a value that is
+    all; those cases are not about the digest, so they get values that are
     simply never compared against a real tree."""
 
     try:
-        return runtime_dependency_digest(root)
+        return runtime_dependency_hashes(root)
     except AcceptanceFailure:
-        return "0" * 64
+        return {relative: "0" * 64 for relative in RUNTIME_DEPENDENCY_PATHS}
 
 
 def _write_valid_artifact(
@@ -106,7 +108,7 @@ def _write_valid_artifact(
     commit_sha: str,
     tree_clean: bool = True,
     assertion_names: tuple[str, ...] = ("it_worked",),
-    runtime_digest: str | None = None,
+    runtime_hashes: dict[str, str] | None = None,
 ) -> Path:
     script_path = root / script_relative
     script_path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,10 +122,15 @@ def _write_valid_artifact(
         "tree_digest": hashlib.sha256(b"" if tree_clean else b"dirty").hexdigest(),
         "script": script_relative,
         "script_sha256": script_sha256,
-        "runtime_digest": (
-            runtime_digest
-            if runtime_digest is not None
-            else _runtime_digest_or_placeholder(root)
+        "runtime_digest": aggregate_runtime_digest(
+            runtime_hashes
+            if runtime_hashes is not None
+            else _runtime_hashes_or_placeholder(root)
+        ),
+        "runtime_dependencies": dict(
+            runtime_hashes
+            if runtime_hashes is not None
+            else _runtime_hashes_or_placeholder(root)
         ),
         "commit_sha": commit_sha,
         "command": "python throwaway.py",
@@ -791,7 +798,7 @@ def test_validate_execution_artifact_rejects_a_drifted_runtime_dependency(
         scenario_id="drifted",
         script_relative="smoke_drifted.py",
         commit_sha=commit_sha,
-        runtime_digest=runtime_dependency_digest(tmp_path),
+        runtime_hashes=runtime_dependency_hashes(tmp_path),
     )
     item = _proven_e2e_item(
         execution_artifact=str(artifact_path.relative_to(tmp_path)),
@@ -803,7 +810,7 @@ def test_validate_execution_artifact_rejects_a_drifted_runtime_dependency(
     provider = tmp_path / "src/dev_health_ops/llm/agent/scripted_openai_service.py"
     provider.write_text("# the fixture provider changed after the run\n")
     errors = validate_execution_artifact(tmp_path, item)
-    assert any("runtime_digest does not match" in error for error in errors)
+    assert any("is STALE" in error for error in errors)
 
 
 def test_validate_execution_artifact_rejects_an_artifact_with_no_runtime_digest(
@@ -823,17 +830,17 @@ def test_validate_execution_artifact_rejects_an_artifact_with_no_runtime_digest(
         scenario_id="legacy_digest",
         script_relative="smoke_legacy_digest.py",
         commit_sha=commit_sha,
-        runtime_digest=runtime_dependency_digest(tmp_path),
+        runtime_hashes=runtime_dependency_hashes(tmp_path),
     )
     artifact = json.loads(artifact_path.read_text())
-    del artifact["runtime_digest"]
+    del artifact["runtime_dependencies"]
     artifact_path.write_text(json.dumps(artifact))
     item = _proven_e2e_item(
         execution_artifact=str(artifact_path.relative_to(tmp_path)),
         evidence="smoke_legacy_digest.py",
     )
     errors = validate_execution_artifact(tmp_path, item)
-    assert any("records no runtime_digest" in error for error in errors)
+    assert any("records no runtime_dependencies" in error for error in errors)
 
 
 def test_validate_execution_artifact_still_accepts_a_real_full_sha(
@@ -1574,3 +1581,104 @@ def test_every_test_nodeid_file_half_is_one_of_its_item_evidence() -> None:
             assert file_part in item.evidence, (
                 f"{item.id}: {node_id} is not under its own evidence {item.evidence}"
             )
+
+
+# --- staleness semantics: a digest mismatch makes a row STALE, not invalid.
+# Silent staleness fails; declared staleness passes and is reported. See
+# wave31_manifest.DECLARED_STALE_ARTIFACTS for why. ---
+
+
+def _stale_fixture(tmp_path: Path) -> tuple[ManifestItem, str]:
+    """A valid proven_e2e row whose fixture surface has since drifted on
+    exactly one covered path. Returns the item and that path."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="stale",
+        script_relative="smoke_stale.py",
+        commit_sha=commit_sha,
+        runtime_hashes=runtime_dependency_hashes(tmp_path),
+    )
+    drifted = "pyproject.toml"
+    (tmp_path / drifted).write_text("# a routine dependency bump\n")
+    return (
+        _proven_e2e_item(
+            execution_artifact=str(artifact_path.relative_to(tmp_path)),
+            evidence="smoke_stale.py",
+        ),
+        drifted,
+    )
+
+
+def test_undeclared_staleness_fails(tmp_path: Path, monkeypatch) -> None:
+    item, drifted = _stale_fixture(tmp_path)
+    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("is STALE" in error and drifted in error for error in errors)
+
+
+def test_declared_staleness_passes_and_is_reported(tmp_path: Path, monkeypatch) -> None:
+    item, drifted = _stale_fixture(tmp_path)
+    monkeypatch.setattr(
+        wave31_manifest, "DECLARED_STALE_ARTIFACTS", {item.id: (drifted,)}
+    )
+    assert validate_execution_artifact(tmp_path, item) == []
+    # ...but it is never silent: the row is still reported as stale.
+    assert wave31_manifest.stale_rows(tmp_path, (item,)) == {item.id: [drifted]}
+
+
+def test_a_declaration_cannot_hide_extra_drift(tmp_path: Path, monkeypatch) -> None:
+    """Declaring one drifted path while a second also drifted must fail --
+    a partial declaration is exactly how real drift would get buried."""
+
+    item, drifted = _stale_fixture(tmp_path)
+    (tmp_path / "requirements.txt").write_text("# also bumped\n")
+    monkeypatch.setattr(
+        wave31_manifest, "DECLARED_STALE_ARTIFACTS", {item.id: (drifted,)}
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("does not match reality" in error for error in errors)
+    assert any("requirements.txt" in error for error in errors)
+
+
+def test_a_declaration_cannot_pre_declare_undrifted_paths(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Naming a path that has NOT drifted must fail, or an author could
+    pre-declare every covered path once and buy permanent silence."""
+
+    item, drifted = _stale_fixture(tmp_path)
+    monkeypatch.setattr(
+        wave31_manifest,
+        "DECLARED_STALE_ARTIFACTS",
+        {item.id: (drifted, "docker/Dockerfile")},
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("does not match reality" in error for error in errors)
+
+
+def test_a_stale_declaration_must_be_removed_after_a_re_mint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The self-cleaning property: once the scenario is re-run there is no
+    drift, and a leftover declaration then FAILS. A stale flag must never
+    outlive the staleness it describes."""
+
+    commit_sha = _init_throwaway_git_repo(tmp_path)
+    artifact_path = _write_valid_artifact(
+        tmp_path,
+        scenario_id="fresh",
+        script_relative="smoke_fresh.py",
+        commit_sha=commit_sha,
+        runtime_hashes=runtime_dependency_hashes(tmp_path),
+    )
+    item = _proven_e2e_item(
+        execution_artifact=str(artifact_path.relative_to(tmp_path)),
+        evidence="smoke_fresh.py",
+    )
+    monkeypatch.setattr(
+        wave31_manifest, "DECLARED_STALE_ARTIFACTS", {item.id: ("pyproject.toml",)}
+    )
+    errors = validate_execution_artifact(tmp_path, item)
+    assert any("nothing has drifted" in error for error in errors)

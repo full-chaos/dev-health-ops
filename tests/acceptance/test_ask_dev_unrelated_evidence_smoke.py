@@ -29,14 +29,22 @@ def test_smoke_asserts_the_negative_control_exclusion() -> None:
 def test_smoke_discloses_the_positive_control_limitation_rather_than_hiding_it() -> (
     None
 ):
-    """The scripted provider's search_evidence.v1 call hardcodes its query
-    to "meridian/web-app" regardless of question -- confirmed live -- so the
-    org-wide positive control cannot independently prove multi-repo evidence
-    appears. This must stay documented, not silently dropped or overclaimed."""
+    """The org-wide positive control does NOT independently prove that
+    multi-repository evidence appears, and the script must keep saying so.
+
+    The wording changed on 2026-08-03 when the scripted provider stopped
+    hardcoding its ``search_evidence.v1`` query, but the limitation itself
+    did not: this script's own assertions were left untouched, so it still
+    only proves the org-wide question is not scope-blocked. What this test
+    pins is the DISCLOSURE surviving, not any particular sentence -- hence
+    the assertion-name distinction below, which is the load-bearing part a
+    reader would act on.
+    """
 
     smoke = _SMOKE.read_text(encoding="utf-8")
-    assert "WEAKER than originally intended" in smoke
-    assert "hardcodes its query argument" in smoke
+    assert "proves less than its name suggests" in smoke
+    assert "org_wide_not_scope_blocked" in smoke
+    assert "org_wide_multi_repo_evidence_present" in smoke
 
 
 def test_smoke_requires_its_own_repo_count_2_bringup_not_the_shared_launcher() -> None:

@@ -38,6 +38,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -53,8 +54,10 @@ __all__ = [
     "AcceptanceFailure",
     "AssertionResult",
     "ScenarioRecorder",
+    "aggregate_runtime_digest",
     "redact_secrets",
     "runtime_dependency_digest",
+    "runtime_dependency_hashes",
 ]
 
 #: Codex finding (HIGH, 2026-08-02): a smoke script recorded ``str(login)``
@@ -150,17 +153,23 @@ RUNTIME_DEPENDENCY_PATHS: tuple[str, ...] = (
 )
 
 
-def runtime_dependency_digest(root: Path) -> str:
-    """Digest the shared fixture surface named in ``RUNTIME_DEPENDENCY_PATHS``.
+def runtime_dependency_hashes(root: Path) -> dict[str, str]:
+    """Per-path sha256 of the shared fixture surface.
 
-    A missing path raises rather than being skipped. Digesting over
+    Recorded per path, not just as an aggregate, because a staleness
+    declaration has to name exactly WHICH dependencies drifted -- see
+    ``wave31_manifest.DECLARED_STALE_ARTIFACTS``. An aggregate alone
+    answers "something moved" but never "what", which would leave the
+    declaration unverifiable free text.
+
+    A missing path raises rather than being skipped. Hashing over
     "whatever happened to be present" would let a deleted or renamed
-    dependency produce a stable-looking digest that silently covers less
+    dependency produce a stable-looking result that silently covers less
     than it claims -- the measurement would not have happened, and the
     result would still look like a pass.
     """
 
-    hasher = hashlib.sha256()
+    hashes: dict[str, str] = {}
     for relative in RUNTIME_DEPENDENCY_PATHS:
         path = root / relative
         if not path.is_file():
@@ -169,9 +178,23 @@ def runtime_dependency_digest(root: Path) -> str:
                 "refusing to compute a digest that would silently cover less "
                 "than RUNTIME_DEPENDENCY_PATHS claims"
             )
+        hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashes
+
+
+def runtime_dependency_digest(root: Path) -> str:
+    """The aggregate over :func:`runtime_dependency_hashes`, for a cheap
+    equality check and a short human-readable value in the artifact."""
+
+    return aggregate_runtime_digest(runtime_dependency_hashes(root))
+
+
+def aggregate_runtime_digest(hashes: Mapping[str, str]) -> str:
+    hasher = hashlib.sha256()
+    for relative in RUNTIME_DEPENDENCY_PATHS:
         hasher.update(relative.encode("utf-8"))
         hasher.update(b"\0")
-        hasher.update(hashlib.sha256(path.read_bytes()).hexdigest().encode("ascii"))
+        hasher.update(hashes[relative].encode("ascii"))
         hasher.update(b"\0")
     return hasher.hexdigest()
 
@@ -295,7 +318,7 @@ class ScenarioRecorder:
     #: start and re-checking at write turns that silent mismatch into a
     #: refusal. It does not close the build-vs-start window (Compose built
     #: the images before this object existed) -- that is CHAOS-3351.
-    started_digest: str | None = field(default=None)
+    started_hashes: dict[str, str] | None = field(default=None)
 
     def check(self, name: str, condition: bool, detail: str) -> None:
         redacted_detail = redact_secrets(detail)
@@ -305,12 +328,12 @@ class ScenarioRecorder:
         if not condition:
             raise AcceptanceFailure(f"{name}: {redacted_detail}")
 
-    def capture_runtime_digest(self, root: Path) -> str:
+    def capture_runtime_digest(self, root: Path) -> dict[str, str]:
         """Record the fixture surface as of scenario start, once."""
 
-        if self.started_digest is None:
-            self.started_digest = runtime_dependency_digest(root)
-        return self.started_digest
+        if self.started_hashes is None:
+            self.started_hashes = runtime_dependency_hashes(root)
+        return self.started_hashes
 
     def write(self, artifact_path: Path, *, error: str | None = None) -> dict[str, Any]:
         finished_at = datetime.now(UTC)
@@ -322,15 +345,20 @@ class ScenarioRecorder:
         # realistic drift window is start-to-write, and defaulting here keeps
         # a caller that forgot the explicit capture honest rather than
         # silently unbound.
-        started_digest = self.capture_runtime_digest(root)
-        finished_digest = runtime_dependency_digest(root)
-        if started_digest != finished_digest:
+        started_hashes = self.capture_runtime_digest(root)
+        finished_hashes = runtime_dependency_hashes(root)
+        if started_hashes != finished_hashes:
+            moved = sorted(
+                relative
+                for relative, digest in finished_hashes.items()
+                if started_hashes.get(relative) != digest
+            )
             raise AcceptanceFailure(
                 "the fixture surface changed while this scenario was running "
-                f"(start {started_digest[:12]}, end {finished_digest[:12]}) -- "
-                "the containers ran one version and the tree now holds "
-                "another, so no artifact written here could describe what "
-                "actually executed. Re-run against a settled tree."
+                f"({moved}) -- the containers ran one version and the tree "
+                "now holds another, so no artifact written here could "
+                "describe what actually executed. Re-run against a settled "
+                "tree."
             )
         status_porcelain = _git_status_porcelain(self.script_path, root=root)
         tree_clean = status_porcelain == ""
@@ -345,7 +373,8 @@ class ScenarioRecorder:
             "tree_digest": tree_digest,
             "script": str(self.script_path.resolve().relative_to(root)),
             "script_sha256": script_sha256,
-            "runtime_digest": started_digest,
+            "runtime_digest": aggregate_runtime_digest(started_hashes),
+            "runtime_dependencies": dict(started_hashes),
             "commit_sha": commit_sha,
             "command": f"{Path(sys.executable).name} {self.script_path.name}",
             "started_at": self.started_at.isoformat(),

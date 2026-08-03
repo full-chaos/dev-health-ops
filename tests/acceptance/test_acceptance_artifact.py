@@ -198,8 +198,11 @@ def test_write_records_the_start_digest_not_a_later_one(tmp_path: Path) -> None:
     recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
     started = recorder.capture_runtime_digest(tmp_path)
     artifact = recorder.write(tmp_path / "artifacts" / "throwaway.json")
-    assert artifact["runtime_digest"] == started
+    assert artifact["runtime_dependencies"] == started
     assert artifact["runtime_digest"] == runtime_dependency_digest(tmp_path)
+    # Every covered path is recorded individually, not just rolled up --
+    # that is what lets a staleness declaration name exactly what drifted.
+    assert set(artifact["runtime_dependencies"]) == set(RUNTIME_DEPENDENCY_PATHS)
 
 
 # --- redact_secrets: codex finding (HIGH, 2026-08-02) -- the primary fix ---

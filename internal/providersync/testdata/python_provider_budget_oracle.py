@@ -93,7 +93,7 @@ def _github_cases(github: Any) -> list[dict[str, object]]:
 def _gitlab_cases(gitlab: Any) -> list[dict[str, object]]:
     cases: list[dict[str, object]] = []
     for span_days in (1, 3):
-        for dataset in ("commits", "commit-stats", "cicd"):
+        for dataset in ("commits", "commit-stats", "cicd", "tests"):
             case: dict[str, object] = {
                 "provider": "gitlab",
                 "dataset": dataset,

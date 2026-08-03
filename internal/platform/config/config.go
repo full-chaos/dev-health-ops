@@ -116,8 +116,10 @@ type Config struct {
 	WorkerGitlabCommitsEnabled bool
 	// WorkerGitlabCommitStatsEnabled gates the isolated aggregate commit-stat route.
 	WorkerGitlabCommitStatsEnabled bool
-	// WorkerGitlabCICDEnabled gates the isolated Python-owned ci_pipeline_runs route.
-	WorkerGitlabCICDEnabled bool
+	// WorkerGitlabCICDEnabled and WorkerGitlabTestsEnabled gate mutually
+	// exclusive aliases for one complete GitLab TestOps writer.
+	WorkerGitlabCICDEnabled  bool
+	WorkerGitlabTestsEnabled bool
 	// WorkerGithubPRsEnabled is the (github, prs) half of the two-key route
 	// gate (CHAOS-3122, following CHAOS-3123's precedent). The matrix marking
 	// the pair route_ready is the other half; neither alone moves traffic.
@@ -233,6 +235,10 @@ func Load(spec Spec) (Config, error) {
 			target: &cfg.WorkerGitlabCICDEnabled,
 		},
 		{
+			name:   "WORKER_GITLAB_TESTS_ENABLED",
+			target: &cfg.WorkerGitlabTestsEnabled,
+		},
+		{
 			name:   "WORKER_GITHUB_PRS_ENABLED",
 			target: &cfg.WorkerGithubPRsEnabled,
 		},
@@ -276,6 +282,9 @@ func Load(spec Spec) (Config, error) {
 	}
 	if cfg.WorkerGithubCICDEnabled && cfg.WorkerGithubTestsEnabled {
 		return Config{}, fmt.Errorf("WORKER_GITHUB_CICD_ENABLED and WORKER_GITHUB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
+	}
+	if cfg.WorkerGitlabCICDEnabled && cfg.WorkerGitlabTestsEnabled {
+		return Config{}, fmt.Errorf("WORKER_GITLAB_CICD_ENABLED and WORKER_GITLAB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
 	}
 	cfg.HealthCheckTimeout, err = durationEnv(
 		lookup,
@@ -538,6 +547,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("worker_gitlab_commits_enabled", c.WorkerGitlabCommitsEnabled),
 		slog.Bool("worker_gitlab_commit_stats_enabled", c.WorkerGitlabCommitStatsEnabled),
 		slog.Bool("worker_gitlab_cicd_enabled", c.WorkerGitlabCICDEnabled),
+		slog.Bool("worker_gitlab_tests_enabled", c.WorkerGitlabTestsEnabled),
 		slog.Bool("worker_github_prs_enabled", c.WorkerGithubPRsEnabled),
 		slog.Bool("worker_github_commits_enabled", c.WorkerGithubCommitsEnabled),
 		slog.Bool("worker_github_security_enabled", c.WorkerGithubSecurityEnabled),

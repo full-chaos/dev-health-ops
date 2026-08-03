@@ -164,12 +164,18 @@ func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing
 			wantErr: true,
 		},
 		{
-			name: "gitlab cicd enabled but companion tests route incomplete",
+			name: "gitlab cicd complete",
 			config: config.Config{
 				WorkerGitlabCICDEnabled: true,
 			},
 			runtime: true,
-			wantErr: true,
+		},
+		{
+			name: "gitlab tests complete",
+			config: config.Config{
+				WorkerGitlabTestsEnabled: true,
+			},
+			runtime: true,
 		},
 		{
 			// (github, prs) is NOT RouteReady (codex H1: the pair's own

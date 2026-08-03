@@ -4,6 +4,7 @@ import pathlib
 import sys
 import types
 from datetime import datetime
+from typing import Any
 
 from internal.providersync.testdata import oracle_registry
 from internal.providersync.testdata.field_reflection import dict_assigned_keys
@@ -15,9 +16,9 @@ SOURCE = REPO_ROOT / "src/dev_health_ops/processors/github.py"
 
 class _Repo:
     def __init__(self) -> None:
-        self.kwargs = {}
+        self.kwargs: dict[str, Any] = {}
 
-    def get_workflow_runs(self, **kwargs):
+    def get_workflow_runs(self, **kwargs: Any) -> list[Any]:
         self.kwargs = kwargs
         return []
 
@@ -25,7 +26,7 @@ class _Repo:
 def _build(case):
     processor = load_live_module(SOURCE)
     safe_archive = types.ModuleType("dev_health_ops.connectors.utils.safe_archive")
-    safe_archive.iter_zip_members = lambda *_args, **_kwargs: ()
+    setattr(safe_archive, "iter_zip_members", lambda *_args, **_kwargs: ())
     sys.modules[safe_archive.__name__] = safe_archive
     repo = _Repo()
     processor._fetch_github_test_artifacts_sync(

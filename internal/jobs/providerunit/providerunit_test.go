@@ -57,6 +57,39 @@ func TestEnabledProviderUnitExecutesCompleteRouteAndTerminalizes(t *testing.T) {
 	}
 }
 
+func TestProviderUnitPersistsCanonicalProviderUsageObservations(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	repository := newMemoryUnitRepository(providerUnit())
+	handler := &Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			LaunchDarklyFeatureFlags: true,
+		},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: successfulExecutor(t, now),
+	}
+	if err := handler.Work(context.Background(), providerExecution(repository.unit, now, 1)); err != nil {
+		t.Fatalf("Work() error = %v", err)
+	}
+	observations, ok := repository.result["observations"].(map[string]any)
+	if !ok {
+		t.Fatalf("persisted observations=%#v", repository.result["observations"])
+	}
+	usage, ok := observations["provider_usage"].([]any)
+	if !ok || len(usage) != 1 {
+		t.Fatalf("persisted provider usage=%#v", observations["provider_usage"])
+	}
+	observation, ok := usage[0].(map[string]any)
+	if !ok || observation["transport"] != "rest" ||
+		observation["route_family"] != "flags" ||
+		observation["dimension"] != "rest_core" || observation["request_count"] != 4 {
+		t.Fatalf("persisted provider usage observation=%#v", observation)
+	}
+}
+
 func TestProviderUnitKeepsWatermarkUnadvancedWhenGitHubFilesTraversalFails(t *testing.T) {
 	// Given
 	t.Setenv("REPO_UUID", "")
@@ -608,7 +641,15 @@ func (handler testCompleteRouteHandler) Collect(
 	}
 	watermark := handler.now
 	return providersync.CompleteRouteBatch{
-		Effects: effects, Result: map[string]any{"records": 4},
+		Effects: effects, Result: map[string]any{
+			"records": 4,
+			"observations": map[string]any{
+				"provider_usage": []any{map[string]any{
+					"transport": "rest", "route_family": "flags",
+					"dimension": "rest_core", "request_count": 4,
+				}},
+			},
+		},
 		Watermark: &watermark,
 		Evidence: providersync.FetchEvidence{
 			Provider: "launchdarkly", Dataset: "feature-flags", Records: 4,

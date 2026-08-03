@@ -176,17 +176,18 @@ func (handler NativeRESTHandler) fetchGitLab(
 }
 
 type repositoryPayload struct {
-	ID            json.Number `json:"id"`
-	Name          string      `json:"name"`
-	FullName      string      `json:"full_name"`
-	Path          string      `json:"path"`
-	PathWithNS    string      `json:"path_with_namespace"`
-	HTMLURL       string      `json:"html_url"`
-	WebURL        string      `json:"web_url"`
-	DefaultBranch string      `json:"default_branch"`
-	Archived      bool        `json:"archived"`
-	UpdatedAt     string      `json:"updated_at"`
-	LastActivity  string      `json:"last_activity_at"`
+	ID                               json.Number `json:"id"`
+	Name                             string      `json:"name"`
+	FullName                         string      `json:"full_name"`
+	Path                             string      `json:"path"`
+	PathWithNS                       string      `json:"path_with_namespace"`
+	HTMLURL                          string      `json:"html_url"`
+	WebURL                           string      `json:"web_url"`
+	DefaultBranch                    string      `json:"default_branch"`
+	OnlyAllowMergeIfPipelineSucceeds *bool       `json:"only_allow_merge_if_pipeline_succeeds"`
+	Archived                         bool        `json:"archived"`
+	UpdatedAt                        string      `json:"updated_at"`
+	LastActivity                     string      `json:"last_activity_at"`
 }
 
 func (handler NativeRESTHandler) normalizeRepository(

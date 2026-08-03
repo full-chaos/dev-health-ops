@@ -166,47 +166,56 @@ for both the Python producer gate and Go worker. Every checked-in deployment
 keeps it false. This route-readiness change therefore transfers no live unit,
 does not activate a River scheduler path, and does not change migration 0066.
 
-## Implementation status for `(gitlab, cicd)`
+## Activation status for `(gitlab, cicd)` and `(gitlab, tests)`
 
-CHAOS-3352 adds the native D16 pipeline collector and effect implementation,
-but deliberately leaves this pair `route_ready: false`. The Python `cicd`
-producer and `gitlab/tests` own different columns on the same
-`ci_pipeline_runs` natural key. Because the table uses `ReplacingMergeTree`, a
-partial row from either independently committed unit replaces the other whole
-row; column ownership alone cannot prevent that exact-key overwrite.
+CHAOS-3356 closes CHAOS-3352's deliberate shared-table blocker and makes both
+aliases `native_go` / `route_ready: true`. They do not own independent partial
+rows: one `GitLabTestsRouteHandler` fetches and normalizes the complete TestOps
+unit for either claim, and one `TestOpsClickHouseEffects` implementation writes
+the same six destinations: `ci_pipeline_runs`, `ci_job_runs`,
+`ci_acceptance_checks`, `test_suite_results`, `test_case_results`, and
+`coverage_snapshots`. This single complete owner is required because
+`ci_pipeline_runs` is a `ReplacingMergeTree`; a newer partial row would replace
+the older whole row rather than merge columns.
 
-Two differential oracles cover distinct boundaries. The selection oracle
-executes the active Python pipeline producer plus its surrounding `started_at`
-upper-window filter and compares accepted run identities at exact source
-precision, including sub-millisecond counterexamples. The persisted-row oracle
-reflects the complete `CiPipelineRun` model and compares millisecond-aligned
-inputs at the `DateTime64(3)` storage boundary; it does not claim Python's
-in-memory microseconds equal the persisted representation. The route retains
-Python's intentional 1,000-pipeline window and reports when that bound is
-reached, but rejects any shorter traversal that exhausts its page allowance.
-The request-plan oracle separately executes both the Python estimator and
-actual GitLab usage resolver, pinning the `pipelines` / `rest_core` identity.
+The aliases have separate, default-off deployment switches:
+`WORKER_GITLAB_CICD_ENABLED` and `WORKER_GITLAB_TESTS_ENABLED`. Go startup and
+the Python producer gate both reject a configuration that enables them
+together, so only one alias can claim the shared complete unit. Their preflight
+reservation is intentionally identical (`pipelines` / `rest_core`, the frozen
+Python estimator vocabulary), while executed Python usage remains attributable
+to the public alias: `cicd` records `pipelines` actuals and `tests` records
+`tests` actuals.
 
-The staged `ci_pipeline_runs` effect is an atomic ClickHouse batch with duplicate
-natural-key rejection and tenant-scoped `SELECT ... FINAL` recovery readback.
-Its integration fixture proves server rejection cannot leave a prefix of the
-batch visible, the same natural key remains isolated across organizations, and
-retrying an identical effect converges to one row.
+The live row oracles execute the active Python adapter, native GitLab report
+normalizer, and coverage parser across the full persisted field sets. The
+selection oracle separately executes `_fetch_gitlab_test_reports_sync` through
+the real canonical GitLab code client. It pins updated-at traversal without a
+created-at early break, default-branch filtering before the pipeline cap, the
+inclusive upper-window behavior, fractional-second provider query bounds, the
+single-page 100-job artifact-discovery boundary, the 25-artifact cap, empty
+artifact truthiness, and `tests` usage labels. The superseded isolated partial
+pipeline handler and sink are removed, so only the complete six-effect owner is
+constructible. Existing Python quirks remain explicit
+compatibility behavior: malformed non-empty numeric durations persist as NULL,
+and `system_output` is duplicated in `stack_trace` when no explicit stack is
+present.
 
-The active Python collector orders the remote list by `updated_at` but stops its
-descending scan on `created_at`. A sufficiently old-created pipeline updated
-recently can therefore appear before a still-in-window pipeline and trigger an
-early break that loses the latter. The Go parity layer intentionally does not
-silently redesign that accepted behavior; the source defect and eventual
-cross-runtime correction are tracked by CHAOS-3357. The related but distinct
-capped-newest backfill underfetch remains tracked by CHAOS-2587.
+Provider, pagination, malformed-payload, and control-plane failures fail the
+complete unit before effects or watermark advancement; only the active
+Python-authorized missing optional report/artifact behavior degrades to empty.
+Pipeline and acceptance rows are bound to `provider=gitlab_ci` on both write
+and recovery readback, preventing a GitHub row from satisfying a GitLab claim.
+Integration coverage writes both alias orders against the same natural key and
+proves that the newer complete 20-field row wins, including a newer NULL over
+an older non-NULL. All six effects use tenant-scoped `SELECT ... FINAL` exact
+readback and retry convergence. Each prepared destination batch is atomic;
+the six destinations are committed sequentially and recover through the effect
+ledger, not through a nonexistent cross-table ClickHouse transaction.
 
-Activation is blocked until the companion `gitlab/tests` port can emit the
-complete shared row and the two aliases can be enabled as one writer. The
-descriptor gate rejects this pair even if `WORKER_GITLAB_CICD_ENABLED=true`,
-and every checked-in deployment keeps that switch false. This implementation
-layer therefore transfers no live unit, does not activate a River scheduler
-path, and does not change migration 0066.
+Every checked-in deployment keeps both switches false. Route readiness alone
+therefore transfers no live unit, activates no River scheduler path, and does
+not change migration 0066.
 
 ## Effect timestamp stabilization (applies to every complete route)
 

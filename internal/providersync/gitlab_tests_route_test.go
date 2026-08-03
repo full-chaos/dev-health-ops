@@ -1,0 +1,456 @@
+package providersync
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+)
+
+type gitLabTestsRouteDoer struct {
+	t                *testing.T
+	archive          []byte
+	failJobs         bool
+	capPipelines     bool
+	emptyArtifacts   bool
+	artifactJobCount int
+	pipelineBody     string
+	redirectStatus   int
+	pipelineBodies   []string
+	pipelineCalls    int
+	requests         []string
+}
+
+func (doer *gitLabTestsRouteDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.requests = append(doer.requests, request.URL.String())
+	status := http.StatusOK
+	header := make(http.Header)
+	body := ""
+	path := request.URL.Path
+	switch {
+	case request.URL.Host == "blob.example":
+		status = doer.redirectStatus
+		body = `{"message":"blob failure"}`
+	case path == "/api/v4/projects/123":
+		body = `{"id":123,"path_with_namespace":"acme/api","default_branch":"main","only_allow_merge_if_pipeline_succeeds":true}`
+	case path == "/api/v4/projects/123/pipelines":
+		if doer.pipelineCalls < len(doer.pipelineBodies) {
+			body = doer.pipelineBodies[doer.pipelineCalls]
+		}
+		doer.pipelineCalls++
+		if body == "" {
+			body = doer.pipelineBody
+		}
+		if body == "" {
+			body = `[{"id":9001,"name":"CI","ref":"main","status":"success","created_at":"2026-07-22T10:00:00Z","started_at":"2026-07-22T10:01:00Z","finished_at":"2026-07-22T10:05:00Z","source":"push","sha":"abc","web_url":"https://gitlab.example/acme/api/-/pipelines/9001"}]`
+		}
+		if doer.capPipelines {
+			header.Set("X-Next-Page", "2")
+		}
+	case path == "/api/v4/projects/123/pipelines/9001/jobs":
+		if doer.failJobs {
+			status = http.StatusServiceUnavailable
+			body = `{"message":"unavailable"}`
+			break
+		}
+		if request.URL.Query().Get("include_retried") == "true" {
+			body = `[{"id":11,"name":"unit","stage":"test","status":"success","started_at":"2026-07-22T10:01:00Z","finished_at":"2026-07-22T10:04:00Z","runner":{"runner_type":"instance_type"},"retried":true}]`
+		} else if doer.artifactJobCount > 0 {
+			body = "[" + strings.TrimSuffix(strings.Repeat(`{"id":11,"name":"unit","artifacts_file":{"filename":"reports.zip"}},`, doer.artifactJobCount), ",") + "]"
+		} else if doer.emptyArtifacts {
+			body = `[{"id":11,"name":"unit","artifacts_file":{},"artifacts":[]}]`
+		} else {
+			body = `[{"id":11,"name":"unit","artifacts_file":{"filename":"reports.zip"}}]`
+		}
+	case path == "/api/v4/projects/123/pipelines/9001/test_report":
+		body = `{"test_suites":[{"name":"api","total_time":"1.25","test_cases":[{"name":"passes","classname":"tests.TestAPI","status":"success","execution_time":"1.25"}]}]}`
+	case path == "/api/v4/projects/123/jobs/11/artifacts":
+		if doer.redirectStatus != 0 {
+			status = http.StatusFound
+			header.Set("Location", "https://blob.example/reports.zip")
+		} else {
+			body = string(doer.archive)
+		}
+	default:
+		doer.t.Fatalf("unexpected request %s", request.URL.String())
+	}
+	return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+}
+
+func TestGitLabCICDAndTestsAliasesEmitByteIdenticalSixEffects(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 30, 0, 456789000, time.UTC)
+	collect := func(dataset string) CompleteRouteBatch {
+		doer := &gitLabTestsRouteDoer{t: t, archive: githubTestsZip(t, map[string]string{"coverage.info": githubTestsLCOVFixture})}
+		claim := nativeTestClaim("gitlab", dataset)
+		batch, err := (GitLabTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, doer, "https://gitlab.example"), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(doer.requests) != 7 {
+			t.Fatalf("requests=%v", doer.requests)
+		}
+		return batch
+	}
+	cicd, tests := collect("cicd"), collect("tests")
+	if !reflect.DeepEqual(cicd.Effects, tests.Effects) {
+		t.Fatalf("alias effects diverged\ncicd=%+v\ntests=%+v", cicd.Effects, tests.Effects)
+	}
+	if cicd.Result["actual_route_family"] != "pipelines" || tests.Result["actual_route_family"] != "tests" {
+		t.Fatalf("actual route families cicd=%v tests=%v", cicd.Result["actual_route_family"], tests.Result["actual_route_family"])
+	}
+	assertGitLabTestsUsageObservation(t, cicd, "pipelines")
+	assertGitLabTestsUsageObservation(t, tests, "tests")
+	wantCounts := map[string]int{"ci_pipeline_runs": 1, "ci_job_runs": 1, "ci_acceptance_checks": 2, "test_suite_results": 1, "test_case_results": 1, "coverage_snapshots": 1}
+	if len(cicd.Effects) != len(wantCounts) {
+		t.Fatalf("effects=%d want=%d", len(cicd.Effects), len(wantCounts))
+	}
+	for _, effect := range cicd.Effects {
+		if got := len(effect.Rows); got != wantCounts[effect.Destination] {
+			t.Fatalf("%s rows=%d want=%d", effect.Destination, got, wantCounts[effect.Destination])
+		}
+	}
+}
+
+func assertGitLabTestsUsageObservation(t *testing.T, batch CompleteRouteBatch, routeFamily string) {
+	t.Helper()
+	observations, ok := batch.Result["observations"].(map[string]any)
+	if !ok {
+		t.Fatalf("observations=%#v", batch.Result["observations"])
+	}
+	usage, ok := observations["provider_usage"].([]any)
+	if !ok || len(usage) != 1 {
+		t.Fatalf("provider usage=%#v", observations["provider_usage"])
+	}
+	observation, ok := usage[0].(map[string]any)
+	if !ok || observation["transport"] != "rest" ||
+		observation["route_family"] != routeFamily ||
+		observation["dimension"] != "rest_core" ||
+		observation["request_count"] != batch.Evidence.Requests {
+		t.Fatalf("provider usage observation=%#v evidence=%+v", observation, batch.Evidence)
+	}
+}
+
+func TestGitLabTestsRouteRejectsCrossScopeBeforeProviderRequests(t *testing.T) {
+	githubClaim := nativeTestClaim("github", "tests")
+	githubClaim.SourceExternalID = "123"
+	for _, test := range []struct {
+		name         string
+		claim        Claim
+		mutateClient func(*providerfoundation.HTTPClient)
+	}{
+		{name: "claim provider", claim: githubClaim},
+		{name: "claim dataset", claim: nativeTestClaim("gitlab", "security")},
+		{name: "client provider", claim: nativeTestClaim("gitlab", "tests"), mutateClient: func(client *providerfoundation.HTTPClient) { client.Provider = "github" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &gitLabTestsRouteDoer{t: t}
+			client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+			if test.mutateClient != nil {
+				test.mutateClient(client)
+			}
+			batch, err := (GitLabTestsRouteHandler{}).Collect(context.Background(), test.claim, providerfoundation.Credential{}, client, time.Now())
+			if !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("error=%v", err)
+			}
+			if len(doer.requests) != 0 || len(batch.Effects) != 0 || batch.Watermark != nil {
+				t.Fatalf("requests=%v batch=%+v", doer.requests, batch)
+			}
+		})
+	}
+}
+
+func TestGitLabTestsFailsClosedOnIncompleteAndTransientTraversal(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		configure func(*gitLabTestsRouteDoer)
+		want      error
+		handler   GitLabTestsRouteHandler
+	}{
+		{name: "transient jobs", configure: func(d *gitLabTestsRouteDoer) { d.failJobs = true }},
+		{name: "pipeline cap", configure: func(d *gitLabTestsRouteDoer) { d.capPipelines = true }, want: ErrPaginationCapExceeded, handler: GitLabTestsRouteHandler{MaxPages: 1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &gitLabTestsRouteDoer{t: t}
+			test.configure(doer)
+			claim := nativeTestClaim("gitlab", "tests")
+			batch, err := test.handler.Collect(context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now())
+			if err == nil || (test.want != nil && !errors.Is(err, test.want)) {
+				t.Fatalf("error=%v want=%v", err, test.want)
+			}
+			if len(batch.Effects) != 0 || batch.Watermark != nil {
+				t.Fatalf("partial batch=%+v", batch)
+			}
+		})
+	}
+}
+
+func TestGitLabTestsFailsClosedOnMissingPipelineID(t *testing.T) {
+	doer := &gitLabTestsRouteDoer{t: t, pipelineBodies: []string{
+		`[{"ref":"main","created_at":"2026-07-22T10:00:00Z","started_at":"2026-07-22T10:01:00Z"}]`,
+		`[]`,
+	}}
+	batch, err := (GitLabTestsRouteHandler{}).Collect(
+		context.Background(), nativeTestClaim("gitlab", "tests"), providerfoundation.Credential{},
+		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+	)
+	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
+		t.Fatalf("error=%v", err)
+	}
+	if len(batch.Effects) != 0 || batch.Watermark != nil {
+		t.Fatalf("partial batch=%+v", batch)
+	}
+}
+
+func TestGitLabTestsComparesSourcePrecisionBeforeStorageTruncation(t *testing.T) {
+	doer := &gitLabTestsRouteDoer{t: t, pipelineBody: `[{"id":9001,"ref":"main","created_at":"2026-07-22T10:00:00Z","started_at":"2026-07-23T00:00:00.0009Z"}]`}
+	claim := nativeTestClaim("gitlab", "tests")
+	before := time.Date(2026, 7, 23, 0, 0, 0, 500000, time.UTC)
+	claim.BeforeAt = &before
+	batch, err := (GitLabTestsRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, effect := range batch.Effects {
+		if len(effect.Rows) != 0 {
+			t.Fatalf("%s rows=%s", effect.Destination, effect.Rows)
+		}
+	}
+}
+
+func TestGitLabTestsArtifactTruthinessMatchesPython(t *testing.T) {
+	doer := &gitLabTestsRouteDoer{t: t, emptyArtifacts: true}
+	claim := nativeTestClaim("gitlab", "tests")
+	batch, err := (GitLabTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range doer.requests {
+		if strings.Contains(request, "/artifacts") {
+			t.Fatalf("empty Python-false artifact metadata triggered download: %v", doer.requests)
+		}
+	}
+	for _, effect := range batch.Effects {
+		if effect.Destination == "coverage_snapshots" && len(effect.Rows) != 0 {
+			t.Fatalf("coverage=%s", effect.Rows)
+		}
+	}
+}
+
+func TestGitLabTestsProjectPolicyDistinguishesMissingFromFalse(t *testing.T) {
+	missing, missingProvenance := projectGitLabTestsRequirement(repositoryPayload{})
+	if missing != nil || missingProvenance != "gitlab.project_merge_policy.missing_field" {
+		t.Fatalf("missing policy required=%v provenance=%q", missing, missingProvenance)
+	}
+	flag := false
+	present, presentProvenance := projectGitLabTestsRequirement(repositoryPayload{
+		OnlyAllowMergeIfPipelineSucceeds: &flag,
+	})
+	if present == nil || len(present) != 0 || presentProvenance != "gitlab.project_merge_policy" {
+		t.Fatalf("false policy required=%v provenance=%q", present, presentProvenance)
+	}
+}
+
+func TestGitLabTestsPreservesSourcePrecisionInProviderQueries(t *testing.T) {
+	doer := &gitLabTestsRouteDoer{t: t}
+	claim := nativeTestClaim("gitlab", "tests")
+	since := time.Date(2026, 7, 22, 0, 0, 0, 400000, time.UTC)
+	before := time.Date(2026, 7, 23, 0, 0, 0, 500000, time.UTC)
+	claim.SinceAt, claim.BeforeAt = &since, &before
+	if _, err := (GitLabTestsRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var pipelineQueries []string
+	for _, raw := range doer.requests {
+		request, err := http.NewRequest(http.MethodGet, raw, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if request.URL.Path == "/api/v4/projects/123/pipelines" {
+			pipelineQueries = append(pipelineQueries, request.URL.RawQuery)
+		}
+	}
+	if len(pipelineQueries) != 2 {
+		t.Fatalf("pipeline queries=%v", pipelineQueries)
+	}
+	wantSince, wantBefore := since.Format(time.RFC3339Nano), before.Format(time.RFC3339Nano)
+	for index, raw := range pipelineQueries {
+		query, err := url.ParseQuery(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if query.Get("updated_after") != wantSince {
+			t.Fatalf("query %d updated_after=%q want=%q", index, query.Get("updated_after"), wantSince)
+		}
+		if index == 0 && query.Get("updated_before") != wantBefore {
+			t.Fatalf("query %d updated_before=%q want=%q", index, query.Get("updated_before"), wantBefore)
+		}
+	}
+}
+
+func TestGitLabTestsAcceptsPythonSinglePageArtifactBoundary(t *testing.T) {
+	doer := &gitLabTestsRouteDoer{t: t, artifactJobCount: nativePerPage}
+	claim := nativeTestClaim("gitlab", "tests")
+	batch, err := (GitLabTestsRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Evidence.Requests != len(doer.requests) {
+		t.Fatalf("evidence requests=%d physical=%d", batch.Evidence.Requests, len(doer.requests))
+	}
+	artifactRequests := 0
+	for _, request := range doer.requests {
+		if strings.HasSuffix(request, "/artifacts") {
+			artifactRequests++
+		}
+	}
+	if artifactRequests != gitLabTestsMaxArtifacts {
+		t.Fatalf("artifact requests=%d want=%d", artifactRequests, gitLabTestsMaxArtifacts)
+	}
+}
+
+func TestTestOpsAcceptanceNamesHaveDeterministicCaseCollisionOrder(t *testing.T) {
+	started := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	pipeline := githubTestsPipelineRow{StartedAt: started}
+	wantGitHub := []string{"Unit", "unit"}
+	wantGitLab := []string{"pipeline", "Unit", "unit"}
+	permutations := [][]githubTestsJobRow{
+		{{JobName: "unit"}, {JobName: "Unit"}},
+		{{JobName: "Unit"}, {JobName: "unit"}},
+	}
+	for iteration := 0; iteration < 32; iteration++ {
+		for _, jobs := range permutations {
+			githubRows := projectGitHubTestsChecks(Claim{}, "repo", pipeline, jobs, githubTestsPolicy{}, nil, nil, nil, started)
+			if got := testOpsAcceptanceNames(githubRows); !reflect.DeepEqual(got, wantGitHub) {
+				t.Fatalf("GitHub iteration %d names=%v want=%v", iteration, got, wantGitHub)
+			}
+
+			gitlabRows := projectGitLabTestsChecks(Claim{}, "repo", pipeline, gitLabTestsPipelinePayload{}, jobs, nil, "test", started)
+			if got := testOpsAcceptanceNames(gitlabRows); !reflect.DeepEqual(got, wantGitLab) {
+				t.Fatalf("GitLab iteration %d names=%v want=%v", iteration, got, wantGitLab)
+			}
+		}
+	}
+}
+
+func testOpsAcceptanceNames(rows []githubTestsAcceptanceRow) []string {
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		names = append(names, row.CheckName)
+	}
+	return names
+}
+
+func TestGitLabTestsArtifactRedirectDoesNotForwardCredentialAndCountsPhysicalRequests(t *testing.T) {
+	archive := githubTestsZip(t, map[string]string{"coverage.info": githubTestsLCOVFixture})
+	var blobHeaders http.Header
+	blob := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		blobHeaders = request.Header.Clone()
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write(archive)
+	}))
+	defer blob.Close()
+	apiRequests := 0
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		apiRequests++
+		if got := request.Header.Get("PRIVATE-TOKEN"); got != "gitlab-secret" {
+			t.Errorf("API request %s PRIVATE-TOKEN=%q", request.URL.Path, got)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.URL.Path == "/api/v4/projects/123":
+			_, _ = io.WriteString(writer, `{"id":123,"path_with_namespace":"acme/api","default_branch":"main","only_allow_merge_if_pipeline_succeeds":true}`)
+		case request.URL.Path == "/api/v4/projects/123/pipelines":
+			_, _ = io.WriteString(writer, `[{"id":9001,"name":"CI","ref":"main","status":"success","created_at":"2026-07-22T10:00:00Z","started_at":"2026-07-22T10:01:00Z","finished_at":"2026-07-22T10:05:00Z","source":"push","sha":"abc"}]`)
+		case request.URL.Path == "/api/v4/projects/123/pipelines/9001/jobs" && request.URL.Query().Get("include_retried") == "true":
+			_, _ = io.WriteString(writer, `[{"id":11,"name":"unit","stage":"test","status":"success"}]`)
+		case request.URL.Path == "/api/v4/projects/123/pipelines/9001/jobs":
+			_, _ = io.WriteString(writer, `[{"id":11,"name":"unit","artifacts_file":{"filename":"reports.zip"}}]`)
+		case request.URL.Path == "/api/v4/projects/123/pipelines/9001/test_report":
+			_, _ = io.WriteString(writer, `{"test_suites":[{"name":"api","test_cases":[{"name":"passes","status":"success"}]}]}`)
+		case request.URL.Path == "/api/v4/projects/123/jobs/11/artifacts":
+			writer.Header().Set("Location", blob.URL+"/reports.zip")
+			writer.WriteHeader(http.StatusFound)
+		default:
+			t.Errorf("unexpected API request %s", request.URL.String())
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer api.Close()
+	credential, err := (providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"base_url": api.URL}}).
+		WithEphemeralSecret("token", secrets.NewValue("gitlab-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doer := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client, err := providerfoundation.NewGitLabClient(
+		credential, doer,
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitLabTestsRouteHandler{}).Collect(
+		context.Background(), nativeTestClaim("gitlab", "tests"), credential, client,
+		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if apiRequests != 7 || batch.Evidence.Requests != 8 {
+		t.Fatalf("api requests=%d physical requests=%d", apiRequests, batch.Evidence.Requests)
+	}
+	for _, header := range []string{"PRIVATE-TOKEN", "Authorization", "Cookie"} {
+		if got := blobHeaders.Get(header); got != "" {
+			t.Fatalf("blob %s=%q", header, got)
+		}
+	}
+	for _, effect := range batch.Effects {
+		if effect.Destination == "coverage_snapshots" && len(effect.Rows) != 1 {
+			t.Fatalf("coverage rows=%d", len(effect.Rows))
+		}
+	}
+}
+
+func TestGitLabTestsRedirectTargetFailuresPreserveProviderClassification(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		class  providerfoundation.ErrorClass
+	}{
+		{status: http.StatusTooManyRequests, class: providerfoundation.ErrorRateLimited},
+		{status: http.StatusServiceUnavailable, class: providerfoundation.ErrorTransient},
+	} {
+		t.Run(http.StatusText(test.status), func(t *testing.T) {
+			doer := &gitLabTestsRouteDoer{t: t, redirectStatus: test.status}
+			batch, err := (GitLabTestsRouteHandler{}).Collect(
+				context.Background(), nativeTestClaim("gitlab", "tests"), providerfoundation.Credential{},
+				gitLabRepositoryClient(t, doer, "https://gitlab.example"), time.Now(),
+			)
+			var providerErr *providerfoundation.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.Class != test.class || providerErr.StatusCode != test.status {
+				t.Fatalf("error=%v", err)
+			}
+			if len(batch.Effects) != 0 || batch.Watermark != nil {
+				t.Fatalf("partial batch=%+v", batch)
+			}
+		})
+	}
+}

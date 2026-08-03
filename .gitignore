@@ -40,6 +40,12 @@ index.txt
 .build/
 .wrangler/
 
+# Mutation-harness working state: snapshots of files it is about to mutate,
+# the applied-mutation record that makes a killed run detectable, and the last
+# report. Never commit these -- a committed applied-record would make every
+# clone refuse to run the harness.
+.mutation-harness/
+
 # CHAOS-3462: the Wave 4 corpus launcher's JUnit report. Its SIBLINGS in that
 # directory -- the wave4_case_result.v1 receipts -- are deliberately tracked
 # evidence, so the directory itself must stay un-ignored; only this per-run

@@ -771,6 +771,20 @@ gate_lint_check() { "${RUFF}" check .; }
 gate_typecheck() { "${MYPY}" --install-types --non-interactive .; }
 gate_go_fast() { bash "${ROOT}/ci/check_go.sh" fast; }
 gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
+# SCOPE (CHAOS-3165): the requirement to author a mutation plan for new work is
+# scoped to the Go port (CHAOS-3033) and is removed when the port finalises —
+# CHAOS-3165 tracks that removal and is blocked by CHAOS-3033. THIS STAGE is not
+# what goes away: `verify` costs milliseconds and answers "did an interrupted run
+# leave a mutation on disk", which stays worth asking for as long as the tool
+# exists. The requirement is load-bearing until the port closes.
+#
+# Runs FIRST, and deliberately so: a mutation left applied by an interrupted
+# mutation-testing run makes every result below it meaningless, and it is
+# invisible to the tools that would otherwise be trusted to notice. `go build`
+# and `go vet` both pass on `if false && (guard)`, and `git diff` reports an
+# UNTRACKED file clean no matter what it contains — so neither the Go gate nor a
+# git check can substitute for this one. See scripts/mutation_harness.py.
+gate_no_active_mutation() { "${PYBIN}" "${ROOT}/scripts/mutation_harness.py" verify; }
 
 # --- The FULL unit suite — the CHAOS-2604 fix. NOT a file subset. ------------------
 # Byte-for-byte the marker filter + ignores of ci/run_tests.sh unit_tests().
@@ -1178,11 +1192,12 @@ verify_stage_manifest() {
 # release_lock without paying for preflight/lint/mypy/the unit suite.
 run_declared_stages() {
   if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
-    DECLARED_STAGE_IDS=(lint_format lint_check typecheck unit_suite)
+    DECLARED_STAGE_IDS=(mutation_clean lint_format lint_check typecheck unit_suite)
   else
-    DECLARED_STAGE_IDS=(lint_format lint_check typecheck ch_probe ch_scratch_create ch_migrate unit_suite ch_argmax_proof)
+    DECLARED_STAGE_IDS=(mutation_clean lint_format lint_check typecheck ch_probe ch_scratch_create ch_migrate unit_suite ch_argmax_proof)
   fi
 
+  run_stage "mutation harness: no mutation applied" mutation_clean gate_no_active_mutation
   run_stage "lint: ruff format --check" lint_format gate_lint_format
   run_stage "lint: ruff check" lint_check gate_lint_check
   run_stage "typecheck: mypy" typecheck gate_typecheck

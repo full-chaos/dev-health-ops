@@ -212,6 +212,7 @@ func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
 			name:   "provider budget parity",
 			script: "python_provider_budget_oracle.py",
 			source: []string{
+				filepath.Join(root, "src", "dev_health_ops", "providers", "github", "budget.py"),
 				filepath.Join(root, "src", "dev_health_ops", "providers", "linear", "budget.py"),
 				filepath.Join(root, "src", "dev_health_ops", "providers", "jira", "budget.py"),
 				filepath.Join(root, "src", "dev_health_ops", "providers", "launchdarkly", "budget.py"),

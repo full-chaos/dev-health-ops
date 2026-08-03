@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -117,6 +118,50 @@ func TestGitHubCICDRouteEmitsOnlyWindowedPipelineRuns(t *testing.T) {
 		second.RetryCount != 0 || second.QueuedAt == nil ||
 		!second.StartedAt.Equal(*second.QueuedAt) || second.FinishedAt != nil {
 		t.Fatalf("second row=%+v", second)
+	}
+}
+
+type gitHubCICDCappedDoer struct{ t *testing.T }
+
+func (doer gitHubCICDCappedDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	body := gitHubRepositoryFixture
+	header := http.Header{"Content-Type": []string{"application/json"}}
+	if request.URL.Path == "/repos/acme/api/actions/runs" {
+		body = gitHubCICDWorkflowRunsFixture
+		header.Set(
+			"Link",
+			`<https://api.github.com/repos/acme/api/actions/runs?per_page=100&page=2>; rel="next"`,
+		)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     header,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    request,
+	}, nil
+}
+
+func TestGitHubCICDRouteDoesNotCompleteOrAdvanceWatermarkAtResultCap(
+	t *testing.T,
+) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	client := gitHubRepositoryClient(
+		t,
+		gitHubCICDCappedDoer{t: t},
+		"https://api.github.com",
+	)
+	claim := nativeTestClaim("github", "cicd")
+
+	batch, err := (GitHubCICDRouteHandler{MaxRuns: 100}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client, now,
+	)
+	if !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("error=%v want ErrPaginationCapExceeded", err)
+	}
+	if batch.Watermark != nil || len(batch.Effects) != 0 {
+		t.Fatalf("incomplete batch must be empty, got %+v", batch)
 	}
 }
 

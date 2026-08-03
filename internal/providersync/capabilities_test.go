@@ -12,6 +12,22 @@ import (
 	"testing"
 )
 
+const (
+	livePythonOraclesEnv      = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
+	livePythonOracleProofDir  = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
+	livePythonOracleProofFile = "providersync"
+)
+
+func requireLivePythonOracles(t *testing.T) {
+	t.Helper()
+	if os.Getenv(livePythonOraclesEnv) != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	if os.Getenv(livePythonOracleProofDir) == "" {
+		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
+	}
+}
+
 func TestCapabilitiesMatchPythonProviderRegistry(t *testing.T) {
 	python := pythonExecutable(t)
 	_, currentFile, _, _ := runtime.Caller(0)
@@ -61,6 +77,14 @@ type registryEntry struct {
 
 func pythonExecutable(t *testing.T) string {
 	t.Helper()
+	requireLivePythonOracles(t)
+	// The shell gate checks this only after the package succeeds. Recording the
+	// proof here makes it impossible for a standalone marker test to pass after
+	// every real Python oracle invocation has been removed or renamed.
+	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), livePythonOracleProofFile)
+	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
+		t.Fatalf("write live Python oracle proof: %v", err)
+	}
 	if configured := os.Getenv("PYTHON"); configured != "" {
 		return configured
 	}

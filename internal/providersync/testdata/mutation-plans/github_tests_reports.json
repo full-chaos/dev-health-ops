@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "name": "github/tests report parsing foundation (CHAOS-3336)",
+  "build": ["go", "build", "./..."],
+  "$limitation": "This plan covers only the reviewable report-parser foundation. github/tests remains executor none and route_ready false; Actions/jobs/acceptance fetches, secure two-hop artifact download, Cobertura, six sinks/readbacks, tenant collision and crash recovery do not exist yet and are explicitly not claimed.",
+  "mutations": [
+    {
+      "id": "T1-report-count-cap",
+      "file": "internal/providersync/github_tests_reports.go",
+      "find": "if processed >= githubTestsMaxReportsPerRun {",
+      "replace": "if false {",
+      "rationale": "one run may parse at most 200 classified reports so an artifact set cannot create unbounded CPU and row volume",
+      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactEnforcesReportCountCap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T2-doctype-rejected",
+      "file": "internal/providersync/github_tests_reports.go",
+      "find": "bytes.Contains(bytes.ToUpper(body), []byte(\"<!DOCTYPE\")) ||",
+      "replace": "false ||",
+      "rationale": "untrusted artifact XML containing a DTD must be rejected before decoding",
+      "proof": [["go", "test", "-run", "^TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T3-stack-truncation",
+      "file": "internal/providersync/github_tests_reports.go",
+      "find": "if len(value) > 4096 {",
+      "replace": "if false {",
+      "rationale": "failure stack text persisted from an untrusted report is capped at the Python contract's 4096 bytes",
+      "proof": [["go", "test", "-run", "^TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T4-failure-status",
+      "file": "internal/providersync/github_tests_reports.go",
+      "find": "case item.Failure != nil:",
+      "replace": "case false:",
+      "rationale": "a JUnit failure element must normalize to failed and contribute to the suite's failed count",
+      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactParsesJUnitCasesAndCoverage$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T5-covered-cannot-exceed-total",
+      "file": "internal/providersync/github_tests_reports.go",
+      "find": "linesCovered > linesTotal ||",
+      "replace": "false ||",
+      "rationale": "an incoherent coverage report must be rejected instead of skewing TestOps rollups",
+      "proof": [["go", "test", "-run", "^TestGitHubTestsCoverageRejectsCoveredGreaterThanTotal$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T6-da-lines-fallback",
+      "file": "internal/providersync/github_tests_reports.go",
+      "find": "lineNumbers[lineNumber] = struct{}{}",
+      "replace": "delete(lineNumbers, lineNumber)",
+      "rationale": "LCOV files without LF/LH must derive total and covered lines from unique DA records exactly like the live Python parser",
+      "proof": [["go", "test", "-run", "^TestGitHubTestsCoverageFallsBackToUniqueDALines$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T7-majority-file-service",
+      "file": "internal/providersync/github_tests_reports.go",
+      "find": "if serviceCounts[service] > bestCount {",
+      "replace": "if serviceCounts[service] > 0 && bestCount == 0 {",
+      "rationale": "coverage service attribution must choose the service represented by the most report files, not the first source path",
+      "proof": [["go", "test", "-run", "^TestGitHubTestsCoverageAttributesMajorityFileService$", "./internal/providersync/"]]
+    }
+  ]
+}

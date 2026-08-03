@@ -120,3 +120,31 @@ def class_annotated_field_names(source: str, class_name: str) -> frozenset[str]:
     raise ValueError(
         f"class_annotated_field_names: no annotated public fields found for {class_name!r}"
     )
+
+
+def typed_dict_field_names(source: str, class_name: str) -> frozenset[str]:
+    """Return every annotated field declared by one production TypedDict.
+
+    TestOps producers construct rows through ``TypedDictName(...)`` calls rather
+    than ORM constructors or dict literals. Reflecting the owning TypedDict is
+    the same structural completeness boundary for that shape: adding a field to
+    the production contract makes the oracle fail until its live row emits or
+    explicitly excludes the field.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name != class_name:
+            continue
+        fields = {
+            statement.target.id
+            for statement in node.body
+            if isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and not statement.target.id.startswith("_")
+        }
+        if fields:
+            return frozenset(fields)
+        break
+    raise ValueError(
+        f"typed_dict_field_names: no annotated public fields found for {class_name!r}"
+    )

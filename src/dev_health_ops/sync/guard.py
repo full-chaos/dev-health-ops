@@ -85,6 +85,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, text
+from sqlalchemy.exc import SQLAlchemyError
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session

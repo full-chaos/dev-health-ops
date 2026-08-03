@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from .contracts import (
     AnswerStatus,
+    DevActualCompletion,
     DevAnswer,
     DevClaim,
     DevContractVersions,
@@ -153,19 +154,45 @@ def _claim_has_grounding_reference(claim: DevClaim) -> bool:
     return bool(claim.metric_ref_ids or claim.evidence_ref_ids)
 
 
+# CHAOS-3297 s2 round 9 (codex CONFIRMED): status_change_service._assess
+# nulls required_child_total/required_child_complete ONLY when the
+# required-child source itself was truncated (children/membership --
+# see children_source_truncated there). Every OTHER assessment category
+# -- blockers, pull_requests, ci, deployments, incidents -- sets the
+# general "assessment_source_limit_reached" reason code while leaving
+# the denominator non-None (it genuinely counted every required child it
+# saw; it's the REST of the evidence that was cut off). Gating the
+# disclosure obligation on required_child_total is None alone left those
+# five categories completely unguarded: codex drove the real service
+# with each category truncated in turn and got total=0/complete=0 with
+# the flag set, and a markerless "All required work is complete." passed
+# every time. The trigger must fire on EITHER signal -- a withheld
+# denominator makes the count itself unknown; the general reason code
+# makes the REST of the evidence (blockers/PRs/CI/deployments/incidents)
+# behind that "complete" claim unknown, which is exactly as untrustworthy.
+_ASSESSMENT_SOURCE_LIMIT_REACHED = "assessment_source_limit_reached"
+
+
+def _completion_assessment_is_untrustworthy(actual: DevActualCompletion) -> bool:
+    return (
+        actual.required_child_total is None
+        or _ASSESSMENT_SOURCE_LIMIT_REACHED in actual.reason_codes
+    )
+
+
 def _any_tool_result_withheld_its_completion_denominator(
     tool_results: tuple[DevToolResult, ...],
 ) -> bool:
     """Whether any executed tool in this run reported a completion
-    assessment whose denominator it explicitly withheld (CHAOS-3297 s2):
-    ``required_child_total``/``required_child_complete`` are ``None``
-    together whenever the required-child source itself was truncated (see
-    ``DevActualCompletion.validate_required_child_counts``, which already
-    enforces they can never be split -- checking one here is sufficient).
+    assessment that cannot be trusted to ground a completion claim
+    (CHAOS-3297 s2): either the denominator itself is withheld
+    (required_child_total is None, whenever the required-child source
+    was truncated), or assessment_source_limit_reached fired for any
+    other reason (round 9) -- see the module-level comment above.
     """
     return any(
         result.actual_completion is not None
-        and result.actual_completion.required_child_total is None
+        and _completion_assessment_is_untrustworthy(result.actual_completion)
         for result in tool_results
     )
 
@@ -178,11 +205,12 @@ def completion_truncation_detail(tool_results: tuple[DevToolResult, ...]) -> str
     required items WERE displayed, not just a generic "validation
     failed". Built only from ``ActualCompletion`` reason codes and a
     count -- never raw evidence/child content, so it stays safe to show
-    verbatim in a terminal error message.
+    verbatim in a terminal error message. Selection matches the trigger
+    predicate above (round 9): either signal, not just a null total.
     """
     for result in tool_results:
         actual = result.actual_completion
-        if actual is not None and actual.required_child_total is None:
+        if actual is not None and _completion_assessment_is_untrustworthy(actual):
             reasons = ", ".join(actual.reason_codes) or "unknown reason"
             displayed = len(actual.required_children)
             return (

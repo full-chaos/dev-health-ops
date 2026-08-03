@@ -11,16 +11,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// GitHubTestsClickHouseEffects owns the six destinations emitted by the
-// github/tests complete route. Every readback is a FINAL point lookup over the
+// TestOpsClickHouseEffects owns the six destinations emitted by complete
+// provider TestOps routes. Every readback is a FINAL point lookup over the
 // complete tenant-prefixed natural key and compares the full persisted row.
-type GitHubTestsClickHouseEffects struct {
+type TestOpsClickHouseEffects struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
 }
 
-func (sink GitHubTestsClickHouseEffects) valid(ctx context.Context, claim Claim, destination string) error {
-	if ctx == nil || sink.Lease == nil || claim.Validate() != nil || claim.Provider != "github" || (claim.Dataset != "tests" && claim.Dataset != "cicd") || !githubTestsDestination(destination) {
+// GitHubTestsClickHouseEffects remains as the source-compatible name used by
+// the already-landed GitHub route. GitLab deliberately reuses the same sink so
+// both providers get identical atomic-write and exact-readback semantics.
+type GitHubTestsClickHouseEffects = TestOpsClickHouseEffects
+
+func (sink TestOpsClickHouseEffects) valid(ctx context.Context, claim Claim, destination string) error {
+	providerOK := claim.Provider == "github" || claim.Provider == "gitlab"
+	if ctx == nil || sink.Lease == nil || claim.Validate() != nil || !providerOK || (claim.Dataset != "tests" && claim.Dataset != "cicd") || !githubTestsDestination(destination) {
 		return ErrInvalidConfiguration
 	}
 	return sink.Lease.Assert(ctx)
@@ -35,7 +41,7 @@ func githubTestsDestination(destination string) bool {
 	}
 }
 
-func (sink GitHubTestsClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
+func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
 	if err := sink.valid(ctx, claim, effect.Destination); err != nil {
 		return err
 	}
@@ -59,6 +65,9 @@ func (sink GitHubTestsClickHouseEffects) WriteEffect(ctx context.Context, claim 
 		seen := make(map[string]struct{}, len(rows))
 		for _, row := range rows {
 			if err := validateGitHubTestsRow(claim, row.OrgID, row.RepoID, row.RunID, row.LastSynced); err != nil {
+				return err
+			}
+			if err := validateTestOpsProvider(claim, row.Provider); err != nil {
 				return err
 			}
 			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID) {
@@ -118,6 +127,9 @@ func (sink GitHubTestsClickHouseEffects) WriteEffect(ctx context.Context, claim 
 					return err
 				}
 				return ErrInvalidConfiguration
+			}
+			if err := validateTestOpsProvider(claim, row.Provider); err != nil {
+				return err
 			}
 			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.CheckKey) {
 				return ErrInvalidConfiguration
@@ -310,7 +322,21 @@ func validateGitHubTestsRow(claim Claim, orgID, repoID, runID string, lastSynced
 	return nil
 }
 
-func (sink GitHubTestsClickHouseEffects) InspectEffect(ctx context.Context, claim Claim, effect EffectBatch) (EffectInspection, error) {
+func validateTestOpsProvider(claim Claim, persisted string) error {
+	want := ""
+	switch claim.Provider {
+	case "github":
+		want = "github_actions"
+	case "gitlab":
+		want = "gitlab_ci"
+	}
+	if want == "" || persisted != want {
+		return providerfoundation.ErrInvalidScope
+	}
+	return nil
+}
+
+func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Claim, effect EffectBatch) (EffectInspection, error) {
 	if err := sink.valid(ctx, claim, effect.Destination); err != nil {
 		return EffectConflict, err
 	}
@@ -325,6 +351,9 @@ func (sink GitHubTestsClickHouseEffects) InspectEffect(ctx context.Context, clai
 		}
 		return inspectGitHubTestsRows(rows, func(expected githubTestsPipelineRow) (githubTestsPipelineRow, bool, error) {
 			actual := githubTestsPipelineRow{}
+			if err := validateTestOpsProvider(claim, expected.Provider); err != nil {
+				return actual, false, err
+			}
 			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,pipeline_name,provider,status,queued_at,started_at,finished_at,duration_seconds,queue_seconds,retry_count,cancel_reason,trigger_source,commit_hash,branch,pr_number,team_id,service_id,last_synced FROM ci_pipeline_runs FINAL WHERE org_id=? AND repo_id=? AND run_id=?`, []any{expected.OrgID, expected.RepoID, expected.RunID}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.PipelineName, &actual.Provider, &actual.Status, &actual.QueuedAt, &actual.StartedAt, &actual.FinishedAt, &actual.DurationSeconds, &actual.QueueSeconds, &actual.RetryCount, &actual.CancelReason, &actual.TriggerSource, &actual.CommitHash, &actual.Branch, &actual.PRNumber, &actual.TeamID, &actual.ServiceID, &actual.LastSynced)
 			return actual, found, err
 		})
@@ -345,6 +374,9 @@ func (sink GitHubTestsClickHouseEffects) InspectEffect(ctx context.Context, clai
 		}
 		return inspectGitHubTestsRows(rows, func(expected githubTestsAcceptanceRow) (githubTestsAcceptanceRow, bool, error) {
 			actual := githubTestsAcceptanceRow{}
+			if err := validateTestOpsProvider(claim, expected.Provider); err != nil {
+				return actual, false, err
+			}
 			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,check_key,check_name,provider,requirement,result,rule_version,provenance,target_branch,pr_number,source_url,observed_at,last_synced FROM ci_acceptance_checks FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND check_key=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.CheckKey}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.CheckKey, &actual.CheckName, &actual.Provider, &actual.Requirement, &actual.Result, &actual.RuleVersion, &actual.Provenance, &actual.TargetBranch, &actual.PRNumber, &actual.SourceURL, &actual.ObservedAt, &actual.LastSynced)
 			return actual, found, err
 		})
@@ -430,5 +462,5 @@ func inspectGitHubTestsRows[T any](expected []T, load func(T) (T, bool, error)) 
 	return EffectConflict, nil
 }
 
-var _ EffectSink = GitHubTestsClickHouseEffects{}
-var _ EffectReadback = GitHubTestsClickHouseEffects{}
+var _ EffectSink = TestOpsClickHouseEffects{}
+var _ EffectReadback = TestOpsClickHouseEffects{}

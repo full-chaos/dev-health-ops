@@ -141,6 +141,7 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 		cfg.WorkerGithubRepoMetadataEnabled || cfg.WorkerGitlabRepoMetadataEnabled ||
 		cfg.WorkerGitlabCommitStatsEnabled ||
 		cfg.WorkerGitlabCICDEnabled ||
+		cfg.WorkerGitlabTestsEnabled ||
 		cfg.WorkerGithubPRsEnabled ||
 		cfg.WorkerGithubCICDEnabled || cfg.WorkerGithubCommitsEnabled ||
 		cfg.WorkerGithubDeploymentsEnabled || cfg.WorkerGithubSecurityEnabled ||
@@ -155,6 +156,17 @@ func TestGitHubCompleteUnitAliasesAreMutuallyExclusive(t *testing.T) {
 	_, err := Load(workerSpec(map[string]string{
 		"WORKER_GITHUB_CICD_ENABLED":  "true",
 		"WORKER_GITHUB_TESTS_ENABLED": "true",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestGitLabCompleteUnitAliasesAreMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	_, err := Load(workerSpec(map[string]string{
+		"WORKER_GITLAB_CICD_ENABLED":  "true",
+		"WORKER_GITLAB_TESTS_ENABLED": "true",
 	}))
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("error=%v", err)
@@ -228,6 +240,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		!cfg.WorkerGitlabCommitsEnabled ||
 		!cfg.WorkerGitlabCommitStatsEnabled ||
 		!cfg.WorkerGitlabCICDEnabled ||
+		cfg.WorkerGitlabTestsEnabled ||
 		!cfg.WorkerGithubPRsEnabled ||
 		cfg.WorkerGithubCICDEnabled || !cfg.WorkerGithubCommitsEnabled ||
 		!cfg.WorkerGithubDeploymentsEnabled || !cfg.WorkerGithubSecurityEnabled ||
@@ -257,6 +270,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITLAB_COMMITS_ENABLED":             "sometimes",
 		"WORKER_GITLAB_COMMIT_STATS_ENABLED":        "sometimes",
 		"WORKER_GITLAB_CICD_ENABLED":                "sometimes",
+		"WORKER_GITLAB_TESTS_ENABLED":               "sometimes",
 		"WORKER_GITHUB_PRS_ENABLED":                 "sometimes",
 		"WORKER_GITHUB_COMMITS_ENABLED":             "sometimes",
 		"WORKER_GITHUB_COMMIT_STATS_ENABLED":        "sometimes",

@@ -33,6 +33,11 @@ def _source(relative_path: str) -> Path:
 _BUDGET_TYPES_SOURCE = _source("dev_health_ops/sync/budget_types.py")
 _DATASETS_SOURCE = _source("dev_health_ops/sync/datasets.py")
 _USAGE_SOURCE = _source("dev_health_ops/providers/usage.py")
+_EXCEPTIONS_SOURCE = _source("dev_health_ops/exceptions.py")
+_HTTP_SOURCE = _source("dev_health_ops/providers/_http.py")
+_RATELIMIT_SOURCE = _source("dev_health_ops/providers/_ratelimit.py")
+_RATE_LIMIT_SIGNAL_SOURCE = _source("dev_health_ops/sync/rate_limit_signal.py")
+_GITLAB_RATELIMIT_SOURCE = _source("dev_health_ops/providers/gitlab/ratelimit.py")
 _LAUNCHDARKLY_PROCESSOR_SOURCE = _source("dev_health_ops/processors/launchdarkly.py")
 _GITHUB_BUDGET_SOURCE = _source("dev_health_ops/providers/github/budget.py")
 _GITLAB_BUDGET_SOURCE = _source("dev_health_ops/providers/gitlab/budget.py")
@@ -60,6 +65,9 @@ _PIPELINE_BASE_SOURCE = _source("dev_health_ops/providers/_base.py")
 _CI_ACCEPTANCE_SOURCE = _source("dev_health_ops/providers/ci_acceptance.py")
 _GITHUB_TESTOPS_PIPELINE_SOURCE = _source(
     "dev_health_ops/providers/github/testops_pipeline.py"
+)
+_GITLAB_TESTOPS_PIPELINE_SOURCE = _source(
+    "dev_health_ops/providers/gitlab/testops_pipeline.py"
 )
 _OPERATIONAL_ORDERING_SOURCE = _source(
     "dev_health_ops/models/operational_ordering_types.py"
@@ -311,8 +319,23 @@ def _target_github_code_client() -> None:
 
 
 def _target_gitlab_code_client() -> None:
-    """Stub unrelated transports while executing GitLab's live commit mapper."""
-    _install_module("httpx", {"Response": object, "AsyncBaseTransport": object})
+    """Load the executable GitLab code client and its fixed transport stack."""
+    _load_safe_source("dev_health_ops.sync.budget_types")
+    _load_safe_source("dev_health_ops.sync.datasets")
+    _load_safe_source("dev_health_ops.providers.usage")
+    _install_module(
+        "dev_health_ops.workers.sync_bootstrap", {"SyncTaskContext": object}
+    )
+    _load_source_module("dev_health_ops.exceptions", _EXCEPTIONS_SOURCE)
+    _load_source_module(
+        "dev_health_ops.sync.rate_limit_signal", _RATE_LIMIT_SIGNAL_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers._ratelimit", _RATELIMIT_SOURCE)
+    _load_source_module("dev_health_ops.providers._http", _HTTP_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.gitlab.ratelimit", _GITLAB_RATELIMIT_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers.gitlab.budget", _GITLAB_BUDGET_SOURCE)
     _install_module(
         "dev_health_ops.connectors.models",
         {
@@ -326,29 +349,6 @@ def _target_gitlab_code_client() -> None:
                 (),
                 {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
             ),
-        },
-    )
-    _install_module(
-        "dev_health_ops.exceptions",
-        {
-            "APIException": Exception,
-            "NotFoundException": Exception,
-            "RateLimitException": Exception,
-        },
-    )
-    _install_module(
-        "dev_health_ops.providers._http",
-        {
-            "GITLAB_DIAGNOSTIC_HEADER_NAMES": (),
-            "InstrumentedRESTCore": object,
-            "gitlab_rest_base_url": lambda *_args, **_kwargs: "",
-        },
-    )
-    _install_module(
-        "dev_health_ops.providers.gitlab.ratelimit",
-        {
-            "build_gitlab_rate_limit_exception": _unsupported_dependency,
-            "classify_gitlab_status": _unsupported_dependency,
         },
     )
 
@@ -565,6 +565,35 @@ def _target_github_testops_pipeline() -> None:
     _load_source_module("dev_health_ops.providers.ci_acceptance", _CI_ACCEPTANCE_SOURCE)
 
 
+def _target_gitlab_testops_pipeline() -> None:
+    """Load the active GitLab TestOps adapter and executable dependencies."""
+    _load_safe_source("dev_health_ops.sync.budget_types")
+    _load_safe_source("dev_health_ops.sync.datasets")
+    _load_safe_source("dev_health_ops.providers.usage")
+    _install_module(
+        "dev_health_ops.workers.sync_bootstrap", {"SyncTaskContext": object}
+    )
+    _install_module(
+        "dev_health_ops.exceptions",
+        {
+            "APIException": type("APIException", (Exception,), {}),
+            "AuthenticationException": type(
+                "AuthenticationException", (Exception,), {}
+            ),
+        },
+    )
+    _load_source_module(
+        "dev_health_ops.metrics.testops_schemas", _TESTOPS_SCHEMAS_SOURCE
+    )
+    _install_module(
+        "dev_health_ops.providers._http",
+        {"GITLAB_DIAGNOSTIC_HEADER_NAMES": ()},
+    )
+    _load_source_module("dev_health_ops.providers.gitlab.budget", _GITLAB_BUDGET_SOURCE)
+    _load_source_module("dev_health_ops.providers._base", _PIPELINE_BASE_SOURCE)
+    _load_source_module("dev_health_ops.providers.ci_acceptance", _CI_ACCEPTANCE_SOURCE)
+
+
 def _target_jsm_incidents() -> None:
     """Load the incident dataclasses and JSM boundary model without ORM init."""
     _load_source_module(
@@ -687,6 +716,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.providers.github.testops_pipeline",
         _GITHUB_TESTOPS_PIPELINE_SOURCE,
         _target_github_testops_pipeline,
+    ),
+    _GITLAB_TESTOPS_PIPELINE_SOURCE: (
+        "dev_health_ops.providers.gitlab.testops_pipeline",
+        _GITLAB_TESTOPS_PIPELINE_SOURCE,
+        _target_gitlab_testops_pipeline,
     ),
     _JSM_INCIDENTS_SOURCE: (
         "dev_health_ops.providers.jira.jsm_incidents",

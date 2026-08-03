@@ -74,7 +74,7 @@ func gitLabRequestPlan(dataset string, spanDays int) []RequestEstimate {
 			Dimension: BudgetRESTCore, Units: max(4, 4*spanDays),
 			Confidence: "low", RouteFamily: "project",
 		}}
-	case "cicd":
+	case "cicd", "tests":
 		return []RequestEstimate{{
 			Dimension: BudgetRESTCore, Units: max(6, 6*spanDays),
 			Confidence: "low", RouteFamily: "pipelines",

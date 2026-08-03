@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"testing"
 
@@ -237,6 +238,7 @@ func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
 		"gitlab_commits":  {GitlabCommits: true},
 		"gitlab_stats":    {GitlabCommitStats: true},
 		"gitlab_cicd":     {GitlabCICD: true},
+		"gitlab_tests":    {GitlabTests: true},
 		"github_prs":      {GithubPRs: true},
 		"github_cicd":     {GithubCICD: true},
 		"github_security": {GithubSecurity: true},
@@ -316,6 +318,12 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 			name: "gitlab cicd",
 			cfg: config.Config{
 				Profile: "sync", WorkerGitlabCICDEnabled: true,
+			},
+		},
+		{
+			name: "gitlab tests",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabTestsEnabled: true,
 			},
 		},
 		{
@@ -416,6 +424,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 		"gitlab_cicd": {
 			cfg:  config.Config{WorkerGitlabCICDEnabled: true},
 			want: providersync.CompleteRouteSwitches{GitlabCICD: true},
+		},
+		"gitlab_tests": {
+			cfg:  config.Config{WorkerGitlabTestsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabTests: true},
 		},
 		"github_prs": {
 			cfg:  config.Config{WorkerGithubPRsEnabled: true},
@@ -705,6 +717,7 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 		"gitlab_commits":       {WorkerGitlabCommitsEnabled: true},
 		"gitlab_commit_stats":  {WorkerGitlabCommitStatsEnabled: true},
 		"gitlab_cicd":          {WorkerGitlabCICDEnabled: true},
+		"gitlab_tests":         {WorkerGitlabTestsEnabled: true},
 		"github_cicd":          {WorkerGithubCICDEnabled: true},
 		"github_commits":       {WorkerGithubCommitsEnabled: true},
 		"github_deployments":   {WorkerGithubDeploymentsEnabled: true},
@@ -808,29 +821,51 @@ func TestBuildProviderSyncHandlerConstructsGitLabCommitStatsCapability(t *testin
 }
 
 func TestBuildProviderSyncHandlerConstructsGitLabCICDCapability(t *testing.T) {
-	handler, _ := buildProviderSyncHandler(
-		nil,
-		providersync.CompleteRouteSwitches{GitlabCICD: true},
-		nil, nil, nil, nil, nil, nil, slog.Default(),
-	)
-	if handler == nil || handler.BuildExecutor == nil {
-		t.Fatal("provider sync handler is not constructed")
-	}
-	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
-		Claim: providersync.Claim{Unit: providersync.Unit{
-			Provider: "gitlab", Dataset: "cicd",
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := executor.Handler.(providersync.GitLabCICDRouteHandler); !ok {
-		t.Fatalf("executor handler=%T", executor.Handler)
-	}
-	if _, ok := executor.Committer.Sink.(providersync.GitLabCICDClickHouseEffects); !ok {
-		t.Fatalf("executor sink=%T", executor.Committer.Sink)
-	}
-	if _, ok := executor.Committer.Readback.(providersync.GitLabCICDClickHouseEffects); !ok {
-		t.Fatalf("executor readback=%T", executor.Committer.Readback)
+	for _, test := range []struct {
+		dataset  string
+		switches providersync.CompleteRouteSwitches
+	}{
+		{dataset: "cicd", switches: providersync.CompleteRouteSwitches{GitlabCICD: true}},
+		{dataset: "tests", switches: providersync.CompleteRouteSwitches{GitlabTests: true}},
+	} {
+		t.Run(test.dataset, func(t *testing.T) {
+			handler, _ := buildProviderSyncHandler(
+				nil, test.switches, nil, nil, nil, nil, nil, nil, slog.Default(),
+			)
+			if handler == nil || handler.BuildExecutor == nil {
+				t.Fatal("provider sync handler is not constructed")
+			}
+			executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+				Claim: providersync.Claim{Unit: providersync.Unit{
+					Provider: "gitlab", Dataset: test.dataset,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := executor.Handler.(providersync.GitLabTestsRouteHandler); !ok {
+				t.Fatalf("executor handler=%T", executor.Handler)
+			}
+			if _, ok := executor.Committer.Sink.(providersync.TestOpsClickHouseEffects); !ok {
+				t.Fatalf("executor sink=%T", executor.Committer.Sink)
+			}
+			if _, ok := executor.Committer.Readback.(providersync.TestOpsClickHouseEffects); !ok {
+				t.Fatalf("executor readback=%T", executor.Committer.Readback)
+			}
+			client, ok := executor.Doer.(*http.Client)
+			if !ok {
+				t.Fatalf("executor doer=%T", executor.Doer)
+			}
+			if client.CheckRedirect == nil {
+				t.Fatal("provider client must expose redirects to the route before an unauthenticated follow")
+			}
+			request, requestErr := http.NewRequest(http.MethodGet, "https://blob.example/artifact", nil)
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			if redirectErr := client.CheckRedirect(request, nil); !errors.Is(redirectErr, http.ErrUseLastResponse) {
+				t.Fatalf("redirect policy error=%v", redirectErr)
+			}
+		})
 	}
 }

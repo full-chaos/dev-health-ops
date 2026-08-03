@@ -1,0 +1,258 @@
+{
+  "schema_version": 1,
+  "name": "GitLab complete TestOps alias owner (CHAOS-3356)",
+  "build": ["go", "test", "-run", "^$", "./internal/providersync/", "./internal/platform/config/", "./cmd/dev-health-worker/"],
+  "$limitation": "This plan pins the combined GitLab TestOps claim boundary, alias selection and caps, fractional provider-query precision, Python's single-page artifact-discovery boundary, explicit unauthenticated artifact redirect, six-effect projection, provider binding, estimator parity, canonical actual-usage observations and persistence, mutually-exclusive gates, route readiness, production worker construction, and FINAL collision recovery. Live row/selection oracles cover every persisted field, physical request counts, and the active Python producer. Existing generalized TestOps integration tests cover atomic per-table batches and tenant isolation. This plan does not claim failed-attempt actual-usage persistence, live credentialed GitLab traffic, a cross-table ClickHouse transaction, deployment activation, scheduler activation, schema redesign, or migration 0066.",
+  "mutations": [
+    {
+      "id": "G1-claim-provider-guard",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "claim.Validate() != nil || claim.Provider != \"gitlab\" ||",
+      "replace": "claim.Validate() != nil || false ||",
+      "rationale": "a GitHub claim must not enter the canonical GitLab TestOps collector",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsRouteRejectsCrossScopeBeforeProviderRequests$/claim_provider$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G2-claim-dataset-alias-guard",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "(claim.Dataset != \"cicd\" && claim.Dataset != \"tests\") || client == nil ||",
+      "replace": "(false && claim.Dataset != \"tests\") || client == nil ||",
+      "rationale": "only the cicd and tests public aliases may enter their shared complete owner",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsRouteRejectsCrossScopeBeforeProviderRequests$/claim_dataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G3-client-provider-guard",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "client.Provider != \"gitlab\" || client.BaseURL == nil || normalizedAt.IsZero()",
+      "replace": "false || client.BaseURL == nil || normalizedAt.IsZero()",
+      "rationale": "GitLab TestOps requests must use a canonical GitLab provider client",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsRouteRejectsCrossScopeBeforeProviderRequests$/client_provider$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G4-default-branch-filter",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "if defaultBranch != \"\" && ref != \"\" && ref != defaultBranch {",
+      "replace": "if defaultBranch != \"\" && ref != \"\" && false {",
+      "rationale": "the active Python producer filters non-default branches before applying its accepted-pipeline cap",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "G5-filtered-pipeline-cap",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "accepted++",
+      "replace": "accepted += 0",
+      "rationale": "the pipeline cap counts default-branch candidates before the upper-window skip exactly like the active Python producer",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "G6-inclusive-upper-window",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "if before != nil && started != nil && started.UTC().After(before.UTC()) {",
+      "replace": "if before != nil && started != nil && false {",
+      "rationale": "pipelines strictly after the inclusive upper bound must be skipped after consuming a cap slot",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "G7-empty-artifact-object-is-false",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "case map[string]any:\n\t\treturn len(typed) > 0",
+      "replace": "case map[string]any:\n\t\treturn true",
+      "rationale": "an empty GitLab artifact metadata object has Python-false truthiness and must not trigger a download",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsArtifactTruthinessMatchesPython$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G8-artifact-cap",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "if len(selected) >= maxArtifacts {",
+      "replace": "if false {",
+      "rationale": "at most the production 25 truthy artifact jobs may be downloaded for one run",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "G9-cross-host-artifact-follow-is-unauthenticated",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "response, err = client.DoUnauthenticated(ctx, http.MethodGet, location)",
+      "replace": "response, err = client.Do(ctx, http.MethodGet, location, nil)",
+      "rationale": "a pre-signed artifact redirect must never receive the GitLab PRIVATE-TOKEN or other provider credentials",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsArtifactRedirectDoesNotForwardCredentialAndCountsPhysicalRequests$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G10-tests-actual-usage-family",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "case \"tests\":\n\t\treturn \"tests\"",
+      "replace": "case \"tests\":\n\t\treturn \"pipelines\"",
+      "rationale": "executed tests requests retain the tests actual-usage label even though both aliases reserve the pipelines estimator bucket",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabCICDAndTestsAliasesEmitByteIdenticalSixEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G11-provider-row-binding",
+      "file": "internal/providersync/github_tests_effects_clickhouse.go",
+      "find": "if want == \"\" || persisted != want {",
+      "replace": "if want == \"\" || false {",
+      "rationale": "github_actions rows cannot satisfy GitLab claims and gitlab_ci rows cannot satisfy GitHub claims on write or readback",
+      "proof": [["go", "test", "-count=1", "-run", "^TestTestOpsRowsBindPersistedProviderToClaim$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G12-six-destination-projection",
+      "file": "internal/providersync/testops_effects.go",
+      "find": "{\"test_case_results\", cases}, {\"coverage_snapshots\", coverage},",
+      "replace": "{\"test_case_results\", cases},",
+      "rationale": "the canonical complete owner must always project all six TestOps destinations",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabCICDAndTestsAliasesEmitByteIdenticalSixEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G13-go-alias-mutual-exclusion",
+      "file": "internal/platform/config/config.go",
+      "find": "if cfg.WorkerGitlabCICDEnabled && cfg.WorkerGitlabTestsEnabled {",
+      "replace": "if false {",
+      "rationale": "Go startup must reject two independently claimed aliases for one complete natural-key owner",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabCompleteUnitAliasesAreMutuallyExclusive$", "./internal/platform/config/"]]
+    },
+    {
+      "id": "G14-python-alias-mutual-exclusion",
+      "file": "src/dev_health_ops/workers/provider_unit_route.py",
+      "find": "if self.gitlab_cicd and self.gitlab_tests:",
+      "replace": "if False:",
+      "rationale": "the Python producer gate must reject the same dual-alias configuration before routing either unit to River",
+      "build": ["python", "-m", "py_compile", "src/dev_health_ops/workers/provider_unit_route.py"],
+      "proof": [["python", "-m", "pytest", "-q", "tests/workers/test_provider_unit_route.py", "-k", "gitlab_complete_unit_aliases_are_mutually_exclusive"]]
+    },
+    {
+      "id": "G15-tests-route-readiness",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "descriptor.RouteReady = true\n\t\tdescriptor.RouteEnabled = switches.GitlabTests",
+      "replace": "descriptor.RouteReady = false\n\t\tdescriptor.RouteEnabled = switches.GitlabTests",
+      "rationale": "both public aliases must advertise the same completed six-destination route contract",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabCICDAndTestsAliasesShareOneCompleteRouteContract$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G16-worker-reaches-tests-alias",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "(session.Claim.Dataset == \"cicd\" || session.Claim.Dataset == \"tests\"):",
+      "replace": "session.Claim.Dataset == \"cicd\":",
+      "rationale": "the production binary must construct the same complete handler, sink, and readback for the tests alias",
+      "proof": [["go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsGitLabCICDCapability$/tests$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "G17-python-estimator-units",
+      "file": "internal/providersync/request_plan.go",
+      "find": "Dimension: BudgetRESTCore, Units: max(6, 6*spanDays),\n\t\t\tConfidence: \"low\", RouteFamily: \"pipelines\",",
+      "replace": "Dimension: BudgetRESTCore, Units: max(5, 5*spanDays),\n\t\t\tConfidence: \"low\", RouteFamily: \"pipelines\",",
+      "rationale": "both aliases port the live Python span-scaled six-unit pipelines reservation",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "G18-final-full-row-readback",
+      "file": "internal/providersync/github_tests_effects_clickhouse.go",
+      "find": "FROM ci_pipeline_runs FINAL WHERE org_id=? AND repo_id=? AND run_id=?",
+      "replace": "FROM ci_pipeline_runs WHERE org_id=? AND repo_id=? AND run_id=?",
+      "rationale": "collision recovery must inspect the single winning complete row rather than unmerged physical alias versions",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-count=1", "-tags", "integration", "-run", "^TestGitLabTestOpsAliasesShareCompleteReplacingRowOwnerInBothWriteOrders$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G19-adapter-window-source-precision",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "if ciPipelineRunOutsideWindow(*startedAt, claim) {",
+      "replace": "if ciPipelineRunOutsideWindow(startedAt.UTC().Truncate(time.Millisecond), claim) {",
+      "rationale": "the adapter-stage since/before comparison must use source precision before DateTime64(3) row canonicalization",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "G20-missing-pipeline-id-fails-closed",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "if stringValue(payload.ID) == \"\" {\n\t\t\treturn CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid\n\t\t}",
+      "replace": "if stringValue(payload.ID) == \"\" {\n\t\t\tcontinue\n\t\t}",
+      "rationale": "a malformed missing pipeline identity must fail the complete unit rather than become a skipped or fabricated natural key",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsFailsClosedOnMissingPipelineID$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G21-redirect-status-classification",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "if classified := providerfoundation.ClassifyHTTPWithMessage(\"gitlab\", response.StatusCode, response.Header, string(message)); classified != nil {\n\t\t\treturn nil, classified\n\t\t}",
+      "replace": "if classified := providerfoundation.ClassifyHTTPWithMessage(\"gitlab\", response.StatusCode, response.Header, string(message)); classified != nil {\n\t\t\treturn nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}\n\t\t}",
+      "rationale": "redirect-target 429, transient, and authentication responses must preserve provider classification for retry and backoff policy",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsRedirectTargetFailuresPreserveProviderClassification$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G22-total-acceptance-name-order",
+      "file": "internal/providersync/testops_effects.go",
+      "find": "if folded := strings.Compare(strings.ToLower(a), strings.ToLower(b)); folded != 0 {\n\t\t\treturn folded\n\t\t}\n\t\treturn strings.Compare(a, b)",
+      "replace": "return strings.Compare(strings.ToLower(a), strings.ToLower(b))",
+      "rationale": "case-distinct provider checks with the same folded name must retain a total shared order so retry effect digests cannot depend on Go map iteration",
+      "proof": [["go", "test", "-count=1", "-run", "^TestTestOpsAcceptanceNamesHaveDeterministicCaseCollisionOrder$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G23-production-redirect-barrier",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "CheckRedirect: func(*http.Request, []*http.Request) error {\n\t\t\t\t\t\treturn http.ErrUseLastResponse\n\t\t\t\t\t},",
+      "replace": "CheckRedirect: nil,",
+      "rationale": "the production provider client must expose cross-host redirects to the route so its explicit unauthenticated follow can prevent PRIVATE-TOKEN forwarding",
+      "proof": [["go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsGitLabCICDCapability$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "G24-actual-usage-dimension",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "\"dimension\": \"rest_core\", \"request_count\": requests,",
+      "replace": "\"dimension\": \"graphql\", \"request_count\": requests,",
+      "rationale": "persisted actual usage must retain the Python GitLab REST-core budget identity",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabCICDAndTestsAliasesEmitByteIdenticalSixEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G25-actual-physical-request-count",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "\"dimension\": \"rest_core\", \"request_count\": requests,",
+      "replace": "\"dimension\": \"rest_core\", \"request_count\": requests - 1,",
+      "rationale": "persisted actual usage must report every physical request counted by the complete route",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "G26-providerunit-persists-observations",
+      "file": "internal/jobs/providerunit/providerunit.go",
+      "find": "payload := cloneResult(result.Result)",
+      "replace": "payload := map[string]any{}",
+      "rationale": "canonical nested provider usage observations must reach sync_run_units.result through Repository.Complete",
+      "proof": [["go", "test", "-count=1", "-run", "^TestProviderUnitPersistsCanonicalProviderUsageObservations$", "./internal/jobs/providerunit/"]]
+    },
+    {
+      "id": "G27-project-policy-missing-vs-false",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "return nil, \"gitlab.project_merge_policy.missing_field\"",
+      "replace": "return map[string]struct{}{}, \"gitlab.project_merge_policy\"",
+      "rationale": "a missing merge-policy field remains unknown while an explicit false value proves no pipeline requirement",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsProjectPolicyDistinguishesMissingFromFalse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G28-adapter-since-query-source-precision",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "query.Set(\"updated_after\", claim.SinceAt.UTC().Format(time.RFC3339Nano))",
+      "replace": "query.Set(\"updated_after\", claim.SinceAt.UTC().Format(time.RFC3339))",
+      "rationale": "the adapter request must preserve fractional source-window precision instead of silently widening its lower bound",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsPreservesSourcePrecisionInProviderQueries$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G29-adapter-before-query-source-precision",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "query.Set(\"updated_before\", claim.BeforeAt.UTC().Format(time.RFC3339Nano))",
+      "replace": "query.Set(\"updated_before\", claim.BeforeAt.UTC().Format(time.RFC3339))",
+      "rationale": "the adapter request must not round an inclusive fractional upper bound down and exclude valid provider rows",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsPreservesSourcePrecisionInProviderQueries$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G30-report-since-query-source-precision",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "reportQuery.Set(\"updated_after\", claim.SinceAt.UTC().Format(time.RFC3339Nano))",
+      "replace": "reportQuery.Set(\"updated_after\", claim.SinceAt.UTC().Format(time.RFC3339))",
+      "rationale": "the report scan must preserve its fractional lower bound so pre-window rows cannot consume the capped selection",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsPreservesSourcePrecisionInProviderQueries$", "./internal/providersync/"]]
+    },
+    {
+      "id": "G31-python-single-page-artifact-boundary",
+      "file": "internal/providersync/gitlab_tests_route.go",
+      "find": "PerPage: nativePerPage, MaxPages: 1, SinglePage: true,",
+      "replace": "PerPage: nativePerPage, MaxPages: 1, SinglePage: false,",
+      "rationale": "artifact discovery must accept Python's deliberate one-page 100-job boundary without inventing an incomplete second page",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabTestsAcceptsPythonSinglePageArtifactBoundary$", "./internal/providersync/"]]
+    }
+  ]
+}

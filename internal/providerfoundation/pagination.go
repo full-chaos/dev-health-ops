@@ -108,10 +108,11 @@ func CollectGitHubLinkPages(
 }
 
 type GitLabPageOptions struct {
-	Path     string
-	Query    url.Values
-	PerPage  int
-	MaxPages int
+	Path       string
+	Query      url.Values
+	PerPage    int
+	MaxPages   int
+	SinglePage bool
 }
 
 // CollectGitLabPageParamPages mirrors Python's page/per_page paginator. A
@@ -157,6 +158,12 @@ func CollectGitLabPageParamPages(
 			return result, nil
 		}
 		result.Items = append(result.Items, items...)
+		// Some active Python provider methods deliberately issue exactly one
+		// page request and accept a full page as a truncated-but-complete
+		// boundary. Do not infer a second page for those callers.
+		if options.SinglePage {
+			return result, nil
+		}
 		nextHeader := strings.TrimSpace(response.Header.Get("X-Next-Page"))
 		if nextHeader != "" {
 			nextPage, parseErr := strconv.Atoi(nextHeader)

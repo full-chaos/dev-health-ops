@@ -45,6 +45,7 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"gitlab/commits":             ExecutorNativeGo,
 	"gitlab/commit-stats":        ExecutorNativeGo,
 	"gitlab/cicd":                ExecutorNativeGo,
+	"gitlab/tests":               ExecutorNativeGo,
 	"github/blame":               ExecutorNativeGo,
 	"github/tests":               ExecutorNativeGo,
 }
@@ -140,8 +141,10 @@ type CompleteRouteSwitches struct {
 	GitlabCommits bool
 	// GitlabCommitStats gates the isolated aggregate git_commit_stats writer.
 	GitlabCommitStats bool
-	// GitlabCICD gates the isolated Python-owned ci_pipeline_runs writer.
-	GitlabCICD bool
+	// GitlabCICD and GitlabTests are mutually-exclusive aliases for the same
+	// complete TestOps writer.
+	GitlabCICD  bool
+	GitlabTests bool
 	// GithubPRs gates (github, prs) only (CHAOS-3122/CHAOS-3123 follow-on).
 	// It must never gate github/pr-reviews or github/pr-comments: those two
 	// datasets share the "prs" legacy target and processor flag in Python
@@ -235,12 +238,19 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GitlabCommitStats
 	case provider == "gitlab" && dataset == "cicd":
-		descriptor.Destinations = []string{"ci_pipeline_runs"}
-		// The isolated D16 producer parity is complete, but gitlab/tests owns
-		// other columns on this same ReplacingMergeTree natural key. A partial
-		// row from either unit replaces the other, so neither pair can route
-		// until the companion port emits one complete row.
+		descriptor.Destinations = []string{
+			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
+			"test_suite_results", "test_case_results", "coverage_snapshots",
+		}
+		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GitlabCICD
+	case provider == "gitlab" && dataset == "tests":
+		descriptor.Destinations = []string{
+			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
+			"test_suite_results", "test_case_results", "coverage_snapshots",
+		}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabTests
 	case provider == "github" && dataset == "prs":
 		// GitHub has a native complete-route handler
 		// (GitHubPullRequestRouteHandler) and a git_pull_requests effect sink

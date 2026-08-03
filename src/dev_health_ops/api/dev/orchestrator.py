@@ -83,9 +83,11 @@ from .contracts_v2 import (
     DevSubjectSet,
     QuestionIntentID,
 )
+from .contracts_v2.base import SourceRequirementState
 from .contracts_v2.frame import DevAnswerFrame
 from .contracts_v2.plan import DevInvestigationPlan
 from .investigation_plans import PlanExecutor, StepContext
+from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from .preflight_outcomes import (
@@ -683,7 +685,29 @@ class DevOrchestrator:
             if error is not None:
                 try:
                     DevError.model_validate(error.model_dump(mode="json"))
-                except ValidationError:
+                except ValidationError as terminal_error_fault:
+                    # CHAOS-3334 (folded in from CHAOS-3332's review): the
+                    # sibling of the answer-write rewrite below, and silent
+                    # for the same reason -- handled locally, so run()'s
+                    # catch-all never sees it. If it ever does fire it means a
+                    # producer built a DevError this module cannot serialize,
+                    # which is a structural defect in *this* package; the
+                    # comment above calls it unreachable in practice, and an
+                    # unreachable branch that fires unlogged is exactly how a
+                    # defect stays invisible for a wave. Logged and counted so
+                    # "should never happen" is a claim an operator can check
+                    # rather than a claim the code makes about itself.
+                    logger.exception(
+                        "ask_dev.orchestrator.terminal_error_rewrite",
+                        extra={
+                            "run_id": run_id,
+                            "exception_type": type(terminal_error_fault).__name__,
+                            "rejected_code": error.code,
+                        },
+                    )
+                    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                        exception_type=type(terminal_error_fault).__name__
+                    ).inc()
                     error = DevError(
                         schema_version="dev_error.v1",
                         request_id=request.request_id,
@@ -1567,8 +1591,18 @@ class DevOrchestrator:
                                 item.model_dump(mode="json")
                                 for item in canonical_evidence
                             ],
-                            "coverage": self._coverage_from_tool_results(
-                                tuple(tool_requests), tuple(tool_results), now
+                            # CHAOS-3334: the model-chosen tool results are
+                            # only half the coverage picture. When a plan
+                            # governed this run, its mandatory source
+                            # observations are merged in here so a failed
+                            # required step is judged by the answer contract's
+                            # existing completeness invariant rather than
+                            # being silently discarded.
+                            "coverage": self._coverage_with_plan_sources(
+                                self._coverage_from_tool_results(
+                                    tuple(tool_requests), tuple(tool_results), now
+                                ),
+                                investigation_result,
                             ).model_dump(mode="json"),
                             "versions": self._versions.model_dump(mode="json"),
                             "model": model.model_dump(mode="json"),
@@ -2145,6 +2179,103 @@ class DevOrchestrator:
             unavailable_required_sources=unavailable,
             stale_required_sources=stale,
             as_of=as_of,
+        )
+
+    @staticmethod
+    def _coverage_with_plan_sources(
+        coverage: DevCoverage,
+        investigation_result: DevInvestigationResult | None,
+    ) -> DevCoverage:
+        """Fold the plan's **mandatory** source observations into ``coverage``.
+
+        CHAOS-3334. ``_coverage_from_tool_results`` above sees only what the
+        *model* chose to call. When a plan governs the investigation, the
+        server independently required a set of sources and observed how each
+        one actually resolved -- and that half was persisted to
+        ``dev_runs.plan_step_partition`` and then dropped on the floor for
+        answer validation. A run whose mandatory ``required_source_health``
+        step failed could still return ``status="complete"`` over a coverage
+        of 1/1, because the one tool the model happened to call succeeded.
+        That is a confident answer standing on a required production source
+        that was never read: the laundering sibling of CHAOS-3332's crash.
+
+        Merging here rather than at the validator is deliberate: coverage is
+        already the server-owned field the answer contract judges
+        completeness against (``DevAnswer.validate_status_consistency``
+        refuses ``complete`` while any required source is unavailable or
+        stale), so a mandatory plan failure becomes a refusal through the
+        invariant that already exists, with no second completeness rule to
+        keep in sync.
+
+        Only ``mandatory`` observations participate. ``conditional`` and
+        ``optional`` requirements are, by their own definition, allowed not
+        to resolve -- counting them would refuse ``complete`` on healthy runs
+        whose conditional steps simply did not apply.
+
+        Usability reuses ``UNMEASURED_REQUIREMENT_STATES``, the closed set
+        the plan executor already treats as "never actually measured", so
+        this cannot drift into a second, parallel vocabulary for the same
+        question. ``available_unknown`` deliberately counts as available and
+        not stale, matching the state ranking the dimension adapters already
+        use (it outranks ``available_stale``); ``truncated`` counts as
+        unavailable because bounded, partial data cannot back a *complete*
+        claim.
+
+        Labels are ``source_class`` values -- short, stable, content-free,
+        and disjoint from the tool-id labels the tool-result half emits, so
+        the union below cannot collide two different sources onto one entry.
+        """
+
+        if investigation_result is None:
+            return coverage
+
+        unavailable = list(coverage.unavailable_required_sources)
+        stale = list(coverage.stale_required_sources)
+        seen = set(unavailable) | set(stale)
+        required_added = 0
+        available_added = 0
+        for observation in investigation_result.observations:
+            if observation.requirement_level != "mandatory":
+                continue
+            label = observation.source_class.value
+            required_added += 1
+            if observation.observed_state in UNMEASURED_REQUIREMENT_STATES:
+                if label not in seen:
+                    unavailable.append(label)
+                    seen.add(label)
+            elif observation.observed_state is SourceRequirementState.AVAILABLE_STALE:
+                available_added += 1
+                if label not in seen:
+                    stale.append(label)
+                    seen.add(label)
+            else:
+                available_added += 1
+        if required_added == 0:
+            return coverage
+        # DevCoverage bounds its counts (<=100) and both id lists (<=25). No
+        # plan declares anywhere near that many mandatory sources, but bounding
+        # here keeps a future oversized one from turning an honest coverage
+        # downgrade into a ValidationError that fails the whole run. What the
+        # completeness invariant actually reads is *non-emptiness*, and
+        # truncating a non-empty list cannot empty it, so the refusal survives
+        # either bound.
+        #
+        # Constructed rather than `model_copy(update=...)`: model_copy skips
+        # validators, so an edit that broke `validate_counts` (available must
+        # not exceed required) would silently produce an invalid coverage that
+        # only surfaced somewhere downstream. The invariant holds by
+        # construction today -- available_added <= required_added, and `min`
+        # is monotonic -- and this makes a future violation fail here.
+        return DevCoverage(
+            required_source_count=min(
+                100, coverage.required_source_count + required_added
+            ),
+            available_source_count=min(
+                100, coverage.available_source_count + available_added
+            ),
+            unavailable_required_sources=unavailable[:25],
+            stale_required_sources=stale[:25],
+            as_of=coverage.as_of,
         )
 
     @staticmethod

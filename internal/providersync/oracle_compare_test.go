@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -376,6 +377,9 @@ func typedEncode(t *testing.T, v reflect.Value) any {
 	}
 	if timeValue, ok := v.Interface().(time.Time); ok {
 		return map[string]any{"t": "datetime", "v": timeValue.UTC().Format(time.RFC3339Nano)}
+	}
+	if integer, ok := v.Interface().(big.Int); ok {
+		return map[string]any{"t": "int", "v": integer.String()}
 	}
 	switch v.Kind() {
 	case reflect.String:

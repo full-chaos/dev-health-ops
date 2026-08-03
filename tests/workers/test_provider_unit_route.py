@@ -40,7 +40,6 @@ def test_route_switch_is_exact_and_independent() -> None:
     (
         "WORKER_LINEAR_WORK_ITEMS_ENABLED",
         "WORKER_JIRA_WORK_ITEMS_ENABLED",
-        "WORKER_JIRA_INCIDENTS_ENABLED",
     ),
 )
 def test_incomplete_routes_fail_closed(name: str) -> None:
@@ -55,6 +54,16 @@ def test_invalid_switch_fails_closed_without_echoing_value() -> None:
             {"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": value}
         )
     assert value not in str(raised.value)
+
+
+def test_jira_incidents_switch_is_the_second_required_key() -> None:
+    assert ProviderUnitRouteSwitches.is_route_ready("jira", "incidents")
+    assert not ProviderUnitRouteSwitches.from_environment({}).routes_to_river(
+        "jira", "incidents"
+    )
+    assert ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_JIRA_INCIDENTS_ENABLED": "true"}
+    ).routes_to_river("jira", "incidents")
 
 
 # ---------------------------------------------------------------------------

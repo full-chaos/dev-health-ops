@@ -792,13 +792,13 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "incidents",
       "route_destinations": [
         "operational_incidents"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",

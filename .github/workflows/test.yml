@@ -320,12 +320,12 @@ jobs:
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test"; the matrix above produces "test-matrix (3.14)"
   # and the coverage job produces "coverage", neither of which match. This
-  # aggregator always runs, treating skipped (path filter, or coverage skipped
-  # on pull_request) as pass and failure/cancelled as fail. It is the single
-  # required check for both PRs and the merge queue. Do not remove.
+  # aggregator runs after failures/skips but exits cleanly when the workflow is
+  # cancelled, preventing a superseded run from holding the concurrency group.
+  # It is the single required check for both PRs and the merge queue. Do not remove.
   test:
     name: test
-    if: always()
+    if: ${{ always() && !cancelled() }}
     needs: [test-matrix, coverage]
     runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-latest' }}
     steps:

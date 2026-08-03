@@ -301,6 +301,8 @@ class PersistenceRunRecorder:
         model_fingerprint: str | None,
         prompt_checksum: str | None,
         prompt_version: str | None = None,
+        narrative_mode: str | None = None,
+        narrative_failure_code: str | None = None,
     ) -> None:
         # Whichever prompt actually composed, not a literal: this row is the
         # run's prompt provenance, and the composer now emits v1 or v2
@@ -354,6 +356,8 @@ class PersistenceRunRecorder:
             terminal_error_payload=(
                 error.model_dump(mode="json") if error is not None else None
             ),
+            narrative_mode=narrative_mode,
+            narrative_failure_code=narrative_failure_code,
         )
 
 

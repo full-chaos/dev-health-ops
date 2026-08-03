@@ -1682,6 +1682,99 @@ async def test_update_run_rejects_an_invalid_terminal_error_payload(
             )
 
 
+# -- dev_runs.narrative_mode / narrative_failure_code (CHAOS-3297 stack #4) --
+
+
+@pytest.mark.asyncio
+async def test_update_run_persists_narrative_mode_and_failure_code(persistence) -> None:
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        run = await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="insufficient_evidence",
+            narrative_mode="deterministic_fallback",
+            narrative_failure_code="narrative_grounding_failed",
+        )
+        assert run is not None
+        assert run.narrative_mode == "deterministic_fallback"
+        assert run.narrative_failure_code == "narrative_grounding_failed"
+
+
+@pytest.mark.asyncio
+async def test_update_run_narrative_mode_and_failure_code_default_to_none(
+    persistence,
+) -> None:
+    """A run with no narrative synthesized (e.g. a no-answer outcome) must
+    leave both columns NULL, not some sentinel string -- migration 0078's
+    docstring: 'Both stay NULL for every run [without narrative
+    synthesis]'."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        run = await service.update_run(
+            org_id=org_id, user_id=user_id, run_id=run_id, state="insufficient_evidence"
+        )
+        assert run is not None
+        assert run.narrative_mode is None
+        assert run.narrative_failure_code is None
+
+
+@pytest.mark.asyncio
+async def test_update_run_rejects_a_narrative_mode_outside_the_closed_vocabulary(
+    persistence,
+) -> None:
+    """Mirrors record_narrative's own ``mode not in _NARRATIVE_MODES``
+    check -- the run-level column cannot legally diverge from the
+    DevRunNarrative row's own closed vocabulary. Planted-defect proof: a
+    value one edit distance from a real mode (a truncation) must still be
+    rejected, not silently coerced or accepted."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        with pytest.raises(DevPersistenceValidationError, match="narrative mode"):
+            await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="failed",
+                narrative_mode="provider_",  # not a real mode
+            )
+
+
+@pytest.mark.asyncio
+async def test_update_run_rejects_an_oversized_narrative_failure_code(
+    persistence,
+) -> None:
+    """Bounded to the dev_runs.narrative_failure_code column width
+    (String(64)) -- oversized input must reject at the service layer, not
+    truncate silently at the database."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        with pytest.raises(DevPersistenceValidationError):
+            await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="failed",
+                narrative_failure_code="x" * 65,
+            )
+
+
 # -- force_terminal_fallback (CHAOS-3297 Codex review round 3 Finding 2) --
 
 

@@ -1758,11 +1758,23 @@ class DevPersistenceService:
         grounding_validation_status: str | None = None,
         safe_error_code: str | None = None,
         terminal_error_payload: Mapping[str, Any] | None = None,
+        narrative_mode: str | None = None,
+        narrative_failure_code: str | None = None,
     ) -> DevRun | None:
         if state not in _RUN_STATES:
             raise DevPersistenceValidationError("invalid run state")
         if provider_source not in {None, "platform", "byo"}:
             raise DevPersistenceValidationError("invalid provider source")
+        # CHAOS-3297 stack #4: dev_runs.narrative_mode mirrors
+        # dev_run_narratives.mode's own closed vocabulary
+        # (_NARRATIVE_MODES) -- the run-level column is a fast-fail UX/
+        # replay-idempotency signal, not a second source of truth, so it
+        # cannot legally diverge from what a DevRunNarrative row (if any)
+        # would say. narrative_failure_code has no fixed vocabulary at this
+        # layer (answer_frames.narrative_fallback.NarrativeFailureCode owns
+        # it, per migration 0078's docstring); only shape/size-bounded here.
+        if narrative_mode is not None and narrative_mode not in _NARRATIVE_MODES:
+            raise DevPersistenceValidationError("invalid narrative mode")
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
         if run is None:
             raise DevPersistenceNotFound("run not found")
@@ -1821,6 +1833,13 @@ class DevPersistenceService:
         )
         safe_error_code_value = _safe_token(
             safe_error_code, field="safe_error_code", max_bytes=64
+        )
+        # CHAOS-3297 stack #4: narrative_failure_code's vocabulary is owned
+        # by answer_frames.narrative_fallback.NarrativeFailureCode, not this
+        # layer -- bounded to the column width (String(64)) and safe-token
+        # shape only, matching safe_error_code's own posture.
+        safe_narrative_failure_code = _safe_token(
+            narrative_failure_code, field="narrative_failure_code", max_bytes=64
         )
         # CHAOS-3297 (0079): the exact terminal v1 DevError, so idempotent
         # replay can reuse it verbatim instead of reconstructing an
@@ -1885,6 +1904,8 @@ class DevPersistenceService:
         run.grounding_validation_status = safe_grounding_validation_status
         run.safe_error_code = safe_error_code_value
         run.terminal_error_payload = bounded_terminal_error_payload
+        run.narrative_mode = narrative_mode
+        run.narrative_failure_code = safe_narrative_failure_code
         if state in _TERMINAL_RUN_STATES:
             run.ended_at = self._now()
         await self.session.flush()

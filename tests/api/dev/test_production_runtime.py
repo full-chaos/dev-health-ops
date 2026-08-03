@@ -8,9 +8,12 @@ from typing import Any, cast
 
 import pytest
 
-from dev_health_ops.api.dev import production_runtime
+from dev_health_ops.api.dev import platform_auto_certification, production_runtime
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevScope, DevToolRequest, ToolID
+from dev_health_ops.api.dev.platform_auto_certification import (
+    PlatformAutoCertifier,
+)
 from dev_health_ops.api.dev.production_runtime import ProductionProviderResolution
 from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
 from dev_health_ops.api.dev.tool_registry import (
@@ -52,6 +55,13 @@ class FakeSettingsService:
     async def get(self, key: str, category: str, default=None):
         del category
         return self.values.get(key, default)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_platform_certifier():
+    platform_auto_certification.reset_platform_auto_certifier()
+    yield
+    platform_auto_certification.reset_platform_auto_certifier()
 
 
 def _fingerprint(
@@ -1654,58 +1664,65 @@ def test_acceptance_candidate_still_fails_closed_without_current_readiness() -> 
 # ---------------------------------------------------------------------------
 # CHAOS-3358 (second half): a stale platform record heals itself. The
 # mechanism -- single-flight, throttle, what it writes -- is covered in
-# tests/api/dev/test_platform_auto_certification.py. These are the wiring
-# controls: does live provider resolution actually trigger it, and only when
-# it should.
+# tests/api/dev/test_platform_auto_certification.py; the authorized trigger
+# is covered in tests/api/dev/test_router.py. What belongs HERE is that
+# provider resolution reports staleness as a FACT and performs no side
+# effect of its own.
+#
+# Codex CHAOS-3358 review, CONFIRMED: scheduling from resolution was
+# reachable from GET /api/v1/dev/capabilities, which resolves a provider
+# before Ask Dev entitlement or emergency-disable is checked -- so any
+# authenticated user, including one from a disabled organization, could
+# initiate operator-paid provider probes from a read-only request, and a run
+# that ultimately selected BYO could too. Resolution is now side-effect free
+# and only the authorized run path acts on the flag.
 # ---------------------------------------------------------------------------
 
 
-def _record_scheduling(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    scheduled: list[int] = []
-
-    def schedule() -> None:
-        scheduled.append(1)
-        return None
-
-    monkeypatch.setattr(
-        production_runtime, "schedule_platform_recertification", schedule
-    )
-    return scheduled
-
-
 @pytest.mark.asyncio
-async def test_a_stale_platform_record_schedules_recertification(
+async def test_resolution_reports_platform_staleness_without_side_effects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # A recording certifier on the process singleton, NOT a monkeypatched name
+    # on this module. production_runtime deliberately no longer imports the
+    # scheduler at all, so patching a name here would assert against an
+    # attribute nothing reads -- the control would pass whatever resolution
+    # did. Everything that can schedule goes through the certifier.
+    scheduled: list[int] = []
+
+    class RecordingCertifier(PlatformAutoCertifier):
+        def schedule(self):
+            scheduled.append(1)
+            return None
+
+    platform_auto_certification.set_platform_auto_certifier(RecordingCertifier())
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
         production_runtime, "_provider", lambda _candidate: FakeProvider()
     )
-    scheduled = _record_scheduling(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_MODEL", "certified-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     FakeSettingsService.values = {}
 
-    await production_runtime.resolve_production_provider(
+    resolved = await production_runtime.resolve_production_provider(
         cast(Any, object()), org_id="org_01"
     )
 
-    assert scheduled == [1]
+    assert resolved.source is AgentProviderSource.PLATFORM
+    assert resolved.platform_certification_stale is True
+    # The fact is reported; nothing is spent reporting it.
+    assert scheduled == []
 
 
 @pytest.mark.asyncio
-async def test_a_current_platform_record_schedules_nothing(
+async def test_a_current_platform_certification_is_not_reported_stale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No pointless probes: a certification that is already current must not
-    re-certify on every question."""
-
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
         production_runtime, "_provider", lambda _candidate: FakeProvider()
     )
-    scheduled = _record_scheduling(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_MODEL", "certified-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -1716,57 +1733,92 @@ async def test_a_current_platform_record_schedules_nothing(
     )
 
     assert resolved.source is AgentProviderSource.PLATFORM
-    assert scheduled == []
+    assert resolved.platform_certification_stale is False
 
 
 @pytest.mark.asyncio
-async def test_an_unusable_platform_candidate_schedules_nothing(
+async def test_a_selected_byo_provider_is_never_reported_platform_stale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A platform provider with no operator credentials cannot be certified,
-    so scheduling an attempt would just burn a throttle window on a probe
-    that is guaranteed to fail for a reason certification cannot fix."""
+    """The flag follows the SELECTED source. A run on a customer's own
+    endpoint must not carry a platform-staleness flag, or it would spend
+    operator provider calls on behalf of an organization that never touches
+    the platform provider (Codex CHAOS-3358, CONFIRMED)."""
 
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
         production_runtime, "_provider", lambda _candidate: FakeProvider()
     )
-    scheduled = _record_scheduling(monkeypatch)
+    monkeypatch.setattr(
+        production_runtime, "attach_agent_budget_guard", lambda value, **_: value
+    )
+    # Platform is configured but stale; BYO is certified and wins.
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_MODEL", "certified-model")
-    for name in ("OPENAI_API_KEY", "LLM_API_KEY", "OPENAI_BASE_URL", "LLM_BASE_URL"):
-        monkeypatch.delenv(name, raising=False)
-    FakeSettingsService.values = {}
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    FakeSettingsService.values = _byo_settings(role_state="compatible")
 
-    with pytest.raises(DevRuntimeUnavailable):
-        await production_runtime.resolve_production_provider(
-            cast(Any, object()), org_id="org_01"
-        )
+    resolved = await production_runtime.resolve_production_provider(
+        cast(Any, object()), org_id="org_01"
+    )
 
-    assert scheduled == []
+    assert resolved.source is AgentProviderSource.BYO
+    assert resolved.platform_certification_stale is False
 
 
 @pytest.mark.asyncio
-async def test_certification_paths_never_schedule_recertification(
+async def test_certification_paths_never_report_staleness(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The preflight/certification resolution paths pass certification=True,
-    which makes every candidate read as current -- but they must not be the
-    thing that triggers automatic re-certification either, or a readiness
-    page load would kick off a probe."""
+    which makes every candidate read as current -- so a readiness page load
+    can never look like a reason to re-certify."""
 
     monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
     monkeypatch.setattr(
         production_runtime, "_provider", lambda _candidate: FakeProvider()
     )
-    scheduled = _record_scheduling(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_MODEL", "certified-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     FakeSettingsService.values = {}
 
-    await production_runtime.resolve_certification_provider(
+    resolved = await production_runtime.resolve_certification_provider(
         cast(Any, object()), org_id="org_01"
     )
 
-    assert scheduled == []
+    assert resolved.platform_certification_stale is False
+
+
+@pytest.mark.asyncio
+async def test_the_runtime_carries_platform_staleness_to_the_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The router's authorized trigger reads the flag off BoundedDevRuntime,
+    so the plumb-through is load-bearing: drop it and a stale platform
+    certification would silently never heal."""
+
+    async def resolve_provider(_session, *, org_id: str):
+        return ProductionProviderResolution(
+            provider=cast(Any, FakeProvider()),
+            source=AgentProviderSource.PLATFORM,
+            family="openai",
+            model="certified-model",
+            provider_label="OpenAI compatible",
+            model_label="certified-model",
+            platform_certification_stale=True,
+        )
+
+    monkeypatch.setattr(
+        production_runtime, "resolve_production_provider", resolve_provider
+    )
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-evidence-signing-secret-32-bytes")
+
+    runtime = await production_runtime.build_production_runtime(
+        cast(Any, object()),
+        org_id="org_01",
+        permission_fingerprint="permissions_01",
+        clickhouse=cast(Any, object()),
+    )
+
+    assert runtime.platform_certification_stale is True

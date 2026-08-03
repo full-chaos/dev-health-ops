@@ -41,6 +41,11 @@ class BoundedDevRuntime:
     registry: AskDevToolRegistry
     scope_resolver: ScopeResolver
     versions: DevContractVersions
+    #: CHAOS-3358. Carried from ProductionProviderResolution so the authorized
+    #: run path can heal a stale platform certification. Never acted on during
+    #: runtime construction itself -- construction happens on read paths that
+    #: have not checked Ask Dev authorization yet.
+    platform_certification_stale: bool = False
     #: ``None`` when ``ask_dev_wave_3_1`` is off for this organization, which
     #: is the pre-CHAOS-3292 run path.
     preflight: SubjectPreflight | None = None

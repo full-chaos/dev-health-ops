@@ -133,6 +133,7 @@ class ProviderUnitRouteSwitches:
     github_cicd: bool = False
     github_commits: bool = False
     github_deployments: bool = False
+    github_security: bool = False
 
     @classmethod
     def from_environment(
@@ -151,6 +152,7 @@ class ProviderUnitRouteSwitches:
             github_cicd=_flag(source, "WORKER_GITHUB_CICD_ENABLED"),
             github_commits=_flag(source, "WORKER_GITHUB_COMMITS_ENABLED"),
             github_deployments=_flag(source, "WORKER_GITHUB_DEPLOYMENTS_ENABLED"),
+            github_security=_flag(source, "WORKER_GITHUB_SECURITY_ENABLED"),
         )
         switches.require_complete_routes()
         return switches

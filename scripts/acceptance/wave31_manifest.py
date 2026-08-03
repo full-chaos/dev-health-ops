@@ -1314,7 +1314,21 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "#1402) -- before that fix this crashed with "
                 "DevPersistenceValidationError('invalid source_class') on "
                 "every run; see STACK3_PERSISTENCE_GAP_REASON for the "
-                "original repro."
+                "original repro. Codex finding (HIGH, 2026-08-03, round "
+                "4): scope+commit+non-error alone does not prove the "
+                "CLAIMED plan ran -- a legacy-loop fallback (portfolio_"
+                "status_gap's own proof) would pass those checks too. "
+                "Closed by reading the persisted dev_runs row directly "
+                "(preflight_outcome + plan_step_partition containing "
+                "health.team.v1's own 'health_evaluation' mandatory step) "
+                "-- never the scripted provider's intent-blind narrative. "
+                "Negative-control demonstration performed once (recorded "
+                "in the commit message, not automated as a permanent test "
+                "since it needs editing the production plan registry): "
+                "with health.team.v1 temporarily removed from the "
+                "registry, this scenario's OLD assertions all still "
+                "passed and only the new plan-step assertion caught the "
+                "silently-absorbed missing plan."
             ),
             status="proven_e2e",
             evidence=(
@@ -1328,6 +1342,8 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "named_team_committed",
                 "answer_completed_event_present",
                 "answer_status_not_hard_error",
+                "preflight_proceeded_committed_subject",
+                "claimed_plan_step_completed",
                 "stream_terminated_as_answer",
             ),
         ),
@@ -1344,7 +1360,13 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "feature work' launch-finding shapes -- those stay at "
                 "matrix.overburdened-teams-with-denominators/matrix."
                 "pressure-without-denominator's existing proven_unit level "
-                "and matrix.light-on-feature-work's honest blocked state."
+                "and matrix.light-on-feature-work's honest blocked state. "
+                "Codex finding (HIGH, 2026-08-03, round 4): asserts "
+                "balance.team_workload.v1's own mandatory step ('workload_"
+                "evaluation') actually completed via a direct dev_runs "
+                "read, not merely a non-error answer a legacy-loop "
+                "fallback would also produce -- same fix and negative-"
+                "control pattern as matrix.team-health.e2e-live-validated."
             ),
             status="proven_e2e",
             evidence=(
@@ -1358,6 +1380,8 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "named_team_committed",
                 "answer_completed_event_present",
                 "answer_status_not_hard_error",
+                "preflight_proceeded_committed_subject",
+                "claimed_plan_step_completed",
                 "stream_terminated_as_answer",
             ),
         ),
@@ -1372,7 +1396,11 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "cause and fix as matrix.team-health.e2e-live-validated. "
                 "Proves reachability, not the specific mixed-rule-status "
                 "shape matrix.operational-deficiencies-mixed's proven_unit "
-                "citation covers."
+                "citation covers. Codex finding (HIGH, 2026-08-03, round "
+                "4): asserts deficiency.operational.v1's own mandatory "
+                "step ('deficiency_evaluation') actually completed via a "
+                "direct dev_runs read -- same fix and negative-control "
+                "pattern as matrix.team-health.e2e-live-validated."
             ),
             status="proven_e2e",
             evidence=(
@@ -1388,6 +1416,8 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "named_team_committed",
                 "answer_completed_event_present",
                 "answer_status_not_hard_error",
+                "preflight_proceeded_committed_subject",
+                "claimed_plan_step_completed",
                 "stream_terminated_as_answer",
             ),
         ),

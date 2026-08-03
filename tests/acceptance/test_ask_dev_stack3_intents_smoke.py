@@ -69,6 +69,35 @@ def test_smoke_discloses_the_warning_signal_is_not_client_observable() -> None:
     assert "no client-observable signal" in smoke
 
 
+def test_smoke_proves_the_claimed_plan_executed_via_dev_runs() -> None:
+    """Codex finding (HIGH, 2026-08-03, round 4): scope+commit+non-error
+    does not distinguish the claimed plan running from a legacy-loop
+    fallback silently absorbing a missing plan-registry entry -- the
+    trustworthy signal is a direct dev_runs read (the same technique used
+    diagnosing CHAOS-3332), never the scripted provider's narrative."""
+
+    smoke = _SMOKE.read_text(encoding="utf-8")
+    assert "preflight_proceeded_committed_subject" in smoke
+    assert '"proceeded_committed_subject"' in smoke
+    assert "claimed_plan_step_completed" in smoke
+    assert "plan_step_partition" in smoke
+    assert '"docker",' in smoke
+    assert '"exec",' in smoke
+    assert "_POSTGRES_CONTAINER" in smoke
+
+
+def test_smoke_pins_each_scenarios_own_distinct_plan_step_name() -> None:
+    """The three plans' mandatory steps differ (wave_3_1_plans.py) -- this
+    is what lets the assertion distinguish the three plans from EACH
+    OTHER, not just from the legacy loop. A shared/generic step name would
+    not catch team_health's plan silently swapped for team_workload's."""
+
+    smoke = _SMOKE.read_text(encoding="utf-8")
+    assert 'expected_plan_step="health_evaluation"' in smoke
+    assert 'expected_plan_step="workload_evaluation"' in smoke
+    assert 'expected_plan_step="deficiency_evaluation"' in smoke
+
+
 def test_smoke_writes_one_artifact_per_scenario_independently() -> None:
     """Each scenario gets its own recorder and artifact -- one broken
     scenario (e.g. CHAOS-3337) must not prevent the others (portfolio_

@@ -376,7 +376,16 @@ def test_stack3_team_scoped_intents_flip_to_proven_e2e_after_chaos_3337() -> Non
     """Locks in the 2026-08-03 CHAOS-3337 flip: all three TEAM-subject
     stack-3 intents now complete live, each with its own execution
     artifact. PROJECT_HEALTH stays unverified live (zero PROJECT-kind
-    fixture rows), so it has no row here."""
+    fixture rows), so it has no row here.
+
+    Codex finding (HIGH, 2026-08-03, round 4): scope+commit+non-error
+    alone does not distinguish the claimed plan running from a legacy-loop
+    fallback silently absorbing a missing plan-registry entry (portfolio_
+    status_gap's own proof is exactly that fallback). required_assertion_
+    names must include the dev_runs-backed plan-execution proof
+    (preflight_proceeded_committed_subject + claimed_plan_step_completed),
+    not just the reachability checks alone.
+    """
 
     by_id = {item.id: item for item in MANIFEST}
     expected = {
@@ -401,6 +410,8 @@ def test_stack3_team_scoped_intents_flip_to_proven_e2e_after_chaos_3337() -> Non
             "named_team_committed",
             "answer_completed_event_present",
             "answer_status_not_hard_error",
+            "preflight_proceeded_committed_subject",
+            "claimed_plan_step_completed",
             "stream_terminated_as_answer",
         )
         assert "CHAOS-3337" in item.description

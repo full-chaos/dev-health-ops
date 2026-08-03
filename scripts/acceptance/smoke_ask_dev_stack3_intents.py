@@ -33,6 +33,34 @@ step calls its canonical service directly per wave_3_1_plans.py's module
 docstring), but answer synthesis still runs through the scripted provider,
 so this is exercised the same way as the other live scenarios.
 
+Codex finding (HIGH, 2026-08-03, round 4): scope+commit+non-error is not
+proof the CLAIMED plan executed -- a legacy-loop answer (the exact
+fallback PORTFOLIO_STATUS uses) would pass every one of those checks too
+if a plan-registry entry were silently missing. The trustworthy signal is
+the same one used diagnosing CHAOS-3332: a direct ``dev_runs`` row read
+(``preflight_outcome`` + ``plan_step_partition``), not the scripted
+provider's intent-blind narrative. Each team-scoped scenario now reads its
+own row (via ``docker exec`` into the acceptance Postgres container -- the
+same technique, not a new one) and asserts ``preflight_outcome ==
+"proceeded_committed_subject"`` AND that the row's OWN mandatory step name
+(``health_evaluation`` / ``workload_evaluation`` / ``deficiency_
+evaluation`` -- these differ per plan in wave_3_1_plans.py, which is what
+lets this assertion distinguish the three plans from each other, not only
+from the legacy loop) appears in ``plan_step_partition["completed"]``.
+
+Negative-control demonstration performed once (2026-08-03, not automated
+as a permanent test -- it needs temporarily editing the production plan
+registry, not something safe to run as part of a normal test suite):
+``_HEALTH_TEAM`` was removed from ``WAVE_3_1_PLANS_BY_INTENT`` in
+wave_3_1_plans.py, the api container rebuilt, and team_health re-run. The
+old assertions (scope resolved, named team committed, a real non-error
+answer) ALL STILL PASSED -- the legacy loop silently absorbed the missing
+plan exactly as codex predicted. Only the new plan_step_partition
+assertion failed (``health_evaluation`` absent from the completed-steps
+list). The change was then reverted, the container rebuilt again, and the
+scenario re-run to confirm it passes cleanly -- see the commit message for
+both runs' recorded observation.
+
 Writes one machine-checkable execution artifact per scenario to
 ``tests/acceptance/artifacts/<scenario_id>.json`` -- see
 ``acceptance_artifact.py``.
@@ -42,6 +70,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
@@ -57,6 +86,7 @@ from scripts.acceptance.prepare_ask_dev_acceptance import AcceptanceApi
 
 NAMED_TEAM = "Core"
 _WAVE_3_1_FEATURE_KEY = "ask_dev_wave_3_1"
+_POSTGRES_CONTAINER = "ask-dev-acceptance-postgres"
 
 _ARTIFACT_DIR = (
     Path(__file__).resolve().parents[2] / "tests" / "acceptance" / "artifacts"
@@ -72,6 +102,10 @@ class Scenario:
     #: surface_context.entity_refs to resolve a named TEAM subject; an
     #: ORGANIZATION-WIDE one (portfolio_status_gap) needs none.
     team_scoped: bool
+    #: The plan's own mandatory step name this scenario's plan_step_
+    #: partition must show completed -- None for portfolio_status_gap,
+    #: which deliberately has no plan to check (that is its own claim).
+    expected_plan_step: str | None = None
 
 
 SCENARIOS: tuple[Scenario, ...] = (
@@ -80,18 +114,21 @@ SCENARIOS: tuple[Scenario, ...] = (
         question=f"Is the {NAMED_TEAM} team healthy?",
         question_class="status",
         team_scoped=True,
+        expected_plan_step="health_evaluation",
     ),
     Scenario(
         scenario_id="team_workload_balance",
         question=f"Is the {NAMED_TEAM} team overburdened?",
         question_class="status",
         team_scoped=True,
+        expected_plan_step="workload_evaluation",
     ),
     Scenario(
         scenario_id="operational_deficiency_team",
         question=f"What operational deficiencies does the {NAMED_TEAM} team have?",
         question_class="status",
         team_scoped=True,
+        expected_plan_step="deficiency_evaluation",
     ),
     Scenario(
         scenario_id="portfolio_status_gap",
@@ -100,6 +137,59 @@ SCENARIOS: tuple[Scenario, ...] = (
         team_scoped=False,
     ),
 )
+
+
+def _read_dev_run(run_id: str) -> dict[str, Any]:
+    """Read one ``dev_runs`` row directly from Postgres via ``docker exec``
+    -- the acceptance profile publishes no host port for Postgres (see
+    tests/acceptance/compose.ask-dev.yml's ``ports: !reset []``), and this
+    mirrors the exact technique used live-diagnosing CHAOS-3332 rather than
+    inventing a new DB-access path for this one check.
+
+    Returns ``{"preflight_outcome": str | None, "plan_step_partition": ...}``
+    -- a single-row JSON object built server-side so there is no fragile
+    tab/column parsing of psql's tabular output.
+    """
+
+    query = (
+        "SELECT jsonb_build_object("
+        "'preflight_outcome', preflight_outcome, "
+        "'plan_step_partition', plan_step_partition"
+        f") FROM dev_runs WHERE id = '{run_id}'"
+    )
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            _POSTGRES_CONTAINER,
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            "-t",
+            "-A",
+            "-c",
+            query,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AcceptanceFailure(
+            f"dev_runs lookup for run {run_id} failed: {result.stderr.strip()}"
+        )
+    stdout = result.stdout.strip()
+    if not stdout:
+        raise AcceptanceFailure(f"dev_runs has no row for run {run_id}")
+    parsed = json.loads(stdout)
+    if not isinstance(parsed, dict):
+        raise AcceptanceFailure(
+            f"dev_runs lookup for run {run_id} returned a non-object: {parsed!r}"
+        )
+    return parsed
 
 
 def _authenticate(
@@ -381,6 +471,34 @@ def _run_scenario(
         answer.status.value != "error",
         f"expected a real (possibly degraded) answer, got status={answer.status.value!r}",
     )
+    if scenario.expected_plan_step is not None:
+        # Codex finding (HIGH, 2026-08-03, round 4): the checks above (a
+        # committed scope, a real non-error answer) do NOT distinguish "the
+        # claimed plan actually ran" from "the legacy fallback silently
+        # absorbed a missing plan-registry entry" -- portfolio_status_gap's
+        # own row proves the legacy loop produces exactly this shape of
+        # answer. Read the persisted dev_runs row directly (never the
+        # scripted provider's narrative, which is intent-blind) and assert
+        # the plan-governed path specifically ran.
+        dev_run = _read_dev_run(str(completed.run_id))
+        recorder.check(
+            "preflight_proceeded_committed_subject",
+            dev_run.get("preflight_outcome") == "proceeded_committed_subject",
+            f"expected preflight_outcome='proceeded_committed_subject', "
+            f"got {dev_run.get('preflight_outcome')!r}",
+        )
+        partition = dev_run.get("plan_step_partition")
+        completed_steps = (
+            partition.get("completed", []) if isinstance(partition, dict) else []
+        )
+        recorder.check(
+            "claimed_plan_step_completed",
+            scenario.expected_plan_step in completed_steps,
+            f"expected {scenario.expected_plan_step!r} in plan_step_partition"
+            f"['completed'], got partition={partition!r} -- a legacy-loop "
+            "fallback would pass every OTHER assertion in this scenario "
+            "while never running this step",
+        )
     recorder.check(
         "stream_terminated_as_answer",
         events[-1].terminal_kind == "answer",

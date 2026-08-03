@@ -188,6 +188,10 @@ NO_ANSWER_FRAME_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
     "health_findings_truncated": NoAnswerFieldPolicy.NON_TEXT,
     "deficiency_findings": NoAnswerFieldPolicy.ABSENT,
     "deficiency_findings_truncated": NoAnswerFieldPolicy.NON_TEXT,
+    # CHAOS-3297 s3 codex full-branch review round 1 (FINDING 2): same
+    # posture as deficiency_findings above -- a no-answer outcome carries
+    # no category coverage block either.
+    "deficiency_category_statuses": NoAnswerFieldPolicy.ABSENT,
     "conflicts": NoAnswerFieldPolicy.ABSENT,
     "limitations": NoAnswerFieldPolicy.ABSENT,
     "source_observations": NoAnswerFieldPolicy.ABSENT,

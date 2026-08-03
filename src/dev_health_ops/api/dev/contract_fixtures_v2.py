@@ -487,6 +487,44 @@ def _deficiency_finding() -> dict[str, Any]:
     }
 
 
+#: All eight closed deficiency categories, in taxonomy order -- mirrors
+#: ``contracts_v2.deficiency.DEFICIENCY_CATEGORIES`` by value (this module
+#: builds raw JSON-shaped dicts, so it cannot import the enum itself
+#: without coupling fixture construction to contract internals the same
+#: way every other raw-dict builder here avoids).
+_ALL_DEFICIENCY_CATEGORIES = (
+    "data_integration",
+    "planning_relationships",
+    "delivery_flow",
+    "review_ci",
+    "deployment_reliability",
+    "ownership_code_risk",
+    "capacity_cognitive_load",
+    "investment_balance",
+)
+
+
+def _deficiency_category_statuses() -> list[dict[str, Any]]:
+    """A valid, full eight-category ``deficiency_category_status.v1`` set
+    (CHAOS-3297 stack #3 codex round 1, FINDING 2) -- every category
+    genuinely evaluated with zero findings, the "evaluated-zero" shape.
+    ``deficiency_category_statuses`` requires either the empty tuple or
+    exactly these eight, never a partial set.
+    """
+
+    return [
+        {
+            "schema_version": "deficiency_category_status.v1",
+            "category": category,
+            "evaluated": True,
+            "finding_count": 0,
+            "applicability_states_observed": [],
+            "limitation": None,
+        }
+        for category in _ALL_DEFICIENCY_CATEGORIES
+    ]
+
+
 #: The canonical server copy a ``denied`` frame is allowed to render, taken
 #: from the contract's own table so the fixtures cannot drift from it.
 DENIED_CANONICAL_COPY = CANONICAL_NO_ANSWER_COPY["denied"]
@@ -690,6 +728,12 @@ def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any
         case(
             "denied_with_deficiency_findings",
             lambda v: v.__setitem__("deficiency_findings", [_deficiency_finding()]),
+        ),
+        case(
+            "denied_with_deficiency_category_statuses",
+            lambda v: v.__setitem__(
+                "deficiency_category_statuses", _deficiency_category_statuses()
+            ),
         ),
         case(
             "denied_with_subject_identity",

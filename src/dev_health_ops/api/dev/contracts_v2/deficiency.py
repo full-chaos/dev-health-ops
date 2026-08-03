@@ -57,6 +57,7 @@ __all__ = [
     "DeficiencyRemediation",
     "DeficiencySeverity",
     "OperationalDeficiencyInventory",
+    "assert_full_category_coverage",
     "finding_sort_key",
 ]
 
@@ -124,6 +125,36 @@ class DeficiencyCategory(StrEnum):
 #: :class:`OperationalDeficiencyInventory` requires exactly one
 #: :class:`DeficiencyCategoryStatus` per member of.
 DEFICIENCY_CATEGORIES: tuple[DeficiencyCategory, ...] = tuple(DeficiencyCategory)
+
+
+def assert_full_category_coverage(
+    statuses: tuple[DeficiencyCategoryStatus, ...],
+) -> None:
+    """Raise unless ``statuses`` is exactly, without repeats, the eight
+    closed :data:`DEFICIENCY_CATEGORIES`.
+
+    Shared by :meth:`OperationalDeficiencyInventory.validate_category_coverage`
+    (which always calls this -- its own ``category_statuses`` field is
+    already bounded ``min_length=8, max_length=8``, so "exactly the eight"
+    is the only shape that ever reaches this check there) and
+    ``contracts_v2.result.DevSourceContent``/``contracts_v2.frame.
+    DevAnswerFrame``'s own ``deficiency_category_statuses`` field (CHAOS-3297
+    s3 codex full-branch review round 1, FINDING 2, 2026-08-02), which
+    additionally allows the EMPTY tuple -- correct for every source class
+    other than ``DEFICIENCY_INVENTORY``, which this field simply does not
+    apply to -- by only calling this function when the tuple is non-empty.
+    Imported by reference at both call sites rather than duplicated, so the
+    two can never silently drift on what "full coverage" means.
+    """
+
+    categories = [status.category for status in statuses]
+    if len(set(categories)) != len(categories):
+        raise ValueError("category_statuses must not repeat a category")
+    if set(categories) != set(DEFICIENCY_CATEGORIES):
+        raise ValueError(
+            "category_statuses must cover exactly the eight closed "
+            f"deficiency categories, got: {sorted(categories)}"
+        )
 
 
 class DeficiencySeverity(StrEnum):
@@ -429,14 +460,7 @@ class OperationalDeficiencyInventory(ContractModelV2):
 
     @model_validator(mode="after")
     def validate_category_coverage(self) -> Self:
-        categories = [status.category for status in self.category_statuses]
-        if len(set(categories)) != len(categories):
-            raise ValueError("category_statuses must not repeat a category")
-        if set(categories) != set(DEFICIENCY_CATEGORIES):
-            raise ValueError(
-                "category_statuses must cover exactly the eight closed "
-                f"deficiency categories, got: {sorted(categories)}"
-            )
+        assert_full_category_coverage(self.category_statuses)
         return self
 
     @model_validator(mode="after")

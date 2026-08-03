@@ -141,7 +141,7 @@
       },
       "schema": {
         "path": "schemas/dev_source_observation.v1.schema.json",
-        "sha256": "ae8ad6c631aa627a7ef2103c75c9aa79117951bd8d78cd176104f020a893f489"
+        "sha256": "8afcc973ac4735763b2ddd50ccaea9eecb710aa6196dc1fbdfe0cbf366d2075c"
       },
       "schema_version": "dev_source_observation.v1"
     },
@@ -159,7 +159,7 @@
       },
       "schema": {
         "path": "schemas/dev_investigation_result.v1.schema.json",
-        "sha256": "1b2443d220b3e268686aca9676513c3a12d802376825e9ebf34ca9c185306769"
+        "sha256": "b085bcd237f8ba86151505c042f2e44061f07063435286e205f4bbb80dc57a66"
       },
       "schema_version": "dev_investigation_result.v1"
     },
@@ -291,6 +291,11 @@
           "sha256": "623e6d7764a62c614d714d7152e177395eead42c84cae08f6e1d7debf593f175"
         },
         {
+          "case": "denied_with_deficiency_category_statuses",
+          "path": "examples/negative/dev_answer_frame.v1.denied_with_deficiency_category_statuses.json",
+          "sha256": "cd7b09b02cddc1b7d62cff208de95708a66ed07ad85f887c4aab2d7aa3c98e70"
+        },
+        {
           "case": "denied_with_subject_identity",
           "path": "examples/negative/dev_answer_frame.v1.denied_with_subject_identity.json",
           "sha256": "818f31e0b4869955ff02c49dea56282f09321ef0f5682e7cd7853b57f703b207"
@@ -337,7 +342,7 @@
       },
       "schema": {
         "path": "schemas/dev_answer_frame.v1.schema.json",
-        "sha256": "9e522a40477b0267161e62bdaa6793e37bbe85e8ecc3b791c4f8857d77863470"
+        "sha256": "7e336d66f6246d75213b8e5958dac4a2b5a1c25aabe48bf71d9c5c03a7096376"
       },
       "schema_version": "dev_answer_frame.v1"
     },
@@ -423,7 +428,7 @@
       },
       "schema": {
         "path": "schemas/dev_answer.v2.schema.json",
-        "sha256": "afc72360f1621105720996f460739bf4441688ac1b0cb80c1f982981bc3fd1f1"
+        "sha256": "d87c3115a58332dc64e6215abb11ca585369b0d85b973bd50a292b47960f2088"
       },
       "schema_version": "dev_answer.v2"
     },
@@ -441,7 +446,7 @@
       },
       "schema": {
         "path": "schemas/dev_stream_event.v2.schema.json",
-        "sha256": "ea027bb155d71526985c4868f41ef7006b36a40b325ea6c3c4b5b20aebe2dd4a"
+        "sha256": "b50ba93311767ae9a564110d3f57adbecf68e0969be158d01db28d00d299634c"
       },
       "schema_version": "dev_stream_event.v2"
     }

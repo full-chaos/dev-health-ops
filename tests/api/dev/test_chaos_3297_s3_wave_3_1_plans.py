@@ -25,6 +25,7 @@ from dev_health_ops.api.dev.contracts_v2.base import (
     SourceRequirementState,
 )
 from dev_health_ops.api.dev.contracts_v2.deficiency import (
+    DEFICIENCY_CATEGORIES,
     DeficiencyCategory,
     DeficiencyEvidenceClassification,
     DeficiencyFinding,
@@ -51,6 +52,7 @@ from dev_health_ops.api.dev.investigation_plans.steps import StepContext, StepRe
 from dev_health_ops.api.dev.investigation_plans.wave_3_1_plans import (
     WAVE_3_1_PLANS_BY_INTENT,
     WAVE_3_1_QUESTION_INTENT_IDS,
+    _deficiency_inventory_content,
     build_registry_with_wave_3_1,
     register_wave_3_1_steps,
 )
@@ -191,6 +193,8 @@ def _deficiency_finding(
 
 def _deficiency_category_statuses(
     findings: tuple[DeficiencyFinding, ...],
+    *,
+    unevaluated: frozenset[DeficiencyCategory] = frozenset(),
 ) -> tuple[Any, ...]:
     from dev_health_ops.api.dev.contracts_v2.deficiency import (
         DEFICIENCY_CATEGORIES,
@@ -204,10 +208,14 @@ def _deficiency_category_statuses(
         DeficiencyCategoryStatus(
             schema_version="deficiency_category_status.v1",
             category=category,
-            evaluated=True,
-            finding_count=counts.get(category, 0),
+            evaluated=category not in unevaluated,
+            finding_count=0 if category in unevaluated else counts.get(category, 0),
             applicability_states_observed=(),
-            limitation=None,
+            limitation=(
+                f"category_{category.value}_not_yet_calibrated"
+                if category in unevaluated
+                else None
+            ),
         )
         for category in DEFICIENCY_CATEGORIES
     )
@@ -218,6 +226,7 @@ def _deficiency_inventory(
     subject_kind: RuleApplicability = RuleApplicability.PROJECT,
     subject_id: str = "proj-1",
     findings: tuple[DeficiencyFinding, ...] = (),
+    unevaluated: frozenset[DeficiencyCategory] = frozenset(),
 ) -> OperationalDeficiencyInventory:
     ordered = tuple(sorted(findings, key=finding_sort_key))
     return OperationalDeficiencyInventory(
@@ -226,7 +235,9 @@ def _deficiency_inventory(
         subject_kind=subject_kind,
         subject_id=subject_id,
         findings=ordered,
-        category_statuses=_deficiency_category_statuses(ordered),
+        category_statuses=_deficiency_category_statuses(
+            ordered, unevaluated=unevaluated
+        ),
         evaluated_at=_NOW,
     )
 
@@ -551,3 +562,152 @@ def test_build_registry_with_wave_3_1_validates_all_ten_plans_together():
         registered = registry.for_plan(plan.plan_id)
         for step_id in (*plan.mandatory_steps, *plan.conditional_steps):
             assert step_id in registered
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3297 s3 codex full-branch review round 1 (FINDING 2, CONFIRMED HIGH,
+# 2026-08-02): OperationalDeficiencyInventory.category_statuses was being
+# discarded entirely on the way into DevSourceContent -- eight valid
+# UNEVALUATED categories produced content indistinguishable from eight
+# genuinely-evaluated zero-finding categories. Proves: (a) the coverage
+# block survives into content, (b) the step's own observed_state/limitation
+# reflect which categories (if any) are unevaluated, (c) evaluated-zero
+# stays distinguishable from unevaluated at both layers.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fully_evaluated_inventory_carries_coverage_and_stays_current():
+    inventory = _deficiency_inventory(findings=(_deficiency_finding(finding_id="a"),))
+    operational_deficiency = _FakeOperationalDeficiency(project_result=inventory)
+    registry = _registry(
+        project_health=_FakeProjectHealth(_health_profile_result()),
+        team_health=_FakeTeamHealth(_health_profile_result()),
+        team_workload=_FakeTeamWorkload(_health_profile_result()),
+        operational_deficiency=operational_deficiency,
+    )
+    step = registry.get("deficiency.operational.v1", "deficiency_evaluation")
+    outcome = await step.run(_step_context(_project_scope()))
+
+    assert outcome.content is not None
+    assert len(outcome.content.deficiency_category_statuses) == 8
+    assert all(
+        status.evaluated for status in outcome.content.deficiency_category_statuses
+    )
+    assert outcome.observed_state is SourceRequirementState.AVAILABLE_CURRENT
+    assert outcome.limitation is None
+
+
+@pytest.mark.asyncio
+async def test_partially_unevaluated_inventory_carries_coverage_and_downgrades():
+    """Plant the defect codex reproduced: eight category_statuses with two
+    genuinely UNEVALUATED must not be silently dropped, and the step must
+    not claim AVAILABLE_CURRENT/no-limitation as if every category ran.
+    """
+
+    unevaluated = frozenset(
+        {DeficiencyCategory.INVESTMENT_BALANCE, DeficiencyCategory.OWNERSHIP_CODE_RISK}
+    )
+    inventory = _deficiency_inventory(
+        findings=(_deficiency_finding(finding_id="a"),), unevaluated=unevaluated
+    )
+    operational_deficiency = _FakeOperationalDeficiency(project_result=inventory)
+    registry = _registry(
+        project_health=_FakeProjectHealth(_health_profile_result()),
+        team_health=_FakeTeamHealth(_health_profile_result()),
+        team_workload=_FakeTeamWorkload(_health_profile_result()),
+        operational_deficiency=operational_deficiency,
+    )
+    step = registry.get("deficiency.operational.v1", "deficiency_evaluation")
+    outcome = await step.run(_step_context(_project_scope()))
+
+    assert outcome.content is not None
+    # The bug: this used to be empty -- category_statuses was dropped
+    # entirely on the way into DevSourceContent.
+    assert len(outcome.content.deficiency_category_statuses) == 8
+    statuses_by_category = {
+        status.category: status
+        for status in outcome.content.deficiency_category_statuses
+    }
+    for category in unevaluated:
+        assert statuses_by_category[category].evaluated is False
+        assert statuses_by_category[category].limitation is not None
+    for category in DEFICIENCY_CATEGORIES:
+        if category not in unevaluated:
+            assert statuses_by_category[category].evaluated is True
+    # The bug: this used to unconditionally be AVAILABLE_CURRENT/None
+    # regardless of category_statuses.
+    assert outcome.observed_state is SourceRequirementState.AVAILABLE_STALE
+    assert outcome.limitation is not None
+    assert "investment_balance" in outcome.limitation
+    assert "ownership_code_risk" in outcome.limitation
+    # Findings from the categories that DID evaluate are still real content
+    # -- a partial answer is not the same as no answer.
+    assert len(outcome.content.deficiency_findings) == 1
+
+
+@pytest.mark.asyncio
+async def test_fully_unevaluated_inventory_still_carries_coverage_never_unmeasured():
+    """Deliberately never reports an UNMEASURED-family observed_state, even
+    when every category is unevaluated: OperationalDeficiencyService
+    genuinely ran and returned a real, disclosed inventory (each
+    category_status IS a measured fact). Reporting an unmeasured state
+    would violate DevSourceObservation.validate_content_semantics (content
+    forbidden on an unmeasured observation) and silently discard the very
+    coverage block this fix exists to preserve.
+    """
+
+    inventory = _deficiency_inventory(
+        findings=(), unevaluated=frozenset(DEFICIENCY_CATEGORIES)
+    )
+    operational_deficiency = _FakeOperationalDeficiency(project_result=inventory)
+    registry = _registry(
+        project_health=_FakeProjectHealth(_health_profile_result()),
+        team_health=_FakeTeamHealth(_health_profile_result()),
+        team_workload=_FakeTeamWorkload(_health_profile_result()),
+        operational_deficiency=operational_deficiency,
+    )
+    step = registry.get("deficiency.operational.v1", "deficiency_evaluation")
+    outcome = await step.run(_step_context(_project_scope()))
+
+    assert outcome.content is not None
+    assert len(outcome.content.deficiency_category_statuses) == 8
+    assert all(
+        not status.evaluated for status in outcome.content.deficiency_category_statuses
+    )
+    assert outcome.observed_state is SourceRequirementState.AVAILABLE_STALE
+    assert outcome.limitation is not None
+    assert outcome.content.deficiency_findings == ()
+
+
+def test_evaluated_zero_is_distinguishable_from_unevaluated_in_content():
+    """Direct proof of the exact distinction codex named: a category with
+    evaluated=True/finding_count=0 (a genuine, measured "no deficiencies")
+    is a structurally different record from evaluated=False (never
+    checked) -- both survive into DevSourceContent, never collapsed to the
+    same "empty" shape.
+    """
+
+    zero_findings_inventory = _deficiency_inventory(findings=())
+    unevaluated_inventory = _deficiency_inventory(
+        findings=(), unevaluated=frozenset(DEFICIENCY_CATEGORIES)
+    )
+
+    zero_content = _deficiency_inventory_content(zero_findings_inventory)
+    unevaluated_content = _deficiency_inventory_content(unevaluated_inventory)
+
+    assert all(
+        status.evaluated and status.finding_count == 0
+        for status in zero_content.deficiency_category_statuses
+    )
+    assert all(
+        not status.evaluated
+        for status in unevaluated_content.deficiency_category_statuses
+    )
+    assert zero_content.deficiency_findings == ()
+    assert unevaluated_content.deficiency_findings == ()
+    # Both are empty on `deficiency_findings`, but NOT the same content --
+    # the coverage block is what tells them apart.
+    assert zero_content.deficiency_category_statuses != (
+        unevaluated_content.deficiency_category_statuses
+    )

@@ -230,33 +230,73 @@ def capped_deficiency_findings(
 def _deficiency_inventory_content(
     inventory: OperationalDeficiencyInventory,
 ) -> DevSourceContent:
+    """CHAOS-3297 s3 codex full-branch review round 1 (FINDING 2, CONFIRMED
+    HIGH, 2026-08-02): the original version of this function only ever
+    copied ``inventory.findings`` -- ``inventory.category_statuses`` was
+    discarded entirely, so eight valid UNEVALUATED categories produced
+    content indistinguishable from eight genuinely-evaluated,
+    genuinely-zero-finding categories. ``category_statuses`` is always
+    exactly the eight closed categories at its own contract layer
+    (``OperationalDeficiencyInventory``'s ``Field(min_length=8,
+    max_length=8)``), so it is passed through verbatim -- never re-derived,
+    never capped (nothing to cap: it is fixed-size).
+    """
+
     capped, truncated = capped_deficiency_findings(inventory.findings)
     return DevSourceContent(
         schema_version="dev_source_content.v1",
         deficiency_findings=capped,
         deficiency_findings_truncated=truncated,
+        deficiency_category_statuses=inventory.category_statuses,
     )
 
 
 def _deficiency_inventory_outcome(
     inventory: OperationalDeficiencyInventory,
 ) -> StepOutcome:
-    """Mirrors ``_health_profile_outcome``'s reasoning exactly:
-    ``OperationalDeficiencyService.evaluate_project``/``evaluate_team``
-    never raise under normal operation and never report an inventory-level
-    "unmeasured" state of their own -- per-category unavailability is
-    disclosed on ``inventory.category_statuses`` (``evaluated=False`` +
-    a bounded ``limitation``), which the eventual frame builder reads
-    directly rather than this step re-deriving a coarser signal from it.
+    """Mirrors ``_health_profile_outcome``'s reasoning for the "did this
+    step run at all" question, but (CHAOS-3297 s3 codex full-branch review
+    round 1, FINDING 2, CONFIRMED HIGH, 2026-08-02) derives
+    ``observed_state``/``limitation`` from ``inventory.category_statuses``
+    rather than hardcoding ``AVAILABLE_CURRENT``/no limitation regardless
+    of it -- the original version claimed a fully current result even when
+    some or all categories were genuinely unevaluated, discarding that
+    distinction one hop downstream of the disclosure
+    ``OperationalDeficiencyService`` already computed.
+
+    Deliberately never reports an UNMEASURED-family ``observed_state``
+    (``UNAVAILABLE``/``UNCONFIGURED``/...) here, even when EVERY category is
+    unevaluated: the service genuinely ran and returned a real, disclosed
+    inventory -- each ``DeficiencyCategoryStatus`` IS a measured fact, with
+    its own bounded reason when ``evaluated`` is ``False``. That is a
+    QUERIED result, just one this step cannot claim is fully current.
+    Reporting an unmeasured state here would also violate
+    ``DevSourceObservation.validate_content_semantics`` (content is
+    forbidden on an unmeasured observation), which would silently discard
+    the very coverage block this fix exists to preserve.
     """
 
     content = _deficiency_inventory_content(inventory)
     usable = len(content.deficiency_findings)
+    unevaluated = sorted(
+        status.category.value
+        for status in inventory.category_statuses
+        if not status.evaluated
+    )
+    if not unevaluated:
+        return StepOutcome(
+            observed_state=SourceRequirementState.AVAILABLE_CURRENT,
+            data_semantics=queried_semantics(usable),
+            usable_fact_count=usable,
+            query_version="deficiency-operational-inventory.v1",
+            content=content,
+        )
     return StepOutcome(
-        observed_state=SourceRequirementState.AVAILABLE_CURRENT,
+        observed_state=SourceRequirementState.AVAILABLE_STALE,
         data_semantics=queried_semantics(usable),
         usable_fact_count=usable,
         query_version="deficiency-operational-inventory.v1",
+        limitation="deficiency_categories_unevaluated:" + ",".join(unevaluated),
         content=content,
     )
 

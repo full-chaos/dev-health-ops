@@ -18,7 +18,9 @@ from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevAnswer
 from dev_health_ops.api.dev.contracts_v2.base import SourceClass, SourceRequirementState
 from dev_health_ops.api.dev.contracts_v2.deficiency import (
+    DEFICIENCY_CATEGORIES,
     DeficiencyCategory,
+    DeficiencyCategoryStatus,
     DeficiencyEvidenceClassification,
     DeficiencyFinding,
     DeficiencyRemediation,
@@ -138,10 +140,31 @@ def _health_observation(
     )
 
 
+def _deficiency_category_statuses(
+    *, unevaluated: frozenset[DeficiencyCategory] = frozenset()
+) -> tuple[DeficiencyCategoryStatus, ...]:
+    return tuple(
+        DeficiencyCategoryStatus(
+            schema_version="deficiency_category_status.v1",
+            category=category,
+            evaluated=category not in unevaluated,
+            finding_count=0,
+            applicability_states_observed=(),
+            limitation=(
+                f"category_{category.value}_not_yet_calibrated"
+                if category in unevaluated
+                else None
+            ),
+        )
+        for category in DEFICIENCY_CATEGORIES
+    )
+
+
 def _deficiency_observation(
     *,
     deficiency_findings: tuple[DeficiencyFinding, ...] = (),
     truncated: bool = False,
+    category_statuses: tuple[DeficiencyCategoryStatus, ...] = (),
 ) -> DevSourceObservation:
     return DevSourceObservation(
         schema_version="dev_source_observation.v1",
@@ -159,6 +182,7 @@ def _deficiency_observation(
             schema_version="dev_source_content.v1",
             deficiency_findings=deficiency_findings,
             deficiency_findings_truncated=truncated,
+            deficiency_category_statuses=category_statuses,
         ),
     )
 
@@ -295,3 +319,84 @@ def test_frame_construction_with_investigation_result_is_deterministic() -> None
         answer, run_id="run_determinism", investigation_result=result
     )
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3297 s3 codex full-branch review round 1 (FINDING 2, CONFIRMED HIGH,
+# 2026-08-02): "a fixture proving evaluated-zero stays distinguishable from
+# unevaluated through the FINAL frame."
+# ---------------------------------------------------------------------------
+
+
+def test_frame_carries_deficiency_category_statuses_alongside_findings() -> None:
+    answer = _legacy_answer()
+    statuses = _deficiency_category_statuses()
+    result = _investigation_result(
+        observations=(_deficiency_observation(category_statuses=statuses),),
+        plan_id="deficiency.operational.v1",
+    )
+
+    frame = tf.wrap_legacy_answer_as_frame(
+        answer, run_id="run_01", investigation_result=result
+    )
+
+    assert len(frame.deficiency_category_statuses) == 8
+    assert all(status.evaluated for status in frame.deficiency_category_statuses)
+
+
+def test_evaluated_zero_is_distinguishable_from_unevaluated_through_the_frame() -> None:
+    """The exact property codex named: an evaluated-zero inventory
+    (every category genuinely checked, none had findings) must produce a
+    DIFFERENT final frame than an unevaluated one (no category was
+    checked) -- both have empty ``deficiency_findings``, so
+    ``deficiency_category_statuses`` is the only signal that tells them
+    apart, and it must survive all the way to ``DevAnswerFrame``.
+    """
+
+    answer = _legacy_answer()
+    evaluated_zero_result = _investigation_result(
+        observations=(
+            _deficiency_observation(category_statuses=_deficiency_category_statuses()),
+        ),
+        plan_id="deficiency.operational.v1",
+    )
+    unevaluated_result = _investigation_result(
+        observations=(
+            _deficiency_observation(
+                category_statuses=_deficiency_category_statuses(
+                    unevaluated=frozenset(DEFICIENCY_CATEGORIES)
+                )
+            ),
+        ),
+        plan_id="deficiency.operational.v1",
+    )
+
+    evaluated_zero_frame = tf.wrap_legacy_answer_as_frame(
+        answer, run_id="run_01", investigation_result=evaluated_zero_result
+    )
+    unevaluated_frame = tf.wrap_legacy_answer_as_frame(
+        answer, run_id="run_01", investigation_result=unevaluated_result
+    )
+
+    # Both are empty on deficiency_findings -- the bug this closes is that
+    # BOTH used to also be empty on deficiency_category_statuses, making
+    # them wire-indistinguishable.
+    assert evaluated_zero_frame.deficiency_findings == ()
+    assert unevaluated_frame.deficiency_findings == ()
+    assert all(
+        status.evaluated for status in evaluated_zero_frame.deficiency_category_statuses
+    )
+    assert all(
+        not status.evaluated
+        for status in unevaluated_frame.deficiency_category_statuses
+    )
+    assert (
+        evaluated_zero_frame.deficiency_category_statuses
+        != unevaluated_frame.deficiency_category_statuses
+    )
+
+
+def test_no_investigation_result_leaves_deficiency_category_statuses_empty() -> None:
+    answer = _legacy_answer()
+    frame = tf.wrap_legacy_answer_as_frame(answer, run_id="run_01")
+    assert frame.deficiency_category_statuses == ()

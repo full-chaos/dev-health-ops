@@ -27,7 +27,12 @@ from .base import (
     SourceRequirementState,
     Version,
 )
-from .deficiency import DeficiencyFinding, finding_sort_key
+from .deficiency import (
+    DeficiencyCategoryStatus,
+    DeficiencyFinding,
+    assert_full_category_coverage,
+    finding_sort_key,
+)
 from .embedded import (
     DevCIFactV2,
     DevDeploymentFactV2,
@@ -150,9 +155,33 @@ class DevSourceContent(ContractModelV2):
         default_factory=tuple, max_length=50
     )
     deficiency_findings_truncated: bool = False
+    #: CHAOS-3297 s3 codex full-branch review round 1 (FINDING 2, CONFIRMED
+    #: HIGH, 2026-08-02): ``OperationalDeficiencyInventory.category_statuses``
+    #: was being discarded entirely on the way into ``DevSourceContent`` --
+    #: only ``findings`` was ever copied over. Eight valid UNEVALUATED
+    #: categories then produced empty ``deficiency_findings`` with no
+    #: distinguishing signal, indistinguishable from eight genuinely
+    #: evaluated, genuinely zero-finding categories -- exactly the
+    #: evaluated-zero-vs-unevaluated distinction ``DeficiencyCategoryStatus``
+    #: exists to preserve (CHAOS-3305), erased one hop downstream. Empty by
+    #: default for every source class other than ``DEFICIENCY_INVENTORY``,
+    #: which this field does not apply to; when populated, must be exactly
+    #: the eight closed categories (``validate_deficiency_category_coverage``
+    #: below, via ``deficiency.assert_full_category_coverage`` imported by
+    #: reference -- the same check ``OperationalDeficiencyInventory`` itself
+    #: enforces, never a second copy that could disagree).
+    deficiency_category_statuses: tuple[DeficiencyCategoryStatus, ...] = Field(
+        default_factory=tuple, max_length=8
+    )
     metric_refs: tuple[DevMetricRefV2, ...] = Field(
         default_factory=tuple, max_length=25
     )
+
+    @model_validator(mode="after")
+    def validate_deficiency_category_coverage(self) -> Self:
+        if self.deficiency_category_statuses:
+            assert_full_category_coverage(self.deficiency_category_statuses)
+        return self
 
     @model_validator(mode="after")
     def validate_finding_order(self) -> Self:

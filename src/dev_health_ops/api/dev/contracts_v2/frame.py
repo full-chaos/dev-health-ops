@@ -44,7 +44,12 @@ from .base import (
     ServerHandle,
     ShortText,
 )
-from .deficiency import DeficiencyFinding, finding_sort_key
+from .deficiency import (
+    DeficiencyCategoryStatus,
+    DeficiencyFinding,
+    assert_full_category_coverage,
+    finding_sort_key,
+)
 from .embedded import DevCoverageV2, DevEvidenceRefV2, DevMetricRefV2
 from .health_rules import HealthRuleFinding
 from .plan import PlanRegistryID
@@ -246,6 +251,15 @@ class DevAnswerFrame(ContractModelV2):
         default_factory=tuple, max_length=50
     )
     deficiency_findings_truncated: bool = False
+    #: CHAOS-3297 s3 codex full-branch review round 1 (FINDING 2, CONFIRMED
+    #: HIGH, 2026-08-02): mirrors ``DevSourceContent.
+    #: deficiency_category_statuses`` exactly, carried through to the frame
+    #: so the evaluated-zero-vs-unevaluated distinction survives to the
+    #: final wire object a caller actually reads -- see that field's own
+    #: docstring for the full rationale.
+    deficiency_category_statuses: tuple[DeficiencyCategoryStatus, ...] = Field(
+        default_factory=tuple, max_length=8
+    )
     conflicts: tuple[DevFrameConflict, ...] = Field(
         default_factory=tuple, max_length=20
     )
@@ -300,6 +314,8 @@ class DevAnswerFrame(ContractModelV2):
                 "deficiency_findings must be ordered per deficiency.finding_sort_key "
                 "(severity, category, finding_id)"
             )
+        if self.deficiency_category_statuses:
+            assert_full_category_coverage(self.deficiency_category_statuses)
         # Structural closure first: the five acceptance-criteria semantic
         # validators below assume a well-formed frame (unique, resolvable
         # fact/section/evidence IDs).

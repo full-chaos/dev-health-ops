@@ -1815,6 +1815,7 @@ def _frame_absent_field_samples() -> dict[str, object]:
         "deficiency_refs": "denied_with_deficiency_refs",
         "health_findings": "denied_with_health_findings",
         "deficiency_findings": "denied_with_deficiency_findings",
+        "deficiency_category_statuses": "denied_with_deficiency_category_statuses",
         "conflicts": "denied_with_conflicts",
         "limitations": "denied_with_limitations",
         "source_observations": "denied_with_source_observations",

@@ -45,6 +45,60 @@
       "title": "DeficiencyCategory",
       "type": "string"
     },
+    "DeficiencyCategoryStatus": {
+      "additionalProperties": false,
+      "description": "One evaluation-status record per taxonomy category.\n\nAlways present for exactly the eight :data:`DEFICIENCY_CATEGORIES`\n(see :func:`OperationalDeficiencyInventory.validate_category_coverage`)\nso \"no deficiencies in this category\" (``evaluated=True,\nfinding_count=0``) is structurally distinguishable from \"this category\nwas never evaluated\" (``evaluated=False``) -- the same distinction\n``DataHealthState`` draws between a genuine zero and an unmeasured\nsource, applied one level up at the category granularity.",
+      "properties": {
+        "applicability_states_observed": {
+          "items": {
+            "$ref": "#/$defs/SourceRequirementState"
+          },
+          "maxItems": 8,
+          "title": "Applicability States Observed",
+          "type": "array"
+        },
+        "category": {
+          "$ref": "#/$defs/DeficiencyCategory"
+        },
+        "evaluated": {
+          "title": "Evaluated",
+          "type": "boolean"
+        },
+        "finding_count": {
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Finding Count",
+          "type": "integer"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "schema_version": {
+          "const": "deficiency_category_status.v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "category",
+        "evaluated",
+        "finding_count"
+      ],
+      "title": "DeficiencyCategoryStatus",
+      "type": "object"
+    },
     "DeficiencyEvidenceClassification": {
       "description": "Closed reasons a finding may carry no per-item evidence ref (F10).\n\nEvery :class:`DeficiencyFinding` carries either a non-empty\n``evidence_ref_ids`` or exactly one of these -- never neither (see\n:func:`DeficiencyFinding.validate_evidence_or_classification`).",
       "enum": [
@@ -1170,6 +1224,14 @@
           },
           "maxItems": 25,
           "title": "Ci Checks",
+          "type": "array"
+        },
+        "deficiency_category_statuses": {
+          "items": {
+            "$ref": "#/$defs/DeficiencyCategoryStatus"
+          },
+          "maxItems": 8,
+          "title": "Deficiency Category Statuses",
           "type": "array"
         },
         "deficiency_findings": {

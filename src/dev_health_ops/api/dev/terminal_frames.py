@@ -82,7 +82,7 @@ from .contracts_v2.base import (
     PublicOutcome,
     SourceClass,
 )
-from .contracts_v2.deficiency import DeficiencyFinding
+from .contracts_v2.deficiency import DeficiencyCategoryStatus, DeficiencyFinding
 from .contracts_v2.embedded import (
     DevCoverageV2,
     DevEvidenceRefV2,
@@ -99,7 +99,7 @@ from .contracts_v2.frame import (
 )
 from .contracts_v2.health_rules import HealthRuleFinding
 from .contracts_v2.no_answer_policy import CANONICAL_NO_ANSWER_COPY, NO_ANSWER_OUTCOMES
-from .contracts_v2.result import DevInvestigationResult
+from .contracts_v2.result import DevInvestigationResult, DevSourceContent
 from .investigation_plans.wave_3_1_plans import (
     capped_deficiency_findings,
     capped_health_findings,
@@ -507,6 +507,32 @@ def build_error_frame(
     )
 
 
+def _deficiency_category_statuses_from_contents(
+    contents: list[DevSourceContent],
+) -> tuple[DeficiencyCategoryStatus, ...]:
+    """The first non-empty ``content.deficiency_category_statuses`` found
+    across ``contents``, or ``()`` if none carry one.
+
+    Today's ``deficiency.operational.v1`` plan (``wave_3_1_plans.py``) is
+    SINGULAR-cardinality with exactly one mandatory step, so at most one
+    observation in any real ``DevInvestigationResult`` ever populates this
+    field -- unlike ``health_findings``/``deficiency_findings``, which can
+    legitimately accumulate across several observations, a coverage block
+    is one inventory's own fixed eight-category snapshot, and multiple
+    genuinely-full ones cannot be meaningfully merged (a category evaluated
+    in one but not another has no single correct combined status). If that
+    single-observation assumption is ever violated, taking the first
+    non-empty one is a conservative, non-fabricating choice -- never a
+    fabricated merge -- documented here so a future second producer is a
+    deliberate design decision, not a silent overwrite.
+    """
+
+    for content in contents:
+        if content.deficiency_category_statuses:
+            return content.deficiency_category_statuses
+    return ()
+
+
 def _findings_from_investigation_result(
     investigation_result: DevInvestigationResult | None,
 ) -> tuple[
@@ -514,6 +540,7 @@ def _findings_from_investigation_result(
     bool,
     tuple[DeficiencyFinding, ...],
     bool,
+    tuple[DeficiencyCategoryStatus, ...],
 ]:
     """Flatten every observation's ``content.health_findings``/
     ``deficiency_findings`` across ``investigation_result``, then re-sort
@@ -533,10 +560,16 @@ def _findings_from_investigation_result(
     truncation signal from any single observation whose OWN pre-cap set
     exceeded 50 but whose surviving 50 combine with few enough others to
     read as untruncated overall).
+
+    ``deficiency_category_statuses`` (CHAOS-3297 s3 codex full-branch
+    review round 1, FINDING 2, 2026-08-02) rides alongside via
+    ``_deficiency_category_statuses_from_contents`` -- see that function's
+    own docstring for why "first non-empty" is the right posture rather
+    than a flatten-and-cap like the findings above.
     """
 
     if investigation_result is None:
-        return (), False, (), False
+        return (), False, (), False, ()
     contents = [
         obs.content
         for obs in investigation_result.observations
@@ -556,7 +589,14 @@ def _findings_from_investigation_result(
     deficiency_truncated = deficiency_truncated or any(
         content.deficiency_findings_truncated for content in contents
     )
-    return health, health_truncated, deficiency, deficiency_truncated
+    deficiency_category_statuses = _deficiency_category_statuses_from_contents(contents)
+    return (
+        health,
+        health_truncated,
+        deficiency,
+        deficiency_truncated,
+        deficiency_category_statuses,
+    )
 
 
 def wrap_legacy_answer_as_frame(
@@ -602,6 +642,7 @@ def wrap_legacy_answer_as_frame(
         health_findings_truncated,
         deficiency_findings,
         deficiency_findings_truncated,
+        deficiency_category_statuses,
     ) = _findings_from_investigation_result(investigation_result)
 
     facts = tuple(
@@ -648,6 +689,7 @@ def wrap_legacy_answer_as_frame(
         health_findings_truncated=health_findings_truncated,
         deficiency_findings=deficiency_findings,
         deficiency_findings_truncated=deficiency_findings_truncated,
+        deficiency_category_statuses=deficiency_category_statuses,
         metrics=tuple(_wrap_legacy_metric(metric) for metric in answer.metrics),
         evidence=tuple(
             DevEvidenceRefV2.model_validate(item.model_dump())

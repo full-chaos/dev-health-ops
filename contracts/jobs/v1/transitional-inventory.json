@@ -393,12 +393,12 @@
       "notes": "Beat entry prune-external-ingest-batches, crontab(5,15) UTC"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:759",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:761",
       "surface": "dispatch_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 759
+        "line": 761
       },
       "queue_or_cadence": "sync",
       "dispatches": "run_sync_unit (per unit)",
@@ -417,12 +417,12 @@
       "notes": "transport-routes.json kind dispatch_sync_run, route=celery"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1150",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1152",
       "surface": "run_sync_unit",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1150
+        "line": 1152
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -441,12 +441,12 @@
       "notes": "only launchdarkly/feature-flags route-ready in Go"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1974",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1976",
       "surface": "finalize_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1974
+        "line": 1976
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -2289,12 +2289,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1046",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1048",
       "surface": "getattr(signature,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1046
+        "line": 1048
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic per-provider signature",
@@ -2313,12 +2313,12 @@
       "notes": "grep-evading form; internal to dispatch_sync_run fan-out"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1609",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1611",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1609
+        "line": 1611
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -2337,12 +2337,12 @@
       "notes": "grep-evading form; internal to unit completion"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2425",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2427",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2425
+        "line": 2427
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",

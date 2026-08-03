@@ -858,6 +858,7 @@ class GitHubCodeClient:
             params={"per_page": _GITHUB_DEPLOYMENTS_PER_PAGE},
             data_key="workflow_runs",
             max_pages=_page_cap_for_limit(max_runs),
+            require_complete=True,
         )
         return [
             _workflow_run_from_item(item)

@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from dev_health_ops.exceptions import PaginationException
 from dev_health_ops.models import (
     Base,
     Integration,
@@ -172,6 +173,13 @@ def test_classify_error_provider_error():
 
 def test_classify_error_adapter_error():
     assert _classify_error(Exception("unexpected NoneType")) == "adapter_error"
+
+
+def test_classify_error_incomplete_pagination():
+    assert (
+        _classify_error(PaginationException("pagination incomplete after 10 pages"))
+        == "pagination_incomplete"
+    )
 
 
 # ---------------------------------------------------------------------------

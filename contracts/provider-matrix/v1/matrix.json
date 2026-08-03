@@ -26,7 +26,8 @@
       "native_shadow": false,
       "route_dataset": "blame",
       "route_destinations": [
-        "git_blame"
+        "git_blame",
+        "github_blame_path_progress"
       ],
       "route_ready": true,
       "credential_modes": [

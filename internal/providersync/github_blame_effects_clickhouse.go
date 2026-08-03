@@ -15,12 +15,24 @@ type GitHubBlameClickHouseEffects struct {
 
 func (sink GitHubBlameClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil || claim.Provider != "github" ||
-		claim.Dataset != "blame" || effect.Destination != "git_blame" {
+		claim.Dataset != "blame" ||
+		(effect.Destination != "github_blame_path_progress" && effect.Destination != "git_blame") {
 		return ErrInvalidConfiguration
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
+	if effect.Destination == "github_blame_path_progress" {
+		return sink.writeProgressEffect(ctx, claim, effect)
+	}
+	return sink.writeBlameEffect(ctx, claim, effect)
+}
+
+func (sink GitHubBlameClickHouseEffects) writeBlameEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) error {
 	rows, err := decodeEffectRows[gitBlameRow](effect)
 	if err != nil {
 		return err
@@ -59,14 +71,68 @@ INSERT INTO git_blame (
 	return batch.Send()
 }
 
+func (sink GitHubBlameClickHouseEffects) writeProgressEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) error {
+	rows, err := decodeEffectRows[gitHubBlamePathProgressRow](effect)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := row.validate(claim); err != nil {
+			return err
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	if sink.Conn == nil {
+		return ErrInvalidConfiguration
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, `
+INSERT INTO github_blame_path_progress (
+  org_id, repo_id, tree_ref, path, generation, outcome, attempted_at
+)`)
+	if err != nil {
+		return err
+	}
+	defer batch.Abort()
+	for _, row := range rows {
+		if err := batch.Append(
+			row.OrgID, row.RepoID, row.TreeRef, row.Path, row.Generation,
+			row.Outcome, row.AttemptedAt,
+		); err != nil {
+			return err
+		}
+	}
+	if err := sink.Lease.Assert(ctx); err != nil {
+		return err
+	}
+	return batch.Send()
+}
+
 func (sink GitHubBlameClickHouseEffects) InspectEffect(ctx context.Context, claim Claim, effect EffectBatch) (EffectInspection, error) {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil || claim.Provider != "github" ||
-		claim.Dataset != "blame" || effect.Destination != "git_blame" {
+		claim.Dataset != "blame" ||
+		(effect.Destination != "github_blame_path_progress" && effect.Destination != "git_blame") {
 		return EffectConflict, ErrInvalidConfiguration
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return EffectConflict, err
 	}
+	if effect.Destination == "github_blame_path_progress" {
+		return sink.inspectProgressEffect(ctx, claim, effect)
+	}
+	return sink.inspectBlameEffect(ctx, claim, effect)
+}
+
+func (sink GitHubBlameClickHouseEffects) inspectBlameEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) (EffectInspection, error) {
 	expected, err := decodeEffectRows[gitBlameRow](effect)
 	if err != nil {
 		return EffectConflict, err
@@ -104,6 +170,91 @@ func (sink GitHubBlameClickHouseEffects) InspectEffect(ctx context.Context, clai
 		return EffectAbsent, nil
 	}
 	return EffectConflict, nil
+}
+
+func (sink GitHubBlameClickHouseEffects) inspectProgressEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) (EffectInspection, error) {
+	expected, err := decodeEffectRows[gitHubBlamePathProgressRow](effect)
+	if err != nil {
+		return EffectConflict, err
+	}
+	for _, row := range expected {
+		if err := row.validate(claim); err != nil {
+			return EffectConflict, err
+		}
+	}
+	if len(expected) == 0 {
+		return EffectAbsent, nil
+	}
+	if sink.Conn == nil {
+		return EffectConflict, ErrInvalidConfiguration
+	}
+	exact, absent := 0, 0
+	for _, row := range expected {
+		inspection, inspectErr := sink.inspectProgress(ctx, row)
+		if inspectErr != nil {
+			return EffectConflict, inspectErr
+		}
+		switch inspection {
+		case EffectExact:
+			exact++
+		case EffectAbsent:
+			absent++
+		default:
+			return EffectConflict, nil
+		}
+	}
+	if exact == len(expected) {
+		return EffectExact, nil
+	}
+	if absent == len(expected) {
+		return EffectAbsent, nil
+	}
+	return EffectConflict, nil
+}
+
+func (sink GitHubBlameClickHouseEffects) inspectProgress(
+	ctx context.Context,
+	expected gitHubBlamePathProgressRow,
+) (EffectInspection, error) {
+	rows, err := sink.Conn.Query(ctx, `
+SELECT org_id, repo_id, tree_ref, path, generation, outcome, attempted_at
+FROM github_blame_path_progress FINAL
+WHERE org_id = ? AND repo_id = ? AND tree_ref = ? AND path = ? AND generation = ?`,
+		expected.OrgID, expected.RepoID, expected.TreeRef, expected.Path,
+		expected.Generation,
+	)
+	if err != nil {
+		return EffectConflict, err
+	}
+	defer rows.Close()
+	var actual gitHubBlamePathProgressRow
+	found := false
+	for rows.Next() {
+		if err := rows.Scan(
+			&actual.OrgID, &actual.RepoID, &actual.TreeRef, &actual.Path,
+			&actual.Generation, &actual.Outcome, &actual.AttemptedAt,
+		); err != nil {
+			return EffectConflict, err
+		}
+		found = true
+	}
+	if err := rows.Err(); err != nil {
+		return EffectConflict, err
+	}
+	if !found || actual.AttemptedAt.UTC().Before(expected.AttemptedAt.UTC()) {
+		return EffectAbsent, nil
+	}
+	if actual.OrgID != expected.OrgID || actual.RepoID != expected.RepoID ||
+		actual.TreeRef != expected.TreeRef || actual.Path != expected.Path ||
+		actual.Generation != expected.Generation || actual.Outcome != expected.Outcome ||
+		!actual.AttemptedAt.UTC().Equal(expected.AttemptedAt.UTC()) {
+		return EffectConflict, nil
+	}
+	return EffectExact, nil
 }
 
 func (sink GitHubBlameClickHouseEffects) inspectBlame(ctx context.Context, expected gitBlameRow) (EffectInspection, error) {

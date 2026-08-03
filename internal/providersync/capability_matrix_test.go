@@ -159,7 +159,9 @@ func TestGitHubBlameRequiresItsOwnSwitch(t *testing.T) {
 		t.Fatal("github/blame has no descriptor")
 	}
 	if descriptor.Executor != ExecutorNativeGo || !descriptor.RouteReady ||
-		!descriptor.RouteEnabled || !slices.Equal(descriptor.Destinations, []string{"git_blame"}) {
+		!descriptor.RouteEnabled || !slices.Equal(
+		descriptor.Destinations, []string{"github_blame_path_progress", "git_blame"},
+	) {
 		t.Fatalf("github/blame descriptor=%+v", descriptor)
 	}
 	off, _ := (CompleteRouteSwitches{}).Descriptor("github", "blame")

@@ -301,6 +301,27 @@ model and executes the real range-expansion/constructor path while replacing
 only provider and sink seams. These proofs make the dormant foundation
 reviewable; they do not constitute an executor or authorize activation.
 
+## Implementation status for `(github, tests)`
+
+CHAOS-3336 remains `go_executor: none` / `route_ready: false`. The first
+reviewable foundation ports the untrusted report boundary: bounded in-memory
+ZIP traversal, a 200-report cap, DTD/entity rejection, JUnit suite/case
+normalization, LCOV aggregate normalization, stable IDs, fallback run
+timestamps, stack truncation, and incoherent-coverage rejection. A generic
+oracle executes the active Python `ingest_report_members` chain and compares
+every field in the production TestOps TypedDict contracts for a non-empty
+JUnit + LCOV fixture.
+
+This is intentionally not represented as a complete route. The active Python
+`sync_tests` contract also owns Actions run pagination, per-run job pagination,
+branch-protection acceptance checks, the authenticated-to-unauthenticated
+two-hop artifact download, Cobertura parsing, and six independently persisted
+destinations: `ci_pipeline_runs`, `ci_job_runs`, `ci_acceptance_checks`,
+`test_suite_results`, `test_case_results`, and `coverage_snapshots`. Native
+effect sinks/readbacks, cross-tenant collision proofs, and crash-window recovery
+must cover all six before the executor or readiness fields can change. Until
+then Python remains the only owner and no native switch exists.
+
 ## Known Go/Python divergences (fail-closed by design)
 
 `repositoryIdentity` mirrors Python's `get_repo_uuid_from_repo` for the ASCII

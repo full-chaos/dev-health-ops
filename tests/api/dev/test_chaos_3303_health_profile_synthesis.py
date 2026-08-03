@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from dev_health_ops.api.dev.contracts_v2.base import SourceRequirementState
 from dev_health_ops.api.dev.contracts_v2.health_rules import (
     DimensionState,
     RuleApplicability,
@@ -217,6 +218,68 @@ def test_change_failure_rate_not_applicable_flag_is_honored() -> None:
         if f.rule_id == "health_rule.change_failure_rate.v1"
     )
     assert finding.state == DimensionState.UNKNOWN
+
+
+def test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly() -> (
+    None
+):
+    """CHAOS-3300 blocking matrix, project health with unknown AND
+    not-applicable dimensions: the two must be recorded as different
+    things, and neither may contaminate a dimension that WAS measured.
+
+    "Not applicable" is a property of the observation, not of the finding:
+    ``evaluate_rule`` maps every unmeasured observation to
+    ``DimensionState.UNKNOWN`` regardless of why it was unmeasured (there
+    is no ``NOT_APPLICABLE`` finding state for a rule that never ran), so
+    the distinction survives only in the observation's
+    ``observed_states`` -- ``NOT_APPLICABLE`` for a source that is
+    structurally inapplicable to this subject versus ``UNAVAILABLE`` for
+    one that simply was not queried. This test asserts the profile keeps
+    both, side by side with a genuinely measured third dimension.
+    """
+
+    sources = HealthEvaluationSources(
+        # Measured, healthy -- the control that must stay unaffected.
+        data_health=_data_health(complete_eligible=True),
+        # Never queried: honestly unavailable, not "fine".
+        status_snapshot=None,
+        # Structurally inapplicable to this subject's scope.
+        change_failure_rate_metric=None,
+        change_failure_rate_not_applicable=True,
+    )
+    profile = synthesize_health_profile(
+        applicability=RuleApplicability.PROJECT,
+        subject_id="proj-1",
+        cohort_size=None,
+        sources=sources,
+        org_id=_ORG_ID,
+        observed_at=_NOW,
+    )
+    observations = profile.observations_by_rule
+    not_applicable = observations["health_rule.change_failure_rate.v1"]
+    unavailable = observations["health_rule.incident_load.v1"]
+    measured = observations["health_rule.data_trust_broken.v1"]
+
+    assert not_applicable.observed_states == (SourceRequirementState.NOT_APPLICABLE,)
+    assert unavailable.observed_states == (SourceRequirementState.UNAVAILABLE,)
+    # The whole point of the row: the two unmeasured dimensions are not
+    # collapsed into one indistinguishable "no answer" bucket.
+    assert not_applicable.observed_states != unavailable.observed_states
+    for observation in (not_applicable, unavailable):
+        assert observation.current_value is None
+        assert observation.data_semantics == "not_measured"
+
+    # ...and the measured dimension is untouched by either.
+    assert measured.data_semantics == "measured_zero"
+    assert measured.current_value is not None
+
+    findings = {finding.rule_id: finding for finding in profile.shadow_findings}
+    assert (
+        findings["health_rule.change_failure_rate.v1"].state == DimensionState.UNKNOWN
+    )
+    assert findings["health_rule.incident_load.v1"].state == DimensionState.UNKNOWN
+    assert findings["health_rule.data_trust_broken.v1"].state == DimensionState.HEALTHY
+    assert profile.launch_findings == ()
 
 
 def test_team_profile_without_cohort_suppresses_every_applicable_rule() -> None:

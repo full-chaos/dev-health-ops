@@ -145,6 +145,79 @@ def test_negative_investment_shift_insufficient_coverage_suppresses() -> None:
     assert finding.suppressed_reason == "insufficient_coverage"
 
 
+def test_investment_shift_with_adequate_coverage_produces_a_neutral_finding() -> None:
+    """CHAOS-3300 blocking matrix, "which teams are light on feature work?"
+    with adequate investment-classification coverage, at the rule/finding
+    layer the question is actually answered from.
+
+    The adapter-layer test only proves a *stable* mix reports a neutral
+    measured zero; it says nothing about what the rule does once a shift
+    IS measured. What the platform commits to here is deliberately not a
+    "light on feature work" verdict: the rule reads a magnitude-only
+    ``new_value_share_shift`` and its own remediation text disclaims the
+    value judgment, so a team that shifted 40 points AWAY from new-value
+    work and one that shifted 40 points TOWARD it are answered
+    identically. Asserting the finding a caller would actually surface --
+    state, dimension, and the neutral remediation wording together -- is
+    what binds that commitment.
+    """
+
+    rule = HEALTH_RULE_REGISTRY.rule("health_rule.investment_allocation_shift.v1")
+    assert rule.minimum_coverage == 0.5
+    assert rule.dimension is HealthDimension.INVESTMENT_BALANCE
+    # Adequate classification coverage, a genuinely measured shift past the
+    # 0.25 threshold, and every guardrail input satisfied.
+    finding = evaluate_rule(
+        rule, [_observation(current_value=0.40, coverage=0.9)], org_id="org-1"
+    )
+    assert finding.suppressed_reason is None
+    assert finding.state is DimensionState.WATCH
+    assert finding.dimension is HealthDimension.INVESTMENT_BALANCE
+    assert "not a value judgment about the mix itself" in finding.remediation_template
+    # Honest scope of this proof: the rule is still provisional (and
+    # CHAOS-3331-blocked from promotion), so the finding this layer
+    # produces is shadow-only today -- it is the finding SHAPE that is
+    # proven here, not that it reaches a launch surface.
+    assert finding.shadow_only is True
+
+    # Same coverage, a shift that does not cross the threshold: healthy,
+    # not a fabricated "light on feature work". The answer tracks the
+    # measured shift, never the composition of the mix.
+    below = evaluate_rule(
+        rule, [_observation(current_value=0.10, coverage=0.9)], org_id="org-1"
+    )
+    assert below.suppressed_reason is None
+    assert below.state is DimensionState.HEALTHY
+
+
+def test_investment_shift_with_adequate_coverage_but_no_baseline_is_unknown() -> None:
+    """Adequate coverage does not license an answer when there is no
+    comparison window to measure a shift against -- the adapter reports
+    ``no_data`` with ``current_value=None`` in exactly this case (see
+    ``investment_allocation_shift_observation``), and the rule must carry
+    that through as ``unknown``, never a healthy "not light on feature
+    work".
+    """
+
+    rule = HEALTH_RULE_REGISTRY.rule("health_rule.investment_allocation_shift.v1")
+    finding = evaluate_rule(
+        rule,
+        [
+            _observation(
+                observed_states=(SourceRequirementState.AVAILABLE_CURRENT,),
+                data_semantics="no_data",
+                current_value=None,
+                coverage=0.9,
+            )
+        ],
+        org_id="org-1",
+    )
+    assert finding.state is DimensionState.UNKNOWN
+    # An honest missing baseline, not a guardrail suppression -- coverage
+    # was adequate, so blaming coverage here would be the wrong reason.
+    assert finding.suppressed_reason is None
+
+
 def test_negative_unmeasured_reports_unknown_never_healthy() -> None:
     """Team attribution gap / missing source: an unmeasured observation
     (``data_semantics="not_measured"``) must report ``unknown``, never a

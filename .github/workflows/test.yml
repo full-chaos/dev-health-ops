@@ -28,6 +28,12 @@ jobs:
         with:
           filters: |
             code:
+              # This workflow decides whether the proof gate runs at all.
+              # Without this pattern a PR that changed ONLY this file set
+              # code=false, skipped both test jobs, and the required `test`
+              # aggregator counted the skip as a pass -- the gate could be
+              # disabled through a green required check.
+              - '.github/workflows/**'
               - 'src/**'
               - 'tests/**'
               - 'ci/**'

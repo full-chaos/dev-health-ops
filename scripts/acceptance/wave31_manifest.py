@@ -1397,9 +1397,29 @@ def _gates() -> tuple[ManifestItem, ...]:
             ),
             status="deferred",
             blocked_reason=(
-                "cross-repo (dev-health-web) CI wiring; likely owned by the "
-                "lanes already carrying web CI surfaces (CHAOS-3287/3291), "
-                "not duplicated here"
+                "Re-checked 2026-08-03 per team-lead priority: web #833 "
+                "(CHAOS-3287, merged to dev-health-web@main at "
+                "a24de7c90dafa98c4f46f0cf5fc4a76cf6767023) landed real, "
+                "default (not opt-in) Playwright coverage -- verified "
+                "directly against the merged spec files, not the PR "
+                "description alone: tests/ask-dev-continuity.spec.ts "
+                "proves window/dev semantic equivalence (a conversation "
+                "started in either surface resumes with the same "
+                "transcript and rendered answer in the other, both "
+                "directions); tests/ask-dev-outcomes.spec.ts and "
+                "tests/ask-dev-shared.spec.ts cover every rendered "
+                "dev_answer.v1 status, evidence-first hierarchy, and "
+                "availability gating; tests/ask-dev-vocabulary.spec.ts is "
+                "the internal-enum-leak denylist (CHAOS-3291 cross-check). "
+                "This row's own claim names 'answer-v2 outcomes' "
+                "specifically, and #833's own PR body is explicit that "
+                "dev_answer.v2's outcome taxonomy is separate CHAOS-3294/"
+                "3298 work not yet landed in web -- honoring 'claim what "
+                "you assert', this row stays deferred rather than "
+                "force-flipped, narrowed to exactly the gap #833 left: "
+                "v2 outcome coverage. Subjects/rendering/window-dev "
+                "equivalence are otherwise real, live, default-suite "
+                "coverage today, not aspirational."
             ),
         ),
         ManifestItem(

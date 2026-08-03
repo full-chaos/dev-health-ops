@@ -5,10 +5,10 @@
   "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "script": "scripts/acceptance/smoke_ask_dev_exact_commit.py",
   "script_sha256": "24c2915fab086438c6abbbab33ba2224164d0e1c93a4042b25b90159227fa0ac",
-  "commit_sha": "ef7e977215b14beed604383eb22c739c322d8c6d",
+  "commit_sha": "4471bde5f8ddc62e49f25e2317815525a2182ce2",
   "command": "python smoke_ask_dev_exact_commit.py",
-  "started_at": "2026-08-03T01:18:53.654441+00:00",
-  "finished_at": "2026-08-03T01:18:54.724889+00:00",
+  "started_at": "2026-08-03T02:43:02.177831+00:00",
+  "finished_at": "2026-08-03T02:43:04.947749+00:00",
   "status": "passed",
   "error": null,
   "assertions": [

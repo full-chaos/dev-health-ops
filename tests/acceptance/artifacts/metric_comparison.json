@@ -5,10 +5,10 @@
   "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "script": "scripts/acceptance/smoke_ask_dev_metric_comparison.py",
   "script_sha256": "8123267caf00f26283c3b317511b0c9ccf27cb2b563886ae1b167fd2e81f2851",
-  "commit_sha": "ef7e977215b14beed604383eb22c739c322d8c6d",
+  "commit_sha": "4471bde5f8ddc62e49f25e2317815525a2182ce2",
   "command": "python smoke_ask_dev_metric_comparison.py",
-  "started_at": "2026-08-03T01:19:22.418689+00:00",
-  "finished_at": "2026-08-03T01:19:23.411013+00:00",
+  "started_at": "2026-08-03T02:43:14.179083+00:00",
+  "finished_at": "2026-08-03T02:43:15.584622+00:00",
   "status": "passed",
   "error": null,
   "assertions": [

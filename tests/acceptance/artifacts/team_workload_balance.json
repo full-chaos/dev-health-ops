@@ -1,16 +1,16 @@
 {
   "schema_version": "ask_dev_acceptance_artifact.v1",
-  "scenario_id": "registered_metrics_organization_wide",
+  "scenario_id": "team_workload_balance",
   "tree_clean": true,
   "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "script": "scripts/acceptance/smoke_ask_dev_core_intents.py",
-  "script_sha256": "d433ff3432b7415609a1a7231fb8a80ccf7ad86de28260f566a61e9dd073cbd1",
+  "script": "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+  "script_sha256": "bc5ac93e0a6b81ba1f928baf33819914f91c4a29d212bccbf7a004f093442cc3",
   "commit_sha": "4471bde5f8ddc62e49f25e2317815525a2182ce2",
-  "command": "python smoke_ask_dev_core_intents.py",
-  "started_at": "2026-08-03T02:43:09.187219+00:00",
-  "finished_at": "2026-08-03T02:43:09.751097+00:00",
-  "status": "passed",
-  "error": null,
+  "command": "python smoke_ask_dev_stack3_intents.py",
+  "started_at": "2026-08-03T02:43:21.995840+00:00",
+  "finished_at": "2026-08-03T02:43:22.471177+00:00",
+  "status": "failed",
+  "error": "scope_resolved_event_present: expected a scope.resolved event committing the named team subject",
   "assertions": [
     {
       "name": "conversation_response_is_object",
@@ -70,37 +70,7 @@
     {
       "name": "sse_frame_has_data",
       "passed": true,
-      "detail": "SSE progress frame omitted data"
-    },
-    {
-      "name": "sse_frame_has_event_name",
-      "passed": true,
-      "detail": "SSE frame omitted event name"
-    },
-    {
-      "name": "sse_frame_has_data",
-      "passed": true,
-      "detail": "SSE progress frame omitted data"
-    },
-    {
-      "name": "sse_frame_has_event_name",
-      "passed": true,
-      "detail": "SSE frame omitted event name"
-    },
-    {
-      "name": "sse_frame_has_data",
-      "passed": true,
-      "detail": "SSE scope.resolved frame omitted data"
-    },
-    {
-      "name": "sse_frame_has_event_name",
-      "passed": true,
-      "detail": "SSE frame omitted event name"
-    },
-    {
-      "name": "sse_frame_has_data",
-      "passed": true,
-      "detail": "SSE answer.completed frame omitted data"
+      "detail": "SSE error frame omitted data"
     },
     {
       "name": "sse_frame_has_event_name",
@@ -113,24 +83,9 @@
       "detail": "SSE done frame omitted data"
     },
     {
-      "name": "answer_completed_event_present",
-      "passed": true,
-      "detail": "no answer completed"
-    },
-    {
-      "name": "answer_status_not_error",
-      "passed": true,
-      "detail": "Ask Dev returned an error-status answer"
-    },
-    {
-      "name": "answer_summary_not_empty",
-      "passed": true,
-      "detail": "answer summary was empty"
-    },
-    {
-      "name": "stream_terminated_as_answer",
-      "passed": true,
-      "detail": "stream did not terminate as answer"
+      "name": "scope_resolved_event_present",
+      "passed": false,
+      "detail": "expected a scope.resolved event committing the named team subject"
     }
   ]
 }

@@ -131,6 +131,47 @@ func TestGitHubTestsCoverageRejectsCoveredGreaterThanTotal(t *testing.T) {
 	}
 }
 
+func TestGitHubTestsCoverageFallsBackToUniqueDALines(t *testing.T) {
+	row, err := parseLCOVRow(
+		[]byte("SF:services/api/main.go\nDA:1,1\nDA:2,0\nDA:2,3\nend_of_record\n"),
+		"lcov.info", "repo", "run", "org", time.Now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.LinesTotal == nil || *row.LinesTotal != 2 ||
+		row.LinesCovered == nil || *row.LinesCovered != 2 ||
+		row.LineCoveragePct == nil || *row.LineCoveragePct != 100 {
+		t.Fatalf("coverage=%+v", row)
+	}
+}
+
+func TestGitHubTestsCoverageAttributesMajorityFileService(t *testing.T) {
+	row, err := parseLCOVRow([]byte(`SF:services/api/main.go
+LF:1
+LH:1
+end_of_record
+SF:services/web/handler.go
+LF:1
+LH:0
+end_of_record
+SF:services/web/router.go
+LF:1
+LH:1
+end_of_record
+`), "lcov.info", "repo", "run", "org", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.ServiceID == nil || *row.ServiceID != "web" {
+		t.Fatalf("service_id=%v", row.ServiceID)
+	}
+	if row.LinesTotal == nil || *row.LinesTotal != 3 ||
+		row.LinesCovered == nil || *row.LinesCovered != 2 {
+		t.Fatalf("coverage=%+v", row)
+	}
+}
+
 func githubTestsZip(t *testing.T, members map[string]string) []byte {
 	t.Helper()
 	var buffer bytes.Buffer

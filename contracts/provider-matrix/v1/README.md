@@ -309,8 +309,10 @@ ZIP traversal, a 200-report cap, DTD/entity rejection, JUnit suite/case
 normalization, LCOV aggregate normalization, stable IDs, fallback run
 timestamps, stack truncation, and incoherent-coverage rejection. A generic
 oracle executes the active Python `ingest_report_members` chain and compares
-every field in the production TestOps TypedDict contracts for a non-empty
-JUnit + LCOV fixture.
+every field in the production TestOps TypedDict contracts. Its LCOV cases
+include summary-bearing input, `DA`-only LF/LH fallback with duplicate line
+records, and multi-service input whose service is attributed by the majority
+of report files (with Python's first-seen tie behavior).
 
 This is intentionally not represented as a complete route. The active Python
 `sync_tests` contract also owns Actions run pagination, per-run job pagination,

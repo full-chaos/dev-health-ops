@@ -61,11 +61,25 @@ func TestGenericOracleMatchesLivePythonForGitHubTestsCaseRow(t *testing.T) {
 }
 
 func TestGenericOracleMatchesLivePythonForGitHubTestsCoverageRow(t *testing.T) {
-	compareRowsAgainstPythonOracle(t, "github/tests/coverage", []oracleCase{githubTestsOracleCase()},
+	fallback := githubTestsOracleCase()
+	fallback.ID = "da_fallback_without_summaries"
+	fallback.Input["lcov"] = "SF:services/api/main.go\nDA:1,1\nDA:2,0\nDA:2,3\nend_of_record\n"
+	majority := githubTestsOracleCase()
+	majority.ID = "majority_file_service"
+	majority.Input["lcov"] = "SF:services/api/main.go\nLF:1\nLH:1\nend_of_record\n" +
+		"SF:services/web/handler.go\nLF:1\nLH:0\nend_of_record\n" +
+		"SF:services/web/router.go\nLF:1\nLH:1\nend_of_record\n"
+	compareRowsAgainstPythonOracle(t, "github/tests/coverage", []oracleCase{
+		githubTestsOracleCase(), fallback, majority,
+	},
 		func(t *testing.T, input map[string]any) coverageSnapshotRow {
 			_, _, normalizedAt := githubTestsOracleTimes(t, input)
+			lcov := githubTestsLCOVFixture
+			if value, ok := input["lcov"].(string); ok {
+				lcov = value
+			}
 			row, err := parseLCOVRow(
-				[]byte(githubTestsLCOVFixture), "reports/lcov.info", input["repo_id"].(string), input["run_id"].(string), input["org_id"].(string), normalizedAt,
+				[]byte(lcov), "reports/lcov.info", input["repo_id"].(string), input["run_id"].(string), input["org_id"].(string), normalizedAt,
 			)
 			if err != nil {
 				t.Fatal(err)

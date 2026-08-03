@@ -44,7 +44,7 @@ def build_rows(
         ingest_report_members(
             [
                 ("reports/junit.xml", JUNIT.encode()),
-                ("reports/lcov.info", LCOV.encode()),
+                ("reports/lcov.info", case.get("lcov", LCOV).encode()),
             ],
             repo_id=uuid.UUID(case["repo_id"]),
             run_id=case["run_id"],

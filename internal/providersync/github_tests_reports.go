@@ -94,6 +94,18 @@ type githubTestsReportRows struct {
 	Skipped  int
 }
 
+type lcovFileMetrics struct {
+	path               string
+	linesTotal         *int64
+	linesCovered       *int64
+	branchesTotal      *int64
+	branchesCovered    *int64
+	functionsTotal     *int64
+	functionsCovered   *int64
+	lineNumbers        map[int64]struct{}
+	coveredLineNumbers map[int64]struct{}
+}
+
 type junitDocument struct {
 	XMLName xml.Name
 	Suites  []junitSuite `xml:"testsuite"`
@@ -348,62 +360,137 @@ func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time
 }
 
 func parseLCOVRow(body []byte, reportPath, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
-	var linesTotal, linesCovered, branchesTotal, branchesCovered, functionsTotal, functionsCovered int64
-	seenSource := false
-	firstSource := ""
+	var currentPath *string
+	var linesTotal, linesCovered, branchesTotal, branchesCovered, functionsTotal, functionsCovered *int64
+	lineNumbers := map[int64]struct{}{}
+	coveredLineNumbers := map[int64]struct{}{}
+	files := make([]lcovFileMetrics, 0)
+	flush := func() {
+		if currentPath == nil {
+			return
+		}
+		files = append(files, lcovFileMetrics{
+			path: *currentPath, linesTotal: linesTotal, linesCovered: linesCovered,
+			branchesTotal: branchesTotal, branchesCovered: branchesCovered,
+			functionsTotal: functionsTotal, functionsCovered: functionsCovered,
+			lineNumbers: lineNumbers, coveredLineNumbers: coveredLineNumbers,
+		})
+		currentPath = nil
+		linesTotal, linesCovered = nil, nil
+		branchesTotal, branchesCovered = nil, nil
+		functionsTotal, functionsCovered = nil, nil
+		lineNumbers = map[int64]struct{}{}
+		coveredLineNumbers = map[int64]struct{}{}
+	}
 	for _, raw := range strings.Split(string(body), "\n") {
 		line := strings.TrimSpace(raw)
+		if line == "end_of_record" {
+			flush()
+			continue
+		}
 		key, value, found := strings.Cut(line, ":")
 		if !found {
 			continue
 		}
-		number, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 		switch key {
 		case "SF":
-			seenSource = strings.TrimSpace(value) != ""
-			if firstSource == "" {
-				firstSource = strings.TrimSpace(value)
+			flush()
+			path := strings.TrimSpace(value)
+			currentPath = &path
+		case "DA":
+			parts := strings.Split(value, ",")
+			lineNumber, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+			if err != nil {
+				continue
+			}
+			lineNumbers[lineNumber] = struct{}{}
+			if len(parts) > 1 {
+				hits, hitErr := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+				if hitErr == nil && hits > 0 {
+					coveredLineNumbers[lineNumber] = struct{}{}
+				}
 			}
 		case "LF":
-			if err == nil {
-				linesTotal += number
-			}
+			linesTotal = parseOptionalInt64(value)
 		case "LH":
-			if err == nil {
-				linesCovered += number
-			}
+			linesCovered = parseOptionalInt64(value)
 		case "BRF":
-			if err == nil {
-				branchesTotal += number
-			}
+			branchesTotal = parseOptionalInt64(value)
 		case "BRH":
-			if err == nil {
-				branchesCovered += number
-			}
+			branchesCovered = parseOptionalInt64(value)
 		case "FNF":
-			if err == nil {
-				functionsTotal += number
-			}
+			functionsTotal = parseOptionalInt64(value)
 		case "FNH":
-			if err == nil {
-				functionsCovered += number
-			}
+			functionsCovered = parseOptionalInt64(value)
 		}
 	}
-	if !seenSource || linesCovered > linesTotal || branchesCovered > branchesTotal {
+	flush()
+	if len(files) == 0 {
 		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
+	}
+	var aggregateLinesTotal, aggregateLinesCovered int64
+	var aggregateBranchesTotal, aggregateBranchesCovered int64
+	var aggregateFunctionsTotal, aggregateFunctionsCovered int64
+	serviceCounts := map[string]int{}
+	serviceOrder := make([]string, 0)
+	for _, file := range files {
+		aggregateLinesTotal += int64(len(file.lineNumbers))
+		if file.linesTotal != nil {
+			aggregateLinesTotal += *file.linesTotal - int64(len(file.lineNumbers))
+		}
+		aggregateLinesCovered += int64(len(file.coveredLineNumbers))
+		if file.linesCovered != nil {
+			aggregateLinesCovered += *file.linesCovered - int64(len(file.coveredLineNumbers))
+		}
+		aggregateBranchesTotal += optionalInt64Value(file.branchesTotal)
+		aggregateBranchesCovered += optionalInt64Value(file.branchesCovered)
+		aggregateFunctionsTotal += optionalInt64Value(file.functionsTotal)
+		aggregateFunctionsCovered += optionalInt64Value(file.functionsCovered)
+		if service := testServiceID(file.path); service != nil {
+			if _, seen := serviceCounts[*service]; !seen {
+				serviceOrder = append(serviceOrder, *service)
+			}
+			serviceCounts[*service]++
+		}
+	}
+	if aggregateLinesCovered > aggregateLinesTotal || aggregateBranchesCovered > aggregateBranchesTotal {
+		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
+	}
+	var serviceID *string
+	bestCount := 0
+	for _, service := range serviceOrder {
+		if serviceCounts[service] > bestCount {
+			value := service
+			serviceID = &value
+			bestCount = serviceCounts[service]
+		}
 	}
 	format := "lcov"
 	row := coverageSnapshotRow{
 		RepoID: repoID, RunID: runID, SnapshotID: hashTestIdentifier(runID, format, reportPath),
-		ReportFormat: &format, LinesTotal: nilIfZero(linesTotal), LinesCovered: nilIfBothZero(linesCovered, linesTotal),
-		BranchesTotal: nilIfZero(branchesTotal), BranchesCovered: nilIfBothZero(branchesCovered, branchesTotal),
-		FunctionsTotal: nilIfZero(functionsTotal), FunctionsCovered: nilIfBothZero(functionsCovered, functionsTotal),
-		ServiceID: testServiceID(firstSource), OrgID: orgID, LastSynced: normalizedAt,
+		ReportFormat: &format, LinesTotal: nilIfZero(aggregateLinesTotal), LinesCovered: nilIfZero(aggregateLinesCovered),
+		BranchesTotal: nilIfZero(aggregateBranchesTotal), BranchesCovered: nilIfZero(aggregateBranchesCovered),
+		FunctionsTotal: nilIfZero(aggregateFunctionsTotal), FunctionsCovered: nilIfZero(aggregateFunctionsCovered),
+		ServiceID: serviceID, OrgID: orgID, LastSynced: normalizedAt,
 	}
 	row.LineCoveragePct = coveragePercent(row.LinesCovered, row.LinesTotal)
 	row.BranchCoveragePct = coveragePercent(row.BranchesCovered, row.BranchesTotal)
 	return row, nil
+}
+
+func parseOptionalInt64(value string) *int64 {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func optionalInt64Value(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func inferJUnitFramework(suite junitSuite) string {
@@ -505,13 +592,6 @@ func looksQuarantined(values ...string) bool {
 
 func nilIfZero(value int64) *int64 {
 	if value == 0 {
-		return nil
-	}
-	return &value
-}
-
-func nilIfBothZero(value, total int64) *int64 {
-	if value == 0 && total == 0 {
 		return nil
 	}
 	return &value

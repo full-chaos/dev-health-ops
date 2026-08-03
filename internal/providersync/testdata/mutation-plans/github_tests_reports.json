@@ -43,6 +43,22 @@
       "replace": "false ||",
       "rationale": "an incoherent coverage report must be rejected instead of skewing TestOps rollups",
       "proof": [["go", "test", "-run", "^TestGitHubTestsCoverageRejectsCoveredGreaterThanTotal$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T6-da-lines-fallback",
+      "file": "internal/providersync/github_tests_reports.go",
+      "find": "lineNumbers[lineNumber] = struct{}{}",
+      "replace": "delete(lineNumbers, lineNumber)",
+      "rationale": "LCOV files without LF/LH must derive total and covered lines from unique DA records exactly like the live Python parser",
+      "proof": [["go", "test", "-run", "^TestGitHubTestsCoverageFallsBackToUniqueDALines$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T7-majority-file-service",
+      "file": "internal/providersync/github_tests_reports.go",
+      "find": "if serviceCounts[service] > bestCount {",
+      "replace": "if serviceCounts[service] > 0 && bestCount == 0 {",
+      "rationale": "coverage service attribution must choose the service represented by the most report files, not the first source path",
+      "proof": [["go", "test", "-run", "^TestGitHubTestsCoverageAttributesMajorityFileService$", "./internal/providersync/"]]
     }
   ]
 }

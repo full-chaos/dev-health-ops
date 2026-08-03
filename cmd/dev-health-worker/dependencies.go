@@ -432,6 +432,7 @@ func workerRouteSwitches(cfg config.Config) providersync.CompleteRouteSwitches {
 		GithubRepoMetadata:       cfg.WorkerGithubRepoMetadataEnabled,
 		GithubPRs:                cfg.WorkerGithubPRsEnabled,
 		GithubCICD:               cfg.WorkerGithubCICDEnabled,
+		GithubCommits:            cfg.WorkerGithubCommitsEnabled,
 	}
 }
 
@@ -452,6 +453,7 @@ func providerRouteSwitchesReady(
 		{"github", "repo-metadata", cfg.WorkerGithubRepoMetadataEnabled},
 		{"github", "prs", cfg.WorkerGithubPRsEnabled},
 		{"github", "cicd", cfg.WorkerGithubCICDEnabled},
+		{"github", "commits", cfg.WorkerGithubCommitsEnabled},
 	}
 	return func(context.Context) error {
 		for _, route := range routes {

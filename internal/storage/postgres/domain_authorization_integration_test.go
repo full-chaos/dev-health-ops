@@ -90,8 +90,9 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE ROLE " + authorizedDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainAuthorizationPass + "'",
 		"GRANT CONNECT ON DATABASE worker_test TO " + authorizedDomainRole,
 		"GRANT USAGE ON SCHEMA public TO " + authorizedDomainRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_sources, public.integration_datasets, public.integration_credentials, public.sync_dispatch_transport_routes, public.sync_configurations, public.organizations, public.billing_notifications, public.external_ingest_sources, public.feature_flags, public.org_feature_overrides, public.org_licenses, public.webhook_deliveries TO " + authorizedDomainRole,
-		"GRANT SELECT, UPDATE ON TABLE public.sync_runs, public.sync_run_units, public.report_runs, public.saved_reports TO " + authorizedDomainRole,
+		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.sync_configurations, public.organizations, public.billing_notifications, public.external_ingest_sources, public.feature_flags, public.org_feature_overrides, public.org_licenses, public.webhook_deliveries TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources, public.integration_datasets, public.sync_runs, public.sync_run_units TO " + authorizedDomainRole,
+		"GRANT SELECT, UPDATE ON TABLE public.report_runs, public.saved_reports TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + authorizedDomainRole,
 		"GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + authorizedDomainRole,
@@ -114,6 +115,16 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 	assertDomainAuthorized(t, ctx, domain)
 	if _, err := domain.Exec(ctx, "SELECT id FROM public.integrations"); err != nil {
 		t.Fatalf("domain SELECT-only inventory access failed: %v", err)
+	}
+	for name, statement := range map[string]string{
+		"integration source":  "INSERT INTO public.integration_sources (id) VALUES (1)",
+		"integration dataset": "INSERT INTO public.integration_datasets (id) VALUES (1)",
+		"sync run":            "INSERT INTO public.sync_runs (id) VALUES (1)",
+		"sync run unit":       "INSERT INTO public.sync_run_units (id, state) VALUES (1, 'planned')",
+	} {
+		if _, err := domain.Exec(ctx, statement); err != nil {
+			t.Fatalf("domain materializer %s INSERT failed: %v", name, err)
+		}
 	}
 	if _, err := domain.Exec(ctx, "UPDATE public.sync_run_units SET state = 'ready'"); err != nil {
 		t.Fatalf("domain sync-run-unit UPDATE failed: %v", err)
@@ -154,6 +165,26 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 			name:   "missing SELECT-only privilege",
 			grant:  "REVOKE SELECT ON TABLE public.integrations FROM " + authorizedDomainRole,
 			revoke: "GRANT SELECT ON TABLE public.integrations TO " + authorizedDomainRole,
+		},
+		{
+			name:   "missing integration-source INSERT",
+			grant:  "REVOKE INSERT ON TABLE public.integration_sources FROM " + authorizedDomainRole,
+			revoke: "GRANT INSERT ON TABLE public.integration_sources TO " + authorizedDomainRole,
+		},
+		{
+			name:   "missing integration-dataset INSERT",
+			grant:  "REVOKE INSERT ON TABLE public.integration_datasets FROM " + authorizedDomainRole,
+			revoke: "GRANT INSERT ON TABLE public.integration_datasets TO " + authorizedDomainRole,
+		},
+		{
+			name:   "missing sync-run INSERT",
+			grant:  "REVOKE INSERT ON TABLE public.sync_runs FROM " + authorizedDomainRole,
+			revoke: "GRANT INSERT ON TABLE public.sync_runs TO " + authorizedDomainRole,
+		},
+		{
+			name:   "missing sync-run-unit INSERT",
+			grant:  "REVOKE INSERT ON TABLE public.sync_run_units FROM " + authorizedDomainRole,
+			revoke: "GRANT INSERT ON TABLE public.sync_run_units TO " + authorizedDomainRole,
 		},
 		{
 			name:   "missing sync-run-unit UPDATE",

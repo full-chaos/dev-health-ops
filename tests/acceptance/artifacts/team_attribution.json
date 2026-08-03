@@ -5,10 +5,10 @@
   "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "script": "scripts/acceptance/smoke_ask_dev_team_attribution.py",
   "script_sha256": "2254cefd6798085e1a3e4766f14e6beb9c14a5f158ef808abc6eef31eaecfc63",
-  "commit_sha": "4471bde5f8ddc62e49f25e2317815525a2182ce2",
+  "commit_sha": "81c6e27b0c21d8b04d4028a9f06b969258a094bc",
   "command": "python smoke_ask_dev_team_attribution.py",
-  "started_at": "2026-08-03T02:43:17.292799+00:00",
-  "finished_at": "2026-08-03T02:43:19.058421+00:00",
+  "started_at": "2026-08-03T03:31:16.288604+00:00",
+  "finished_at": "2026-08-03T03:31:17.162377+00:00",
   "status": "passed",
   "error": null,
   "assertions": [

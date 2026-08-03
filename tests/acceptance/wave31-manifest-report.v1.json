@@ -1,15 +1,15 @@
 {
   "schema_version": "wave_3_1_proof_gate_manifest.v1",
-  "item_count": 62,
+  "item_count": 64,
   "status_counts": {
-    "blocked": 5,
+    "blocked": 4,
     "deferred": 8,
-    "proven_e2e": 11,
+    "proven_e2e": 14,
     "proven_unit": 38
   },
   "category_counts": {
     "attack": 7,
-    "blocking_matrix": 30,
+    "blocking_matrix": 32,
     "gate": 7,
     "mutation_proof": 12,
     "original_defect_reproduction": 5,
@@ -223,7 +223,7 @@
       "description": "'Which teams are light on feature work?' with adequate investment-classification coverage.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "The closest existing test, test_chaos_3304_workload_observation_adapters.py::test_investment_shift_stable_high_ktlo_mix_reports_neutral_measured_zero, is adapter-layer only -- it proves the observation adapter reports a neutral, measured-zero shift, not that the health-rule layer produces the launch-level 'light on feature work' finding this row claims. Citing it would overclaim what a passing adapter test proves about the rule/finding layer. Live e2e is separately blocked by CHAOS-3337 (see STACK3_PERSISTENCE_GAP_REASON). Closing this needs either a rule/finding-layer unit test or CHAOS-3337 fixed plus a live re-run.",
+      "blocked_reason": "The closest existing test, test_chaos_3304_workload_observation_adapters.py::test_investment_shift_stable_high_ktlo_mix_reports_neutral_measured_zero, is adapter-layer only -- it proves the observation adapter reports a neutral, measured-zero shift, not that the health-rule layer produces the launch-level 'light on feature work' finding this row claims. Citing it would overclaim what a passing adapter test proves about the rule/finding layer. CHAOS-3337 shipped 2026-08-03 (ops #1402), removing the separate live-e2e blocker: matrix.team-workload-balance.e2e-live-validated now proves TEAM_WORKLOAD_BALANCE is live-reachable, but that smoke only asserts a real completed answer, not the specific launch-level 'light on feature work' finding shape this row claims -- closing this needs a rule/finding-layer unit test, or a live smoke that asserts the specific finding content.",
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
@@ -327,6 +327,27 @@
       "required_assertion_names": []
     },
     {
+      "id": "matrix.operational-deficiency.e2e-live-validated",
+      "category": "blocking_matrix",
+      "description": "OPERATIONAL_DEFICIENCY_INVENTORY live end-to-end: deficiency.operational.v1 reachable and answering for a named team subject, over the real Compose stack. Proven only after CHAOS-3337 shipped (ops #1402) -- same root cause and fix as matrix.team-health.e2e-live-validated. Proves reachability, not the specific mixed-rule-status shape matrix.operational-deficiencies-mixed's proven_unit citation covers.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+        "tests/acceptance/test_ask_dev_stack3_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/operational_deficiency_team.json",
+      "required_assertion_names": [
+        "scope_resolved_event_present",
+        "named_team_committed",
+        "answer_completed_event_present",
+        "answer_status_not_hard_error",
+        "stream_terminated_as_answer"
+      ]
+    },
+    {
       "id": "matrix.organization-portfolio-status",
       "category": "blocking_matrix",
       "description": "Organization portfolio status.",
@@ -408,7 +429,7 @@
       "description": "Project health with unknown and not-applicable dimensions.",
       "status": "blocked",
       "evidence": [],
-      "blocked_reason": "No PROJECT-scoped test asserts UNKNOWN and NOT_APPLICABLE together -- the closest existing test, test_chaos_3303_health_profile_synthesis.py::test_team_profile_without_cohort_suppresses_every_applicable_rule, proves this pair for a TEAM-scoped profile, not PROJECT. Live e2e is separately blocked by CHAOS-3337 (see STACK3_PERSISTENCE_GAP_REASON) and, for a literal PROJECT subject, by this fixture profile's zero PROJECT-kind rows (see positive-control.real-project-status). Closing this needs either a new PROJECT-scoped unit test or both of those infrastructure gaps closed.",
+      "blocked_reason": "No PROJECT-scoped test asserts UNKNOWN and NOT_APPLICABLE together -- the closest existing test, test_chaos_3303_health_profile_synthesis.py::test_team_profile_without_cohort_suppresses_every_applicable_rule, proves this pair for a TEAM-scoped profile, not PROJECT. CHAOS-3337 (the persistence-layer allowlist gap that separately blocked ALL live stack-3 e2e attempts) shipped 2026-08-03 (ops #1402) and no longer applies, but a literal PROJECT subject still cannot be live-verified: this fixture profile seeds zero PROJECT-kind rows (see positive-control.real-project-status). Closing this needs a new PROJECT-scoped unit test.",
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
@@ -519,18 +540,6 @@
       ]
     },
     {
-      "id": "matrix.stack3-intents.e2e-blocked-by-live-defect",
-      "category": "blocking_matrix",
-      "description": "Live end-to-end proof attempt for the four CHAOS-3297 stack-3 newly-wired intents (PROJECT_HEALTH/TEAM_HEALTH/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY), per team-lead priority 2026-08-03 following ops #1383/#1387 merging the wiring to main. Blocked by a newly discovered, 100%-reproducible live defect one layer beneath the wiring itself -- not by the wiring gap that STACK3_WIRING_GAP_REASON described, which is now resolved.",
-      "status": "blocked",
-      "evidence": [],
-      "blocked_reason": "PROJECT_HEALTH/TEAM_HEALTH/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY are now wired in the live plan_registry (ops #1383/#1387), but every one of their mandatory steps crashes to a terminal ERROR/internal_error before scope resolution completes -- 100% reproducible, live-confirmed for TEAM_HEALTH/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY against a named TEAM subject (\"Is the Core team healthy?\"/\"overburdened?\"/\"What operational deficiencies does the Core team have?\"); PROJECT_HEALTH shares the identical root cause but was not independently live-run since this fixture profile seeds zero PROJECT-kind rows (the same constraint documented on positive-control.real-project-status). Unlike CHAOS-3332, this crash IS logged: dev_health_ops.api.dev.persistence.service.DevPersistenceValidationError: invalid source_class, raised from persistence/service.py:2255 append_source_observation, via orchestrator_persistence.py:175/203, via orchestrator.py:1109 run(). Root cause read directly from source: wave_3_1_plans.py's four plans declare source_class=SourceClass.HEALTH_PROFILE (three plans) or SourceClass.DEFICIENCY_INVENTORY (one plan) -- both legitimate members of the SourceClass contract enum -- but persistence/service.py's separate _SOURCE_CLASSES frozenset allowlist, which append_source_observation validates against before every mandatory-step write, was never updated with either value. Every investigation using any of the four plans fails on its first mandatory step. Filed as CHAOS-3337 (parent CHAOS-3297, Ask Dev project) with the full traceback and the one-line fix (add both string values to _SOURCE_CLASSES) -- these rows flip once CHAOS-3337 ships and a live re-run of smoke_ask_dev_stack3_intents.py confirms it.",
-      "test_nodeids": [],
-      "requires_live_infra": false,
-      "execution_artifact": null,
-      "required_assertion_names": []
-    },
-    {
       "id": "matrix.struggling-teams-insufficient-sample",
       "category": "blocking_matrix",
       "description": "The struggling-teams question with insufficient sample/coverage and no unsupported label.",
@@ -593,6 +602,48 @@
       "requires_live_infra": false,
       "execution_artifact": null,
       "required_assertion_names": []
+    },
+    {
+      "id": "matrix.team-health.e2e-live-validated",
+      "category": "blocking_matrix",
+      "description": "TEAM_HEALTH live end-to-end: health.team.v1 (CHAOS-3297 stack-3, wired via ops #1383/#1387) reachable and answering for a named team subject, over the real Compose stack. Proven only after CHAOS-3337 shipped (ops #1402) -- before that fix this crashed with DevPersistenceValidationError('invalid source_class') on every run; see STACK3_PERSISTENCE_GAP_REASON for the original repro.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+        "tests/acceptance/test_ask_dev_stack3_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/team_health.json",
+      "required_assertion_names": [
+        "scope_resolved_event_present",
+        "named_team_committed",
+        "answer_completed_event_present",
+        "answer_status_not_hard_error",
+        "stream_terminated_as_answer"
+      ]
+    },
+    {
+      "id": "matrix.team-workload-balance.e2e-live-validated",
+      "category": "blocking_matrix",
+      "description": "TEAM_WORKLOAD_BALANCE live end-to-end: balance.team_workload.v1 reachable and answering for a named team subject, over the real Compose stack. Proven only after CHAOS-3337 shipped (ops #1402) -- same root cause and fix as matrix.team-health.e2e-live-validated. Proves reachability, not the specific 'overburdened'/'light on feature work' launch-finding shapes -- those stay at matrix.overburdened-teams-with-denominators/matrix.pressure-without-denominator's existing proven_unit level and matrix.light-on-feature-work's honest blocked state.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+        "tests/acceptance/test_ask_dev_stack3_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/team_workload_balance.json",
+      "required_assertion_names": [
+        "scope_resolved_event_present",
+        "named_team_committed",
+        "answer_completed_event_present",
+        "answer_status_not_hard_error",
+        "stream_terminated_as_answer"
+      ]
     },
     {
       "id": "matrix.unwired-intent-safe-fallback",
@@ -671,7 +722,7 @@
     {
       "id": "gate.plan-registry-gap-is-loud.e2e-live-validated",
       "category": "gate",
-      "description": "The same plan_registry_gap fallback, proven over the real live Compose stack against PORTFOLIO_STATUS -- the intent actually in this gap today, not a simulated one. A portfolio-shaped question (\"What's the status of all our projects across the portfolio?\") ran through many legacy model-round progress events (confirming the fallback loop actually engaged, not a fast-path), committed scope, and completed as a real non-error answer (status='partial') rather than hanging or terminating. This smoke has no public API to observe the WARNING log line or the counter directly, so it proves the externally-observable half of the contract; gate.plan-registry-gap-is-loud proves the signal half at the unit level, driven through the same orchestrator seam.",
+      "description": "The same plan_registry_gap fallback, proven over the real live Compose stack against PORTFOLIO_STATUS -- the intent actually in this gap today, not a simulated one. A portfolio-shaped question (\"What's the status of all our projects across the portfolio?\") ran through many legacy model-round progress events (confirming the fallback loop actually engaged, not a fast-path), committed a real scope.resolved event, and completed as status EXACTLY 'partial' (the legacy-loop budget-exhaustion outcome, not any non-error status a lucky 'complete' would also satisfy) rather than hanging or terminating. Codex finding (HIGH, 2026-08-03, round 3): the prior version of this row passed without requiring any of that -- scope resolution was only checked for team-scoped scenarios (portfolio is not), no assertion pinned the exact status, and 'not error' alone is satisfied by complete/partial/degraded alike. Fixed by asserting the specific state directly. Live-confirmed 2026-08-03 there is NO client-observable signal for the WARNING log line or ASK_DEV_PLAN_REGISTRY_GAP_TOTAL counter this row's other half of the claim needs: answer.warnings for this scenario is generic scripted-provider boilerplate (\"Deterministic scripted acceptance response.\", \"Provider health was measured through data_health.v1.\"), identical regardless of question, not text tied to the gap signal -- recorded as an informational assertion, not claimed as proof of the signal. gate.plan-registry-gap-is-loud proves that signal at the unit level, through the real orchestrator seam, the only place it is observable.",
       "status": "proven_e2e",
       "evidence": [
         "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
@@ -682,9 +733,11 @@
       "requires_live_infra": true,
       "execution_artifact": "tests/acceptance/artifacts/portfolio_status_gap.json",
       "required_assertion_names": [
+        "scope_resolved_event_present",
         "answer_completed_event_present",
-        "answer_status_not_hard_error",
-        "stream_terminated_as_answer"
+        "answer_status_is_exactly_partial",
+        "stream_terminated_as_answer",
+        "warnings_present_but_not_a_plan_registry_gap_signal"
       ]
     },
     {

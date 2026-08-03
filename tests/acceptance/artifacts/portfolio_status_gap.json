@@ -4,11 +4,11 @@
   "tree_clean": true,
   "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "script": "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
-  "script_sha256": "bc5ac93e0a6b81ba1f928baf33819914f91c4a29d212bccbf7a004f093442cc3",
-  "commit_sha": "4471bde5f8ddc62e49f25e2317815525a2182ce2",
+  "script_sha256": "890446ac8efbc49f95f814659724a885a234d81989eacbda20f3e4b9b82e5773",
+  "commit_sha": "81c6e27b0c21d8b04d4028a9f06b969258a094bc",
   "command": "python smoke_ask_dev_stack3_intents.py",
-  "started_at": "2026-08-03T02:43:22.872309+00:00",
-  "finished_at": "2026-08-03T02:43:23.525854+00:00",
+  "started_at": "2026-08-03T03:31:20.828948+00:00",
+  "finished_at": "2026-08-03T03:31:21.333796+00:00",
   "status": "passed",
   "error": null,
   "assertions": [
@@ -173,6 +173,11 @@
       "detail": "SSE done frame omitted data"
     },
     {
+      "name": "scope_resolved_event_present",
+      "passed": true,
+      "detail": "expected a scope.resolved event"
+    },
+    {
       "name": "answer_completed_event_present",
       "passed": true,
       "detail": "no answer completed"
@@ -186,6 +191,16 @@
       "name": "stream_terminated_as_answer",
       "passed": true,
       "detail": "stream did not terminate as answer -- a hang or non-answer terminal kind would mean the newly-wired plan or the deliberate portfolio fallback broke the run rather than completing it"
+    },
+    {
+      "name": "answer_status_is_exactly_partial",
+      "passed": true,
+      "detail": "expected status='partial' per the legacy-fallback contract, got 'partial'"
+    },
+    {
+      "name": "warnings_present_but_not_a_plan_registry_gap_signal",
+      "passed": true,
+      "detail": "expected the scripted provider's boilerplate warnings, got ['Deterministic scripted acceptance response.', 'Provider health was measured through data_health.v1.']"
     }
   ]
 }

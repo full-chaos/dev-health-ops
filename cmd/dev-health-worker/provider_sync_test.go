@@ -625,7 +625,7 @@ func TestBuildProviderSyncHandlerConstructsGitLabRepositoryCapability(t *testing
 	handler, _ := buildProviderSyncHandler(
 		nil,
 		providersync.CompleteRouteSwitches{GitlabRepoMetadata: true},
-		nil, nil, nil, nil, nil, slog.Default(),
+		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("provider sync handler is not constructed")

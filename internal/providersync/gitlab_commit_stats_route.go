@@ -3,7 +3,6 @@ package providersync
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"math"
 	"net/url"
 	"strconv"
@@ -187,22 +186,24 @@ func gitLabCommitStatsFatalDetailError(ctx context.Context, err error) error {
 	if ctx != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
+	// D16 preserves malformed individual detail payloads as soft degradation,
+	// but only when every leaf is that normalization sentinel. A joined budget,
+	// lease, context, or other control-plane error must still fail the unit.
+	if gitLabErrorTreeOnlyLeaves(err, func(leaf error) bool {
+		return leaf == providerfoundation.ErrNormalizationInvalid
+	}) {
 		return nil
 	}
-	var providerErr *providerfoundation.ProviderError
-	if !errors.As(err, &providerErr) {
-		return err
-	}
-	switch providerErr.Class {
-	case providerfoundation.ErrorNotFound,
+	if gitLabErrorTreeOnlyProviderClasses(
+		err,
+		providerfoundation.ErrorNotFound,
 		providerfoundation.ErrorConflict,
 		providerfoundation.ErrorTransient,
-		providerfoundation.ErrorPermanent:
+		providerfoundation.ErrorPermanent,
+	) {
 		return nil
-	default:
-		return err
 	}
+	return err
 }
 
 func normalizeGitLabCommitStats(

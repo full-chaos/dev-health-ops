@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -53,6 +54,70 @@ func TestEnabledProviderUnitExecutesCompleteRouteAndTerminalizes(t *testing.T) {
 	}
 	if _, ok := repository.result["go_provider_route"]; !ok {
 		t.Fatalf("terminal result=%#v", repository.result)
+	}
+}
+
+func TestProviderUnitKeepsWatermarkUnadvancedWhenGitHubFilesTraversalFails(t *testing.T) {
+	// Given
+	t.Setenv("REPO_UUID", "")
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	repository := newMemoryUnitRepository(githubFilesUnit())
+	handler := &Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			GithubFiles: true,
+		},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: githubFilesTraversalExecutor(now),
+	}
+
+	// When
+	err := handler.Work(context.Background(), providerExecution(repository.unit, now, 1))
+
+	// Then
+	if err == nil {
+		t.Fatal("Work() error = nil, want retryable traversal failure")
+	}
+	if repository.status != "dispatching" || repository.result != nil || repository.watermark != nil {
+		t.Fatalf(
+			"status=%s result=%#v watermark=%v, want retrying state without completed result or watermark",
+			repository.status, repository.result, repository.watermark,
+		)
+	}
+}
+
+func TestProviderUnitRecordsGitHubFilesTraversalFailureAfterRetriesExhaust(t *testing.T) {
+	// Given
+	t.Setenv("REPO_UUID", "")
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	repository := newMemoryUnitRepository(githubFilesUnit())
+	handler := &Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			GithubFiles: true,
+		},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: githubFilesTraversalExecutor(now),
+	}
+	execution := providerExecution(repository.unit, now, 5)
+	execution.Definition.MaxAttempts = 5
+
+	// When
+	err := handler.Work(context.Background(), execution)
+
+	// Then
+	if err == nil {
+		t.Fatal("Work() error = nil, want exhausted traversal failure")
+	}
+	if repository.status != "failed" || repository.lastFailCategory != GitHubFilesInventoryFailureCategory {
+		t.Fatalf(
+			"status=%s category=%s, want failed/%s",
+			repository.status, repository.lastFailCategory, GitHubFilesInventoryFailureCategory,
+		)
 	}
 }
 
@@ -214,6 +279,20 @@ func providerUnit() providersync.Unit {
 	}
 }
 
+func githubFilesUnit() providersync.Unit {
+	unit := providerUnit()
+	capability, ok := providersync.Capability("github", "files")
+	if !ok {
+		panic("github/files capability missing")
+	}
+	unit.SourceExternalID = "acme/api"
+	unit.SourceName = "acme/api"
+	unit.Provider = "github"
+	unit.Dataset = "files"
+	unit.CostClass = capability.CostClass
+	return unit
+}
+
 func successfulExecutor(
 	t *testing.T,
 	now time.Time,
@@ -245,7 +324,41 @@ func successfulExecutor(
 			},
 			Handler:           testCompleteRouteHandler{t: t, now: now},
 			Comparator:        providersync.ProductionContractComparator{},
-			Committer:         providersync.EffectCommitter{Ledger: &testEffectLedger{}, Sink: testEffectSink{}, Now: func() time.Time { return now }},
+			Committer:         providersync.EffectCommitter{Ledger: &testEffectLedger{}, Sink: testEffectSink{}, Readback: testEffectReadback{}, Now: func() time.Time { return now }},
+			HeartbeatInterval: 10 * time.Second,
+			Now:               func() time.Time { return now },
+		}, nil
+	}
+}
+
+func githubFilesTraversalExecutor(now time.Time) ExecutorFactory {
+	return func(
+		session *providersync.LeaseSession,
+	) (providersync.CompleteRouteExecutor, error) {
+		return providersync.CompleteRouteExecutor{
+			Credentials: providerfoundation.CredentialResolver{
+				Repository: githubCredentialRepository{unit: session.Claim.Unit},
+				Decryptor:  githubCredentialDecryptor{},
+			},
+			Doer: githubFilesTraversalDoer{},
+			Retry: providerfoundation.RetryPolicy{
+				MaxAttempts: 1, InitialWait: time.Nanosecond,
+				MaxWait: time.Nanosecond,
+			},
+			Budget: testBudgetStore{},
+			BudgetLimits: map[providersync.CostClass]int{
+				providersync.CostMedium: 1,
+			},
+			BudgetTTL: time.Minute,
+			Gate: func(
+				providersync.Claim,
+				*providerfoundation.HTTPClient,
+			) providerfoundation.BackoffGate {
+				return testBackoffGate{}
+			},
+			Handler:           providersync.GitHubFilesRouteHandler{},
+			Comparator:        providersync.ProductionContractComparator{},
+			Committer:         providersync.EffectCommitter{Ledger: &testEffectLedger{}, Sink: testEffectSink{}, Readback: testEffectReadback{}, Now: func() time.Time { return now }},
 			HeartbeatInterval: 10 * time.Second,
 			Now:               func() time.Time { return now },
 		}, nil
@@ -259,6 +372,7 @@ type memoryUnitRepository struct {
 	attempt          int
 	lastClaim        providersync.Claim
 	result           map[string]any
+	watermark        *time.Time
 	failures         int
 	lastFailCategory string
 	releaseErr       error
@@ -326,7 +440,7 @@ func (repository *memoryUnitRepository) Complete(
 	_ context.Context,
 	claim providersync.Claim,
 	result map[string]any,
-	_ *time.Time,
+	watermark *time.Time,
 	_ time.Time,
 	_ time.Time,
 ) error {
@@ -335,7 +449,7 @@ func (repository *memoryUnitRepository) Complete(
 	if repository.status != "running" || repository.lastClaim.Owner != claim.Owner {
 		return providersync.ErrLeaseLost
 	}
-	repository.status, repository.result = "success", result
+	repository.status, repository.result, repository.watermark = "success", result, watermark
 	return nil
 }
 
@@ -393,10 +507,52 @@ func (testCredentialDecryptor) Decrypt(secrets.Value) ([]byte, error) {
 	return []byte(`{"api_key":"test-token"}`), nil
 }
 
+type githubCredentialRepository struct{ unit providersync.Unit }
+
+func (repository githubCredentialRepository) ResolveEncrypted(
+	_ context.Context,
+	_ providerfoundation.TenantScope,
+) (providerfoundation.EncryptedCredential, error) {
+	return providerfoundation.EncryptedCredential{
+		ID: repository.unit.CredentialID, Provider: "github",
+		Name: "default", Active: true,
+		Ciphertext: secrets.NewValue("ciphertext"),
+	}, nil
+}
+
+type githubCredentialDecryptor struct{}
+
+func (githubCredentialDecryptor) Decrypt(secrets.Value) ([]byte, error) {
+	return []byte(`{"token":"test-token"}`), nil
+}
+
 type testDoer struct{}
 
 func (testDoer) Do(*http.Request) (*http.Response, error) {
 	return nil, errors.New("unexpected request")
+}
+
+type githubFilesTraversalDoer struct{}
+
+func (githubFilesTraversalDoer) Do(request *http.Request) (*http.Response, error) {
+	switch request.URL.Path {
+	case "/repos/acme/api":
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"full_name":"acme/api","default_branch":"main"}`)),
+			Request:    request,
+		}, nil
+	case "/repos/acme/api/branches/main":
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"message":"tree traversal unavailable"}`)),
+			Request:    request,
+		}, nil
+	default:
+		return nil, errors.New("unexpected request")
+	}
 }
 
 type testReservation struct{}
@@ -513,4 +669,14 @@ func (testEffectSink) WriteEffect(
 	providersync.EffectBatch,
 ) error {
 	return nil
+}
+
+type testEffectReadback struct{}
+
+func (testEffectReadback) InspectEffect(
+	context.Context,
+	providersync.Claim,
+	providersync.EffectBatch,
+) (providersync.EffectInspection, error) {
+	return providersync.EffectAbsent, nil
 }

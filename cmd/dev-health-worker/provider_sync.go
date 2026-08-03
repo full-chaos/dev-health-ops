@@ -192,9 +192,9 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Five route-ready pairs can reach this closure today
-			// (launchdarkly/feature-flags, github/repo-metadata, github/prs,
-			// github/cicd, github/security — see CompleteRouteSwitches.Descriptor), and each
+			// Seven route-ready pairs can reach this closure today:
+			// launchdarkly/feature-flags plus github/repo-metadata, cicd,
+			// commits, deployments, security, and files. Each
 			// has its own CompleteRouteHandler and effect sink. session.Claim
 			// is already known here — providerunit.Handler.Work only calls
 			// BuildExecutor after its own descriptor gate passed for THIS
@@ -264,10 +264,17 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitHubSecurityRouteHandler{}
 				sink, readback = ghSecuritySink, ghSecuritySink
+			case session.Claim.Provider == "github" &&
+				session.Claim.Dataset == "files":
+				ghFilesSink := providersync.GitHubFilesClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitHubFilesRouteHandler{}
+				sink, readback = ghFilesSink, ghFilesSink
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
-				// reported RouteReady && RouteEnabled, and those three cases
+				// reported RouteReady && RouteEnabled, and the cases
 				// above are the only pairs CompleteRouteSwitches.Descriptor
 				// ever marks RouteReady. Fail closed rather than construct an
 				// executor with a nil Handler.
@@ -337,11 +344,7 @@ func buildProviderSyncWorker(
 	// (github, prs) in CHAOS-3122, and a process that dispatches github units
 	// while refusing to build the handler for them would strand every unit at
 	// a worker with nothing registered.
-	if cfg.Profile != "sync" ||
-		(!cfg.WorkerLaunchDarklyFeatureFlagsEnabled &&
-			!cfg.WorkerGithubRepoMetadataEnabled && !cfg.WorkerGithubPRsEnabled &&
-			!cfg.WorkerGithubCICDEnabled && !cfg.WorkerGithubCommitsEnabled &&
-			!cfg.WorkerGithubDeploymentsEnabled && !cfg.WorkerGithubSecurityEnabled) {
+	if cfg.Profile != "sync" || !providerSyncWorkerEnabled(cfg) {
 		return workerFamily{}, nil
 	}
 	return constructProviderSyncWorker(ctx, cfg, database, registry, observer, logger)
@@ -446,6 +449,13 @@ func constructProviderSyncWorkerWithDependencies(
 		},
 		metricsSource: providerMetrics,
 	}, nil
+}
+
+func providerSyncWorkerEnabled(cfg config.Config) bool {
+	return cfg.WorkerLaunchDarklyFeatureFlagsEnabled || cfg.WorkerGithubRepoMetadataEnabled ||
+		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubCICDEnabled ||
+		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
+		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled
 }
 
 func providerSyncRiverConfig(

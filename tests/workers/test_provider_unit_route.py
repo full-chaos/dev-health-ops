@@ -237,6 +237,16 @@ def test_github_security_switch_is_the_second_required_key() -> None:
     ).routes_to_river("github", "security")
 
 
+def test_github_files_switch_is_the_second_required_key() -> None:
+    assert ProviderUnitRouteSwitches.is_route_ready("github", "files")
+    assert not ProviderUnitRouteSwitches.from_environment({}).routes_to_river(
+        "github", "files"
+    )
+    assert ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_FILES_ENABLED": "true"}
+    ).routes_to_river("github", "files")
+
+
 # ---------------------------------------------------------------------------
 # CHAOS-3131: routability is derived from the checked-in matrix, not from a
 # hardcoded provider/dataset literal.

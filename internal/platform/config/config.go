@@ -122,6 +122,8 @@ type Config struct {
 	WorkerGithubDeploymentsEnabled bool
 	// WorkerGithubSecurityEnabled gates the isolated (github, security) route.
 	WorkerGithubSecurityEnabled bool
+	// WorkerGithubFilesEnabled gates the isolated (github, files) route.
+	WorkerGithubFilesEnabled bool
 
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
@@ -217,6 +219,10 @@ func Load(spec Spec) (Config, error) {
 		{
 			name:   "WORKER_GITHUB_SECURITY_ENABLED",
 			target: &cfg.WorkerGithubSecurityEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_FILES_ENABLED",
+			target: &cfg.WorkerGithubFilesEnabled,
 		},
 	} {
 		*item.target, err = boolEnv(lookup, item.name, false)

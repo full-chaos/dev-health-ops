@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -48,7 +49,6 @@ func (doer *gitLabCommitsDoer) Do(request *http.Request) (*http.Response, error)
 func TestGitLabCommitsRouteEmitsCompleteNullableEffectAcrossPages(t *testing.T) {
 	t.Parallel()
 	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 987654321, time.UTC)
-	fallbackNow := time.Date(2026, 8, 3, 11, 59, 0, 0, time.UTC)
 	doer := &gitLabCommitsDoer{t: t, responses: []gitLabCommitsResponse{
 		{body: gitLabRepositoryFixture},
 		{body: `[
@@ -66,7 +66,6 @@ func TestGitLabCommitsRouteEmitsCompleteNullableEffectAcrossPages(t *testing.T) 
 	batch, err := (GitLabCommitsRouteHandler{
 		PerPage:  2,
 		MaxPages: 10,
-		Now:      func() time.Time { return fallbackNow },
 	}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
@@ -105,14 +104,95 @@ func TestGitLabCommitsRouteEmitsCompleteNullableEffectAcrossPages(t *testing.T) 
 	}
 	if first.OrgID != claim.OrgID || first.RepoID != "c7198fbc-1945-3717-05d8-eb78866b4e79" ||
 		first.Hash != "sha-1" || first.Message != nil || first.AuthorName != "Unknown" ||
-		first.AuthorEmail != nil || !first.AuthorWhen.Equal(fallbackNow) ||
+		first.AuthorEmail != nil || !first.AuthorWhen.Equal(normalizedAt.Truncate(time.Millisecond)) ||
 		first.CommitterName != "Grace" || first.CommitterEmail != nil ||
 		first.Parents != 2 || !first.LastSynced.Equal(normalizedAt.Truncate(time.Millisecond)) {
 		t.Fatalf("first=%+v", first)
 	}
 	if second.Message == nil || *second.Message != "ship it" ||
-		second.CommitterName != "Unknown" || !second.CommitterWhen.Equal(fallbackNow) {
+		second.CommitterName != "Unknown" || !second.CommitterWhen.Equal(normalizedAt.Truncate(time.Millisecond)) {
 		t.Fatalf("second=%+v", second)
+	}
+}
+
+func TestGitLabCommitsRouteRetryReusesNormalizedAtForMissingTimestamps(t *testing.T) {
+	t.Parallel()
+	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 987654321, time.UTC)
+	collect := func() CompleteRouteBatch {
+		t.Helper()
+		doer := &gitLabCommitsDoer{t: t, responses: []gitLabCommitsResponse{
+			{body: gitLabRepositoryFixture},
+			{body: `[{"id":"sha-retry","message":null,"author_name":null,"authored_date":null,"committer_name":null,"committed_date":"invalid","parent_ids":[]}]`},
+		}}
+		batch, err := (GitLabCommitsRouteHandler{}).Collect(
+			context.Background(), nativeTestClaim("gitlab", "commits"),
+			providerfoundation.Credential{},
+			gitLabRepositoryClient(t, doer, "https://gitlab.example"), normalizedAt,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return batch
+	}
+
+	first := collect()
+	time.Sleep(time.Millisecond)
+	second := collect()
+	if first.Effects[0].ContentDigest != second.Effects[0].ContentDigest ||
+		!bytes.Equal(first.Effects[0].Rows[0], second.Effects[0].Rows[0]) {
+		t.Fatalf(
+			"retry drifted effect: first digest=%s row=%s second digest=%s row=%s",
+			first.Effects[0].ContentDigest, first.Effects[0].Rows[0],
+			second.Effects[0].ContentDigest, second.Effects[0].Rows[0],
+		)
+	}
+	var row gitCommitRow
+	if err := json.Unmarshal(first.Effects[0].Rows[0], &row); err != nil {
+		t.Fatal(err)
+	}
+	want := normalizedAt.UTC().Truncate(time.Millisecond)
+	if !row.AuthorWhen.Equal(want) || !row.CommitterWhen.Equal(want) ||
+		!row.LastSynced.Equal(want) {
+		t.Fatalf("fallback timestamps=%+v want occurrence instant %s", row, want)
+	}
+}
+
+func TestGitLabCommitsRouteUsesProjectPathBeforeAmbiguousName(t *testing.T) {
+	t.Parallel()
+	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	repoIDs := map[string]string{}
+	for _, group := range []string{"group-a", "group-b"} {
+		fullPath := group + "/widgets"
+		wantID, err := repositoryIdentity(fullPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doer := &gitLabCommitsDoer{t: t, responses: []gitLabCommitsResponse{
+			{body: `{"id":123,"name":"widgets","path":"` + fullPath + `","path_with_namespace":""}`},
+			{body: `[{"id":"sha-1","authored_date":"2026-07-20T09:00:00Z","committed_date":"2026-07-20T10:00:00Z","parent_ids":[]}]`},
+		}}
+		batch, err := (GitLabCommitsRouteHandler{}).Collect(
+			context.Background(), nativeTestClaim("gitlab", "commits"),
+			providerfoundation.Credential{},
+			gitLabRepositoryClient(t, doer, "https://gitlab.example"), normalizedAt,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := batch.Result["repo"]; got != fullPath {
+			t.Fatalf("repo=%v want path fallback %q", got, fullPath)
+		}
+		var row gitCommitRow
+		if err := json.Unmarshal(batch.Effects[0].Rows[0], &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.RepoID != wantID {
+			t.Fatalf("%s repo_id=%s want=%s", group, row.RepoID, wantID)
+		}
+		repoIDs[group] = row.RepoID
+	}
+	if repoIDs["group-a"] == repoIDs["group-b"] {
+		t.Fatalf("cross-group repositories collapsed to %s", repoIDs["group-a"])
 	}
 }
 

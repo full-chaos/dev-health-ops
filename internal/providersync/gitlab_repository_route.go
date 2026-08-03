@@ -53,10 +53,7 @@ func (GitLabRepositoryRouteHandler) Collect(
 	if err != nil || parsedProjectID < 1 || strconv.FormatInt(parsedProjectID, 10) != projectID {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
-	fullName := payload.PathWithNS
-	if fullName == "" {
-		fullName = payload.Name
-	}
+	fullName := gitLabProjectFullName(payload)
 	identity, err := repositoryIdentity(fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -147,3 +144,17 @@ func normalizedGitLabInstance(base *url.URL) (string, bool) {
 }
 
 var _ CompleteRouteHandler = GitLabRepositoryRouteHandler{}
+
+// gitLabProjectFullName mirrors providers/gitlab/code_client.py::_map_project:
+// GitLab's canonical namespaced path wins, then its path fallback, then the
+// display name. The path fallback is identity-bearing: two groups may contain
+// projects with the same display name and must never collapse to one repo_id.
+func gitLabProjectFullName(payload repositoryPayload) string {
+	if payload.PathWithNS != "" {
+		return payload.PathWithNS
+	}
+	if payload.Path != "" {
+		return payload.Path
+	}
+	return payload.Name
+}

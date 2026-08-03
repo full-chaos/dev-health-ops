@@ -59,6 +59,13 @@ func TestGenericOracleMatchesLivePythonForGitLabRepositoryRow(t *testing.T) {
 				"web_url": nil, "default_branch": "main",
 			},
 		}},
+		{ID: "path_fallback", Input: map[string]any{
+			"gitlab_url": "https://gitlab.example", "normalized_at": "2026-07-23T12:30:00Z",
+			"project": map[string]any{
+				"id": 123, "name": "api", "path": "group-a/api",
+				"path_with_namespace": "", "web_url": nil, "default_branch": "main",
+			},
+		}},
 	}
 	compareRowsAgainstPythonOracle(
 		t, "gitlab/repo-metadata/row", cases,

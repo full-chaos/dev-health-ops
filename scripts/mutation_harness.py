@@ -312,6 +312,25 @@ def _state_dir(root: Path) -> Path:
     return directory
 
 
+def _snapshot_dir(root: Path) -> Path:
+    """Return the snapshot directory without following a planted child link.
+
+    Checking only ``.mutation-harness`` is insufficient: an attacker can leave
+    that trusted directory in place and symlink its predictable ``snapshots``
+    child elsewhere. Both the run and recovery paths call this before their
+    first snapshot filesystem operation.
+    """
+
+    snapshots = _state_dir(root) / SNAPSHOT_DIRNAME
+    if snapshots.is_symlink():
+        raise HarnessError(
+            f"snapshot directory {snapshots} is a symlink. Snapshot bytes are "
+            "trusted recovery data, so following that link would read or write "
+            "outside the harness state directory. Remove it and re-run."
+        )
+    return snapshots
+
+
 def _read_state(root: Path) -> dict[str, Any] | None:
     path = _state_dir(root) / STATE_FILENAME
     # Deliberately NOT `if not path.is_file(): return None`. is_file() answers
@@ -818,6 +837,18 @@ def restore(root: Path, force: bool = False) -> str:
         # and die with nothing recording it, after which `verify` reports clean
         # with a mutation on disk -- worse than the state --force was invoked to
         # repair, and reachable through this tool's own escape hatch.
+        if live == _LOCK_HELD_BY_UNKNOWN:
+            lock_path = _state_dir(root) / LOCK_DIRNAME
+            raise HarnessError(
+                "--force refused: the lock holder is unknown because the lock "
+                "has no readable pid. This may be a live run between mkdir and "
+                "its pid write, so force cannot prove the lock stale and must "
+                "not evict it. Check that no mutation_harness.py run process is "
+                "active, then deliberately break the lock yourself and re-run "
+                "restore without --force:\n"
+                f"        rm -rf {shlex.quote(str(lock_path))}\n"
+                "        python3 scripts/mutation_harness.py restore"
+            ) from None
         if live is not None and live != _LOCK_HELD_BY_UNKNOWN:
             raise HarnessError(
                 f"--force refused: pid {live} is alive and holds the lock. Force "
@@ -894,7 +925,7 @@ def restore(root: Path, force: bool = False) -> str:
                 "filename; refusing to read it. Recover by hand, then clear the "
                 f"record with: {_accept_hint(relative)}"
             )
-        snapshot = _state_dir(root) / SNAPSHOT_DIRNAME / snapshot_name
+        snapshot = _snapshot_dir(root) / snapshot_name
         if not snapshot.is_file():
             raise HarnessError(
                 f"snapshot {snapshot} is missing, so {relative} cannot be restored "
@@ -1273,7 +1304,7 @@ def run_plan(
             raise HarnessError(f"--only names unknown mutations: {sorted(unknown)}")
         mutations = [mutation for mutation in mutations if mutation.identifier in only]
 
-    snapshot_dir = _state_dir(root) / SNAPSHOT_DIRNAME
+    snapshot_dir = _snapshot_dir(root)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     results: list[Result] = []
@@ -1655,8 +1686,9 @@ def main(argv: list[str] | None = None) -> int:
         "--force",
         action="store_true",
         help="restore when a lock was left by a DEAD run. It deliberately "
-        "refuses while a process with the recorded pid exists, so for a REUSED "
-        "pid remove the lock directory by hand and restore without this flag",
+        "refuses while a process with the recorded pid exists or the holder "
+        "cannot be identified, so for a REUSED or missing pid inspect the "
+        "holder, remove the lock directory by hand, and restore without this flag",
     )
     accept_parser = sub.add_parser(
         "accept",

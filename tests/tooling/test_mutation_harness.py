@@ -875,6 +875,27 @@ def test_restore_refuses_while_a_live_run_holds_the_lock(tree: Path) -> None:
     assert (tree / SOURCE_NAME).read_bytes() == original
 
 
+def test_restore_force_refuses_a_lock_whose_holder_is_unknown(tree: Path) -> None:
+    """Force cannot prove a pid-less lock stale during mkdir -> pid.
+
+    The lock owner may be a live run in the real gap between creating the lock
+    directory and recording its pid. Evicting that lock lets the run continue
+    after recovery clears its applied record, leaving an unrecorded mutation.
+    Unknown ownership therefore requires the deliberate manual lock break.
+    """
+
+    state = _stranded_record(tree, snapshot=True)
+    lock = state / "lock"
+    lock.mkdir()
+
+    with pytest.raises(HarnessError, match="holder is unknown"):
+        restore(tree, force=True)
+
+    assert DISABLED_GUARD in (tree / SOURCE_NAME).read_text(encoding="utf-8")
+    assert (state / "state.json").is_file()
+    assert lock.is_dir(), "--force must not evict a lock with an unknown holder"
+
+
 def _stranded_record(
     tree: Path,
     *,
@@ -1684,6 +1705,48 @@ def test_a_symlinked_state_directory_is_refused(tree: Path) -> None:
 
     with pytest.raises(HarnessError, match="is a symlink"):
         verify(tree)
+
+
+def test_a_symlinked_snapshot_directory_is_refused_before_run_io(tree: Path) -> None:
+    """A trusted state directory does not make its child path trusted.
+
+    Following a pre-created ``snapshots`` symlink writes the source snapshot
+    outside the state directory before the mutation run takes its lock.
+    """
+
+    state = tree / ".mutation-harness"
+    state.mkdir()
+    elsewhere = tree / "elsewhere"
+    elsewhere.mkdir()
+    (state / "snapshots").symlink_to(elsewhere)
+
+    plan = _plan(tree, [_mutation()])
+    with pytest.raises(HarnessError, match="snapshot directory.*symlink"):
+        run_plan(tree, plan, None, assert_all_killed=False)
+
+    assert list(elsewhere.iterdir()) == []
+    assert (tree / SOURCE_NAME).read_text(encoding="utf-8") == _source(GUARD)
+
+
+def test_restore_refuses_a_symlinked_snapshot_directory_before_io(
+    tree: Path,
+) -> None:
+    """Recovery must not trust snapshot bytes reached through a child symlink."""
+
+    state = _stranded_record(tree, snapshot=True)
+    snapshot = state / "snapshots" / "M1-x.snapshot"
+    elsewhere = tree / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / snapshot.name).write_bytes(snapshot.read_bytes())
+    snapshot.unlink()
+    snapshot.parent.rmdir()
+    snapshot.parent.symlink_to(elsewhere)
+
+    with pytest.raises(HarnessError, match="snapshot directory.*symlink"):
+        restore(tree)
+
+    assert DISABLED_GUARD in (tree / SOURCE_NAME).read_text(encoding="utf-8")
+    assert (state / "state.json").is_file()
 
 
 def test_restore_refuses_when_the_path_resolves_to_a_different_file(

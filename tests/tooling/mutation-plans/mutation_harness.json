@@ -349,6 +349,41 @@
           "-q"
         ]
       ]
+    },
+    {
+      "id": "H21",
+      "file": "scripts/mutation_harness.py",
+      "find": "        if live == _LOCK_HELD_BY_UNKNOWN:\n            lock_path = _state_dir(root) / LOCK_DIRNAME",
+      "replace": "        if False:\n            lock_path = _state_dir(root) / LOCK_DIRNAME",
+      "expect_occurrences": 1,
+      "rationale": "A pid-less lock may belong to a live run in the real mkdir-to-pid window. Force cannot prove that holder dead, so evicting it can clear the applied record and lock before the live run writes its mutation. The proof asserts the source remains mutated, the record remains, and the lock remains; this is a state transition guard, not a wording check.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_restore_force_refuses_a_lock_whose_holder_is_unknown",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H22",
+      "file": "scripts/mutation_harness.py",
+      "find": "    snapshots = _state_dir(root) / SNAPSHOT_DIRNAME\n    if snapshots.is_symlink():",
+      "replace": "    snapshots = _state_dir(root) / SNAPSHOT_DIRNAME\n    if False:",
+      "expect_occurrences": 1,
+      "rationale": "A trusted .mutation-harness directory does not make its predictable snapshots child trusted. Following a planted child symlink escapes the state boundary for both pre-mutation writes and recovery reads. The proofs exercise both directions and require refusal before snapshot IO.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_a_symlinked_snapshot_directory_is_refused_before_run_io",
+          "tests/tooling/test_mutation_harness.py::test_restore_refuses_a_symlinked_snapshot_directory_before_io",
+          "-q"
+        ]
+      ]
     }
   ]
 }

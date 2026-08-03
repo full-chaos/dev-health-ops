@@ -34,9 +34,11 @@ python3 scripts/mutation_harness.py run --plan <plan.json> --only M3,M4
 `verify` distinguishes three states, and the messages are different on purpose because the
 instructions are opposite: a mutation **leaked** from a dead run says repair; a **live** run
 holding the lock says wait; a lock with **no pid file** says neither — there is no pid to
-wait for and none to check, so it says break the stale lock. Confusing the first two cost
-real time; phrasing the third around a pid nobody has left the gate red behind advice no one
-could act on.
+wait for and none to check, so it says inspect for a live harness and deliberately break the
+lock yourself if none exists. `restore --force` refuses this unknown-holder state: the missing
+pid may be the real window between `mkdir` and the pid write, so force cannot prove the lock is
+stale. Confusing the first two cost real time; phrasing the third around a pid nobody has left
+the gate red behind advice no one could act on.
 
 ### When `restore` refuses: `accept`
 
@@ -186,14 +188,14 @@ python3 scripts/mutation_harness.py run \
   --plan tests/tooling/mutation-plans/mutation_harness.json --assert-all-killed
 ```
 
-**Twenty guards, twenty kills, zero `INVALID`** — measured on 2026-07-26 against this tree, not
+**Twenty-two guards, twenty-two kills, zero `INVALID`** — measured on 2026-08-02 against this tree, not
 claimed. Check the number against a real run rather than trusting this line: a previous version of
 this sentence said eleven while two of its anchors had drifted to match zero lines, so the run
 actually produced nine kills and two `INVALID`. A stale claim about mutation coverage is the same
 false confidence the tool exists to prevent, wearing the tool's own badge.
 
 The plan's `$limitation` field names what it does *not* cover — the record-before-apply ordering,
-the restored-byte digest comparison, the lock, the schema validators, the build/`INVALID` routing,
+the restored-byte digest comparison, lock acquisition, the schema validators, the build/`INVALID` routing,
 `STALE_DECLARATION` routing, and kill-site extraction are pinned by `test_mutation_harness.py`
 instead, and the declared `build` catches syntax and import errors only. A plan that looks complete
 is how a coverage gap survives, so the gaps are stated where the coverage is claimed.

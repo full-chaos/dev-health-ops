@@ -156,6 +156,7 @@ def test_brief_excludes_ungrounded_findings_blocks():
         "health_findings_truncated",
         "deficiency_findings",
         "deficiency_findings_truncated",
+        "deficiency_category_statuses",
     ):
         assert excluded_field not in brief
 

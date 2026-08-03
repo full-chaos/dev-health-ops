@@ -144,6 +144,10 @@ NARRATIVE_BRIEF_FIELD_POLICY: dict[str, NarrativeFieldDisposition] = {
     "health_findings_truncated": _EXCLUDED,
     "deficiency_findings": _EXCLUDED,
     "deficiency_findings_truncated": _EXCLUDED,
+    # Same posture as deficiency_findings above (per-category
+    # evaluated-vs-unevaluated bookkeeping, not narrative content) -- no
+    # validator grounds a claim against it either.
+    "deficiency_category_statuses": _EXCLUDED,
     # Producer-authored conflict summaries the narrative may need to
     # reflect faithfully.
     "conflicts": _INCLUDED,

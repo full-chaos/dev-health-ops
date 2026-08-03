@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import cast
 
 ROOT = Path(__file__).resolve().parents[4]
 SOURCE = ROOT / "src/dev_health_ops"
@@ -112,14 +113,61 @@ def _encode_instant(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _rows(
+    value: object, field: str, *, allow_none: bool = False
+) -> list[dict[str, object]]:
+    if value is None:
+        if allow_none:
+            return []
+        raise TypeError(f"{field} must be a list")
+    if not isinstance(value, list):
+        raise TypeError(f"{field} must be a list")
+    rows: list[dict[str, object]] = []
+    for index, row in enumerate(value):
+        if not isinstance(row, dict) or not all(isinstance(key, str) for key in row):
+            raise TypeError(f"{field}[{index}] must be an object with string keys")
+        rows.append(cast(dict[str, object], row))
+    return rows
+
+
+def _list(value: object, field: str) -> list[object]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise TypeError(f"{field} must be a list")
+    return value
+
+
+def _optional_mapping(value: object, field: str) -> dict[str, object] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise TypeError(f"{field} must be an object")
+    return cast(dict[str, object], value)
+
+
+def _optional_str(value: object, field: str) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    raise TypeError(f"{field} must be a string or null")
+
+
+def _integer(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field} must be an integer")
+    return value
+
+
 def _planned(case: dict[str, object]) -> list[dict[str, object]]:
     now = _instant(str(case["now"]))
     assert now is not None
     watermarks = {
         (str(row["source_id"]), str(row["dataset_key"])): _instant(str(row["at"]))
-        for row in (case.get("watermarks") or [])
+        for row in _rows(case.get("watermarks"), "watermarks", allow_none=True)
     }
-    overlap = int(case.get("watermark_overlap_seconds", 0))
+    overlap = _integer(
+        case.get("watermark_overlap_seconds", 0), "watermark_overlap_seconds"
+    )
 
     def watermark(
         _session: object, _org_id: str, source_id: str, dataset_key: str
@@ -127,8 +175,8 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
         value = watermarks.get((source_id, dataset_key))
         return value - timedelta(seconds=overlap) if value is not None else None
 
-    planner.get_watermark_with_overlap = watermark
-    planner._get_tier_backfill_days_cap = lambda *_args: case.get("tier_cap")
+    setattr(planner, "get_watermark_with_overlap", watermark)
+    setattr(planner, "_get_tier_backfill_days_cap", lambda *_args: case.get("tier_cap"))
     integration = SimpleNamespace(
         id=case["integration_id"],
         org_id=case["org_id"],
@@ -137,7 +185,9 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
         if case.get("integration_depth") is not None
         else {},
     )
-    sources = [SimpleNamespace(**source) for source in case["sources"]]
+    sources = [
+        SimpleNamespace(**source) for source in _rows(case["sources"], "sources")
+    ]
     plan_datasets = [
         SimpleNamespace(
             dataset_key=row["dataset_key"],
@@ -145,25 +195,24 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
             if row.get("initial_depth") is not None
             else {},
         )
-        for row in case["datasets"]
+        for row in _rows(case["datasets"], "datasets")
     ]
     request = planner.SyncPlanRequest(
         integration_id=str(case["integration_id"]),
         org_id=str(case["org_id"]),
         mode=str(case["mode"]),
         triggered_by="schedule",
-        before=_instant(case.get("before")),
+        before=_instant(_optional_str(case.get("before"), "before")),
     )
-    route = case.get("route")
+    route = _optional_mapping(case.get("route"), "route")
     if route is not None:
-        route = dict(route)
         config = SimpleNamespace(
             id="00000000-0000-4000-8000-000000009001",
             integration_id=case["integration_id"],
             org_id=case["org_id"],
             provider=case["provider"],
             source_id=route.get("source_id"),
-            sync_targets=list(route.get("sync_targets") or []),
+            sync_targets=_list(route.get("sync_targets"), "route.sync_targets"),
             sync_options={},
             planner_managed=False,
         )

@@ -14,8 +14,9 @@ DEV_HEALTH_GO_BUILD_OUTPUT=""
 DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
 
 usage() {
-  cat <<'EOF'
-Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|integration-vet|integration-coverage|integration|fast|all]
+  # Backticks in the literal help text document commands; they are not substitutions.
+  # shellcheck disable=SC2016
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|integration-vet|integration-coverage|integration|fast|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -27,7 +28,7 @@ Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|inte
          about cache state). Separate from `test` because that package
          executes real production Python files (src/dev_health_ops/**.py)
          at test time, which `//go:embed` cannot make part of the Go test
-         cache key -- `test`'s bare `go test ./...` can return a stale
+         cache key -- `test`'\''s bare `go test ./...` can return a stale
          cached PASS for a real change to one of those files. NOT an
          optimization opt-out: a run that skips this verb has not tested
          the oracles at all, so it MUST stay in `all` (and `fast`, since
@@ -42,7 +43,7 @@ Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|inte
          only -- it never fails the build on findings, by design. Included in
          `fast` and `all` because the report has no other delivery channel: the
          test that produces it uses t.Log, and `go test` without -v discards a
-         passing package's output.
+         passing package'\''s output.
   integration-vet
          Compile-check every package under the integration build tag, across
          the WHOLE tree. No Docker required. This is what would have caught a
@@ -55,7 +56,7 @@ Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|inte
          Fails if the denylist names a package discovery does not find, or if
          discovery finds nothing at all.
   integration
-         Discover and run EVERY integration-tagged package's suite against
+         Discover and run EVERY integration-tagged package'\''s suite against
          real containers, except the (small, justified) INTEGRATION_DENYLIST.
          Inclusion is the default; exclusion is the explicit, loud exception.
   fast   Run fmt, vet, test, live-python-oracles, build, contract,
@@ -63,8 +64,7 @@ Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|inte
          the grant advisory report.
   all    Run fmt, vet, test, race, live-python-oracles, build, contract,
          integration-vet, and integration-coverage checks, then publish
-         the grant advisory report (default).
-EOF
+         the grant advisory report (default).'
 }
 
 die() {

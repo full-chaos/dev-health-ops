@@ -232,17 +232,18 @@ func disjointHandlerSets(left, right map[string]struct{}) bool {
 func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string]providersync.CompleteRouteSwitches{
-		"none":            {},
-		"github":          {GithubRepoMetadata: true},
-		"gitlab":          {GitlabRepoMetadata: true},
-		"gitlab_commits":  {GitlabCommits: true},
-		"gitlab_stats":    {GitlabCommitStats: true},
-		"gitlab_cicd":     {GitlabCICD: true},
-		"gitlab_tests":    {GitlabTests: true},
-		"github_prs":      {GithubPRs: true},
-		"github_cicd":     {GithubCICD: true},
-		"github_security": {GithubSecurity: true},
-		"both":            {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
+		"none":             {},
+		"github":           {GithubRepoMetadata: true},
+		"gitlab":           {GitlabRepoMetadata: true},
+		"gitlab_commits":   {GitlabCommits: true},
+		"gitlab_stats":     {GitlabCommitStats: true},
+		"gitlab_cicd":      {GitlabCICD: true},
+		"gitlab_tests":     {GitlabTests: true},
+		"gitlab_incidents": {GitlabIncidents: true},
+		"github_prs":       {GithubPRs: true},
+		"github_cicd":      {GithubCICD: true},
+		"github_security":  {GithubSecurity: true},
+		"both":             {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -324,6 +325,12 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 			name: "gitlab tests",
 			cfg: config.Config{
 				Profile: "sync", WorkerGitlabTestsEnabled: true,
+			},
+		},
+		{
+			name: "gitlab incidents",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabIncidentsEnabled: true,
 			},
 		},
 		{
@@ -428,6 +435,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 		"gitlab_tests": {
 			cfg:  config.Config{WorkerGitlabTestsEnabled: true},
 			want: providersync.CompleteRouteSwitches{GitlabTests: true},
+		},
+		"gitlab_incidents": {
+			cfg:  config.Config{WorkerGitlabIncidentsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabIncidents: true},
 		},
 		"github_prs": {
 			cfg:  config.Config{WorkerGithubPRsEnabled: true},
@@ -718,6 +729,7 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 		"gitlab_commit_stats":  {WorkerGitlabCommitStatsEnabled: true},
 		"gitlab_cicd":          {WorkerGitlabCICDEnabled: true},
 		"gitlab_tests":         {WorkerGitlabTestsEnabled: true},
+		"gitlab_incidents":     {WorkerGitlabIncidentsEnabled: true},
 		"github_cicd":          {WorkerGithubCICDEnabled: true},
 		"github_commits":       {WorkerGithubCommitsEnabled: true},
 		"github_deployments":   {WorkerGithubDeploymentsEnabled: true},
@@ -867,5 +879,29 @@ func TestBuildProviderSyncHandlerConstructsGitLabCICDCapability(t *testing.T) {
 				t.Fatalf("redirect policy error=%v", redirectErr)
 			}
 		})
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsGitLabIncidentsCapability(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(
+		nil, providersync.CompleteRouteSwitches{GitlabIncidents: true},
+		nil, nil, nil, nil, nil, nil, slog.Default(),
+	)
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "gitlab", Dataset: "incidents",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := executor.Handler.(providersync.GitLabIncidentsRouteHandler); !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.GitLabIncidentsClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+	if _, ok := executor.Committer.Readback.(providersync.GitLabIncidentsClickHouseEffects); !ok {
+		t.Fatalf("executor readback=%T", executor.Committer.Readback)
 	}
 }

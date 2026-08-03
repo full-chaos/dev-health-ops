@@ -120,6 +120,8 @@ type Config struct {
 	// exclusive aliases for one complete GitLab TestOps writer.
 	WorkerGitlabCICDEnabled  bool
 	WorkerGitlabTestsEnabled bool
+	// WorkerGitlabIncidentsEnabled gates the canonical operational incident route.
+	WorkerGitlabIncidentsEnabled bool
 	// WorkerGithubPRsEnabled is the (github, prs) half of the two-key route
 	// gate (CHAOS-3122, following CHAOS-3123's precedent). The matrix marking
 	// the pair route_ready is the other half; neither alone moves traffic.
@@ -237,6 +239,10 @@ func Load(spec Spec) (Config, error) {
 		{
 			name:   "WORKER_GITLAB_TESTS_ENABLED",
 			target: &cfg.WorkerGitlabTestsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_INCIDENTS_ENABLED",
+			target: &cfg.WorkerGitlabIncidentsEnabled,
 		},
 		{
 			name:   "WORKER_GITHUB_PRS_ENABLED",
@@ -548,6 +554,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("worker_gitlab_commit_stats_enabled", c.WorkerGitlabCommitStatsEnabled),
 		slog.Bool("worker_gitlab_cicd_enabled", c.WorkerGitlabCICDEnabled),
 		slog.Bool("worker_gitlab_tests_enabled", c.WorkerGitlabTestsEnabled),
+		slog.Bool("worker_gitlab_incidents_enabled", c.WorkerGitlabIncidentsEnabled),
 		slog.Bool("worker_github_prs_enabled", c.WorkerGithubPRsEnabled),
 		slog.Bool("worker_github_commits_enabled", c.WorkerGithubCommitsEnabled),
 		slog.Bool("worker_github_security_enabled", c.WorkerGithubSecurityEnabled),

@@ -277,6 +277,11 @@ def _target_github_code_client() -> None:
 _GITHUB_PROCESSOR_SOURCE = _source("dev_health_ops/processors/github.py")
 
 
+class _OracleGitCommitStat:
+    def __init__(self, **values: Any) -> None:
+        self.__dict__.update(values)
+
+
 def _target_github_processor() -> None:
     """Stub processors/github.py's heavy, unrelated imports (CHAOS-3162).
 
@@ -340,7 +345,7 @@ def _target_github_processor() -> None:
                 (),
                 {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
             ),
-            "GitCommitStat": object,
+            "GitCommitStat": _OracleGitCommitStat,
             "GitPullRequest": object,
             "GitPullRequestReview": object,
             "Repo": object,

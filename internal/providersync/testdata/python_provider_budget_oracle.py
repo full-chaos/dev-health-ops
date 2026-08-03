@@ -89,6 +89,28 @@ def _github_cases(github: Any) -> list[dict[str, object]]:
     ]
 
 
+def _gitlab_cases(gitlab: Any) -> list[dict[str, object]]:
+    return [
+        {
+            "provider": "gitlab",
+            "dataset": "commits",
+            "span_days": span_days,
+            "flags": {},
+            "estimates": _render(
+                gitlab._dataset_estimates(
+                    dataset_key="commits",
+                    flags={},
+                    org_id="org",
+                    host="fixture.example",
+                    credential_fingerprint="fingerprint",
+                    span_days=span_days,
+                )
+            ),
+        }
+        for span_days in (1, 3)
+    ]
+
+
 def _jira_cases(jira: Any) -> list[dict[str, object]]:
     cases: list[dict[str, object]] = []
     for span_days in (1, 3):
@@ -141,6 +163,8 @@ def _provider_cases(provider: str, source: pathlib.Path) -> list[dict[str, objec
     module = _namespace(source)
     if provider == "github":
         return _github_cases(module)
+    if provider == "gitlab":
+        return _gitlab_cases(module)
     if provider == "linear":
         return _linear_cases(module)
     if provider == "jira":
@@ -176,16 +200,18 @@ def main() -> int:
         child_cases = _provider_cases(sys.argv[2], pathlib.Path(sys.argv[3]))
         json.dump(child_cases, sys.stdout, sort_keys=True, separators=(",", ":"))
         return 0
-    if len(sys.argv) != 5:
+    if len(sys.argv) != 6:
         return 2
 
     github = _provider_subprocess("github", pathlib.Path(sys.argv[1]))
-    linear = _provider_subprocess("linear", pathlib.Path(sys.argv[2]))
-    jira = _provider_subprocess("jira", pathlib.Path(sys.argv[3]))
-    launchdarkly = _provider_subprocess("launchdarkly", pathlib.Path(sys.argv[4]))
+    gitlab = _provider_subprocess("gitlab", pathlib.Path(sys.argv[2]))
+    linear = _provider_subprocess("linear", pathlib.Path(sys.argv[3]))
+    jira = _provider_subprocess("jira", pathlib.Path(sys.argv[4]))
+    launchdarkly = _provider_subprocess("launchdarkly", pathlib.Path(sys.argv[5]))
     cases: list[dict[str, object]] = []
     for span_days in (1, 3):
         cases.extend(case for case in github if case["span_days"] == span_days)
+        cases.extend(case for case in gitlab if case["span_days"] == span_days)
         cases.extend(case for case in linear if case["span_days"] == span_days)
         cases.extend(case for case in jira if case["span_days"] == span_days)
     cases.extend(launchdarkly)

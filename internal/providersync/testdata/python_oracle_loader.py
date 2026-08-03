@@ -35,12 +35,15 @@ _DATASETS_SOURCE = _source("dev_health_ops/sync/datasets.py")
 _USAGE_SOURCE = _source("dev_health_ops/providers/usage.py")
 _LAUNCHDARKLY_PROCESSOR_SOURCE = _source("dev_health_ops/processors/launchdarkly.py")
 _GITHUB_BUDGET_SOURCE = _source("dev_health_ops/providers/github/budget.py")
+_GITLAB_BUDGET_SOURCE = _source("dev_health_ops/providers/gitlab/budget.py")
 _LINEAR_BUDGET_SOURCE = _source("dev_health_ops/providers/linear/budget.py")
 _JIRA_BUDGET_SOURCE = _source("dev_health_ops/providers/jira/budget.py")
 _LAUNCHDARKLY_BUDGET_SOURCE = _source("dev_health_ops/providers/launchdarkly/budget.py")
 _DATASET_ADAPTERS_SOURCE = _source("dev_health_ops/processors/dataset_adapters.py")
 _BASE_GIT_SOURCE = _source("dev_health_ops/processors/base_git.py")
 _GITHUB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/github/code_client.py")
+_GITLAB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/gitlab/code_client.py")
+_GITLAB_COMMITS_SOURCE = _source("dev_health_ops/providers/gitlab/commits.py")
 _GITLAB_INSTANCE_SOURCE = _source("dev_health_ops/providers/gitlab/instance.py")
 _GITLAB_REPOSITORY_SOURCE = _source("dev_health_ops/providers/gitlab/repository.py")
 _GIT_MODEL_SOURCE = _source("dev_health_ops/models/git.py")
@@ -301,6 +304,49 @@ def _target_github_code_client() -> None:
     )
 
 
+def _target_gitlab_code_client() -> None:
+    """Stub unrelated transports while executing GitLab's live commit mapper."""
+    _install_module("httpx", {"Response": object, "AsyncBaseTransport": object})
+    _install_module(
+        "dev_health_ops.connectors.models",
+        {
+            "Repository": type(
+                "Repository",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            ),
+            "SecurityAlertData": type(
+                "SecurityAlertData",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            ),
+        },
+    )
+    _install_module(
+        "dev_health_ops.exceptions",
+        {
+            "APIException": Exception,
+            "NotFoundException": Exception,
+            "RateLimitException": Exception,
+        },
+    )
+    _install_module(
+        "dev_health_ops.providers._http",
+        {
+            "GITLAB_DIAGNOSTIC_HEADER_NAMES": (),
+            "InstrumentedRESTCore": object,
+            "gitlab_rest_base_url": lambda *_args, **_kwargs: "",
+        },
+    )
+    _install_module(
+        "dev_health_ops.providers.gitlab.ratelimit",
+        {
+            "build_gitlab_rate_limit_exception": _unsupported_dependency,
+            "classify_gitlab_status": _unsupported_dependency,
+        },
+    )
+
+
 _GITHUB_PROCESSOR_SOURCE = _source("dev_health_ops/processors/github.py")
 
 
@@ -522,6 +568,16 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         _GITHUB_CODE_CLIENT_SOURCE,
         _target_github_code_client,
     ),
+    _GITLAB_CODE_CLIENT_SOURCE: (
+        "dev_health_ops.providers.gitlab.code_client",
+        _GITLAB_CODE_CLIENT_SOURCE,
+        _target_gitlab_code_client,
+    ),
+    _GITLAB_COMMITS_SOURCE: (
+        "dev_health_ops.providers.gitlab.commits",
+        _GITLAB_COMMITS_SOURCE,
+        lambda: None,
+    ),
     _GITLAB_REPOSITORY_SOURCE: (
         "dev_health_ops.providers.gitlab.repository",
         _GITLAB_REPOSITORY_SOURCE,
@@ -555,6 +611,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
     _GITHUB_BUDGET_SOURCE: (
         "dev_health_ops.providers.github.budget",
         _GITHUB_BUDGET_SOURCE,
+        _target_budget,
+    ),
+    _GITLAB_BUDGET_SOURCE: (
+        "dev_health_ops.providers.gitlab.budget",
+        _GITLAB_BUDGET_SOURCE,
         _target_budget,
     ),
     _LINEAR_BUDGET_SOURCE: (

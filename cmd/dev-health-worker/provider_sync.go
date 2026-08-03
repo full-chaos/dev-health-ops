@@ -193,10 +193,10 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Eleven route-ready pairs can reach this closure today:
+			// Twelve route-ready pairs can reach this closure today:
 			// launchdarkly/feature-flags plus github/repo-metadata, cicd,
 			// commits, deployments, security, files, commit-stats, and blame,
-			// plus jira/incidents and gitlab/repo-metadata. Each
+			// plus jira/incidents, gitlab/repo-metadata, and gitlab/commits. Each
 			// has its own CompleteRouteHandler and effect sink. session.Claim
 			// is already known here — providerunit.Handler.Work only calls
 			// BuildExecutor after its own descriptor gate passed for THIS
@@ -238,6 +238,13 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitLabRepositoryRouteHandler{}
 				sink, readback = glSink, glSink
+			case session.Claim.Provider == "gitlab" &&
+				session.Claim.Dataset == "commits":
+				glCommitsSink := providersync.GitLabCommitsClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitLabCommitsRouteHandler{}
+				sink, readback = glCommitsSink, glCommitsSink
 			case session.Claim.Provider == "github" &&
 				session.Claim.Dataset == "prs":
 				ghPRSink := providersync.GitHubPullRequestClickHouseEffects{
@@ -506,6 +513,7 @@ func constructProviderSyncWorkerWithDependencies(
 func providerSyncWorkerEnabled(cfg config.Config) bool {
 	return cfg.WorkerLaunchDarklyFeatureFlagsEnabled || cfg.WorkerGithubRepoMetadataEnabled ||
 		cfg.WorkerGitlabRepoMetadataEnabled ||
+		cfg.WorkerGitlabCommitsEnabled ||
 		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubCICDEnabled ||
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
 		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||

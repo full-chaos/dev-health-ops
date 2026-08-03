@@ -166,6 +166,48 @@ for both the Python producer gate and Go worker. Every checked-in deployment
 keeps it false. This route-readiness change therefore transfers no live unit,
 does not activate a River scheduler path, and does not change migration 0066.
 
+## Implementation status for `(gitlab, cicd)`
+
+CHAOS-3352 adds the native D16 pipeline collector and effect implementation,
+but deliberately leaves this pair `route_ready: false`. The Python `cicd`
+producer and `gitlab/tests` own different columns on the same
+`ci_pipeline_runs` natural key. Because the table uses `ReplacingMergeTree`, a
+partial row from either independently committed unit replaces the other whole
+row; column ownership alone cannot prevent that exact-key overwrite.
+
+Two differential oracles cover distinct boundaries. The selection oracle
+executes the active Python pipeline producer plus its surrounding `started_at`
+upper-window filter and compares accepted run identities at exact source
+precision, including sub-millisecond counterexamples. The persisted-row oracle
+reflects the complete `CiPipelineRun` model and compares millisecond-aligned
+inputs at the `DateTime64(3)` storage boundary; it does not claim Python's
+in-memory microseconds equal the persisted representation. The route retains
+Python's intentional 1,000-pipeline window and reports when that bound is
+reached, but rejects any shorter traversal that exhausts its page allowance.
+The request-plan oracle separately executes both the Python estimator and
+actual GitLab usage resolver, pinning the `pipelines` / `rest_core` identity.
+
+The staged `ci_pipeline_runs` effect is an atomic ClickHouse batch with duplicate
+natural-key rejection and tenant-scoped `SELECT ... FINAL` recovery readback.
+Its integration fixture proves server rejection cannot leave a prefix of the
+batch visible, the same natural key remains isolated across organizations, and
+retrying an identical effect converges to one row.
+
+The active Python collector orders the remote list by `updated_at` but stops its
+descending scan on `created_at`. A sufficiently old-created pipeline updated
+recently can therefore appear before a still-in-window pipeline and trigger an
+early break that loses the latter. The Go parity layer intentionally does not
+silently redesign that accepted behavior; the source defect and eventual
+cross-runtime correction are tracked by CHAOS-3357. The related but distinct
+capped-newest backfill underfetch remains tracked by CHAOS-2587.
+
+Activation is blocked until the companion `gitlab/tests` port can emit the
+complete shared row and the two aliases can be enabled as one writer. The
+descriptor gate rejects this pair even if `WORKER_GITLAB_CICD_ENABLED=true`,
+and every checked-in deployment keeps that switch false. This implementation
+layer therefore transfers no live unit, does not activate a River scheduler
+path, and does not change migration 0066.
+
 ## Effect timestamp stabilization (applies to every complete route)
 
 `BuildEffectBatch` digests the serialized rows, so any wall-clock value inside

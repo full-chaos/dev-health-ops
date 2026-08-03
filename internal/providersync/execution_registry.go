@@ -44,6 +44,7 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"gitlab/repo-metadata":       ExecutorNativeGo,
 	"gitlab/commits":             ExecutorNativeGo,
 	"gitlab/commit-stats":        ExecutorNativeGo,
+	"gitlab/cicd":                ExecutorNativeGo,
 	"github/blame":               ExecutorNativeGo,
 	"github/tests":               ExecutorNativeGo,
 }
@@ -139,6 +140,8 @@ type CompleteRouteSwitches struct {
 	GitlabCommits bool
 	// GitlabCommitStats gates the isolated aggregate git_commit_stats writer.
 	GitlabCommitStats bool
+	// GitlabCICD gates the isolated Python-owned ci_pipeline_runs writer.
+	GitlabCICD bool
 	// GithubPRs gates (github, prs) only (CHAOS-3122/CHAOS-3123 follow-on).
 	// It must never gate github/pr-reviews or github/pr-comments: those two
 	// datasets share the "prs" legacy target and processor flag in Python
@@ -231,6 +234,13 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = []string{"git_commit_stats"}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GitlabCommitStats
+	case provider == "gitlab" && dataset == "cicd":
+		descriptor.Destinations = []string{"ci_pipeline_runs"}
+		// The isolated D16 producer parity is complete, but gitlab/tests owns
+		// other columns on this same ReplacingMergeTree natural key. A partial
+		// row from either unit replaces the other, so neither pair can route
+		// until the companion port emits one complete row.
+		descriptor.RouteEnabled = switches.GitlabCICD
 	case provider == "github" && dataset == "prs":
 		// GitHub has a native complete-route handler
 		// (GitHubPullRequestRouteHandler) and a git_pull_requests effect sink

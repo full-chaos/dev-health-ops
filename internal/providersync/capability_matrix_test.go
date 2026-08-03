@@ -139,13 +139,14 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		GitlabRepoMetadata: true,
 		GitlabCommits:      true,
 		GitlabCommitStats:  true,
+		GitlabCICD:         true,
 		GithubPRs:          true, GithubCICD: true, GithubCommits: true,
 		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 		GithubCommitStats: true,
 		GithubBlame:       true,
 		GithubTests:       true,
 	}
-	if reflect.TypeOf(all).NumField() != 17 {
+	if reflect.TypeOf(all).NumField() != 18 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -245,6 +246,23 @@ func TestGitLabCommitStatsRequiresItsOwnSwitch(t *testing.T) {
 	}
 }
 
+func TestGitLabCICDRequiresItsOwnSwitch(t *testing.T) {
+	t.Parallel()
+	off, ok := (CompleteRouteSwitches{GithubCICD: true}).Descriptor("gitlab", "cicd")
+	if !ok || off.RouteReady || off.RouteEnabled || off.Executor != ExecutorNativeGo {
+		t.Fatalf("gitlab/cicd with github switch descriptor=%+v ok=%v", off, ok)
+	}
+	on, ok := (CompleteRouteSwitches{GitlabCICD: true}).Descriptor("gitlab", "cicd")
+	if !ok || on.RouteReady || !on.RouteEnabled || on.Executor != ExecutorNativeGo ||
+		!slices.Equal(on.Destinations, []string{"ci_pipeline_runs"}) {
+		t.Fatalf("gitlab/cicd descriptor=%+v ok=%v", on, ok)
+	}
+	github, _ := (CompleteRouteSwitches{GitlabCICD: true}).Descriptor("github", "cicd")
+	if github.RouteEnabled {
+		t.Fatalf("gitlab switch opened github/cicd: %+v", github)
+	}
+}
+
 // TestGithubPRsSwitchAloneCannotOpenTheRoute pins codex's H1 finding: even
 // with its switch on, github/prs must stay RouteReady=false until
 // github/pr-reviews exists to own the three review-derived columns on the
@@ -329,6 +347,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"gitlab/repo-metadata":       GitLabRepositoryRouteHandler{},
 		"gitlab/commits":             GitLabCommitsRouteHandler{},
 		"gitlab/commit-stats":        GitLabCommitStatsRouteHandler{},
+		"gitlab/cicd":                GitLabCICDRouteHandler{},
 		"github/blame":               GitHubBlameRouteHandler{},
 		"github/tests":               GitHubTestsRouteHandler{},
 	}

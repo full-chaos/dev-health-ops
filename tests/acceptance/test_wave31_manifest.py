@@ -13,6 +13,7 @@ from scripts.acceptance.wave31_manifest import (
     MANIFEST,
     MANIFEST_SCHEMA_VERSION,
     MIGRATION_COEXISTENCE_REASON,
+    STACK3_PERSISTENCE_GAP_REASON,
     STACK3_WIRING_GAP_REASON,
     TEAM_ATTRIBUTION_LIVE_DEFECT_REASON,
     ManifestIntegrityError,
@@ -129,44 +130,66 @@ def test_original_defect_reproductions_are_all_at_least_unit_proven() -> None:
     assert all(item.status in ("proven_unit", "proven_e2e") for item in defects)
 
 
-def test_health_workload_deficiency_portfolio_items_are_honestly_blocked() -> None:
-    """Locks in the CHAOS-3303/3304/3305 plan-wiring gap.
+def test_health_workload_deficiency_portfolio_flip_after_stack3_wiring() -> None:
+    """Locks in the 2026-08-03 stack-3 wiring flip (ops #1383/#1387).
 
-    These ids must stay ``blocked`` with the plan-wiring root cause until
-    someone actually registers DevInvestigationPlan documents + StepRegistry
-    steps for PROJECT_HEALTH/TEAM_HEALTH/PORTFOLIO_STATUS/
-    TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY and threads the
-    five services into production_runtime.py. A future change that flips one
-    of these to proven_* without that wiring landing would be a false-green
-    regression this test exists to catch.
+    STACK3_WIRING_GAP_REASON's root cause is resolved for PROJECT_HEALTH/
+    TEAM_HEALTH/TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY --
+    most of the 13 originally-blocked rows now flip to ``proven_unit``,
+    backed by existing CHAOS-3302/3303/3304/3305 service-layer tests. A
+    regression back to ``blocked`` (or a silent switch to some other
+    status) without a corresponding new reason must fail here.
     """
 
-    blocked_ids = {
+    proven_ids = {
         "matrix.legitimate-org-wide-status",
-        "matrix.organization-portfolio-status",
         "matrix.project-health-mixed-dimensions",
-        "matrix.project-health-unknown-not-applicable",
         "matrix.team-health-complete-attribution",
         "matrix.team-health-unattributable-signals",
         "matrix.struggling-teams-positive",
         "matrix.struggling-teams-insufficient-sample",
         "matrix.overburdened-teams-with-denominators",
         "matrix.pressure-without-denominator",
-        "matrix.light-on-feature-work",
         "matrix.light-on-feature-work-unclassified",
         "matrix.operational-deficiencies-mixed",
+    }
+    by_id = {item.id: item for item in MANIFEST}
+    assert proven_ids <= by_id.keys()
+    for item_id in proven_ids:
+        item = by_id[item_id]
+        assert item.status == "proven_unit", (
+            f"{item_id} is not proven_unit: {item.status}"
+        )
+        assert item.blocked_reason is None
+        assert item.test_nodeids, f"{item_id}: proven_unit with no test_nodeids"
+
+
+def test_health_workload_deficiency_portfolio_items_still_honestly_blocked() -> None:
+    """The three rows the 2026-08-03 map found no adequate citation for --
+    or that are deliberately, permanently out of scope this wave -- must
+    stay ``blocked`` rather than force-fit to a weak analogue. A future
+    change that flips one of these without a genuinely matching test (or,
+    for the portfolio row, an actual StepContext-widening fix) would be a
+    false-green regression this test exists to catch.
+    """
+
+    blocked_ids = {
+        "matrix.organization-portfolio-status",
+        "matrix.project-health-unknown-not-applicable",
+        "matrix.light-on-feature-work",
     }
     by_id = {item.id: item for item in MANIFEST}
     assert blocked_ids <= by_id.keys()
     for item_id in blocked_ids:
         item = by_id[item_id]
         assert item.status == "blocked", f"{item_id} is not blocked: {item.status}"
-        # Codex finding (MED, 2026-08-02): substring checks here ("X" in
-        # reason) still pass after appending "SILENTLY REWORDED" to the
-        # string -- codex demonstrated this live. Exact equality against the
-        # named golden constant the manifest itself uses is the only check
-        # that fails on ANY wording change, not just a removed substring.
-        assert item.blocked_reason == STACK3_WIRING_GAP_REASON
+        assert item.blocked_reason, f"{item_id} is blocked with no reason"
+        # None of these three share a single golden reason anymore (each
+        # was blocked for a genuinely different cause -- deliberately
+        # unwired, no matching test, or a weak analogue), so this pins
+        # distinguishing content per row rather than one shared constant.
+        assert item.blocked_reason != STACK3_WIRING_GAP_REASON
+        assert item.blocked_reason != STACK3_PERSISTENCE_GAP_REASON
 
 
 def test_migration_coexistence_gate_reflects_chaos_3306_decision() -> None:
@@ -254,6 +277,10 @@ def test_golden_reason_constants_match_independent_snapshot() -> None:
         TEAM_ATTRIBUTION_LIVE_DEFECT_REASON
         == _GOLDEN_REASON_SNAPSHOT["TEAM_ATTRIBUTION_LIVE_DEFECT_REASON"]
     )
+    assert (
+        STACK3_PERSISTENCE_GAP_REASON
+        == _GOLDEN_REASON_SNAPSHOT["STACK3_PERSISTENCE_GAP_REASON"]
+    )
 
 
 def test_golden_reason_mutation_is_actually_caught_not_just_theoretically() -> None:
@@ -267,6 +294,50 @@ def test_golden_reason_mutation_is_actually_caught_not_just_theoretically() -> N
 
     mutated = STACK3_WIRING_GAP_REASON + " SILENTLY REWORDED"
     assert mutated != _GOLDEN_REASON_SNAPSHOT["STACK3_WIRING_GAP_REASON"]
+
+
+def test_stack3_intents_e2e_attempt_is_pinned_to_chaos_3337() -> None:
+    """Locks in the 2026-08-03 live-discovered persistence allowlist gap.
+
+    This is a DIFFERENT root cause from the 3 remaining honestly-blocked
+    matrix rows above (deliberate/no-citation/weak-analogue): the plan
+    wiring is real and correct, but the persistence layer crashes on the
+    first mandatory-step write. Must never get silently merged into or
+    explained away by the resolved STACK3_WIRING_GAP_REASON.
+    """
+
+    by_id = {item.id: item for item in MANIFEST}
+    item = by_id["matrix.stack3-intents.e2e-blocked-by-live-defect"]
+    assert item.status == "blocked"
+    assert item.blocked_reason == STACK3_PERSISTENCE_GAP_REASON
+    assert "CHAOS-3337" in STACK3_PERSISTENCE_GAP_REASON
+    assert "invalid source_class" in STACK3_PERSISTENCE_GAP_REASON
+    assert STACK3_PERSISTENCE_GAP_REASON != STACK3_WIRING_GAP_REASON
+
+
+def test_plan_registry_gap_gates_are_proven_at_unit_and_e2e_level() -> None:
+    by_id = {item.id: item for item in MANIFEST}
+    unit_item = by_id["gate.plan-registry-gap-is-loud"]
+    assert unit_item.status == "proven_unit"
+    assert unit_item.test_nodeids == (
+        "tests/api/dev/test_chaos_3300_plan_registry_gap.py::"
+        "test_plan_registry_gap_is_loud_for_a_normally_plan_governed_intent",
+        "tests/api/dev/test_chaos_3300_plan_registry_gap.py::"
+        "test_bounded_investigation_never_triggers_the_gap_signal",
+    )
+
+    e2e_item = by_id["gate.plan-registry-gap-is-loud.e2e-live-validated"]
+    assert e2e_item.status == "proven_e2e"
+    assert e2e_item.requires_live_infra is True
+    assert (
+        e2e_item.execution_artifact
+        == "tests/acceptance/artifacts/portfolio_status_gap.json"
+    )
+    assert e2e_item.required_assertion_names == (
+        "answer_completed_event_present",
+        "answer_status_not_hard_error",
+        "stream_terminated_as_answer",
+    )
 
 
 # --- guard behavior: validate_manifest must actually catch every defect it

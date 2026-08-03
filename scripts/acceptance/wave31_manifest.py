@@ -931,65 +931,129 @@ def _blocking_matrix_wired() -> tuple[ManifestItem, ...]:
 
 
 def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
-    """Blocking-matrix items whose services exist but are not runtime-wired.
+    """Blocking-matrix items for the CHAOS-3303/3304/3305 health/workload/
+    deficiency/portfolio services.
 
-    Root cause (all items below): ``CORE_PLANS_BY_INTENT`` in
-    ``investigation_plans/plan_documents.py`` covers only 6 of the 12
-    ``QuestionIntentID`` members. ``production_runtime.py`` passes that same
-    dict as the live ``plan_registry`` and never threads
-    ProjectHealthService/TeamHealthService/PortfolioStatusService/
-    TeamWorkloadService/OperationalDeficiencyService into
-    ``_ProductionPlanExecutorRuntime``.
-
-    This is a **ratified, sequenced deferral, not an unmet acceptance
-    criterion silently dropped**: CHAOS-3303's comment thread (comment
-    d0985e79-051d-4b6f-8833-6137e8511aec, 2026-08-02, "Policy ratification
-    (orchestrator)") explicitly defers "the stack-3 wiring work alongside
-    plan/step registry integration"; the wave handoff
-    (.remember/wave31-stageBC-handoff.md) records the same as
-    "Deferred-to-stack-3: plan/step wiring". The dedicated CHAOS-3297 stack-3
-    lane owns landing this once its own prerequisites (s2, flags) merge --
-    see CHAOS-3300 team-lead guidance 2026-08-02. These manifest rows exist
-    now precisely so re-running this generator once stack-3 lands requires
-    no manifest changes: only ``status``/``evidence`` on each row flips.
+    STATE AS OF 2026-08-03: the CHAOS-3297 stack-3 wiring landed (ops
+    #1383/#1387, merged to main) -- PROJECT_HEALTH/TEAM_HEALTH/
+    TEAM_WORKLOAD_BALANCE/OPERATIONAL_DEFICIENCY_INVENTORY are now real
+    ``plan_registry`` entries (``WAVE_3_1_PLANS_BY_INTENT``), so
+    STACK3_WIRING_GAP_REASON no longer applies to those four intents. Most
+    rows below flip to ``proven_unit``, backed by existing CHAOS-3303/3304/
+    3305/3302 service-layer tests -- unaffected by the separate, deeper
+    CHAOS-3337 persistence-layer defect a live attempt against these same
+    four intents found (see STACK3_PERSISTENCE_GAP_REASON and
+    matrix.stack3-intents.e2e-blocked-by-live-defect): ``proven_unit`` never
+    claimed live reachability, only that the service's own evaluation logic
+    is correct, and that claim is untouched by a bug in a different layer
+    (the orchestrator's persistence write path) these unit tests never
+    exercise. PORTFOLIO_STATUS stays deliberately, permanently unwired this
+    wave (wave_3_1_plans.py's own module docstring: a real StepContext
+    single-DevScope limitation, tracked on the CHAOS-3297 Linear issue) --
+    its row stays honestly blocked, not force-fit to a citation that does
+    not actually prove it.
     """
 
-    reason = STACK3_WIRING_GAP_REASON
     return (
         ManifestItem(
             id="matrix.legitimate-org-wide-status",
             category="blocking_matrix",
-            description="Legitimate organization-wide status.",
-            status="blocked",
-            blocked_reason=reason,
+            description=(
+                "Legitimate organization-wide status. Note: ENTITY_STATUS "
+                "was always a core-wired intent (one of the original 6 in "
+                "CORE_PLANS_BY_INTENT) -- this row was never actually "
+                "blocked by the stack-3 wiring gap the other 12 rows in "
+                "this function were; it is a manifest bookkeeping catch-up, "
+                "not a new proof."
+            ),
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3292_preflight_acceptance.py",),
+            content_markers=("test_a4_organization_wide_question_executes_normally",),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3292_preflight_acceptance.py::"
+                "test_a4_organization_wide_question_executes_normally",
+            ),
         ),
         ManifestItem(
             id="matrix.organization-portfolio-status",
             category="blocking_matrix",
             description="Organization portfolio status.",
             status="blocked",
-            blocked_reason=reason,
+            blocked_reason=(
+                "PORTFOLIO_STATUS is deliberately, not accidentally, "
+                "unwired this wave -- wave_3_1_plans.py's own module "
+                "docstring: PlanExecutor's StepContext carries exactly one "
+                "DevScope, but PortfolioStatusService.evaluate_portfolio "
+                "needs several project scopes at once, a real gap that "
+                "needs a StepContext-widening decision before this can be "
+                "wired (tracked on the CHAOS-3297 Linear issue). The "
+                "closest existing test, "
+                "test_chaos_3303_portfolio_status_service.py::"
+                "test_evaluate_portfolio_all_provisional_registry_reports_no_elevated_state, "
+                "is service-layer only and does not exercise the plan/"
+                "orchestrator path this row's claim needs -- not cited as "
+                "proof it would be overclaiming. The GAP itself being "
+                "handled honestly (loud, non-terminal fallback) is a "
+                "separate, already-proven claim -- see "
+                "gate.plan-registry-gap-is-loud and its e2e-live-validated "
+                "sibling."
+            ),
         ),
         ManifestItem(
             id="matrix.project-health-mixed-dimensions",
             category="blocking_matrix",
-            description="Project health with mixed dimension states.",
-            status="blocked",
-            blocked_reason=reason,
+            description=(
+                "Project health with mixed dimension states -- proven as "
+                "HEALTHY and UNKNOWN dimensions coexisting independently "
+                "in one profile, no leakage between them. Caveat: the "
+                "cited test's own docstring also mentions 'not_applicable', "
+                "but every dimension it actually asserts resolves to "
+                "HEALTHY or UNKNOWN, never DimensionState.NOT_APPLICABLE -- "
+                "this row's claim is scoped to what is actually asserted, "
+                "not the test's looser prose."
+            ),
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3303_health_profile_synthesis.py",),
+            content_markers=(
+                "test_mixed_profile_reports_complete_unknown_and_not_applicable_dimensions",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3303_health_profile_synthesis.py::"
+                "test_mixed_profile_reports_complete_unknown_and_not_applicable_dimensions",
+            ),
         ),
         ManifestItem(
             id="matrix.project-health-unknown-not-applicable",
             category="blocking_matrix",
             description=("Project health with unknown and not-applicable dimensions."),
             status="blocked",
-            blocked_reason=reason,
+            blocked_reason=(
+                "No PROJECT-scoped test asserts UNKNOWN and NOT_APPLICABLE "
+                "together -- the closest existing test, "
+                "test_chaos_3303_health_profile_synthesis.py::"
+                "test_team_profile_without_cohort_suppresses_every_applicable_rule, "
+                "proves this pair for a TEAM-scoped profile, not PROJECT. "
+                "Live e2e is separately blocked by CHAOS-3337 (see "
+                "STACK3_PERSISTENCE_GAP_REASON) and, for a literal PROJECT "
+                "subject, by this fixture profile's zero PROJECT-kind rows "
+                "(see positive-control.real-project-status). Closing this "
+                "needs either a new PROJECT-scoped unit test or both of "
+                "those infrastructure gaps closed."
+            ),
         ),
         ManifestItem(
             id="matrix.team-health-complete-attribution",
             category="blocking_matrix",
             description="Named team health with complete team attribution.",
-            status="blocked",
-            blocked_reason=reason,
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3303_team_health_service.py",),
+            content_markers=(
+                "test_evaluate_team_with_attribution_and_real_facts_reports_real_findings",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3303_team_health_service.py::"
+                "test_evaluate_team_with_attribution_and_real_facts_reports_real_findings",
+            ),
         ),
         ManifestItem(
             id="matrix.team-health-unattributable-signals",
@@ -998,8 +1062,20 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "Team health where repository/org signals are available "
                 "but cannot be attributed to the team."
             ),
-            status="blocked",
-            blocked_reason=reason,
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3303_team_health_service.py",),
+            content_markers=(
+                "test_evaluate_team_zero_attribution_suppresses_even_with_real_facts",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3303_team_health_service.py::"
+                "test_evaluate_team_zero_attribution_suppresses_even_with_real_facts",
+            ),
+            # Same test attack.team-attribution cites (proven_unit, its own
+            # row) -- legitimate dual-citation: that row's claim is about
+            # EXCLUSION from findings under zero attribution; this row's is
+            # about the resulting TEAM_HEALTH dimension-state outcome. One
+            # real scenario proves both angles.
         ),
         ManifestItem(
             id="matrix.struggling-teams-positive",
@@ -1008,8 +1084,15 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "'Are there any struggling teams?' with a valid sustained "
                 "multi-signal positive case."
             ),
-            status="blocked",
-            blocked_reason=reason,
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3302_health_rule_e2e_controls.py",),
+            content_markers=(
+                "test_positive_two_independent_at_risk_dimensions_qualify_team_needs_attention",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3302_health_rule_e2e_controls.py::"
+                "test_positive_two_independent_at_risk_dimensions_qualify_team_needs_attention",
+            ),
         ),
         ManifestItem(
             id="matrix.struggling-teams-insufficient-sample",
@@ -1018,8 +1101,13 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "The struggling-teams question with insufficient "
                 "sample/coverage and no unsupported label."
             ),
-            status="blocked",
-            blocked_reason=reason,
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3302_health_rule_e2e_controls.py",),
+            content_markers=("test_negative_cohort_below_minimum_suppresses_finding",),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3302_health_rule_e2e_controls.py::"
+                "test_negative_cohort_below_minimum_suppresses_finding",
+            ),
         ),
         ManifestItem(
             id="matrix.overburdened-teams-with-denominators",
@@ -1027,8 +1115,15 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
             description=(
                 "'Which teams are overburdened?' with approved denominators/baselines."
             ),
-            status="blocked",
-            blocked_reason=reason,
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3304_workload_health_rules.py",),
+            content_markers=(
+                "test_positive_two_independent_workload_dimensions_qualify",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
+                "test_positive_two_independent_workload_dimensions_qualify",
+            ),
         ),
         ManifestItem(
             id="matrix.pressure-without-denominator",
@@ -1037,8 +1132,15 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "High observed pressure without a valid denominator, "
                 "producing pressure/not-calculable language."
             ),
-            status="blocked",
-            blocked_reason=reason,
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3304_workload_health_rules.py",),
+            content_markers=(
+                "test_negative_review_request_load_without_denominator_is_not_calculable",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
+                "test_negative_review_request_load_without_denominator_is_not_calculable",
+            ),
         ),
         ManifestItem(
             id="matrix.light-on-feature-work",
@@ -1048,7 +1150,20 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "investment-classification coverage."
             ),
             status="blocked",
-            blocked_reason=reason,
+            blocked_reason=(
+                "The closest existing test, "
+                "test_chaos_3304_workload_observation_adapters.py::"
+                "test_investment_shift_stable_high_ktlo_mix_reports_neutral_measured_zero, "
+                "is adapter-layer only -- it proves the observation adapter "
+                "reports a neutral, measured-zero shift, not that the "
+                "health-rule layer produces the launch-level 'light on "
+                "feature work' finding this row claims. Citing it would "
+                "overclaim what a passing adapter test proves about the "
+                "rule/finding layer. Live e2e is separately blocked by "
+                "CHAOS-3337 (see STACK3_PERSISTENCE_GAP_REASON). Closing "
+                "this needs either a rule/finding-layer unit test or "
+                "CHAOS-3337 fixed plus a live re-run."
+            ),
         ),
         ManifestItem(
             id="matrix.light-on-feature-work-unclassified",
@@ -1057,8 +1172,15 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "The feature-work question with high unclassified work and "
                 "no unsupported conclusion."
             ),
-            status="blocked",
-            blocked_reason=reason,
+            status="proven_unit",
+            evidence=("tests/api/dev/test_chaos_3304_workload_health_rules.py",),
+            content_markers=(
+                "test_negative_investment_shift_insufficient_coverage_suppresses",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3304_workload_health_rules.py::"
+                "test_negative_investment_shift_insufficient_coverage_suppresses",
+            ),
         ),
         ManifestItem(
             id="matrix.operational-deficiencies-mixed",
@@ -1068,8 +1190,24 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
                 "applicable, not-applicable, stale, unavailable, and "
                 "unconfigured rules."
             ),
-            status="blocked",
-            blocked_reason=reason,
+            status="proven_unit",
+            evidence=(
+                "tests/api/dev/test_chaos_3305_operational_deficiency_service.py",
+            ),
+            content_markers=(
+                "test_data_integration_distinguishes_stale_missing_and_unconfigured",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3305_operational_deficiency_service.py::"
+                "test_data_integration_distinguishes_stale_missing_and_unconfigured",
+                "tests/api/dev/test_chaos_3305_operational_deficiency_service.py::"
+                "test_rule_driven_category_status_partial_when_launch_and_suppressed_coexist",
+            ),
+            # Jointly: the first proves the mixed stale/missing/unconfigured
+            # source-availability states this row's description names; the
+            # second proves the mixed applicable/not-applicable rule-status
+            # states (launch vs suppressed) coexisting. Neither alone covers
+            # the full "mixed ... rules" claim.
         ),
         ManifestItem(
             id="matrix.unwired-intent-safe-fallback",

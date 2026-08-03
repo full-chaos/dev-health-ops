@@ -41,6 +41,7 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"github/files":               ExecutorNativeGo,
 	"github/commit-stats":        ExecutorNativeGo,
 	"jira/incidents":             ExecutorNativeGo,
+	"gitlab/repo-metadata":       ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -122,10 +123,13 @@ type CompleteRouteSwitches struct {
 	JiraIncidents            bool
 	LaunchDarklyFeatureFlags bool
 	// GithubRepoMetadata gates (github, repo-metadata) only. It must never
-	// gate gitlab/repo-metadata: GitLab has fixture fetch code only and no
-	// CompleteRouteHandler, so it stays RouteReady=false regardless of this
-	// field (see Descriptor's separate gitlab case below).
+	// gate gitlab/repo-metadata, whose independently completed route has its
+	// own switch below.
 	GithubRepoMetadata bool
+	// GitlabRepoMetadata independently gates the native GitLab repository
+	// route. It intentionally does not share GithubRepoMetadata: the two pairs
+	// have different API and persisted-instance semantics.
+	GitlabRepoMetadata bool
 	// GithubPRs gates (github, prs) only (CHAOS-3122/CHAOS-3123 follow-on).
 	// It must never gate github/pr-reviews or github/pr-comments: those two
 	// datasets share the "prs" legacy target and processor flag in Python
@@ -201,11 +205,9 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubRepoMetadata
 	case provider == "gitlab" && dataset == "repo-metadata":
-		// GitLab has fixture fetch code only and no CompleteRouteHandler, so
-		// it stays behind the shadow-only stage. Do not fold this back into
-		// the github case above: doing so would make GithubRepoMetadata
-		// enable a route with no handler behind it.
 		descriptor.Destinations = []string{"repos"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabRepoMetadata
 	case provider == "github" && dataset == "prs":
 		// GitHub has a native complete-route handler
 		// (GitHubPullRequestRouteHandler) and a git_pull_requests effect sink

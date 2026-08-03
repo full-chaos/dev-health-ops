@@ -634,13 +634,13 @@
         "git"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": true,
       "route_dataset": "repo-metadata",
       "route_destinations": [
         "repos"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]

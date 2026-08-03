@@ -122,16 +122,34 @@ def test_github_repo_metadata_switch_is_the_second_required_key() -> None:
 
 
 def test_github_repo_metadata_switch_does_not_open_gitlab_repo_metadata() -> None:
-    """Mirrors the Go-side TestGithubRepoMetadataSwitchDoesNotOpenGitLab:
-    gitlab/repo-metadata shares the repo-metadata dataset name but has no
-    native handler and stays route_ready=false in the matrix, so turning on
-    the github switch must never widen gitlab's route open."""
+    """The two ready repository routes still require independent switches."""
 
     switches = ProviderUnitRouteSwitches.from_environment(
         {"WORKER_GITHUB_REPO_METADATA_ENABLED": "true"}
     )
-    assert not ProviderUnitRouteSwitches.is_route_ready("gitlab", "repo-metadata")
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "repo-metadata")
     assert not switches.routes_to_river("gitlab", "repo-metadata")
+
+
+def test_gitlab_repo_metadata_defaults_off_and_routes_independently() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert off.gitlab_repo_metadata is False
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "repo-metadata")
+    assert not off.routes_to_river("gitlab", "repo-metadata")
+
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITLAB_REPO_METADATA_ENABLED": "true"}
+    )
+    assert on.gitlab_repo_metadata is True
+    assert on.routes_to_river("gitlab", "repo-metadata")
+    assert not on.routes_to_river("github", "repo-metadata")
+
+
+def test_gitlab_repo_metadata_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITLAB_REPO_METADATA_ENABLED": "sometimes"}
+        )
 
 
 # ---------------------------------------------------------------------------

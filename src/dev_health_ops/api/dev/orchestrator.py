@@ -2235,11 +2235,40 @@ class DevOrchestrator:
         Usability reuses ``UNMEASURED_REQUIREMENT_STATES``, the closed set
         the plan executor already treats as "never actually measured", so
         this cannot drift into a second, parallel vocabulary for the same
-        question. ``available_unknown`` deliberately counts as available and
-        not stale, matching the state ranking the dimension adapters already
-        use (it outranks ``available_stale``); ``truncated`` counts as
-        unavailable because bounded, partial data cannot back a *complete*
-        claim.
+        question. ``truncated`` counts as unavailable because bounded,
+        partial data cannot back a *complete* claim.
+
+        ``available_unknown`` is grouped with ``available_stale``: the data
+        is real and countable, but a ``complete`` claim over it is refused
+        and the source is named in ``stale_required_sources`` so the
+        disclosure machinery reports it. An earlier revision let it fall
+        through to plain "available", citing the dimension adapters'
+        severity ranking (``available_unknown`` outranks
+        ``available_stale``) -- but that ranking is about *display* order,
+        not completeness eligibility, and the two are not interchangeable.
+
+        Every reachable producer of this state is a degradation, traced by
+        executing all five ``state_mapping`` functions over their full source
+        enums (CHAOS-3334 codex review, finding 2):
+
+        * ``status_result_state_to_requirement_state(DEGRADED)`` -- its own
+          docstring: "at least one contributing source is itself
+          unavailable". Reachable on the mandatory ``status_snapshot`` step.
+        * ``metric_data_state_to_requirement_state(PARTIAL)`` and
+          ``(INSUFFICIENT_EVIDENCE)`` -- reachable on the mandatory
+          ``registered_metric_query`` step.
+        * ``freshness_state_to_requirement_state(UNKNOWN)`` is the only
+          producer that would mean "healthy data, freshness merely unproven",
+          and it has **no callers anywhere in the repository** -- it cannot
+          put this state on a live observation today.
+
+        So no legitimately-healthy run reaches ``available_unknown`` on a
+        participating source, and blocking needs no split-by-cause. If
+        ``freshness_state_to_requirement_state`` is ever wired up, that
+        conclusion changes and the split becomes necessary --
+        ``test_available_unknown_has_no_healthy_producer`` fails the moment a
+        new producer appears, so the decision gets revisited rather than
+        silently inherited.
 
         Labels are ``source_class`` values -- short, stable, content-free,
         and disjoint from the tool-id labels the tool-result half emits, so
@@ -2268,7 +2297,10 @@ class DevOrchestrator:
                 if label not in seen:
                     unavailable.append(label)
                     seen.add(label)
-            elif observation.observed_state is SourceRequirementState.AVAILABLE_STALE:
+            elif observation.observed_state in {
+                SourceRequirementState.AVAILABLE_STALE,
+                SourceRequirementState.AVAILABLE_UNKNOWN,
+            }:
                 available_added += 1
                 if label not in seen:
                     stale.append(label)

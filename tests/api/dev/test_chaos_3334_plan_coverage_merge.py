@@ -23,24 +23,41 @@ asserted is the terminal an actual run reaches.
 
 from __future__ import annotations
 
+import ast
 import logging
+from collections.abc import Callable
 from copy import deepcopy
+from datetime import UTC, datetime
+from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
-from dev_health_ops.api.dev.contracts import AnswerStatus, DevError, ToolID
+from dev_health_ops.api.dev import orchestrator as orchestrator_module
+from dev_health_ops.api.dev.contracts import (
+    AnswerStatus,
+    DevError,
+    FreshnessState,
+    ToolID,
+)
 from dev_health_ops.api.dev.contracts_v2.base import SourceRequirementState
+from dev_health_ops.api.dev.data_health_service import DataHealthState
+from dev_health_ops.api.dev.investigation_plans import state_mapping
 from dev_health_ops.api.dev.investigation_plans.plan_documents import (
     CORE_PLANS_BY_INTENT,
 )
 from dev_health_ops.api.dev.investigation_plans.state_mapping import (
     UNMEASURED_REQUIREMENT_STATES,
 )
+from dev_health_ops.api.dev.metrics.definitions import METRIC_REGISTRY, MetricID
+from dev_health_ops.api.dev.metrics.service import MetricDataState, MetricQueryResult
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.scope_service import AuthorizedEntity, EntityKind
+from dev_health_ops.api.dev.status_change_service import StatusResultState
+from dev_health_ops.api.dev.work_graph_neighbors_service import WorkGraphResultState
 from dev_health_ops.llm.agent.contracts import (
     AgentFinalAnswer,
     AgentToolRequest,
@@ -76,6 +93,69 @@ QUESTION = "What's the status of the Ask Dev project?"
 #: a name to the adjacent kind noun, and a multi-word label does not resolve
 #: through "<name> issue" phrasing.
 NIGHTFALL_ISSUE = AuthorizedEntity(EntityKind.ISSUE, "issue-4242", "Nightfall")
+
+
+UNKNOWN_STATE = SourceRequirementState.AVAILABLE_UNKNOWN
+_FRESHNESS_MAPPER = "freshness_state_to_requirement_state"
+
+#: Every canonical-result-state mapper, paired with the enum it consumes.
+#: Enumerated rather than sampled: the producer trace below is only a closure
+#: argument if it covers all of them.
+_STATE_MAPPERS: tuple[
+    tuple[str, Callable[[Any], SourceRequirementState], type[Enum]], ...
+] = (
+    (
+        "data_health_state_to_requirement_state",
+        state_mapping.data_health_state_to_requirement_state,
+        DataHealthState,
+    ),
+    (
+        "status_result_state_to_requirement_state",
+        state_mapping.status_result_state_to_requirement_state,
+        StatusResultState,
+    ),
+    (
+        "metric_data_state_to_requirement_state",
+        state_mapping.metric_data_state_to_requirement_state,
+        MetricDataState,
+    ),
+    (
+        "work_graph_result_state_to_requirement_state",
+        state_mapping.work_graph_result_state_to_requirement_state,
+        WorkGraphResultState,
+    ),
+    (
+        "freshness_state_to_requirement_state",
+        state_mapping.freshness_state_to_requirement_state,
+        FreshnessState,
+    ),
+)
+
+_METRIC_WINDOW = datetime(2026, 8, 1, tzinfo=UTC)
+
+
+class _MetricRuntime(FakePlanExecutorRuntime):
+    """The shared double with ``query_metric`` returning a chosen data state."""
+
+    def __init__(self, state: MetricDataState) -> None:
+        super().__init__()
+        self._metric_state = state
+
+    async def query_metric(self, **kwargs: Any) -> MetricQueryResult:
+        self.query_metric_calls += 1
+        return MetricQueryResult(
+            definition=METRIC_REGISTRY[MetricID.ITEMS_COMPLETED],
+            state=self._metric_state,
+            freshness=FreshnessState.FRESH,
+            values=(),
+            coverage=1.0,
+            current_window_start=_METRIC_WINDOW,
+            current_window_end=_METRIC_WINDOW,
+            comparison_window_start=None,
+            comparison_window_end=None,
+            watermark=_METRIC_WINDOW,
+            source_refs=(),
+        )
 
 
 class WorkGraphFailingRuntime(FakePlanExecutorRuntime):
@@ -447,6 +527,168 @@ async def test_the_merged_coverage_survives_a_repair_turn() -> None:
     assert coverage.available_source_count == 2
 
 
+@pytest.mark.asyncio
+async def test_a_degraded_mandatory_status_snapshot_refuses_complete() -> None:
+    """Known degradation must not launder into COMPLETE (codex finding 2).
+
+    ``StatusResultState.DEGRADED`` maps to ``AVAILABLE_UNKNOWN``, and its own
+    mapping docstring says why: *at least one contributing source is itself
+    unavailable*. The facts that did return are real, so the state is not
+    "unmeasured" -- but an answer claiming **complete** over a knowingly
+    degraded required source is precisely the laundering this ticket exists
+    to stop.
+
+    Mutation kill site: moving ``AVAILABLE_UNKNOWN`` back to the available
+    fall-through fails this at the terminal assertion -- observed
+    ``RunState.COMPLETED`` with ``AnswerStatus.COMPLETE`` and coverage 3/3.
+    """
+
+    output = await _plan_run(
+        runtime=FakePlanExecutorRuntime(status_state=StatusResultState.DEGRADED),
+        status="complete",
+        script_id="chaos3334-degraded-status",
+    )
+
+    result = output.result
+    assert result.state is RunState.FAILED
+    assert result.error is not None
+    assert result.error.code == "answer_validation_failed"
+
+    recorder = output.recorder
+    assert isinstance(recorder, InvestigationRecorder)
+    status = [
+        observation
+        for observation in recorder.results[0].observations
+        if observation.source_class.value == STATUS_SOURCE_LABEL
+    ]
+    assert len(status) == 1
+    # Degraded, not unmeasured: the step still counted real facts.
+    assert status[0].observed_state is SourceRequirementState.AVAILABLE_UNKNOWN
+    assert status[0].observed_state not in UNMEASURED_REQUIREMENT_STATES
+
+
+@pytest.mark.parametrize(
+    ("metric_state", "expected_state", "expected_requirement_state"),
+    [
+        pytest.param(
+            MetricDataState.INSUFFICIENT_EVIDENCE,
+            RunState.FAILED,
+            SourceRequirementState.AVAILABLE_UNKNOWN,
+            id="insufficient-evidence-refused",
+        ),
+        pytest.param(
+            MetricDataState.VALUE,
+            RunState.COMPLETED,
+            SourceRequirementState.AVAILABLE_CURRENT,
+            id="value-still-completes",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_metric_insufficient_evidence_refuses_complete(
+    metric_state: MetricDataState,
+    expected_state: RunState,
+    expected_requirement_state: SourceRequirementState,
+) -> None:
+    """The second ``AVAILABLE_UNKNOWN`` producer, on a different plan.
+
+    ``metric.comparison.v1``'s mandatory ``registered_metric_query`` reaches
+    the same state through ``metric_data_state_to_requirement_state``, so
+    proving only the status-snapshot arm would leave a second live producer
+    unpinned on a plan the first test never touches.
+
+    The ``VALUE`` arm is the non-vacuity control: without it, a fix that
+    refused *every* metric-plan run would satisfy the first arm.
+    """
+
+    runtime = _MetricRuntime(metric_state)
+    output = await run_preflight_orchestrator(
+        question=(
+            "How does items completed compare to the previous period "
+            "for the Ask Dev project?"
+        ),
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script_id=f"chaos3334-metric-{metric_state.value}",
+        script=_script("complete"),
+        requested_metric_ids=["items_completed"],
+        recorder_factory=InvestigationRecorder,
+        plan_registry=CORE_PLANS_BY_INTENT,
+        plan_executor=executor_for(runtime),
+    )
+
+    # The metric step really ran, on the metric plan -- not the status plan.
+    assert runtime.query_metric_calls == 1
+    recorder = output.recorder
+    assert isinstance(recorder, InvestigationRecorder)
+    investigation = recorder.results[0]
+    assert investigation.plan_id == "metric.comparison.v1"
+    assert [
+        observation.observed_state for observation in investigation.observations
+    ] == [expected_requirement_state]
+    assert output.result.state is expected_state
+
+
+def test_available_unknown_has_no_healthy_producer() -> None:
+    """The trace behind choosing BLOCK over split-by-cause (codex finding 2).
+
+    Team-lead's ruling allowed splitting ``AVAILABLE_UNKNOWN`` by cause *if*
+    some legitimately-healthy run could produce it on a participating source.
+    Executing all five ``state_mapping`` functions over their full source
+    enums says none can:
+
+    * ``status_result_state_to_requirement_state``: ``degraded`` only
+    * ``metric_data_state_to_requirement_state``: ``partial`` and
+      ``insufficient_evidence`` only
+    * ``freshness_state_to_requirement_state``: ``unknown`` -- the one
+      "healthy data, freshness merely unproven" producer, and it has no
+      callers anywhere in the repository
+
+    so blocking needs no split. This test is what makes that conclusion
+    maintained rather than a one-time observation: a new producer, or the
+    freshness mapper being wired up, fails it and forces the split decision
+    to be re-made instead of silently inherited.
+    """
+
+    producers = {
+        name: sorted(member.value for member in enum if fn(member) is UNKNOWN_STATE)
+        for name, fn, enum in _STATE_MAPPERS
+    }
+    assert {name: values for name, values in producers.items() if values} == {
+        "status_result_state_to_requirement_state": ["degraded"],
+        "metric_data_state_to_requirement_state": [
+            "insufficient_evidence",
+            "partial",
+        ],
+        "freshness_state_to_requirement_state": ["unknown"],
+    }
+
+    # The freshness mapper is the only one whose AVAILABLE_UNKNOWN would mean
+    # "healthy", so its reachability is the whole basis for blocking. Assert
+    # it is still uncalled -- via the AST, not a text scan: this module's own
+    # docstrings name the function while explaining the decision, and a
+    # substring search counts that prose as a caller (it did, on the first
+    # attempt).
+    package = Path(orchestrator_module.__file__).parent
+    callers = []
+    for path in sorted(package.rglob("*.py")):
+        if path.name == "state_mapping.py":
+            continue
+        tree = ast.parse(path.read_text())
+        referenced = any(
+            (isinstance(node, ast.Name) and node.id == _FRESHNESS_MAPPER)
+            or (isinstance(node, ast.Attribute) and node.attr == _FRESHNESS_MAPPER)
+            for node in ast.walk(tree)
+        )
+        if referenced:
+            callers.append(path.relative_to(package).as_posix())
+    assert callers == [], (
+        "freshness_state_to_requirement_state now has callers; an "
+        "AVAILABLE_UNKNOWN that means 'healthy but unproven freshness' is "
+        "reachable, so _coverage_with_plan_sources must split the state by "
+        "cause instead of blocking it wholesale"
+    )
+
+
 def test_every_source_requirement_state_is_classified() -> None:
     """Totality over the closed vocabulary.
 
@@ -466,11 +708,13 @@ def test_every_source_requirement_state_is_classified() -> None:
     this test for the classification.
     """
 
-    stale_states = {SourceRequirementState.AVAILABLE_STALE}
-    available_states = {
-        SourceRequirementState.AVAILABLE_CURRENT,
+    stale_states = {
+        SourceRequirementState.AVAILABLE_STALE,
+        # CHAOS-3334 codex finding 2: grouped with stale, not available --
+        # every reachable producer is a degradation.
         SourceRequirementState.AVAILABLE_UNKNOWN,
     }
+    available_states = {SourceRequirementState.AVAILABLE_CURRENT}
     classified = UNMEASURED_REQUIREMENT_STATES | stale_states | available_states
     assert set(SourceRequirementState) == classified, (
         "a SourceRequirementState member is unclassified for coverage merging; "

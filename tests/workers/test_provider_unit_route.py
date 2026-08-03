@@ -173,6 +173,27 @@ def test_gitlab_commits_invalid_value_fails_closed() -> None:
         )
 
 
+def test_gitlab_commit_stats_defaults_off_and_routes_independently() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert off.gitlab_commit_stats is False
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "commit-stats")
+    assert not off.routes_to_river("gitlab", "commit-stats")
+
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITLAB_COMMIT_STATS_ENABLED": "true"}
+    )
+    assert on.gitlab_commit_stats is True
+    assert on.routes_to_river("gitlab", "commit-stats")
+    assert not on.routes_to_river("github", "commit-stats")
+
+
+def test_gitlab_commit_stats_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITLAB_COMMIT_STATS_ENABLED": "sometimes"}
+        )
+
+
 # ---------------------------------------------------------------------------
 # CHAOS-3122: the (github, prs) producer-side switch. Its Go counterpart is
 # config.Config.WorkerGithubPRsEnabled, read from the same

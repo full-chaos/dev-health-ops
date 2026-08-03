@@ -15,17 +15,41 @@ type GitHubCommitStatsClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
+type GitLabCommitStatsClickHouseEffects struct {
+	Conn  driver.Conn
+	Lease providerfoundation.LeaseGuard
+}
+
 func (sink GitHubCommitStatsClickHouseEffects) WriteEffect(
 	ctx context.Context,
 	claim Claim,
 	effect EffectBatch,
 ) error {
-	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "commit-stats" ||
+	return writeCommitStatsEffect(ctx, sink.Conn, sink.Lease, "github", claim, effect)
+}
+
+func (sink GitLabCommitStatsClickHouseEffects) WriteEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) error {
+	return writeCommitStatsEffect(ctx, sink.Conn, sink.Lease, "gitlab", claim, effect)
+}
+
+func writeCommitStatsEffect(
+	ctx context.Context,
+	conn driver.Conn,
+	lease providerfoundation.LeaseGuard,
+	provider string,
+	claim Claim,
+	effect EffectBatch,
+) error {
+	if ctx == nil || lease == nil || claim.Validate() != nil ||
+		claim.Provider != provider || claim.Dataset != "commit-stats" ||
 		effect.Destination != "git_commit_stats" {
 		return ErrInvalidConfiguration
 	}
-	if err := sink.Lease.Assert(ctx); err != nil {
+	if err := lease.Assert(ctx); err != nil {
 		return err
 	}
 	rows, err := decodeEffectRows[commitStatsRow](effect)
@@ -40,10 +64,10 @@ func (sink GitHubCommitStatsClickHouseEffects) WriteEffect(
 	if len(rows) == 0 {
 		return nil
 	}
-	if sink.Conn == nil {
+	if conn == nil {
 		return ErrInvalidConfiguration
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `
+	batch, err := conn.PrepareBatch(ctx, `
 INSERT INTO git_commit_stats (
   repo_id, commit_hash, file_path, additions, deletions, old_file_mode,
   new_file_mode, last_synced, org_id
@@ -60,7 +84,7 @@ INSERT INTO git_commit_stats (
 			return err
 		}
 	}
-	if err := sink.Lease.Assert(ctx); err != nil {
+	if err := lease.Assert(ctx); err != nil {
 		return err
 	}
 	return batch.Send()
@@ -71,12 +95,31 @@ func (sink GitHubCommitStatsClickHouseEffects) InspectEffect(
 	claim Claim,
 	effect EffectBatch,
 ) (EffectInspection, error) {
-	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "commit-stats" ||
+	return inspectCommitStatsEffect(ctx, sink.Conn, sink.Lease, "github", claim, effect)
+}
+
+func (sink GitLabCommitStatsClickHouseEffects) InspectEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) (EffectInspection, error) {
+	return inspectCommitStatsEffect(ctx, sink.Conn, sink.Lease, "gitlab", claim, effect)
+}
+
+func inspectCommitStatsEffect(
+	ctx context.Context,
+	conn driver.Conn,
+	lease providerfoundation.LeaseGuard,
+	provider string,
+	claim Claim,
+	effect EffectBatch,
+) (EffectInspection, error) {
+	if ctx == nil || lease == nil || claim.Validate() != nil ||
+		claim.Provider != provider || claim.Dataset != "commit-stats" ||
 		effect.Destination != "git_commit_stats" {
 		return EffectConflict, ErrInvalidConfiguration
 	}
-	if err := sink.Lease.Assert(ctx); err != nil {
+	if err := lease.Assert(ctx); err != nil {
 		return EffectConflict, err
 	}
 	expected, err := decodeEffectRows[commitStatsRow](effect)
@@ -91,12 +134,12 @@ func (sink GitHubCommitStatsClickHouseEffects) InspectEffect(
 	if len(expected) == 0 {
 		return EffectAbsent, nil
 	}
-	if sink.Conn == nil {
+	if conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
 	exact, absent := 0, 0
 	for _, row := range expected {
-		inspection, err := sink.inspectCommitStats(ctx, row)
+		inspection, err := inspectCommitStats(ctx, conn, row)
 		if err != nil {
 			return EffectConflict, err
 		}
@@ -119,11 +162,12 @@ func (sink GitHubCommitStatsClickHouseEffects) InspectEffect(
 	}
 }
 
-func (sink GitHubCommitStatsClickHouseEffects) inspectCommitStats(
+func inspectCommitStats(
 	ctx context.Context,
+	conn driver.Conn,
 	expected commitStatsRow,
 ) (EffectInspection, error) {
-	rows, err := sink.Conn.Query(ctx, `
+	rows, err := conn.Query(ctx, `
 SELECT org_id, commit_hash, file_path, additions, deletions, old_file_mode,
        new_file_mode, last_synced
 FROM git_commit_stats FINAL
@@ -172,3 +216,5 @@ func compareCommitStatsVersion(expected commitStatsRow, actual commitStatsVersio
 
 var _ EffectSink = GitHubCommitStatsClickHouseEffects{}
 var _ EffectReadback = GitHubCommitStatsClickHouseEffects{}
+var _ EffectSink = GitLabCommitStatsClickHouseEffects{}
+var _ EffectReadback = GitLabCommitStatsClickHouseEffects{}

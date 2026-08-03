@@ -44,6 +44,7 @@ _BASE_GIT_SOURCE = _source("dev_health_ops/processors/base_git.py")
 _GITHUB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/github/code_client.py")
 _GITLAB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/gitlab/code_client.py")
 _GITLAB_COMMITS_SOURCE = _source("dev_health_ops/providers/gitlab/commits.py")
+_GITLAB_COMMIT_STATS_SOURCE = _source("dev_health_ops/providers/gitlab/commit_stats.py")
 _GITLAB_INSTANCE_SOURCE = _source("dev_health_ops/providers/gitlab/instance.py")
 _GITLAB_REPOSITORY_SOURCE = _source("dev_health_ops/providers/gitlab/repository.py")
 _GIT_MODEL_SOURCE = _source("dev_health_ops/models/git.py")
@@ -576,6 +577,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
     _GITLAB_COMMITS_SOURCE: (
         "dev_health_ops.providers.gitlab.commits",
         _GITLAB_COMMITS_SOURCE,
+        lambda: None,
+    ),
+    _GITLAB_COMMIT_STATS_SOURCE: (
+        "dev_health_ops.providers.gitlab.commit_stats",
+        _GITLAB_COMMIT_STATS_SOURCE,
         lambda: None,
     ),
     _GITLAB_REPOSITORY_SOURCE: (

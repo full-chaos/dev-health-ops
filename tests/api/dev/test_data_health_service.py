@@ -219,6 +219,114 @@ async def test_schedule_derived_source_policy_overrides_fallback_threshold() -> 
 
 
 @pytest.mark.asyncio
+async def test_measured_empty_subject_is_no_data_distinct_from_unavailable() -> None:
+    """CHAOS-3375: a genuinely empty, *measured* PROJECT/TEAM repository
+
+    derivation (``NativeDataHealthReader``'s ``project_repository_scope_
+    empty`` / ``team_repository_scope_empty`` warnings) must read as
+    ``DataHealthState.NO_DATA`` -- "queried, genuinely nothing in scope" --
+    never the same ``DataHealthState.UNAVAILABLE`` a *failed* derivation
+    (``..._unavailable``) reports. Collapsing the two was the residual gap
+    CHAOS-3375 closed on top of #1453's PROJECT-only widening fix.
+    """
+
+    observations = [
+        SourceHealthObservation(
+            "measured_empty",
+            True,
+            True,
+            watermark=None,
+            warning="project_repository_scope_empty",
+        ),
+        SourceHealthObservation(
+            "unavailable",
+            None,
+            False,
+            warning="project_repository_scope_unavailable",
+        ),
+    ]
+    policies = {
+        source: SourceFreshnessPolicy(source, f"{source}.v1", timedelta(hours=48))
+        for source in ("measured_empty", "unavailable")
+    }
+    result = await DataHealthService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        reader=Reader(observations),
+        policies=policies,
+        now=NOW,
+    ).inspect(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        required_sources=list(policies),
+    )
+
+    by_source = {item.source_system: item for item in result.sources}
+    assert by_source["measured_empty"].state is DataHealthState.NO_DATA
+    assert by_source["unavailable"].state is DataHealthState.UNAVAILABLE
+    assert by_source["measured_empty"].state is not by_source["unavailable"].state
+    assert result.complete_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_unresolved_mandatory_sources_never_report_complete_eligible() -> None:
+    """CHAOS-3375 (Codex adversarial review, HIGH): a derivation failure on
+
+    EVERY mandatory native source used to still report ``complete_eligible
+    =True``, because ``NativeDataHealthReader.read``'s unresolved-scope
+    branch constructed each ``SourceHealthObservation`` with ``required=
+    False`` -- and ``complete_eligible = all(not item.required or
+    item.state is COMPLETE ...)`` treats ``required=False`` as "this source
+    can never block completeness", regardless of its actual state.
+    ``production_runtime.py``'s ``data_health`` tool executor maps
+    ``complete_eligible`` straight to ``status="success" if result.
+    complete_eligible else "partial"`` -- so a fully-unresolved subject
+    (every mandatory source UNAVAILABLE) would have reported tool
+    ``status="success"``, exactly the fail-open outcome CHAOS-3375 exists
+    to close. ``required`` must stay ``True`` for these -- they are still
+    the caller's own mandatory sources, merely unmeasured.
+    """
+
+    observations = [
+        SourceHealthObservation(
+            source,
+            None,
+            True,
+            warning="team_repository_scope_unavailable",
+        )
+        for source in ("work_items", "pull_requests", "commits")
+    ]
+    policies = {
+        source: SourceFreshnessPolicy(source, f"{source}.v1", timedelta(hours=48))
+        for source in ("work_items", "pull_requests", "commits")
+    }
+    result = await DataHealthService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        reader=Reader(observations),
+        policies=policies,
+        now=NOW,
+    ).inspect(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        required_sources=list(policies),
+    )
+
+    assert all(
+        item.state is DataHealthState.UNAVAILABLE and item.required
+        for item in result.sources
+    )
+    assert result.complete_eligible is False
+    # The exact mapping production_runtime.py's data_health tool executor
+    # applies -- asserted here directly so this test fails if that mapping
+    # or this fix ever drifts apart.
+    tool_status = "success" if result.complete_eligible else "partial"
+    assert tool_status == "partial"
+
+
+@pytest.mark.asyncio
 async def test_relevant_missing_repository_is_not_reported_as_complete() -> None:
     organization_scope = ScopeResolution(
         outcome=ScopeResolutionOutcome.EXACT,

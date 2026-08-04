@@ -97,10 +97,11 @@ from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .no_match_terminal import (
     attested_strings,
-    internal_token_leak,
+    internal_token_leak_field,
     named_subject_not_found_answer,
+    scrub_auxiliary_leaks,
     user_supplied_subject_label,
-    user_visible_strings,
+    user_visible_strings_by_field,
 )
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
@@ -787,25 +788,64 @@ class DevOrchestrator:
             # legitimately appears in copy (pinned by
             # test_no_match_terminal.py), so this must never fire on a
             # healthy run.
-            leaked_token = internal_token_leak(
-                user_visible_strings(answer=answer, error=error),
+            attested = attested_strings(answer, request.question)
+            # CHAOS-3377 leak-hardening: scrub model-authored AUXILIARY
+            # fields (warnings/conflicts/suggested_follow_up_questions/
+            # resolved_scope.warnings) BEFORE the fail-closed scan below --
+            # not after. `_deterministic_status_render` overwrites status/
+            # direct_summary/claims once a bound status_snapshot.v1 result
+            # exists, but leaves those four fully model-authored; a model
+            # that has seen a tool result's raw actual_completion.
+            # reason_codes can echo one into any of them, and without this
+            # the scan below would destroy the entire safe, deterministic
+            # answer over one leaked auxiliary sentence (live incident: run
+            # 22f97bee-0b8b-44a5-979f-78d7d7a80a82). direct_summary/claims
+            # are deliberately NOT touched here -- see
+            # `no_match_terminal.scrub_auxiliary_leaks`'s docstring for why
+            # a leak reaching those must still fail the whole terminal
+            # closed, exactly as before this scrub existed.
+            if answer is not None:
+                answer, scrubbed_fields = scrub_auxiliary_leaks(
+                    answer, attested=attested
+                )
+                if scrubbed_fields:
+                    logger.warning(
+                        "ask_dev.orchestrator.internal_token_leak_scrubbed "
+                        f"run_id={run_id} fields={','.join(scrubbed_fields)}",
+                        extra={"run_id": run_id, "fields": scrubbed_fields},
+                    )
+            leaked = internal_token_leak_field(
+                user_visible_strings_by_field(answer=answer, error=error),
                 # Provenance, so an authorized entity whose real name looks
                 # like an enum member does not fail its own answer. See
                 # `no_match_terminal.internal_token_leak`.
-                attested=attested_strings(answer, request.question),
+                attested=attested,
             )
-            if leaked_token is not None:
+            if leaked is not None:
+                leaked_field, leaked_token = leaked
+                terminal_kind = "answer" if answer is not None else "error"
+                # The token AND the field it was found in, embedded directly
+                # in the message string -- not only `extra=`. This dev
+                # stack's own LOG_JSON=0 configuration proved `extra=` keys
+                # are silently dropped by a bare-message StreamHandler (no
+                # formatter references them), which is exactly why the live
+                # incident's log line carried no diagnostic detail at all.
+                # Internal log only: never in `safe_message` or any
+                # persisted user-visible field.
                 logger.error(
-                    "ask_dev.orchestrator.internal_token_leak",
+                    "ask_dev.orchestrator.internal_token_leak "
+                    f"run_id={run_id} field={leaked_field} token={leaked_token} "
+                    f"terminal_kind={terminal_kind}",
                     extra={
                         "run_id": run_id,
                         "token": leaked_token,
-                        "terminal_kind": "answer" if answer is not None else "error",
+                        "field": leaked_field,
+                        "terminal_kind": terminal_kind,
                     },
                 )
                 ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL.labels(
                     token=leaked_token,
-                    terminal_kind="answer" if answer is not None else "error",
+                    terminal_kind=terminal_kind,
                 ).inc()
                 state = RunState.FAILED
                 answer = None

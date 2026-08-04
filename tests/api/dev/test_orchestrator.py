@@ -3378,6 +3378,254 @@ async def test_substantive_status_answer_is_never_refused_and_never_leaks_intern
     )
 
 
+# --- CHAOS-3377 leak-hardening: the second live-probe failure -------------
+#
+# A run past the acceptance test above (22f97bee-0b8b-44a5-979f-78d7d7a80a82)
+# still terminated as a bare internal_error even though status_snapshot.v1
+# bound a real actual_completion, so the §10 deterministic renderer had
+# already overwritten status/direct_summary/claims with safe content. Two
+# hypotheses were investigated:
+#
+# H1 (confirmed by code-path reading, reproduced below): the renderer never
+# touches warnings/conflicts/suggested_follow_up_questions -- a model echo
+# of the tool result's own raw reason codes into any of those three still
+# trips orchestrator.finish()'s fail-closed scan, which destroyed the WHOLE
+# terminal, safe deterministic core included.
+#
+# H2 (investigated against real production data -- org
+# 70d529e0-3c06-4597-8480-794fd02328b6's ClickHouse work_items.title --
+# which found genuine denylist-token collisions in real titles, e.g. a title
+# literally containing "model_not_found"): REFUTED for the deterministic
+# claims path specifically. status_answer_render.build_deterministic_status_
+# claims already only emits a blocker/required-child claim when its evidence
+# is present in canonical_evidence_ids, which guarantees attested_strings
+# (reading answer.evidence[].display_label) already covers any title text
+# that survives into a claim. Reproduced below as a regression lock, not a
+# fix -- it already passed.
+
+
+@pytest.mark.asyncio
+async def test_auxiliary_field_leak_is_scrubbed_not_the_whole_answer() -> None:
+    """H1, fail-to-pass. Before ``scrub_auxiliary_leaks`` was wired into
+    ``finish()``, this failed: ``result.state`` was ``RunState.FAILED`` and
+    ``result.answer`` was ``None`` -- the model's echoed reason code in
+    ``suggested_follow_up_questions`` destroyed the entire, otherwise-safe,
+    server-rendered answer. After the fix, the leaked follow-up question is
+    dropped and the deterministic core (status/direct_summary/claims,
+    entirely server-rendered once status_snapshot.v1 bound a real
+    actual_completion) survives untouched.
+    """
+
+    script_id = "chaos-3377-leak-hardening-auxiliary"
+    open_evidence_id = "ev1_" + hashlib.sha256(b"aux-open").hexdigest()[:40]
+    verdict_evidence_id = "ev1_" + hashlib.sha256(b"aux-verdict").hexdigest()[:40]
+
+    async def status_snapshot(_context: Any, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "metrics": [],
+                "evidence": [
+                    {
+                        **positive_fixtures()["dev_tool_result.v1"]["evidence"][0],
+                        "evidence_ref_id": eid,
+                    }
+                    for eid in (open_evidence_id, verdict_evidence_id)
+                ],
+                "actual_completion": {
+                    "state": "not_ready",
+                    "rule_id": "actual-completion",
+                    "rule_version": "actual-completion.v4",
+                    "reason_codes": ["required_child_incomplete"],
+                    "required_children": [
+                        {
+                            "fact_id": "issue:OPEN-1",
+                            "text": "Wire the presentation seam",
+                            "status": "in_progress",
+                            "evidence_ref_ids": [open_evidence_id],
+                        }
+                    ],
+                    "required_child_total": 5,
+                    "required_child_complete": 4,
+                    "display_truncated": False,
+                    "conflicts": [],
+                    "evidence_ref_ids": [verdict_evidence_id],
+                },
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+
+    fabricated_answer = _answer(script_id=script_id)
+    fabricated_answer.update(
+        {
+            "status": "complete",
+            "direct_summary": "This placeholder is overwritten by the deterministic renderer.",
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+            "warnings": [],
+            "conflicts": [],
+            # The leak: the model has seen the raw tool-result JSON and
+            # echoes its own reason code into a follow-up question -- a
+            # field the deterministic renderer never touches.
+            "suggested_follow_up_questions": [
+                "Why is required_child_incomplete still blocking this?"
+            ],
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(fabricated_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    answer = result.answer
+
+    # The deterministic core survived: it is the server-rendered content,
+    # not the model's fabricated placeholder.
+    assert answer.status is not AnswerStatus.REFUSED
+    assert "4" in answer.direct_summary and "5" in answer.direct_summary
+
+    # The leaked follow-up question is gone -- dropped, not translated into
+    # a WITHHELD_COPY placeholder (a suggested question with no real content
+    # left is worse than one fewer suggestion).
+    assert not answer.suggested_follow_up_questions
+
+    # And the raw token never reached the wire in any field.
+    all_text = " ".join(user_visible_strings(answer=answer))
+    assert "required_child_incomplete" not in all_text
+
+
+@pytest.mark.asyncio
+async def test_attested_real_title_collision_survives_in_a_blocker_claim() -> None:
+    """H2, reproduced against real production data -- REFUTED for the
+    deterministic claims path (regression lock, not a fix: this already
+    passed before this round's changes).
+
+    ``real_title`` is an actual ``work_items.title`` value for org
+    ``70d529e0-3c06-4597-8480-794fd02328b6``, read read-only from the dev
+    ClickHouse stack (never hand-invented), that happens to literally
+    contain the denylisted substring ``not_found``. It flows through the
+    same shape ``production_runtime.wire_required_child`` mints in
+    production: the required-child fact's own ``text`` AND its evidence's
+    ``display_label`` are the identical string, so ``attested_strings``
+    already exempts it once that evidence is canonical.
+    """
+
+    script_id = "chaos-3377-leak-hardening-attested-title"
+    real_title = (
+        "Fail fast on deterministic LLM errors (insufficient_quota / "
+        "invalid_api_key / model_not_found) with classified verdicts"
+    )
+    child_evidence_id = (
+        "ev1_" + hashlib.sha256(b"attested-title-child").hexdigest()[:40]
+    )
+    verdict_evidence_id = (
+        "ev1_" + hashlib.sha256(b"attested-title-verdict").hexdigest()[:40]
+    )
+
+    async def status_snapshot(_context: Any, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "metrics": [],
+                "evidence": [
+                    {
+                        **positive_fixtures()["dev_tool_result.v1"]["evidence"][0],
+                        "evidence_ref_id": child_evidence_id,
+                        "display_label": real_title,
+                    },
+                    {
+                        **positive_fixtures()["dev_tool_result.v1"]["evidence"][0],
+                        "evidence_ref_id": verdict_evidence_id,
+                    },
+                ],
+                "actual_completion": {
+                    "state": "not_ready",
+                    "rule_id": "actual-completion",
+                    "rule_version": "actual-completion.v4",
+                    "reason_codes": ["required_child_incomplete"],
+                    "required_children": [
+                        {
+                            "fact_id": "issue:REAL-TITLE-1",
+                            "text": real_title,
+                            "status": "in_progress",
+                            "evidence_ref_ids": [child_evidence_id],
+                        }
+                    ],
+                    "required_child_total": 3,
+                    "required_child_complete": 2,
+                    "display_truncated": False,
+                    "conflicts": [],
+                    "evidence_ref_ids": [verdict_evidence_id],
+                },
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+
+    fabricated_answer = _answer(script_id=script_id)
+    fabricated_answer.update(
+        {
+            "status": "complete",
+            "direct_summary": "This placeholder is overwritten by the deterministic renderer.",
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+            "warnings": [],
+            "conflicts": [],
+            "suggested_follow_up_questions": [],
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(fabricated_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    answer = result.answer
+    assert answer.status is not AnswerStatus.REFUSED
+    blocker_texts = " ".join(claim.text for claim in answer.claims)
+    assert real_title in blocker_texts
+
+
 @pytest.mark.asyncio
 async def test_genuine_refusal_with_no_grounding_still_completes_as_refused() -> None:
     """Negative control (do not regress CHAOS-3367/#1449 or the CHAOS-3377

@@ -5,7 +5,6 @@ content_type: landing
 owner: product-analytics
 source_of_truth:
   - current /ai product surfaces
-  - current /dev and app-shell Ask Dev surfaces
   - docs/user-guide/views/ai-impact.md
   - docs/user-guide/views/ai-review-load.md
   - docs/user-guide/views/ai-risk.md
@@ -67,76 +66,8 @@ Where the product exposes **Last computed**, persisted evidence, or an attributi
 
 AI Attribution remains a preview route and is intentionally omitted from the public navigation until it becomes a supported customer destination.
 
-## Ask Dev: window and full-page workspace
+## Investigate the result with Ask Dev
 
-When Ask Dev is enabled for your workspace, you can use the permanent **Ask
-Dev** action from authenticated product pages without leaving the page you are
-investigating. The window shows the proposed page context before you ask. Merely
-opening it does not send a question, page text, screenshot, or model request.
-Changing pages may change that proposed context, but it does not silently change
-the scope already committed to an active conversation.
+Ask Dev is the customer interaction layer powered by Context Fabric. It is available as a window from authenticated product pages and as the full-page `/dev` workspace when the organization is entitled and the feature is enabled.
 
-Choose **Workspace** to expand the same conversation into `/dev` for a longer
-investigation, history, evidence, and metric detail. The window and `/dev` share
-one conversation, scope, streamed run, answer, feedback record, and retention
-policy; expanding or minimizing does not run the question again. **Ask Dev about
-this** actions use an approved route and entity allowlist and show the inherited
-scope before submission. They never copy arbitrary page content or submit a
-suggested question automatically.
-
-An answer labels AI-generated content and keeps its as-of time, coverage,
-freshness, conflicts, unavailable sources, observed facts, inferences,
-recommendations, metrics, and evidence visible. A partial, degraded, refused, or
-insufficient-evidence answer is a result with limitations, not a silent success.
-Evidence links are authorized again when opened.
-
-Ask Dev is the customer interaction layer powered by Context Fabric. **Context
-Fabric Validation** is a separate platform-administrator diagnostic surface; an
-Ask Dev or organization-administrator entitlement does not grant access to it.
-
-## Ask Dev conversation history
-
-Ask Dev keeps a conversation only under your organization's retention policy.
-An organization administrator sets this policy for every conversation in the
-workspace; it is not a choice made when an individual conversation starts:
-
-- **Do not retain** removes the question, validated answer, run, tool audit,
-  and feedback after the request reaches a terminal state. A minimal deletion
-  record remains so operators can verify that cleanup occurred.
-- **30 days** keeps the conversation for 30 days after its latest activity.
-  Starting from a saved conversation extends that conversation's expiry from
-  the latest activity; it does not create a hidden longer-lived copy.
-
-You can delete a saved conversation before it expires. Dev Health does not use
-Ask Dev conversation content to train models. Disabling Ask Dev stops new use;
-it does not silently delete saved history, whose organization-set retention
-policy and delete controls continue to apply.
-
-The permanent window and `/dev` load this same saved transcript; opening the
-workspace does not copy or fork it. History contains the question and committed
-scope plus the validated answer and its safe run status. It does not expose
-internal prompts, provider messages, or tool payloads. Retrying a terminal run
-adds a new linked question/run/answer turn and leaves the earlier turn intact.
-If a browser stream disconnects while work is active, that run is cancelled and
-recorded as cancelled rather than silently continuing as a duplicate.
-
-## Ask Dev model availability
-
-Ask Dev starts a run only after the selected model connection has passed its
-current capability check. The check proves structured answers, one bounded tool
-request, continuation after the tool result, a final answer, timeouts,
-cancellation, and usage reporting. A completion-only model connection is not
-automatically suitable for Ask Dev.
-
-If a workspace-selected model is unsupported or no longer ready, Ask Dev shows
-a safe availability error and starts no model or tool work. The rejected
-submission may remain as a failed run record for audit and idempotent retry; it
-contains no raw provider response. Ask Dev does not silently send the question
-through a platform model. A workspace administrator can explicitly allow that
-fallback after reviewing the data-processing implications.
-
-Ask Dev answers contain opaque evidence references, not arbitrary source URLs.
-Opening evidence rechecks that the answer belongs to the signed-in user and
-organization, then reauthorizes the current repository and entity scope. A
-missing, unrelated, or no-longer-authorized reference appears as not found.
-Safe excerpts are limited to 64 KiB and are treated as untrusted source text.
+Use [Ask Dev and agent context](../ask-dev/index.md) for the shared window and workspace behavior, conversation retention, evidence handling, Context Fabric Validation, ACR, and MCP boundaries.

@@ -59,6 +59,10 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.providers.github.work_item_options import (
+    canonical_github_work_item_runtime_options,
+    snapshot_github_work_item_runtime_options,
+)
 from dev_health_ops.sync.canonical_incident_gate import (
     CanonicalIncidentFeatureDisabledError,
     is_canonical_incident_feature_enabled_async,
@@ -1293,6 +1297,8 @@ def _planner_dataset_options(
         and isinstance(mappings, dict)
     ):
         options["service_repository_mappings"] = mappings
+    if provider == "github" and dataset_key == "work-items":
+        options.update(canonical_github_work_item_runtime_options(parent_options))
     return options
 
 
@@ -1322,6 +1328,11 @@ async def _create_planner_managed_config(
     ``SyncConfiguration`` carries no credential column of its own, so there is
     exactly one place a credential attaches to sync work.
     """
+    if provider.lower() == "github":
+        parent_options = {
+            **parent_options,
+            **snapshot_github_work_item_runtime_options(parent_options),
+        }
     credential_uuid = uuid.UUID(credential_id) if credential_id else None
     integration = Integration(
         org_id=org_id,
@@ -2133,6 +2144,64 @@ async def update_sync_config(
         for key in cleared_keys:
             merged_options.pop(key, None)
         mutable_config.sync_options = merged_options
+    if (
+        str(getattr(config, "provider", "")).lower() == "github"
+        and (integration_id := getattr(config, "integration_id", None)) is not None
+    ):
+        current_options = dict(getattr(config, "sync_options") or {})
+        integration = await session.get(Integration, integration_id)
+        scoped_integration = (
+            integration
+            if integration is not None and str(integration.org_id) == org_id
+            else None
+        )
+        integration_options = (
+            dict(scoped_integration.config or {})
+            if scoped_integration is not None
+            else {}
+        )
+        dataset_result = await session.execute(
+            select(IntegrationDataset).where(
+                IntegrationDataset.org_id == org_id,
+                IntegrationDataset.integration_id == integration_id,
+                IntegrationDataset.dataset_key == "work-items",
+            )
+        )
+        work_items_dataset = dataset_result.scalar_one_or_none()
+        dataset_options = (
+            dict(work_items_dataset.options or {})
+            if work_items_dataset is not None
+            else {}
+        )
+
+        # A planner repair can durably snapshot legacy runtime defaults in the
+        # Integration and work-items dataset before the older
+        # SyncConfiguration row has those keys. Read every durable store before
+        # consulting the environment; explicit PATCH values win last. Dataset
+        # options outrank the integration for the same reason they do in the
+        # planner repair: they are the dataset-specific execution contract.
+        canonical_runtime_options = snapshot_github_work_item_runtime_options(
+            {
+                **current_options,
+                **integration_options,
+                **dataset_options,
+                **sync_options,
+            }
+        )
+        mutable_config.sync_options = {
+            **current_options,
+            **canonical_runtime_options,
+        }
+        if scoped_integration is not None:
+            scoped_integration.config = {
+                **integration_options,
+                **canonical_runtime_options,
+            }
+        if work_items_dataset is not None:
+            work_items_dataset.options = {
+                **dataset_options,
+                **canonical_runtime_options,
+            }
     if (
         str(getattr(config, "provider", "")).lower() == "pagerduty"
         and "service_repository_mappings" in sync_options

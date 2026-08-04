@@ -957,6 +957,206 @@ async def test_update_sync_config_changes_is_active(client):
 
 
 @pytest.mark.asyncio
+async def test_github_work_item_defaults_and_patch_controls_reach_stale_planned_claim(
+    client, session_maker, monkeypatch
+):
+    ac, _ = client
+    monkeypatch.setenv("GITHUB_FETCH_COMMENTS", "false")
+    monkeypatch.setenv("GITHUB_FETCH_MILESTONES", "false")
+    monkeypatch.setenv("GITHUB_COMMENTS_LIMIT", "7")
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "github-work-item-runtime-controls",
+            "provider": "github",
+            "sync_targets": ["work-items"],
+            "sync_options": {"owner": "acme"},
+            "repos": ["api"],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = uuid.UUID(create_resp.json()["parent"]["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        integration = await session.get(Integration, config.integration_id)
+        assert integration is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "work-items",
+                )
+            )
+        ).scalar_one()
+        assert config.sync_options["fetch_comments"] is False
+        assert config.sync_options["fetch_milestones"] is False
+        assert config.sync_options["comments_limit"] == 7
+        assert dataset.options["fetch_comments"] is False
+        assert dataset.options["fetch_milestones"] is False
+        assert dataset.options["comments_limit"] == 7
+
+        # Reproduce a legacy planner-managed config created before runtime
+        # options were durable. The planner repair must snapshot the current
+        # environment into the integration and dataset, while this older
+        # SyncConfiguration row remains sparse until a later PATCH.
+        runtime_keys = {"fetch_comments", "fetch_milestones", "comments_limit"}
+        config.sync_options = {
+            key: value
+            for key, value in config.sync_options.items()
+            if key not in runtime_keys
+        }
+        integration.config = {
+            key: value
+            for key, value in integration.config.items()
+            if key not in runtime_keys
+        }
+        dataset.options = {
+            **{
+                key: value
+                for key, value in dataset.options.items()
+                if key not in runtime_keys
+            },
+            "unrelated": "preserve",
+        }
+        await session.commit()
+
+    dispatch = MagicMock()
+    dispatch.apply_async.return_value = MagicMock(id="stale-unit-dispatch")
+    with patch("dev_health_ops.api.admin.routers.sync.dispatch_sync_run", dispatch):
+        trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+    assert trigger_resp.status_code == 202, trigger_resp.text
+    assert trigger_resp.json()["total_units"] == 1
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        integration = await session.get(Integration, config.integration_id)
+        assert integration is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "work-items",
+                )
+            )
+        ).scalar_one()
+        assert "fetch_comments" not in config.sync_options
+        assert "fetch_milestones" not in config.sync_options
+        assert "comments_limit" not in config.sync_options
+        assert integration.config["fetch_comments"] is False
+        assert integration.config["fetch_milestones"] is False
+        assert integration.config["comments_limit"] == 7
+        assert dataset.options["fetch_comments"] is False
+        assert dataset.options["fetch_milestones"] is False
+        assert dataset.options["comments_limit"] == 7
+
+        # Keep only the dataset snapshot before the unrelated PATCH. This pins
+        # that durable boundary independently instead of letting the identical
+        # integration copy mask a missing dataset-precedence clause.
+        integration.config = {
+            key: value
+            for key, value in integration.config.items()
+            if key not in runtime_keys
+        }
+        await session.commit()
+
+    monkeypatch.setenv("GITHUB_FETCH_COMMENTS", "true")
+    monkeypatch.setenv("GITHUB_FETCH_MILESTONES", "true")
+    monkeypatch.setenv("GITHUB_COMMENTS_LIMIT", "999")
+    unrelated_update_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"is_active": False},
+    )
+    assert unrelated_update_resp.status_code == 200, unrelated_update_resp.text
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        integration = await session.get(Integration, config.integration_id)
+        assert integration is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "work-items",
+                )
+            )
+        ).scalar_one()
+        for durable_options in (
+            config.sync_options,
+            integration.config,
+            dataset.options,
+        ):
+            assert durable_options["fetch_comments"] is False
+            assert durable_options["fetch_milestones"] is False
+            assert durable_options["comments_limit"] == 7
+
+        # The unrelated PATCH repaired all three stores. Keep only the
+        # integration snapshot before the partial runtime PATCH so its
+        # precedence is measured independently, while comments_limit=37 below
+        # still proves explicit PATCH values win over durable state.
+        config.sync_options = {
+            key: value
+            for key, value in config.sync_options.items()
+            if key not in runtime_keys
+        }
+        dataset.options = {
+            key: value
+            for key, value in dataset.options.items()
+            if key not in runtime_keys
+        }
+        await session.commit()
+
+    update_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={
+            "sync_options": {
+                "comments_limit": 37,
+            }
+        },
+    )
+    assert update_resp.status_code == 200, update_resp.text
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        integration = await session.get(Integration, config.integration_id)
+        assert integration is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "work-items",
+                )
+            )
+        ).scalar_one()
+        stale_units = (
+            (
+                await session.execute(
+                    select(SyncRunUnit).where(
+                        SyncRunUnit.integration_id == config.integration_id,
+                        SyncRunUnit.dataset_key == "work-items",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert len(stale_units) == 1
+    assert config.sync_options["fetch_comments"] is False
+    assert config.sync_options["fetch_milestones"] is False
+    assert config.sync_options["comments_limit"] == 37
+    for durable_options in (integration.config, dataset.options):
+        assert durable_options["fetch_comments"] is False
+        assert durable_options["fetch_milestones"] is False
+        assert durable_options["comments_limit"] == 37
+    assert dataset.options["unrelated"] == "preserve"
+
+
+@pytest.mark.asyncio
 async def test_update_pagerduty_service_mappings_propagates_to_services_dataset(
     client, session_maker
 ):

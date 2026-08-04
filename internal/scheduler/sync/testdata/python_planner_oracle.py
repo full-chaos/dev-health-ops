@@ -52,6 +52,8 @@ class _Placeholder:
 _package("dev_health_ops")
 _package("dev_health_ops.backfill")
 _package("dev_health_ops.credentials")
+_package("dev_health_ops.providers")
+_package("dev_health_ops.providers.github")
 _package("dev_health_ops.sync")
 _module(
     "dev_health_ops.backfill.chunker",
@@ -62,6 +64,11 @@ _module(
     AUTH_SOURCE_ENVIRONMENT="environment",
     AUTH_SOURCE_INTEGRATION_CREDENTIAL="integration_credential",
     credential_fingerprint=lambda *_args, **_kwargs: "unused",
+)
+_module(
+    "dev_health_ops.providers.utils",
+    env_flag=lambda _name, default: default,
+    env_int=lambda _name, default: default,
 )
 _module(
     "dev_health_ops.models",
@@ -81,6 +88,10 @@ _module(
     sync_datasets_require_canonical_incident_feature=lambda *_args, **_kwargs: False,
 )
 datasets = _load("dev_health_ops.sync.datasets", SOURCE / "sync/datasets.py")
+_load(
+    "dev_health_ops.providers.github.work_item_options",
+    SOURCE / "providers/github/work_item_options.py",
+)
 _module(
     "dev_health_ops.sync.dispatch_outbox",
     OUTBOX_KIND_DISCOVERY="reference_discovery",

@@ -65,6 +65,49 @@ func TestGitHubLinkPaginationReportsHardCapWithoutExtraCall(t *testing.T) {
 	}
 }
 
+func TestGitHubLinkPaginationStopsAtExplicitItemLimitWithoutExtraPage(t *testing.T) {
+	t.Parallel()
+	doer := &paginationDoer{responses: []paginationResponse{
+		{
+			body:    `[{"id":1},{"id":2}]`,
+			headers: http.Header{"Link": {`<https://api.github.com/items?page=2>; rel="next"`}},
+		},
+		{body: `[{"id":3}]`},
+	}}
+	client := paginationClient(t, "github", "https://api.github.com", doer)
+	result, err := CollectGitHubLinkPages(context.Background(), client, GitHubPageOptions{
+		Path: "/items", MaxPages: 2, MaxItems: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Pages != 1 || result.CapReached || len(result.Items) != 2 || len(doer.requests) != 1 {
+		t.Fatalf("result=%+v calls=%d", result, len(doer.requests))
+	}
+}
+
+func TestGitHubLinkPaginationReturnsSuccessfulPagesBeforeLaterFailure(t *testing.T) {
+	t.Parallel()
+	doer := &paginationDoer{responses: []paginationResponse{
+		{
+			body:    `[{"id":1}]`,
+			headers: http.Header{"Link": {`<https://api.github.com/items?page=2>; rel="next"`}},
+		},
+		{status: http.StatusBadGateway, body: `{"message":"down"}`},
+	}}
+	client := paginationClient(t, "github", "https://api.github.com", doer)
+	result, err := CollectGitHubLinkPages(context.Background(), client, GitHubPageOptions{
+		Path: "/items", MaxPages: 2,
+	})
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != ErrorTransient {
+		t.Fatalf("error=%v", err)
+	}
+	if result.Pages != 1 || result.CapReached || len(result.Items) != 1 || len(doer.requests) != 2 {
+		t.Fatalf("result=%+v calls=%d", result, len(doer.requests))
+	}
+}
+
 func TestGitHubLinkPaginationRejectsSameHostSchemeDowngradeBeforeRequest(t *testing.T) {
 	t.Parallel()
 	doer := &paginationDoer{responses: []paginationResponse{{
@@ -311,6 +354,7 @@ func paginationClient(t *testing.T, provider, base string, doer HTTPDoer) *HTTPC
 type paginationResponse struct {
 	body    string
 	headers http.Header
+	status  int
 }
 
 type paginationDoer struct {
@@ -329,8 +373,12 @@ func (d *paginationDoer) Do(request *http.Request) (*http.Response, error) {
 	}
 	d.requests = append(d.requests, request.Clone(request.Context()))
 	response := d.responses[len(d.requests)-1]
+	status := response.status
+	if status == 0 {
+		status = http.StatusOK
+	}
 	return &http.Response{
-		StatusCode: http.StatusOK,
+		StatusCode: status,
 		Header:     response.headers.Clone(),
 		Body:       io.NopCloser(strings.NewReader(response.body)),
 		Request:    request,

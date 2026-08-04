@@ -799,6 +799,34 @@ def test_dataset_option_overrides_integration_depth(db_session):
     assert abs((since - expected_start).total_seconds()) < 2
 
 
+def test_planner_durably_snapshots_legacy_github_work_item_env(db_session, monkeypatch):
+    monkeypatch.setenv("GITHUB_FETCH_COMMENTS", "false")
+    monkeypatch.setenv("GITHUB_FETCH_MILESTONES", "false")
+    monkeypatch.setenv("GITHUB_COMMENTS_LIMIT", "37")
+    integration = _create_integration(db_session, provider="github")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    dataset = _create_dataset(db_session, integration, "work-items")
+    dataset.options = {"unrelated": "preserve"}
+    db_session.flush()
+
+    plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    assert dataset.options == {
+        "unrelated": "preserve",
+        "fetch_comments": False,
+        "fetch_milestones": False,
+        "comments_limit": 37,
+    }
+
+
 def test_existing_watermark_incremental_unchanged(db_session):
     """With a watermark row, since_at == watermark (regression guard)."""
     integration = _create_integration(db_session)

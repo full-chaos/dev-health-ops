@@ -65,6 +65,16 @@ func TestPostgresLeaseClaimRenewRecoveryAndTerminalFence(t *testing.T) {
 	if err := repository.Assert(ctx, first, now.Add(89*time.Second)); err != nil {
 		t.Fatal(err)
 	}
+	// Dataset options are intentionally joined live when the already-planned
+	// unit is claimed. Admin PATCH can therefore replace a frozen provider
+	// control before first claim or expired-lease recovery without rewriting the
+	// unit row itself.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.integration_datasets
+SET options = '{"include_archived":false,"comments_limit":37}'::jsonb
+WHERE integration_id = $1 AND dataset_key = 'commits'`, firstIntegrationID); err != nil {
+		t.Fatal(err)
+	}
 
 	secondOwner := uuid.NewString()
 	second, err := repository.Claim(ctx, ClaimRequest{
@@ -74,7 +84,8 @@ func TestPostgresLeaseClaimRenewRecoveryAndTerminalFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !second.Recovered || second.Attempt != 2 || second.GenerationKey() != first.GenerationKey() {
+	if !second.Recovered || second.Attempt != 2 || second.GenerationKey() != first.GenerationKey() ||
+		second.DatasetOptions["comments_limit"] != float64(37) {
 		t.Fatalf("recovered claim=%+v", second)
 	}
 	if err := repository.Assert(ctx, first, now.Add(92*time.Second)); !errors.Is(err, ErrLeaseLost) {

@@ -38,6 +38,11 @@ type GitHubPageOptions struct {
 	Query    url.Values
 	DataKey  string
 	MaxPages int
+	// MaxItems stops after appending exactly this many items, even when the
+	// current response advertises rel=next. Zero leaves the item count
+	// unbounded. This models provider APIs whose public iterator contract has
+	// an item limit without spending one speculative request past the limit.
+	MaxItems int
 	// StopAt, when set, is evaluated for each item in page order (codex H1,
 	// CHAOS-3122). The first item it reports true for is excluded from
 	// Items, and pagination stops immediately without requesting a next
@@ -64,7 +69,8 @@ func CollectGitHubLinkPages(
 	options GitHubPageOptions,
 ) (PageCollection, error) {
 	if ctx == nil || client == nil || strings.TrimSpace(options.Path) == "" ||
-		options.MaxPages < 1 || options.MaxPages > maximumProviderPages {
+		options.MaxPages < 1 || options.MaxPages > maximumProviderPages ||
+		options.MaxItems < 0 {
 		return PageCollection{}, ErrPaginationInvalid
 	}
 	next, err := pageURL(options.Path, options.Query)
@@ -79,25 +85,28 @@ func CollectGitHubLinkPages(
 		}
 		response, err := client.Do(ctx, http.MethodGet, next, nil)
 		if err != nil {
-			return PageCollection{}, err
+			return result, err
 		}
 		items, decodeErr := decodePage(response, options.DataKey)
 		if decodeErr != nil {
-			return PageCollection{}, decodeErr
+			return result, decodeErr
 		}
 		result.Pages++
-		if options.StopAt == nil {
+		if options.StopAt == nil && options.MaxItems == 0 {
 			result.Items = append(result.Items, items...)
 			next = githubNextLink(response.Header.Get("Link"))
 			continue
 		}
 		crossedBoundary := false
 		for _, item := range items {
-			if options.StopAt(item) {
+			if options.StopAt != nil && options.StopAt(item) {
 				crossedBoundary = true
 				break
 			}
 			result.Items = append(result.Items, item)
+			if options.MaxItems > 0 && len(result.Items) >= options.MaxItems {
+				return result, nil
+			}
 		}
 		if crossedBoundary {
 			return result, nil

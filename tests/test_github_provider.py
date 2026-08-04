@@ -1300,6 +1300,59 @@ def test_work_item_options_ctx_overrides_env(mock_status_mapping, mock_identity)
     client.iter_pull_requests.assert_called_once()
 
 
+@patch.dict(os.environ, {"GITHUB_COMMENTS_LIMIT": "999"}, clear=True)
+def test_work_item_options_comments_limit_overrides_env(
+    mock_status_mapping, mock_identity
+):
+    from dev_health_ops.providers.base import WorkItemIngestionOptions
+
+    issue = _mock_issue(number=1)
+    client = _options_client()
+    client.iter_issues.return_value = [issue]
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(
+        repo="owner/repo",
+        window=IngestionWindow(),
+        work_item_options=WorkItemIngestionOptions(
+            include_pull_requests=False,
+            comments_limit=37,
+        ),
+    )
+
+    provider.ingest(ctx)
+
+    client.iter_issue_comments.assert_called_once_with(issue, limit=37)
+
+
+@patch.dict(
+    os.environ,
+    {
+        "GITHUB_FETCH_COMMENTS": "false",
+        "GITHUB_FETCH_MILESTONES": "false",
+        "GITHUB_COMMENTS_LIMIT": "7",
+    },
+    clear=True,
+)
+def test_github_work_item_runtime_snapshot_preserves_explicit_config() -> None:
+    from dev_health_ops.providers.github.work_item_options import (
+        snapshot_github_work_item_runtime_options,
+    )
+
+    assert snapshot_github_work_item_runtime_options(
+        {
+            "fetch_comments": True,
+            "fetch_milestones": True,
+            "comments_limit": 37,
+        }
+    ) == {
+        "fetch_comments": True,
+        "fetch_milestones": True,
+        "comments_limit": 37,
+    }
+
+
 # ============================================================================
 # active_until windowing — CHAOS-2573 (post-fetch enforcement, no limit drain)
 # ============================================================================

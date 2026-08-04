@@ -51,6 +51,7 @@ from .question_interpreter import INTERPRETER_VERSION
 __all__ = [
     "CLARIFICATION_COPY",
     "LEGACY_ONLY_QUESTION_INTENTS",
+    "NOT_FOUND_CLOSE_MATCHES_KEY",
     "PLAN_ID_BY_INTENT",
     "PREFLIGHT_OUTCOME_BY_RESOLUTION",
     "TERMINAL_STATE_BY_OUTCOME",
@@ -136,6 +137,10 @@ TERMINAL_STATE_BY_OUTCOME: Mapping[PublicOutcome, RunState] = {
 #: contract's total field allowlist does not constrain its ``direct_answer``.
 #: Server-owned copy is supplied here instead, and — like the canonical
 #: no-answer table — it names nothing about the subject.
+#: CHAOS-3366's key into ``CLARIFICATION_COPY``. Named rather than spelled as
+#: a literal at both ends so the preflight and this table cannot drift apart.
+NOT_FOUND_CLOSE_MATCHES_KEY = "not_found_close_matches"
+
 CLARIFICATION_COPY: Mapping[str, str] = {
     "ambiguous": (
         "More than one authorized entity matches the name in this question. "
@@ -144,6 +149,16 @@ CLARIFICATION_COPY: Mapping[str, str] = {
     "uninterpretable": (
         "This question could not be interpreted confidently. Please rephrase "
         "it, naming the project, repository, or team you are asking about."
+    ),
+    # CHAOS-3366, provisional. The PRD sentence names the kind and the name
+    # back ("I couldn't find an authorized <kind> named 'X'"); interpolating
+    # request text into this table is a change to how public copy is governed,
+    # which is CHAOS-3367's contract to make, not this one's. Static
+    # server-owned text until then -- it says the same thing and, like every
+    # other value here, names nothing the catalog did not confirm.
+    NOT_FOUND_CLOSE_MATCHES_KEY: (
+        "I could not find an authorized entity of that kind with that name. "
+        "Here are the closest matches -- please ask again naming one of them."
     ),
 }
 

@@ -375,6 +375,26 @@ class NativeDataHealthReader:
                 else:
                     subject_scope_measured_empty = True
                     subject_scope_warning = "team_repository_scope_empty"
+            elif scope.team_filters:
+                # Codex adversarial review (HIGH): a team-FILTERED scope with
+                # no repository-carrying entity at all -- the canonical shape
+                # is a team-filtered ORGANIZATION scope (``direct_scope=
+                # ORGANIZATION`` plus ``scope.team_ids``,
+                # ``ScopeResolutionOutcome.FILTERED``) -- fell through this
+                # whole ``if not repository_ids:`` block untouched (neither
+                # the PROJECT nor TEAM branch above matches an ORGANIZATION
+                # entity), leaving ``repository_ids`` empty and reaching the
+                # SAME ``empty(repository_ids) OR ...`` org-wide widening,
+                # unguarded -- the third entry point to the same class of
+                # bug. No data-health query applies a team filter (mirrors
+                # ``native_status_change._authorized_repository_ids``'s own
+                # documented ruling for the identical ORG+team-filter shape:
+                # deriving the full org repository set would silently widen
+                # a team-filtered request to every repository in the
+                # organization -- fail closed instead, never guess at an
+                # intersection).
+                subject_scope_unresolved = True
+                subject_scope_warning = "team_filtered_scope_unavailable"
         observations: list[SourceHealthObservation] = []
         for source in source_systems:
             if source == "acr":
@@ -388,12 +408,56 @@ class NativeDataHealthReader:
                 # ``configured=None`` maps to DataHealthState.UNAVAILABLE --
                 # an explicit "this could not be measured for this subject",
                 # never a silent organization-wide substitute.
+                #
+                # Codex adversarial review (HIGH): ``required`` must stay
+                # ``True`` here. This is still one of the caller's own
+                # mandatory ``NATIVE_EVIDENCE_SOURCES`` -- it merely failed
+                # to resolve -- never an optional source like ``acr`` above.
+                # ``DataHealthService.inspect``'s ``complete_eligible =
+                # all(not item.required or item.state is COMPLETE ...)``
+                # treats ``required=False`` as "this source can never block
+                # completeness", so a prior ``required=False`` here let a
+                # derivation failure on every mandatory source still report
+                # ``complete_eligible=True`` -- and
+                # ``production_runtime.py``'s ``data_health`` tool executor
+                # maps that straight to ``status="success"``, the exact
+                # fail-open outcome the whole CHAOS-3375 fix exists to
+                # prevent, just through ``required`` instead of the
+                # repository widening.
                 observations.append(
                     SourceHealthObservation(
                         source,
                         None,
-                        False,
+                        True,
                         warning=subject_scope_warning,
+                    )
+                )
+                continue
+            if source == "incidents" and repository_ids:
+                # Codex adversarial review (MEDIUM): ``operational_incidents``
+                # carries no ``repo_id`` column of its own
+                # (``_SOURCE_TABLES["incidents"]``'s ``repo_column`` is
+                # ``None``), so ``_watermark``'s ``repo_filter`` is
+                # unconditionally ``""`` for it -- it reads every
+                # organization incident regardless of ``repository_ids``.
+                # Correct for a genuine org-wide request (``repository_ids``
+                # empty, no PROJECT/TEAM/REPOSITORY narrowing); silently
+                # WRONG for any narrower-than-org scope reaching this point
+                # with a non-empty ``repository_ids`` (a REPOSITORY-direct
+                # scope, or a resolved PROJECT/TEAM subject): an unrelated
+                # repository's or team's incident would drive THIS subject's
+                # STALE/NO_DATA classification. Report unavailable rather
+                # than a confidently wrongly-scoped answer -- there is no
+                # repository-bearing incident relationship this reader can
+                # join through today (unlike ``native_evidence.py``'s own
+                # incidents spec, which joins ``work_graph_deployment_
+                # incident_edges`` for exactly this reason).
+                observations.append(
+                    SourceHealthObservation(
+                        source,
+                        None,
+                        True,
+                        warning="incident_repository_scope_unavailable",
                     )
                 )
                 continue

@@ -42,13 +42,18 @@ from typing import Any
 import pytest
 
 from dev_health_ops.api.dev import data_health_service
-from dev_health_ops.api.dev.data_health_service import NativeDataHealthReader
+from dev_health_ops.api.dev.data_health_service import (
+    DataHealthService,
+    NativeDataHealthReader,
+)
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
     EntityKind,
     ResolvedTimeRange,
     ScopeResolution,
     ScopeResolutionOutcome,
+    ScopeResolveRequest,
+    TimeRangeRequest,
 )
 
 NOW = datetime(2026, 8, 4, tzinfo=UTC)
@@ -125,6 +130,40 @@ def _repository_resolution() -> ScopeResolution:
             ),
         ),
         team_filters=(),
+        candidates=(),
+        time_range=_time_range(),
+    )
+
+
+def _organization_resolution() -> ScopeResolution:
+    """A plain, un-filtered ORGANIZATION scope: the genuine org-wide case
+
+    the ``empty(repository_ids) OR ...`` arm exists to serve, distinct from
+    the team-FILTERED shape below.
+    """
+
+    return ScopeResolution(
+        outcome=ScopeResolutionOutcome.EXACT,
+        entities=(AuthorizedEntity(EntityKind.ORGANIZATION, ORG_ID, "Org"),),
+        team_filters=(),
+        candidates=(),
+        time_range=_time_range(),
+    )
+
+
+def _organization_team_filtered_resolution() -> ScopeResolution:
+    """A team-FILTERED organization scope, in the shape the resolver
+
+    produces for ``direct_scope=ORGANIZATION`` plus ``scope.team_ids``
+    (``ScopeResolutionService.resolve``'s ``FILTERED`` outcome): the
+    ORGANIZATION entity carries no repository dimension, and the team lives
+    only in ``team_filters``, never in ``entities``.
+    """
+
+    return ScopeResolution(
+        outcome=ScopeResolutionOutcome.FILTERED,
+        entities=(AuthorizedEntity(EntityKind.ORGANIZATION, ORG_ID, "Org"),),
+        team_filters=(AuthorizedEntity(EntityKind.TEAM, "team-a", "Team A", None),),
         candidates=(),
         time_range=_time_range(),
     )
@@ -216,6 +255,77 @@ async def test_project_data_health_is_bound_to_the_projects_repositories(
     assert not client.org_wide_enumerated
     assert observations[0].relevant_repository_ids == (PROJECT_REPOSITORY_ID,)
     assert UNRELATED_REPOSITORY_ID not in observations[0].relevant_repository_ids
+
+
+@pytest.mark.asyncio
+async def test_incidents_reports_unavailable_not_org_wide_for_a_resolved_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex adversarial review (MEDIUM): every other
+
+    ``NATIVE_EVIDENCE_SOURCES`` member has a ``repo_id`` column
+    (``_SOURCE_TABLES``) that ``_watermark`` can filter by, but
+    ``operational_incidents`` (source ``"incidents"``) does not -- its
+    ``repo_filter`` is unconditionally ``""``, so even with the project's
+    repositories correctly derived, the incidents watermark query would
+    read every organization incident. Assert it reports unavailable
+    instead, while every repo-bearing source in the same read is correctly
+    scoped -- covering all of ``NATIVE_EVIDENCE_SOURCES``, not only
+    ``work_items``.
+    """
+
+    from dev_health_ops.api.dev.data_health_service import NATIVE_EVIDENCE_SOURCES
+
+    client = _FakeClient(derived=[PROJECT_REPOSITORY_ID])
+    _install(monkeypatch, client)
+
+    observations = await NativeDataHealthReader(object(), None).read(
+        org_id=ORG_ID,
+        scope=_project_resolution(),
+        source_systems=list(NATIVE_EVIDENCE_SOURCES),
+    )
+    by_source = {item.source_system: item for item in observations}
+
+    assert not client.org_wide_enumerated
+    assert by_source["incidents"].configured is None
+    assert by_source["incidents"].required is True
+    assert by_source["incidents"].warning == "incident_repository_scope_unavailable"
+    for source in NATIVE_EVIDENCE_SOURCES:
+        if source == "incidents":
+            continue
+        assert by_source[source].warning != "incident_repository_scope_unavailable"
+        assert by_source[source].relevant_repository_ids == (PROJECT_REPOSITORY_ID,)
+    # Every repo-bearing source's watermark call was scoped to the
+    # project's own repositories -- the incidents branch above never
+    # reached ``_watermark`` at all.
+    assert all(
+        params["repository_ids"] == [PROJECT_REPOSITORY_ID]
+        for params in client.watermark_params
+    )
+    assert len(client.watermark_params) == len(NATIVE_EVIDENCE_SOURCES) - 1
+
+
+@pytest.mark.asyncio
+async def test_incidents_stays_org_wide_for_a_genuine_organization_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The unavailable branch above must be scope-narrowing-specific: a
+
+    genuine org-wide request (no PROJECT/TEAM/REPOSITORY narrowing, empty
+    ``repository_ids``) legitimately measures every organization incident,
+    and must not regress to unavailable.
+    """
+
+    client = _FakeClient(derived=[])
+    _install(monkeypatch, client)
+
+    observations = await NativeDataHealthReader(object(), None).read(
+        org_id=ORG_ID,
+        scope=_organization_resolution(),
+        source_systems=["incidents"],
+    )
+
+    assert observations[0].warning != "incident_repository_scope_unavailable"
 
 
 @pytest.mark.asyncio
@@ -353,6 +463,40 @@ async def test_team_filtered_project_data_health_fails_closed(
     assert client.watermark_params == []
     assert observations[0].configured is None
     assert observations[0].warning == "project_repository_scope_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_team_filtered_organization_data_health_fails_closed_not_org_wide(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3375 (Codex adversarial review, HIGH): a team-FILTERED
+
+    ORGANIZATION scope (``direct_scope=ORGANIZATION`` plus ``scope.
+    team_ids``, ``ScopeResolutionOutcome.FILTERED``) has no repository-
+    carrying entity at all -- the team lives only in ``scope.team_filters``,
+    never in ``scope.entities`` -- so neither the PROJECT nor the TEAM
+    branch above matched it, and it fell through to the SAME org-wide
+    ``empty(repository_ids) OR ...`` widening this whole fix exists to
+    close: a third, previously-unguarded entry point. No data-health query
+    applies a team filter, so this must fail closed exactly like a
+    team-filtered PROJECT scope does above, never derive or guess at an
+    intersection.
+    """
+
+    client = _FakeClient(derived=[])
+    _install(monkeypatch, client)
+
+    observations = await NativeDataHealthReader(object(), None).read(
+        org_id=ORG_ID,
+        scope=_organization_team_filtered_resolution(),
+        source_systems=["work_items"],
+    )
+
+    assert client.watermark_params == []
+    assert not client.org_wide_enumerated
+    assert observations[0].configured is None
+    assert observations[0].required is True
+    assert observations[0].warning == "team_filtered_scope_unavailable"
 
 
 @pytest.mark.asyncio
@@ -503,3 +647,61 @@ async def test_acr_stays_optional_for_a_measured_empty_project(
     assert by_source["acr"].warning == "acr_optional"
     assert by_source["acr"].required is False
     assert by_source["work_items"].warning == "project_repository_scope_empty"
+
+
+class _Entitlement:
+    async def require(self, _org_id: str) -> None:
+        return None
+
+
+class _Authorizer:
+    def __init__(self, resolution: ScopeResolution) -> None:
+        self._resolution = resolution
+
+    async def resolve(self, *_args: object) -> ScopeResolution:
+        return self._resolution
+
+
+def _scope_request() -> ScopeResolveRequest:
+    return ScopeResolveRequest(explicit_refs=(), time_range=TimeRangeRequest())
+
+
+@pytest.mark.asyncio
+async def test_derivation_failure_on_every_mandatory_source_fails_the_whole_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3375 (Codex adversarial review, HIGH), end to end through
+
+    ``DataHealthService.inspect`` -- not just ``NativeDataHealthReader.
+    read`` in isolation. The reviewer's own repro: a derivation failure on
+    every mandatory native source used to still report ``complete_eligible
+    =True`` (``NativeDataHealthReader.read``'s unresolved-scope branch
+    built each ``SourceHealthObservation`` with ``required=False``, and
+    ``inspect``'s ``complete_eligible = all(not item.required or item.
+    state is COMPLETE ...)`` treats ``required=False`` as "never blocks
+    completeness" regardless of state). ``production_runtime.py``'s
+    ``data_health`` tool executor maps ``complete_eligible`` straight to
+    ``status="success" if result.complete_eligible else "partial"`` -- the
+    exact fail-open outcome this asserts against.
+    """
+
+    client = _FakeClient(derived=None, fail=True)
+    _install(monkeypatch, client)
+
+    reader = NativeDataHealthReader(object(), None)
+    resolution = _project_resolution()
+    result = await DataHealthService(
+        entitlement=_Entitlement(),
+        authorizer=_Authorizer(resolution),
+        reader=reader,
+    ).inspect(
+        org_id=ORG_ID,
+        permission_fingerprint="permission-v1",
+        scope_request=_scope_request(),
+        required_sources=["work_items", "pull_requests"],
+    )
+
+    assert all(item.required for item in result.sources)
+    assert result.complete_eligible is False
+    tool_status = "success" if result.complete_eligible else "partial"
+    assert tool_status == "partial"

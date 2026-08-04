@@ -589,6 +589,19 @@ LIMIT 1
 #: excluding pattern-matched-but-unresolved ownership rows (``repo_id IS
 #: NULL`` -- a ``match_type='pattern'`` row that has not yet resolved to a
 #: concrete repository contributes no queryable repository id).
+#:
+#: CHAOS-3375 (Codex adversarial review, HIGH): the first cut stopped there
+#: and trusted every ``team_repo_ownership.repo_id`` outright, exactly the
+#: mistake the adjacent ``PROJECT_REPOSITORIES_SQL`` derivation's own review
+#: comment above documents for ``work_items.repo_id``. ClickHouse enforces no
+#: foreign key, so a repository revoked from ``repos`` -- de-authorized, and
+#: correctly invisible to the ORGANIZATION branch, which enumerates ``repos``
+#: itself -- can keep a stale ``team_repo_ownership`` row and would have
+#: become an admitted read bound for team scope alone. Every *real*
+#: repository id must therefore still resolve through the same org-scoped
+#: ``repos`` catalog. Verified against a live migrated ClickHouse: an
+#: orphaned ownership row (repo_id absent from ``repos``) is admitted by the
+#: query without this clause and excluded with it.
 _TEAM_REPOSITORIES_SQL = """
 SELECT toString(g.repo_id) AS repository_id
 FROM (
@@ -606,6 +619,9 @@ FROM (
   GROUP BY org_id, provider, repo_full_name, team_id
 ) AS g
 WHERE g.repo_id IS NOT NULL
+  AND toString(g.repo_id) IN (
+    SELECT toString(id) FROM repos FINAL WHERE org_id = {org_id:String}
+  )
 """
 
 #: Re-derive one project's repository set from canonical work-item attribution.

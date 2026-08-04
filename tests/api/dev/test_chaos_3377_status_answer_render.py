@@ -730,6 +730,92 @@ def test_outstanding_facts_never_interpolates_raw_status_fields() -> None:
         assert "not_ready" not in fact.text
 
 
+# --- CHAOS-3377 residual defect (live acceptance probe): the same work
+# item entering a category's source list more than once (e.g. a project-
+# scope blocker with `blocks` edges to several blocked issues in scope --
+# `_BLOCKERS_SQL` in native_status_change.py returns one row PER EDGE) must
+# never render the same claim more than once. ---
+
+
+def test_outstanding_facts_deduplicates_the_same_blocker_seen_via_multiple_edges() -> (
+    None
+):
+    """Fail->pass repro: the live probe's blocker list carried the SAME
+    blocker entity 5 times (one row per `blocks` edge to a different blocked
+    issue in the project scope), each an identical ``DevRequiredChildFact``
+    (same ``fact_id``, ``text``, ``evidence_ref_ids``). A single duplicated
+    entity must produce exactly ONE outstanding fact, not one per edge.
+    """
+
+    duplicate_blocker = _child(
+        "issue:linear:CHAOS-3203",
+        "Ask Dev Wave 0: Audit graph, metric, evidence, and data-freshness "
+        "coverage for launch questions",
+        "open",
+        ("ev1_f9689b2af649f8b55017ddf4e0d6325a50c1e159",),
+    )
+    actual = _actual(blockers=(duplicate_blocker,) * 5)
+    status_result = _tool_result(actual_completion=actual)
+    facts = outstanding_facts(actual, status_result)
+    matching = [
+        f for f in facts if f.claim_id_suffix == "blocker:issue:linear:CHAOS-3203"
+    ]
+    assert len(matching) == 1
+
+
+def test_build_deterministic_status_claims_never_repeats_the_same_claim_id() -> None:
+    """Same repro, one level up: the WIRE claims list must never contain the
+    same ``claim_id`` (and therefore never the same text/evidence) twice,
+    regardless of how many duplicate rows the upstream source produced for
+    one entity.
+    """
+
+    duplicate_blocker = _child(
+        "issue:linear:CHAOS-3203",
+        "Ask Dev Wave 0: Audit graph, metric, evidence, and data-freshness "
+        "coverage for launch questions",
+        "open",
+        ("ev_01",),
+    )
+    actual = _actual(blockers=(duplicate_blocker,) * 5)
+    status_result = _tool_result(actual_completion=actual)
+    claims = build_deterministic_status_claims(
+        actual=actual,
+        status_result=status_result,
+        validity_scope=SCOPE,
+        canonical_evidence_ids=frozenset({"ev_01"}),
+    )
+    claim_ids = [c.claim_id for c in claims]
+    assert len(claim_ids) == len(set(claim_ids)), (
+        f"duplicate claim_id(s) rendered: {claim_ids}"
+    )
+    blocker_claims = [c for c in claims if c.claim_id.startswith("status-blocker:")]
+    assert len(blocker_claims) == 1
+
+
+def test_outstanding_facts_dedup_is_scoped_per_category_not_global() -> None:
+    """The SAME entity appearing as both a required child AND a blocker
+    (two genuinely distinct categories -- see the CHAOS-3377 HIGH 3 comment
+    on why blockers and required children are independent sources) must
+    still produce TWO claims, not be collapsed into one -- dedup keys on
+    (category, entity), never entity alone.
+    """
+
+    shared_fact_id = "issue:linear:CHAOS-9999"
+    actual = _actual(
+        reason_codes=("open_blocker", "required_child_incomplete"),
+        required_children=(_child(shared_fact_id, "Shared work item", "open"),),
+        blockers=(_child(shared_fact_id, "Shared work item", "open"),),
+    )
+    status_result = _tool_result(actual_completion=actual)
+    facts = outstanding_facts(actual, status_result)
+    suffixes = {f.claim_id_suffix for f in facts}
+    assert suffixes == {
+        f"child:{shared_fact_id}",
+        f"blocker:{shared_fact_id}",
+    }
+
+
 def test_claims_built_across_multiple_categories_at_once() -> None:
     """A verdict caused by several categories at once gets a claim for
     EACH, not just the first one found.

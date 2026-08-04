@@ -27,11 +27,14 @@ from dev_health_ops.api.dev.no_match_terminal import (
     WITHHELD_COPY,
     attested_strings,
     internal_token_leak,
+    internal_token_leak_field,
     named_subject_not_found_answer,
     no_match_summary,
     redact_persisted_answer,
+    scrub_auxiliary_leaks,
     user_supplied_subject_label,
     user_visible_strings,
+    user_visible_strings_by_field,
 )
 
 NOW = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
@@ -230,6 +233,119 @@ def test_internal_token_leak_ignores_ordinary_prose() -> None:
         )
         is None
     )
+
+
+def test_internal_token_leak_field_names_the_field_the_token_was_found_in() -> None:
+    """CHAOS-3377 leak-hardening (operability): the field-labeled scan
+    ``orchestrator.finish()`` now uses, so a leak's log line can say WHERE
+    the token was found, not only what it was."""
+
+    found = internal_token_leak_field(
+        [
+            ("direct_summary", "Everything here is fine."),
+            ("warnings[0]", "Rejected with scope_forbidden."),
+        ]
+    )
+    assert found == ("warnings[0]", "scope_forbidden")
+
+
+def test_internal_token_leak_field_is_none_for_clean_input() -> None:
+    assert (
+        internal_token_leak_field([("direct_summary", "Everything here is fine.")])
+        is None
+    )
+
+
+def test_user_visible_strings_by_field_indexes_list_valued_fields() -> None:
+    answer = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={"warnings": ["first warning", "second warning"]}
+    )
+    pairs = dict(user_visible_strings_by_field(answer=answer))
+    assert pairs["warnings[0]"] == "first warning"
+    assert pairs["warnings[1]"] == "second warning"
+    # And the two functions agree on content -- one is derived from the other.
+    assert user_visible_strings(answer=answer) == tuple(
+        text for _, text in user_visible_strings_by_field(answer=answer)
+    )
+
+
+# --- scrub_auxiliary_leaks (CHAOS-3377 leak-hardening) ---------------------
+#
+# The write-time counterpart of ``redact_persisted_answer``'s per-field
+# cleaning, run at the SAME seam ``orchestrator.finish()`` applies the
+# fail-closed whole-answer scan -- but deliberately narrower: only the four
+# model-authored auxiliary fields (warnings/conflicts/
+# suggested_follow_up_questions/resolved_scope.warnings) are eligible. A
+# leak in direct_summary or claims -- the answer's load-bearing deterministic
+# content -- must still fail the whole terminal closed.
+
+
+def test_scrub_auxiliary_leaks_withholds_a_leaked_warning() -> None:
+    answer = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={"warnings": ["Rejected with scope_forbidden for this repository."]}
+    )
+    scrubbed, touched = scrub_auxiliary_leaks(answer)
+    assert touched == ("warnings[0]",)
+    assert scrubbed.warnings == [WITHHELD_COPY]
+    assert internal_token_leak(user_visible_strings(answer=scrubbed)) is None
+
+
+def test_scrub_auxiliary_leaks_drops_a_leaked_follow_up_question_outright() -> None:
+    """Unlike warnings/conflicts, a leaked follow-up question is removed from
+    the list entirely rather than replaced with a placeholder -- a suggested
+    question with no real content left is worse than one fewer suggestion,
+    mirroring ``redact_persisted_answer``'s existing treatment of the same
+    field."""
+
+    answer = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={
+            "suggested_follow_up_questions": [
+                "Why is this required_child_incomplete?",
+                "What repositories are in scope?",
+            ]
+        }
+    )
+    scrubbed, touched = scrub_auxiliary_leaks(answer)
+    assert touched == ("suggested_follow_up_questions[0]",)
+    assert scrubbed.suggested_follow_up_questions == ["What repositories are in scope?"]
+
+
+def test_scrub_auxiliary_leaks_never_touches_direct_summary_or_claims() -> None:
+    """The negative control at the unit level: a leak in direct_summary (the
+    deterministic core, or -- absent a bound status_snapshot -- the model's
+    only substantive content) is NOT this function's job. It must survive
+    scrubbing untouched, so ``orchestrator.finish()``'s whole-terminal
+    fail-closed scan still catches it afterward."""
+
+    leaky_summary = "Scope resolution returned forbidden_or_not_found."
+    answer = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={"direct_summary": leaky_summary}
+    )
+    scrubbed, touched = scrub_auxiliary_leaks(answer)
+    assert touched == ()
+    assert scrubbed is answer
+    assert scrubbed.direct_summary == leaky_summary
+    assert internal_token_leak([scrubbed.direct_summary]) == "forbidden_or_not_found"
+
+
+def test_scrub_auxiliary_leaks_is_a_noop_on_a_clean_answer() -> None:
+    answer = _answer("What is the status of the Falcon project?", "Falcon")
+    scrubbed, touched = scrub_auxiliary_leaks(answer)
+    assert touched == ()
+    assert scrubbed is answer
+
+
+def test_scrub_auxiliary_leaks_respects_attestation() -> None:
+    """The same provenance escape hatch ``internal_token_leak`` applies
+    elsewhere: an authorized entity genuinely named like a denylisted token
+    is not scrubbed out of a warning that mentions it."""
+
+    answer = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={"warnings": ["The authorized project not_found has stale data."]}
+    )
+    scrubbed, touched = scrub_auxiliary_leaks(answer, attested=["not_found"])
+    assert touched == ()
+    assert scrubbed is answer
 
 
 # --- the PRD's own sentence ------------------------------------------------

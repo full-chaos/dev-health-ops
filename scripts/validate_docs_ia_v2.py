@@ -11,6 +11,7 @@ from typing import Any
 
 URL_RE = re.compile(r"^/(?:[a-z0-9]+(?:-[a-z0-9]+)*/)*$")
 EXPECTED_TOP_LEVEL = {
+    "/context-fabric/",
     "/get-started/",
     "/use/",
     "/admin/",
@@ -33,6 +34,7 @@ ALLOWED_PUBLIC_STATES = {"public", "internal", "reserved"}
 ALLOWED_LIFECYCLES = {"planned", "active", "deprecated", "archived"}
 ALLOWED_KINDS = {
     "landing",
+    "marketing",
     "section",
     "tutorial",
     "task-guide",
@@ -102,7 +104,18 @@ def validate_nodes(nodes: list[dict[str, Any]]) -> list[str]:
         if "first-10-minutes" in lowered or "first-ten-minutes" in lowered:
             errors.append(f"{node_id}: current onboarding title may not be preserved")
         if "context-fabric" in lowered:
-            errors.append(f"{node_id}: Context Fabric is reserved, not a live IA node")
+            canonical_context_fabric = (
+                node_id == "context-fabric"
+                and url == "/context-fabric/"
+                and parent_id == "home"
+                and kind == "marketing"
+                and public_state == "public"
+            )
+            if not canonical_context_fabric:
+                errors.append(
+                    f"{node_id}: Context Fabric URLs are limited to the canonical "
+                    "top-level marketing page"
+                )
         segments = [segment for segment in url.strip("/").split("/") if segment]
         if len(segments) > 4:
             errors.append(f"{node_id}: URL exceeds the default four-segment budget")

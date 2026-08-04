@@ -23,8 +23,21 @@ tracking metrics, treat the GitLab project path as the 'project' scope."),
 the SAME id space ``work_items.project_id`` already carries — mirroring
 Linear's raw-UUID catalog id, NOT Jira's ``{org}:jira:{key}`` prefixed id
 (CHAOS-3374). This is why the plain ``project_id = {entity_id}`` predicate
-below already matches a GitLab project on ``main``, with no dependency on the
-CHAOS-3374 identity-join fix landing first (unlike Jira).
+already matched a GitLab project even before CHAOS-3374 landed (unlike
+Jira, which needed the provider-scoped identity join to resolve at all).
+
+CHAOS-3374 (``native_status_change._PROJECT_IDENTITY_CTE`` /
+``_project_identity_match``) merged as of this revision (main 61aae46af,
+#1460): every project-scoped fact arm and ``PROJECT_REPOSITORIES_SQL`` now
+join through the catalog's own ``provider``/``project_key`` columns rather
+than comparing ``work_items.project_id``/``project_key`` to the entity id
+directly.
+``test_gitlab_project_resolves_end_to_end_through_the_native_status_change_join``
+below exercises that merged join directly (``ScopeResolutionService.
+resolve_contract`` → ``StatusChangeService.status_snapshot``, both reading
+through ``native_status_change.py``) with a REAL catalog row from this
+ticket's worker — the "only works once 3374 merges" caveat from the original
+handoff no longer applies and this test is the evidence.
 
 Opt-in (filtered from unit/CI by ``ci/run_tests.sh``'s
 ``-m "not benchmark and not clickhouse"`` in BOTH ``unit_tests()`` and
@@ -46,8 +59,20 @@ import pytest
 
 from dev_health_ops.api.admin.schemas_flat import DiscoveredMember, DiscoveredTeam
 from dev_health_ops.api.dev.contracts_v2 import ResolutionOutcome
+from dev_health_ops.api.dev.native_status_change import (
+    ClickHouseStatusChangeSource,
+)
 from dev_health_ops.api.dev.scope_catalog import ClickHouseAuthorizedEntityCatalog
-from dev_health_ops.api.dev.scope_service import EntityKind, ScopeResolutionService
+from dev_health_ops.api.dev.scope_service import (
+    EntityKind,
+    ScopeRef,
+    ScopeResolutionService,
+    ScopeResolveRequest,
+)
+from dev_health_ops.api.dev.status_change_service import (
+    StatusChangeService,
+    StatusSnapshotRequest,
+)
 from dev_health_ops.api.services.configuration.team_discovery import (
     GitLabDiscoveryResult,
 )
@@ -384,6 +409,74 @@ async def test_gitlab_project_id_selects_the_projects_work_items(
         assert matched == 1, (
             "the resolved project id selects no work items; the subject resolves "
             "but every answer about it would be empty"
+        )
+    finally:
+        _cleanup(raw_client, org_id)
+
+
+@pytest.mark.asyncio
+async def test_gitlab_project_resolves_end_to_end_through_the_native_status_change_join(
+    sink: Any, raw_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The full CHAOS-3380 + CHAOS-3374 chain, exercised together.
+
+    CHAOS-3374 (merged, main 61aae46af / #1460) reworked EVERY project-scoped
+    arm in ``native_status_change.py`` -- ``_WORK_ITEMS_SQL``,
+    ``PROJECT_REPOSITORIES_SQL``, and the rest -- to join through
+    ``_PROJECT_IDENTITY_CTE`` / ``_project_identity_match`` (catalog
+    ``provider`` + native key) instead of comparing ``work_items.project_id``/
+    ``project_key`` to the entity id directly. Before this ticket, GitLab
+    never reached that join at all: no catalog row existed, so
+    ``ScopeResolutionService`` returned ``NO_AUTHORIZED_MATCH`` before
+    ``native_status_change.py`` was ever queried. This test goes past
+    resolution (already covered above) into the SAME two calls the sibling
+    Jira live test uses (``resolve_contract`` then ``status_snapshot``) to
+    prove the merged join actually joins for a GitLab project: a work item
+    committed against it comes back in the snapshot, and a work item under a
+    DIFFERENT GitLab project (same provider, so the provider guard alone
+    can't be what excludes it) does not.
+    """
+
+    org_id = f"chaos-3380-e2e-{uuid.uuid4().hex[:12]}"
+    try:
+        _seed_reference_side(sink, org_id)
+        await _run_autoimport(
+            monkeypatch,
+            org_id,
+            projects={
+                GITLAB_PROJECT_PATH: _FakeGitLabProject(name=GITLAB_PROJECT_NAME),
+                OTHER_PROJECT_PATH: _FakeGitLabProject(name=OTHER_PROJECT_NAME),
+            },
+        )
+
+        catalog = ClickHouseAuthorizedEntityCatalog(sink)
+        service = ScopeResolutionService(catalog)
+        resolution = await service.resolve_contract(
+            org_id,
+            "permission-live",
+            ScopeResolveRequest(
+                explicit_refs=(ScopeRef(EntityKind.PROJECT, GITLAB_PROJECT_PATH),)
+            ),
+        )
+        assert resolution.outcome.value == "exact"
+        scope = resolution.resolved_scope
+        assert scope is not None
+        # Repo-less, like every GitLab issue/MR today (providers/gitlab/
+        # provider.py passes repo_id=None at normalize time) -- the zero-UUID
+        # sentinel bucket, exactly like Linear, not a real repos row.
+        assert scope.repositories == []
+
+        snapshot = await StatusChangeService(
+            ClickHouseStatusChangeSource(sink)
+        ).status_snapshot(org_id, "permission-live", StatusSnapshotRequest(scope))
+
+        seen = {child.entity_id for child in snapshot.children}
+        own_work_item_id = f"gitlab:{GITLAB_PROJECT_PATH}#1"
+        other_work_item_id = f"gitlab:{OTHER_PROJECT_PATH}#1"
+        assert any(child.endswith(own_work_item_id) for child in seen), seen
+        assert not any(child.endswith(other_work_item_id) for child in seen), (
+            "a different GitLab project's work item leaked into this project's scope",
+            seen,
         )
     finally:
         _cleanup(raw_client, org_id)

@@ -500,6 +500,21 @@ WHERE g.repo_id IS NOT NULL
 #: read bound for project scope alone. Every *real* repository id must therefore
 #: still resolve through the same org-scoped ``repos`` catalog.
 #:
+#: Provider scope, deliberate (Codex adversarial review HIGH, 2026-08-03;
+#: ruling: keep the arm provider-scoped rather than grow it). Sharing the fact
+#: queries' predicate exactly is also what stops this arm from *helping* a
+#: provider whose committed id those queries cannot match. Jira is that case:
+#: ``team_autoimport_jira._project_id`` mints the catalog id as
+#: ``f"{org_id}:jira:{project_key}"`` while ``providers/jira/normalize`` writes
+#: the raw Jira id/key onto ``work_items``, so neither arm matches. Deriving
+#: repositories for it anyway would be strictly *worse* than not: the fact
+#: queries would still match nothing and the run would report a confident empty
+#: answer for a project that has data, in place of the disclosed fail-closed
+#: one it reports today. Jira project subjects therefore keep exactly their
+#: current behavior here; making them answerable needs a coordinated
+#: provider-aware change across every project arm at once. Asserted by
+#: ``test_jira_shaped_project_keeps_todays_fail_closed_behaviour``.
+#:
 #: The zero UUID is admitted explicitly rather than by omitting that check.
 #: It is not a repository at all: it is the sentinel
 #: ``ClickHouseMetricsSink`` writes whenever a record has no repository
@@ -509,7 +524,7 @@ WHERE g.repo_id IS NOT NULL
 #: existence join would re-empty the set for the exact provider this fix exists
 #: for -- while a blanket "skip the catalog" would have de-authorized nothing
 #: and admitted everything. Naming the sentinel keeps both properties.
-_PROJECT_REPOSITORIES_SQL = """
+PROJECT_REPOSITORIES_SQL = """
 SELECT DISTINCT toString(repo_id) AS repository_id
 FROM work_items FINAL
 WHERE org_id = {org_id:String}
@@ -980,7 +995,7 @@ class ClickHouseStatusChangeSource:
             async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
                 rows = await query_dicts(
                     self._client,
-                    _PROJECT_REPOSITORIES_SQL,
+                    PROJECT_REPOSITORIES_SQL,
                     {
                         "org_id": org_id,
                         "entity_id": entity_id,
@@ -1029,7 +1044,7 @@ class ClickHouseStatusChangeSource:
         ``scope.repositories`` and ``entity_refs[0].repository_id`` are always
         empty for a production project commit -- and is re-derived here from
         canonical work-item project attribution
-        (``_PROJECT_REPOSITORIES_SQL``). Without this branch every project
+        (``PROJECT_REPOSITORIES_SQL``). Without this branch every project
         subject failed closed below while its work items sat in ``work_items``
         matching the very ``project_id`` the scope committed.
 

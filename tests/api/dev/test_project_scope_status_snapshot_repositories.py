@@ -174,7 +174,7 @@ class _FakeWorkItems:
 
     A canned-answer fake makes the ``org_id`` / ``as_of`` / ``project_key`` /
     ``repos`` predicates unfalsifiable -- deleting any of them from
-    ``_PROJECT_REPOSITORIES_SQL`` would still return the same rows. This reads
+    ``PROJECT_REPOSITORIES_SQL`` would still return the same rows. This reads
     which predicates the SQL under test actually contains and applies exactly
     those, so a dropped predicate changes the derived repository set and a
     test fails.
@@ -251,7 +251,9 @@ class _FakeWorkItems:
         raise AssertionError("the work-item read was never issued")
 
 
-def _install_catalog_client(monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_catalog_client(
+    monkeypatch: pytest.MonkeyPatch, *, project_id: str = PROJECT_ID
+) -> None:
     """Serve the real catalog SQL the shapes production ClickHouse returns."""
 
     async def fake_query(
@@ -262,7 +264,7 @@ def _install_catalog_client(monkeypatch: pytest.MonkeyPatch) -> None:
         if "FROM projects FINAL" in sql:
             return [
                 {
-                    "canonical_id": PROJECT_ID,
+                    "canonical_id": project_id,
                     "label": PROJECT_NAME,
                     # The production SQL selects ``NULL AS repository_id`` --
                     # pinned by test_catalog_project_rows_carry_no_repository.
@@ -290,7 +292,9 @@ def _install_status_client(monkeypatch: pytest.MonkeyPatch) -> _FakeWorkItems:
     return fake
 
 
-async def _committed_project_scope(*, team_filter: str | None = None) -> Any:
+async def _committed_project_scope(
+    *, team_filter: str | None = None, project_id: str = PROJECT_ID
+) -> Any:
     """The committed scope, from the real producer -- never hand-built."""
 
     service = ScopeResolutionService(ClickHouseAuthorizedEntityCatalog(object()))
@@ -298,7 +302,7 @@ async def _committed_project_scope(*, team_filter: str | None = None) -> Any:
         ORG_ID,
         "permission-fingerprint",
         ScopeResolveRequest(
-            explicit_refs=(ScopeRef(EntityKind.PROJECT, PROJECT_ID),),
+            explicit_refs=(ScopeRef(EntityKind.PROJECT, project_id),),
             team_filter_refs=(
                 () if team_filter is None else (ScopeRef(EntityKind.TEAM, team_filter),)
             ),
@@ -339,7 +343,7 @@ def test_derivation_matches_projects_exactly_as_the_queries_it_bounds_do() -> No
     project_predicate = (
         "project_id = {entity_id:String} OR project_key = {entity_id:String}"
     )
-    assert project_predicate in native_status_change._PROJECT_REPOSITORIES_SQL
+    assert project_predicate in native_status_change.PROJECT_REPOSITORIES_SQL
     assert project_predicate in native_status_change._WORK_ITEMS_SQL
 
 
@@ -351,7 +355,7 @@ def test_derivation_sql_structure_is_pinned() -> None:
     which change real ClickHouse results. Assert them on the SQL text itself.
     """
 
-    sql = native_status_change._PROJECT_REPOSITORIES_SQL
+    sql = native_status_change.PROJECT_REPOSITORIES_SQL
 
     # The project arms are one parenthesised disjunction, not a conjunction:
     # a Jira row matches by key and a Linear row by id, never both at once, so
@@ -472,10 +476,79 @@ async def test_repository_revoked_from_the_catalog_is_never_admitted(
     bound = fake.work_item_read_params()["repository_ids"]
     assert REVOKED_REPOSITORY_ID not in bound
     assert "linear:REVOKED-1" not in {child.entity_id for child in snapshot.children}
-    # ...while the repository-less sentinel, which has no ``repos`` row and
-    # never will, is still admitted -- otherwise the catalog check would have
-    # re-broken every Linear project.
-    assert LINEAR_NO_REPOSITORY_ID in bound
+
+
+@pytest.mark.asyncio
+async def test_repository_less_sentinel_is_admitted_without_a_repos_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The zero UUID's exception, asserted apart from the revocation rule.
+
+    Deliberately a separate test from the revoked-repository one above: they
+    pull in opposite directions on the same predicate, and a single test
+    asserting both would still pass if the two arms were merged into one
+    wrong rule. The sentinel has no ``repos`` row and never will (it is what
+    the sink writes when a record has no repository at all), so a bare
+    existence check would re-break every Linear project.
+    """
+
+    _install_catalog_client(monkeypatch)
+    scope = await _committed_project_scope()
+    fake = _install_status_client(monkeypatch)
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert LINEAR_NO_REPOSITORY_ID not in REPOS_CATALOG[ORG_ID]
+    assert LINEAR_NO_REPOSITORY_ID in fake.work_item_read_params()["repository_ids"]
+    assert {"linear:CHAOS-3367", "linear:CHAOS-3368"} <= {
+        child.entity_id for child in snapshot.children
+    }
+
+
+@pytest.mark.asyncio
+async def test_jira_shaped_project_keeps_todays_fail_closed_behaviour(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The new arm is provider-scoped by construction, and discloses it.
+
+    ``team_autoimport_jira._project_id`` mints a Jira project's catalog id as
+    ``f"{org_id}:jira:{project_key}"``, while ``providers/jira/normalize``
+    writes the *raw* Jira id and key onto ``work_items``. Neither
+    ``project_id = {entity_id}`` nor ``project_key = {entity_id}`` matches --
+    and ``_WORK_ITEMS_SQL``/``_BLOCKERS_SQL``/``_PULL_REQUESTS_SQL`` already
+    share that identical predicate, so Jira project subjects were, and remain,
+    unanswerable end to end.
+
+    Making *only* the derivation provider-aware would be strictly worse than
+    leaving it: it would derive repositories, the fact queries would still
+    match nothing, and the run would report a confident empty answer for a
+    project that has data instead of the disclosed fail-closed one. So the
+    derivation shares the fact queries' predicate exactly, which keeps Jira on
+    today's honest refusal. Asserted here so that stays a decision rather than
+    an accident.
+    """
+
+    jira_project_id = f"{ORG_ID}:jira:ASK"
+    _install_catalog_client(monkeypatch, project_id=jira_project_id)
+    scope = await _committed_project_scope(project_id=jira_project_id)
+    assert scope.entity_refs[0].entity_id == jira_project_id
+
+    fake = _install_status_client(monkeypatch)
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    # Disclosed refusal, not a confident empty: the warning is the whole point.
+    assert NO_REPOSITORY_SET_WARNING in snapshot.warnings
+    assert snapshot.children == ()
+    assert not any("parent_id" in sql for sql in fake.sql), (
+        "no fact query may run on a repository set that was never resolved"
+    )
 
 
 @pytest.mark.asyncio

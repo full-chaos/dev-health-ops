@@ -84,6 +84,94 @@ func TestGitHubPullRequestReviewRouteComposesOneCompletePRRow(t *testing.T) {
 	}
 }
 
+// TestGitHubPullRequestSocialRoutePreservesAliasIdentityAndParity pins the
+// Python execution boundary: prs, pr-reviews, and pr-comments all invoke
+// _sync_github_prs_to_store_async, so they must produce the same two durable
+// effects while retaining their own claim/ledger/watermark identity. In
+// particular, pr-comments is not a third raw-table fetch: comments_count is
+// already supplied by the PR detail response.
+func TestGitHubPullRequestSocialRoutePreservesAliasIdentityAndParity(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 123456000, time.UTC)
+	graphql := `{"data":{"repository":{"pr0":{"number":42,"reviews":{"nodes":[{"id":"review-1","state":"APPROVED","submittedAt":"2026-07-11T10:30:00Z","author":{"login":"octocat"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`
+	var baseline CompleteRouteBatch
+	for _, dataset := range []string{"prs", "pr-reviews", "pr-comments"} {
+		t.Run(dataset, func(t *testing.T) {
+			doer := &gitHubPullRequestReviewRouteDoer{
+				t: t, restBodies: defaultGitHubPullRequestFixtures(), graphQLReply: graphql,
+			}
+			claim := nativeTestClaim("github", dataset)
+			batch, err := (GitHubPullRequestSocialRouteHandler{}).Collect(
+				context.Background(), claim, providerfoundation.Credential{},
+				gitHubPullRequestClient(t, doer, "https://api.github.com"), now,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batch.Evidence.Dataset != dataset || batch.Watermark == nil ||
+				!batch.Watermark.Equal(*claim.BeforeAt) {
+				t.Fatalf("claim=%+v batch=%+v", claim, batch)
+			}
+			ledger, err := NewEffectLedgerState(claim, batch.Effects, now)
+			if err != nil || ledger.Dataset != dataset || ledger.Generation != claim.GenerationKey() {
+				t.Fatalf("claim=%+v ledger=%+v error=%v", claim, ledger, err)
+			}
+			if baseline.Effects == nil {
+				baseline = batch
+				return
+			}
+			for index := range batch.Effects {
+				if batch.Effects[index].Destination != baseline.Effects[index].Destination ||
+					batch.Effects[index].ContentDigest != baseline.Effects[index].ContentDigest {
+					t.Fatalf("effect[%d]=%+v baseline=%+v", index, batch.Effects[index], baseline.Effects[index])
+				}
+			}
+		})
+	}
+}
+
+func TestGitHubPullRequestSocialEffectsAcceptEveryAliasClaim(t *testing.T) {
+	t.Parallel()
+	sink := GitHubPullRequestSocialClickHouseEffects{
+		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}
+	pullEffect, err := effectBatchFromValues("git_pull_requests", EffectReadbackRequired, []pullRequestRow(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewEffect, err := effectBatchFromValues("git_pull_request_reviews", EffectReadbackRequired, []pullRequestReviewRow(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := pullRequestReadbackFixture(time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC))
+	nonEmptyReviewEffect, err := effectBatchFromValues(
+		"git_pull_request_reviews", EffectReadbackRequired, []pullRequestReviewRow{{
+			OrgID: "org-acme", RepoID: row.RepoID, Number: row.Number,
+			ReviewID: "review-1", Reviewer: "octocat", State: "APPROVED",
+			SubmittedAt: row.CreatedAt, LastSynced: row.LastSynced,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dataset := range []string{"prs", "pr-reviews", "pr-comments"} {
+		t.Run(dataset, func(t *testing.T) {
+			claim := nativeTestClaim("github", dataset)
+			if err := sink.WriteEffect(context.Background(), claim, pullEffect); err != nil {
+				t.Fatalf("pull effect: %v", err)
+			}
+			if err := sink.WriteEffect(context.Background(), claim, reviewEffect); err != nil {
+				t.Fatalf("review effect: %v", err)
+			}
+			// A nil Conn is the final expected failure: reaching it proves the
+			// non-empty review row passed alias-aware scope validation first.
+			if err := sink.WriteEffect(context.Background(), claim, nonEmptyReviewEffect); err != ErrInvalidConfiguration {
+				t.Fatalf("non-empty review effect error=%v want ErrInvalidConfiguration", err)
+			}
+		})
+	}
+}
+
 func TestGitHubPullRequestReviewRoutePreservesBaseRowOnOptionalReviewFailure(t *testing.T) {
 	t.Parallel()
 	doer := &gitHubPullRequestReviewRouteDoer{
@@ -136,10 +224,12 @@ func TestEnrichPullRequestsWithReviewsLeavesNoReviewRowsUntouched(t *testing.T) 
 	}
 }
 
-func TestGitHubPullRequestReviewRouteIsNotRegisteredUntilTheThreeWayUnitLands(t *testing.T) {
+func TestGitHubPullRequestSocialRouteIsNotRegisteredUntilTheRegistryLayerLands(t *testing.T) {
 	t.Parallel()
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "pr-reviews")
-	if !ok || descriptor.RouteReady || len(descriptor.Destinations) != 0 {
-		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
+	for _, dataset := range []string{"prs", "pr-reviews", "pr-comments"} {
+		descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", dataset)
+		if !ok || descriptor.RouteReady {
+			t.Fatalf("dataset=%s descriptor=%+v ok=%v", dataset, descriptor, ok)
+		}
 	}
 }

@@ -24,8 +24,23 @@ func (sink GitHubPullRequestClickHouseEffects) WriteEffect(
 	claim Claim,
 	effect EffectBatch,
 ) error {
+	return sink.writePullRequestEffect(ctx, claim, effect, "prs")
+}
+
+// writePullRequestEffect owns the complete git_pull_requests row write. The
+// public prs sink deliberately restricts it to github/prs; the composed
+// github/pr-reviews route calls this same whole-row writer under its own unit
+// claim after it has enriched the three review-derived columns. Keeping the
+// SQL and validation here prevents two subtly different complete-row writers
+// from racing on a ReplacingMergeTree table, which has no partial-column merge.
+func (sink GitHubPullRequestClickHouseEffects) writePullRequestEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+	dataset string,
+) error {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "prs" ||
+		claim.Provider != "github" || claim.Dataset != dataset ||
 		effect.Destination != "git_pull_requests" {
 		return ErrInvalidConfiguration
 	}
@@ -89,8 +104,21 @@ func (sink GitHubPullRequestClickHouseEffects) InspectEffect(
 	claim Claim,
 	effect EffectBatch,
 ) (EffectInspection, error) {
+	return sink.inspectPullRequestEffect(ctx, claim, effect, "prs")
+}
+
+// inspectPullRequestEffect is the companion to writePullRequestEffect. It
+// uses the exact same FINAL whole-row readback for github/prs and the composed
+// github/pr-reviews unit, so crash recovery cannot bless a row whose review
+// columns came from a different physical version.
+func (sink GitHubPullRequestClickHouseEffects) inspectPullRequestEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+	dataset string,
+) (EffectInspection, error) {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "prs" ||
+		claim.Provider != "github" || claim.Dataset != dataset ||
 		effect.Destination != "git_pull_requests" {
 		return EffectConflict, ErrInvalidConfiguration
 	}

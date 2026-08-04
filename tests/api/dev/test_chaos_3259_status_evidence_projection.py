@@ -276,9 +276,15 @@ class _FakeAuthorizedEntityCatalog:
         return []
 
     async def search(
-        self, org_id: str, query: str, kinds: tuple[EntityKind, ...], *, limit: int
+        self,
+        org_id: str,
+        query: str,
+        kinds: tuple[EntityKind, ...],
+        *,
+        limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]:
-        del org_id, query, kinds, limit
+        del org_id, query, kinds, limit, include_alias_matches
         return []
 
 

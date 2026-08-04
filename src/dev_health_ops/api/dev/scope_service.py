@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .alias_matching import alias_forms
 from .contracts import (
     DevDisambiguationCandidate,
     DevEntityRef,
@@ -248,6 +249,17 @@ class ScopeSearchRequest:
     #: search on the GraphQL field or the model-facing ``resolve_scope.v1``
     #: tool, both of which CHAOS-3301 owns.
     allowed_kinds: frozenset[EntityKind] = V1_SEARCHABLE_ENTITY_KINDS
+    #: CHAOS-3388. Never set by an ordinary caller -- only
+    #: ``subject_preflight._close_matches`` (the CHAOS-3366 closest-matches
+    #: fallback for an already-unresolved named mention) opts in. Acronym
+    #: matching is a derived, candidate-only signal (see ``alias_matching``'s
+    #: module docstring): folding it into the *primary* resolution search
+    #: would let a query like "ACR" land in the ordinary ``AMBIGUOUS_
+    #: CANDIDATES``/"more than one entity matches this name" outcome, which
+    #: is the wrong copy for "nothing matched literally, but here is
+    #: something close" -- that is exactly the outcome and copy the
+    #: closest-matches fallback already owns.
+    include_alias_matches: bool = False
 
     def __post_init__(self) -> None:
         query = self.query.strip()
@@ -317,6 +329,7 @@ class AuthorizedEntityCatalog(Protocol):
         kinds: tuple[EntityKind, ...],
         *,
         limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]: ...
 
     async def organization_repository_ids(
@@ -612,6 +625,11 @@ class ScopeResolutionService:
             "query": request.query,
             "kinds": [kind.value for kind in kinds],
             "limit": request.limit,
+            # CHAOS-3388: distinct cache entry from an alias-unaware search of
+            # the same query/kinds/limit -- the two can return different
+            # candidate sets, so sharing a cache key would let whichever
+            # request happened to run first silently answer the other's call.
+            "include_alias_matches": request.include_alias_matches,
         }
         cache_key = self._cache_key(
             "search", org_id, permission_fingerprint, payload, watermark
@@ -620,7 +638,11 @@ class ScopeResolutionService:
         if isinstance(cached, ScopeSearchResult):
             return cached
         entities = await self._catalog.search(
-            org_id, request.query, kinds, limit=request.limit
+            org_id,
+            request.query,
+            kinds,
+            limit=request.limit,
+            include_alias_matches=request.include_alias_matches,
         )
         result = ScopeSearchResult(
             candidates=_dedupe_entities(entities)[: request.limit],
@@ -723,11 +745,22 @@ class ScopeResolutionService:
         # the user did not name. Committing therefore requires the name to
         # equal a label or canonical id outright; a partial name that matched
         # something real is offered back as candidates instead.
+        #
+        # CHAOS-3388: a candidate's own parenthetical alias ("Dev Health
+        # Agent Context Runtime (Context Fabric)" -> "Context Fabric") is
+        # exactly as literal a name as its primary label -- typing it is a
+        # deliberate naming act, not a derived guess -- so it is eligible for
+        # the same outright-equality commit. A *derived* acronym
+        # ("ACR") is deliberately excluded from this check: it is never
+        # eligible for auto-commit, only for the candidate list, however
+        # unique the acronym match turns out to be (see ``alias_matching``'s
+        # module docstring).
         wanted = lookup_text.strip().casefold()
         exact_matches = tuple(
             candidate
             for candidate in candidates
             if wanted in {candidate.canonical_id.casefold(), candidate.label.casefold()}
+            or wanted in alias_forms(candidate.label).literal_aliases
         )
         if len(exact_matches) == 1:
             return MentionResolution(

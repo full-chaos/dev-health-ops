@@ -1091,6 +1091,13 @@ class SubjectPreflight:
             kinds=tuple(sorted(SEARCHABLE_ENTITY_KINDS, key=lambda kind: kind.value)),
             limit=NOT_FOUND_FALLBACK_LIMIT,
             allowed_kinds=SEARCHABLE_ENTITY_KINDS,
+            # CHAOS-3388: this is the one seam allowed to widen the search to
+            # acronym/parenthetical-alias matches -- the mention is already
+            # confirmed unresolved under its literal name, so an acronym hit
+            # here is additional "closest matches" material, never a
+            # commit-eligible primary resolution (see ScopeSearchRequest.
+            # include_alias_matches).
+            include_alias_matches=True,
         )
         try:
             result = await self._scope_service.search(

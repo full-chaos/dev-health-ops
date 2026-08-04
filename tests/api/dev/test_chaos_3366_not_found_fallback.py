@@ -45,6 +45,7 @@ from tests._chaos_3292_preflight import (
     ASK_DEV_PROJECT,
     ATLAS_PROJECT_ONE,
     ATLAS_PROJECT_TWO,
+    NIGHTFALL_PROJECT,
     ORG_ID,
     OTHER_ORG_ID,
     SeededCatalog,
@@ -94,9 +95,16 @@ class LimitRecordingCatalog(SeededCatalog):
         kinds: tuple[EntityKind, ...],
         *,
         limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]:
         self.search_limits.append((len(kinds), limit))
-        return await super().search(org_id, query, kinds, limit=limit)
+        return await super().search(
+            org_id,
+            query,
+            kinds,
+            limit=limit,
+            include_alias_matches=include_alias_matches,
+        )
 
 
 class CrossTenantLeakingCatalog(SeededCatalog):
@@ -113,9 +121,16 @@ class CrossTenantLeakingCatalog(SeededCatalog):
         kinds: tuple[EntityKind, ...],
         *,
         limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]:
         if len(kinds) == 1:
-            return await super().search(org_id, query, kinds, limit=limit)
+            return await super().search(
+                org_id,
+                query,
+                kinds,
+                limit=limit,
+                include_alias_matches=include_alias_matches,
+            )
         needle = query.casefold()
         matched = [
             entity
@@ -140,10 +155,17 @@ class MultiKindFailingCatalog(SeededCatalog):
         kinds: tuple[EntityKind, ...],
         *,
         limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]:
         if len(kinds) > 1:
             raise RuntimeError("catalog unavailable for the fallback search")
-        return await super().search(org_id, query, kinds, limit=limit)
+        return await super().search(
+            org_id,
+            query,
+            kinds,
+            limit=limit,
+            include_alias_matches=include_alias_matches,
+        )
 
 
 def _preflight(
@@ -228,6 +250,182 @@ async def test_named_project_with_no_match_offers_bounded_close_matches() -> Non
         result.answer.frame.direct_answer
         == CLARIFICATION_COPY[NOT_FOUND_CLOSE_MATCHES_KEY]
     )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3388 -- acronym / parenthetical-alias closest matches
+# ---------------------------------------------------------------------------
+
+#: The real production catalog row this ticket's live repro named (org
+#: 70d529e0-3c06-4597-8480-794fd02328b6, read live from ClickHouse
+#: `projects` -- not a hand-authored stand-in): "ACR" is the acronym of
+#: "Agent Context Runtime" inside the full display name.
+ACR_PROJECT = AuthorizedEntity(
+    kind=EntityKind.PROJECT,
+    canonical_id="60997592-f9f4-462b-87c3-ef82671df270",
+    label="Dev Health Agent Context Runtime (Context Fabric)",
+    repository_id=None,
+)
+
+#: The literal repro question from the live incident report.
+ACR_QUESTION = (
+    "What's the status of the ACR Project and what drivers are blocking it? "
+    "What's left to complete?"
+)
+
+
+@pytest.mark.asyncio
+async def test_an_acronym_mention_offers_the_matching_project_as_a_close_match() -> (
+    None
+):
+    """CHAOS-3388 acceptance: "ACR" must never dead-end as a bare no-match.
+
+    Before acronym-aware closest matches, "ACR" is not a substring of "Dev
+    Health Agent Context Runtime (Context Fabric)", so this terminated
+    ``not_found`` with zero candidates -- the run either fell through to
+    org-wide investigation (before the interpreter case fix) or landed here
+    with nothing to offer (before this fix). Never auto-committed either
+    way: an acronym is a derived signal, not a literal name the user typed.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, ACR_PROJECT)]),
+        request_for(ACR_QUESTION),
+    )
+
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.NEEDS_CLARIFICATION
+    assert result.committed_resolution is None
+    assert result.diagnostic == "unresolved_close_matches"
+
+    assert result.answer is not None
+    candidates = result.answer.frame.clarification_candidates
+    assert len(candidates) == 1
+    assert candidates[0].entity_ref.display_label == ACR_PROJECT.label
+    assert candidates[0].entity_ref.entity_id == ACR_PROJECT.canonical_id
+
+
+@pytest.mark.asyncio
+async def test_an_acronym_match_survives_substring_noise_past_the_bound() -> None:
+    """CHAOS-3388 live finding: literal-substring noise must never crowd out
+    the real acronym match.
+
+    The live probe against the real org repro'd a genuine defect here: the
+    org holds more than ``NOT_FOUND_FALLBACK_LIMIT`` issues whose titles
+    contain "acr" as a plain substring (e.g. "Harden ACR runtime client
+    boundary"), sorted alphabetically ahead of the actual project's full
+    name -- so a combined alphabetical sort truncated the acronym-matched
+    project out of the returned page entirely, and the closest-matches
+    answer named everything BUT the thing "ACR" actually stood for.
+    """
+
+    noisy_issues = [
+        AuthorizedEntity(
+            kind=EntityKind.ISSUE,
+            canonical_id=f"issue-acr-{index}",
+            # Alphabetically ahead of "Dev Health Agent Context Runtime
+            # (Context Fabric)" -- starts with a digit, which sorts before
+            # any letter.
+            label=f"{index} ACR boundary hardening task",
+            repository_id=None,
+        )
+        for index in range(NOT_FOUND_FALLBACK_LIMIT + 3)
+    ]
+    result = await _run(
+        _preflight([(ORG_ID, entity) for entity in [ACR_PROJECT, *noisy_issues]]),
+        request_for(ACR_QUESTION),
+    )
+
+    assert result.outcome is PublicOutcome.NEEDS_CLARIFICATION
+    assert result.answer is not None
+    labels = {
+        candidate.entity_ref.display_label
+        for candidate in result.answer.frame.clarification_candidates
+    }
+    assert ACR_PROJECT.label in labels, (
+        "the real acronym match must survive the bound even when outnumbered "
+        "by incidental substring hits"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multiple_acronym_matches_are_offered_without_picking() -> None:
+    """Two catalog projects sharing an acronym must both surface as candidates.
+
+    Never a coin flip: CHAOS-3289 history is "ambiguity -> candidates, never
+    a pick", so an acronym shared by more than one authorized project is
+    exactly as unresolved as two projects sharing a literal name.
+    """
+
+    analytics_core_runtime = AuthorizedEntity(
+        kind=EntityKind.PROJECT,
+        canonical_id="project-analytics-core-runtime",
+        label="Analytics Core Runtime",
+        repository_id=None,
+    )
+    result = await _run(
+        _preflight([(ORG_ID, ACR_PROJECT), (ORG_ID, analytics_core_runtime)]),
+        request_for(ACR_QUESTION),
+    )
+
+    assert result.outcome is PublicOutcome.NEEDS_CLARIFICATION
+    assert result.committed_resolution is None
+    assert result.answer is not None
+    labels = {
+        candidate.entity_ref.display_label
+        for candidate in result.answer.frame.clarification_candidates
+    }
+    assert labels == {ACR_PROJECT.label, "Analytics Core Runtime"}
+
+
+@pytest.mark.asyncio
+async def test_a_nonsense_name_never_fabricates_an_acronym_match() -> None:
+    """CHAOS-3388 acceptance: "Zebra Project" must stay a bare no-match.
+
+    The real catalog (``ACR_PROJECT`` plus a few of its live siblings) holds
+    nothing "Zebra" is remotely an acronym or alias of -- this must terminate
+    ``not_found`` with zero candidates, never a guessed entity.
+    """
+
+    result = await _run(
+        _preflight(
+            [
+                (ORG_ID, ASK_DEV_PROJECT),
+                (ORG_ID, ACR_PROJECT),
+                (ORG_ID, NIGHTFALL_PROJECT),
+            ]
+        ),
+        request_for("What is the status of the Zebra Project?"),
+    )
+
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.NOT_FOUND
+    assert result.diagnostic == "unresolved_no_authorized_match"
+    assert result.answer is not None
+    assert result.answer.frame.clarification_candidates == ()
+
+
+@pytest.mark.asyncio
+async def test_a_literal_parenthetical_alias_commits_like_the_primary_label() -> None:
+    """CHAOS-3388: typing the parenthetical alias outright is a literal name.
+
+    Unlike an acronym, "Context Fabric" is a real alternate name the catalog
+    itself carries (in parentheses) -- typing it is exactly as deliberate an
+    act as typing the primary label, so a unique hit commits instead of only
+    ever candidating.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, ACR_PROJECT)]),
+        request_for('What is the status of the "Context Fabric" project?'),
+    )
+
+    assert result.decision is PreflightDecision.PROCEED
+    assert result.committed_resolution is not None
+    committed_ids = {
+        ref.entity_id for ref in result.committed_resolution.resolved_scope.entity_refs
+    }
+    assert committed_ids == {ACR_PROJECT.canonical_id}
 
 
 # ---------------------------------------------------------------------------

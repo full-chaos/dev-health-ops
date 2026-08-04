@@ -7,6 +7,9 @@ source_of_truth:
   - docs/architecture.md
   - docs/architecture/canonical-operational-model.md
   - current deployment and service entry points
+  - TRD: Ask Dev — constrained agent runtime, graph query layer, and web experience
+  - Amendment TRD v2 — Ask Dev Wave 3.1: Deterministic investigation, health synthesis, and safe outcomes
+  - PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar
 applicability: current
 lifecycle: active
 ---
@@ -45,10 +48,77 @@ versioned job contract + checked-in route
 
 Current checked-in routes still point to Celery and no production domain producer routes work to River.
 
+## Ask Dev and Context Fabric runtime
+
+Ask Dev remains part of the existing Python application and API. It is not a browser-side agent, a new generic agent service, or an MCP-driven web chatbot. The authoritative Ask Dev runtime path is:
+
+```mermaid
+flowchart LR
+    U[Authenticated user] --> W[dev-health-web /dev]
+    W --> P[Same-origin /api/v1/dev proxy]
+    P --> D[dev-health-ops Dev API]
+
+    D --> A[Dev orchestrator]
+    A --> L[Agent LLM provider adapter]
+    A --> T[Versioned tool registry]
+
+    T --> S[Scope and entity service]
+    T --> M[Canonical metric service]
+    T --> G[Status/change/work-graph service]
+    T --> E[Evidence and data-health service]
+
+    S --> PG[(PostgreSQL)]
+    M --> CH[(ClickHouse)]
+    G --> CH
+    E --> CH
+    E -. optional .-> ACR[acr-api evidence endpoint]
+
+    D --> PG
+    D --> O[Audit, traces, Prometheus, LLM usage]
+```
+
+The app-wide Ask Dev window and `/dev` workspace share this same backend, conversation identity, scope, streaming run, answer contract, evidence authorization, and retention policy.
+
+Wave 3.1 makes the investigation lifecycle server-owned. Mandatory retrieval and canonical synthesis happen before optional model narration:
+
+```mermaid
+flowchart LR
+    Q[Question + authorized page/conversation context]
+    --> I[Server intent interpreter]
+    I --> R[Subject preflight + per-mention resolution ledger]
+    R --> P[Versioned investigation plan registry]
+    P --> X[Bounded deterministic executor]
+    X --> S[Canonical source adapters]
+    S --> B[Typed investigation result bundle]
+    B --> F[Canonical answer-frame builder]
+    F --> N[Optional compact model narrative]
+    N --> V[Layered validation]
+    F --> D[Deterministic renderer fallback]
+    V --> O[Safe answer-v2 projection]
+    D --> O
+```
+
+The model may help present the result. It does not own subject resolution, mandatory source selection, canonical facts, metrics, health states, evidence, or the final safe outcome. See [Ask Dev subject preflight](ask-dev-subject-preflight.md) and [Ask Dev v2 contracts](ask-dev-contracts-v2.md) for the runtime and wire invariants.
+
+ACR is a separate Go service family for agent-facing Context Fabric access:
+
+```text
+compatible agent client
+  → STDIO MCP
+  → acr-mcp
+  → HTTPS with scoped ACR credential
+  → acr-api
+  → authorized Dev Health evidence and operational stores
+```
+
+`acr-api` may enrich Ask Dev evidence through an approved adapter, but Ask Dev does not invoke the MCP sidecar. The hosted ACR packet remains authoritative for ACR clients; optional local CodeGraph evidence is supplemental and read-only.
+
 ## Ownership boundaries
 
-- **dev-health-web** owns product routes, navigation, UI state, charts, browser interactions, and client-side GraphQL behavior.
+- **dev-health-web** owns product routes, navigation, UI state, charts, browser interactions, Ask Dev window/workspace composition, and client-side GraphQL behavior.
 - **FastAPI and GraphQL** own public request authentication, authorization, schema, and response contracts.
+- **Ask Dev orchestration in dev-health-ops** owns server intent interpretation, subject preflight, investigation planning, deterministic source execution, canonical answer frames, optional narrative, and safe outcomes.
+- **dev-health-acr** owns hosted context-packet assembly, authorized evidence expansion, ACR credentials, and the local MCP adapter.
 - **Services** own business orchestration and domain decisions.
 - **Queries and compilers** own bounded storage access and calculation contracts.
 - **Providers** own source-specific authentication, pagination, retry, discovery, and normalization.
@@ -96,7 +166,9 @@ A process can be live and healthy while its profile is disabled. Production admi
 - A webhook payload cannot choose organization or credential authority.
 - An unavailable sample must not be emitted as zero.
 - A successful process health check is not domain completion evidence.
+- Generated narrative is not canonical evidence or authorization.
+- An unresolved subject cannot silently widen to organization data.
 
 ## Contributor navigation
 
-Use [Data and storage boundaries](data-and-storage.md) for database, River, outbox, and migration responsibilities. Use [Stable contracts](contracts.md) for public and internal contract changes. Use [Workers, schedules, and queues](../../operate/configure/workers-and-schedules.md) for deployment ownership and migration gates.
+Use [Data and storage boundaries](data-and-storage.md) for database, River, outbox, and migration responsibilities. Use [Stable contracts](contracts.md) for public and internal contract changes. Use [Ask Dev subject preflight](ask-dev-subject-preflight.md) and [Ask Dev v2 contracts](ask-dev-contracts-v2.md) for the deterministic investigation boundary. Use [Workers, schedules, and queues](../../operate/configure/workers-and-schedules.md) for deployment ownership and migration gates.

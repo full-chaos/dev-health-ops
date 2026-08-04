@@ -10,7 +10,10 @@ import (
 // pullRequestReviewRow mirrors the complete row written by
 // ClickHouseStore.insert_git_pull_request_reviews. It is deliberately kept
 // separate from pullRequestRow: D16 preserves Python's three-way unit boundary
-// even though the rows share a repository and pull-request identity.
+// even though the rows share a repository and pull-request identity. The raw
+// review effect belongs to the enclosing PR-social claim, so validate accepts
+// all three aliases even though normalization itself runs under the derived
+// internal pr-reviews claim.
 type pullRequestReviewRow struct {
 	RepoID      string    `json:"repo_id"`
 	Number      int       `json:"number"`
@@ -61,7 +64,7 @@ func normalizeGitHubPullRequestReview(
 }
 
 func (row pullRequestReviewRow) validate(claim Claim) error {
-	if claim.Provider != "github" || claim.Dataset != "pr-reviews" ||
+	if claim.Provider != "github" || !isGitHubPRSocialDataset(claim.Dataset) ||
 		row.OrgID == "" || row.OrgID != claim.OrgID || len(row.RepoID) != 36 ||
 		row.Number < 1 || row.ReviewID == "" || row.Reviewer == "" ||
 		row.State == "" || row.SubmittedAt.IsZero() || row.LastSynced.IsZero() ||

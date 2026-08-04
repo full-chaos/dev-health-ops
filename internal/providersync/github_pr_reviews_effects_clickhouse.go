@@ -7,26 +7,28 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// GitHubPullRequestReviewClickHouseEffects persists the two effects emitted by
-// the composed github/pr-reviews unit. Both write and FINAL readback are
+// GitHubPullRequestSocialClickHouseEffects persists the two effects emitted by
+// the composed github PR-social unit. The outer claim may be prs,
+// pr-reviews, or pr-comments; it is preserved for the effect ledger while the
+// two durable effects remain byte-identical. Both write and FINAL readback are
 // guarded by the authoritative unit lease; wiring this sink does not activate
 // a route.
-type GitHubPullRequestReviewClickHouseEffects struct {
+type GitHubPullRequestSocialClickHouseEffects struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
 }
 
-func (sink GitHubPullRequestReviewClickHouseEffects) WriteEffect(
+func (sink GitHubPullRequestSocialClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "pr-reviews" {
+		claim.Provider != "github" || !isGitHubPRSocialDataset(claim.Dataset) {
 		return ErrInvalidConfiguration
 	}
 	if effect.Destination == "git_pull_requests" {
 		return (GitHubPullRequestClickHouseEffects{
 			Conn: sink.Conn, Lease: sink.Lease,
-		}).writePullRequestEffect(ctx, claim, effect, "pr-reviews")
+		}).writePullRequestEffect(ctx, claim, effect, claim.Dataset)
 	}
 	if effect.Destination != "git_pull_request_reviews" {
 		return ErrInvalidConfiguration
@@ -72,18 +74,18 @@ INSERT INTO git_pull_request_reviews (
 	return batch.Send()
 }
 
-func (sink GitHubPullRequestReviewClickHouseEffects) InspectEffect(
+func (sink GitHubPullRequestSocialClickHouseEffects) InspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
 	if ctx == nil || sink.Lease == nil || sink.Conn == nil ||
 		claim.Validate() != nil || claim.Provider != "github" ||
-		claim.Dataset != "pr-reviews" {
+		!isGitHubPRSocialDataset(claim.Dataset) {
 		return EffectConflict, ErrInvalidConfiguration
 	}
 	if effect.Destination == "git_pull_requests" {
 		return (GitHubPullRequestClickHouseEffects{
 			Conn: sink.Conn, Lease: sink.Lease,
-		}).inspectPullRequestEffect(ctx, claim, effect, "pr-reviews")
+		}).inspectPullRequestEffect(ctx, claim, effect, claim.Dataset)
 	}
 	if effect.Destination != "git_pull_request_reviews" {
 		return EffectConflict, ErrInvalidConfiguration
@@ -125,7 +127,7 @@ func (sink GitHubPullRequestReviewClickHouseEffects) InspectEffect(
 	return EffectConflict, nil
 }
 
-func (sink GitHubPullRequestReviewClickHouseEffects) inspectReview(
+func (sink GitHubPullRequestSocialClickHouseEffects) inspectReview(
 	ctx context.Context, expected pullRequestReviewRow,
 ) (EffectInspection, error) {
 	var actual pullRequestReviewRow
@@ -170,5 +172,10 @@ WHERE org_id = ? AND repo_id = ? AND number = ? AND review_id = ?`,
 	return EffectExact, nil
 }
 
-var _ EffectSink = GitHubPullRequestReviewClickHouseEffects{}
-var _ EffectReadback = GitHubPullRequestReviewClickHouseEffects{}
+// GitHubPullRequestReviewClickHouseEffects remains a source-compatible name
+// for the earlier review-only foundation. It now accepts all three PR-social
+// outer claim identities through GitHubPullRequestSocialClickHouseEffects.
+type GitHubPullRequestReviewClickHouseEffects = GitHubPullRequestSocialClickHouseEffects
+
+var _ EffectSink = GitHubPullRequestSocialClickHouseEffects{}
+var _ EffectReadback = GitHubPullRequestSocialClickHouseEffects{}

@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "name": "github/work-items PR-social non-routed fetch foundation",
+  "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
+  "mutations": [
+    {
+      "id": "alias-batches-stop-at-fifty",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "gitHubWorkItemPRSocialBatchSize          = 50",
+      "replace": "gitHubWorkItemPRSocialBatchSize          = 51",
+      "rationale": "GitHub PR-social aliases are bounded to fifty caller-selected PRs per initial GraphQL request",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherBatchesFiftyAndReportsActualUsage$", "./internal/providersync/"]]
+    },
+    {
+      "id": "comment-continuation-does-not-refetch-events",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "ctx, client, owner, repository, []int{number}, first, cursor, 0, nil, result,",
+      "replace": "ctx, client, owner, repository, []int{number}, first, cursor, 1, nil, result,",
+      "rationale": "comment pagination advances only the comment connection and does not duplicate event traffic or mix cursors",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherDrainsCommentAndEventCursorsIndependently$", "./internal/providersync/"]]
+    },
+    {
+      "id": "event-continuation-does-not-refetch-comments",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "ctx, client, owner, repository, []int{number}, 0, nil, first, cursor, result,",
+      "replace": "ctx, client, owner, repository, []int{number}, 1, nil, first, cursor, result,",
+      "rationale": "event pagination advances only the timeline connection and does not duplicate comment traffic or mix cursors",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherDrainsCommentAndEventCursorsIndependently$", "./internal/providersync/"]]
+    },
+    {
+      "id": "missing-comment-cursor-is-incomplete",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "for pageInfo.HasNextPage && len(payload.Comments) < limit {\n\t\tif cursor == nil || strings.TrimSpace(*cursor) == \"\" {",
+      "replace": "for pageInfo.HasNextPage && len(payload.Comments) < limit {\n\t\tif false || strings.TrimSpace(*cursor) == \"\" {",
+      "rationale": "a comment connection advertising another page must supply a cursor before any continuation request",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherRejectsMissingAndStalledCursors$/missing_comment_cursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "stalled-comment-cursor-is-incomplete",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "(next == nil || strings.TrimSpace(*next) == \"\" || *next == *cursor) {\n\t\t\treturn errGitHubWorkItemPRSocialPaginationInvalid\n\t\t}\n\t\tcursor = next\n\t}\n\treturn nil\n}\n\nfunc (fetcher GitHubWorkItemPRSocialFetcher) drainEvents",
+      "replace": "(next == nil || strings.TrimSpace(*next) == \"\" || false) {\n\t\t\treturn errGitHubWorkItemPRSocialPaginationInvalid\n\t\t}\n\t\tcursor = next\n\t}\n\treturn nil\n}\n\nfunc (fetcher GitHubWorkItemPRSocialFetcher) drainEvents",
+      "rationale": "a comment continuation that repeats its cursor cannot be treated as forward progress",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherRejectsMissingAndStalledCursors$/stalled_comment_cursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "missing-event-cursor-is-incomplete",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "for pageInfo.HasNextPage && len(payload.Events) < limit {\n\t\tif cursor == nil || strings.TrimSpace(*cursor) == \"\" {",
+      "replace": "for pageInfo.HasNextPage && len(payload.Events) < limit {\n\t\tif false || strings.TrimSpace(*cursor) == \"\" {",
+      "rationale": "a timeline connection advertising another page must supply a cursor before any continuation request",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherRejectsMissingAndStalledCursors$/missing_event_cursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "stalled-event-cursor-is-incomplete",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "(next == nil || strings.TrimSpace(*next) == \"\" || *next == *cursor) {\n\t\t\treturn errGitHubWorkItemPRSocialPaginationInvalid\n\t\t}\n\t\tcursor = next\n\t}\n\treturn nil\n}\n\nfunc appendGitHubWorkItemPRSocialNodes",
+      "replace": "(next == nil || strings.TrimSpace(*next) == \"\" || false) {\n\t\t\treturn errGitHubWorkItemPRSocialPaginationInvalid\n\t\t}\n\t\tcursor = next\n\t}\n\treturn nil\n}\n\nfunc appendGitHubWorkItemPRSocialNodes",
+      "rationale": "a timeline continuation that repeats its cursor cannot be treated as forward progress",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherRejectsMissingAndStalledCursors$/stalled_event_cursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "declared-record-limits-truncate-provider-overreturn",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "if len(nodes) > remaining {",
+      "replace": "if false {",
+      "rationale": "a provider page that returns more nodes than requested cannot escape the caller-declared comment or event cap",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherHonorsDeclaredLimitsWithoutOverfetch$", "./internal/providersync/"]]
+    },
+    {
+      "id": "request-cap-marks-incomplete",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "if result.Evidence.Pages >= maxRequests {",
+      "replace": "if result.Evidence.Pages > maxRequests {",
+      "rationale": "the bounded social traversal must stop before issuing a logical GraphQL request beyond its declared cap",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherReturnsTypedGraphQLAndCapIncomplete$/request_cap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "graphql-errors-never-become-empty-data",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "if len(envelope.Errors) > 0 || envelope.Data.Repository == nil {",
+      "replace": "if false || envelope.Data.Repository == nil {",
+      "rationale": "an HTTP-200 GraphQL errors envelope is a typed degraded fetch, never a complete empty repository payload",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherReturnsTypedGraphQLAndCapIncomplete$/graphql_errors$", "./internal/providersync/"]]
+    },
+    {
+      "id": "actual-wire-attempts-are-counted",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "func (doer gitHubWorkItemPRSocialCountingDoer) Do(request *http.Request) (*http.Response, error) {\n\t*doer.requests++",
+      "replace": "func (doer gitHubWorkItemPRSocialCountingDoer) Do(request *http.Request) (*http.Response, error) {\n\t*doer.requests += 0",
+      "rationale": "usage evidence counts physical GraphQL retry attempts while the transport reserves provider budget once per logical call",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherCountsRetryAttemptsButOneLogicalPage$", "./internal/providersync/"]]
+    },
+    {
+      "id": "rate-limit-propagates-not-degrades",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "|| isRateLimited(err) {",
+      "replace": "|| false {",
+      "rationale": "GitHub rate limits retain retry and deferral semantics rather than becoming Python-style optional social degradation",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherPropagatesRateLimitCancelAndLeaseLoss$/rate_limit$", "./internal/providersync/"]]
+    },
+    {
+      "id": "non-rate-failure-has-typed-marker",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "result.Incomplete = &GitHubWorkItemPRSocialFetchIncomplete{\n\t\tCause: gitHubWorkItemPRSocialFailureCause(err),\n\t}",
+      "replace": "result.Incomplete = nil",
+      "rationale": "a swallowed non-rate PR-social failure must remain distinguishable from a complete empty social payload",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherMarksNonRateProviderFailureIncomplete$", "./internal/providersync/"]]
+    },
+    {
+      "id": "usage-family-matches-work-item-budget",
+      "file": "internal/providersync/github_work_items_social_fetch.go",
+      "find": "Transport: \"graphql\", RouteFamily: \"work_item_prs\", Dimension: BudgetGraphQLCost,",
+      "replace": "Transport: \"graphql\", RouteFamily: \"pr_social\", Dimension: BudgetGraphQLCost,",
+      "rationale": "the work-item PR GraphQL actual is keyed to the same work_item_prs family reserved by the Python budget estimator",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherBatchesFiftyAndReportsActualUsage$", "./internal/providersync/"]]
+    },
+    {
+      "id": "comment-adapter-preserves-created-at",
+      "file": "internal/providersync/github_work_items_social_adapter.go",
+      "find": "ID:        githubWorkItemPRSocialPythonTruthyID(node.DatabaseID, node.FullDatabaseID, node.ID),\n\t\tCreatedAt: parseGitHubWorkItemTime(node.CreatedAt),",
+      "replace": "ID:        githubWorkItemPRSocialPythonTruthyID(node.DatabaseID, node.FullDatabaseID, node.ID),\n\t\tCreatedAt: nil,",
+      "rationale": "the GraphQL comment createdAt timestamp must become Python's created_at semantic field instead of being silently dropped",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialCommentAdapterMatchesLivePythonProducer$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "comment-adapter-preserves-author",
+      "file": "internal/providersync/github_work_items_social_adapter.go",
+      "find": "comment.User.Login = node.Author.Login",
+      "replace": "comment.User.Login = nil",
+      "rationale": "the GraphQL author must become Python's user.login so interactions retain identity and trusted-bot dependencies remain admissible",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialCommentAdapterMatchesLivePythonProducer$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "event-adapter-maps-closed-typename",
+      "file": "internal/providersync/github_work_items_social_adapter.go",
+      "find": "\"MergedEvent\": \"merged\", \"ClosedEvent\": \"closed\", \"ReopenedEvent\": \"reopened\",",
+      "replace": "\"MergedEvent\": \"merged\", \"ClosedEvent\": \"\", \"ReopenedEvent\": \"reopened\",",
+      "rationale": "ClosedEvent must become Python's closed event token so the status transition is not silently discarded",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialEventAdapterMatchesLivePythonProducer$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "composition-keeps-adapted-comments",
+      "file": "internal/providersync/github_work_items_social_adapter.go",
+      "find": "adapted.Comments = append(adapted.Comments, encoded)",
+      "replace": "if false { adapted.Comments = append(adapted.Comments, encoded) }",
+      "rationale": "adapted comments must cross the composition seam so interaction and trusted-comment dependency rows cannot both disappear",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "composition-keeps-adapted-events",
+      "file": "internal/providersync/github_work_items_social_adapter.go",
+      "find": "adapted.Events = append(adapted.Events, encoded)",
+      "replace": "if false { adapted.Events = append(adapted.Events, encoded) }",
+      "rationale": "adapted events must cross the composition seam so transitions and reopen rows cannot both disappear",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "work-item-base-rest-plan-is-present",
+      "file": "internal/providersync/request_plan.go",
+      "find": "case \"work-items\", \"work-item-labels\", \"work-item-projects\", \"work-item-history\", \"work-item-comments\":",
+      "replace": "case \"work-items-disabled\", \"work-item-labels\", \"work-item-projects\", \"work-item-history\", \"work-item-comments\":",
+      "rationale": "the canonical GitHub work-items unit must reserve the Python REST work_items estimate instead of presenting an empty admission plan",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemRequestPlansCoverEveryAliasAndPRPressure$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestProviderRequestPlansMatchLivePythonBudgetFunctions$", "./internal/providersync/"]]
+    },
+    {
+      "id": "canonical-work-items-rest-floor-is-two",
+      "file": "internal/providersync/request_plan.go",
+      "find": "if dataset == \"work-items\" {\n\t\t\tfloor = 2",
+      "replace": "if false {\n\t\t\tfloor = 2",
+      "rationale": "Python budgets two REST_CORE units per span day for canonical work-items while the four derived aliases reserve one",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemRequestPlansCoverEveryAliasAndPRPressure$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestProviderRequestPlansMatchLivePythonBudgetFunctions$", "./internal/providersync/"]]
+    },
+    {
+      "id": "sync-prs-enables-work-item-expansion-plan",
+      "file": "internal/providersync/request_plan.go",
+      "find": "if flags[\"sync_prs\"] {",
+      "replace": "if false {",
+      "rationale": "planner-stamped sync_prs must add both PR GraphQL and secondary-abuse reservations for every work-item family alias",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemRequestPlansCoverEveryAliasAndPRPressure$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestProviderRequestPlansMatchLivePythonBudgetFunctions$", "./internal/providersync/"]]
+    },
+    {
+      "id": "work-item-pr-graphql-plan-scales-by-three",
+      "file": "internal/providersync/request_plan.go",
+      "find": "Dimension: BudgetGraphQLCost, Units: max(3, 3*spanDays),",
+      "replace": "Dimension: BudgetGraphQLCost, Units: max(2, 2*spanDays),",
+      "rationale": "work_item_prs GraphQL pressure uses Python's three-unit floor and per-day scaling",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemRequestPlansCoverEveryAliasAndPRPressure$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestProviderRequestPlansMatchLivePythonBudgetFunctions$", "./internal/providersync/"]]
+    },
+    {
+      "id": "work-item-pr-secondary-abuse-plan-is-distinct",
+      "file": "internal/providersync/request_plan.go",
+      "find": "Dimension: BudgetSecondaryAbuseRisk, Units: 1,",
+      "replace": "Dimension: BudgetGraphQLCost, Units: 1,",
+      "rationale": "Python reserves a distinct work_item_prs secondary-abuse bucket rather than folding that risk into GraphQL cost",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemRequestPlansCoverEveryAliasAndPRPressure$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestProviderRequestPlansMatchLivePythonBudgetFunctions$", "./internal/providersync/"]]
+    },
+    {
+      "id": "event-adapter-maps-merged-typename",
+      "file": "internal/providersync/github_work_items_social_adapter.go",
+      "find": "\"MergedEvent\": \"merged\", \"ClosedEvent\": \"closed\", \"ReopenedEvent\": \"reopened\",",
+      "replace": "\"MergedEvent\": \"\", \"ClosedEvent\": \"closed\", \"ReopenedEvent\": \"reopened\",",
+      "rationale": "MergedEvent must independently become Python's merged event token so the terminal done transition cannot silently disappear",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialEventAdapterMatchesLivePythonProducer$/merged$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "comment-id-falls-back-to-full-database-id",
+      "file": "internal/providersync/github_work_items_social_adapter.go",
+      "find": "githubWorkItemPRSocialPythonTruthyID(node.DatabaseID, node.FullDatabaseID, node.ID)",
+      "replace": "githubWorkItemPRSocialPythonTruthyID(node.DatabaseID, node.ID)",
+      "rationale": "a falsey numeric databaseId must preserve Python's next-choice fullDatabaseId before considering the GraphQL node id",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialCommentIDFallbackMatchesPythonTruthiness$/full_database_id_fallback$", "./internal/providersync/"]]
+    },
+    {
+      "id": "comment-id-falls-back-to-node-id",
+      "file": "internal/providersync/github_work_items_social_adapter.go",
+      "find": "githubWorkItemPRSocialPythonTruthyID(node.DatabaseID, node.FullDatabaseID, node.ID)",
+      "replace": "githubWorkItemPRSocialPythonTruthyID(node.DatabaseID, node.FullDatabaseID)",
+      "rationale": "when both database ID forms are falsey the adapter must retain Python's final GraphQL node-id fallback",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialCommentIDFallbackMatchesPythonTruthiness$/node_id_fallback$", "./internal/providersync/"]]
+    },
+    {
+      "id": "numeric-zero-id-is-python-falsey",
+      "file": "internal/providersync/github_work_items_social_adapter.go",
+      "find": "if integer.Sign() != 0 {\n\t\t\t\t\treturn integer",
+      "replace": "if true {\n\t\t\t\t\treturn integer",
+      "rationale": "numeric zero is falsey in Python's databaseId-or-fullDatabaseId-or-id chain and must never stop fallback traversal",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialCommentIDFallbackMatchesPythonTruthiness$/full_database_id_fallback$", "./internal/providersync/"]]
+    }
+  ]
+}

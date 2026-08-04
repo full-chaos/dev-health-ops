@@ -10,8 +10,6 @@ source_of_truth:
   - docs/user-guide/views/ai-impact.md
   - docs/user-guide/views/ai-review-load.md
   - docs/user-guide/views/ai-risk.md
-  - TRD: Ask Dev — constrained agent runtime, graph query layer, and web experience
-  - Amendment TRD v2 — Ask Dev Wave 3.1: Deterministic investigation, health synthesis, and safe outcomes
   - Ask Dev Interaction Surface Amendment — Context Fabric relationship, chat window, and full-page workspace
   - PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar
   - full-chaos/dev-health-acr README.md
@@ -76,9 +74,21 @@ AI Attribution remains a preview route and is intentionally omitted from the pub
 
 ## Ask Dev, Context Fabric, and agent context
 
-Ask Dev and the Agent Context Runtime (ACR) expose related parts of Context Fabric to different users. **Ask Dev** is the human investigation surface inside Dev Health. **ACR** assembles scoped context packets and authorized evidence for compatible agents. The local **`acr-mcp`** sidecar connects an agent client to the hosted ACR API.
+Context Fabric is the underlying Dev Health context, graph, evidence, metric, scope, and trust capability. **Ask Dev** is the conversational experience for people. **ACR** provides scoped context and evidence to compatible agents through the hosted `acr-api` and local `acr-mcp` sidecar.
 
-Context Fabric is the underlying Dev Health context, graph, evidence, metric, scope, and trust capability. Ask Dev is the user-facing conversational interaction layer for Context Fabric. It is not a synonym for an MCP server, a generic memory store, or a code graph.
+### How the product surfaces relate
+
+```mermaid
+flowchart TB
+    DH["Dev Health data, work graph,<br/>metrics, evidence, and source health"] --> CF["Context Fabric<br/>scope, retrieval, trust, and provenance"]
+    CF --> ASK["Ask Dev<br/>app window and /dev workspace"]
+    CF --> ACR["ACR for agents<br/>acr-api and acr-mcp"]
+    CF --> VAL["Context Fabric Validation<br/>platform administrators"]
+```
+
+These are related surfaces, not interchangeable names. Ask Dev does not call the MCP, and the MCP is not a remote-control interface for Ask Dev. Context Fabric Validation remains a separate platform-administrator diagnostic surface.
+
+Implementation topology, service ownership, contract flow, and the deterministic investigation lifecycle belong in [Platform architecture](../../contribute/architecture/platform.md) and [Ask Dev v2 contracts](../../contribute/architecture/ask-dev-contracts-v2.md).
 
 ### Choose the supported entry point
 
@@ -88,62 +98,6 @@ Context Fabric is the underlying Dev Health context, graph, evidence, metric, sc
 | Ask Dev workspace | You need a longer investigation, conversation history, evidence, and metric detail. | Open `/dev`, or select **Workspace** from the Ask Dev window. |
 | Context Fabric Validation | A platform administrator needs to validate context-packet assembly, coverage, compatibility, and evidence disclosure. | Open `/superadmin/context-fabric/validation`. This is not the customer Ask Dev experience. |
 | ACR MCP sidecar | A compatible coding, review, documentation, or CI agent needs explicit task context or source evidence. | Register `acr-mcp serve` in the agent client, then use `context_for_task` and `source_evidence`. |
-
-Ask Dev does not call the MCP, and the MCP is not a remote-control interface for Ask Dev. Both use the same evidence and authorization principles through separate runtime paths.
-
-### Ask Dev runtime architecture
-
-The authoritative Ask Dev TRD defines the application and service boundary as follows:
-
-```mermaid
-flowchart LR
-    U[Authenticated user] --> W[dev-health-web /dev]
-    W --> P[Same-origin /api/v1/dev proxy]
-    P --> D[dev-health-ops Dev API]
-
-    D --> A[Dev orchestrator]
-    A --> L[Agent LLM provider adapter]
-    A --> T[Versioned tool registry]
-
-    T --> S[Scope and entity service]
-    T --> M[Canonical metric service]
-    T --> G[Status/change/work-graph service]
-    T --> E[Evidence and data-health service]
-
-    S --> PG[(PostgreSQL)]
-    M --> CH[(ClickHouse)]
-    G --> CH
-    E --> CH
-    E -. optional .-> ACR[acr-api evidence endpoint]
-
-    D --> PG
-    D --> O[Audit, traces, Prometheus, LLM usage]
-```
-
-The chat window and `/dev` page are two presentations of this same backend path. There is no browser-side LLM orchestration and no separate chat-window service.
-
-### Current investigation lifecycle
-
-The Wave 3.1 corrective TRD further constrains how an answer is built. Mandatory retrieval and synthesis occur before optional narrative generation:
-
-```mermaid
-flowchart LR
-    Q[Question + authorized page/conversation context]
-    --> I[Server intent interpreter]
-    I --> R[Subject preflight + per-mention resolution ledger]
-    R --> P[Versioned investigation plan registry]
-    P --> X[Bounded deterministic executor]
-    X --> S[Canonical source adapters]
-    S --> B[Typed investigation result bundle]
-    B --> F[Canonical answer-frame builder]
-    F --> N[Optional compact model narrative]
-    N --> V[Layered validation]
-    F --> D[Deterministic renderer fallback]
-    V --> O[Safe answer-v2 projection]
-    D --> O
-```
-
-The model may help present the result, but it does not own subject resolution, mandatory source selection, canonical facts, metrics, health states, evidence, or the final safe outcome.
 
 Both Ask Dev and ACR support the same diagnosis loop:
 
@@ -156,8 +110,6 @@ When Ask Dev is enabled for your workspace, you can use the permanent **Ask Dev*
 Choose **Workspace** to expand the same conversation into `/dev` for a longer investigation, history, evidence, and metric detail. The window and `/dev` share one conversation, scope, streamed run, answer, feedback record, and retention policy; expanding or minimizing does not run the question again. **Ask Dev about this** actions use an approved route and entity allowlist and show the inherited scope before submission. They never copy arbitrary page content or submit a suggested question automatically.
 
 An answer labels AI-generated content and keeps its as-of time, coverage, freshness, conflicts, unavailable sources, observed facts, inferences, recommendations, metrics, and evidence visible. A partial, degraded, refused, or insufficient-evidence answer is a result with limitations, not a silent success. Evidence links are authorized again when opened.
-
-Ask Dev is the customer interaction layer powered by Context Fabric. **Context Fabric Validation** is a separate platform-administrator diagnostic surface; an Ask Dev or organization-administrator entitlement does not grant access to it.
 
 ### Understand Ask Dev conversation history
 
@@ -185,21 +137,6 @@ ACR is a separate hosted Go service family with two primary binaries:
 - **`acr-api`** assembles context packets, expands authorized provenance, and exposes the hosted entitlement and credential boundary.
 - **`acr-mcp`** runs locally as a STDIO MCP server and connects a compatible client to `acr-api`.
 
-The agent-facing service path defined by the ACR design is:
-
-```text
-compatible agent client
-        ↓ STDIO MCP
-     acr-mcp
-        ↓ HTTPS + scoped ACR credential
-     acr-api
-        ↓
-Context assembly, evidence expansion, authorization,
-packet snapshots, audit, usage, and SLO telemetry
-        ↓
-Dev Health evidence and operational stores
-```
-
 The default MCP surface is deliberately small and read-only:
 
 1. Call `context_for_task` when the current task needs evidence-backed context.
@@ -216,7 +153,7 @@ Client setup and platform-specific credential behavior are maintained in the ACR
 
 ### Validate Context Fabric as a platform administrator
 
-Context Fabric Validation is a platform-administrator diagnostic surface. It is separate from Ask Dev and from organization administration. The previous `/agent-context/context-packet` route redirects a platform administrator to the validation surface and redirects other users to an entitled customer destination.
+Context Fabric Validation is separate from Ask Dev and organization administration. The previous `/agent-context/context-packet` route redirects a platform administrator to the validation surface and redirects other users to an entitled customer destination.
 
 The Context Packet Explorer accepts a goal, an authorized repository, an optional branch or commit, and an optional task reference. Its result exposes the resolved scope, packet categories, freshness, coverage, budget, compatibility, checks, next steps, and sanitized evidence disclosure.
 

@@ -68,7 +68,10 @@ set -uo pipefail
 # --- Resolve the worktree root from THIS script's location (cwd-independent). -------
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
-cd "${ROOT}" || { echo "FATAL: cannot cd to worktree root ${ROOT}"; exit 2; }
+cd "${ROOT}" || {
+  echo "FATAL: cannot cd to worktree root ${ROOT}"
+  exit 2
+}
 
 # --- Config (override via env). ----------------------------------------------------
 CH_CONTAINER="${CH_CONTAINER:-dev-health-clickhouse-1}"
@@ -113,14 +116,18 @@ PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_p
 # --- Result tracking. --------------------------------------------------------------
 declare -a RESULTS=()
 FAILED=0
-CH_READY=0   # set to 1 by ch_provision() once the scratch CH is migrated
+CH_READY=0 # set to 1 by ch_provision() once the scratch CH is migrated
 
-c_red()   { printf '\033[31m%s\033[0m' "$1"; }
+c_red() { printf '\033[31m%s\033[0m' "$1"; }
 c_green() { printf '\033[32m%s\033[0m' "$1"; }
-c_yellow(){ printf '\033[33m%s\033[0m' "$1"; }
+c_yellow() { printf '\033[33m%s\033[0m' "$1"; }
 
-hr()      { printf '%s\n' "------------------------------------------------------------"; }
-banner()  { hr; printf '>> %s\n' "$1"; hr; }
+hr() { printf '%s\n' "------------------------------------------------------------"; }
+banner() {
+  hr
+  printf '>> %s\n' "$1"
+  hr
+}
 
 # record <name> <rc> ; non-zero rc marks the whole gate FAILED (fail-fast aware).
 record() {
@@ -141,12 +148,16 @@ skip() {
   printf '   [%s] %s — %s\n' "$(c_yellow SKIP)" "${name}" "${why}"
 }
 
-die() { printf '\n%s %s\n' "$(c_red 'FATAL:')" "$1" >&2; exit 2; }
+die() {
+  printf '\n%s %s\n' "$(c_red 'FATAL:')" "$1" >&2
+  exit 2
+}
 
 # Run a stage; on failure print an actionable hint and STOP (fail fast) unless the
 # caller passes KEEP_GOING=1. We fail fast by default so the first red is the signal.
 run_stage() {
-  local name="$1"; shift
+  local name="$1"
+  shift
   banner "${name}"
   "$@"
   local rc=$?
@@ -207,9 +218,9 @@ preflight() {
 
 # --- Pure-Python CI-parity gates (no services). ------------------------------------
 gate_lint_format() { "${RUFF}" format --check .; }
-gate_lint_check()  { "${RUFF}" check .; }
-gate_typecheck()   { "${MYPY}" --install-types --non-interactive .; }
-gate_go_fast()     { bash "${ROOT}/ci/check_go.sh" fast; }
+gate_lint_check() { "${RUFF}" check .; }
+gate_typecheck() { "${MYPY}" --install-types --non-interactive .; }
+gate_go_fast() { bash "${ROOT}/ci/check_go.sh" fast; }
 gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
 # SCOPE (CHAOS-3165): the requirement to author a mutation plan for new work is
 # scoped to the Go port (CHAOS-3033) and is removed when the port finalises —
@@ -257,7 +268,7 @@ gate_unit_suite() {
   # inherited here (PROXY_OFF only unsets proxy vars), so org_deletion connects to
   # the empty scratch db (org-scoped counts -> 0) exactly like CI.
   OTEL_ENABLED=false PYTHONPATH=src \
-  "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests \
+    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests \
     -m "not benchmark and not clickhouse" \
     --ignore=tests/test_connectors_integration.py \
     --ignore=tests/test_private_repo_access.py \
@@ -284,16 +295,16 @@ cleanup_scratch() {
   # trap handler: always drop the scratch db; never touches 'default'.
   if [ "${SCRATCH_CREATED:-0}" = "1" ]; then
     printf '\n>> cleanup: dropping scratch db %s\n' "${SCRATCH_DB}"
-    ch_query "DROP DATABASE IF EXISTS ${SCRATCH_DB}" \
-      && printf '   %s\n' "$(c_green "scratch db ${SCRATCH_DB} dropped")" \
-      || printf '   %s could not drop %s — drop it manually.\n' "$(c_red 'WARN:')" "${SCRATCH_DB}"
+    ch_query "DROP DATABASE IF EXISTS ${SCRATCH_DB}" &&
+      printf '   %s\n' "$(c_green "scratch db ${SCRATCH_DB} dropped")" ||
+      printf '   %s could not drop %s — drop it manually.\n' "$(c_red 'WARN:')" "${SCRATCH_DB}"
   fi
 }
 
 ch_create_scratch() {
   # Guard: refuse to proceed if anything points us at 'default'.
   case "${SCRATCH_DB}" in
-    default) die "refusing to run: SCRATCH_DB is 'default' (the real dev db)." ;;
+  default) die "refusing to run: SCRATCH_DB is 'default' (the real dev db)." ;;
   esac
   # Reclaim: the default SCRATCH_DB name is deterministic per worktree (see the
   # CONCURRENCY CONTRACT header), so a prior run from THIS SAME worktree that
@@ -313,7 +324,7 @@ ch_migrate() {
   # Apply THIS branch's migrations into the scratch db, then read-only verify.
   # Belt-and-suspenders: never let an edited SCRATCH_URI point migrations at 'default'.
   case "${SCRATCH_URI}" in
-    *"/default"|*"/default?"*) die "refusing to migrate: SCRATCH_URI resolves to /default (${SCRATCH_URI})." ;;
+  *"/default" | *"/default?"*) die "refusing to migrate: SCRATCH_URI resolves to /default (${SCRATCH_URI})." ;;
   esac
   printf '   migrating into scratch: %s\n' "${SCRATCH_URI}"
   OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false \
@@ -380,8 +391,14 @@ ch_provision() {
   banner "clickhouse provisioning (isolated scratch db: ${SCRATCH_DB})"
   ch_available
   case $? in
-    1) skip "clickhouse provisioning" "container '${CH_CONTAINER}' not running (start the dev stack, or SKIP_CLICKHOUSE=1)"; return 0 ;;
-    2) skip "clickhouse provisioning" "missing ${DEVHOPS} (install [dev] extra into .venv)"; return 0 ;;
+  1)
+    skip "clickhouse provisioning" "container '${CH_CONTAINER}' not running (start the dev stack, or SKIP_CLICKHOUSE=1)"
+    return 0
+    ;;
+  2)
+    skip "clickhouse provisioning" "missing ${DEVHOPS} (install [dev] extra into .venv)"
+    return 0
+    ;;
   esac
   if ! ch_create_scratch; then
     skip "clickhouse provisioning" "could not create scratch db ${SCRATCH_DB}"
@@ -409,9 +426,9 @@ print_summary() {
   banner "SUMMARY"
   for line in "${RESULTS[@]}"; do
     case "$line" in
-      PASS*) printf '   %s  %s\n' "$(c_green '✔')" "${line#PASS  }" ;;
-      FAIL*) printf '   %s  %s\n' "$(c_red   '✗')" "${line#FAIL  }" ;;
-      SKIP*) printf '   %s  %s\n' "$(c_yellow '-')" "${line#SKIP  }" ;;
+    PASS*) printf '   %s  %s\n' "$(c_green '✔')" "${line#PASS  }" ;;
+    FAIL*) printf '   %s  %s\n' "$(c_red '✗')" "${line#FAIL  }" ;;
+    SKIP*) printf '   %s  %s\n' "$(c_yellow '-')" "${line#SKIP  }" ;;
     esac
   done
   hr
@@ -422,14 +439,14 @@ main() {
   preflight
 
   run_stage "mutation harness: no mutation applied" gate_no_active_mutation
-  run_stage "lint: ruff format --check"  gate_lint_format
-  run_stage "lint: ruff check"           gate_lint_check
-  run_stage "typecheck: mypy"            gate_typecheck
-  run_stage "go: format + vet + test"     gate_go_fast
+  run_stage "lint: ruff format --check" gate_lint_format
+  run_stage "lint: ruff check" gate_lint_check
+  run_stage "typecheck: mypy" gate_typecheck
+  run_stage "go: format + vet + test" gate_go_fast
   run_stage "river: static compatibility harness" gate_river_compat_static
-  ch_provision   # scratch db + migrations; exports CLICKHOUSE_URI when available
+  ch_provision # scratch db + migrations; exports CLICKHOUSE_URI when available
   run_stage "unit suite (FULL, not subset)" gate_unit_suite
-  ch_tests       # argMax live-exec proof on the real engine (reuses the scratch db)
+  ch_tests # argMax live-exec proof on the real engine (reuses the scratch db)
 
   print_summary
   if [ "${FAILED}" -ne 0 ]; then

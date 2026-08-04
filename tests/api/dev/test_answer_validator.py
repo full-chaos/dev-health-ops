@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from dev_health_ops.api.dev.answer_validator import (
+    INCOMPLETE_DENOMINATOR_DISCLOSURE,
     AnswerValidationContext,
     AnswerValidationError,
     validate_answer_candidate,
@@ -133,6 +134,294 @@ def test_numeric_inference_requires_metric_or_source_reference() -> None:
     ]
     with pytest.raises(AnswerValidationError, match="numeric claim"):
         validate_answer_candidate(payload, _context())
+
+
+def _context_with_withheld_completion() -> AnswerValidationContext:
+    """A run whose tool result reports a completion assessment with the
+    required-child denominator withheld (CHAOS-3297 s2 round 2/3): the
+    required-child source itself was truncated, so
+    required_child_total/required_child_complete are ``None`` -- an
+    honestly unknown denominator, never a fabricated count.
+    """
+    fixtures = positive_fixtures()
+    answer = DevAnswer.model_validate(fixtures["dev_answer.v1"])
+    tool_result = deepcopy(fixtures["dev_tool_result.v1"])
+    tool_result["actual_completion"] = {
+        "state": "indeterminate",
+        "rule_id": "actual-completion",
+        "rule_version": "actual-completion.v4",
+        "reason_codes": ["assessment_source_limit_reached"],
+        "required_children": [],
+        "required_child_total": None,
+        "required_child_complete": None,
+        "display_truncated": True,
+        "conflicts": [],
+        "evidence_ref_ids": [],
+    }
+    return AnswerValidationContext(
+        conversation_id=answer.conversation_id,
+        answer_id=answer.answer_id,
+        scope_resolution=DevScopeResolution.model_validate(
+            fixtures["dev_scope_resolution.v1"]
+        ),
+        versions=DevContractVersions.model_validate(answer.versions),
+        model=DevModelMetadata.model_validate(answer.model),
+        tool_results=(DevToolResult.model_validate(tool_result),),
+    )
+
+
+# -----------------------------------------------------------------------
+# CHAOS-3297 s2 round 8 (closure, ratified on the ticket): positive-
+# obligation partition for the completion-denominator guard.
+#
+# Rounds 5, 6, and 7 each tried to CLOSE an open set -- detect every
+# possible fabricated-completion phrasing by vocabulary. Each round's
+# sweep (digit/ratio shapes -> totalizing words -> bare unhedged
+# predicates -> hedge-word rescue) was defeated by the next round's
+# fresh synonym ("all set", "concluded", "resolved", "delivered",
+# "shipped") or a whole-text hedge token rescuing an unequivocal clause
+# elsewhere in the SAME sentence ("The work appears fully complete --
+# and it is."). That is structural, not a vocabulary gap: natural-
+# language completion semantics has no finite vocabulary, so absence-
+# of-bad-phrasing can never be a closed check.
+#
+# The fix inverts the obligation to PRESENCE of a fixed, exact, server-
+# specified sentence (answer_validator.INCOMPLETE_DENOMINATOR_
+# DISCLOSURE). This makes the domain of every prose field (each
+# claim.text, and direct_summary), whenever ANY tool result withheld its
+# completion denominator, a TWO-CELL partition -- nothing left to
+# enumerate:
+#
+#   Cell 1 (ACCEPTED): the field's text contains
+#   INCOMPLETE_DENOMINATOR_DISCLOSURE, case-insensitive, verbatim.
+#   Covered structurally: presence is a bounded, exact, checkable fact,
+#   independent of what else the text says. The reader always sees the
+#   caveat verbatim alongside any other claim in that field -- the
+#   residual risk (ratified as acceptable) is a confident clause NEXT TO
+#   an explicit caveat, never a confident clause with no caveat visible
+#   anywhere in that field.
+#
+#   Cell 2 (REJECTED): the field's text does not contain the disclosure.
+#   Covered structurally: this is the logical complement of Cell 1 -- by
+#   definition every string not in Cell 1 is in Cell 2. No vocabulary
+#   detection, no hedge-word list, no synonym enumeration is involved in
+#   deciding which cell a string falls into.
+#
+# Every round-5/6/7 repro -- both the fabricated paraphrases AND the
+# "honest hedge" phrasings that used to be treated specially -- now
+# lands in Cell 2 uniformly, because none of them happen to contain the
+# exact marker. That is deliberate: it proves the mechanism no longer
+# depends on recognizing WHICH phrasings are dishonest vs. which are
+# honest hedges (see test_every_round_5_6_7_repro_lands_in_cell_2_and_
+# is_rejected below).
+#
+# The obligation applies independently to EVERY claim and to
+# direct_summary (never "the disclosure appears somewhere in the
+# answer") -- a reader of one field alone (e.g. claims rendered as a
+# separate list from direct_summary) must never see an unqualified
+# assertion whose only caveat lives in a different field. This closes
+# the round-7 "confident clause not adjacent to its caveat" bypass shape
+# at the ANSWER level, not just within one sentence. The accepted cost
+# (test_topically_unrelated_claim_also_requires_the_disclosure below):
+# a claim about something entirely unrelated to completion is ALSO
+# rejected in this state, because gating the obligation on an "is this
+# claim about completion" vocabulary check would reopen exactly the
+# open-set problem this fix exists to close.
+#
+# When the denominator is NOT withheld
+# (test_completion_language_is_fine_when_the_denominator_is_known
+# below), the check does not run at all -- the partition is scoped to
+# the withheld state, not a blanket ban on completion language.
+# -----------------------------------------------------------------------
+
+
+def test_claim_omitting_the_disclosure_is_rejected() -> None:
+    """Cell 2 (claims loop): a claim asserting completion without the
+    exact disclosure is rejected regardless of what it cites.
+    direct_summary carries the disclosure so this isolates the
+    claims-loop mechanism.
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    payload["direct_summary"] = (
+        f"See the linked claim. {INCOMPLETE_DENOMINATOR_DISCLOSURE.capitalize()}."
+    )
+    payload["claims"] = [
+        {**payload["claims"][0], "text": "Required work is 100% complete."}
+    ]
+    with pytest.raises(
+        AnswerValidationError, match="claim omits the required disclosure"
+    ):
+        validate_answer_candidate(payload, _context_with_withheld_completion())
+
+
+def test_direct_summary_omitting_the_disclosure_is_rejected() -> None:
+    """Cell 2 (direct_summary): direct_summary carries no citation
+    requirement at all, so it needs the identical positive obligation
+    independently of the claims loop. claims carries the disclosure so
+    this isolates the direct_summary mechanism.
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    payload["direct_summary"] = "Required work is 100% complete."
+    payload["claims"] = [
+        {
+            **payload["claims"][0],
+            "text": (
+                f"See direct_summary. {INCOMPLETE_DENOMINATOR_DISCLOSURE.capitalize()}."
+            ),
+        }
+    ]
+    with pytest.raises(
+        AnswerValidationError, match="direct summary omits the required disclosure"
+    ):
+        validate_answer_candidate(payload, _context_with_withheld_completion())
+
+
+# Every prior round's repro, verbatim: none contain the disclosure, so
+# all land in Cell 2 (rejected) under the round-8 partition.
+_ROUND_5_6_7_REPROS_LAND_IN_CELL_2 = [
+    # Round 5: digit/ratio-shape bypasses.
+    "Required work is 100% complete.",
+    "3 of 5 required items are done.",
+    "All 500 required items are finished.",
+    "Nothing remains to be done on the required work.",
+    "The required work is fully complete.",
+    "Three of five required items are complete.",
+    "All required items are complete.",
+    "None of the required work is outstanding.",
+    # Round 6: bare, unhedged predicates -- neither a number nor a
+    # totalizing word.
+    "The required work is done.",
+    "The required work is finished.",
+    "The required work is wrapped up.",
+    "The required work is closed out.",
+    "No required work is left.",
+    # Round 6 negatives: were treated as "honestly hedged" under the old
+    # vocabulary check. Under the positive-obligation partition, natural-
+    # language hedging alone is no longer sufficient -- only the exact
+    # marker is.
+    "The completion status of required work is unknown because the data "
+    "source was truncated.",
+    "Some required items appear complete based on available data, but "
+    "the full set could not be verified.",
+    "The required work is likely done, though this could not be fully verified.",
+    "It is unclear whether the required work is finished.",
+    "Some of the required work appears done, but full verification was not possible.",
+    # Round 7: fresh synonyms the vocabulary sweep missed.
+    "The required work is all set.",
+    "The required work is concluded.",
+    "The required work is resolved.",
+    "The required work is delivered.",
+    "The required work is shipped.",
+    "The required work is fully addressed.",
+    "The work is over.",
+    # Round 7: whole-text hedge-rescue bypass -- one hedge token
+    # ("appears") no longer rescues an unequivocal clause elsewhere in
+    # the same sentence.
+    "The work appears fully complete -- and it is.",
+]
+
+
+@pytest.mark.parametrize("text", _ROUND_5_6_7_REPROS_LAND_IN_CELL_2)
+def test_every_round_5_6_7_repro_lands_in_cell_2_and_is_rejected(text: str) -> None:
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    payload["direct_summary"] = "See the linked claim for details."
+    payload["claims"] = [{**payload["claims"][0], "text": text}]
+    with pytest.raises(
+        AnswerValidationError, match="omits the required disclosure"
+    ) as raised:
+        validate_answer_candidate(payload, _context_with_withheld_completion())
+    assert raised.value.repairable is True
+    assert raised.value.code == "completion_denominator_withheld"
+
+
+def test_topically_unrelated_claim_also_requires_the_disclosure() -> None:
+    """Accepted cost of uniform enforcement: a claim about something
+    entirely unrelated to completion (no completion language at all) is
+    ALSO rejected when the denominator is withheld anywhere in the run's
+    tool results. Gating the obligation on an "is this claim about
+    completion" check would reopen exactly the open-set problem the
+    positive obligation exists to close. The cost is bounded -- one
+    repair pass appends the boilerplate sentence (repairable=True); the
+    alternative is unbounded.
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    payload["direct_summary"] = "See the linked claim for details."
+    payload["claims"] = [
+        {
+            **payload["claims"][0],
+            "text": "Twelve work items were touched in the selected period.",
+        }
+    ]
+    with pytest.raises(
+        AnswerValidationError, match="claim omits the required disclosure"
+    ):
+        validate_answer_candidate(payload, _context_with_withheld_completion())
+
+
+# Cell 1: text carrying the exact disclosure is accepted regardless of
+# case, position, or what else the sentence says.
+_TEXT_WITH_DISCLOSURE_LANDS_IN_CELL_1_AND_IS_ACCEPTED = [
+    INCOMPLETE_DENOMINATOR_DISCLOSURE.capitalize() + ".",
+    f"Some required items look done, but {INCOMPLETE_DENOMINATOR_DISCLOSURE}.",
+    INCOMPLETE_DENOMINATOR_DISCLOSURE.upper() + ".",
+    # The documented residual: a confident clause NEXT TO the caveat is
+    # accepted per the ratified residual-risk note above, not silently
+    # absent.
+    f"It's 100% done. Note: {INCOMPLETE_DENOMINATOR_DISCLOSURE}.",
+]
+
+
+@pytest.mark.parametrize("text", _TEXT_WITH_DISCLOSURE_LANDS_IN_CELL_1_AND_IS_ACCEPTED)
+def test_text_carrying_the_disclosure_lands_in_cell_1_and_is_accepted(
+    text: str,
+) -> None:
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    payload["direct_summary"] = text
+    payload["claims"] = [{**payload["claims"][0], "text": text}]
+    # Must not raise.
+    validate_answer_candidate(payload, _context_with_withheld_completion())
+
+
+def test_completion_language_is_fine_when_the_denominator_is_known() -> None:
+    """Known-denominator control: the positive obligation only applies
+    when the denominator is withheld -- the same phrasing that requires
+    the disclosure above must pass cleanly, WITHOUT the disclosure, when
+    the tool result carries a real (non-null) denominator.
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["direct_summary"] = "All required work is complete."
+    payload["claims"] = [
+        {**payload["claims"][0], "text": "All required work is complete."}
+    ]
+    # Should not raise -- _context()'s tool result has actual_completion=None.
+    validate_answer_candidate(payload, _context())
+
+
+def test_honest_partial_answer_with_the_disclosure_passes_end_to_end() -> None:
+    """Honest-partial control: a well-formed PARTIAL answer that
+    correctly discloses the withheld denominator passes cleanly end to
+    end -- this guard, the numeric-citation check, and the CHAOS-3290
+    grounding floor all satisfied together.
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "partial"
+    payload["direct_summary"] = (
+        f"Some required items appear complete, but {INCOMPLETE_DENOMINATOR_DISCLOSURE}."
+    )
+    payload["claims"] = [
+        {
+            **payload["claims"][0],
+            "text": (
+                f"One required item is done; {INCOMPLETE_DENOMINATOR_DISCLOSURE}."
+            ),
+        }
+    ]
+    validate_answer_candidate(payload, _context_with_withheld_completion())
 
 
 # --- CHAOS-3290: a complete/substantive answer cannot be an empty shell ---

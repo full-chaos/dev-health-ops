@@ -16,6 +16,7 @@ from pydantic import AwareDatetime, Field, FiniteFloat, model_validator
 
 from .base import (
     ContractModelV2,
+    DevRelationshipPath,
     EvidenceHandle,
     Label,
     OpaqueID,
@@ -25,6 +26,12 @@ from .base import (
     SourceClass,
     SourceRequirementState,
     Version,
+)
+from .deficiency import (
+    DeficiencyCategoryStatus,
+    DeficiencyFinding,
+    assert_full_category_coverage,
+    finding_sort_key,
 )
 from .embedded import (
     DevCIFactV2,
@@ -36,9 +43,11 @@ from .embedded import (
     DevRequiredChildFactV2,
     DevStatusFactV2,
 )
+from .health_rules import DimensionState, HealthRuleFinding
 from .plan import PlanRegistryID
 
 __all__ = [
+    "HEALTH_FINDING_SEVERITY_RANK",
     "DevInvestigationResult",
     "DevObservedChangeV2",
     "DevRelationshipPath",
@@ -68,21 +77,6 @@ _UNMEASURED_STATES = frozenset(
         SourceRequirementState.TRUNCATED,
     }
 )
-
-
-class DevRelationshipPath(ContractModelV2):
-    """One verifiable hop chain from a committed subject to supporting data."""
-
-    path_id: OpaqueID
-    source_entity_id: OpaqueID
-    relationship: OpaqueID
-    target_entity_id: OpaqueID
-    provenance: ShortText
-    confidence: FiniteFloat = Field(ge=0, le=1)
-    observed_at: AwareDatetime
-    evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(
-        default_factory=tuple, max_length=25
-    )
 
 
 class DevObservedChangeV2(ContractModelV2):
@@ -136,8 +130,123 @@ class DevSourceContent(ContractModelV2):
     observed_changes: tuple[DevObservedChangeV2, ...] = Field(
         default_factory=tuple, max_length=25
     )
+    #: CHAOS-3297 stack #3: launch-eligible findings only (never
+    #: shadow/suppressed -- see ``health_profile_synthesis.HealthProfileResult``)
+    #: from ``ProjectHealthService``/``TeamHealthService``/
+    #: ``PortfolioStatusService``/``TeamWorkloadService``, ordered
+    #: worst-severity-first then ``finding_id`` for stability (mirrors
+    #: ``portfolio_status_service._sort_key``'s own severity table) so a
+    #: 50-of-N cap always keeps the same 50. ``health_findings_truncated``
+    #: is a SEPARATE signal from the cap itself (team-lead amendment,
+    #: 2026-08-02: "a capped set without a signal is a false-complete",
+    #: the same lesson CHAOS-3297 s2's denominator fix exists for) -- a
+    #: bounded tuple alone cannot distinguish "exactly 50 findings exist"
+    #: from "51+ findings exist and 1+ were dropped", so the wiring
+    #: function that populates this field must set the flag explicitly
+    #: whenever the pre-cap count exceeds 50.
+    health_findings: tuple[HealthRuleFinding, ...] = Field(
+        default_factory=tuple, max_length=50
+    )
+    health_findings_truncated: bool = False
+    #: CHAOS-3297 stack #3: ``OperationalDeficiencyService``'s findings,
+    #: same worst-severity-first/``finding_id`` ordering and truncation-
+    #: disclosure discipline as ``health_findings`` above.
+    deficiency_findings: tuple[DeficiencyFinding, ...] = Field(
+        default_factory=tuple, max_length=50
+    )
+    deficiency_findings_truncated: bool = False
+    #: CHAOS-3297 s3 codex full-branch review round 1 (FINDING 2, CONFIRMED
+    #: HIGH, 2026-08-02): ``OperationalDeficiencyInventory.category_statuses``
+    #: was being discarded entirely on the way into ``DevSourceContent`` --
+    #: only ``findings`` was ever copied over. Eight valid UNEVALUATED
+    #: categories then produced empty ``deficiency_findings`` with no
+    #: distinguishing signal, indistinguishable from eight genuinely
+    #: evaluated, genuinely zero-finding categories -- exactly the
+    #: evaluated-zero-vs-unevaluated distinction ``DeficiencyCategoryStatus``
+    #: exists to preserve (CHAOS-3305), erased one hop downstream. Empty by
+    #: default for every source class other than ``DEFICIENCY_INVENTORY``,
+    #: which this field does not apply to; when populated, must be exactly
+    #: the eight closed categories (``validate_deficiency_category_coverage``
+    #: below, via ``deficiency.assert_full_category_coverage`` imported by
+    #: reference -- the same check ``OperationalDeficiencyInventory`` itself
+    #: enforces, never a second copy that could disagree).
+    deficiency_category_statuses: tuple[DeficiencyCategoryStatus, ...] = Field(
+        default_factory=tuple, max_length=8
+    )
     metric_refs: tuple[DevMetricRefV2, ...] = Field(
         default_factory=tuple, max_length=25
+    )
+
+    @model_validator(mode="after")
+    def validate_deficiency_category_coverage(self) -> Self:
+        if self.deficiency_category_statuses:
+            assert_full_category_coverage(self.deficiency_category_statuses)
+        return self
+
+    @model_validator(mode="after")
+    def validate_finding_order(self) -> Self:
+        """``health_findings``/``deficiency_findings`` must already be
+        worst-severity-first, then a stable id -- the canonical form,
+        enforced here rather than merely documented, the same posture
+        ``DevAnswerFact.validate_disclosures_canonical_order`` takes for
+        ``FactDisclosure`` (contracts_v2/frame.py). A capped tuple whose
+        SURVIVING 50 depend on caller iteration order rather than a
+        structural invariant is not reproducible: two evaluations of the
+        identical, larger underlying finding set could keep a different
+        50 -- this closes that as a construction-time error rather than a
+        wiring convention a future call site could silently violate.
+
+        ``deficiency_findings`` reuses ``deficiency.finding_sort_key`` BY
+        REFERENCE rather than a second, hand-written severity table:
+        ``OperationalDeficiencyInventory.findings`` is already validated
+        against that exact key (severity, category, finding_id) at its own
+        contract layer, so importing it is the only way this check and
+        that one can be PROVEN to agree rather than merely described as
+        agreeing (mirrors ``relationship_matrix.py``'s own "imported by
+        reference, not duplicated by value" rationale). ``health_findings``
+        has no equivalent existing convention to import --
+        ``health_profile_synthesis._ordered`` sorts by
+        ``(dimension, rule_id)``, not severity -- so this validator defines
+        the canonical health order itself, matching
+        ``portfolio_status_service._DIMENSION_STATE_SEVERITY``.
+        """
+
+        health_keys = [
+            (HEALTH_FINDING_SEVERITY_RANK[finding.state], finding.finding_id)
+            for finding in self.health_findings
+        ]
+        if health_keys != sorted(health_keys):
+            raise ValueError(
+                "health_findings must be ordered worst-severity-first, then finding_id"
+            )
+        deficiency_keys = [
+            finding_sort_key(finding) for finding in self.deficiency_findings
+        ]
+        if deficiency_keys != sorted(deficiency_keys):
+            raise ValueError(
+                "deficiency_findings must be ordered per deficiency.finding_sort_key "
+                "(severity, category, finding_id)"
+            )
+        return self
+
+
+#: Worst-first severity rank for ``health_findings`` ordering -- mirrors
+#: ``portfolio_status_service._DIMENSION_STATE_SEVERITY`` exactly (lower
+#: sorts first). Import-time-total over ``DimensionState`` below, the same
+#: posture as every other closed-vocabulary table in this package.
+HEALTH_FINDING_SEVERITY_RANK: dict[DimensionState, int] = {
+    DimensionState.CRITICAL: 0,
+    DimensionState.AT_RISK: 1,
+    DimensionState.WATCH: 2,
+    DimensionState.UNKNOWN: 3,
+    DimensionState.NOT_APPLICABLE: 4,
+    DimensionState.HEALTHY: 5,
+}
+_missing_health_states = set(DimensionState) - set(HEALTH_FINDING_SEVERITY_RANK)
+if _missing_health_states:
+    raise RuntimeError(
+        f"health_findings severity rank is missing DimensionState member(s): "
+        f"{sorted(state.value for state in _missing_health_states)}"
     )
 
 

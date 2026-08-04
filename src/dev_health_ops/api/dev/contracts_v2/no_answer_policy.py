@@ -169,12 +169,29 @@ NO_ANSWER_FRAME_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
     "readiness": NoAnswerFieldPolicy.ABSENT,
     "sections": NoAnswerFieldPolicy.ABSENT,
     "facts": NoAnswerFieldPolicy.ABSENT,
+    # ABSENT forces the whole tuple empty on a no-answer outcome, which
+    # makes DevMetricRefV2.evidence_classification (CHAOS-3297 stack #3,
+    # F10 metric half) moot here: there is never a metric instance -- with
+    # or without a classification -- for a no-answer outcome to carry. No
+    # separate registry entry for DevMetricRefV2 is needed; F10's XOR
+    # invariant is enforced at the metric's own construction validator and
+    # re-checked by validate_frame_grounding, independent of this table.
     "metrics": NoAnswerFieldPolicy.ABSENT,
     "comparisons": NoAnswerFieldPolicy.ABSENT,
     "relationship_paths": NoAnswerFieldPolicy.ABSENT,
     "health_profile_refs": NoAnswerFieldPolicy.ABSENT,
     "finding_refs": NoAnswerFieldPolicy.ABSENT,
     "deficiency_refs": NoAnswerFieldPolicy.ABSENT,
+    # CHAOS-3297 stack #3: same posture as every other content-bearing
+    # collection field above -- a no-answer outcome carries no findings.
+    "health_findings": NoAnswerFieldPolicy.ABSENT,
+    "health_findings_truncated": NoAnswerFieldPolicy.NON_TEXT,
+    "deficiency_findings": NoAnswerFieldPolicy.ABSENT,
+    "deficiency_findings_truncated": NoAnswerFieldPolicy.NON_TEXT,
+    # CHAOS-3297 s3 codex full-branch review round 1 (FINDING 2): same
+    # posture as deficiency_findings above -- a no-answer outcome carries
+    # no category coverage block either.
+    "deficiency_category_statuses": NoAnswerFieldPolicy.ABSENT,
     "conflicts": NoAnswerFieldPolicy.ABSENT,
     "limitations": NoAnswerFieldPolicy.ABSENT,
     "source_observations": NoAnswerFieldPolicy.ABSENT,

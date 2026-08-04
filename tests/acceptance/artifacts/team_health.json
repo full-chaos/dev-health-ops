@@ -1,0 +1,234 @@
+{
+  "schema_version": "ask_dev_acceptance_artifact.v1",
+  "scenario_id": "team_health",
+  "tree_clean": true,
+  "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "script": "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+  "script_sha256": "444b2f4157781c1ebf80ad6d47f623fc48f008129120a671be435dcdaa35c96b",
+  "runtime_digest": "74cdc3461d3aa2c35b7fa5af834884d5fa09485f5b31bcc66c4937c67092d507",
+  "runtime_dependencies": {
+    "compose.yml": "bada6bb643a76178a446333e61434878b054bac88c0f11c9222a434de084fbcf",
+    "docker/Dockerfile": "c8b2107d0d7cc780ac6010600ec66de3b0d41e70cdc9ac77b80a134aecadce6f",
+    "pyproject.toml": "e6426b64a1bac28e43ecd4d992f082ef2680842e437bd0094b5eb645b4ce834e",
+    "requirements.txt": "cbb3d1a9ccb506efa9a503e39ba9cc02576ae4c252550a2a1a904519f54d64d8",
+    "scripts/acceptance/acceptance_artifact.py": "a9d375da4cf648aab162816f6bc79c914bc9f8bea74b9619791f809f20b78aa2",
+    "scripts/acceptance/prepare_ask_dev_acceptance.py": "a6a7b052a944762dab78e1c514e849acfc8fbd19d6061d303b6ddf18b801afda",
+    "scripts/acceptance/run_ask_dev_compose.sh": "a0932f03003e4d764de476d45a79c784abd553e6dc48a44cd8f314416ad3b898",
+    "src/dev_health_ops/llm/agent/scripted_openai_service.py": "31b8ddb59d0fb2a0f96e687ab857d57cbf5198ba4327437c70dfee83927e1592",
+    "tests/acceptance/compose.ask-dev-provider-profile.yml": "815cb497b955d344412339e037cb21bc846d817803dc87ad7efabf8937b02c23",
+    "tests/acceptance/compose.ask-dev.yml": "126625be3fda01108fd623e660ec3fd6dd8b4415dc4958283144e0173135fae1"
+  },
+  "commit_sha": "bc7bd4267ffd1f9a2e04020b6d4decc878995471",
+  "command": "python smoke_ask_dev_stack3_intents.py",
+  "started_at": "2026-08-03T18:09:52.078930+00:00",
+  "finished_at": "2026-08-03T18:09:53.163102+00:00",
+  "status": "passed",
+  "error": null,
+  "assertions": [
+    {
+      "name": "conversation_response_is_object",
+      "passed": true,
+      "detail": "conversation response was not an object"
+    },
+    {
+      "name": "conversation_id_present",
+      "passed": true,
+      "detail": "conversation response returned no conversation_id"
+    },
+    {
+      "name": "sse_request_authenticated",
+      "passed": true,
+      "detail": "SSE request requires authentication"
+    },
+    {
+      "name": "sse_content_type",
+      "passed": true,
+      "detail": "unexpected SSE type text/event-stream"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE run.started frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE progress frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE scope.resolved frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE warning frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE warning frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE answer.completed frame omitted data"
+    },
+    {
+      "name": "sse_frame_has_event_name",
+      "passed": true,
+      "detail": "SSE frame omitted event name"
+    },
+    {
+      "name": "sse_frame_has_data",
+      "passed": true,
+      "detail": "SSE done frame omitted data"
+    },
+    {
+      "name": "scope_resolved_event_present",
+      "passed": true,
+      "detail": "expected a scope.resolved event"
+    },
+    {
+      "name": "named_team_committed",
+      "passed": true,
+      "detail": "the named team subject was never committed to the resolved scope"
+    },
+    {
+      "name": "answer_completed_event_present",
+      "passed": true,
+      "detail": "no answer completed"
+    },
+    {
+      "name": "answer_status_not_hard_error",
+      "passed": true,
+      "detail": "expected a real (possibly degraded) answer, got status='degraded'"
+    },
+    {
+      "name": "preflight_proceeded_committed_subject",
+      "passed": true,
+      "detail": "expected preflight_outcome='proceeded_committed_subject', got 'proceeded_committed_subject'"
+    },
+    {
+      "name": "claimed_plan_step_completed",
+      "passed": true,
+      "detail": "expected 'health_evaluation' in plan_step_partition['completed'], got partition={'failed': [], 'skipped': [], 'completed': ['health_evaluation']} -- a legacy-loop fallback would pass every OTHER assertion in this scenario while never running this step"
+    },
+    {
+      "name": "stream_terminated_as_answer",
+      "passed": true,
+      "detail": "stream did not terminate as answer -- a hang or non-answer terminal kind would mean the newly-wired plan or the deliberate portfolio fallback broke the run rather than completing it"
+    }
+  ]
+}

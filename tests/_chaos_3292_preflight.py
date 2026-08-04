@@ -372,11 +372,25 @@ class Recorder:
         """No-op here; CHAOS-3295's InvestigationRecorder subclass captures this."""
         del result
 
+    async def record_narrative(self, narrative: Any) -> None:
+        """No-op here; CHAOS-3297 stack #4's narrative synthesis is not
+        under test in this module -- only the RunRecorder protocol shape."""
+        del narrative
+
     async def terminal(self, **values: Any) -> None:
         self.terminals.append(values["state"])
 
 
-def recording_registry(calls: list[DevToolRequest]) -> AskDevToolRegistry:
+def stock_executor(
+    calls: list[DevToolRequest],
+) -> Callable[[Any, DevToolRequest], Any]:
+    """The one successful-tool-result executor every suite here shares.
+
+    Exposed separately from ``recording_registry`` so a suite that needs a
+    registry where only *some* tools behave normally (CHAOS-3332) can compose
+    against the same success shape instead of re-deriving it and drifting.
+    """
+
     async def execute(_context: Any, request: DevToolRequest) -> DevToolResult:
         calls.append(request)
         payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
@@ -389,6 +403,11 @@ def recording_registry(calls: list[DevToolRequest]) -> AskDevToolRegistry:
         )
         return DevToolResult.model_validate(payload)
 
+    return execute
+
+
+def recording_registry(calls: list[DevToolRequest]) -> AskDevToolRegistry:
+    execute = stock_executor(calls)
     return AskDevToolRegistry({tool_id: execute for tool_id in ToolID})
 
 
@@ -478,12 +497,22 @@ async def run_preflight_orchestrator(
     recorder_factory: Callable[[], Recorder] = Recorder,
     plan_registry: Any = None,
     plan_executor: Any = None,
+    registry_factory: Callable[[list[DevToolRequest]], AskDevToolRegistry] = (
+        recording_registry
+    ),
 ) -> RunOutput:
     """One full orchestrator run with the preflight wired the way production wires it.
 
     ``recorder_factory`` defaults to the plain ``Recorder`` above; CHAOS-3301's
     harness passes a subclass that also captures ``record_subject_set`` calls,
     without duplicating this whole function for one extra capture point.
+
+    ``registry_factory`` defaults to ``recording_registry`` above; CHAOS-3332's
+    suite passes registries whose executors raise, so the orchestrator's
+    executor-fault handling is exercised through this same seam rather than a
+    second, divergent runner. It still receives the shared ``calls`` list, so a
+    faulting executor's *attempted* request is recorded even though no tool
+    result is produced.
     """
 
     catalog = SeededCatalog(entities, fail_search=fail_search)
@@ -521,7 +550,7 @@ async def run_preflight_orchestrator(
         provider=provider,
         provider_source="platform",
         provider_family="scripted",
-        registry=recording_registry(calls),
+        registry=registry_factory(calls),
         scope_resolver=resolve,
         versions=versions(),
         recorder=recorder,

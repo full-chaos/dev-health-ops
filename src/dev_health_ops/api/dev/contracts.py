@@ -272,7 +272,17 @@ class DevScope(ContractModel):
             # populated) and never carry any other id. An organization scope
             # carrying team_ids stays a filter, structurally — this branch
             # only fires for DirectScope.TEAM.
-            if self.team_ids != [self.entity_refs[0].entity_id]:
+            # CHAOS-3338: compared as tuples, not against a list literal.
+            # ``DevScopeV2`` (contracts_v2.embedded) re-declares ``team_ids``
+            # as a ``tuple[OpaqueID, ...]``, and ``("t",) != ["t"]`` is
+            # always True in Python -- so this branch rejected *every* v2
+            # team scope, including the one the real producer commits.
+            # ``investigation_plans.builtin_steps._wire_metric_content``
+            # revalidates the committed scope as a ``DevScopeV2``, so a
+            # committed team subject raised there for the whole metrics
+            # step. Found by exporting the first team golden into the v2
+            # tree, which had no positive team example until now.
+            if tuple(self.team_ids) != (self.entity_refs[0].entity_id,):
                 raise ValueError(
                     "team direct scope requires team_ids to name exactly that team"
                 )
@@ -350,6 +360,26 @@ class DevDisambiguationCandidate(ContractModel):
     reason: ShortText
 
 
+#: Outcomes a ``DevScopeResolution`` may carry ``candidates`` for.
+#:
+#: ``ambiguous`` REQUIRES them (several authorized entities matched and the
+#: caller must pick one). ``forbidden_or_not_found`` MAY carry them (CHAOS-3367):
+#: the Wave 3.1 PRD's no-match sentence ends "Here are the closest matches, if
+#: any", so the closest-match list needs somewhere to live, and the alternative
+#: -- a second, parallel candidate field -- would give two producers of the same
+#: thing. Every other outcome still forbids them: an ``exact`` commit with a
+#: candidate list beside it is a contradiction, not extra context.
+#:
+#: The set is deliberately narrow. Widening it is a wire-behaviour change, so
+#: it is an edit here rather than a condition inlined in the validator.
+CANDIDATE_BEARING_OUTCOMES: frozenset[ScopeResolutionOutcome] = frozenset(
+    {
+        ScopeResolutionOutcome.AMBIGUOUS,
+        ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND,
+    }
+)
+
+
 class DevScopeResolution(ContractModel):
     schema_version: Literal["dev_scope_resolution.v1"]
     requested_scope: DevScope
@@ -378,8 +408,10 @@ class DevScopeResolution(ContractModel):
             raise ValueError("resolved outcome requires resolved_scope")
         if self.outcome is ScopeResolutionOutcome.AMBIGUOUS and not self.candidates:
             raise ValueError("ambiguous outcome requires candidates")
-        if self.outcome is not ScopeResolutionOutcome.AMBIGUOUS and self.candidates:
-            raise ValueError("candidates are allowed only for ambiguous outcomes")
+        if self.outcome not in CANDIDATE_BEARING_OUTCOMES and self.candidates:
+            raise ValueError(
+                "candidates are allowed only for ambiguous and not-found outcomes"
+            )
         if self.outcome is ScopeResolutionOutcome.ORGANIZATION_FALLBACK:
             if (
                 self.resolved_scope is None
@@ -664,6 +696,16 @@ class DevCoverage(ContractModel):
         default_factory=list, max_length=25
     )
     stale_required_sources: list[OpaqueID] = Field(default_factory=list, max_length=25)
+    #: Required sources that returned real data whose completeness cannot be
+    #: established -- distinct from stale, which asserts the data is old
+    #: (CHAOS-3334 codex review). A degraded status snapshot means one of its
+    #: contributing sources was *unavailable*, and a metric reporting
+    #: insufficient evidence can carry ``FreshnessState.FRESH``; filing either
+    #: under ``stale_required_sources`` tells a client the wrong failure
+    #: cause. Blocks a ``complete`` answer exactly as the other two lists do.
+    degraded_required_sources: list[OpaqueID] = Field(
+        default_factory=list, max_length=25
+    )
     as_of: AwareDatetime
 
     @model_validator(mode="after")
@@ -734,6 +776,7 @@ class DevAnswer(ContractModel):
             self.coverage.available_source_count != self.coverage.required_source_count
             or self.coverage.unavailable_required_sources
             or self.coverage.stale_required_sources
+            or self.coverage.degraded_required_sources
         ):
             raise ValueError(
                 "complete answer requires all required sources fresh and available"
@@ -894,8 +937,43 @@ class DevActualCompletion(ContractModel):
     required_children: list[DevRequiredChildFact] = Field(
         default_factory=list, max_length=100
     )
+    # The complete denominator/numerator from the server's UNBOUNDED
+    # required-work assessment set (CHAOS-3297 stack #2) -- never derived
+    # from ``len(required_children)``, which is truncated to the display
+    # bound above and would silently undercount once a parent has more
+    # than 100 required children.
+    #
+    # Both are ``None`` together (round 2, codex HIGH) whenever the
+    # required-child *source* itself was truncated: an honestly unknown
+    # total is not the same claim as a complete one that happens to equal
+    # its numerator, and the wire contract must not let a caller mistake
+    # one for the other.
+    required_child_total: int | None = Field(default=None, ge=0, le=100_000)
+    required_child_complete: int | None = Field(default=None, ge=0, le=100_000)
+    display_truncated: bool = False
     conflicts: list[DevStatusConflict] = Field(default_factory=list, max_length=20)
     evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+
+    @model_validator(mode="after")
+    def validate_required_child_counts(self) -> Self:
+        if (self.required_child_total is None) != (
+            self.required_child_complete is None
+        ):
+            raise ValueError(
+                "required_child_total and required_child_complete must both be "
+                "known or both be withheld"
+            )
+        if self.required_child_total is None or self.required_child_complete is None:
+            return self
+        if self.required_child_complete > self.required_child_total:
+            raise ValueError(
+                "required_child_complete cannot exceed required_child_total"
+            )
+        if len(self.required_children) > self.required_child_total:
+            raise ValueError(
+                "displayed required_children cannot exceed required_child_total"
+            )
+        return self
 
 
 class DevSourceHealth(ContractModel):

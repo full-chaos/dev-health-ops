@@ -77,8 +77,8 @@ jobs:
           - platform: linux/amd64
             runner: ubuntu-latest
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm
-    
+            runner: ubuntu-26.04-arm
+
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -113,7 +113,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (github.event_name == 'release' && !github.event.release.prerelease) }}
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -182,7 +182,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (github.event_name == 'release' && !github.event.release.prerelease) }}
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

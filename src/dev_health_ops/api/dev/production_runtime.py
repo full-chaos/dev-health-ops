@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import logging
 import os
 import uuid
 from collections.abc import Mapping, Sequence
@@ -43,8 +44,10 @@ from dev_health_ops.llm.agent.probes.legacy_agent import _probe_registry, _probe
 from dev_health_ops.llm.agent.readiness import (
     PLATFORM_READINESS_SETTING_KEY,
     PLATFORM_SETTINGS_ORG_ID,
+    AgentReadinessService,
     SettingsAgentReadinessStore,
 )
+from dev_health_ops.llm.agent.role_readiness import RoleReadinessService
 from dev_health_ops.llm.agent.roles import (
     PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
     AgentRole,
@@ -101,17 +104,21 @@ from .evidence_service import (
     EvidenceReferenceSigner,
     EvidenceService,
 )
-from .investigation_plans import (
-    PlanExecutor,
-    build_default_registry,
-)
+from .investigation_plans import PlanExecutor
 from .investigation_plans.plan_documents import CORE_PLANS_BY_INTENT
+from .investigation_plans.wave_3_1_plans import (
+    WAVE_3_1_PLANS_BY_INTENT,
+    build_registry_with_wave_3_1,
+)
 from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
 from .native_evidence import native_evidence_adapters
 from .native_status_change import ClickHouseStatusChangeSource
+from .native_team_workload import ClickHouseTeamWorkloadSource
+from .operational_deficiency_service import OperationalDeficiencyService
 from .orchestrator import DevRunLimits
 from .org_policy import load_ask_dev_org_policy
+from .project_health_service import ProjectHealthService
 from .prompts import LEGACY_PROMPT_VERSION, PROMPT_VERSION
 from .question_interpreter import QuestionInterpreter
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
@@ -138,6 +145,8 @@ from .status_change_service import (
     StatusSnapshotRequest,
 )
 from .subject_preflight import SubjectPreflight
+from .team_health_service import TeamHealthService
+from .team_workload_service import TeamWorkloadService
 from .tool_registry import TOOL_CONTRACT_VERSION, AskDevToolRegistry
 from .work_graph_neighbors_service import (
     ALLOWED_RELATIONSHIP_TYPES,
@@ -156,6 +165,8 @@ from .work_graph_neighbors_service import (
 from .work_graph_neighbors_service import (
     SCHEMA_VERSION as _WORK_GRAPH_SCHEMA_VERSION,
 )
+
+logger = logging.getLogger(__name__)
 
 _LLM_CATEGORY = SettingCategory.LLM.value
 _METRIC_REGISTRY_VERSION = "ask-dev-metrics.v1"
@@ -186,6 +197,15 @@ class ProductionProviderResolution:
     provider_label: str
     model_label: str
     readiness_fingerprint: str = ""
+    #: CHAOS-3358. True when the SELECTED provider is the platform one and its
+    #: stored certification is not current. Deliberately a fact, not a side
+    #: effect: resolution runs on unauthenticated-adjacent read paths (the
+    #: capabilities projection resolves a provider before Ask Dev entitlement
+    #: or emergency-disable is checked), and automatic re-certification spends
+    #: real operator provider calls. Only an authorized run that actually
+    #: selected the platform provider acts on this -- see the dev router's
+    #: message path. Codex CHAOS-3358 review, CONFIRMED reachable.
+    platform_certification_stale: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,6 +383,104 @@ async def resolve_platform_certification_provider() -> ProductionProviderResolut
     raise DevRuntimeUnavailable(
         "provider_not_configured", "No certified Ask Dev model is ready."
     )
+
+
+async def certify_platform_resolution(
+    session: AsyncSession, resolution: ProductionProviderResolution
+) -> None:
+    """Probe an already-resolved platform provider and persist the verdict.
+
+    This is the ONE implementation of "certify the platform-owned provider
+    and write the record". Both callers share it deliberately: the Platform
+    Admin preflight button (a force-refresh) and the automatic
+    re-certification that CHAOS-3358 triggers when the stored record has gone
+    stale. Two copies of this sequence would be two things to keep in
+    agreement, and the whole point of the automatic path is that the record
+    it writes is indistinguishable from the one the button writes -- same
+    binary ``AgentReadinessRecord``, same per-role ``legacy_agent`` record,
+    same fingerprint.
+
+    The provider probed and the fingerprint written both come off the SAME
+    ``ProductionProviderResolution``, so the record cannot claim a
+    configuration other than the one actually exercised.
+    """
+
+    try:
+        await AgentReadinessService(_platform_readiness_store(session)).certify(
+            resolution.provider,
+            provider_name=resolution.family,
+            model=resolution.model,
+            fingerprint=resolution.readiness_fingerprint,
+        )
+        try:
+            # CHAOS-3285: certify the legacy_agent role in the new per-role
+            # store too, on the same already-resolved provider, so the
+            # per-role projection reflects real preflight results rather
+            # than staying "not_yet_certified" forever. Best-effort: a bug
+            # here must never regress the existing (tested, relied-upon)
+            # binary certify() call above -- certify_legacy_agent already
+            # turns every AgentProviderError into a FAILED/INCOMPATIBLE
+            # record internally, so only a genuinely unexpected failure
+            # (e.g. store I/O) reaches this except.
+            #
+            # CHAOS-3285 round 2 (Codex MEDIUM): the whole attempt runs
+            # inside a SAVEPOINT (begin_nested), never bare. A DB error
+            # caught by a plain except -- without a rollback or savepoint --
+            # leaves the session's transaction unable to accept further
+            # operations; the NEXT query on it raises PendingRollbackError,
+            # and when the request's own session dependency later tries to
+            # commit, THAT failure rolls back the whole transaction --
+            # silently discarding the binary certify() write just above,
+            # despite this being "caught". begin_nested()'s __aexit__ rolls
+            # back only to the savepoint on an exception, leaving the outer
+            # transaction (and the binary write already flushed into it)
+            # intact and the session usable for the rest of this request.
+            async with session.begin_nested():
+                await RoleReadinessService(_platform_role_store(session)).certify_role(
+                    AgentRole.LEGACY_AGENT,
+                    resolution.provider,
+                    certification_key=resolution.readiness_fingerprint,
+                )
+        except Exception:
+            logger.warning(
+                "Failed to certify the legacy_agent role during platform "
+                "Ask Dev preflight",
+                exc_info=True,
+            )
+    finally:
+        try:
+            await resolution.provider.aclose()
+        except Exception:
+            # Best-effort cleanup only: the certify() call above has already
+            # persisted the readiness result (or its own failure state), so a
+            # transport-close error here must never mask that outcome or fail
+            # this request. Still worth knowing about (a leaked connection is
+            # an operational signal), so log it rather than swallow it.
+            logger.warning(
+                "Failed to close platform Ask Dev provider connection after preflight",
+                exc_info=True,
+            )
+
+
+async def certify_platform_provider(session: AsyncSession) -> bool:
+    """Resolve the platform provider and certify it. False when there was
+    nothing to certify.
+
+    The entry point for automatic re-certification (CHAOS-3358), which -- unlike
+    the admin route -- has no request to answer and so resolves the provider
+    itself. A provider that will not resolve at all (unconfigured, or an
+    explicit operator "none") leaves the stored record untouched: the badge
+    already reports that state from the resolution failure itself, and
+    overwriting a real prior verdict with a synthetic one would lose
+    information.
+    """
+
+    try:
+        resolution = await resolve_platform_certification_provider()
+    except DevRuntimeUnavailable:
+        return False
+    await certify_platform_resolution(session, resolution)
+    return True
 
 
 async def resolve_byo_certification_provider(
@@ -567,6 +685,19 @@ def _resolve_provider_selection(
         provider_label="OpenAI compatible",
         model_label=selected.model.replace("\r", "").replace("\n", "")[:256],
         readiness_fingerprint=_readiness_fingerprint(selected),
+        # The source check is redundant TODAY and deliberately kept: a BYO
+        # candidate is only ever selectable while readiness_current is true
+        # (AgentProviderCandidate.usable still requires it for BYO, and
+        # selection only returns candidates that are usable), so dropping it
+        # is currently an equivalent mutation -- no reachable input
+        # distinguishes the two. It is written explicitly anyway so this flag
+        # does not silently start meaning something else if BYO's own gate
+        # ever changes. Stated rather than claimed as covered: no test kills
+        # that mutant, because none can.
+        platform_certification_stale=(
+            selected.source is AgentProviderSource.PLATFORM
+            and not selected.readiness_current
+        ),
     )
 
 
@@ -1357,9 +1488,18 @@ async def _assemble_production_runtime(
         ClickHouseAuthorizedEntityCatalog(clickhouse), cache=ScopeRequestCache()
     )
     metric_service = MetricQueryService(ClickHouseMetricSource(clickhouse))
+    # CHAOS-3297 stack #3: kept as a NAMED reference (not inlined into
+    # StatusChangeService's constructor call the way it was before this
+    # stack) so TeamHealthService/TeamWorkloadService/
+    # OperationalDeficiencyService can share the SAME source instance --
+    # its own (org_id, team_id, as_of) cache then turns their internal
+    # team_repository_ids lookup into a hit rather than a second round
+    # trip, per those services' own docstrings.
+    status_change_source = ClickHouseStatusChangeSource(clickhouse)
     status_service = StatusChangeService(
-        ClickHouseStatusChangeSource(clickhouse), metric_service=metric_service
+        status_change_source, metric_service=metric_service
     )
+    team_workload_source = ClickHouseTeamWorkloadSource(clickhouse)
     secret = os.getenv("JWT_SECRET_KEY")
     if not secret:
         raise DevRuntimeUnavailable(
@@ -1795,6 +1935,9 @@ async def _assemble_production_runtime(
             rule_version=result.actual.rule_version,
             reason_codes=list(result.actual.reason_codes)[:25],
             required_children=required_children,
+            required_child_total=result.actual.required_child_total,
+            required_child_complete=result.actual.required_child_complete,
+            display_truncated=result.actual.display_truncated,
             conflicts=conflicts,
             evidence_ref_ids=aggregate_evidence_ids,
         )
@@ -2133,8 +2276,24 @@ async def _assemble_production_runtime(
     # CHAOS-3295: the plan-governed investigation seam rides the same
     # organization gate as preflight -- a plan can only run once a subject
     # is committed, and only the preflight commits one.
-    plan_executor = (
-        PlanExecutor(
+    plan_executor: PlanExecutor | None = None
+    if wave_3_1_enabled:
+        plan_executor_runtime = _ProductionPlanExecutorRuntime(
+            status_service=status_service,
+            metric_service=metric_service,
+            work_graph_service=work_graph_service,
+            data_health_service=data_health_service,
+            evidence_signer=evidence_signer,
+        )
+        # CHAOS-3297 stack #3: every CHAOS-3303/3304/3305 service is
+        # constructed over the SAME PlanExecutorRuntime instance the six
+        # core plans' steps use -- never a second, parallel query path.
+        # TeamHealthService/TeamWorkloadService/OperationalDeficiencyService
+        # share the SAME status_change_source instance so their internal
+        # team_repository_ids lookup shares its (org_id, team_id, as_of)
+        # cache with the runtime's own calls (see that instance's own
+        # construction comment above).
+        plan_executor = PlanExecutor(
             # CHAOS-3296 round 5 (structural inversion, 2026-08-02): passing
             # the exact ``EvidenceReferenceSigner`` every builtin step's
             # ``mint_evidence`` already signs through is what turns on
@@ -2143,20 +2302,26 @@ async def _assemble_production_runtime(
             # ``investigation_plans.executor._evidence_signature_failures``)
             # rather than trusting a receipt of what this run minted, so no
             # runtime-wrapping step is needed here anymore.
-            registry=build_default_registry(
-                _ProductionPlanExecutorRuntime(
-                    status_service=status_service,
-                    metric_service=metric_service,
-                    work_graph_service=work_graph_service,
-                    data_health_service=data_health_service,
-                    evidence_signer=evidence_signer,
-                )
+            #
+            # build_registry_with_wave_3_1 registers the six core plans'
+            # steps PLUS health.project.v1/health.team.v1/
+            # balance.team_workload.v1/deficiency.operational.v1's, all
+            # against ONE shared registry, validated together.
+            registry=build_registry_with_wave_3_1(
+                plan_executor_runtime,
+                project_health=ProjectHealthService(plan_executor_runtime),
+                team_health=TeamHealthService(
+                    plan_executor_runtime, status_change_source
+                ),
+                team_workload=TeamWorkloadService(
+                    plan_executor_runtime, status_change_source, team_workload_source
+                ),
+                operational_deficiency=OperationalDeficiencyService(
+                    plan_executor_runtime, status_change_source, team_workload_source
+                ),
             ),
             evidence_signer=evidence_signer,
         )
-        if wave_3_1_enabled
-        else None
-    )
 
     return BoundedDevRuntime(
         provider=provider.provider,
@@ -2165,8 +2330,16 @@ async def _assemble_production_runtime(
         registry=registry,
         scope_resolver=scope_resolver,
         versions=versions,
+        platform_certification_stale=provider.platform_certification_stale,
         preflight=preflight,
-        plan_registry=CORE_PLANS_BY_INTENT if wave_3_1_enabled else None,
+        # CHAOS-3297 stack #3: the combined ten-plan lookup -- orchestrator.py's
+        # own plan_registry.get(intent.intent_id) is intent-generic and needs
+        # no change to reach the four new plans.
+        plan_registry=(
+            {**CORE_PLANS_BY_INTENT, **WAVE_3_1_PLANS_BY_INTENT}
+            if wave_3_1_enabled
+            else None
+        ),
         plan_executor=plan_executor,
     )
 

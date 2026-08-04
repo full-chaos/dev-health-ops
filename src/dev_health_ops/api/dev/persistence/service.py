@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from dev_health_ops.api.dev.contracts import DevError
+from dev_health_ops.api.dev.contracts_v2.base import NarrativeFailureCode
 from dev_health_ops.api.dev.contracts_v2.frame import (
     DevAnswerFrame as DevAnswerFrameContract,
 )
@@ -147,6 +148,18 @@ _RESOLUTION_OUTCOMES = frozenset(
 _ENTITY_KINDS = frozenset(
     {"repository", "project", "work_unit", "issue", "pull_request", "team"}
 )
+#: CHAOS-3337: this frozenset is a SEPARATE, hand-maintained mirror of
+#: ``contracts_v2.base.SourceClass`` -- that enum being closed only proves a
+#: plan document's own ``source_requirements`` are internally consistent,
+#: never that THIS allowlist was updated to match. A registered plan whose
+#: steps emit a SourceClass this table does not carry crashes the first
+#: live run that reaches ``append_source_observation`` below with
+#: ``DevPersistenceValidationError('invalid source_class')`` -- exactly
+#: what happened for ``health_profile``/``deficiency_inventory``
+#: (CHAOS-3297 stack #3, merged #1387) before this fix. Reconciliation is
+#: now also checked at ``investigation_plans.wave_3_1_plans`` import time
+#: (``_source_classes_missing_from_persistence_allowlist``), so the next
+#: SourceClass a registered plan's steps emit fails at import, not live.
 _SOURCE_CLASSES = frozenset(
     {
         "status_change",
@@ -161,6 +174,8 @@ _SOURCE_CLASSES = frozenset(
         "incident",
         "operational_control",
         "source_health",
+        "health_profile",
+        "deficiency_inventory",
     }
 )
 _REQUIREMENT_LEVELS = frozenset(
@@ -192,6 +207,10 @@ _PUBLIC_OUTCOMES = frozenset(
     }
 )
 _NARRATIVE_MODES = frozenset({"provider", "deterministic_fallback"})
+# CHAOS-3297 codex NO-SHIP finding round 1, MEDIUM #3: the Python-side half
+# of NarrativeFailureCode's enforcement (contracts_v2.base owns the
+# vocabulary itself; migration 0083's CHECK constraint is the other half).
+_NARRATIVE_FAILURE_CODES = frozenset(code.value for code in NarrativeFailureCode)
 _STAGE_IDS = frozenset(
     {
         "interpreting",
@@ -1744,11 +1763,37 @@ class DevPersistenceService:
         grounding_validation_status: str | None = None,
         safe_error_code: str | None = None,
         terminal_error_payload: Mapping[str, Any] | None = None,
+        narrative_mode: str | None = None,
+        narrative_failure_code: str | None = None,
     ) -> DevRun | None:
         if state not in _RUN_STATES:
             raise DevPersistenceValidationError("invalid run state")
         if provider_source not in {None, "platform", "byo"}:
             raise DevPersistenceValidationError("invalid provider source")
+        # CHAOS-3297 stack #4: dev_runs.narrative_mode mirrors
+        # dev_run_narratives.mode's own closed vocabulary
+        # (_NARRATIVE_MODES) -- the run-level column is a fast-fail UX/
+        # replay-idempotency signal, not a second source of truth, so it
+        # cannot legally diverge from what a DevRunNarrative row (if any)
+        # would say. narrative_failure_code's closed vocabulary is
+        # contracts_v2.base.NarrativeFailureCode (CHAOS-3297 codex NO-SHIP
+        # finding round 1, MEDIUM #3): Python enforces it here as fast-fail
+        # UX, and a DB CHECK constraint (migration 0083,
+        # ck_dev_runs_narrative_failure_code) enforces it at the one
+        # boundary every write path -- this method, an ORM write that
+        # bypasses it, a bulk write, or a raw connection -- must cross to
+        # become a row, the same posture migration 0080 established for
+        # dev_answer_frames/dev_run_narratives.payload. Unlike that
+        # payload's nested-key cross-checks, a scalar column-vs-fixed-list
+        # comparison needs no trigger function, so a plain CHECK suffices
+        # here.
+        if narrative_mode is not None and narrative_mode not in _NARRATIVE_MODES:
+            raise DevPersistenceValidationError("invalid narrative mode")
+        if (
+            narrative_failure_code is not None
+            and narrative_failure_code not in _NARRATIVE_FAILURE_CODES
+        ):
+            raise DevPersistenceValidationError("invalid narrative failure code")
         run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
         if run is None:
             raise DevPersistenceNotFound("run not found")
@@ -1807,6 +1852,12 @@ class DevPersistenceService:
         )
         safe_error_code_value = _safe_token(
             safe_error_code, field="safe_error_code", max_bytes=64
+        )
+        # Enum membership was already checked above (raises before any
+        # mutation on an invalid value); this only re-applies the same
+        # shape/size bound every other safe token gets.
+        safe_narrative_failure_code = _safe_token(
+            narrative_failure_code, field="narrative_failure_code", max_bytes=64
         )
         # CHAOS-3297 (0079): the exact terminal v1 DevError, so idempotent
         # replay can reuse it verbatim instead of reconstructing an
@@ -1871,6 +1922,8 @@ class DevPersistenceService:
         run.grounding_validation_status = safe_grounding_validation_status
         run.safe_error_code = safe_error_code_value
         run.terminal_error_payload = bounded_terminal_error_payload
+        run.narrative_mode = narrative_mode
+        run.narrative_failure_code = safe_narrative_failure_code
         if state in _TERMINAL_RUN_STATES:
             run.ended_at = self._now()
         await self.session.flush()
@@ -2606,8 +2659,23 @@ class DevPersistenceService:
             narrative_text=text,
             created_at=self._now(),
         )
-        self.session.add(record)
-        await self.session.flush()
+        # codex NO-SHIP finding round 1 (HIGH #2b): the narrative row is an
+        # *optional* write on a session that may already carry a
+        # successfully-flushed frame/answer earlier in the same request
+        # (orchestrator.finish() calls this after record_frame). A flush
+        # failure here (a CHECK-constraint violation, a byte-bound
+        # rejection) previously poisoned the WHOLE session -- the
+        # terminal() write that follows would then raise
+        # PendingRollbackError, and recovery would roll back the
+        # already-flushed frame/answer along with it, downgrading an
+        # otherwise-valid run. A SAVEPOINT isolates this one flush: on
+        # failure, only the savepoint rolls back (automatic, on exception
+        # exit from this block) -- the outer transaction, and everything
+        # already flushed on it, stays intact and the session stays usable
+        # for the terminal() write that follows.
+        async with self.session.begin_nested():
+            self.session.add(record)
+            await self.session.flush()
         return record
 
     async def append_stage_diagnostic(

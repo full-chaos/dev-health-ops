@@ -31,6 +31,11 @@
           "title": "Conflicts",
           "type": "array"
         },
+        "display_truncated": {
+          "default": false,
+          "title": "Display Truncated",
+          "type": "boolean"
+        },
         "evidence_ref_ids": {
           "items": {
             "maxLength": 128,
@@ -52,6 +57,34 @@
           "maxItems": 25,
           "title": "Reason Codes",
           "type": "array"
+        },
+        "required_child_complete": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Child Complete"
+        },
+        "required_child_total": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Child Total"
         },
         "required_children": {
           "items": {

@@ -22,8 +22,14 @@ services:
 
   api:
     container_name: ask-dev-acceptance-api
+    # Host port is configurable because 18080 is not ours alone: the normal
+    # dev-health stack publishes its ACR API on 127.0.0.1:18080 too, and a
+    # developer running that stack could not start this one at all (the
+    # container fails with "port is already allocated" before any scenario
+    # runs). Default stays 18080 so nothing that already works changes;
+    # export ASK_DEV_ACCEPTANCE_API_PORT to run alongside the dev stack.
     ports: !override
-      - "127.0.0.1:18080:8000"
+      - "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-18080}:8000"
     environment:
       ENVIRONMENT: acceptance
       ASK_DEV_LIVE_ACCEPTANCE: "1"

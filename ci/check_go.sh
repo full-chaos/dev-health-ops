@@ -14,8 +14,9 @@ DEV_HEALTH_GO_BUILD_OUTPUT=""
 DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
 
 usage() {
-  cat <<'EOF'
-Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|integration-vet|integration-coverage|integration|fast|all]
+  # Backticks in the literal help text document commands; they are not substitutions.
+  # shellcheck disable=SC2016
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|integration-vet|integration-coverage|integration|fast|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -28,7 +29,7 @@ Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|inte
          about cache state). Separate from `test` because that package
          executes real production Python files (src/dev_health_ops/**.py)
          at test time, which `//go:embed` cannot make part of the Go test
-         cache key -- `test`'s bare `go test ./...` can return a stale
+         cache key -- `test`'\''s bare `go test ./...` can return a stale
          cached PASS for a real change to one of those files. NOT an
          optimization opt-out: a run that skips this verb has not tested
          the oracles at all, so it MUST stay in `all` (and `fast`, since
@@ -43,7 +44,7 @@ Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|inte
          only -- it never fails the build on findings, by design. Included in
          `fast` and `all` because the report has no other delivery channel: the
          test that produces it uses t.Log, and `go test` without -v discards a
-         passing package's output.
+         passing package'\''s output.
   integration-vet
          Compile-check every package under the integration build tag, across
          the WHOLE tree. No Docker required. This is what would have caught a
@@ -56,7 +57,7 @@ Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|inte
          Fails if the denylist names a package discovery does not find, or if
          discovery finds nothing at all.
   integration
-         Discover and run EVERY integration-tagged package's suite against
+         Discover and run EVERY integration-tagged package'\''s suite against
          real containers, except the (small, justified) INTEGRATION_DENYLIST.
          Inclusion is the default; exclusion is the explicit, loud exception.
   fast   Run fmt, vet, test, live-python-oracles, build, contract,
@@ -64,8 +65,7 @@ Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|inte
          the grant advisory report.
   all    Run fmt, vet, test, race, live-python-oracles, build, contract,
          integration-vet, and integration-coverage checks, then publish
-         the grant advisory report (default).
-EOF
+         the grant advisory report (default).'
 }
 
 die() {
@@ -367,18 +367,18 @@ check_contract() {
 # "needs a live vendor credential CI does not provision."
 declare -A INTEGRATION_DENYLIST=()
 
-# discover_integration_packages populates INTEGRATION_PACKAGES_BY_MODULE
-# (module_dir -> newline-separated list of module-relative "./pkg/dir"
-# entries) with every package that has at least one tracked or untracked,
-# non-vendor *_test.go file whose leading build-constraint comment names the
-# "integration" tag. This is a repo-wide scan for the literal constraint
+# discover_integration_packages populates parallel module/package arrays with
+# every module-relative "./pkg/dir" entry that has at least one tracked or
+# untracked, non-vendor *_test.go file whose leading build-constraint comment
+# names the "integration" tag. This is a repo-wide scan for the literal constraint
 # every integration suite in this tree uses today
 # (`//go:build integration`), checked via git's own file listing so it
 # honours the same tracked/untracked/exclude-standard rules as the rest of
 # this script -- not `find`, and not a hand-maintained list.
 discover_integration_packages() {
   local module_dir go_file dir
-  declare -gA INTEGRATION_PACKAGES_BY_MODULE=()
+  declare -ga INTEGRATION_PACKAGE_MODULES=()
+  declare -ga INTEGRATION_PACKAGES=()
 
   for module_dir in "${MODULE_DIRS[@]}"; do
     local -a found=()
@@ -399,9 +399,12 @@ discover_integration_packages() {
     done < <(
       git -C "${ROOT}/${module_dir}" ls-files --cached --others --exclude-standard -z -- '*_test.go'
     )
-    if [ "${#found[@]}" -gt 0 ]; then
-      INTEGRATION_PACKAGES_BY_MODULE["${module_dir}"]="$(printf '%s\n' "${found[@]}" | sort -u)"
-    fi
+    [ "${#found[@]}" -gt 0 ] || continue
+    while IFS= read -r dir; do
+      [ -n "${dir}" ] || continue
+      INTEGRATION_PACKAGE_MODULES+=("${module_dir}")
+      INTEGRATION_PACKAGES+=("${dir}")
+    done < <(printf '%s\n' "${found[@]}" | sort -u)
   done
 }
 
@@ -425,25 +428,23 @@ integration_denylist_reason() {
 # Docker and belongs in the fast path.
 check_integration_coverage() {
   discover_integration_packages
-  local module_dir pkg key reason
+  local index module_dir pkg key reason
   local -a denylist_seen=()
   local total=0
 
   printf 'integration coverage: discovered packages (module: package)\n'
-  for module_dir in "${MODULE_DIRS[@]}"; do
-    [ -n "${INTEGRATION_PACKAGES_BY_MODULE[${module_dir}]:-}" ] || continue
-    while IFS= read -r pkg; do
-      [ -n "${pkg}" ] || continue
-      total=$((total + 1))
-      key="${module_dir}/${pkg#./}"
-      key="${key#./}"
-      if reason="$(integration_denylist_reason "${key}")"; then
-        denylist_seen+=("${key}")
-        printf '  SKIP %s: %s\n' "${key}" "${reason}"
-      else
-        printf '  RUN  %s\n' "${key}"
-      fi
-    done <<<"${INTEGRATION_PACKAGES_BY_MODULE[${module_dir}]}"
+  for index in "${!INTEGRATION_PACKAGES[@]}"; do
+    module_dir="${INTEGRATION_PACKAGE_MODULES[${index}]}"
+    pkg="${INTEGRATION_PACKAGES[${index}]}"
+    total=$((total + 1))
+    key="${module_dir}/${pkg#./}"
+    key="${key#./}"
+    if reason="$(integration_denylist_reason "${key}")"; then
+      denylist_seen+=("${key}")
+      printf '  SKIP %s: %s\n' "${key}" "${reason}"
+    else
+      printf '  RUN  %s\n' "${key}"
+    fi
   done
 
   if [ "${total}" -eq 0 ]; then
@@ -467,21 +468,21 @@ check_integration_coverage() {
 
 check_integration() {
   check_integration_coverage
-  local module_dir pkg key reason
+  local index module_dir pkg key reason
   local -a run_pkgs=()
 
   for module_dir in "${MODULE_DIRS[@]}"; do
-    [ -n "${INTEGRATION_PACKAGES_BY_MODULE[${module_dir}]:-}" ] || continue
     run_pkgs=()
-    while IFS= read -r pkg; do
-      [ -n "${pkg}" ] || continue
+    for index in "${!INTEGRATION_PACKAGES[@]}"; do
+      [ "${INTEGRATION_PACKAGE_MODULES[${index}]}" = "${module_dir}" ] || continue
+      pkg="${INTEGRATION_PACKAGES[${index}]}"
       key="${module_dir}/${pkg#./}"
       key="${key#./}"
       if reason="$(integration_denylist_reason "${key}")"; then
         continue
       fi
       run_pkgs+=("${pkg}")
-    done <<<"${INTEGRATION_PACKAGES_BY_MODULE[${module_dir}]}"
+    done
     [ "${#run_pkgs[@]}" -gt 0 ] || continue
 
     printf 'go test integration: %s -> %s\n' "${module_dir}" "${run_pkgs[*]}"

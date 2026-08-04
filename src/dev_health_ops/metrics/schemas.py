@@ -317,6 +317,14 @@ class ProjectRecord:
     last_synced: datetime
     project_key: str | None = None
     org_id: str = ""
+    #: The provider's OWN lifecycle vocabulary, stored verbatim and not remapped
+    #: (CHAOS-3365). Deliberately separate from ``is_active``, which is a
+    #: retirement flag: the Ask Dev subject catalog filters on ``is_active = 1``,
+    #: so folding "completed" into inactivity would make a finished project
+    #: unaskable. Empty for rows whose provider exposes no project lifecycle.
+    state: str = ""
+    target_date: date | None = None
+    url: str = ""
 
 
 @dataclass(frozen=True)

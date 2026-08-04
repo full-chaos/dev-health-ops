@@ -10,7 +10,12 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .contract_fixtures import negative_fixtures, positive_fixtures, stream_fixtures
+from .contract_fixtures import (
+    negative_fixtures,
+    positive_fixtures,
+    positive_variant_fixtures,
+    stream_fixtures,
+)
 from .contracts import CONTRACT_MODELS, DevStreamEvent, validate_stream
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
@@ -34,6 +39,29 @@ def _schema(name: str) -> dict[str, Any]:
     }
 
 
+def _validate_positive_variants() -> None:
+    """CHAOS-3338: variants are additional *valid* payloads, held to the
+    same bar as the canonical positives plus a naming contract, since each
+    one claims its own ``examples/positive/{schema}.{label}.json`` path."""
+
+    variants = positive_variant_fixtures()
+    unregistered = sorted(set(variants) - set(CONTRACT_MODELS))
+    if unregistered:
+        raise RuntimeError(
+            f"positive variants name unregistered contracts: {unregistered}"
+        )
+    for name, cases in variants.items():
+        if not cases:
+            raise RuntimeError(f"{name} declares an empty positive variant list")
+        labels = [label for label, _ in cases]
+        if len(labels) != len(set(labels)):
+            raise RuntimeError(f"{name} has duplicate positive variant labels")
+        for label, payload in cases:
+            if not label:
+                raise RuntimeError(f"{name} has an unlabelled positive variant")
+            CONTRACT_MODELS[name].model_validate(payload)
+
+
 def _validate_fixtures() -> None:
     positives = positive_fixtures()
     negatives = negative_fixtures()
@@ -43,6 +71,7 @@ def _validate_fixtures() -> None:
         raise RuntimeError("negative fixture coverage does not match contract registry")
     for name, payload in positives.items():
         CONTRACT_MODELS[name].model_validate(payload)
+    _validate_positive_variants()
     for name, cases in negatives.items():
         if not cases:
             raise RuntimeError(f"{name} has no negative fixture")
@@ -71,6 +100,7 @@ def expected_artifacts() -> dict[str, str]:
     manifest_entries: list[dict[str, Any]] = []
     positives = positive_fixtures()
     negatives = negative_fixtures()
+    variants = positive_variant_fixtures()
     for name in CONTRACT_MODELS:
         schema_path = f"schemas/{name}.schema.json"
         positive_path = f"examples/positive/{name}.json"
@@ -78,6 +108,20 @@ def expected_artifacts() -> dict[str, str]:
         positive_contents = _json(positives[name])
         artifacts[schema_path] = schema_contents
         artifacts[positive_path] = positive_contents
+        variant_entries = []
+        for label, payload in variants.get(name, []):
+            variant_path = f"examples/positive/{name}.{label}.json"
+            if variant_path in artifacts:
+                raise RuntimeError(f"positive variant path collides: {variant_path}")
+            variant_contents = _json(payload)
+            artifacts[variant_path] = variant_contents
+            variant_entries.append(
+                {
+                    "case": label,
+                    "path": variant_path,
+                    "sha256": _sha256(variant_contents),
+                }
+            )
         negative_entries = []
         for label, payload in negatives[name]:
             negative_path = f"examples/negative/{name}.{label}.json"
@@ -98,6 +142,7 @@ def expected_artifacts() -> dict[str, str]:
                     "path": positive_path,
                     "sha256": _sha256(positive_contents),
                 },
+                "positive_variants": variant_entries,
                 "negative": negative_entries,
             }
         )

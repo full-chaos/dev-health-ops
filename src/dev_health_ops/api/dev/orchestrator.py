@@ -40,12 +40,20 @@ from dev_health_ops.llm.agent.errors import (
     safe_agent_provider_error,
 )
 from dev_health_ops.llm.budget import budget_idempotency_scope
-from dev_health_ops.metrics.prometheus import ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL
+from dev_health_ops.metrics.prometheus import (
+    ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL,
+    ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
+    ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL,
+    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL,
+    ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL,
+)
 
 from . import terminal_frames
+from .answer_frames import narrative_fallback
 from .answer_validator import (
     AnswerValidationContext,
     AnswerValidationError,
+    completion_truncation_detail,
     validate_answer_candidate,
 )
 from .contracts import (
@@ -71,18 +79,33 @@ from .contracts import (
     dev_error_remediation,
 )
 from .contracts_v2 import (
+    NO_ANSWER_OUTCOMES,
     Cardinality,
     DevInvestigationResult,
     DevResolutionEntry,
     DevSubjectSet,
     QuestionIntentID,
 )
+from .contracts_v2.base import SourceRequirementState
 from .contracts_v2.frame import DevAnswerFrame
+from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
 from .investigation_plans import PlanExecutor, StepContext
+from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
+from .no_match_terminal import (
+    attested_strings,
+    internal_token_leak,
+    named_subject_not_found_answer,
+    user_supplied_subject_label,
+    user_visible_strings,
+)
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
-from .preflight_outcomes import TERMINAL_STATE_BY_OUTCOME, project_preflight_error
+from .preflight_outcomes import (
+    LEGACY_ONLY_QUESTION_INTENTS,
+    TERMINAL_STATE_BY_OUTCOME,
+    project_preflight_error,
+)
 from .prompts import PromptComposer, PromptConversationTurn
 from .subject_preflight import (
     SUBJECT_BEARING_TOOLS,
@@ -176,6 +199,40 @@ _NAME_SPECIFIC_GUARD_REASONS = frozenset(
         "narrated_unresolved_entity",
     }
 )
+
+#: CHAOS-3297 stack #5 (guard cutover). The server-owned copy a run ships
+#: when a demoted legacy guard rejected the model's own summary but the run
+#: still holds server-verified material.
+#:
+#: Deliberately says what the server did and why, and names no source, no
+#: entity, and no domain fact -- it is the same class of copy as
+#: ``_budget_answer``'s summary (a server statement about the *shape* of what
+#: follows), never a claim about the subject. The substance lives in the
+#: canonical metrics/evidence beside it and, once the frame is built, in the
+#: plan's own findings.
+SERVER_GROUNDED_SUMMARY = (
+    "This result was assembled by the server from the sources it could "
+    "verify for this request. The model's own summary was withheld because "
+    "it did not pass a server-side answer check."
+)
+SERVER_GROUNDED_WARNING = (
+    "A server-side answer check rejected the model's own summary; only "
+    "server-verified data is reported here."
+)
+
+#: ``dev_runs.grounding_validation_status`` values for the two demoted
+#: guards (a ``String(32)`` column, no CHECK constraint -- both fit).
+#:
+#: Distinct values rather than one shared "demoted" marker: the two guards
+#: answer different questions (did the answer narrate a name the server never
+#: resolved / did it carry any checkable grounding at all), and an operator
+#: triaging a cutover regression needs to know which one fired without
+#: joining another table. ``legacy_guard_reason`` still carries the
+#: CHAOS-3289 backstop's own closed-vocabulary reason code alongside the
+#: first of these -- this column says the verdict was *demoted*, that one
+#: says what the verdict was.
+GUARD_DEMOTED_NAMED_ENTITY_STATUS = "advisory_named_entity"
+GUARD_DEMOTED_GROUNDING_FLOOR_STATUS = "advisory_grounding_floor"
 
 _LEGACY_GUARD_TERMINALS: dict[str, tuple[str, str]] = {
     "resolve_scope_ambiguous": (
@@ -380,6 +437,18 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_narrative(self, narrative: DevNarrative) -> None:
+        """Persist one ``dev_narrative.v1`` (CHAOS-3297 stack #4).
+
+        Called at most once per run, only for a frame that already
+        persisted (``record_frame`` succeeded) and only for a content-
+        bearing outcome — narrative is ABSENT by contract for every
+        ``NO_ANSWER_OUTCOMES`` member (``no_answer_policy``), the same
+        guardrail that keeps a no-answer outcome from carrying a free-form
+        channel.
+        """
+        ...
+
     async def terminal(
         self,
         *,
@@ -392,6 +461,9 @@ class RunRecorder(Protocol):
         model_fingerprint: str | None,
         prompt_checksum: str | None,
         prompt_version: str | None,
+        narrative_mode: str | None = None,
+        narrative_failure_code: str | None = None,
+        grounding_validation_status: str | None = None,
     ) -> None: ...
 
 
@@ -435,6 +507,9 @@ class NullRunRecorder:
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
 
+    async def record_narrative(self, narrative: DevNarrative) -> None:
+        del narrative
+
     async def terminal(
         self,
         *,
@@ -447,6 +522,9 @@ class NullRunRecorder:
         model_fingerprint: str | None,
         prompt_checksum: str | None,
         prompt_version: str | None,
+        narrative_mode: str | None = None,
+        narrative_failure_code: str | None = None,
+        grounding_validation_status: str | None = None,
     ) -> None:
         del (
             state,
@@ -458,6 +536,9 @@ class NullRunRecorder:
             model_fingerprint,
             prompt_checksum,
             prompt_version,
+            narrative_mode,
+            narrative_failure_code,
+            grounding_validation_status,
         )
 
 
@@ -571,6 +652,7 @@ class DevOrchestrator:
         preflight: SubjectPreflight | None = None,
         plan_registry: Mapping[QuestionIntentID, DevInvestigationPlan] | None = None,
         plan_executor: PlanExecutor | None = None,
+        narrative_provider: narrative_fallback.NarrativeProvider | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -592,6 +674,14 @@ class DevOrchestrator:
         # not preflight itself is enabled.
         self._plan_registry = plan_registry or {}
         self._plan_executor = plan_executor
+        # CHAOS-3297 stack #4: ``None`` is the only certified state today --
+        # no narrative provider has been certified yet (CHAOS-3285's
+        # territory). synthesize_narrative treats a ``None`` provider as a
+        # configuration state, not a failure, and goes straight to the
+        # deterministic fallback. This is the seam CHAOS-3285 populates and
+        # the seam C3/C4 live-endpoint controls inject a scripted provider
+        # through.
+        self._narrative_provider = narrative_provider
         self._composer = PromptComposer(registry)
 
     async def run(
@@ -630,7 +720,23 @@ class DevOrchestrator:
         # organization scope that was never confirmed to exist.
         resolve_scope_attempted = False
         last_resolve_scope_outcome: ScopeResolutionOutcome | None = None
+        # CHAOS-3367: the not-found resolution itself, and the query that
+        # produced it, so the no-match terminal can render the run's OWN
+        # resolution (never the previously committed organization scope --
+        # that juxtaposition is the "Scope outcome: exact while a named
+        # subject could not be found" the PRD prohibits) and look the query
+        # up in the user's own question text.
+        last_resolve_scope_resolution: DevScopeResolution | None = None
+        last_resolve_scope_query: str | None = None
         selected_event_sink = event_sink or self._event_sink
+        # CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02): set
+        # by the CHAOS-3295 plan-execution block below when a plan actually
+        # runs, read by `finish()`'s closure (a free variable over this
+        # enclosing scope, not `nonlocal` -- `finish()` only reads it) so
+        # the legacy answer's frame can embed the plan's findings alongside
+        # it, without threading a new parameter through every one of
+        # `finish()`'s ~35 call sites.
+        investigation_result: DevInvestigationResult | None = None
 
         async def transition(state: RunState, safe_code: str | None = None) -> None:
             event = OrchestratorEvent(state=state, safe_code=safe_code)
@@ -645,10 +751,56 @@ class DevOrchestrator:
             answer: DevAnswer | None = None,
             error: DevError | None = None,
             frame_already_recorded: bool = False,
+            grounding_validation_status: str | None = None,
         ) -> OrchestratorResult:
             nonlocal terminal_written
             if terminal_written:
                 raise RuntimeError("terminal state already written")
+            # CHAOS-3367: the one place every terminal in this module passes
+            # through, and therefore the only place a user-visible-copy rule
+            # can be enforced structurally rather than by asking ~35 call
+            # sites to remember it.
+            #
+            # It fails CLOSED. A leaked internal token is a producer defect,
+            # and the PRD's requirement is "must never show", not "show it
+            # with a warning" -- so the offending terminal is discarded and
+            # replaced with a canonical internal_error rather than repaired
+            # in place, which would leave the rest of a defective payload on
+            # the wire. Every increment of the counter is a bug to fix at its
+            # source; the denylist is derived from the live enums and is
+            # disjoint from the completion reason-code vocabulary that
+            # legitimately appears in copy (pinned by
+            # test_no_match_terminal.py), so this must never fire on a
+            # healthy run.
+            leaked_token = internal_token_leak(
+                user_visible_strings(answer=answer, error=error),
+                # Provenance, so an authorized entity whose real name looks
+                # like an enum member does not fail its own answer. See
+                # `no_match_terminal.internal_token_leak`.
+                attested=attested_strings(answer, request.question),
+            )
+            if leaked_token is not None:
+                logger.error(
+                    "ask_dev.orchestrator.internal_token_leak",
+                    extra={
+                        "run_id": run_id,
+                        "token": leaked_token,
+                        "terminal_kind": "answer" if answer is not None else "error",
+                    },
+                )
+                ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL.labels(
+                    token=leaked_token,
+                    terminal_kind="answer" if answer is not None else "error",
+                ).inc()
+                state = RunState.FAILED
+                answer = None
+                error = DevError(
+                    schema_version="dev_error.v1",
+                    request_id=request.request_id,
+                    code="internal_error",
+                    safe_message="The request could not be completed.",
+                    retryable=False,
+                )
             # CHAOS-3297 Codex review round 3 Finding 2: materialize and
             # validate the terminal error input before any record_*() write
             # is attempted -- not after answer/frame are already flushed on
@@ -665,7 +817,29 @@ class DevOrchestrator:
             if error is not None:
                 try:
                     DevError.model_validate(error.model_dump(mode="json"))
-                except ValidationError:
+                except ValidationError as terminal_error_fault:
+                    # CHAOS-3334 (folded in from CHAOS-3332's review): the
+                    # sibling of the answer-write rewrite below, and silent
+                    # for the same reason -- handled locally, so run()'s
+                    # catch-all never sees it. If it ever does fire it means a
+                    # producer built a DevError this module cannot serialize,
+                    # which is a structural defect in *this* package; the
+                    # comment above calls it unreachable in practice, and an
+                    # unreachable branch that fires unlogged is exactly how a
+                    # defect stays invisible for a wave. Logged and counted so
+                    # "should never happen" is a claim an operator can check
+                    # rather than a claim the code makes about itself.
+                    logger.exception(
+                        "ask_dev.orchestrator.terminal_error_rewrite",
+                        extra={
+                            "run_id": run_id,
+                            "exception_type": type(terminal_error_fault).__name__,
+                            "rejected_code": error.code,
+                        },
+                    )
+                    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                        exception_type=type(terminal_error_fault).__name__
+                    ).inc()
                     error = DevError(
                         schema_version="dev_error.v1",
                         request_id=request.request_id,
@@ -677,7 +851,31 @@ class DevOrchestrator:
             if answer is not None:
                 try:
                     await self._recorder.record_answer(answer)
-                except Exception:
+                except Exception as answer_write_fault:
+                    # CHAOS-3332 Codex review (MED): this rewrite is the same
+                    # invisible-failure class the rest of this ticket removes,
+                    # and it is the one instance the new catch-all cannot
+                    # cover -- the exception is handled *locally* and never
+                    # propagates to the bottom of run(), so without this log a
+                    # validated answer being lost to a database failure is
+                    # indistinguishable from any other internal_error, with no
+                    # exception type and no traceback anywhere.
+                    #
+                    # It shares ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL with the
+                    # catch-all deliberately: both mean "a run terminated
+                    # internal_error for a reason no branch anticipated", which
+                    # is the alert an operator actually wants, and the distinct
+                    # log message keeps the two separable when triaging.
+                    logger.exception(
+                        "ask_dev.orchestrator.answer_write_fault",
+                        extra={
+                            "run_id": run_id,
+                            "exception_type": type(answer_write_fault).__name__,
+                        },
+                    )
+                    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                        exception_type=type(answer_write_fault).__name__
+                    ).inc()
                     state = RunState.FAILED
                     answer = None
                     error = DevError(
@@ -687,6 +885,14 @@ class DevOrchestrator:
                         safe_message="The validated answer could not be stored.",
                         retryable=True,
                     )
+            # CHAOS-3297 stack #4: populated only inside the frame-construction
+            # branch below (frame_already_recorded=True has no local `frame`
+            # to synthesize a narrative from -- the preflight TERMINATE branch
+            # doesn't attach a narrative today, a documented gap, not silently
+            # dropped: see the module docstring). Stay None (migration 0078's
+            # documented default) for every other path.
+            narrative_mode: str | None = None
+            narrative_failure_code: str | None = None
             # CHAOS-3297 P1: every terminal path persists a dev_answer_frame.v1,
             # structurally rather than by caller discipline -- the preflight
             # TERMINATE branch already built and recorded a richer frame ahead
@@ -701,7 +907,9 @@ class DevOrchestrator:
                 try:
                     frame = (
                         terminal_frames.wrap_legacy_answer_as_frame(
-                            answer, run_id=run_id
+                            answer,
+                            run_id=run_id,
+                            investigation_result=investigation_result,
                         )
                         if answer is not None
                         else terminal_frames.build_error_frame(
@@ -784,6 +992,69 @@ class DevOrchestrator:
                     # recoverable, a dropped answer is not, so this path
                     # deliberately leaves the session as-is and proceeds
                     # frame-less.
+                else:
+                    # CHAOS-3297 stack #4: narrative synthesis only runs for
+                    # a frame that actually persisted -- record_narrative's
+                    # own frame_id cross-check (persistence/service.py)
+                    # would otherwise always reject against a frame_id
+                    # nothing wrote -- and only for a content-bearing
+                    # outcome (see the narrative_mode/narrative_failure_code
+                    # declaration above the frame-construction block for the
+                    # no-answer-outcome rationale).
+                    if frame.public_outcome not in NO_ANSWER_OUTCOMES:
+                        (
+                            narrative,
+                            failure_code,
+                        ) = await narrative_fallback.synthesize_narrative(
+                            frame=frame,
+                            # self._narrative_provider is None until
+                            # CHAOS-3285 certifies one (a configuration
+                            # state, not a provider failure --
+                            # synthesize_narrative goes straight to the
+                            # deterministic fallback with no failure
+                            # code in that case) or a test injects a
+                            # scripted one.
+                            provider=self._narrative_provider,
+                            generated_at=datetime.now(UTC),
+                        )
+                        try:
+                            await self._recorder.record_narrative(narrative)
+                        except Exception as narrative_write_fault:
+                            # codex NO-SHIP finding round 1 (HIGH #2b): a
+                            # narrative sub-artifact write failure must
+                            # never strand or crash an otherwise-successful
+                            # run -- but dev_runs must also never CLAIM a
+                            # narrative_mode/narrative_failure_code for a
+                            # row that was never durably written (the
+                            # original defect: the contract's LongText body
+                            # cap is looser than persistence's own byte
+                            # bound, so a contract-valid narrative could be
+                            # rejected here while terminal() still recorded
+                            # "deterministic_fallback" as if it had
+                            # succeeded). narrative_mode/narrative_failure_code
+                            # are set ONLY in the success branch below, so
+                            # they stay at their None default here -- an
+                            # honest "no narrative recorded" signal, not a
+                            # false claim. No rollback needed: record_narrative
+                            # isolates its own flush behind a SAVEPOINT
+                            # (persistence/service.py), so the session is
+                            # already clean by the time this handler runs --
+                            # the frame/answer already committed earlier in
+                            # this flush are untouched.
+                            logger.error(
+                                "ask_dev.orchestrator.narrative_persistence_failed",
+                                extra={
+                                    "run_id": run_id,
+                                    "exception_type": type(
+                                        narrative_write_fault
+                                    ).__name__,
+                                },
+                            )
+                        else:
+                            narrative_mode = narrative.mode
+                            narrative_failure_code = (
+                                failure_code.value if failure_code is not None else None
+                            )
             await self._recorder.terminal(
                 state=state,
                 answer=answer,
@@ -794,6 +1065,15 @@ class DevOrchestrator:
                 model_fingerprint=model_fingerprint,
                 prompt_checksum=prompt_checksum,
                 prompt_version=prompt_version,
+                narrative_mode=narrative_mode,
+                narrative_failure_code=narrative_failure_code,
+                # CHAOS-3297 stack #5: ``None`` on every ordinary path, which
+                # keeps the recorder's own "passed"/"not_applicable" default.
+                # Only a demoted-guard terminal names a value here -- a run
+                # that shipped a server-grounded result *because* a guard
+                # rejected the model's summary must not be recorded as
+                # having simply "passed" grounding validation.
+                grounding_validation_status=grounding_validation_status,
             )
             terminal_written = True
             event = OrchestratorEvent(
@@ -998,6 +1278,40 @@ class DevOrchestrator:
             if self._plan_executor is not None and preflight_result is not None:
                 intent = preflight_result.interpretation.intent
                 plan = self._plan_registry.get(intent.intent_id)
+                # CHAOS-3300 finding (2026-08-02): a plan-eligible-by-vocabulary
+                # intent whose plan_registry.get(...) returns None silently
+                # falls through to the legacy model-tool-choice loop below --
+                # a real capability downgrade (a status_snapshot.v1-only
+                # answer instead of a governed health/deficiency/portfolio
+                # evaluation) that produced no signal anywhere. Distinguish it
+                # from BOUNDED_INVESTIGATION, whose fallthrough is the
+                # DESIGNED behavior (preflight_outcomes.LEGACY_ONLY_QUESTION_INTENTS'
+                # own docstring) -- only the genuine gap is loud.
+                #
+                # Team-lead ratification (2026-08-02, superseding an earlier,
+                # reverted attempt at an honest "feature_not_enabled" early
+                # termination here): the legacy fallback stays the terminal
+                # behavior for BOTH cases -- PORTFOLIO_STATUS recognition is
+                # new this wave; before it, these questions degraded to
+                # BOUNDED_INVESTIGATION and got a legacy answer, so
+                # terminating unsupported now would regress live free-form
+                # traffic to a refusal. That is exactly the behavioral cliff
+                # the epic's own §g sequencing defers to the stack-5 guard
+                # cutover, once frames are proven -- not a side effect stack
+                # 3 introduces alone. One rule until then: a recognized-but-
+                # unwired intent falls back loudly (this log + counter),
+                # never terminally.
+                if (
+                    plan is None
+                    and intent.intent_id not in LEGACY_ONLY_QUESTION_INTENTS
+                ):
+                    logger.warning(
+                        "ask_dev.orchestrator.plan_registry_gap",
+                        extra={"run_id": run_id, "intent_id": intent.intent_id.value},
+                    )
+                    ASK_DEV_PLAN_REGISTRY_GAP_TOTAL.labels(
+                        intent=intent.intent_id.value
+                    ).inc()
                 cardinality = intent.cardinality
                 plan_eligible = (
                     plan is not None and cardinality in plan.supported_cardinalities
@@ -1307,6 +1621,61 @@ class DevOrchestrator:
                                     "execution deadline."
                                 ),
                             )
+                        except ToolRegistryError:
+                            # Run-level registry failures (unknown tool,
+                            # malformed executor output, cancellation) stay
+                            # fatal by design -- see
+                            # _rejected_tool_execution's docstring. Listed
+                            # explicitly so the catch-all below cannot
+                            # silently demote them to a per-call error.
+                            raise
+                        except Exception as executor_fault:
+                            # CHAOS-3332: an executor that raises OUTSIDE its
+                            # declared contract -- neither a rejection, a
+                            # timeout, nor a registry fault -- used to escape
+                            # every handler here and land in the catch-all at
+                            # the bottom of run(), which mapped it to a
+                            # terminal internal_error while logging nothing
+                            # at all. AskDevToolRegistry.execute re-raises
+                            # whatever the executor raised verbatim, so this
+                            # is the only place that class can be caught.
+                            #
+                            # The observed instance: a committed TEAM subject
+                            # (a real v1 direct scope since CHAOS-3301)
+                            # reaching MetricQueryService._validate_request,
+                            # which raises a bare ValueError because no
+                            # registered metric lists DirectScope.TEAM in its
+                            # supported_scopes. Every status question naming a
+                            # team died on its first tool call with zero
+                            # operator signal.
+                            #
+                            # One failed tool call must not discard a run that
+                            # can still answer from its other evidence, so
+                            # this degrades exactly like the timeout above
+                            # (CHAOS-3262's posture). It is NOT a silent
+                            # downgrade: an executor breaking its contract is
+                            # a server defect, so it is logged with a
+                            # traceback and counted under its own signal.
+                            # The safe_message is fixed text -- the exception
+                            # string is operator-only and never echoed to the
+                            # model or the user.
+                            logger.exception(
+                                "ask_dev.orchestrator.tool_executor_fault",
+                                extra={
+                                    "run_id": run_id,
+                                    "tool_id": tool_request.tool_id.value,
+                                    "exception_type": type(executor_fault).__name__,
+                                },
+                            )
+                            ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL.labels(
+                                tool_id=tool_request.tool_id.value,
+                                exception_type=type(executor_fault).__name__,
+                            ).inc()
+                            execution = self._rejected_tool_execution(
+                                tool_request=tool_request,
+                                code="source_unavailable",
+                                message="The tool did not produce a result.",
+                            )
                     if execution.serialized_bytes > self._limits.per_tool_bytes:
                         return await finish(
                             RunState.FAILED,
@@ -1357,6 +1726,8 @@ class DevOrchestrator:
                         # covers "resolve_scope.v1 was never called".
                         resolve_scope_attempted = True
                         last_resolve_scope_outcome = committed_resolution.outcome
+                        last_resolve_scope_resolution = committed_resolution
+                        last_resolve_scope_query = tool_request.query
                     if (
                         tool_request.tool_id is ToolID.RESOLVE_SCOPE
                         and execution.result.status == "success"
@@ -1391,6 +1762,89 @@ class DevOrchestrator:
                     )
                     continue
 
+                # CHAOS-3367: the run's most recent named-subject resolution
+                # came back not-found, and the model is now trying to close
+                # the run. Whatever it wants to say, the server owns this
+                # terminal.
+                #
+                # This runs BEFORE the decision dispatch, so it covers both
+                # shapes the model can take here, which previously diverged:
+                #
+                # * AgentFinalAnswer -- the CHAOS-3289 backstop below already
+                #   treats `resolve_scope_not_found` as terminal, but only for
+                #   an answer whose own status is substantive. A model that
+                #   set status=refused/insufficient_evidence walked straight
+                #   past it with its prose intact -- that is the reported live
+                #   defect, where the summary read "Scope resolution ...
+                #   returned forbidden_or_not_found" under a "Refused" chip.
+                # * AgentRefusal -- terminated with the generic
+                #   "not supported by Ask Dev" refusal, which labels a
+                #   no-match as a refusal (PRD Wave 3.1 §12).
+                #
+                # Two preconditions keep this from diverting a run that is
+                # legitimately about something else:
+                #
+                # * `last_resolve_scope_outcome` is the LAST outcome, not any
+                #   outcome -- a run that failed to resolve "A" and then
+                #   resolved "B" exactly is answering about B.
+                # * the run is still on organization scope -- if an earlier
+                #   resolve_scope.v1 committed a real entity scope, the answer
+                #   is about that entity and a later miss on some other name
+                #   must not erase it. This is the same precondition
+                #   `_legacy_named_entity_guard_reason` uses, for the same
+                #   reason.
+                #
+                # Deliberately NOT restricted to `QuestionClass.STATUS` the
+                # way that guard is: §12's prohibition is about a named
+                # subject that could not be found, and a class restriction
+                # would leave the identical defect reachable from every other
+                # question class.
+                #
+                # The third precondition is what makes this safe, and an
+                # earlier revision without it was wrong (codex adversarial
+                # review, round 1 HIGH, with a repro from this file's own
+                # fixtures): "the last lookup missed" does NOT imply "the
+                # answer depended on it". A model can speculatively resolve a
+                # name the user never wrote, miss, and then answer a genuinely
+                # organization-wide question correctly -- diverting that run
+                # replaces a good answer with a no-match about a subject
+                # nobody asked for. Requiring the failed query to correspond
+                # to a whole word the USER typed is the cheapest available
+                # proof that the miss was about the question's own subject,
+                # and it is the same span the copy would name.
+                missed_subject_label = (
+                    user_supplied_subject_label(
+                        request.question, last_resolve_scope_query
+                    )
+                    if last_resolve_scope_outcome
+                    is ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND
+                    else None
+                )
+                if (
+                    missed_subject_label is not None
+                    and last_resolve_scope_resolution is not None
+                    and authorized_scope.direct_scope is DirectScope.ORGANIZATION
+                    and isinstance(decision, (AgentFinalAnswer, AgentRefusal))
+                ):
+                    await transition(RunState.ANSWER_VALIDATION)
+                    return await finish(
+                        RunState.INSUFFICIENT_EVIDENCE,
+                        answer=named_subject_not_found_answer(
+                            answer_id=answer_id,
+                            conversation_id=conversation_id,
+                            question=request.question,
+                            query=last_resolve_scope_query,
+                            resolution=last_resolve_scope_resolution,
+                            versions=self._versions,
+                            model=DevModelMetadata(
+                                provider_source=self._provider_source,
+                                provider_family=self._provider_family,
+                                model_fingerprint=decision_result.model_fingerprint,
+                            ),
+                            now=datetime.now(UTC),
+                        ),
+                    )
+
                 if isinstance(decision, AgentFinalAnswer):
                     await transition(RunState.ANSWER_VALIDATION)
                     model = DevModelMetadata(
@@ -1418,6 +1872,18 @@ class DevOrchestrator:
                         )
                     canonical_metrics, canonical_evidence = canonical_data
                     now = datetime.now(UTC)
+                    # CHAOS-3297 stack #5: computed once, into a local, because
+                    # the demoted-guard path below builds a server-owned answer
+                    # from the SAME coverage this candidate is judged against.
+                    # Recomputing it there would be a second producer of the
+                    # run's coverage accounting that could silently disagree
+                    # with the one the validator saw.
+                    server_coverage = self._coverage_with_plan_sources(
+                        self._coverage_from_tool_results(
+                            tuple(tool_requests), tuple(tool_results), now
+                        ),
+                        investigation_result,
+                    )
                     candidate.update(
                         {
                             "schema_version": "dev_answer.v1",
@@ -1434,9 +1900,14 @@ class DevOrchestrator:
                                 item.model_dump(mode="json")
                                 for item in canonical_evidence
                             ],
-                            "coverage": self._coverage_from_tool_results(
-                                tuple(tool_requests), tuple(tool_results), now
-                            ).model_dump(mode="json"),
+                            # CHAOS-3334: the model-chosen tool results are
+                            # only half the coverage picture. When a plan
+                            # governed this run, its mandatory source
+                            # observations are merged in here so a failed
+                            # required step is judged by the answer contract's
+                            # existing completeness invariant rather than
+                            # being silently discarded.
+                            "coverage": server_coverage.model_dump(mode="json"),
                             "versions": self._versions.model_dump(mode="json"),
                             "model": model.model_dump(mode="json"),
                         }
@@ -1471,6 +1942,31 @@ class DevOrchestrator:
                                 ),
                             )
                             continue
+                        if exc.code == "completion_denominator_withheld":
+                            # CHAOS-3297 s2 round 5 (codex MEDIUM): the
+                            # bounded repair pass above already gave the
+                            # model one chance to reissue this honestly; if
+                            # it still fabricated a completion total, the
+                            # user must not be left with only a generic
+                            # "validation failed" -- surface WHY (the
+                            # reason codes) and WHAT was actually assessed
+                            # (how many required items were displayed), the
+                            # same truncation detail the repair prompt
+                            # itself never leaked beyond bounded safe text.
+                            # DevError.code stays the closed-vocabulary
+                            # "answer_validation_failed" (this internal
+                            # exc.code is orchestrator-only branching, not
+                            # the wire code -- see "answer_grounding_floor_
+                            # not_met" just below for the same pattern).
+                            return await finish(
+                                RunState.FAILED,
+                                error=error(
+                                    "answer_validation_failed",
+                                    "The answer stated a completion total "
+                                    "that could not be verified. "
+                                    + completion_truncation_detail(tuple(tool_results)),
+                                ),
+                            )
                         if exc.code == "answer_grounding_floor_not_met":
                             # CHAOS-3290: a complete/substantive answer with
                             # no claim, metric, or evidence grounding at all
@@ -1480,6 +1976,49 @@ class DevOrchestrator:
                             # elsewhere (AgentDisambiguation/AgentRefusal
                             # below), not the scarier "validation failed"
                             # error a real grounding violation gets.
+                            #
+                            # CHAOS-3297 stack #5 (guard cutover): routed
+                            # through the same demotion seam as the
+                            # CHAOS-3289 backstop below, so there is one
+                            # rule for "a guard rejected the model's answer"
+                            # rather than two that could drift.
+                            #
+                            # In practice this seam cannot fire for THIS
+                            # guard, and that is a property worth stating
+                            # rather than leaving a reader to rediscover:
+                            # `answer.metrics`/`answer.evidence` are
+                            # OVERWRITTEN above with the canonical tuples, so
+                            # `answer_grounding_floor_not_met` implies both
+                            # are empty -- which is exactly the condition
+                            # `_server_grounded_answer` refuses to build on.
+                            # The CHAOS-3290 floor therefore never had server
+                            # material to erase in the first place; the guard
+                            # that did is the named-entity backstop below.
+                            # `test_chaos_3297_s5_guard_cutover.py::test_c4_*`
+                            # pins that implication so a future change to the
+                            # floor's trigger cannot silently make this branch
+                            # live without anyone noticing.
+                            demoted = self._server_grounded_answer(
+                                answer_id=answer_id,
+                                conversation_id=conversation_id,
+                                resolution=resolution,
+                                coverage=server_coverage,
+                                tool_results=tuple(tool_results),
+                                investigation_result=investigation_result,
+                                model=model,
+                                now=now,
+                                cutover_active=self._frame_cutover_active(
+                                    preflight_result
+                                ),
+                            )
+                            if demoted is not None:
+                                return await finish(
+                                    RunState.COMPLETED,
+                                    answer=demoted,
+                                    grounding_validation_status=(
+                                        GUARD_DEMOTED_GROUNDING_FLOOR_STATUS
+                                    ),
+                                )
                             return await finish(
                                 RunState.INSUFFICIENT_EVIDENCE,
                                 error=error(
@@ -1541,10 +2080,68 @@ class DevOrchestrator:
                                 legacy_guard_reason=guard_reason,
                             )
                         else:
-                            code, message = _LEGACY_GUARD_TERMINALS[guard_reason]
+                            # CHAOS-3297 stack #5 (guard cutover, TRD §15
+                            # Phase D). This is the branch where the CHAOS-3289
+                            # backstop still *decides*: a name-specific reason
+                            # on a preflight run that saw an unresolved bare
+                            # name, or any reason at all on the flag-off path.
+                            #
+                            # Frames are now proven end to end (stack #1 makes
+                            # every terminal persist one, stack #3 builds it,
+                            # stack #4 renders it deterministically), so the
+                            # remaining question is no longer "is the model's
+                            # answer trustworthy" -- it is "does the server
+                            # hold anything of its own to show instead". The
+                            # model's prose stays rejected either way; what
+                            # changes is that its rejection no longer erases
+                            # the run's server-verified material.
+                            #
+                            # ``_frame_cutover_active`` is the flag gate:
+                            # ``preflight_result`` is None exactly when
+                            # ``ask_dev_wave_3_1`` is off for this
+                            # organization (production_runtime builds
+                            # preflight/plan_registry/plan_executor together
+                            # or not at all), and that path has no proven
+                            # frame path behind it -- so it keeps every reason
+                            # terminal, exactly as today.
+                            demoted = self._server_grounded_answer(
+                                answer_id=answer_id,
+                                conversation_id=conversation_id,
+                                resolution=resolution,
+                                coverage=server_coverage,
+                                tool_results=tuple(tool_results),
+                                investigation_result=investigation_result,
+                                model=model,
+                                now=now,
+                                cutover_active=self._frame_cutover_active(
+                                    preflight_result
+                                ),
+                            )
+                            if demoted is None:
+                                code, message = _LEGACY_GUARD_TERMINALS[guard_reason]
+                                return await finish(
+                                    RunState.INSUFFICIENT_EVIDENCE,
+                                    error=error(code, message),
+                                )
+                            # Demoted, not deleted: the verdict is recorded on
+                            # the run as a content-free diagnostic (the same
+                            # closed vocabulary the telemetry branch above
+                            # writes), and the terminal marks grounding
+                            # validation as advisory rather than "passed".
+                            await self._recorder.record_preflight(
+                                preflight_outcome=(
+                                    preflight_result.diagnostic
+                                    if preflight_result is not None
+                                    else None
+                                ),
+                                legacy_guard_reason=guard_reason,
+                            )
                             return await finish(
-                                RunState.INSUFFICIENT_EVIDENCE,
-                                error=error(code, message),
+                                RunState.COMPLETED,
+                                answer=demoted,
+                                grounding_validation_status=(
+                                    GUARD_DEMOTED_NAMED_ENTITY_STATUS
+                                ),
                             )
                     return await finish(RunState.COMPLETED, answer=answer)
 
@@ -1616,7 +2213,32 @@ class DevOrchestrator:
                     "tool_unavailable", "The requested tool was not available."
                 ),
             )
-        except Exception:
+        except Exception as unhandled:
+            # CHAOS-3332: this handler is the run's last resort, and until now
+            # it mapped anything at all to a terminal internal_error while
+            # emitting nothing -- no log line, no metric, no exception type.
+            # A 100%-reproducible production crash (every TEAM-subject status
+            # question) was therefore indistinguishable from a transient blip
+            # in every operator surface there is. An increment here is always
+            # an unclassified server defect: every *expected* terminal
+            # condition in this run loop has its own typed handler above, so
+            # anything reaching this line is by construction something no
+            # branch anticipated, and it must be loud.
+            #
+            # Logged before finish() rather than after: finish() itself does
+            # database writes that can raise, and the diagnosis for the
+            # original exception must survive that.
+            logger.exception(
+                "ask_dev.orchestrator.unhandled_run_fault",
+                extra={
+                    "run_id": run_id,
+                    "exception_type": type(unhandled).__name__,
+                    "terminal_written": terminal_written,
+                },
+            )
+            ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                exception_type=type(unhandled).__name__
+            ).inc()
             if terminal_written:
                 raise
             return await finish(
@@ -1965,6 +2587,164 @@ class DevOrchestrator:
         )
 
     @staticmethod
+    def _coverage_with_plan_sources(
+        coverage: DevCoverage,
+        investigation_result: DevInvestigationResult | None,
+    ) -> DevCoverage:
+        """Fold the plan's **mandatory** source observations into ``coverage``.
+
+        CHAOS-3334. ``_coverage_from_tool_results`` above sees only what the
+        *model* chose to call. When a plan governs the investigation, the
+        server independently required a set of sources and observed how each
+        one actually resolved -- and that half was persisted to
+        ``dev_runs.plan_step_partition`` and then dropped on the floor for
+        answer validation. A run whose mandatory ``required_source_health``
+        step failed could still return ``status="complete"`` over a coverage
+        of 1/1, because the one tool the model happened to call succeeded.
+        That is a confident answer standing on a required production source
+        that was never read: the laundering sibling of CHAOS-3332's crash.
+
+        Merging here rather than at the validator is deliberate: coverage is
+        already the server-owned field the answer contract judges
+        completeness against (``DevAnswer.validate_status_consistency``
+        refuses ``complete`` while any required source is unavailable or
+        stale), so a mandatory plan failure becomes a refusal through the
+        invariant that already exists, with no second completeness rule to
+        keep in sync.
+
+        ``mandatory`` observations always participate. ``conditional`` ones
+        participate **unless they were never applicable** -- the distinction
+        the plan itself draws, and one already present in the data rather
+        than inferred:
+
+        * ``not_applicable`` means the step's applicability predicate said
+          this subject does not need the source at all. It must never block:
+          ``status.entity.v2``'s two conditional requirements are
+          ``not_applicable`` on every project-subject run, so counting them
+          would refuse ``complete`` everywhere.
+        * any *other* unmeasured state on a conditional means the predicate
+          said the source **was** needed for this subject, the step ran, and
+          the data did not arrive. ``_work_graph_applicable`` fires for
+          issue/pull-request subjects, so this is reachable in production,
+          not hypothetical: before this clause an issue-subject run whose
+          ``work_graph_expansion`` failed still answered ``complete`` at
+          coverage 3/3 with an empty unavailable list -- the same laundering
+          this function exists to stop, one requirement level over.
+
+        ``optional`` never participates: optional means the answer does not
+        need it even when it is available.
+
+        Only a *complete* claim is blocked either way -- ``partial`` remains
+        reachable, and now names the missing source.
+
+        Usability reuses ``UNMEASURED_REQUIREMENT_STATES``, the closed set
+        the plan executor already treats as "never actually measured", so
+        this cannot drift into a second, parallel vocabulary for the same
+        question. ``truncated`` counts as unavailable because bounded,
+        partial data cannot back a *complete* claim.
+
+        ``available_unknown`` is grouped with ``available_stale``: the data
+        is real and countable, but a ``complete`` claim over it is refused
+        and the source is named in ``stale_required_sources`` so the
+        disclosure machinery reports it. An earlier revision let it fall
+        through to plain "available", citing the dimension adapters'
+        severity ranking (``available_unknown`` outranks
+        ``available_stale``) -- but that ranking is about *display* order,
+        not completeness eligibility, and the two are not interchangeable.
+
+        Every reachable producer of this state is a degradation, traced by
+        executing all five ``state_mapping`` functions over their full source
+        enums (CHAOS-3334 codex review, finding 2):
+
+        * ``status_result_state_to_requirement_state(DEGRADED)`` -- its own
+          docstring: "at least one contributing source is itself
+          unavailable". Reachable on the mandatory ``status_snapshot`` step.
+        * ``metric_data_state_to_requirement_state(PARTIAL)`` and
+          ``(INSUFFICIENT_EVIDENCE)`` -- reachable on the mandatory
+          ``registered_metric_query`` step.
+        * ``freshness_state_to_requirement_state(UNKNOWN)`` is the only
+          producer that would mean "healthy data, freshness merely unproven",
+          and it has **no callers anywhere in the repository** -- it cannot
+          put this state on a live observation today.
+
+        So no legitimately-healthy run reaches ``available_unknown`` on a
+        participating source, and blocking needs no split-by-cause. If
+        ``freshness_state_to_requirement_state`` is ever wired up, that
+        conclusion changes and the split becomes necessary --
+        ``test_available_unknown_has_no_healthy_producer`` fails the moment a
+        new producer appears, so the decision gets revisited rather than
+        silently inherited.
+
+        Labels are ``source_class`` values -- short, stable, content-free,
+        and disjoint from the tool-id labels the tool-result half emits, so
+        the union below cannot collide two different sources onto one entry.
+        """
+
+        if investigation_result is None:
+            return coverage
+
+        unavailable = list(coverage.unavailable_required_sources)
+        stale = list(coverage.stale_required_sources)
+        degraded = list(coverage.degraded_required_sources)
+        seen = set(unavailable) | set(stale) | set(degraded)
+        required_added = 0
+        available_added = 0
+        for observation in investigation_result.observations:
+            if observation.requirement_level not in {"mandatory", "conditional"}:
+                continue
+            if (
+                observation.requirement_level == "conditional"
+                and observation.observed_state is SourceRequirementState.NOT_APPLICABLE
+            ):
+                continue
+            label = observation.source_class.value
+            required_added += 1
+            if observation.observed_state in UNMEASURED_REQUIREMENT_STATES:
+                if label not in seen:
+                    unavailable.append(label)
+                    seen.add(label)
+            elif observation.observed_state is SourceRequirementState.AVAILABLE_STALE:
+                available_added += 1
+                if label not in seen:
+                    stale.append(label)
+                    seen.add(label)
+            elif observation.observed_state is SourceRequirementState.AVAILABLE_UNKNOWN:
+                available_added += 1
+                if label not in seen:
+                    degraded.append(label)
+                    seen.add(label)
+            else:
+                available_added += 1
+        if required_added == 0:
+            return coverage
+        # DevCoverage bounds its counts (<=100) and both id lists (<=25). No
+        # plan declares anywhere near that many mandatory sources, but bounding
+        # here keeps a future oversized one from turning an honest coverage
+        # downgrade into a ValidationError that fails the whole run. What the
+        # completeness invariant actually reads is *non-emptiness*, and
+        # truncating a non-empty list cannot empty it, so the refusal survives
+        # either bound.
+        #
+        # Constructed rather than `model_copy(update=...)`: model_copy skips
+        # validators, so an edit that broke `validate_counts` (available must
+        # not exceed required) would silently produce an invalid coverage that
+        # only surfaced somewhere downstream. The invariant holds by
+        # construction today -- available_added <= required_added, and `min`
+        # is monotonic -- and this makes a future violation fail here.
+        return DevCoverage(
+            required_source_count=min(
+                100, coverage.required_source_count + required_added
+            ),
+            available_source_count=min(
+                100, coverage.available_source_count + available_added
+            ),
+            unavailable_required_sources=unavailable[:25],
+            stale_required_sources=stale[:25],
+            degraded_required_sources=degraded[:25],
+            as_of=coverage.as_of,
+        )
+
+    @staticmethod
     def _legacy_named_entity_guard_reason(
         *,
         question: str,
@@ -2050,6 +2830,123 @@ class DevOrchestrator:
                 ):
                     return "narrated_unresolved_entity"
         return None
+
+    @staticmethod
+    def _frame_cutover_active(preflight: SubjectPreflightResult | None) -> bool:
+        """Whether CHAOS-3297's server-owned frame path governs this run.
+
+        A named seam rather than an inline condition, for the same reason
+        ``_legacy_guard_is_terminal`` is one: a mutation test can defeat
+        exactly this decision and observe which acceptance case notices.
+
+        The gate is ``ask_dev_wave_3_1``, not a new flag of this stack's own.
+        ``production_runtime.build_runtime`` constructs ``preflight``,
+        ``plan_registry`` and ``plan_executor`` together under that one org
+        flag or not at all (and ``_wave_3_1_enabled`` fails *closed* to the
+        flag-off path on any error), so ``preflight_result is not None`` is
+        precisely "this organization is in the Wave 3.1 cohort". The
+        flag-off path has no preflight, no plan, and no proven frame
+        pipeline behind it -- demoting its backstop there would widen the
+        cutover past the cohort the rollout gate defines.
+        """
+
+        return preflight is not None
+
+    def _server_grounded_answer(
+        self,
+        *,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        coverage: DevCoverage,
+        tool_results: tuple[DevToolResult, ...],
+        investigation_result: DevInvestigationResult | None,
+        model: DevModelMetadata,
+        now: datetime,
+        cutover_active: bool,
+    ) -> DevAnswer | None:
+        """The answer a demoted guard firing ships, or ``None`` to fail safe.
+
+        CHAOS-3297 stack #5. Carries ONLY server-owned material: the
+        canonical metrics/evidence the tool registry itself returned (the
+        same tuples ``_canonical_answer_data`` hands the validator, so they
+        are the objects the run actually retrieved, not a re-derivation),
+        the server's own coverage accounting, and -- once ``finish()`` wraps
+        this into a frame -- the plan's health/deficiency findings. The
+        model's ``claims`` and ``direct_summary`` are exactly what the guard
+        rejected and are structurally unreachable from here: this function
+        takes no ``DevAnswer`` parameter at all, so no reviewed-and-rejected
+        prose has a path into what it returns. That mirrors
+        ``narrative_fallback.build_deterministic_fallback_narrative``'s own
+        signature-level guarantee one layer down.
+
+        Returns ``None`` -- meaning "terminate exactly as the pre-cutover
+        code did" -- in three cases, each of which is a case where shipping
+        would be worse than failing:
+
+        * the cutover is not active for this run (``ask_dev_wave_3_1`` off);
+        * the tool results disagree about a canonical object
+          (``_canonical_answer_data`` returns ``None``), which is an
+          integrity failure, not a grounding one;
+        * there is no canonical metric and no canonical evidence. An
+          "answer" built from nothing but this module's own copy would be a
+          substantive-looking shell, which is the precise failure the
+          CHAOS-3290 floor exists to prevent.
+
+        On that last point, ``investigation_result`` is deliberately NOT
+        part of the predicate, and the parameter is kept only to document
+        that (codex adversarial review, round 1 HIGH -- an earlier revision
+        did count plan findings as sufficient material). The plan's
+        health/deficiency findings are real server-computed content, but
+        ``finish()`` embeds them into the FRAME, and no client surface reads
+        a frame today: ``streaming.py`` sends ``result.answer`` live, and
+        ``router``'s replay prefers the stored v1 answer. So a run demoted
+        on the strength of findings alone would terminate COMPLETED while
+        the client received an answer with no claim, no metric and no
+        evidence -- the exact empty shell this function's third guard
+        exists to refuse, and a worse outcome than the honest
+        ``insufficient_evidence`` it replaced. When canonical material IS
+        present the findings ride along on the frame for free, which is the
+        only case where they add anything a caller can reach. Revisit once
+        CHAOS-3298 puts v2 on the wire and a findings-only frame is
+        genuinely readable.
+        """
+
+        del investigation_result  # see the docstring: documented non-input
+        if not cutover_active:
+            return None
+        canonical_data = self._canonical_answer_data(tool_results)
+        if canonical_data is None:
+            return None
+        canonical_metrics, canonical_evidence = canonical_data
+        if not (canonical_metrics or canonical_evidence):
+            return None
+        degraded = any(
+            result.status in {"unavailable", "error"} for result in tool_results
+        )
+        return DevAnswer(
+            schema_version="dev_answer.v1",
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            generated_at=now,
+            resolved_scope=resolution,
+            as_of=now,
+            # Never COMPLETE: a run whose model summary was withheld has by
+            # construction not reported everything it could have, and
+            # COMPLETE additionally asserts every required source was fresh
+            # and available (DevAnswer.validate_answer_invariants).
+            status=AnswerStatus.DEGRADED if degraded else AnswerStatus.PARTIAL,
+            direct_summary=SERVER_GROUNDED_SUMMARY,
+            claims=[],
+            metrics=canonical_metrics,
+            evidence=canonical_evidence,
+            conflicts=[],
+            coverage=coverage,
+            warnings=[SERVER_GROUNDED_WARNING],
+            suggested_follow_up_questions=[],
+            versions=self._versions,
+            model=model,
+        )
 
     @staticmethod
     def _legacy_guard_is_terminal(

@@ -139,6 +139,22 @@ def _total_content_facts(content: DevSourceContent) -> int:
     return sum(len(getattr(content, slot)) for slot in CONTENT_SLOT_FIELDS)
 
 
+#: Codex finding (HIGH, CHAOS-3297 s3 full-branch review round 1,
+#: 2026-08-02): ``health_findings``/``deficiency_findings`` joined
+#: ``CONTENT_SLOT_FIELDS`` (and therefore this drop mechanism) without this
+#: table -- a byte-budget drop from either slot silently left
+#: ``health_findings_truncated``/``deficiency_findings_truncated`` at
+#: whatever value the step originally set (typically ``False``), so a
+#: reader saw fewer findings than existed with no disclosure the set was
+#: incomplete. Every OTHER ``CONTENT_SLOT_FIELDS`` member has no equivalent
+#: flag (their own ``max_length`` bound is the only signal a caller gets),
+#: so this table intentionally only covers the two that do.
+_TRUNCATION_FLAG_FIELD: dict[str, str] = {
+    "health_findings": "health_findings_truncated",
+    "deficiency_findings": "deficiency_findings_truncated",
+}
+
+
 def _drop_lowest_priority_item(
     content: DevSourceContent, dropped: dict[str, int]
 ) -> DevSourceContent | None:
@@ -147,13 +163,24 @@ def _drop_lowest_priority_item(
     stable, service-determined order, so this never touches dict/set
     iteration order). ``CONTENT_SLOT_FIELDS`` is walked in reverse: the
     last field in that priority list is the first ever dropped. Returns
-    ``None`` once every field is empty -- nothing left to drop."""
+    ``None`` once every field is empty -- nothing left to drop.
+
+    Also sets the slot's own truncation-disclosure flag (see
+    ``_TRUNCATION_FLAG_FIELD``) whenever a drop touches
+    ``health_findings``/``deficiency_findings`` -- never cleared once set,
+    since a later call only ever touches a DIFFERENT (lower-priority) slot
+    once this one is empty.
+    """
 
     for slot in reversed(CONTENT_SLOT_FIELDS):
         items = getattr(content, slot)
         if items:
             dropped[slot] = dropped.get(slot, 0) + 1
-            return content.model_copy(update={slot: items[:-1]})
+            update: dict[str, object] = {slot: items[:-1]}
+            truncated_field = _TRUNCATION_FLAG_FIELD.get(slot)
+            if truncated_field is not None:
+                update[truncated_field] = True
+            return content.model_copy(update=update)
     return None
 
 

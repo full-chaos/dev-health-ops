@@ -301,6 +301,9 @@ class PersistenceRunRecorder:
         model_fingerprint: str | None,
         prompt_checksum: str | None,
         prompt_version: str | None = None,
+        narrative_mode: str | None = None,
+        narrative_failure_code: str | None = None,
+        grounding_validation_status: str | None = None,
     ) -> None:
         # Whichever prompt actually composed, not a literal: this row is the
         # run's prompt provenance, and the composer now emits v1 or v2
@@ -342,7 +345,15 @@ class PersistenceRunRecorder:
             tool_call_count=tool_call_count,
             citation_count=len(answer.evidence) if answer else 0,
             metric_count=len(answer.metrics) if answer else 0,
-            grounding_validation_status="passed" if answer else "not_applicable",
+            # CHAOS-3297 stack #5: the caller only names a value on a
+            # demoted-guard terminal, where "passed" would be a false claim
+            # (a guard rejected the model's summary; what shipped is the
+            # server's own grounded material). Every other path keeps the
+            # existing derivation untouched.
+            grounding_validation_status=(
+                grounding_validation_status
+                or ("passed" if answer else "not_applicable")
+            ),
             safe_error_code=error.code if error else None,
             # CHAOS-3297 Codex review HIGH #1: persist the exact validated
             # v1 DevError this terminal call carried -- whichever origin
@@ -354,6 +365,8 @@ class PersistenceRunRecorder:
             terminal_error_payload=(
                 error.model_dump(mode="json") if error is not None else None
             ),
+            narrative_mode=narrative_mode,
+            narrative_failure_code=narrative_failure_code,
         )
 
 

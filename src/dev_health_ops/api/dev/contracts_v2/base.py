@@ -17,7 +17,14 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    StringConstraints,
+)
 
 from dev_health_ops.api.dev.contracts import (
     Label,
@@ -35,12 +42,14 @@ __all__ = [
     "EMPTY_CONTENT_OUTCOMES",
     "Cardinality",
     "ContractModelV2",
+    "DevRelationshipPath",
     "EntityKind",
     "EvidenceHandle",
     "FactDisclosure",
     "IdempotencyKey",
     "Label",
     "LongText",
+    "NarrativeFailureCode",
     "OpaqueID",
     "PlatformVersionToken",
     "PublicOutcome",
@@ -156,6 +165,42 @@ class FactDisclosure(StrEnum):
     UNTRUSTED_SOURCE = "untrusted_source"
 
 
+class NarrativeFailureCode(StrEnum):
+    """The closed, run-persisted vocabulary for
+    ``dev_runs.narrative_failure_code`` (CHAOS-3297 stack #4, migration
+    0078's docstring names this module's package as the vocabulary's
+    owner).
+
+    Declared here rather than in ``answer_frames.narrative_fallback``
+    (where the classification logic that produces it lives): both
+    ``contracts_v2.stream`` (the ``answer.narrative_fallback`` SSE event's
+    ``narrative_failure_code`` field) and ``persistence.service``
+    (``update_run``'s own closed-vocabulary check, alongside its DB CHECK
+    constraint) need to validate against this exact set, and neither may
+    depend on ``answer_frames`` -- an orchestration-layer package that
+    itself depends on ``contracts_v2``. Same leaf-module reasoning as
+    ``FactDisclosure`` above. ``answer_frames.narrative_fallback``
+    re-exports this name for backward compatibility rather than defining
+    its own copy.
+
+    Seven members are the issue's own acceptance-criteria failure modes
+    (timeout, refusal, empty content, schema violation, output-budget
+    exhaustion, unsafe prose, narrative grounding failure); the eighth,
+    ``PROVIDER_UNKNOWN_FAILURE``, is the closed-vocabulary totality guard's
+    catch-all for a provider exception outside the six typed
+    ``NarrativeProviderError`` subclasses.
+    """
+
+    PROVIDER_TIMEOUT = "provider_timeout"
+    PROVIDER_REFUSED = "provider_refused"
+    PROVIDER_EMPTY_CONTENT = "provider_empty_content"
+    PROVIDER_SCHEMA_VIOLATION = "provider_schema_violation"
+    PROVIDER_OUTPUT_BUDGET_EXCEEDED = "provider_output_budget_exceeded"
+    PROVIDER_UNSAFE_CONTENT = "provider_unsafe_content"
+    NARRATIVE_GROUNDING_FAILED = "narrative_grounding_failed"
+    PROVIDER_UNKNOWN_FAILURE = "provider_unknown_failure"
+
+
 class SourceRequirementState(StrEnum):
     """Per-source fulfillment state (CHAOS-3294 deliverable list, verbatim).
 
@@ -217,6 +262,25 @@ class SourceClass(StrEnum):
     #: (``investment_metrics_daily`` -- new-value/KTLO/security/infra/
     #: unclassified delivery units).
     INVESTMENT_ALLOCATION = "investment_allocation"
+    #: CHAOS-3297 stack #3: CHAOS-3302 code-owned health-rule evaluation
+    #: (``health_rule_registry.evaluate_registry``) synthesized by
+    #: ``ProjectHealthService``/``TeamHealthService``/``PortfolioStatusService``/
+    #: ``TeamWorkloadService`` -- a *derived* judgment over several other
+    #: source classes' already-canonical facts, never a primary source of
+    #: its own. Shared by all four services: ``TeamWorkloadService`` returns
+    #: the exact same ``HealthProfileResult`` shape ``TeamHealthService``
+    #: does (its own docstring: "structurally this is TeamHealthService plus
+    #: two extra sources"), and a portfolio batch is just several
+    #: HEALTH_PROFILE observations flattened into one, each still tagged
+    #: with its own subject_id -- no separate source class per plan.
+    HEALTH_PROFILE = "health_profile"
+    #: CHAOS-3297 stack #3: CHAOS-3305 ``OperationalDeficiencyService``'s
+    #: ``deficiency.operational.v1`` inventory -- kept distinct from
+    #: ``HEALTH_PROFILE`` because ``DeficiencyFinding``'s own wire shape
+    #: (category/severity/remediation/verification, plus
+    #: ``DeficiencyCategoryStatus``'s per-category evaluated/unevaluated
+    #: split) has no ``HealthRuleFinding`` equivalent.
+    DEFICIENCY_INVENTORY = "deficiency_inventory"
 
 
 #: A **server-minted opaque handle**: the canonical hyphenated UUID form.
@@ -271,6 +335,32 @@ EvidenceHandle = Annotated[
     str,
     StringConstraints(min_length=44, max_length=44, pattern=r"^ev1_[0-9a-f]{40}$"),
 ]
+
+
+class DevRelationshipPath(ContractModelV2):
+    """One verifiable hop chain from a committed subject to supporting data.
+
+    Lives in this leaf module (not ``result.py``, where it originated)
+    because ``contracts_v2.deficiency`` needs it and also needs
+    ``contracts_v2.result`` to import ``DeficiencyFinding`` in the other
+    direction (CHAOS-3297 stack #3, ``DevSourceContent.deficiency_findings``)
+    -- the same "both sides of the seam read from the same leaf module"
+    reasoning ``FactDisclosure`` above was placed here for. ``result.py``
+    re-exports this name unchanged, so no existing import site elsewhere in
+    the package needed to change.
+    """
+
+    path_id: OpaqueID
+    source_entity_id: OpaqueID
+    relationship: OpaqueID
+    target_entity_id: OpaqueID
+    provenance: ShortText
+    confidence: FiniteFloat = Field(ge=0, le=1)
+    observed_at: AwareDatetime
+    evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+
 
 #: A platform provenance token: a dotted, lowercase, version-suffixed
 #: identifier such as ``intent_interpreter.v1``, ``status.entity.v2.1`` or

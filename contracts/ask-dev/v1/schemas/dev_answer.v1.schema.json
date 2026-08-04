@@ -268,6 +268,17 @@
           "title": "Available Source Count",
           "type": "integer"
         },
+        "degraded_required_sources": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Degraded Required Sources",
+          "type": "array"
+        },
         "required_source_count": {
           "maximum": 100,
           "minimum": 0,

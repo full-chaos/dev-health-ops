@@ -54,7 +54,10 @@ denied answer's coverage block was a disclosure channel.
 
 from __future__ import annotations
 
-from pydantic import Field
+from enum import StrEnum
+from typing import Self
+
+from pydantic import Field, model_validator
 
 from dev_health_ops.api.dev.contracts import (
     DevCIFact,
@@ -98,6 +101,7 @@ __all__ = [
     "DevScopeV2",
     "DevStatusFactV2",
     "DevSurfaceContextV2",
+    "MetricEvidenceClassification",
 ]
 
 
@@ -118,6 +122,9 @@ class DevCoverageV2(ContractModelV2, DevCoverage):
         default_factory=tuple, max_length=25
     )
     stale_required_sources: tuple[SourceClass, ...] = Field(  # type: ignore[assignment]
+        default_factory=tuple, max_length=25
+    )
+    degraded_required_sources: tuple[SourceClass, ...] = Field(  # type: ignore[assignment]
         default_factory=tuple, max_length=25
     )
 
@@ -151,6 +158,25 @@ class DevEvidenceRefV2(ContractModelV2, DevEvidenceRef):
     )
 
 
+class MetricEvidenceClassification(StrEnum):
+    """Closed reasons a ``DevMetricRefV2`` may carry no per-metric evidence
+    ref (F10, CHAOS-3297 stack #3, ratified 2026-08-02) -- the same
+    "evidence XOR an explicit no-evidence classification" pattern
+    ``contracts_v2.deficiency.DeficiencyEvidenceClassification`` already
+    established, applied to metrics here.
+    """
+
+    #: The metric arrived via the legacy v1 model-tool-choice loop's own
+    #: ``query_metric.v1`` tool (``production_runtime.py``), which
+    #: deliberately scrubs ``evidence_ref_ids`` to ``()`` on every call --
+    #: the metric service's own source refs are not signer-minted
+    #: ``DevEvidenceRef`` ids. Named for what happened (the refs WERE
+    #: scrubbed, not merely absent) so a frame consumer -- including
+    #: CHAOS-3298's web renderer -- can distinguish "known legacy gap" from
+    #: "a bug": an unclassified, evidence-free metric is always the latter.
+    LEGACY_V1_UNMINTED = "legacy_v1_unminted"
+
+
 class DevMetricRefV2(ContractModelV2, DevMetricRef):
     resolved_scope: DevScopeV2
     dimensions: tuple[Label, ...] = Field(  # type: ignore[assignment]
@@ -162,6 +188,27 @@ class DevMetricRefV2(ContractModelV2, DevMetricRef):
     evidence_ref_ids: tuple[EvidenceHandle, ...] = Field(  # type: ignore[assignment]
         default_factory=tuple, max_length=25
     )
+    #: F10 (CHAOS-3297 stack #3): evidence_ref_ids XOR evidence_classification
+    #: -- never both, never neither. See validate_evidence_or_classification.
+    evidence_classification: MetricEvidenceClassification | None = None
+
+    @model_validator(mode="after")
+    def validate_evidence_or_classification(self) -> Self:
+        has_evidence = bool(self.evidence_ref_ids)
+        has_classification = self.evidence_classification is not None
+        if has_evidence and has_classification:
+            raise ValueError(
+                "a metric with real evidence_ref_ids must not also carry an "
+                "evidence_classification -- the classification exists only "
+                "for the no-evidence case"
+            )
+        if not has_evidence and not has_classification:
+            raise ValueError(
+                "a DevMetricRefV2 requires either evidence_ref_ids or an "
+                "explicit evidence_classification (F10) -- neither is not a "
+                "valid disclosure"
+            )
+        return self
 
 
 class DevStatusFactV2(ContractModelV2, DevStatusFact):
@@ -244,11 +291,13 @@ _policy.register_no_answer_policy(
         "available_source_count": _policy.NoAnswerFieldPolicy.NON_TEXT,
         "unavailable_required_sources": (_policy.NoAnswerFieldPolicy.CLOSED_VOCABULARY),
         "stale_required_sources": _policy.NoAnswerFieldPolicy.CLOSED_VOCABULARY,
+        "degraded_required_sources": (_policy.NoAnswerFieldPolicy.CLOSED_VOCABULARY),
         "as_of": _policy.NoAnswerFieldPolicy.NON_TEXT,
     },
     canonical={},
     vocabularies={
         "unavailable_required_sources": _policy.SOURCE_CLASS_VOCABULARY,
         "stale_required_sources": _policy.SOURCE_CLASS_VOCABULARY,
+        "degraded_required_sources": _policy.SOURCE_CLASS_VOCABULARY,
     },
 )

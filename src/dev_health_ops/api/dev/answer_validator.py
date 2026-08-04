@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from .contracts import (
     AnswerStatus,
+    DevActualCompletion,
     DevAnswer,
     DevClaim,
     DevContractVersions,
@@ -23,6 +24,55 @@ from .contracts import (
 )
 
 _NUMBER = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:[.,]\d+)*(?:%|\b)")
+# CHAOS-3297 s2 round 3 (codex HIGH): the numeric-claim check just below
+# (a claim with a number needs *some* metric/evidence citation) is
+# necessary but not sufficient for completion language specifically -- it
+# never verifies the citation actually grounds the number it accompanies,
+# so a model can cite an unrelated evidence ref to "unlock" a fabricated
+# "100% complete" / "3 of 5 done" even when status_snapshot.v1 explicitly
+# withheld the denominator (ActualCompletion.required_child_total /
+# required_child_complete are ``None`` whenever the required-child source
+# itself was truncated -- see status_change_service.py). direct_summary
+# carries no citation requirement at all, so the same language needs the
+# identical guard independently of any claim.
+#
+# Rounds 5, 6, and 7 (codex HIGH, three times) all tried to detect
+# FABRICATED completion language by vocabulary -- digit/fraction shapes,
+# then totalizing words, then bare unhedged predicates, then hedge-word
+# rescue. Each round's fix was defeated by the next round's fresh
+# synonym or a whole-text hedge-token bypassing an unequivocal clause
+# elsewhere in the same sentence ("The work appears fully complete --
+# and it is."). That is structural, not a vocabulary gap: natural-
+# language completion semantics is an open set, and absence-of-bad-
+# phrasing can never be closed by enumerating more phrasings -- there is
+# always one more synonym, and hedge-rescue at whole-text granularity
+# can always be defeated by a second, unequivocal clause.
+#
+# Round 8 (closure, ratified on the ticket): invert the obligation from
+# ABSENCE (no fabricated language) to PRESENCE (a required, exact,
+# server-specified disclosure). This is not a vocabulary sweep -- it is
+# a two-cell partition of the entire text domain: a string either
+# contains INCOMPLETE_DENOMINATOR_DISCLOSURE (verbatim, case-
+# insensitive) or it does not, with no third case and nothing left to
+# enumerate. The repair-turn prompt already echoes ``exc.detail``
+# (see orchestrator.py), which is exactly this message -- the model is
+# told the precise sentence to include, not asked to guess at "more
+# hedging". The residual risk this accepts (ratified, bounded, not an
+# open bypass): a text CAN still contain both the disclosure and an
+# unequivocal completion clause ("It's 100% done. Note: the
+# required-work completion total could not be fully verified.") -- the
+# reader always sees the caveat verbatim alongside whatever else the
+# text says, which is a materially different risk than the caveat being
+# silently absent.
+INCOMPLETE_DENOMINATOR_DISCLOSURE = (
+    "the required-work completion total could not be fully verified"
+)
+
+
+def _has_incomplete_denominator_disclosure(text: str) -> bool:
+    return INCOMPLETE_DENOMINATOR_DISCLOSURE.casefold() in text.casefold()
+
+
 _NON_REPAIRABLE_VALIDATION_MARKERS = (
     "unknown evidence",
     "unknown metric",
@@ -104,6 +154,74 @@ def _claim_has_grounding_reference(claim: DevClaim) -> bool:
     return bool(claim.metric_ref_ids or claim.evidence_ref_ids)
 
 
+# CHAOS-3297 s2 round 9 (codex CONFIRMED): status_change_service._assess
+# nulls required_child_total/required_child_complete ONLY when the
+# required-child source itself was truncated (children/membership --
+# see children_source_truncated there). Every OTHER assessment category
+# -- blockers, pull_requests, ci, deployments, incidents -- sets the
+# general "assessment_source_limit_reached" reason code while leaving
+# the denominator non-None (it genuinely counted every required child it
+# saw; it's the REST of the evidence that was cut off). Gating the
+# disclosure obligation on required_child_total is None alone left those
+# five categories completely unguarded: codex drove the real service
+# with each category truncated in turn and got total=0/complete=0 with
+# the flag set, and a markerless "All required work is complete." passed
+# every time. The trigger must fire on EITHER signal -- a withheld
+# denominator makes the count itself unknown; the general reason code
+# makes the REST of the evidence (blockers/PRs/CI/deployments/incidents)
+# behind that "complete" claim unknown, which is exactly as untrustworthy.
+_ASSESSMENT_SOURCE_LIMIT_REACHED = "assessment_source_limit_reached"
+
+
+def _completion_assessment_is_untrustworthy(actual: DevActualCompletion) -> bool:
+    return (
+        actual.required_child_total is None
+        or _ASSESSMENT_SOURCE_LIMIT_REACHED in actual.reason_codes
+    )
+
+
+def _any_tool_result_withheld_its_completion_denominator(
+    tool_results: tuple[DevToolResult, ...],
+) -> bool:
+    """Whether any executed tool in this run reported a completion
+    assessment that cannot be trusted to ground a completion claim
+    (CHAOS-3297 s2): either the denominator itself is withheld
+    (required_child_total is None, whenever the required-child source
+    was truncated), or assessment_source_limit_reached fired for any
+    other reason (round 9) -- see the module-level comment above.
+    """
+    return any(
+        result.actual_completion is not None
+        and _completion_assessment_is_untrustworthy(result.actual_completion)
+        for result in tool_results
+    )
+
+
+def completion_truncation_detail(tool_results: tuple[DevToolResult, ...]) -> str:
+    """A safe, user-facing description of why a completion total was
+    withheld (CHAOS-3297 s2 round 5, codex MEDIUM): rejecting a fabricated
+    completion claim without saying why leaves the user with nothing --
+    the failure path must still surface the reason codes and how many
+    required items WERE displayed, not just a generic "validation
+    failed". Built only from ``ActualCompletion`` reason codes and a
+    count -- never raw evidence/child content, so it stays safe to show
+    verbatim in a terminal error message. Selection matches the trigger
+    predicate above (round 9): either signal, not just a null total.
+    """
+    for result in tool_results:
+        actual = result.actual_completion
+        if actual is not None and _completion_assessment_is_untrustworthy(actual):
+            reasons = ", ".join(actual.reason_codes) or "unknown reason"
+            displayed = len(actual.required_children)
+            return (
+                f"The required-work assessment could not verify a "
+                f"complete total ({reasons}); {displayed} required "
+                "item(s) were displayed, but that count may be "
+                "incomplete."
+            )
+    return "The required-work assessment could not verify a complete total."
+
+
 def _answer_has_material_grounding(answer: DevAnswer) -> bool:
     """Whether the answer carries anything an evidence-linked reader could
     actually check: a metric, an evidence entry, or a claim that references
@@ -172,6 +290,7 @@ def _coverage_reports_a_gap(coverage: DevCoverage) -> bool:
         coverage.available_source_count < coverage.required_source_count
         or coverage.unavailable_required_sources
         or coverage.stale_required_sources
+        or coverage.degraded_required_sources
     )
 
 
@@ -355,6 +474,9 @@ def validate_answer_candidate(
             code="answer_validation_failed",
             repairable=False,
         )
+    completion_denominator_withheld = (
+        _any_tool_result_withheld_its_completion_denominator(context.tool_results)
+    )
     for claim in answer.claims:
         if resolved_scope is not None and claim.validity_scope != resolved_scope:
             raise AnswerValidationError(
@@ -370,6 +492,46 @@ def validate_answer_candidate(
                 code="answer_validation_failed",
                 repairable=False,
             )
+        # CHAOS-3297 s2 round 8 (closure): a citation existing (checked
+        # above) does not mean it grounds THIS number, and no vocabulary
+        # sweep can close an open set of fabricated-completion phrasings
+        # (see the module-level comment on INCOMPLETE_DENOMINATOR_
+        # DISCLOSURE for the round 5/6/7 history) -- so this is now a
+        # POSITIVE obligation, not a vocabulary check: whenever the
+        # server withheld the completion denominator, every claim must
+        # carry the disclosure verbatim, independent of what else it
+        # cites or says. repairable=True (round 5, still true): a
+        # missing disclosure is a phrasing omission the model can
+        # correct in one bounded pass, not a trust breach with no
+        # honest alternative -- see completion_truncation_detail and its
+        # caller for what happens if that pass also fails.
+        if (
+            completion_denominator_withheld
+            and not _has_incomplete_denominator_disclosure(claim.text)
+        ):
+            raise AnswerValidationError(
+                "claim omits the required disclosure for a withheld "
+                f'completion total -- include the exact sentence "'
+                f'{INCOMPLETE_DENOMINATOR_DISCLOSURE}" (verbatim, '
+                "case-insensitive)",
+                code="completion_denominator_withheld",
+                repairable=True,
+            )
+
+    if completion_denominator_withheld and not _has_incomplete_denominator_disclosure(
+        answer.direct_summary
+    ):
+        # direct_summary carries no citation requirement at all, so it
+        # needs the identical positive obligation independently of the
+        # claims loop.
+        raise AnswerValidationError(
+            "direct summary omits the required disclosure for a withheld "
+            f'completion total -- include the exact sentence "'
+            f'{INCOMPLETE_DENOMINATOR_DISCLOSURE}" (verbatim, '
+            "case-insensitive)",
+            code="completion_denominator_withheld",
+            repairable=True,
+        )
 
     # CHAOS-3290 grounding floor -- see the constants above for the full
     # reasoning. Only reachable once every other invariant already passed,
@@ -421,7 +583,9 @@ def validate_answer_candidate(
 
 
 __all__ = [
+    "INCOMPLETE_DENOMINATOR_DISCLOSURE",
     "AnswerValidationContext",
     "AnswerValidationError",
+    "completion_truncation_detail",
     "validate_answer_candidate",
 ]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -75,6 +76,49 @@ def _question_from_messages(payload: dict[str, Any]) -> str | None:
         if isinstance(question, str):
             return question
     return None
+
+
+_REPOSITORY_IDENTITY = re.compile(r"\b[\w][\w.-]*/[\w][\w.-]*\b")
+
+
+def _evidence_query_from_question(question: str | None) -> str:
+    """Derive the scripted ``search_evidence.v1`` query from the question.
+
+    CHAOS-3300: this used to be a single literal ("meridian/web-app")
+    regardless of the question asked, which made the organization-wide
+    (no committed subject) half of the unrelated-evidence attack
+    unprovable through this fixture -- native evidence search executes the
+    provider's bounded query verbatim (``EvidenceService.search`` ->
+    ``ClickHouseEvidenceSource.search``'s ``positionCaseInsensitiveUTF8``
+    substring match), so a single-repository literal can never surface a
+    second repository's evidence no matter what the model was asked.
+
+    When the question names a repository identity (an ``owner/name``
+    token, e.g. "meridian/web-app"), use that identity verbatim -- this
+    keeps the existing named-subject negative control's behavior
+    byte-for-byte identical to before. Otherwise the question is
+    organization-wide, so use a query that is not restricted to one
+    repository: every name in ``fixtures/demo_identity.py``'s
+    ``DEMO_REPO_NAMES`` begins with "meridian/", and ``work_item_id`` is
+    one of the columns ``native_evidence``'s work-item search matches on
+    (``_search_predicate(("work_item_id", "title", ...))``) while carrying
+    the full repository name -- the unrelated-evidence smoke confirmed
+    that live, observing entity ids of the form "meridian/web-app-*". A
+    "meridian" substring therefore reaches every fixture repository where
+    the old full-identity literal could only ever reach one.
+
+    This is a fixture provider, not a product path: what it establishes is
+    that the fixture no longer BLOCKS the organization-wide half of the
+    attack. The product-side property (an org-wide scope admits evidence
+    from a repository it never named) is proven separately at
+    ``EvidenceService.search`` -- see
+    ``test_organization_wide_search_admits_evidence_from_multiple_repositories``.
+    """
+    if question:
+        match = _REPOSITORY_IDENTITY.search(question)
+        if match:
+            return match.group(0)
+    return "meridian"
 
 
 def _list_metrics_script(
@@ -412,12 +456,13 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
                             "name": _WIRE_SEARCH_EVIDENCE,
                             "arguments": json.dumps(
                                 {
-                                    # The acceptance corpus guarantees this repository
-                                    # identity in native work-item IDs and titles. Native
-                                    # evidence search deliberately executes the provider's
-                                    # bounded query verbatim, so use the fixture identity
-                                    # instead of an ungrounded natural-language phrase.
-                                    "query": "meridian/web-app",
+                                    # See _evidence_query_from_question: a named
+                                    # repository identity when the question names
+                                    # one, otherwise an org-wide query that is not
+                                    # restricted to a single repository.
+                                    "query": _evidence_query_from_question(
+                                        _question_from_messages(payload)
+                                    ),
                                     "limit": 25,
                                 },
                                 separators=(",", ":"),

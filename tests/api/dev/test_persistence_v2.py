@@ -28,7 +28,7 @@ import pytest_asyncio
 from pydantic import AwareDatetime
 from sqlalchemy import Table, event, func, insert, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, PendingRollbackError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
@@ -47,6 +47,7 @@ from dev_health_ops.api.dev.contract_fixtures_v2 import (
     positive_fixtures as positive_fixtures_v2,
 )
 from dev_health_ops.api.dev.contracts import DevAnswer, DevError
+from dev_health_ops.api.dev.contracts_v2 import base as _base
 from dev_health_ops.api.dev.contracts_v2.narrative import (
     DevNarrative as DevNarrativeContract,
 )
@@ -104,6 +105,12 @@ def _legacy_answer_with_real_evidence() -> DevAnswer:
     payload = deepcopy(positive_fixtures_v1()["dev_answer.v1"])
     text = json.dumps(payload, default=str)
     payload = json.loads(re.sub(r"ev_\d+", _REAL_EVIDENCE_HANDLE, text))
+    # F10 (CHAOS-3297 stack #3): a real v1-sourced metric never carries
+    # evidence_ref_ids -- see test_terminal_frames.py's _legacy_answer for
+    # the full rationale. Clear it so wrap_legacy_answer_as_frame's
+    # unconditional evidence_classification is exercised realistically.
+    for metric in payload.get("metrics", []):
+        metric["evidence_ref_ids"] = []
     return DevAnswer.model_validate(payload)
 
 
@@ -1449,6 +1456,257 @@ async def test_record_narrative_rejects_a_schema_only_junk_payload(persistence):
         assert narratives == 0, "a rejected junk payload must never be written"
 
 
+# -- codex NO-SHIP finding round 1 (HIGH #2b): record_narrative's SAVEPOINT
+# isolation. All three exercise the REAL PersistenceRunRecorder-facing
+# service layer against a real SQLite session -- the clean-RuntimeError
+# fake in test_orchestrator.py's Recorder cannot reproduce either failure
+# class, since neither a pre-insert Python-level rejection nor a genuine
+# flush-time IntegrityError behaves like a bare raise on a real session.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_narrative_pre_insert_rejection_never_poisons_the_session(
+    persistence,
+) -> None:
+    """The exact mismatch codex found: DevNarrative.body's contract bound
+    (LongText, 16,384 chars) is looser than persistence's own byte bound
+    (_NARRATIVE_TEXT_MAX_BYTES, 8 KiB) -- a contract-valid narrative can
+    still be rejected here. The rejection must be a clean, pre-insert
+    DevPersistenceValidationError (no DB write attempted at all), and the
+    session must stay fully usable for a subsequent real write on it --
+    proving this failure class was never the one needing a SAVEPOINT (the
+    Python-level bound check runs entirely before any flush)."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        real_frame_id = uuid.UUID(frame_payload["frame_id"])
+        await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=real_frame_id,
+            public_outcome="answered",
+            payload=frame_payload,
+        )
+
+        # 9,063 chars: comfortably inside DevNarrative.body's 16,384-char
+        # LongText bound, comfortably past persistence's 8,192-byte bound
+        # (pure ASCII, so char count == byte count here) -- codex's exact
+        # repro shape.
+        oversized_text = "n" * 9_063
+        narrative_id = uuid.uuid4()
+        narrative_payload, _text, provider_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=narrative_id,
+            mode="deterministic_fallback",
+        )
+        with pytest.raises(DevPersistenceValidationError):
+            await service.record_narrative(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                narrative_id=narrative_id,
+                frame_id=real_frame_id,
+                mode="deterministic_fallback",
+                provider_fingerprint=provider_fingerprint,
+                narrative_text=oversized_text,
+                payload=narrative_payload,
+            )
+
+        narratives = await session.scalar(
+            select(func.count()).select_from(DevRunNarrative)
+        )
+        assert narratives == 0, "an oversized narrative must never be written"
+
+        # The session must still be usable: a genuine follow-up write
+        # (mirrors terminal()'s own update_run call in production) must
+        # succeed, not raise PendingRollbackError.
+        run = await service.update_run(
+            org_id=org_id, user_id=user_id, run_id=run_id, state="insufficient_evidence"
+        )
+        assert run is not None
+        assert run.narrative_mode is None
+
+
+@pytest.mark.asyncio
+async def test_record_narrative_flush_failure_is_isolated_by_a_savepoint(
+    persistence,
+) -> None:
+    """A genuine DB-level flush failure (not a Python-level pre-insert
+    rejection): dev_run_narratives' own uq_dev_run_narratives_run
+    constraint rejects a second narrative row for the same run at flush
+    time. Before the SAVEPOINT fix, this would mark the whole session
+    rollback-only; after, only the savepoint rolls back and the session
+    stays usable for a real follow-up write on it -- the same coherence
+    property the pre-insert test above proves for the other failure
+    class, proven here for a failure that actually reaches the database."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        real_frame_id = uuid.UUID(frame_payload["frame_id"])
+        await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=real_frame_id,
+            public_outcome="answered",
+            payload=frame_payload,
+        )
+
+        first_narrative_id = uuid.uuid4()
+        first_payload, first_text, first_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=first_narrative_id,
+            mode="deterministic_fallback",
+        )
+        await service.record_narrative(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            narrative_id=first_narrative_id,
+            frame_id=real_frame_id,
+            mode="deterministic_fallback",
+            provider_fingerprint=first_fingerprint,
+            narrative_text=first_text,
+            payload=first_payload,
+        )
+
+        second_narrative_id = uuid.uuid4()
+        second_payload, second_text, second_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=second_narrative_id,
+            mode="deterministic_fallback",
+        )
+        with pytest.raises(IntegrityError):
+            await service.record_narrative(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                narrative_id=second_narrative_id,
+                frame_id=real_frame_id,
+                mode="deterministic_fallback",
+                provider_fingerprint=second_fingerprint,
+                narrative_text=second_text,
+                payload=second_payload,
+            )
+
+        # The savepoint rolled back the second (rejected) row -- exactly
+        # one narrative row remains, the first.
+        narratives = await session.scalars(select(DevRunNarrative))
+        remaining = narratives.all()
+        assert len(remaining) == 1
+        assert remaining[0].narrative_id == first_narrative_id
+
+        # And the session is not poisoned: a genuine follow-up write
+        # succeeds (this is the exact terminal()-after-narrative-flush
+        # coherence property codex's finding named).
+        run = await service.update_run(
+            org_id=org_id, user_id=user_id, run_id=run_id, state="completed"
+        )
+        assert run is not None
+        assert run.state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_old_unprotected_narrative_write_would_have_poisoned_the_session(
+    persistence,
+) -> None:
+    """Planted-defect proof, reconstructing record_narrative's OLD shape
+    verbatim: before the fix, the narrative row was written with a bare
+    ``session.add(record); await self.session.flush()`` -- no
+    ``begin_nested()`` SAVEPOINT around it. This test performs exactly
+    that (a real, validly-shaped second ``DevRunNarrative`` row for a run
+    that already has one, added and flushed directly on the session, with
+    no SAVEPOINT), and confirms what the fixed test above (``..._is_
+    isolated_by_a_savepoint``) confirms does NOT happen anymore: the
+    session goes rollback-only, and a subsequent genuine write -- exactly
+    the terminal() call that follows record_narrative in production --
+    fails with PendingRollbackError, not because that write is itself
+    invalid, but because an earlier, unrelated, already-rolled-back flush
+    poisoned the whole transaction."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        frame_payload = _frame_payload(run_id=run_id, outcome="answered")
+        real_frame_id = uuid.UUID(frame_payload["frame_id"])
+        await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=real_frame_id,
+            public_outcome="answered",
+            payload=frame_payload,
+        )
+
+        first_narrative_id = uuid.uuid4()
+        first_payload, first_text, first_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=first_narrative_id,
+            mode="deterministic_fallback",
+        )
+        await service.record_narrative(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            narrative_id=first_narrative_id,
+            frame_id=real_frame_id,
+            mode="deterministic_fallback",
+            provider_fingerprint=first_fingerprint,
+            narrative_text=first_text,
+            payload=first_payload,
+        )
+
+        # record_narrative's OLD internals, reproduced directly: a real,
+        # validly-shaped second row (same run_id -- violates
+        # uq_dev_run_narratives_run), added and flushed with no SAVEPOINT.
+        second_narrative_id = uuid.uuid4()
+        second_payload, second_text, second_fingerprint = _narrative_payload(
+            run_id=run_id,
+            frame_id=real_frame_id,
+            narrative_id=second_narrative_id,
+            mode="deterministic_fallback",
+        )
+        second_row = DevRunNarrative(
+            run_id=run_id,
+            org_id=org_id,
+            user_id=user_id,
+            narrative_id=second_narrative_id,
+            frame_id=real_frame_id,
+            mode="deterministic_fallback",
+            provider_fingerprint=second_fingerprint,
+            narrative_text=second_text,
+            payload=second_payload,
+            created_at=datetime.now(UTC),
+        )
+        session.add(second_row)
+        with pytest.raises(IntegrityError):
+            await session.flush()
+
+        # The bug codex found: with no SAVEPOINT protecting the write
+        # above, the whole session is now rollback-only. A genuine
+        # follow-up write -- itself perfectly valid -- cannot proceed.
+        with pytest.raises(PendingRollbackError):
+            await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="completed",
+            )
+
+
 # -- dev_runs.terminal_error_payload (CHAOS-3297 Codex review round 3
 # CLASS A closure argument) -------------------------------------------------
 
@@ -1674,6 +1932,248 @@ async def test_update_run_rejects_an_invalid_terminal_error_payload(
                 state="failed",
                 terminal_error_payload={"schema_version": "dev_error.v1"},
             )
+
+
+# -- dev_runs.narrative_mode / narrative_failure_code (CHAOS-3297 stack #4) --
+
+
+@pytest.mark.asyncio
+async def test_update_run_persists_narrative_mode_and_failure_code(persistence) -> None:
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        run = await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="insufficient_evidence",
+            narrative_mode="deterministic_fallback",
+            narrative_failure_code="narrative_grounding_failed",
+        )
+        assert run is not None
+        assert run.narrative_mode == "deterministic_fallback"
+        assert run.narrative_failure_code == "narrative_grounding_failed"
+
+
+@pytest.mark.asyncio
+async def test_update_run_narrative_mode_and_failure_code_default_to_none(
+    persistence,
+) -> None:
+    """A run with no narrative synthesized (e.g. a no-answer outcome) must
+    leave both columns NULL, not some sentinel string -- migration 0078's
+    docstring: 'Both stay NULL for every run [without narrative
+    synthesis]'."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        run = await service.update_run(
+            org_id=org_id, user_id=user_id, run_id=run_id, state="insufficient_evidence"
+        )
+        assert run is not None
+        assert run.narrative_mode is None
+        assert run.narrative_failure_code is None
+
+
+@pytest.mark.asyncio
+async def test_update_run_rejects_a_narrative_mode_outside_the_closed_vocabulary(
+    persistence,
+) -> None:
+    """Mirrors record_narrative's own ``mode not in _NARRATIVE_MODES``
+    check -- the run-level column cannot legally diverge from the
+    DevRunNarrative row's own closed vocabulary. Planted-defect proof: a
+    value one edit distance from a real mode (a truncation) must still be
+    rejected, not silently coerced or accepted."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        with pytest.raises(DevPersistenceValidationError, match="narrative mode"):
+            await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="failed",
+                narrative_mode="provider_",  # not a real mode
+            )
+
+
+@pytest.mark.asyncio
+async def test_update_run_rejects_an_oversized_narrative_failure_code(
+    persistence,
+) -> None:
+    """Bounded to the dev_runs.narrative_failure_code column width
+    (String(64)) -- oversized input must reject at the service layer, not
+    truncate silently at the database."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        with pytest.raises(DevPersistenceValidationError):
+            await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="failed",
+                narrative_failure_code="x" * 65,
+            )
+
+
+@pytest.mark.asyncio
+async def test_update_run_rejects_a_narrative_failure_code_outside_the_closed_vocabulary(
+    persistence,
+) -> None:
+    """CHAOS-3297 codex NO-SHIP finding round 1, MEDIUM #3: the producer's
+    own check, mirroring narrative_mode's -- a shape/size-legal but
+    invented code (never a real ``NarrativeFailureCode`` member) must
+    reject here, not merely pass through to the DB CHECK constraint."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+
+        with pytest.raises(
+            DevPersistenceValidationError, match="narrative failure code"
+        ):
+            await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="failed",
+                # one edit distance from a real member (narrative_grounding_failed)
+                narrative_failure_code="narrative_grounding_faile",
+            )
+
+
+# -- CHAOS-3297 codex NO-SHIP finding round 1, MEDIUM #3: dev_runs
+# .narrative_failure_code's closed vocabulary at the DB boundary (migration
+# 0083's ck_dev_runs_narrative_failure_code CHECK constraint). Unlike
+# dev_answer_frames/dev_run_narratives.payload (migration 0080), this
+# column has no Python-side ORM listener at all -- a scalar CHECK needs
+# none -- so every write shape below is rejected by the database itself,
+# with no session-level guard to disable first.
+
+
+@pytest.mark.asyncio
+async def test_db_check_rejects_a_direct_orm_attribute_assignment_bypass(
+    persistence,
+) -> None:
+    """Write shape 1/3: ``row.narrative_failure_code = x`` on an
+    already-persisted ORM instance, entirely outside ``update_run`` --
+    caught only by the DB CHECK constraint at flush time."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await session.commit()
+
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        run.narrative_failure_code = "an_invented_code"
+        with pytest.raises(IntegrityError):
+            await session.commit()
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevRun, run_id)
+        assert reloaded is not None
+        assert reloaded.narrative_failure_code is None, (
+            "the invalid attribute-assignment write must not persist"
+        )
+
+
+@pytest.mark.asyncio
+async def test_db_check_rejects_a_bulk_update_values_bypass(persistence) -> None:
+    """Write shape 2/3: ``update(DevRun).values(narrative_failure_code=x)``
+    -- a Core-style bulk statement issued through the Session, never going
+    through the ORM unit-of-work at all."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await session.commit()
+
+        with pytest.raises(IntegrityError):
+            await session.execute(
+                update(DevRun)
+                .where(DevRun.id == run_id)
+                .values(narrative_failure_code="an_invented_code")
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevRun, run_id)
+        assert reloaded is not None
+        assert reloaded.narrative_failure_code is None, (
+            "the invalid bulk-update write must not persist"
+        )
+
+
+@pytest.mark.asyncio
+async def test_db_check_rejects_a_raw_connection_write(persistence) -> None:
+    """Write shape 3/3: a ``Connection`` obtained via ``session.connection()``,
+    entirely outside the ORM/Session write surface -- confirms the
+    constraint is enforced by the database itself, not by anything this
+    application's own code executes."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await session.commit()
+
+        connection = await session.connection()
+        with pytest.raises(IntegrityError):
+            await connection.execute(
+                update(DevRun)
+                .where(DevRun.id == run_id)
+                .values(narrative_failure_code="an_invented_code")
+            )
+        await session.rollback()
+
+    async with maker() as session:
+        reloaded = await session.get(DevRun, run_id)
+        assert reloaded is not None
+        assert reloaded.narrative_failure_code is None, (
+            "the raw-connection bypass attempt must not persist"
+        )
+
+
+@pytest.mark.asyncio
+async def test_db_check_permits_every_real_narrative_failure_code(
+    persistence,
+) -> None:
+    """Positive control for the CHECK constraint itself: every real
+    ``NarrativeFailureCode`` member -- not just the one fixture value the
+    happy-path test above uses -- must be writable at the DB boundary."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        for code in _base.NarrativeFailureCode:
+            _conv_id, run_id = await _accepted_run(
+                service, org_id=org_id, user_id=user_id
+            )
+            run = await service.update_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                state="failed",
+                narrative_failure_code=code.value,
+            )
+            assert run is not None
+            assert run.narrative_failure_code == code.value
 
 
 # -- force_terminal_fallback (CHAOS-3297 Codex review round 3 Finding 2) --

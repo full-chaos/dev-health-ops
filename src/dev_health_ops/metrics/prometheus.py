@@ -180,6 +180,50 @@ if _PROMETHEUS_AVAILABLE:
         ["code"],
     )
 
+    ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_tool_executor_fault_total",
+        "Ask Dev tool executors that raised outside their declared contract "
+        "(not a rejection, timeout, or cancellation) and were degraded to one "
+        "failed tool result instead of terminating the run",
+        ["tool_id", "exception_type"],
+    )
+
+    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_unhandled_run_fault_total",
+        "Ask Dev runs terminated by the orchestrator's catch-all internal_error "
+        "handler (every increment is an unclassified server defect)",
+        ["exception_type"],
+    )
+
+    ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_internal_token_leak_total",
+        "Ask Dev terminals rejected at the boundary because a user-visible "
+        "string carried an internal vocabulary token (CHAOS-3367). Every "
+        "increment is a producer defect that would otherwise have reached a "
+        "customer; this must stay at zero.",
+        ["token", "terminal_kind"],
+    )
+
+    ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_plan_registry_gap_total",
+        "Ask Dev requests for an intent preflight_outcomes.PLAN_ID_BY_INTENT names "
+        "a real plan for, that fell back to the legacy model-tool-choice loop "
+        "because this runtime's plan_registry does not carry that plan yet "
+        "(CHAOS-3300 finding: a silent capability downgrade unless observed here)",
+        ["intent"],
+    )
+
+    ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_narrative_fallback_total",
+        "Ask Dev narrative provider calls that fell back to the deterministic "
+        "narrative built from the frame alone, by safe failure code "
+        "(CHAOS-3297 stack #4: answer_frames.narrative_fallback). The "
+        "'provider_unknown_failure' code labels a provider exception outside "
+        "the closed classification table -- a classifier gap, not a genuine "
+        "unclassifiable failure, and should trend to zero.",
+        ["failure_code"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -196,6 +240,11 @@ else:
     INVESTMENT_MEMBERSHIP_SCOPE_STALE_TOTAL = _noop_counter()
     INVESTMENT_MEMBERSHIP_SCOPE_LAG_SECONDS = _noop_gauge()
     ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL = _noop_counter()
+    ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL = _noop_counter()
+    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL = _noop_counter()
+    ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL = _noop_counter()
+    ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _noop_counter()
+    ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
-from collections.abc import Coroutine, Sequence
+from collections.abc import Coroutine, Iterable, Mapping, Sequence
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from threading import Thread
 from typing import Any, Protocol, TypeVar, cast
 
@@ -36,6 +37,11 @@ from dev_health_ops.models.work_items import Sprint
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
 from dev_health_ops.providers.linear.normalize import linear_cycle_to_sprint
+
+logger = logging.getLogger(__name__)
+
+#: Placeholder timestamp for rows read back purely for comparison. Never written.
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 _T = TypeVar("_T")
 _REAL_CLICKHOUSE_SINK_TYPE = ClickHouseMetricsSink
@@ -107,6 +113,107 @@ def _project_id(org_id: str, provider: str, project_key: str) -> str:
     return f"{org_id}:{provider}:{project_key}"
 
 
+def _project_is_active(node: Mapping[str, Any]) -> int:
+    """Activity for a Linear project is retirement, NOT lifecycle state.
+
+    A project whose status is ``completed``/``canceled`` is still a legitimate
+    thing to ask Ask Dev about, and ``scope_catalog`` filters the catalog on
+    ``is_active = 1`` — so keying activity off lifecycle would make every
+    finished project unresolvable the moment it finished. Lifecycle is carried
+    in its own ``state`` column instead. Only a project Linear itself retired is
+    inactive.
+
+    Retirement has TWO distinct forms in Linear and both must count. ``archivedAt``
+    is archival; ``trashed`` is the soft delete a project passes through before it
+    is purged, and a trashed project is not an archived one. Reading only
+    ``archivedAt`` would leave a deleted project resolvable indefinitely.
+
+    This is a real predicate only because the worker asks for archived projects
+    (``include_archived=True``). Under the connection's default they are simply
+    absent from the response, and a worker that writes only what it is handed can
+    never retire a row it stops being told about.
+    """
+
+    return 0 if (node.get("archivedAt") or node.get("trashed")) else 1
+
+
+def _project_state(node: Mapping[str, Any]) -> str:
+    """The project's lifecycle CATEGORY, from the non-deprecated ``status``.
+
+    ``status.type`` is the closed vocabulary (backlog/planned/started/paused/
+    completed/canceled) that the deprecated ``Project.state`` string used to
+    carry. ``status.name`` is the workspace's own customisable label for that
+    status and is deliberately NOT stored here: the ratified column set is three
+    columns, and a category is what a consumer can reason about across
+    workspaces. It is selected by the query so CHAOS-3368 can use it without a
+    schema change.
+    """
+
+    status = node.get("status")
+    if not isinstance(status, Mapping):
+        return ""
+    return str(status.get("type") or "")
+
+
+def _project_target_date(value: Any) -> date | None:
+    """Linear sends ``targetDate`` as a bare ``YYYY-MM-DD`` day, not an instant."""
+
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _linear_project_records(
+    nodes: Iterable[Mapping[str, Any]], *, org_id: str, now: datetime
+) -> list[ProjectRecord]:
+    """Normalize Linear's ``PROJECTS_QUERY`` nodes into catalog project rows.
+
+    ``id`` is the raw Linear project UUID — deliberately the SAME id space that
+    ``work_items.project_id`` already carries — so a scope committed against one
+    of these rows selects work items with no query change. ``project_key`` is
+    ``None`` because a Linear project has no key; the team-derived
+    ``{org}:linear:{team_key}`` attribution rows are a separate id space and are
+    unaffected.
+    """
+
+    rows: list[ProjectRecord] = []
+    for node in nodes:
+        project_id = str(node.get("id") or "").strip()
+        if not project_id:
+            continue
+        rows.append(
+            ProjectRecord(
+                id=project_id,
+                org_id=org_id,
+                provider="linear",
+                project_key=None,
+                name=str(node.get("name") or project_id),
+                is_active=_project_is_active(node),
+                # Lifecycle stored, not interpreted (CHAOS-3365). Surfacing it
+                # as an answer fact is CHAOS-3368; this only has to persist
+                # Linear's own vocabulary faithfully rather than remap it.
+                state=_project_state(node),
+                target_date=_project_target_date(node.get("targetDate")),
+                url=str(node.get("url") or ""),
+                # OBSERVATION time, not Linear's mtime. ``updated_at`` is the
+                # ReplacingMergeTree version column, and retirement tombstones
+                # are stamped when the absence is observed, so versioning active
+                # rows by provider mtime would mix two clocks in one ordering.
+                # A project that came back after a false absence carries an
+                # UNCHANGED, older mtime and would lose to its own tombstone
+                # forever — a transient mistake made permanent. Versioning every
+                # native row by observation time guarantees the opposite: the
+                # most recent look at the world always wins.
+                updated_at=now,
+                last_synced=now,
+            )
+        )
+    return rows
+
+
 def _member_id(provider: str, provider_identity: str) -> str:
     return f"{provider}:{provider_identity.strip().lower()}"
 
@@ -163,6 +270,7 @@ def populate(
             "status": "skipped",
             "reason": "missing_linear_credentials",
             "projects_imported": 0,
+            "native_projects_imported": 0,
             "members_imported": 0,
             "team_memberships_imported": 0,
             "team_project_ownership_imported": 0,
@@ -283,10 +391,67 @@ def populate(
             )
         team_rows[-1]["members"] = roster_facets
 
+    native_project_rows: list[ProjectRecord] = []
+    # Starts FALSE and is set true only where enumeration demonstrably finished.
+    # Defaulting to true meant a failure BEFORE the inner handler -- constructing
+    # the client, for instance -- fell through the outer except with the flag
+    # untouched, so a run that fetched nothing reported "0 projects, complete",
+    # which reads as "this workspace has no projects".
+    native_projects_complete = False
     try:
         with LinearClient(
             auth=LinearAuth(api_key=linear_credentials.api_key), org_id=org_id
         ) as client:
+            # CHAOS-3365: import Linear PROJECTS as their own catalog rows so a
+            # Linear project name resolves as an Ask Dev subject. Kept in its own
+            # try so a cycles failure below cannot discard projects and a projects
+            # failure cannot discard cycles — the two are independent fetches.
+            try:
+                # Accumulated one node at a time, NOT via a list comprehension
+                # over the generator: a failure part-way through pagination must
+                # keep the prefix already fetched instead of discarding every
+                # project because the last page 502'd.
+                #
+                # Archived projects are requested DELIBERATELY. Linear's
+                # connection omits them by default, so an archived project would
+                # just stop appearing and this worker -- which only writes the
+                # rows it is handed -- could never write the is_active=0 that
+                # retires it. The catalog would serve the stale subject forever.
+                for node in client.iter_projects(include_archived=True):
+                    # Versioned at the OBSERVATION boundary, not at worker
+                    # start. ``now`` is captured before team discovery and
+                    # enumeration, which can take a long time; two overlapping
+                    # runs for the same org would then be ordered by when they
+                    # STARTED rather than by what they SAW. A run that started
+                    # earlier but observed a project later would write a stale
+                    # version and lose to the other run's tombstone, keeping a
+                    # live project retired.
+                    native_project_rows.extend(
+                        _linear_project_records(
+                            [node],
+                            org_id=org_id,
+                            now=datetime.now(timezone.utc),
+                        )
+                    )
+                # Only here: the iterator ran to exhaustion without raising.
+                native_projects_complete = True
+            except Exception:
+                # Enumeration did not finish. Strict reference discovery fails
+                # the run; otherwise keep what arrived but leave the run marked
+                # INCOMPLETE, so a partial catalog is never recorded as a full
+                # one. A missing project would otherwise look identical to a
+                # project that does not exist.
+                logger.warning(
+                    "Linear project enumeration for org_id=%s did not complete; "
+                    "keeping %d project(s) already fetched and marking the run "
+                    "incomplete. Absence-based retirement is skipped.",
+                    org_id,
+                    len(native_project_rows),
+                    exc_info=True,
+                )
+                if strict:
+                    raise
+            project_rows.extend(native_project_rows)
             for team in teams:
                 api_team = client.get_team_by_key(_team_id(team))
                 if not api_team or not api_team.get("id"):
@@ -378,6 +543,16 @@ def populate(
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
         "projects_imported": len(projects),
+        # Counted off the deduped rows actually handed to the sink, not the
+        # pre-dedupe fetch, so the number reports what was written.
+        "native_projects_imported": sum(
+            1 for row in projects if row.project_key is None
+        ),
+        # False when Linear's project connection could not be enumerated to the
+        # end. Without this an incomplete discovery run reports exactly like a
+        # complete one, and a project that simply never arrived is
+        # indistinguishable from a project that does not exist.
+        "native_projects_complete": native_projects_complete,
         "members_imported": len(members),
         "team_memberships_imported": len(memberships),
         "team_project_ownership_imported": len(ownership),

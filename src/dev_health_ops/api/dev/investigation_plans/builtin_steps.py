@@ -31,6 +31,7 @@ from ..contracts_v2.embedded import (
     DevRequiredChildFactV2,
     DevScopeV2,
     DevStatusFactV2,
+    MetricEvidenceClassification,
 )
 from ..contracts_v2.result import DevObservedChangeV2, DevSourceContent
 from ..data_health_service import DataHealthResult
@@ -120,6 +121,18 @@ _REQUIRED_CHILDREN_LIMIT = 100
 #: digest, and the real handle overwrites this immediately after minting.
 _PLACEHOLDER_EVIDENCE_REF_ID = "ev1_" + "0" * 40
 
+#: The mirror-image bootstrapping placeholder for ``DevMetricRefV2``'s F10
+#: evidence-XOR-classification requirement (CHAOS-3297 stack #3):
+#: ``_wire_metric_content`` constructs a provisional metric before minting
+#: its real evidence, and the XOR rule rejects a metric with neither. Any
+#: enum member works here (there is only one today) -- it is never read by
+#: anything: ``_claim_projection`` excludes ``evidence_classification`` from
+#: the digest, and the real handle's ``model_copy`` clears it back to
+#: ``None`` in the same update that attaches the real evidence_ref_ids.
+_PLACEHOLDER_METRIC_EVIDENCE_CLASSIFICATION = (
+    MetricEvidenceClassification.LEGACY_V1_UNMINTED
+)
+
 
 def _ci_evidence_identity(entity_id: str) -> str:
     # ci_acceptance_checks rows carry a "{repo}#ci{run}#check{key}" entity_id;
@@ -190,10 +203,20 @@ def _bind_content(source_version: str, claim: Mapping[str, object]) -> str:
 
 #: Fields every ``DevSourceContent`` embedded fact model carries that are
 #: NEVER part of its own asserted claim: ``schema_version`` is a fixed
-#: contract-version literal (never forgeable content), and
-#: ``evidence_ref_ids`` is the handle(s) being authenticated -- binding it
-#: into its own digest would be circular.
-_CLAIM_PROJECTION_EXCLUDED_FIELDS = frozenset({"schema_version", "evidence_ref_ids"})
+#: contract-version literal (never forgeable content), ``evidence_ref_ids``
+#: is the handle(s) being authenticated -- binding it into its own digest
+#: would be circular -- and ``evidence_classification``
+#: (``DevMetricRefV2`` only, CHAOS-3297 F10 metric half) is structurally
+#: ``None`` on every genuinely v2-minted metric by the time it reaches the
+#: wire (F10's evidence-XOR-classification rule): a construct-then-mint
+#: helper needs a PROVISIONAL non-``None`` value there only to satisfy that
+#: same XOR at construction time, before the real handle exists -- see
+#: ``_wire_metric_content``'s own placeholder use, mirroring
+#: ``_PLACEHOLDER_EVIDENCE_REF_ID``'s identical bootstrapping role for
+#: ``evidence_ref_ids`` above.
+_CLAIM_PROJECTION_EXCLUDED_FIELDS = frozenset(
+    {"schema_version", "evidence_ref_ids", "evidence_classification"}
+)
 
 
 def _claim_projection(fact: Any) -> dict[str, object]:
@@ -774,6 +797,16 @@ def _wire_metric_content(
                 freshness=result.freshness,
                 coverage=result.coverage,
                 evidence_ref_ids=(),
+                # F10 (CHAOS-3297 stack #3): DevMetricRefV2 requires evidence
+                # XOR an explicit classification -- this construct-then-mint
+                # helper always ends with real, signer-minted evidence (never
+                # legacy_v1_unminted; that value names the v1 model-tool-
+                # choice loop's own metrics, not this v2 investigation-plan
+                # path), so this is a PROVISIONAL placeholder satisfying the
+                # XOR only until the real handle is minted below --
+                # _claim_projection excludes it from the digest for exactly
+                # this reason, mirroring _PLACEHOLDER_EVIDENCE_REF_ID.
+                evidence_classification=_PLACEHOLDER_METRIC_EVIDENCE_CLASSIFICATION,
             )
             source_version = _bind_content(
                 _METRIC_EVIDENCE_SOURCE_VERSION, _claim_projection(provisional)
@@ -790,8 +823,19 @@ def _wire_metric_content(
                 valid_entity_ids=valid_entity_ids,
                 repository_ids=repository_ids,
             )
+            # ``model_copy`` never reruns validators (a raw field copy), so
+            # the placeholder ``evidence_classification`` must be cleared
+            # explicitly in the SAME update as attaching the real handle --
+            # leaving it set would silently produce a wire object violating
+            # its own evidence-XOR-classification invariant, undetected,
+            # because no validator ever re-runs to catch it.
             refs.append(
-                provisional.model_copy(update={"evidence_ref_ids": (evidence_id,)})
+                provisional.model_copy(
+                    update={
+                        "evidence_ref_ids": (evidence_id,),
+                        "evidence_classification": None,
+                    }
+                )
             )
     return DevSourceContent(
         schema_version="dev_source_content.v1",

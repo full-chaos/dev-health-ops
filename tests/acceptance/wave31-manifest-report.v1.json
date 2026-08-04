@@ -1,0 +1,1149 @@
+{
+  "schema_version": "wave_3_1_proof_gate_manifest.v1",
+  "item_count": 64,
+  "status_counts": {
+    "blocked": 4,
+    "deferred": 7,
+    "proven_e2e": 14,
+    "proven_unit": 39
+  },
+  "category_counts": {
+    "attack": 7,
+    "blocking_matrix": 32,
+    "gate": 7,
+    "mutation_proof": 12,
+    "original_defect_reproduction": 5,
+    "real_project_positive_control": 1
+  },
+  "proven_e2e_claim_limits": "A proven_e2e row means: a live scenario was run by an operator, its per-assertion results were recorded by the scenario itself, and the script and shared fixture surface it ran against still match this tree. It does NOT mean the validator has established that the run happened. Execution artifacts are unsigned JSON and the validator recomputes exactly the values a forger would compute, so a fabricated artifact validates clean; occurrence rests on operator-recorded evidence and on re-running scenarios, not on this check. commit_sha is metadata only -- shape-checked, never resolved, so a well-formed id naming no commit is accepted. Product code under src/ is outside the digested surface, so for product changes these rows are historical records of a past run rather than statements about the current tree.",
+  "stale_row_count": 0,
+  "stale_rows": {},
+  "items": [
+    {
+      "id": "attack.missing-data",
+      "category": "attack",
+      "description": "Remove source rows while keeping the source configured. The result must become no-data/unknown, not numeric zero, healthy, or a completed denominator.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py",
+        "tests/api/dev/test_chaos_3304_workload_observation_adapters.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py::test_data_trust_no_sources_is_no_data_not_measured_zero",
+        "tests/api/dev/test_chaos_3304_workload_observation_adapters.py::test_investment_shift_missing_comparison_window_is_no_data_not_zero"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "attack.runtime-divergence",
+      "category": "attack",
+      "description": "Run the same authorized subject/source fixture through every enabled consumer boundary (Web trusted-assertion, hosted API, MCP). Any difference in canonical subject, source state, status/readiness, health finding, metric, relationship, or evidence applicability fails.",
+      "status": "deferred",
+      "evidence": [],
+      "blocked_reason": "requires a cross-repo (dev-health-web + dev-health-acr) consumer-boundary harness that does not exist yet; the Wave 3.1 v2 contracts (dev_answer.v2 / dev_answer_frame.v1) are shared, but nothing runs the same fixture through Web, hosted API, and MCP in one assertion today",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "attack.team-attribution",
+      "category": "attack",
+      "description": "Seed repository/org risk and reliability facts with no valid team relationship. They may appear only as clearly broader-scope context and cannot set a team-health dimension or team finding.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3303_team_health_service.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3303_team_health_service.py::test_evaluate_team_zero_attribution_suppresses_even_with_real_facts"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "attack.team-attribution.e2e-blocked-by-live-defect",
+      "category": "attack",
+      "description": "Live end-to-end team-attribution proof, attempted per team-lead priority 2026-08-02. Originally blocked by a newly discovered, 100%-reproducible live defect (see TEAM_ATTRIBUTION_LIVE_DEFECT_REASON for the full original repro) -- flipped to proven after ops #1382 (CHAOS-3332) merged to main and this lane re-ran the exact-commit pattern against a named team subject on the fixed code. The named team subject still commits correctly (scope.resolved with a non-empty authorized_entity_ids) and the run now completes as a real ANSWER instead of a terminal ERROR/internal_error. This row's claim is exactly the CHAOS-3333 characterization, asserted directly rather than implied by 'not error': status is precisely ``degraded`` (not complete/partial), metrics come back genuinely empty (query_metric.v1 does not yet support a TEAM-scoped request), and the limitation is named in coverage.unavailable_required_sources rather than silently dropped. A future CHAOS-3333 fix that adds TEAM-scoped metric support is expected to break this row's assertions -- that is the correct outcome, and the claim must be updated alongside the fix, not loosened in advance.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_team_attribution.py",
+        "scripts/acceptance/run_ask_dev_compose.sh",
+        "tests/acceptance/test_ask_dev_team_attribution_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/team_attribution.json",
+      "required_assertion_names": [
+        "named_team_committed",
+        "no_internal_error_event",
+        "answer_completed_event_present",
+        "answer_status_is_degraded",
+        "metrics_empty_for_team_scope",
+        "limitation_names_unavailable_metric_source"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "attack.unrelated-evidence.availability",
+      "category": "attack",
+      "description": "The same unrelated-org facts must be available in an explicit organization-wide answer (the other half of the attack -- exclusion when named, availability when not). Proven at the layer that decides it: EvidenceService.search over an ORGANIZATION-resolved scope returns evidence from a repository the scope never named. The non-obvious mechanism is _authorized_entity_ids, which excludes ORGANIZATION and REPOSITORY kinds, so an org-wide resolution yields an EMPTY valid_entity_ids that downstream authorization treats as unrestricted rather than as 'nothing authorized'; a mutation restricting records to the resolved scope's own entity ids kills the test. The fixture limitation that originally blocked this row is also fixed -- the scripted provider derives its search_evidence.v1 query from the question instead of hardcoding one repository identity, with the named-subject path byte-for-byte unchanged. NOT claimed: the ClickHouse SQL layer beneath EvidenceService is covered by neither test, and smoke_ask_dev_unrelated_evidence.py has not been re-run live against a --repo-count 2 bring-up since the provider fix, so the end-to-end 'multi-repository evidence actually appears in a live answer' claim remains unproven. That script's own docstring still describes the pre-fix provider (it hardcoded one repository identity) and is deliberately left byte-for-byte unedited: its bytes are bound by script_sha256 into attack.unrelated-evidence.e2e-live-validated's execution artifact, so correcting even a docstring there invalidates that artifact until the scenario is re-run live. Read this row, not that docstring, for the current provider behaviour.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_evidence_service.py",
+        "tests/api/dev/test_acceptance_openai_runtime.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_evidence_service.py::test_organization_wide_search_admits_evidence_from_multiple_repositories",
+        "tests/api/dev/test_acceptance_openai_runtime.py::test_organization_wide_question_searches_are_not_restricted_to_one_repository",
+        "tests/api/dev/test_acceptance_openai_runtime.py::test_named_repository_question_still_searches_that_exact_repository"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "attack.unrelated-evidence.e2e-live-validated",
+      "category": "attack",
+      "description": "Live end-to-end unrelated-evidence proof: a named repository question over the real Compose stack excludes a second, unrelated real repository's evidence.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_unrelated_evidence.py",
+        "tests/acceptance/test_ask_dev_unrelated_evidence_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/unrelated_evidence.json",
+      "required_assertion_names": [
+        "named_repository_committed",
+        "unrelated_repo_excluded_from_named_answer"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "attack.unrelated-evidence.exclusion",
+      "category": "attack",
+      "description": "Recent organization deployments, PRs, incidents, and metrics unrelated to the named target must be absent from the named-target answer.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3296_relationship_closure.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3296_relationship_closure.py::test_an_edge_unrelated_to_the_committed_subject_fails_closed"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.ambiguous-candidate-selection",
+      "category": "blocking_matrix",
+      "description": "Ambiguous named project and candidate selection.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py::test_a3_ambiguous_target_needs_clarification_with_candidates"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.cross-tenant-identifier-change",
+      "category": "blocking_matrix",
+      "description": "Cross-tenant/cross-scope identifier and authorization change.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_status_change_service.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_change_summary_is_reproducible_and_tenant_scoped"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.data-trust-organization-wide",
+      "category": "blocking_matrix",
+      "description": "Organization-wide data-trust question (freshness/coverage/configuration), safely answered.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_core_intents.py",
+        "tests/acceptance/test_ask_dev_core_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/data_trust_organization_wide.json",
+      "required_assertion_names": [
+        "answer_completed_event_present",
+        "answer_status_not_error",
+        "answer_summary_not_empty"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.exact-project-complete",
+      "category": "blocking_matrix",
+      "description": "Exact named subject status with complete current data -- proven against a repository subject, not literally PROJECT-kind; see positive-control.real-project-status for why (this fixture profile seeds zero rows in default.projects, confirmed live).",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_exact_commit.py",
+        "tests/acceptance/test_ask_dev_exact_commit_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/exact_commit.json",
+      "required_assertion_names": [
+        "named_repository_committed",
+        "evidence_is_linked_to_the_committed_subject",
+        "answer_status_not_error"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.legitimate-org-wide-status",
+      "category": "blocking_matrix",
+      "description": "Legitimate organization-wide status. Note: ENTITY_STATUS was always a core-wired intent (one of the original 6 in CORE_PLANS_BY_INTENT) -- this row was never actually blocked by the stack-3 wiring gap the other 12 rows in this function were; it is a manifest bookkeeping catch-up, not a new proof.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py::test_a4_organization_wide_question_executes_normally"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.light-on-feature-work",
+      "category": "blocking_matrix",
+      "description": "'Which teams are light on feature work?' with adequate investment-classification coverage.",
+      "status": "blocked",
+      "evidence": [],
+      "blocked_reason": "The health-rule layer cannot produce this row's finding through production code today. health_rule.investment_allocation_shift.v1 sets attribution_required=True, and its only production adapter, dimension_observation_adapters.investment_allocation_shift_observation, reports attribution_present=False unconditionally while CHAOS-3331 is open (the writer path cannot distinguish a canonically attributed row from a fail-open one on the read side). evaluate_rule checks attribution BEFORE cohort/sample/coverage/threshold, so every real evaluation returns UNKNOWN with missing_attribution -- never the 'light on feature work' finding this row claims. A rule-layer test that constructs attribution_present=True bypasses exactly the guard that makes the claim false, so citing one would overclaim. Closing this needs CHAOS-3331 to land and a test through TeamWorkloadService that produces the finding from real adapter output, or the row rewritten to claim the abstract rule-evaluator shape rather than an answer to the user's question.",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.light-on-feature-work-unclassified",
+      "category": "blocking_matrix",
+      "description": "The feature-work question with high unclassified work and no unsupported conclusion.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py::test_negative_investment_shift_insufficient_coverage_suppresses"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.multi-metric-comparison-organization-wide",
+      "category": "blocking_matrix",
+      "description": "Multi-metric comparison (items_completed + cyclomatic_per_kloc), organization-wide.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_metric_comparison.py",
+        "tests/acceptance/test_ask_dev_metric_comparison_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/metric_comparison.json",
+      "required_assertion_names": [
+        "run_started_event_present",
+        "answer_completed_event_present",
+        "answer_status_not_error",
+        "stream_terminated_as_answer"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.multi-metric-comparison-stale-source",
+      "category": "blocking_matrix",
+      "description": "Multi-metric comparison with one stale source.",
+      "status": "deferred",
+      "evidence": [],
+      "blocked_reason": "metric.comparison.v1 is a wired core intent and the multi-metric happy path is now live-proven (see matrix.multi-metric-comparison-organization-wide), but the specific one-stale-source variant is not: attempted live 2026-08-02 with items_completed + cyclomatic_per_kloc against this Compose profile's fixtures (dev-hops fixtures generate --days 28) and direct dev_run_source_observations inspection showed BOTH metrics genuinely available and fresh (observed_state=available_current for both) -- this fixture profile does not naturally produce a stale metric source within the 28-day backfill window, so the negative case needs either a metric class structurally absent from these fixtures (not yet identified) or direct ClickHouse row manipulation to force staleness, neither done here",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.no-authorized-match",
+      "category": "blocking_matrix",
+      "description": "Named project with no authorized match.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py::test_a2_unknown_target_is_not_found_and_runs_no_subject_tool"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.observed-change-comparison-windows",
+      "category": "blocking_matrix",
+      "description": "Observed change across exact comparison windows.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_status_change_service.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_change_summary_is_reproducible_and_tenant_scoped"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.operational-deficiencies-mixed",
+      "category": "blocking_matrix",
+      "description": "'What operational deficiencies do we have?' with mixed applicable, not-applicable, stale, unavailable, and unconfigured rules.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3305_operational_deficiency_service.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3305_operational_deficiency_service.py::test_data_integration_distinguishes_stale_missing_and_unconfigured",
+        "tests/api/dev/test_chaos_3305_operational_deficiency_service.py::test_rule_driven_category_status_partial_when_launch_and_suppressed_coexist"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.operational-deficiency.e2e-live-validated",
+      "category": "blocking_matrix",
+      "description": "OPERATIONAL_DEFICIENCY_INVENTORY live end-to-end: deficiency.operational.v1 reachable and answering for a named team subject, over the real Compose stack. Proven only after CHAOS-3337 shipped (ops #1402) -- same root cause and fix as matrix.team-health.e2e-live-validated. Proves reachability, not the specific mixed-rule-status shape matrix.operational-deficiencies-mixed's proven_unit citation covers. Codex finding (HIGH, 2026-08-03, round 4): asserts deficiency.operational.v1's own mandatory step ('deficiency_evaluation') actually completed via a direct dev_runs read -- same fix and negative-control pattern as matrix.team-health.e2e-live-validated.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+        "tests/acceptance/test_ask_dev_stack3_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/operational_deficiency_team.json",
+      "required_assertion_names": [
+        "scope_resolved_event_present",
+        "named_team_committed",
+        "answer_completed_event_present",
+        "answer_status_not_hard_error",
+        "preflight_proceeded_committed_subject",
+        "claimed_plan_step_completed",
+        "stream_terminated_as_answer"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.organization-portfolio-status",
+      "category": "blocking_matrix",
+      "description": "Organization portfolio status.",
+      "status": "blocked",
+      "evidence": [],
+      "blocked_reason": "PORTFOLIO_STATUS is deliberately, not accidentally, unwired this wave -- wave_3_1_plans.py's own module docstring: PlanExecutor's StepContext carries exactly one DevScope, but PortfolioStatusService.evaluate_portfolio needs several project scopes at once, a real gap that needs a StepContext-widening decision before this can be wired (tracked on the CHAOS-3297 Linear issue). The closest existing test, test_chaos_3303_portfolio_status_service.py::test_evaluate_portfolio_all_provisional_registry_reports_no_elevated_state, is service-layer only and does not exercise the plan/orchestrator path this row's claim needs -- not cited as proof it would be overclaiming. The GAP itself being handled honestly (loud, non-terminal fallback) is a separate, already-proven claim -- see gate.plan-registry-gap-is-loud and its e2e-live-validated sibling.",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.overburdened-teams-with-denominators",
+      "category": "blocking_matrix",
+      "description": "'Which teams are overburdened?' with approved denominators/baselines.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py::test_positive_two_independent_workload_dimensions_qualify"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.pressure-without-denominator",
+      "category": "blocking_matrix",
+      "description": "High observed pressure without a valid denominator, producing pressure/not-calculable language.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py::test_negative_review_request_load_without_denominator_is_not_calculable"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.prohibited-write-request",
+      "category": "blocking_matrix",
+      "description": "Prohibited write/execution/arbitrary-query request.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_tool_registry.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_tool_registry.py::test_manifest_is_the_exact_nine_tool_server_allowlist"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.project-health-mixed-dimensions",
+      "category": "blocking_matrix",
+      "description": "Project health with mixed dimension states -- proven as HEALTHY and UNKNOWN dimensions coexisting independently in one profile, no leakage between them. Caveat: the cited test's own docstring also mentions 'not_applicable', but every dimension it actually asserts resolves to HEALTHY or UNKNOWN, never DimensionState.NOT_APPLICABLE -- this row's claim is scoped to what is actually asserted, not the test's looser prose.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3303_health_profile_synthesis.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3303_health_profile_synthesis.py::test_mixed_profile_reports_complete_unknown_and_not_applicable_dimensions"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.project-health-unknown-not-applicable",
+      "category": "blocking_matrix",
+      "description": "Project health with unknown and not-applicable dimensions.",
+      "status": "blocked",
+      "evidence": [],
+      "blocked_reason": "No PROJECT-scoped proof exists that reaches both an UNKNOWN and a NOT_APPLICABLE dimension through production code. The only source that yields NOT_APPLICABLE at the synthesis layer is the change-failure-rate metric, and ProjectHealthService always computes change_failure_rate_not_applicable=False for a PROJECT subject (DirectScope.PROJECT is in CHANGE_FAILURE_RATE_SUPPORTED_SCOPES), so a NOT_APPLICABLE observation is unreachable for this subject kind through the real service. A synthesis-layer test can construct the flag by hand -- test_chaos_3303_health_profile_synthesis.py::test_project_profile_reports_unknown_and_not_applicable_dimensions_distinctly does, and it is a genuine test of the engine -- but citing it here would claim a production-reachable behaviour that does not exist. Closing this needs either a production input that genuinely yields both states for a PROJECT subject, or the row rewritten to claim the abstract synthesis property instead of project health. Separately, a literal PROJECT subject still cannot be live-verified: this fixture profile seeds zero PROJECT-kind rows (see positive-control.real-project-status).",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.project-incomplete-required-children",
+      "category": "blocking_matrix",
+      "description": "Exact project with incomplete required children.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_status_change_service.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_completed_parent_with_incomplete_required_child_is_not_ready"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.project-source-unavailable-qualified",
+      "category": "blocking_matrix",
+      "description": "Exact project with unavailable required source but enough facts for a qualified answer.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_status_change_service.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_merged_delivery_without_release_evidence_is_indeterminate"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.project-stale-required-source",
+      "category": "blocking_matrix",
+      "description": "Exact project with stale required source.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_status_change_service.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_stale_source_is_partial_and_never_ready"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.provider-narrative-failure-after-frame",
+      "category": "blocking_matrix",
+      "description": "Provider timeout/refusal/malformed/empty/budget failure after a valid frame.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_orchestrator.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_orchestrator.py::test_provider_timeout_is_caller_enforced_and_terminal_once",
+        "tests/api/dev/test_orchestrator.py::test_budget_exhaustion_after_grounded_tool_data_returns_bounded_partial"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.registered-metric-catalog",
+      "category": "blocking_matrix",
+      "description": "Registered metric catalog.",
+      "status": "proven_e2e",
+      "evidence": [
+        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
+        "scripts/acceptance/smoke_ask_dev_core_intents.py",
+        "tests/acceptance/test_ask_dev_core_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/registered_metrics_organization_wide.json",
+      "required_assertion_names": [
+        "answer_completed_event_present",
+        "answer_status_not_error",
+        "answer_summary_not_empty"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.remaining-work-exact-project",
+      "category": "blocking_matrix",
+      "description": "Remaining work in scope (organization-wide today; an exact named project awaits a real fixture-resolvable project identity, not yet built).",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_core_intents.py",
+        "tests/acceptance/test_ask_dev_core_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/remaining_work_organization_wide.json",
+      "required_assertion_names": [
+        "answer_completed_event_present",
+        "answer_status_not_error",
+        "answer_summary_not_empty"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.struggling-teams-insufficient-sample",
+      "category": "blocking_matrix",
+      "description": "The struggling-teams question with insufficient sample/coverage and no unsupported label.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3302_health_rule_e2e_controls.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3302_health_rule_e2e_controls.py::test_negative_cohort_below_minimum_suppresses_finding"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.struggling-teams-positive",
+      "category": "blocking_matrix",
+      "description": "'Are there any struggling teams?' with a valid sustained multi-signal positive case.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3302_health_rule_e2e_controls.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3302_health_rule_e2e_controls.py::test_positive_two_independent_at_risk_dimensions_qualify_team_needs_attention"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.team-health-complete-attribution",
+      "category": "blocking_matrix",
+      "description": "Named team health with complete team attribution.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3303_team_health_service.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3303_team_health_service.py::test_evaluate_team_with_attribution_and_real_facts_reports_real_findings"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.team-health-unattributable-signals",
+      "category": "blocking_matrix",
+      "description": "Team health where repository/org signals are available but cannot be attributed to the team.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3303_team_health_service.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3303_team_health_service.py::test_evaluate_team_zero_attribution_suppresses_even_with_real_facts"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.team-health.e2e-live-validated",
+      "category": "blocking_matrix",
+      "description": "TEAM_HEALTH live end-to-end: health.team.v1 (CHAOS-3297 stack-3, wired via ops #1383/#1387) reachable and answering for a named team subject, over the real Compose stack. Proven only after CHAOS-3337 shipped (ops #1402) -- before that fix this crashed with DevPersistenceValidationError('invalid source_class') on every run; see STACK3_PERSISTENCE_GAP_REASON for the original repro. Codex finding (HIGH, 2026-08-03, round 4): scope+commit+non-error alone does not prove the CLAIMED plan ran -- a legacy-loop fallback (portfolio_status_gap's own proof) would pass those checks too. Closed by reading the persisted dev_runs row directly (preflight_outcome + plan_step_partition containing health.team.v1's own 'health_evaluation' mandatory step) -- never the scripted provider's intent-blind narrative. Negative-control demonstration performed once (recorded in the commit message, not automated as a permanent test since it needs editing the production plan registry): with health.team.v1 temporarily removed from the registry, this scenario's OLD assertions all still passed and only the new plan-step assertion caught the silently-absorbed missing plan.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+        "tests/acceptance/test_ask_dev_stack3_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/team_health.json",
+      "required_assertion_names": [
+        "scope_resolved_event_present",
+        "named_team_committed",
+        "answer_completed_event_present",
+        "answer_status_not_hard_error",
+        "preflight_proceeded_committed_subject",
+        "claimed_plan_step_completed",
+        "stream_terminated_as_answer"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.team-workload-balance.e2e-live-validated",
+      "category": "blocking_matrix",
+      "description": "TEAM_WORKLOAD_BALANCE live end-to-end: balance.team_workload.v1 reachable and answering for a named team subject, over the real Compose stack. Proven only after CHAOS-3337 shipped (ops #1402) -- same root cause and fix as matrix.team-health.e2e-live-validated. Proves reachability, not the specific 'overburdened'/'light on feature work' launch-finding shapes -- those stay at matrix.overburdened-teams-with-denominators/matrix.pressure-without-denominator's existing proven_unit level and matrix.light-on-feature-work's honest blocked state. Codex finding (HIGH, 2026-08-03, round 4): asserts balance.team_workload.v1's own mandatory step ('workload_evaluation') actually completed via a direct dev_runs read, not merely a non-error answer a legacy-loop fallback would also produce -- same fix and negative-control pattern as matrix.team-health.e2e-live-validated.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+        "tests/acceptance/test_ask_dev_stack3_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/team_workload_balance.json",
+      "required_assertion_names": [
+        "scope_resolved_event_present",
+        "named_team_committed",
+        "answer_completed_event_present",
+        "answer_status_not_hard_error",
+        "preflight_proceeded_committed_subject",
+        "claimed_plan_step_completed",
+        "stream_terminated_as_answer"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "matrix.unwired-intent-safe-fallback",
+      "category": "blocking_matrix",
+      "description": "A safe, honest outcome for a question whose intent has no wired plan -- traced, not guessed. Team-lead guidance 2026-08-02: 'don't leave presumably UNSUPPORTED in the manifest -- one traced run, assert the exact outcome/code'. HISTORICAL NOTE (2026-08-03): originally traced against PROJECT_HEALTH/TEAM_HEALTH as the live examples, before the CHAOS-3297 stack-3 wiring landed (ops #1383/#1387) -- both are now real plan_registry entries, so this exact shape no longer describes their live behavior (see STACK3_PERSISTENCE_GAP_REASON: they now reach the plan-governed path and crash, rather than safely falling through). The cited tests below still prove the general mechanism correctly (they construct their own registry with the intent absent, the same technique gate.plan-registry-gap-is-loud's tests use) -- PORTFOLIO_STATUS is the current live example of this row's claim; see gate.plan-registry-gap-is-loud and its e2e-live-validated sibling for that proof.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3300_unwired_intent_fallback.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3300_unwired_intent_fallback.py::test_project_health_question_falls_through_to_the_legacy_loop_not_a_plan",
+        "tests/api/dev/test_chaos_3300_unwired_intent_fallback.py::test_team_health_question_also_falls_through_when_subject_resolves"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "gate.content-security-audit",
+      "category": "gate",
+      "description": "Scan logs, traces, metric labels, persistence metadata, CI artifacts, and retained reports for the listed leakage classes.",
+      "status": "deferred",
+      "evidence": [],
+      "blocked_reason": "requires a live deployed system's logs/traces/artifacts to scan; a static/unit suite cannot prove absence in production telemetry",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "gate.deterministic",
+      "category": "gate",
+      "description": "The scripted-provider and canonical-service matrix passes 100% with no substantive skips; assertions are machine-readable.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/acceptance/test_wave31_manifest.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/acceptance/test_wave31_manifest.py::test_the_landed_manifest_has_no_integrity_errors"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "gate.migration-coexistence",
+      "category": "gate",
+      "description": "Prove Python/Go coexistence, cutover, rollback, and decommission per the CHAOS-3306 selected design.",
+      "status": "blocked",
+      "evidence": [],
+      "blocked_reason": "CHAOS-3306 resolved as Backlog/Low with an explicit decision to keep the Ask Dev runtime permanently on Python in dev-health-ops (people-facing) alongside Go acr-api/acr-mcp (agents/MCP) -- 'not part of Wave 3.1', 'does not block any active Ask Dev, Web, Ops, or ACR implementation issue', and 'no implementation or decommission work is authorized by this backlog item today'. This gate assumes an active cutover with a sunset date, which 3306 did not approve; treated as not-applicable-by-decision rather than unmet, but the report must say so explicitly rather than silently skip it",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "gate.plan-registry-gap-is-loud",
+      "category": "gate",
+      "description": "A recognized-but-currently-unwired intent (PORTFOLIO_STATUS today) must fall back to the legacy model-round loop LOUDLY -- a structured WARNING log record plus ASK_DEV_PLAN_REGISTRY_GAP_TOTAL -- and still complete as a real, non-error answer, never terminate. Team-lead ratification (2026-08-02): this is a provable row, not an acknowledged gap -- the fallback IS the designed, correct behavior until the stack-5 guard cutover, and BOUNDED_INVESTIGATION's separate, always-silent fallthrough must never trigger the same signal.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3300_plan_registry_gap.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3300_plan_registry_gap.py::test_plan_registry_gap_is_loud_for_a_normally_plan_governed_intent",
+        "tests/api/dev/test_chaos_3300_plan_registry_gap.py::test_bounded_investigation_never_triggers_the_gap_signal"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "gate.plan-registry-gap-is-loud.e2e-live-validated",
+      "category": "gate",
+      "description": "The same plan_registry_gap fallback, proven over the real live Compose stack against PORTFOLIO_STATUS -- the intent actually in this gap today, not a simulated one. A portfolio-shaped question (\"What's the status of all our projects across the portfolio?\") ran through many legacy model-round progress events (confirming the fallback loop actually engaged, not a fast-path), committed a real scope.resolved event, and completed as status EXACTLY 'partial' (the legacy-loop budget-exhaustion outcome, not any non-error status a lucky 'complete' would also satisfy) rather than hanging or terminating. Codex finding (HIGH, 2026-08-03, round 3): the prior version of this row passed without requiring any of that -- scope resolution was only checked for team-scoped scenarios (portfolio is not), no assertion pinned the exact status, and 'not error' alone is satisfied by complete/partial/degraded alike. Fixed by asserting the specific state directly. Live-confirmed 2026-08-03 there is NO client-observable signal for the WARNING log line or ASK_DEV_PLAN_REGISTRY_GAP_TOTAL counter this row's other half of the claim needs: answer.warnings for this scenario is generic scripted-provider boilerplate (\"Deterministic scripted acceptance response.\", \"Provider health was measured through data_health.v1.\"), identical regardless of question, not text tied to the gap signal -- recorded as an informational assertion, not claimed as proof of the signal. gate.plan-registry-gap-is-loud proves that signal at the unit level, through the real orchestrator seam, the only place it is observable.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_stack3_intents.py",
+        "tests/acceptance/test_ask_dev_stack3_intents_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/portfolio_status_gap.json",
+      "required_assertion_names": [
+        "scope_resolved_event_present",
+        "answer_completed_event_present",
+        "answer_status_is_exactly_partial",
+        "stream_terminated_as_answer",
+        "warnings_present_but_not_a_plan_registry_gap_signal"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "gate.repeated-certified-provider",
+      "category": "gate",
+      "description": "For each certified provider profile and enabled role, run at least 20 repetitions of critical paths at the stated thresholds.",
+      "status": "deferred",
+      "evidence": [],
+      "blocked_reason": "scripts/acceptance/run_ask_dev_provider_profile.sh + smoke_ask_dev_provider_profile.py already wire the lmstudio-local/ollama-local/ollama-cloud profile mechanics, but running 20 reps against real certified providers requires live credentials/endpoints not available in this sandboxed environment; missing credentials must mark the provider-profile gate non-passing per CHAOS-3300, not silently green",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "gate.web-default-ci",
+      "category": "gate",
+      "description": "Default required Playwright CI covers answer-v2 outcomes, subjects, rendering, and window/dev semantic equivalence.",
+      "status": "deferred",
+      "evidence": [],
+      "blocked_reason": "Re-checked 2026-08-03 per team-lead priority: web #833 (CHAOS-3287, merged to dev-health-web@main at a24de7c90dafa98c4f46f0cf5fc4a76cf6767023) landed real, default (not opt-in) Playwright coverage -- verified directly against the merged spec files, not the PR description alone: tests/ask-dev-continuity.spec.ts proves window/dev semantic equivalence (a conversation started in either surface resumes with the same transcript and rendered answer in the other, both directions); tests/ask-dev-outcomes.spec.ts and tests/ask-dev-shared.spec.ts cover every rendered dev_answer.v1 status, evidence-first hierarchy, and availability gating; tests/ask-dev-vocabulary.spec.ts is the internal-enum-leak denylist (CHAOS-3291 cross-check). This row's own claim names 'answer-v2 outcomes' specifically, and #833's own PR body is explicit that dev_answer.v2's outcome taxonomy is separate CHAOS-3294/3298 work not yet landed in web -- honoring 'claim what you assert', this row stays deferred rather than force-flipped, narrowed to exactly the gap #833 left: v2 outcome coverage. Subjects/rendering/window-dev equivalence are otherwise real, live, default-suite coverage today, not aspirational.",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.burden-without-denominator",
+      "category": "mutation_proof",
+      "description": "Calculate burden without a denominator/baseline.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3304_workload_observation_adapters.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3304_workload_observation_adapters.py::test_review_request_load_without_denominator_reports_raw_value_not_calculable",
+        "tests/api/dev/test_chaos_3304_workload_observation_adapters.py::test_review_request_load_zero_active_contributors_is_not_calculable"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.bypass-subject-preflight",
+      "category": "mutation_proof",
+      "description": "Bypass subject preflight.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3292_mutations.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m1a_pre_loop_gate_defeated_is_still_caught_at_dispatch",
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m1b_dispatch_gate_defeated_is_still_caught_before_the_loop"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.completion-without-denominator",
+      "category": "mutation_proof",
+      "description": "Calculate completion without a complete denominator.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_status_change_service.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_completed_parent_with_incomplete_required_child_is_not_ready"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.disable-deterministic-fallback",
+      "category": "mutation_proof",
+      "description": "Disable deterministic fallback.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3297_frame_reachability.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3297_frame_reachability.py::test_replay_with_corrupted_frame_payload_falls_back_safely",
+        "tests/api/dev/test_chaos_3297_frame_reachability.py::test_replay_with_mismatched_frame_outcome_falls_back_safely"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.duplicate-run-on-reconnect",
+      "category": "mutation_proof",
+      "description": "Duplicate a run during expand/reconnect.",
+      "status": "deferred",
+      "evidence": [],
+      "blocked_reason": "reconnect/expand duplication is a persistence-layer concern (CHAOS-3299's replay work); no mutation test in this lane's evidence set exercises it yet",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.expose-forbidden-or-not-found",
+      "category": "mutation_proof",
+      "description": "Expose forbidden_or_not_found as display copy.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3292_mutations.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.mutate-fixture-differently-go-python",
+      "category": "mutation_proof",
+      "description": "Mutate the same fixture differently in Go and Python.",
+      "status": "deferred",
+      "evidence": [],
+      "blocked_reason": "requires the cross-repo differential harness attack.runtime-divergence also needs (Web/API/MCP/Go/Python), which does not exist yet",
+      "test_nodeids": [],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.no-data-to-zero",
+      "category": "mutation_proof",
+      "description": "Convert no data to zero.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3303_dimension_observation_adapters.py::test_data_trust_no_sources_is_no_data_not_measured_zero"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.remove-mention-from-set",
+      "category": "mutation_proof",
+      "description": "Remove one mention from a subject set.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3292_mutations.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m2_multi_mention_fallthrough_is_caught_in_both_orders"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.remove-relationship-filtering",
+      "category": "mutation_proof",
+      "description": "Remove relationship filtering.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3296_relationship_closure.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3296_relationship_closure.py::test_an_edge_unrelated_to_the_committed_subject_fails_closed"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.restore-org-fallback",
+      "category": "mutation_proof",
+      "description": "Restore organization fallback.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3292_mutations.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m2_no_authorized_match_must_not_fall_through_to_organization_scope"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "mutation.single-signal-struggling-team",
+      "category": "mutation_proof",
+      "description": "Enable a single-signal struggling-team finding.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3304_workload_health_rules.py::test_negative_single_at_risk_dimension_does_not_qualify"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "defect.ask-dev-exact-commit",
+      "category": "original_defect_reproduction",
+      "description": "Seed an exact Ask Dev project: commit it before investigation and return its substantive status frame.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py::test_a1_known_project_commits_scope_before_the_status_tool"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "defect.ask-dev-exact-commit.e2e-live-validated",
+      "category": "original_defect_reproduction",
+      "description": "The exact-commit defect reproduction proven through the real live Compose stack -- the positive control the not-found negative control needs to hold against, over the same real HTTP/SSE surface.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_exact_commit.py",
+        "scripts/acceptance/run_ask_dev_compose.sh",
+        "tests/acceptance/test_ask_dev_exact_commit_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/exact_commit.json",
+      "required_assertion_names": [
+        "scope_resolved_event_present",
+        "named_repository_committed",
+        "answer_completed_event_present",
+        "answer_status_not_error",
+        "stream_terminated_as_answer"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "defect.ask-dev-not-found",
+      "category": "original_defect_reproduction",
+      "description": "Seed no authorized project named Ask Dev: return not_found, state that organization data was not substituted, and execute zero status/health/evidence steps for the nonexistent subject.",
+      "status": "proven_unit",
+      "evidence": [
+        "tests/_chaos_3292_preflight.py",
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_preflight_acceptance.py::test_a2_unknown_target_is_not_found_and_runs_no_subject_tool"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "defect.ask-dev-not-found.e2e-live-validated",
+      "category": "original_defect_reproduction",
+      "description": "The not-found defect reproduction proven through the real live Compose stack (real Postgres/ClickHouse/Valkey, real API, real HTTP/SSE, scripted OpenAI-compatible provider) rather than only the orchestrator-level unit harness -- no web/Playwright dependency, since the outcome never reaches the web UI.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_not_found.py",
+        "scripts/acceptance/run_ask_dev_compose.sh",
+        "tests/acceptance/test_ask_dev_not_found_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/not_found.json",
+      "required_assertion_names": [
+        "terminal_error_event_present",
+        "error_code_is_scope_not_found",
+        "no_answer_produced",
+        "safe_message_does_not_name_subject"
+      ],
+      "stale_dependencies": []
+    },
+    {
+      "id": "defect.no-org-fallback-or-blank",
+      "category": "original_defect_reproduction",
+      "description": "Never render organization deployments, refused, forbidden/not_found, raw resolver reasons, or a blank answer for a preflight termination.",
+      "status": "proven_unit",
+      "evidence": [
+        "src/dev_health_ops/api/dev/preflight_outcomes.py",
+        "tests/api/dev/test_chaos_3292_mutations.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m2_no_authorized_match_must_not_fall_through_to_organization_scope",
+        "tests/api/dev/test_chaos_3292_mutations.py::test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "positive-control.real-project-status",
+      "category": "real_project_positive_control",
+      "description": "A seeded exact NAMED SUBJECT with known status, required work, and subject-linked evidence must reliably resolve and answer -- the CHAOS-3289 1-useful-answer-in-10 result fails this issue even if the other nine runs are described as safe. Proven against a repository subject, not literally a PROJECT-kind entity: this Compose profile's `dev-hops fixtures generate` never populates default.projects (confirmed live 2026-08-02 -- 0 rows; PROJECT-kind entities are sourced from an external issue-tracker's project_key, e.g. Jira/Linear, which these synthetic fixtures do not simulate), so no PROJECT-kind subject exists to name. Codex finding (HIGH, 2026-08-02) explicitly allows this: 'if the fixture profile genuinely can't support it, downgrade/rename ... to what the ... run proves -- honest downgrade over overclaim'. A named repository is the strongest real, resolvable, named subject this fixture profile offers, and the underlying claim this row exists to prove (a real named subject reliably resolves and substantively answers, unlike CHAOS-3289's 1-in-10) is satisfied by it.",
+      "status": "proven_e2e",
+      "evidence": [
+        "scripts/acceptance/smoke_ask_dev_exact_commit.py",
+        "tests/acceptance/test_ask_dev_exact_commit_smoke.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [],
+      "requires_live_infra": true,
+      "execution_artifact": "tests/acceptance/artifacts/exact_commit.json",
+      "required_assertion_names": [
+        "named_repository_committed",
+        "answer_completed_event_present",
+        "answer_status_not_error",
+        "answer_summary_not_empty"
+      ],
+      "stale_dependencies": []
+    }
+  ]
+}

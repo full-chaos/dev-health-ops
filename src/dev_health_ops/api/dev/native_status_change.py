@@ -468,6 +468,76 @@ FROM (
 WHERE g.repo_id IS NOT NULL
 """
 
+#: Re-derive one project's repository set from canonical work-item attribution.
+#:
+#: A committed PROJECT subject can never carry a repository list of its own,
+#: exactly like the TEAM subject above: ``DevScope.repositories`` is only ever
+#: populated for a REPOSITORY commit
+#: (``scope_service.ScopeResolutionService.committed_scope_for`` /
+#: ``_resolved_scope``), and the catalog row a project commit is built from
+#: selects ``NULL AS repository_id``
+#: (``scope_catalog.ClickHouseAuthorizedEntityCatalog._query_for``) because a
+#: project spans repositories and has no repository dimension. So
+#: ``_repository_ids(scope)`` returned an empty set for *every* production
+#: project subject, and ``status_snapshot``/``change_summary`` took the
+#: fail-closed "authorized repository set" branch before running a single
+#: project query -- an empty snapshot for a project whose work items match.
+#:
+#: Bounded by the same ``org_id`` tenant boundary
+#: ``_ORGANIZATION_AUTHORIZED_REPOSITORIES_SQL`` enforces, by the same
+#: ``updated_at <= as_of`` bound ``_WORK_ITEMS_SQL`` applies, and by the
+#: byte-identical ``project_id``/``project_key`` disjunction every project SQL
+#: arm uses (pinned by
+#: ``test_derivation_matches_projects_exactly_as_the_queries_it_bounds_do``) --
+#: so the derived set can never admit a repository the fact queries it bounds
+#: would not themselves have drawn from.
+#:
+#: Codex adversarial review (HIGH, 2026-08-03): the first cut stopped there and
+#: trusted every ``work_items.repo_id`` outright. ClickHouse enforces no
+#: foreign key, so a repository revoked from ``repos`` -- de-authorized, and
+#: correctly invisible to the ORGANIZATION branch, which enumerates ``repos``
+#: itself -- can keep its ``work_items`` rows and would have become an admitted
+#: read bound for project scope alone. Every *real* repository id must therefore
+#: still resolve through the same org-scoped ``repos`` catalog.
+#:
+#: Provider scope, deliberate (Codex adversarial review HIGH, 2026-08-03;
+#: ruling: keep the arm provider-scoped rather than grow it). Sharing the fact
+#: queries' predicate exactly is also what stops this arm from *helping* a
+#: provider whose committed id those queries cannot match. Jira is that case:
+#: ``team_autoimport_jira._project_id`` mints the catalog id as
+#: ``f"{org_id}:jira:{project_key}"`` while ``providers/jira/normalize`` writes
+#: the raw Jira id/key onto ``work_items``, so neither arm matches. Deriving
+#: repositories for it anyway would be strictly *worse* than not: the fact
+#: queries would still match nothing and the run would report a confident empty
+#: answer for a project that has data, in place of the disclosed fail-closed
+#: one it reports today. Jira project subjects therefore keep exactly their
+#: current behavior here; making them answerable needs a coordinated
+#: provider-aware change across every project arm at once. Asserted by
+#: ``test_jira_shaped_project_keeps_todays_fail_closed_behaviour``.
+#:
+#: The zero UUID is admitted explicitly rather than by omitting that check.
+#: It is not a repository at all: it is the sentinel
+#: ``ClickHouseMetricsSink`` writes whenever a record has no repository
+#: (``metrics/sinks/clickhouse/core.py`` -- ``row.repo_id or uuid.UUID(int=0)``),
+#: which is every Linear work item (``providers/linear/normalize.py`` sets
+#: ``repo_id=None``). It has no ``repos`` row and never will, so a bare
+#: existence join would re-empty the set for the exact provider this fix exists
+#: for -- while a blanket "skip the catalog" would have de-authorized nothing
+#: and admitted everything. Naming the sentinel keeps both properties.
+PROJECT_REPOSITORIES_SQL = """
+SELECT DISTINCT toString(repo_id) AS repository_id
+FROM work_items FINAL
+WHERE org_id = {org_id:String}
+  AND updated_at <= {as_of:DateTime64(3, 'UTC')}
+  AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
+  AND (
+    toString(repo_id) = '00000000-0000-0000-0000-000000000000'
+    OR toString(repo_id) IN (
+      SELECT toString(id) FROM repos FINAL WHERE org_id = {org_id:String}
+    )
+  )
+"""
+
 _TRANSITIONS_SQL = (
     """
 SELECT transition.work_item_id AS entity_id, item.title AS display_label,
@@ -908,6 +978,36 @@ class ClickHouseStatusChangeSource:
             self._team_repository_cache.popitem(last=False)
         return result
 
+    async def _project_repository_ids(
+        self, org_id: str, entity_id: str, *, as_of: datetime
+    ) -> list[str]:
+        """Repositories this project's canonical work items live in.
+
+        A failed query returns an empty set, which lands the caller on the
+        same fail-closed "authorized repository set" branch an unmeasured
+        team attribution already takes -- an unreadable attribution source is
+        never allowed to read as "this project spans no repositories".
+        """
+
+        if not entity_id:
+            return []
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+                rows = await query_dicts(
+                    self._client,
+                    PROJECT_REPOSITORIES_SQL,
+                    {
+                        "org_id": org_id,
+                        "entity_id": entity_id,
+                        "as_of": as_of.astimezone(UTC),
+                    },
+                )
+        except Exception:
+            return []
+        return sorted(
+            {str(row["repository_id"]) for row in rows if row.get("repository_id")}
+        )
+
     async def _authorized_repository_ids(
         self, org_id: str, scope: DevScope, *, as_of: datetime
     ) -> list[str]:
@@ -937,7 +1037,34 @@ class ClickHouseStatusChangeSource:
         it), so without this branch every team subject would always resolve
         to an empty repository set and take the fail-closed path below,
         regardless of real ownership data.
+
+        A committed project *subject* (``direct_scope=PROJECT``) has the same
+        structural problem for a different reason -- the catalog resolves
+        projects with no repository dimension at all, so both
+        ``scope.repositories`` and ``entity_refs[0].repository_id`` are always
+        empty for a production project commit -- and is re-derived here from
+        canonical work-item project attribution
+        (``PROJECT_REPOSITORIES_SQL``). Without this branch every project
+        subject failed closed below while its work items sat in ``work_items``
+        matching the very ``project_id`` the scope committed.
+
+        A *team-filtered* project scope (``direct_scope=PROJECT`` alongside
+        ``scope.team_ids``, a filter -- ``DevScope`` permits the combination,
+        and ``ScopeResolutionService._resolved_scope`` populates ``team_ids``
+        from ``resolution.team_filters`` for any direct scope) is excluded
+        from that derivation for exactly the reason the team-filtered
+        ORGANIZATION case below is excluded, and the exclusion is checked
+        first: no project SQL arm applies a team filter, so deriving the
+        project's full repository set would silently answer a "project P, team
+        A only" request with team B's work from the same project. Falling
+        through to the caller's own (empty) bounded fields preserves the
+        fail-closed behavior such a request already had before this branch
+        existed. Codex adversarial review (HIGH, 2026-08-03).
         """
+        if scope.direct_scope is DirectScope.PROJECT and not scope.team_ids:
+            return await self._project_repository_ids(
+                org_id, self._entity_id(scope), as_of=as_of
+            )
         if scope.direct_scope is DirectScope.TEAM:
             # Unmeasured (failed lookup) and measured-but-empty both fall
             # through to the existing empty-repositories fail-closed branch
@@ -980,6 +1107,7 @@ class ClickHouseStatusChangeSource:
                 ),
             )
 
+        requested = min(limit, MAX_STATUS_ASSESSMENT_ITEMS)
         common = {
             "org_id": org_id,
             "repository_ids": repositories,
@@ -987,7 +1115,7 @@ class ClickHouseStatusChangeSource:
             "entity_id": entity_id,
             "pr_number": self._pr_number(entity_id),
             "as_of": as_of.astimezone(UTC),
-            "limit": min(limit, MAX_STATUS_ASSESSMENT_ITEMS),
+            "limit": requested,
             "member_issue_ids": [],
             "member_pr_ids": [],
             # CHAOS-3303 round 2: the canonical-primary-attribution team arms
@@ -998,6 +1126,7 @@ class ClickHouseStatusChangeSource:
             if scope.direct_scope is DirectScope.TEAM
             else "",
         }
+        membership_source_truncated = False
         if scope.direct_scope is DirectScope.WORK_UNIT:
             marker_rows, membership_ref, warning = await self._read(
                 "work_units",
@@ -1017,10 +1146,25 @@ class ClickHouseStatusChangeSource:
                         + ["canonical work-unit membership has no complete run"]
                     ),
                 )
+            # CHAOS-3297 s2 round 3 (codex HIGH): _WORK_UNIT_MEMBERS_SQL
+            # mixes issue and PR members in ONE query sharing a single
+            # LIMIT budget, then splits them post-fetch by node_type --
+            # the same shared-budget-then-split shape as _WORK_ITEMS_SQL's
+            # parent/child split. A plain post-split length check on
+            # either member_issue_ids or member_pr_ids can stay under the
+            # bound even when the true combined membership exceeds it
+            # (e.g. 500 issues + 501 PRs = 1001 rows against a 1000 cap
+            # drops the last PR, and neither 500-length list ever trips
+            # its own >= 1000 check). Fetch one sentinel row beyond the
+            # real budget, exactly as for work items, and record
+            # truncation BEFORE the split.
+            membership_requested = requested
             try:
                 async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
                     member_rows = await query_dicts(
-                        self._client, _WORK_UNIT_MEMBERS_SQL, common
+                        self._client,
+                        _WORK_UNIT_MEMBERS_SQL,
+                        {**common, "limit": membership_requested + 1},
                     )
             except Exception:
                 return RawStatusSnapshot(
@@ -1028,6 +1172,9 @@ class ClickHouseStatusChangeSource:
                     source_refs=(self._unavailable_ref("work_units", scope),),
                     warnings=("work_units source unavailable",),
                 )
+            if len(member_rows) > membership_requested:
+                membership_source_truncated = True
+                member_rows = member_rows[:membership_requested]
             common["member_issue_ids"] = sorted(
                 {
                     str(row.get("node_id") or "")
@@ -1050,22 +1197,44 @@ class ClickHouseStatusChangeSource:
                     declared=None,
                     source_refs=tuple(source_refs),
                     warnings=tuple(warnings),
+                    membership_source_truncated=membership_source_truncated,
                 )
 
         work_item_rows: list[dict[str, Any]] = []
+        children_source_truncated = False
         if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT} or (
             scope.direct_scope is DirectScope.WORK_UNIT
             and bool(common["member_issue_ids"])
         ):
+            # CHAOS-3297 s2 round 2 (codex HIGH): _WORK_ITEMS_SQL fetches
+            # the declared parent AND its children from ONE query sharing a
+            # single LIMIT budget -- the parent consumes one row of that
+            # budget, so a plain post-split ``len(children) >= limit``
+            # check can never fire even when the true child set exceeds
+            # the limit (limit=1000 -> 1000 rows returned -> 999 children
+            # -> 999 < 1000, no truncation detected, though an older,
+            # incomplete child past rank 1000 was silently dropped).
+            # Request one sentinel row beyond the real budget: getting it
+            # back proves the source had more matching rows than we asked
+            # for, independent of how the parent/child split later divides
+            # the (trimmed-back-down) result.
+            work_items_requested = requested
             work_item_rows, ref, warning = await self._read(
-                "work_items", _WORK_ITEMS_SQL, common, scope
+                "work_items",
+                _WORK_ITEMS_SQL,
+                {**common, "limit": work_items_requested + 1},
+                scope,
             )
+            if len(work_item_rows) > work_items_requested:
+                children_source_truncated = True
+                work_item_rows = work_item_rows[:work_items_requested]
             source_refs.append(ref)
             if warning:
                 warnings.append(warning)
 
         blocker_rows: list[dict[str, Any]] = []
         blocker_ref: SourceReference | None = None
+        blockers_source_truncated = False
         if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT} or (
             scope.direct_scope is DirectScope.WORK_UNIT
             and bool(common["member_issue_ids"])
@@ -1085,14 +1254,27 @@ class ClickHouseStatusChangeSource:
                 try:
                     async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
                         blocker_rows = await query_dicts(
-                            self._client, _BLOCKERS_SQL, common
+                            self._client,
+                            _BLOCKERS_SQL,
+                            {**common, "limit": requested + 1},
                         )
                 except Exception:
                     blocker_ref = self._unavailable_ref("work_graph", scope)
                     warnings.append("work_graph blocker source unavailable")
+                else:
+                    # CHAOS-3297 s2 round 5 (codex MEDIUM): sentinel, not a
+                    # post-fetch length inference -- see _bounded_read.
+                    if len(blocker_rows) > requested:
+                        blockers_source_truncated = True
+                        blocker_rows = blocker_rows[:requested]
 
-        pr_rows, pr_ref, warning = await self._read(
-            "pull_requests", _PULL_REQUESTS_SQL, common, scope
+        (
+            pr_rows,
+            pr_ref,
+            warning,
+            pull_requests_source_truncated,
+        ) = await self._bounded_read(
+            "pull_requests", _PULL_REQUESTS_SQL, common, scope, requested=requested
         )
         source_refs.append(pr_ref)
         if warning:
@@ -1106,9 +1288,14 @@ class ClickHouseStatusChangeSource:
         ci_rows: list[dict[str, Any]] = []
         ci_acceptance_rows: list[dict[str, Any]] = []
         ci_acceptance_ref: SourceReference | None = None
+        ci_source_truncated = False
         if pr_numbers:
-            ci_rows, ci_ref, warning = await self._read(
-                "ci_runs", _CI_SQL, {**common, "pr_numbers": pr_numbers}, scope
+            ci_rows, ci_ref, warning, ci_runs_truncated = await self._bounded_read(
+                "ci_runs",
+                _CI_SQL,
+                {**common, "pr_numbers": pr_numbers},
+                scope,
+                requested=requested,
             )
             source_refs.append(ci_ref)
             if warning:
@@ -1119,11 +1306,17 @@ class ClickHouseStatusChangeSource:
                 if (str(row.get("repository_id") or ""), int(row.get("pr_number") or 0))
                 in pr_pairs
             ]
-            ci_acceptance_rows, ci_acceptance_ref, warning = await self._read(
+            (
+                ci_acceptance_rows,
+                ci_acceptance_ref,
+                warning,
+                ci_acceptance_truncated,
+            ) = await self._bounded_read(
                 "ci_acceptance_checks",
                 _CI_ACCEPTANCE_SQL,
                 {**common, "pr_numbers": pr_numbers},
                 scope,
+                requested=requested,
             )
             source_refs.append(ci_acceptance_ref)
             if warning:
@@ -1146,12 +1339,27 @@ class ClickHouseStatusChangeSource:
                 )
                 == str(row.get("run_id") or "")
             ]
+            # CHAOS-3297 s2 round 5 (codex HIGH): truncation is measured on
+            # the RAW fetched rows, before the pr_pairs filter and the
+            # latest-run-per-PR collapse -- the global bound applies to
+            # per-EVENT rows, not per-PR ones, so a high-churn PR can push
+            # a different PR's latest (possibly failing) run out of the
+            # fetch window entirely; the collapse can only pick a latest
+            # run from what was actually fetched, never recover one that
+            # never arrived.
+            ci_source_truncated = ci_runs_truncated or ci_acceptance_truncated
 
-        deployment_rows, deployment_ref, warning = await self._read(
+        (
+            deployment_rows,
+            deployment_ref,
+            warning,
+            deployments_source_truncated,
+        ) = await self._bounded_read(
             "deployments",
             _DEPLOYMENTS_SQL,
             {**common, "pr_numbers": pr_numbers},
             scope,
+            requested=requested,
         )
         source_refs.append(deployment_ref)
         if warning:
@@ -1195,12 +1403,19 @@ class ClickHouseStatusChangeSource:
         ]
 
         incident_rows: list[dict[str, Any]] = []
+        incidents_source_truncated = False
         if deployment_pairs:
-            incident_rows, incident_ref, warning = await self._read(
+            (
+                incident_rows,
+                incident_ref,
+                warning,
+                incidents_source_truncated,
+            ) = await self._bounded_read(
                 "incidents",
                 _INCIDENTS_SQL,
                 {**common, "org_id": org_id, "deployment_pairs": deployment_pairs},
                 scope,
+                requested=requested,
             )
             source_refs.append(incident_ref)
             if warning:
@@ -1402,6 +1617,13 @@ class ClickHouseStatusChangeSource:
                 + gap_refs
             ),
             warnings=tuple(warnings),
+            children_source_truncated=children_source_truncated,
+            membership_source_truncated=membership_source_truncated,
+            blockers_source_truncated=blockers_source_truncated,
+            pull_requests_source_truncated=pull_requests_source_truncated,
+            ci_source_truncated=ci_source_truncated,
+            deployments_source_truncated=deployments_source_truncated,
+            incidents_source_truncated=incidents_source_truncated,
         )
 
     async def change_summary(
@@ -1579,6 +1801,35 @@ class ClickHouseStatusChangeSource:
         watermark = max(watermarks, default=None)
         ref = self._source_ref(source, scope, watermark)
         return rows, ref, None
+
+    async def _bounded_read(
+        self,
+        source: str,
+        sql: str,
+        params: dict[str, Any],
+        scope: DevScope,
+        *,
+        requested: int,
+    ) -> tuple[list[dict[str, Any]], SourceReference, str | None, bool]:
+        """``_read`` plus a limit+1 sentinel (CHAOS-3297 s2 round 5, codex
+        MEDIUM): fetch one row beyond ``requested`` so truncation is
+        detected from the source's own row count, never inferred from
+        ``len(result) >= MAX_STATUS_ASSESSMENT_ITEMS`` -- that equality
+        heuristic has two proven failure modes: it never fires when a
+        query shares its LIMIT budget with another entity type sharing the
+        row before a post-fetch split (rounds 2-3: _WORK_ITEMS_SQL,
+        _WORK_UNIT_MEMBERS_SQL), and it fires on a false positive at
+        exactly ``MAX_STATUS_ASSESSMENT_ITEMS`` legitimate, untruncated
+        results (round 3). Trims back down to ``requested`` so every
+        caller's row count is unaffected by the +1 probe.
+        """
+        rows, ref, warning = await self._read(
+            source, sql, {**params, "limit": requested + 1}, scope
+        )
+        truncated = len(rows) > requested
+        if truncated:
+            rows = rows[:requested]
+        return rows, ref, warning, truncated
 
     def _source_ref(
         self, source: str, scope: DevScope, watermark: datetime | None

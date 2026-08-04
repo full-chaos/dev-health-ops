@@ -342,6 +342,7 @@ func githubPRSocialRouteDestinations() []string {
 
 func workItemRouteDestinations() []string {
 	return []string{
+		"ai_attribution",
 		"estimate_coverage_metrics_daily",
 		"investment_classifications_daily",
 		"investment_metrics_daily",

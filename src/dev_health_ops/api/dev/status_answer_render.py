@@ -66,6 +66,7 @@ from .status_completion_copy import (
 )
 
 __all__ = [
+    "DISPLAY_TRUNCATED_DISCLOSURE",
     "build_deterministic_status_claims",
     "deterministic_answer_status",
     "open_blockers",
@@ -149,6 +150,22 @@ def open_blockers(actual: DevActualCompletion) -> list[DevRequiredChildFact]:
     return [blocker for blocker in actual.blockers if is_blocker_open(blocker.status)]
 
 
+#: CHAOS-3377 hotfix: disclosed whenever ``actual.display_truncated`` is
+#: True -- ``status_change_service.status_snapshot`` bounds both
+#: ``required_children`` and ``blockers`` to ``request.max_items`` (100) for
+#: display, independent of ``required_child_total``/``required_child_complete``
+#: (which always reflect the true, UNBOUNDED assessment -- see that
+#: module). A real project can have more than 100 outstanding items (the
+#: live acceptance probe found 155 blockers on one project); when that
+#: happens, some of them are silently absent from ``open_required_children``/
+#: ``open_blockers`` below, and that must never be silent -- "never a silent
+#: cap", the same rule every other bounded list in this codebase follows.
+DISPLAY_TRUNCATED_DISCLOSURE = (
+    "some required items or blockers were not displayed because there were "
+    "more than this answer's display limit"
+)
+
+
 def render_verdict_summary(
     actual: DevActualCompletion, *, denominator_withheld: bool = False
 ) -> str:
@@ -166,6 +183,11 @@ def render_verdict_summary(
     model-authored -- must carry that exact sentence, so a server-rendered
     verdict is not exempt from the same honesty requirement a model-authored
     one is held to.
+
+    ``actual.display_truncated`` drives the same kind of positive
+    disclosure for a DIFFERENT truncation: not a withheld denominator, but a
+    real denominator whose full required-item/blocker LIST does not fit in
+    one display page (CHAOS-3377 hotfix).
     """
 
     parts = [translate_completion_state(actual.state)]
@@ -188,6 +210,8 @@ def render_verdict_summary(
         parts.append("Open items: " + "; ".join(reasons) + ".")
     if denominator_withheld:
         parts.append(INCOMPLETE_DENOMINATOR_DISCLOSURE.capitalize() + ".")
+    if actual.display_truncated:
+        parts.append(DISPLAY_TRUNCATED_DISCLOSURE.capitalize() + ".")
     return " ".join(parts)
 
 

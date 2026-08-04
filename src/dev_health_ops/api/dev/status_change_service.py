@@ -569,14 +569,37 @@ class StatusChangeService:
         )
         actual = replace(
             actual,
-            # Read from the still-unbounded ``actual.required_children``
-            # (set by ``_assess``) before it is overwritten below with the
-            # bounded display list -- both keyword arguments are evaluated
-            # against the pre-replace object.
-            display_truncated=len(actual.required_children) > request.max_items,
+            # Read from the still-unbounded ``actual.required_children``/
+            # ``actual.blockers`` (set by ``_assess``) before they are
+            # overwritten below with their bounded display lists -- every
+            # keyword argument here is evaluated against the pre-``replace``
+            # object.
+            #
+            # CHAOS-3377 hotfix (live acceptance probe): ``actual.blockers``
+            # was added alongside ``required_children`` but never went
+            # through this same bounding step -- the wire type
+            # (``DevActualCompletion.blockers``) caps at
+            # ``max_length=100`` (``contracts.py``) exactly like
+            # ``required_children`` does, but nothing enforced that cap on
+            # the ``ActualCompletion`` domain object before
+            # ``production_runtime.py`` handed it straight to the wire
+            # constructor. A real project with >100 blocker facts (155,
+            # confirmed against the live org) raised a pydantic
+            # ``too_long`` ``ValidationError`` there, which surfaced as the
+            # status tool erroring and the whole §10 deterministic render
+            # never running -- unit fixtures never exercised more than 100
+            # blockers, so nothing caught it before now. ``display_truncated``
+            # covers BOTH lists (one flag, not two) -- it already means "the
+            # display doesn't reflect everything assessed", and blockers
+            # being cut is exactly that same claim.
+            display_truncated=(
+                len(actual.required_children) > request.max_items
+                or len(actual.blockers) > request.max_items
+            ),
             required_children=self._bounded(
                 actual.required_children, request.max_items
             ),
+            blockers=self._bounded(actual.blockers, request.max_items),
         )
         assessment_source_ids = set(actual.source_ref_ids)
         freshness = {

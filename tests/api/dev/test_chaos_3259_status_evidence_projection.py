@@ -35,6 +35,10 @@ from dev_health_ops.api.dev.contracts import (
 from dev_health_ops.api.dev.evidence_service import EvidenceReferenceSigner
 from dev_health_ops.api.dev.production_runtime import ProductionProviderResolution
 from dev_health_ops.api.dev.scope_service import AuthorizedEntity, EntityKind
+from dev_health_ops.api.dev.status_answer_render import (
+    build_deterministic_status_claims,
+    render_verdict_summary,
+)
 from dev_health_ops.api.dev.status_change_service import (
     ChangeCategory,
     ChangeWindow,
@@ -1084,6 +1088,135 @@ async def test_status_snapshot_bounds_evidence_instead_of_failing_validation(
     for conflict in result.actual_completion.conflicts:
         assert conflict.evidence_ref_ids
         assert not (set(conflict.evidence_ref_ids) & pr_evidence_ids)
+
+    await runtime.aclose()
+
+
+class _FakeManyBlockersStatusChangeSource:
+    """CHAOS-3377 hotfix: a project with more blocker facts than the wire
+    cap (155, matching the live acceptance probe's real count on a real
+    org) must not crash ``DevActualCompletion`` construction --
+    ``contracts.py`` caps ``DevActualCompletion.blockers`` at
+    ``max_length=100``, exactly like ``required_children`` above it, and
+    ``status_change_service._assess`` built ``ActualCompletion.blockers``
+    from the raw, UNBOUNDED source list with nothing capping it before
+    ``production_runtime.py`` handed it straight to the wire constructor.
+    Unit fixtures never exceeded 100 blockers, so nothing caught it until
+    the live probe. Mirrors ``_FakeDenseStatusChangeSource`` above, which
+    proves the sibling evidence-count defect the same way.
+    """
+
+    def __init__(self) -> None:
+        self.declared = StatusFact(
+            entity_type="issue",
+            entity_id="issue_parent",
+            display_label="Parent issue",
+            status="in_progress",
+            observed_at=FRESH_OBSERVED,
+            source_ref_id="ref:work_items",
+            evidence_ref_ids=(),
+        )
+        self.blockers = tuple(
+            StatusFact(
+                entity_type="issue",
+                entity_id=f"issue_blocker_{index:04d}",
+                display_label=f"Blocker {index}",
+                status="open",
+                observed_at=FRESH_OBSERVED,
+                source_ref_id="ref:work_items",
+                evidence_ref_ids=(),
+                required=True,
+            )
+            for index in range(155)
+        )
+        self.source_refs = (
+            SourceReference(
+                ref_id="ref:work_items",
+                source_system="work_items",
+                source_version="work-items.v1",
+                freshness=production_runtime.FreshnessState.FRESH,
+                watermark=FRESH_OBSERVED,
+                evidence_ref_ids=(),
+            ),
+        )
+
+    async def status_snapshot(
+        self, *, org_id: str, scope: DevScope, as_of: datetime, limit: int
+    ) -> RawStatusSnapshot:
+        del org_id, scope, as_of, limit
+        return RawStatusSnapshot(
+            declared=self.declared,
+            blockers=self.blockers,
+            source_refs=self.source_refs,
+        )
+
+    async def change_summary(
+        self,
+        *,
+        org_id: str,
+        scope: DevScope,
+        current: ChangeWindow,
+        comparison: ChangeWindow,
+        limit: int,
+    ) -> RawChangeSummary:
+        del org_id, scope, current, comparison, limit
+        return RawChangeSummary(changes=(), source_refs=self.source_refs)
+
+
+@pytest.mark.asyncio
+async def test_status_snapshot_bounds_blockers_instead_of_failing_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3377 hotfix, fail->pass against pre-fix main: a real project
+    with 155 blocker facts raised a pydantic ``too_long`` ``ValidationError``
+    constructing ``DevActualCompletion.blockers`` -- the status tool errored,
+    and the whole §10 deterministic renderer (``status_answer_render.py``)
+    never ran for that answer at all. Asserts, through the REAL production
+    tool-registry construction path (not a hand-built ``DevActualCompletion``):
+    (a) no ``ValidationError`` -- the tool call below would have raised, not
+    returned, on unfixed code; (b) the deterministic §10 renderer still
+    fires on the bounded result; (c) the truncation is disclosed, never
+    silent.
+    """
+
+    runtime = await _build_runtime(
+        monkeypatch, status_source=_FakeManyBlockersStatusChangeSource()
+    )
+    scope = _scope()
+    execution = await runtime.registry.execute(
+        DevToolRequest(
+            schema_version="dev_tool_request.v1",
+            run_id="run_01",
+            tool_call_id="tool_call_01",
+            tool_id=ToolID.STATUS_SNAPSHOT,
+            scope=scope,
+            limit=25,
+        ),
+        _context(scope),
+    )
+    result = execution.result
+    assert result.status == "success"
+    assert result.actual_completion is not None
+
+    # (a) no ValidationError: the 155-blocker source above would have
+    # raised constructing this very object on unfixed code.
+    assert len(result.actual_completion.blockers) <= 100
+    # (c) truncation is disclosed, never silent.
+    assert result.actual_completion.display_truncated is True
+
+    # (b) the deterministic §10 renderer still fires on the bounded result.
+    claims = build_deterministic_status_claims(
+        actual=result.actual_completion,
+        status_result=result,
+        validity_scope=scope,
+        canonical_evidence_ids=frozenset(
+            item.evidence_ref_id for item in result.evidence
+        ),
+    )
+    assert claims  # at least the verdict claim
+    summary = render_verdict_summary(result.actual_completion)
+    assert "not ready" in summary.casefold()
+    assert "some required items or blockers were not displayed" in summary.casefold()
 
     await runtime.aclose()
 

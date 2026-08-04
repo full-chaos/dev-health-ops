@@ -219,6 +219,57 @@ async def test_schedule_derived_source_policy_overrides_fallback_threshold() -> 
 
 
 @pytest.mark.asyncio
+async def test_measured_empty_subject_is_no_data_distinct_from_unavailable() -> None:
+    """CHAOS-3375: a genuinely empty, *measured* PROJECT/TEAM repository
+
+    derivation (``NativeDataHealthReader``'s ``project_repository_scope_
+    empty`` / ``team_repository_scope_empty`` warnings) must read as
+    ``DataHealthState.NO_DATA`` -- "queried, genuinely nothing in scope" --
+    never the same ``DataHealthState.UNAVAILABLE`` a *failed* derivation
+    (``..._unavailable``) reports. Collapsing the two was the residual gap
+    CHAOS-3375 closed on top of #1453's PROJECT-only widening fix.
+    """
+
+    observations = [
+        SourceHealthObservation(
+            "measured_empty",
+            True,
+            True,
+            watermark=None,
+            warning="project_repository_scope_empty",
+        ),
+        SourceHealthObservation(
+            "unavailable",
+            None,
+            False,
+            warning="project_repository_scope_unavailable",
+        ),
+    ]
+    policies = {
+        source: SourceFreshnessPolicy(source, f"{source}.v1", timedelta(hours=48))
+        for source in ("measured_empty", "unavailable")
+    }
+    result = await DataHealthService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        reader=Reader(observations),
+        policies=policies,
+        now=NOW,
+    ).inspect(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        required_sources=list(policies),
+    )
+
+    by_source = {item.source_system: item for item in result.sources}
+    assert by_source["measured_empty"].state is DataHealthState.NO_DATA
+    assert by_source["unavailable"].state is DataHealthState.UNAVAILABLE
+    assert by_source["measured_empty"].state is not by_source["unavailable"].state
+    assert result.complete_eligible is False
+
+
+@pytest.mark.asyncio
 async def test_relevant_missing_repository_is_not_reported_as_complete() -> None:
     organization_scope = ScopeResolution(
         outcome=ScopeResolutionOutcome.EXACT,

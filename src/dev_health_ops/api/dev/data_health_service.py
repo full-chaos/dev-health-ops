@@ -25,7 +25,7 @@ from dev_health_ops.models.settings import (
 from .entitlement import AskDevEntitlementAuthorizer
 from .evidence_service import EvidenceScopeAuthorizer
 from .native_evidence import SourceFreshnessPolicy, default_native_freshness_policies
-from .native_status_change import PROJECT_REPOSITORIES_SQL
+from .native_status_change import _TEAM_REPOSITORIES_SQL, PROJECT_REPOSITORIES_SQL
 from .scope_service import (
     EntityKind,
     ScopeResolution,
@@ -252,6 +252,30 @@ class DataHealthService:
         return DataHealthResult(tuple(results), complete_eligible)
 
 
+@dataclass(frozen=True, slots=True)
+class _ScopeRepositoryDerivation:
+    """Outcome of re-deriving a subject's repositories for a scope kind
+    (PROJECT, TEAM) that carries no repository dimension of its own.
+
+    CHAOS-3375: mirrors ``native_status_change.TeamAttributionResult``'s
+    measured/unmeasured distinction. ``available=False`` means the
+    derivation query itself failed (client/query error) -- the repository
+    set is UNKNOWN, never "this subject spans zero repositories".
+    ``available=True`` with an empty ``repository_ids`` is the genuine
+    zero-repository case: a real, measured answer, not a failure. Collapsing
+    the two into the same ``[]`` return (as a prior version of this reader
+    did) is exactly the bug this type exists to prevent -- a project/team
+    that legitimately has no repositories must read as "no data measured
+    for this subject" (``DataHealthState.NO_DATA``), never silently
+    upgraded to org-wide measurement (the original CHAOS-3375 defect) nor
+    conflated with ``DataHealthState.UNAVAILABLE`` (an unrelated query
+    failure).
+    """
+
+    available: bool
+    repository_ids: tuple[str, ...] = ()
+
+
 class NativeDataHealthReader:
     """Reconcile existing sync configuration with native source watermarks."""
 
@@ -270,34 +294,66 @@ class NativeDataHealthReader:
         configurations = configuration_rows or []
         schedules = await self._schedules(org_id)
         repository_ids = sorted(_repository_ids(scope))
-        # A committed PROJECT subject carries no repository dimension (the
-        # catalog resolves projects with ``NULL AS repository_id``), so
-        # ``_repository_ids`` is empty for one and the ``empty(array) OR ...``
-        # arm in ``_watermark`` below then disables repository filtering
-        # entirely -- measuring the whole organization and reporting it as the
-        # project's coverage. Because source health is a *mandatory* source for
-        # the project status plan, unrelated healthy repositories could make a
-        # project's evidence coverage read complete. Resolve the same
-        # repository set the status/change reader derives, from the same shared
-        # query, or fail closed. Codex adversarial review (HIGH, 2026-08-03).
-        project_scope_unresolved = False
+        # A committed PROJECT or TEAM subject carries no repository dimension
+        # of its own (the catalog resolves projects with ``NULL AS
+        # repository_id``; a team commit's ``AuthorizedEntity.repository_id``
+        # is always ``None`` -- ``ScopeResolutionService._committed_scope_for``
+        # 's own docstring), so ``_repository_ids`` is empty for either and
+        # the ``empty(array) OR ...`` arm in ``_watermark`` below then
+        # disables repository filtering entirely -- measuring the whole
+        # organization and reporting it as the subject's coverage. Because
+        # source health is a *mandatory* source for the project/team status
+        # plan, unrelated healthy repositories could make a subject's
+        # evidence coverage read complete. Resolve the same repository set
+        # the status/change reader derives, from the same shared query, or
+        # fail closed. Codex adversarial review (HIGH, 2026-08-03; CHAOS-3375
+        # widened the PROJECT-only fix to TEAM, which #1453 left unpatched --
+        # a committed TEAM direct scope reaches this exact same ``empty(...)
+        # OR ...`` widening, unguarded, via ``production_runtime._scope_
+        # request``'s ``DirectScope.TEAM`` branch).
+        subject_scope_unresolved = False
+        subject_scope_measured_empty = False
+        subject_scope_warning: str | None = None
         if not repository_ids:
             project_ids = [
                 entity.canonical_id
                 for entity in scope.entities
                 if entity.kind is EntityKind.PROJECT
             ]
+            team_ids = [
+                entity.canonical_id
+                for entity in scope.entities
+                if entity.kind is EntityKind.TEAM
+            ]
             if project_ids:
                 if scope.team_filters:
                     # No data-health query applies a team filter either, so a
                     # team-filtered project must not be answered with the whole
                     # project's repository set.
-                    project_scope_unresolved = True
+                    subject_scope_unresolved = True
+                    subject_scope_warning = "project_repository_scope_unavailable"
                 else:
-                    repository_ids = await self._project_repositories(
+                    derivation = await self._project_repositories(
                         org_id, project_ids[0]
                     )
-                    project_scope_unresolved = not repository_ids
+                    if not derivation.available:
+                        subject_scope_unresolved = True
+                        subject_scope_warning = "project_repository_scope_unavailable"
+                    elif derivation.repository_ids:
+                        repository_ids = list(derivation.repository_ids)
+                    else:
+                        subject_scope_measured_empty = True
+                        subject_scope_warning = "project_repository_scope_empty"
+            elif team_ids:
+                derivation = await self._team_repositories(org_id, team_ids[0])
+                if not derivation.available:
+                    subject_scope_unresolved = True
+                    subject_scope_warning = "team_repository_scope_unavailable"
+                elif derivation.repository_ids:
+                    repository_ids = list(derivation.repository_ids)
+                else:
+                    subject_scope_measured_empty = True
+                    subject_scope_warning = "team_repository_scope_empty"
         observations: list[SourceHealthObservation] = []
         for source in source_systems:
             if source == "acr":
@@ -307,7 +363,7 @@ class NativeDataHealthReader:
                     )
                 )
                 continue
-            if project_scope_unresolved:
+            if subject_scope_unresolved:
                 # ``configured=None`` maps to DataHealthState.UNAVAILABLE --
                 # an explicit "this could not be measured for this subject",
                 # never a silent organization-wide substitute.
@@ -316,7 +372,7 @@ class NativeDataHealthReader:
                         source,
                         None,
                         False,
-                        warning="project_repository_scope_unavailable",
+                        warning=subject_scope_warning,
                     )
                 )
                 continue
@@ -340,8 +396,23 @@ class NativeDataHealthReader:
                 ),
                 default=None,
             )
-            watermark, covered = await self._watermark(source, org_id, repository_ids)
-            relevant = set(repository_ids) or await self._repositories(org_id)
+            if subject_scope_measured_empty:
+                # A genuinely empty, measured repository set (project/team
+                # confirmed to own zero repositories) must never reach
+                # ``_watermark`` with an empty ``repository_ids`` list --
+                # that would re-trigger the exact ``empty(array) OR ...``
+                # org-wide widening this fix exists to close. There is
+                # nothing to look up: report no watermark and no coverage
+                # directly, distinctly warned from the derivation-failed
+                # (``..._unavailable``) branch above.
+                watermark: datetime | None = None
+                covered: set[str] = set()
+                relevant: set[str] = set()
+            else:
+                watermark, covered = await self._watermark(
+                    source, org_id, repository_ids
+                )
+                relevant = set(repository_ids) or await self._repositories(org_id)
             if watermark is not None:
                 configured = True
             intervals = [
@@ -371,25 +442,40 @@ class NativeDataHealthReader:
                     relevant_repository_ids=tuple(sorted(relevant)),
                     maximum_age=maximum_age,
                     freshness_policy_version=freshness_version,
-                    warning="active_sync_failure" if failure else None,
+                    warning=(
+                        "active_sync_failure"
+                        if failure
+                        else (
+                            subject_scope_warning
+                            if subject_scope_measured_empty
+                            else None
+                        )
+                    ),
                 )
             )
         return tuple(observations)
 
-    async def _project_repositories(self, org_id: str, project_id: str) -> list[str]:
+    async def _project_repositories(
+        self, org_id: str, project_id: str
+    ) -> _ScopeRepositoryDerivation:
         """The project's repository set, from the one shared derivation.
 
         Deliberately the same ``PROJECT_REPOSITORIES_SQL`` the status/change
         reader uses rather than a second query with the same intent: two
         independently-drifting notions of "which repositories is this project
-        in" is exactly the class of bug this fix exists to close. A failed or
-        empty derivation returns ``[]`` and the caller fails closed -- an
-        unreadable attribution source is never "this project spans no
-        repositories", and never an excuse to widen to the organization.
+        in" is exactly the class of bug this fix exists to close.
+
+        CHAOS-3375: a query failure and a query that legitimately returns
+        zero rows are no longer collapsed into the same ``[]`` -- see
+        ``_ScopeRepositoryDerivation``. Either way the caller must never
+        treat an unresolved/failed derivation as "this project spans no
+        repositories", and never as an excuse to widen to the organization;
+        a genuinely empty, *measured* result is likewise never widened, only
+        reported as no data for this subject.
         """
 
         if not project_id:
-            return []
+            return _ScopeRepositoryDerivation(available=False)
         try:
             rows = await query_dicts(
                 self._client,
@@ -403,9 +489,69 @@ class NativeDataHealthReader:
                 },
             )
         except Exception:
-            return []
-        return sorted(
-            {str(row["repository_id"]) for row in rows if row.get("repository_id")}
+            return _ScopeRepositoryDerivation(available=False)
+        return _ScopeRepositoryDerivation(
+            available=True,
+            repository_ids=tuple(
+                sorted(
+                    {
+                        str(row["repository_id"])
+                        for row in rows
+                        if row.get("repository_id")
+                    }
+                )
+            ),
+        )
+
+    async def _team_repositories(
+        self, org_id: str, team_id: str
+    ) -> _ScopeRepositoryDerivation:
+        """The team's repository set, from the one shared derivation.
+
+        Deliberately the same ``_TEAM_REPOSITORIES_SQL`` (re-derived from
+        ``team_repo_ownership``) that ``native_status_change.
+        ClickHouseStatusChangeSource.team_repository_ids`` uses, for the
+        same reason ``_project_repositories`` above shares
+        ``PROJECT_REPOSITORIES_SQL``: one canonical notion of "which
+        repositories does this team own", never a second query that can
+        independently drift.
+
+        CHAOS-3375: a committed TEAM direct scope carries no repository
+        dimension of its own (``ScopeResolutionService._committed_scope_
+        for``'s own docstring: "authorized_repository_ids ... stay empty
+        for a team commit"), the same structural gap ``_project_repositories``
+        closes for PROJECT -- but #1453 only special-cased PROJECT, leaving
+        a team subject to fall straight through to the ``empty(repository_
+        ids) OR ...`` org-wide widening this whole fix exists to close.
+        """
+
+        if not team_id:
+            return _ScopeRepositoryDerivation(available=False)
+        try:
+            rows = await query_dicts(
+                self._client,
+                _TEAM_REPOSITORIES_SQL,
+                {
+                    "org_id": org_id,
+                    "team_id": team_id,
+                    # Data health is a "right now" measurement, unlike a
+                    # snapshot's caller-supplied as_of.
+                    "as_of": datetime.now(UTC),
+                },
+            )
+        except Exception:
+            return _ScopeRepositoryDerivation(available=False)
+        return _ScopeRepositoryDerivation(
+            available=True,
+            repository_ids=tuple(
+                sorted(
+                    {
+                        str(row["repository_id"])
+                        for row in rows
+                        if row.get("repository_id")
+                    }
+                )
+            ),
         )
 
     async def _repositories(self, org_id: str) -> set[str]:

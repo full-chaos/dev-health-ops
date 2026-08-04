@@ -1162,7 +1162,11 @@ _STATUS_ENTITY_SOURCE_SYSTEM: Mapping[str, str] = {
     "issue": "work_items",
     "pull_request": "pull_requests",
     "work_unit": "work_units",
-    "project": "work_items",
+    # CHAOS-3368 (Codex HIGH fix): a project's own catalog id is never a
+    # work_item_id, so routing through "work_items" always expanded to
+    # NO_MATCHES. Routes to native_evidence.py's own "projects" adapter,
+    # which reads the same table the declared-state facts came from.
+    "project": "projects",
 }
 _CHANGE_CATEGORY_SOURCE_SYSTEM: Mapping[str, str] = {
     "entity": "work_items",
@@ -1795,17 +1799,66 @@ async def _assemble_production_runtime(
                 evidence_ref_ids=[ref.evidence_ref_id],
             )
 
+        # CHAOS-3368: build the interim display fact HERE, from the typed
+        # ``declared_project_state``/``declared_project_target_date``
+        # scalars on ``result`` -- never pre-joined text from the source
+        # boundary (Codex adversarial review, HIGH, 2026-08-04). A future
+        # deterministic renderer (CHAOS-3377) can consume the same two
+        # typed fields directly once it lands, without parsing this
+        # string back apart.
+        declared_project_fact: StatusFact | None = None
+        if (
+            result.declared_project_state is not None
+            or result.declared_project_target_date is not None
+        ) and (
+            result.declared_project_observed_at is not None
+            and request.scope.entity_refs
+        ):
+            parts = [
+                *(
+                    [result.declared_project_state]
+                    if result.declared_project_state
+                    else []
+                ),
+                *(
+                    ["target date " + result.declared_project_target_date.isoformat()]
+                    if result.declared_project_target_date is not None
+                    else []
+                ),
+            ]
+            # Routes evidence expansion through native_evidence.py's own
+            # "projects" adapter (CHAOS-3368 Codex HIGH fix) -- never the
+            # "work_items" one, whose identity match a project's catalog
+            # id can never satisfy.
+            declared_project_ref_id = next(
+                (
+                    ref.ref_id
+                    for ref in result.source_refs
+                    if ref.source_system == "projects"
+                ),
+                "source:projects-unavailable",
+            )
+            declared_project_fact = StatusFact(
+                entity_type="project",
+                entity_id=request.scope.entity_refs[0].entity_id,
+                display_label="Declared status",
+                status="; ".join(parts),
+                observed_at=result.declared_project_observed_at,
+                source_ref_id=declared_project_ref_id,
+                evidence_ref_ids=(),
+            )
+
         status_facts = [
             wire_status_fact(fact)
             for fact in (
                 ([result.declared] if result.declared else [])
                 + list(result.children)
-                # CHAOS-3368: the project's own declared state/target date,
-                # wired through the exact same fact->evidence->status_fact
-                # path as declared/children/blockers so they reach the
-                # model's context (and, through it, the §10 answer)
-                # identically -- no separate rendering path.
-                + list(result.project_facts)
+                # The project's own declared state/target date, wired
+                # through the exact same fact->evidence->status_fact path
+                # as declared/children/blockers so it reaches the model's
+                # context (and, through it, the §10 answer) identically --
+                # no separate rendering path.
+                + ([declared_project_fact] if declared_project_fact else [])
                 + list(result.blockers)
             )
         ]
@@ -1847,19 +1900,23 @@ async def _assemble_production_runtime(
         }
         priority_ids = [
             *(status_facts[0].evidence_ref_ids if result.declared else []),
-            *(
-                evidence_id
-                for fact in required_children
-                for evidence_id in fact.evidence_ref_ids
-            ),
-            # CHAOS-3368: never let the declared-state/target-date facts be
-            # the ones an unrelated dense scope's evidence truncation
-            # silently drops -- prioritize them exactly like the declared
-            # fact and required children above.
+            # CHAOS-3368 (Codex MEDIUM fix): reserved a slot BEFORE
+            # required_children -- with the old ordering, >=25 required
+            # children alone exhausted the entire ``_MAX_RESULT_EVIDENCE``
+            # budget and silently dropped this fact even though it was
+            # nominally "prioritized" (just prioritized too late to ever
+            # actually be reached). At most one small evidence set, so
+            # reserving it unconditionally here can never meaningfully
+            # starve required_children's own budget.
             *(
                 evidence_id
                 for fact in status_facts
                 if fact.fact_id.startswith("project:")
+                for evidence_id in fact.evidence_ref_ids
+            ),
+            *(
+                evidence_id
+                for fact in required_children
                 for evidence_id in fact.evidence_ref_ids
             ),
             *(

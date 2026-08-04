@@ -1085,6 +1085,13 @@ def _install_status_client_with_project_row(
     ...) and that CTE also reads ``FROM projects FINAL``, so the broader
     substring would wrongly intercept those queries too and starve
     ``_FakeWorkItems`` of the calls it needs to answer them.
+
+    Evaluates the ``updated_at <= {as_of:DateTime64(3, 'UTC')}`` predicate
+    against ``params["as_of"]`` (Codex adversarial review, MEDIUM,
+    2026-08-04) rather than always returning the canned row -- a fake that
+    ignores this predicate could not catch a regression that dropped it
+    from the real SQL and started leaking a future-dated declared state
+    into an as-of snapshot.
     """
 
     fake = _FakeWorkItems()
@@ -1097,6 +1104,12 @@ def _install_status_client_with_project_row(
                 project_row is None
                 or params.get("org_id") != ORG_ID
                 or params.get("entity_id") != PROJECT_ID
+            ):
+                return []
+            if (
+                "updated_at <= {as_of:DateTime64(3, 'UTC')}" in sql
+                and project_row.get("updated_at") is not None
+                and project_row["updated_at"] > params["as_of"]
             ):
                 return []
             return [project_row]
@@ -1135,12 +1148,9 @@ async def test_committed_project_scope_surfaces_declared_state_and_target_date(
         ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
     )
 
-    assert len(snapshot.project_facts) == 1
-    fact = snapshot.project_facts[0]
-    assert fact.entity_type == "project"
-    assert fact.entity_id == PROJECT_ID
-    assert "started" in fact.status
-    assert "2026-09-01" in fact.status
+    assert snapshot.declared_project_state == "started"
+    assert snapshot.declared_project_target_date == date(2026, 9, 1)
+    assert snapshot.declared_project_observed_at is not None
     # The pre-existing derived work-item tree is unaffected.
     assert {child.entity_id for child in snapshot.children} == IN_SCOPE_WORK_ITEM_IDS
     # The declared-state read really was issued with this project's identity.
@@ -1170,7 +1180,8 @@ async def test_committed_project_scope_declared_state_absent_when_catalog_row_mi
         ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
     )
 
-    assert snapshot.project_facts == ()
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None
     assert {child.entity_id for child in snapshot.children} == IN_SCOPE_WORK_ITEM_IDS
 
 
@@ -1202,7 +1213,8 @@ async def test_committed_project_scope_declared_state_absent_when_columns_empty(
         ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
     )
 
-    assert snapshot.project_facts == ()
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None
 
 
 @pytest.mark.asyncio
@@ -1238,10 +1250,50 @@ async def test_issue_scope_never_queries_the_projects_catalog(
         ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
     )
 
-    assert snapshot.project_facts == ()
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None
     # Matched on the declared-state read's own unique SELECT list, not the
     # broader "FROM projects FINAL" -- CHAOS-3374's _PROJECT_IDENTITY_CTE is
     # spliced into _WORK_ITEMS_SQL itself now, so that substring legitimately
     # appears even for an ISSUE-scope call that never reaches CHAOS-3368's
     # own query.
     assert not any("any(state) AS state" in sql for sql in fake.sql)
+
+
+@pytest.mark.asyncio
+async def test_committed_project_scope_declared_state_absent_for_future_dated_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 Codex MEDIUM fix (confirmed): ``_PROJECT_DECLARED_FACTS_SQL``
+    read the current ``FINAL`` row with no ``updated_at <= as_of`` bound --
+    an as-of snapshot strictly BEFORE the project's last declared-state
+    update would have reported that (not-yet-true-at-as_of) state anyway.
+    Since ``FINAL`` collapses all history, there is nothing earlier to
+    answer with; the correct behavior is absence, not an anachronistic
+    answer -- asserted here with an update timestamp strictly after the
+    snapshot's own ``as_of`` (which defaults to ``scope.time_range.end``).
+    """
+
+    _install_catalog_client(monkeypatch)
+    scope = await _committed_project_scope()
+    assert scope.time_range.end < NOW + timedelta(days=1)
+
+    _install_status_client_with_project_row(
+        monkeypatch,
+        project_row={
+            "state": "started",
+            "target_date": date(2026, 9, 1),
+            "updated_at": scope.time_range.end + timedelta(days=1),
+            "last_synced": scope.time_range.end + timedelta(days=1),
+        },
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None
+    # The rest of the tree (bounded by the same as_of) is unaffected.
+    assert {child.entity_id for child in snapshot.children} == IN_SCOPE_WORK_ITEM_IDS

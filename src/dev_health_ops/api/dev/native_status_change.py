@@ -13,7 +13,7 @@ import json
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from dev_health_ops.api.graphql.resolvers._membership_run_scope import (
@@ -326,6 +326,18 @@ LIMIT {limit:UInt32}
 #: Selects ``last_synced`` under that exact alias so ``_read``'s existing
 #: watermark/freshness plumbing applies unchanged -- no bespoke handling
 #: needed here.
+#:
+#: Codex adversarial review (MEDIUM, 2026-08-04): ``FINAL`` collapses the
+#: RMT to its single CURRENT row per key -- there is no history left to read
+#: here, so ``updated_at <= {as_of:DateTime64(3, 'UTC')}`` (mirroring every
+#: other as-of-bounded read in this module, e.g. ``_WORK_ITEMS_SQL``) is not
+#: a narrowing filter, it is the difference between "this project's
+#: declared state as of the requested instant" and "whatever it is RIGHT
+#: NOW, mislabeled as of an earlier instant". A project updated after
+#: ``as_of`` is excluded entirely (``count() = 0`` -> absent facts) rather
+#: than answered with its current, not-yet-true-at-as_of state -- this
+#: ticket deliberately does not attempt a real history representation; an
+#: as-of snapshot of a since-changed declared state is simply unavailable.
 _PROJECT_DECLARED_FACTS_SQL = """
 SELECT any(state) AS state,
        any(target_date) AS target_date,
@@ -333,6 +345,7 @@ SELECT any(state) AS state,
        any(last_synced) AS last_synced
 FROM projects FINAL
 WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
+  AND updated_at <= {as_of:DateTime64(3, 'UTC')}
 HAVING count() = 1
 """
 
@@ -1549,7 +1562,16 @@ class ClickHouseStatusChangeSource:
         # project-only read in this method (_BLOCKERS_SQL's own guard,
         # just above): an issue/work-unit/team/org/repository scope must
         # see byte-identical behavior to before this change.
-        project_facts: tuple[StatusFact, ...] = ()
+        #
+        # Codex adversarial review (HIGH, 2026-08-04): kept as TYPED scalars
+        # here, never pre-joined into presentation text -- a renderer that
+        # only ever sees "started; target date 2026-09-01" would have to
+        # parse it back apart to use the pieces independently. Formatting
+        # into a display fact is production_runtime.py's job, sourced from
+        # these typed fields.
+        declared_project_state: str | None = None
+        declared_project_target_date: date | None = None
+        declared_project_observed_at: datetime | None = None
         if scope.direct_scope is DirectScope.PROJECT:
             project_rows, project_ref, warning = await self._read(
                 "projects", _PROJECT_DECLARED_FACTS_SQL, common, scope
@@ -1558,9 +1580,17 @@ class ClickHouseStatusChangeSource:
             if warning:
                 warnings.append(warning)
             if project_rows:
-                project_facts = self._project_declared_facts(
-                    project_rows[0], entity_id, project_ref.ref_id, as_of
-                )
+                row = project_rows[0]
+                state = str(row.get("state") or "").strip()
+                target_date = row.get("target_date")
+                if state or target_date is not None:
+                    declared_project_state = state or None
+                    declared_project_target_date = (
+                        target_date if target_date is not None else None
+                    )
+                    declared_project_observed_at = self._datetime(
+                        row.get("updated_at"), as_of
+                    )
 
         pull_requests = tuple(
             PullRequestFact(
@@ -1702,7 +1732,9 @@ class ClickHouseStatusChangeSource:
         return RawStatusSnapshot(
             declared=declared,
             children=children,
-            project_facts=project_facts,
+            declared_project_state=declared_project_state,
+            declared_project_target_date=declared_project_target_date,
+            declared_project_observed_at=declared_project_observed_at,
             blockers=tuple(
                 StatusFact(
                     entity_type="issue",
@@ -2040,67 +2072,6 @@ class ClickHouseStatusChangeSource:
         declared = next((fact for fact in facts if fact.entity_id == entity_id), None)
         children = tuple(fact for fact in facts if fact is not declared)
         return declared, children
-
-    @staticmethod
-    def _project_declared_facts(
-        row: dict[str, Any],
-        entity_id: str,
-        source_ref_id: str,
-        as_of: datetime,
-    ) -> tuple[StatusFact, ...]:
-        """The project's own declared state / target date (CHAOS-3368).
-
-        Folded into a SINGLE ``StatusFact`` (never two facts sharing the
-        same ``entity_type``/``entity_id``, which would collide on
-        ``production_runtime.wire_status_fact``'s ``fact_id =
-        f"{entity_type}:{entity_id}"`` convention) -- mirrors the existing
-        one-fact-per-entity shape every other category in this module
-        already uses (one issue = one ``StatusFact`` whose own ``status``
-        conveys its full state). ``status`` never feeds ``_assess`` for
-        this field (see ``RawStatusSnapshot.project_facts``), so combining
-        pieces of text into it is safe here in a way it would not be for a
-        real completion-rule input.
-
-        Present only when the catalog row carries at least one value.
-        ``projects.state`` defaults to ``''`` and ``target_date`` is
-        ``Nullable`` (migration 073) precisely because not every provider
-        populates a lifecycle for every project -- an empty/``NULL``
-        column is a real "the provider declared nothing" and must render
-        as an absent fact, never a fabricated status string or an
-        epoch/zero date (the absence-collapses-to-zero pattern this
-        codebase treats as unsafe). Neither piece is dropped silently when
-        only one is present: the returned text names exactly the piece(s)
-        this project's catalog row actually carries.
-        """
-        observed_at = ClickHouseStatusChangeSource._datetime(
-            row.get("updated_at"), as_of
-        )
-        state = str(row.get("state") or "").strip()
-        target_date = row.get("target_date")
-        target_date_text: str | None = None
-        if target_date is not None:
-            target_date_text = (
-                target_date.isoformat()
-                if hasattr(target_date, "isoformat")
-                else str(target_date)
-            )
-        parts = [
-            *([state] if state else []),
-            *([f"target date {target_date_text}"] if target_date_text else []),
-        ]
-        if not parts:
-            return ()
-        return (
-            StatusFact(
-                entity_type="project",
-                entity_id=entity_id,
-                display_label="Declared status",
-                status="; ".join(parts),
-                observed_at=observed_at,
-                source_ref_id=source_ref_id,
-                evidence_ref_ids=(),
-            ),
-        )
 
     @classmethod
     def _latest_ci_run_rows(cls, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

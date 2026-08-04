@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 
 import pytest
@@ -1379,23 +1379,34 @@ async def test_ci_acceptance_checks_on_one_run_do_not_collide(
 # CHAOS-3368: the project's own declared state / target date must surface as
 # a status fact alongside the derived completion/blockers -- through the
 # exact same fact -> evidence -> status_fact wiring CHAOS-3259 pinned above,
-# not a separate rendering path.
+# not a separate rendering path. TYPED at the RawStatusSnapshot/
+# StatusSnapshotResult boundary (Codex adversarial review, HIGH,
+# 2026-08-04) -- never a pre-joined display string -- so this fixture sets
+# ``declared_project_state``/``declared_project_target_date`` directly.
 # ---------------------------------------------------------------------------
 
 
 class _FakeProjectStatusChangeSource(_FakeStatusChangeSource):
-    """Adds ``RawStatusSnapshot.project_facts`` to the otherwise-unchanged
-    ``_FakeStatusChangeSource`` fixture -- exactly the shape
-    ``ClickHouseStatusChangeSource._project_declared_facts`` now produces
-    for PROJECT scope. Every other field (declared/children/pull_requests/
-    ci/incidents) is untouched, so these tests exercise ONLY the new
-    project_facts wiring, not a parallel fixture that could drift from the
-    real one CHAOS-3259 already pins.
+    """Adds the CHAOS-3368 typed declared-state fields to the otherwise-
+    unchanged ``_FakeStatusChangeSource`` fixture. Every other field
+    (declared/children/pull_requests/ci/incidents) is untouched, so these
+    tests exercise ONLY the new wiring, not a parallel fixture that could
+    drift from the real one CHAOS-3259 already pins.
     """
 
-    def __init__(self, *, project_facts: tuple[StatusFact, ...]) -> None:
+    def __init__(
+        self,
+        *,
+        declared_project_state: str | None = None,
+        declared_project_target_date: date | None = None,
+        declared_project_observed_at: datetime | None = None,
+        extra_children: tuple[StatusFact, ...] = (),
+    ) -> None:
         super().__init__()
-        self._project_facts = project_facts
+        self._declared_project_state = declared_project_state
+        self._declared_project_target_date = declared_project_target_date
+        self._declared_project_observed_at = declared_project_observed_at
+        self._extra_children = extra_children
 
     async def status_snapshot(
         self, *, org_id: str, scope: DevScope, as_of: datetime, limit: int
@@ -1403,18 +1414,42 @@ class _FakeProjectStatusChangeSource(_FakeStatusChangeSource):
         raw = await super().status_snapshot(
             org_id=org_id, scope=scope, as_of=as_of, limit=limit
         )
-        return replace(raw, project_facts=self._project_facts)
+        return replace(
+            raw,
+            declared_project_state=self._declared_project_state,
+            declared_project_target_date=self._declared_project_target_date,
+            declared_project_observed_at=self._declared_project_observed_at,
+            children=raw.children + self._extra_children,
+        )
 
 
-PROJECT_DECLARED_STATE_FACT = StatusFact(
-    entity_type="project",
-    entity_id="project_01",
-    display_label="Declared status",
-    status="started; target date 2026-09-01",
-    observed_at=FRESH_OBSERVED,
-    source_ref_id="ref:projects",
-    evidence_ref_ids=(),
-)
+def _fake_projects_evidence_query_dicts() -> Any:
+    """Faithful stand-in for ``native_evidence.py``'s own "projects" adapter
+    ``expand_sql`` -- returns real content keyed on the real identity
+    predicate (``entity_id`` = the project's catalog id), never a canned
+    always-available response. Mirrors the file's existing
+    ``_real_native_evidence_query_dicts`` pattern.
+    """
+
+    async def fake_query_dicts(_client: Any, sql: str, params: dict[str, Any]) -> Any:
+        if "FROM projects FINAL" in sql and params.get("entity_id") == "project_01":
+            return [
+                {
+                    "entity_id": "project_01",
+                    "display_label": "Project 01",
+                    "excerpt": "Declared state: started. Target date: 2026-09-01.",
+                    "provenance": "linear",
+                    "observed_at": FRESH_OBSERVED,
+                    "last_synced": FRESH_OBSERVED,
+                    "repository_id": "",
+                    "source_url": "",
+                    "deleted": 0,
+                    "confidence": 1.0,
+                }
+            ]
+        return []
+
+    return fake_query_dicts
 
 
 @pytest.mark.asyncio
@@ -1423,12 +1458,14 @@ async def test_status_snapshot_surfaces_project_declared_state_and_target_date(
 ) -> None:
     """CHAOS-3368 acceptance: a PROJECT-scope status_snapshot call surfaces
     the project's own declared state / target date (projects.state/
-    target_date, migration 073) as a real, grounded status fact -- reaching
-    the tool result the model narrates into the §10 answer -- alongside the
-    derived completion/blockers this file already pins above.
+    target_date, migration 073) as a status fact -- reaching the tool
+    result the model narrates into the §10 answer -- alongside the derived
+    completion/blockers this file already pins above.
     """
     source = _FakeProjectStatusChangeSource(
-        project_facts=(PROJECT_DECLARED_STATE_FACT,)
+        declared_project_state="started",
+        declared_project_target_date=date(2026, 9, 1),
+        declared_project_observed_at=FRESH_OBSERVED,
     )
     runtime = await _build_runtime(monkeypatch, status_source=source)
     scope = _project_scope()
@@ -1455,8 +1492,6 @@ async def test_status_snapshot_surfaces_project_declared_state_and_target_date(
     fact = project_facts[0]
     assert "started" in fact.text
     assert "2026-09-01" in fact.text
-    # Grounded: a real, signer-issued evidence reference, not a bare claim
-    # the model could not independently verify via get_evidence.v1.
     assert fact.evidence_ref_ids
 
     # The pre-existing declared/child facts (CHAOS-3259) are unaffected --
@@ -1464,6 +1499,82 @@ async def test_status_snapshot_surfaces_project_declared_state_and_target_date(
     assert {"issue:issue_parent", "issue:issue_child"} <= {
         f.fact_id for f in result.status_facts
     }
+
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_expands_declared_project_state_with_real_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 Codex HIGH fix (confirmed): before this fix, the declared-
+    state fact's evidence was minted through the "work_items" native
+    evidence adapter (``_STATUS_ENTITY_SOURCE_SYSTEM["project"] =
+    "work_items"``), whose ``expand_sql`` requires ``work_item_id =
+    {entity_id}`` where ``entity_id`` is the FACT's own id -- a project's
+    catalog id, which is never a ``work_item_id``. That predicate can never
+    match, so ``get_evidence.v1`` would have returned NO_MATCHES for every
+    real declared-state fact -- while the prior test asserted only
+    ``fact.evidence_ref_ids`` truthy, which is satisfied by ANY signed
+    handle regardless of whether it expands to anything (a measurement
+    that never happened, reading as coverage). See
+    ``test_work_items_adapter_never_matches_a_project_identity`` in
+    test_native_evidence.py for the direct proof of the old failure mode.
+
+    This test performs the real STATUS_SNAPSHOT -> GET_EVIDENCE round trip
+    against the fix (routed through the new "projects" adapter) and asserts
+    the expanded record actually contains the declared state / target date.
+    """
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_evidence.query_dicts",
+        _fake_projects_evidence_query_dicts(),
+    )
+    source = _FakeProjectStatusChangeSource(
+        declared_project_state="started",
+        declared_project_target_date=date(2026, 9, 1),
+        declared_project_observed_at=FRESH_OBSERVED,
+    )
+    runtime = await _build_runtime(monkeypatch, status_source=source)
+    scope = _project_scope()
+
+    status_execution = await runtime.registry.execute(
+        DevToolRequest(
+            schema_version="dev_tool_request.v1",
+            run_id="run_01",
+            tool_call_id="tool_call_01",
+            tool_id=ToolID.STATUS_SNAPSHOT,
+            scope=scope,
+            limit=25,
+        ),
+        _context(scope),
+    )
+    project_fact = next(
+        fact
+        for fact in status_execution.result.status_facts
+        if fact.fact_id == "project:project_01"
+    )
+    evidence_id = project_fact.evidence_ref_ids[0]
+
+    get_execution = await runtime.registry.execute(
+        DevToolRequest(
+            schema_version="dev_tool_request.v1",
+            run_id="run_01",
+            tool_call_id="tool_call_02",
+            tool_id=ToolID.GET_EVIDENCE,
+            scope=scope,
+            evidence_ref_ids=[evidence_id],
+            limit=10,
+        ),
+        _context(scope),
+    )
+    result = get_execution.result
+    assert result.status != "unavailable"
+    texts = [fact.text for fact in result.status_facts]
+    assert len(texts) == 1, (
+        f"expected the declared-state evidence to expand, got {result}"
+    )
+    assert "started" in texts[0]
+    assert "2026-09-01" in texts[0]
 
     await runtime.aclose()
 
@@ -1479,7 +1590,7 @@ async def test_status_snapshot_project_declared_state_absent_renders_as_absent(
     fabricated empty-string status or an epoch/zero-date fact. Absence
     must render as absence, not a zero-like value.
     """
-    source = _FakeProjectStatusChangeSource(project_facts=())
+    source = _FakeProjectStatusChangeSource()
     runtime = await _build_runtime(monkeypatch, status_source=source)
     scope = _project_scope()
     execution = await runtime.registry.execute(
@@ -1512,10 +1623,10 @@ async def test_status_snapshot_non_project_scope_unchanged_by_project_facts_wiri
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """CHAOS-3368 negative control: an ISSUE-scope status_snapshot call must
-    never surface a project declared-state fact -- ``RawStatusSnapshot.
-    project_facts`` defaults to empty and the fake source here never sets
-    it, exactly mirroring today's real ``ClickHouseStatusChangeSource``,
-    which only ever populates it for PROJECT scope.
+    never surface a project declared-state fact -- the fake source here
+    never sets ``declared_project_state``/``declared_project_target_date``,
+    exactly mirroring today's real ``ClickHouseStatusChangeSource``, which
+    only ever populates them for PROJECT scope.
     """
     runtime = await _build_runtime(monkeypatch)
     scope = _scope()
@@ -1537,5 +1648,71 @@ async def test_status_snapshot_non_project_scope_unchanged_by_project_facts_wiri
         "issue:issue_parent",
         "issue:issue_child",
     }
+
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_declared_project_fact_survives_dense_required_child_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 Codex MEDIUM fix (confirmed): ``priority_ids`` previously
+    listed every required child's evidence BEFORE the declared-state
+    fact's -- with >=25 required children (the display bound this test
+    uses, ``limit=25``) alone exhausting ``_MAX_RESULT_EVIDENCE`` (25), the
+    declared-state fact's own evidence was silently filtered out of the
+    result even though it was nominally "prioritized" too late to ever be
+    reached. Reproduces that density and asserts the fact survives.
+    """
+    dense_required_children = tuple(
+        StatusFact(
+            entity_type="issue",
+            entity_id=f"issue_child_{i}",
+            display_label=f"Child issue {i}",
+            status="open",
+            observed_at=FRESH_OBSERVED,
+            source_ref_id="ref:work_items",
+            evidence_ref_ids=(),
+            required=True,
+        )
+        for i in range(30)
+    )
+    source = _FakeProjectStatusChangeSource(
+        declared_project_state="started",
+        declared_project_target_date=date(2026, 9, 1),
+        declared_project_observed_at=FRESH_OBSERVED,
+        extra_children=dense_required_children,
+    )
+    runtime = await _build_runtime(monkeypatch, status_source=source)
+    scope = _project_scope()
+    execution = await runtime.registry.execute(
+        DevToolRequest(
+            schema_version="dev_tool_request.v1",
+            run_id="run_01",
+            tool_call_id="tool_call_01",
+            tool_id=ToolID.STATUS_SNAPSHOT,
+            scope=scope,
+            limit=25,
+        ),
+        _context(scope),
+    )
+    result = execution.result
+
+    # Sanity: the reproduction actually hit the truncation path this test
+    # exists to exercise.
+    assert len(result.actual_completion.required_children) >= 25
+    assert "status_snapshot_evidence_result_truncated" in result.warnings
+
+    project_facts = [
+        fact for fact in result.status_facts if fact.fact_id == "project:project_01"
+    ]
+    assert len(project_facts) == 1, (
+        "the declared-state fact was dropped by evidence-budget truncation "
+        f"under {len(result.actual_completion.required_children)} required children"
+    )
+    assert project_facts[0].evidence_ref_ids, (
+        "the declared-state fact survived but with its evidence stripped -- "
+        "still effectively ungrounded"
+    )
 
     await runtime.aclose()

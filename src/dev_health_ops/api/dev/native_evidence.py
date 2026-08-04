@@ -174,6 +174,48 @@ _SPECS: dict[str, _SourceSpec] = {
         ORDER BY last_synced DESC LIMIT 1
         """,
     ),
+    # CHAOS-3368 (Codex HIGH fix): declared-state facts must expand through a
+    # real ``projects`` read, not the ``work_items`` adapter's ``work_item_id
+    # = {entity_id}`` identity match -- a project's own catalog id is never a
+    # work_item_id, so that adapter always returned NO_MATCHES for it. This
+    # adapter reads the SAME table CHAOS-3368's declared-state query does.
+    "projects": _SourceSpec(
+        "projects",
+        _COMMON_KINDS | {EntityKind.PROJECT},
+        f"""
+        SELECT id AS entity_id,
+               ifNull(nullIf(name, ''), concat('Project ', id)) AS display_label,
+               concat('Declared state: ', ifNull(nullIf(state, ''), 'unknown'),
+                      '. Target date: ', ifNull(toString(target_date), 'none')) AS excerpt,
+               ifNull(nullIf(provider, ''), 'native') AS provenance,
+               updated_at AS observed_at, last_synced,
+               '' AS repository_id,
+               ifNull(url, '') AS source_url, 0 AS deleted, 1.0 AS confidence
+        FROM projects FINAL
+        WHERE org_id = {{org_id:String}}
+          AND updated_at >= {{start:DateTime64(3, 'UTC')}}
+          AND updated_at < {{end:DateTime64(3, 'UTC')}}
+          AND is_active = 1
+          AND ({_search_predicate(("id", "name", "state"))})
+          AND ({{entity_id:String}} = '' OR id = {{entity_id:String}})
+        ORDER BY updated_at DESC, id
+        LIMIT {{limit:UInt32}}
+        """,
+        """
+        SELECT id AS entity_id,
+               ifNull(nullIf(name, ''), concat('Project ', id)) AS display_label,
+               concat('Declared state: ', ifNull(nullIf(state, ''), 'unknown'),
+                      '. Target date: ', ifNull(toString(target_date), 'none')) AS excerpt,
+               ifNull(nullIf(provider, ''), 'native') AS provenance,
+               updated_at AS observed_at, last_synced,
+               '' AS repository_id,
+               ifNull(url, '') AS source_url, 0 AS deleted, 1.0 AS confidence
+        FROM projects FINAL
+        WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
+          AND ({scope_entity_id:String} = '' OR id = {scope_entity_id:String})
+        ORDER BY last_synced DESC LIMIT 1
+        """,
+    ),
     "pull_requests": _SourceSpec(
         "pull_requests",
         _COMMON_KINDS | {EntityKind.PULL_REQUEST},
@@ -607,6 +649,7 @@ def _pr_number(entity_id: str) -> int:
 def _entity_type(source_system: str) -> str:
     return {
         "work_items": "issue",
+        "projects": "project",
         "work_units": "work_unit",
         "pull_requests": "pull_request",
         "reviews": "review",

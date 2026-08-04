@@ -25,7 +25,11 @@ from dev_health_ops.models.settings import (
 from .entitlement import AskDevEntitlementAuthorizer
 from .evidence_service import EvidenceScopeAuthorizer
 from .native_evidence import SourceFreshnessPolicy, default_native_freshness_policies
-from .native_status_change import _TEAM_REPOSITORIES_SQL, PROJECT_REPOSITORIES_SQL
+from .native_status_change import (
+    _PROJECT_IDENTITY_CTE,
+    _TEAM_REPOSITORIES_SQL,
+    PROJECT_REPOSITORIES_SQL,
+)
 from .scope_service import (
     EntityKind,
     ScopeResolution,
@@ -44,6 +48,23 @@ NATIVE_EVIDENCE_SOURCES = (
     "ci_runs",
     "deployments",
     "incidents",
+)
+
+#: CHAOS-3375 (post-CHAOS-3374 rebase): ``PROJECT_REPOSITORIES_SQL`` now
+#: ``INNER JOIN``s the provider-identity CTE (``_PROJECT_IDENTITY_CTE``,
+#: ``HAVING count() = 1``, ``is_active = 1``), so an unresolvable identity
+#: (retired between scope commit and this read, or a same-id cross-provider
+#: collision) empties the join and returns zero rows -- indistinguishable,
+#: by row count alone, from a project whose identity resolves cleanly but
+#: which genuinely owns zero repositories. The two must not read the same:
+#: the standing fail-closed ruling is that an unresolvable identity is
+#: never a clean "measured empty" answer. This reuses the exact same
+#: canonical CTE (imported, never re-implemented) to answer only "did the
+#: identity resolve" -- ``count()`` over an aggregate CTE with no rows still
+#: returns exactly one row with value 0, so ``resolved = 0`` unambiguously
+#: means "did not resolve".
+_PROJECT_IDENTITY_RESOLVED_SQL = (
+    "WITH " + _PROJECT_IDENTITY_CTE + "\nSELECT count() AS resolved FROM project"
 )
 
 
@@ -472,6 +493,16 @@ class NativeDataHealthReader:
         repositories", and never as an excuse to widen to the organization;
         a genuinely empty, *measured* result is likewise never widened, only
         reported as no data for this subject.
+
+        Post-CHAOS-3374 rebase: ``PROJECT_REPOSITORIES_SQL`` now ``INNER
+        JOIN``s the provider-identity CTE, so a zero-row result is ambiguous
+        between "identity resolved, project genuinely owns zero
+        repositories" and "identity did not resolve" (retired between scope
+        commit and this read, or a same-id cross-provider collision). A
+        second, cheap query against the *same* canonical identity CTE
+        (``_PROJECT_IDENTITY_RESOLVED_SQL``) disambiguates before either
+        answer is reported -- the standing fail-closed ruling is that an
+        unresolvable identity is never a clean "measured empty" answer.
         """
 
         if not project_id:
@@ -490,18 +521,44 @@ class NativeDataHealthReader:
             )
         except Exception:
             return _ScopeRepositoryDerivation(available=False)
-        return _ScopeRepositoryDerivation(
-            available=True,
-            repository_ids=tuple(
-                sorted(
-                    {
-                        str(row["repository_id"])
-                        for row in rows
-                        if row.get("repository_id")
-                    }
-                )
-            ),
+        repository_ids = tuple(
+            sorted(
+                {str(row["repository_id"]) for row in rows if row.get("repository_id")}
+            )
         )
+        if repository_ids:
+            return _ScopeRepositoryDerivation(
+                available=True, repository_ids=repository_ids
+            )
+        if not await self._project_identity_resolved(org_id, project_id):
+            return _ScopeRepositoryDerivation(available=False)
+        return _ScopeRepositoryDerivation(available=True, repository_ids=())
+
+    async def _project_identity_resolved(self, org_id: str, project_id: str) -> bool:
+        """Whether the committed project id still resolves to exactly one
+
+        active catalog row, via the exact same canonical identity CTE
+        ``PROJECT_REPOSITORIES_SQL`` itself joins through. Only called when
+        the derivation above returned zero rows, to tell a genuinely
+        repo-less project apart from an unresolvable one. A query failure
+        here is itself treated as unresolved -- there is no honest "assume
+        resolved" default when the check that would prove it cannot run.
+        """
+
+        try:
+            rows = await query_dicts(
+                self._client,
+                _PROJECT_IDENTITY_RESOLVED_SQL,
+                {"org_id": org_id, "entity_id": project_id},
+            )
+        except Exception:
+            return False
+        if not rows:
+            return False
+        try:
+            return int(rows[0].get("resolved") or 0) >= 1
+        except (TypeError, ValueError):
+            return False
 
     async def _team_repositories(
         self, org_id: str, team_id: str

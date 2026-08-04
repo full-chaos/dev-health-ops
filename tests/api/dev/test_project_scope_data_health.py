@@ -131,17 +131,37 @@ def _repository_resolution() -> ScopeResolution:
 
 
 class _FakeClient:
-    """Answers the three query shapes ``NativeDataHealthReader`` issues."""
+    """Answers the four query shapes ``NativeDataHealthReader`` issues."""
 
-    def __init__(self, *, derived: list[str] | None, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        derived: list[str] | None,
+        fail: bool = False,
+        identity_resolved: bool = True,
+        identity_check_fails: bool = False,
+    ) -> None:
         self.derived = derived
         self.fail = fail
+        # Only consulted when ``derived`` is empty and the identity-check
+        # query fires (``_project_identity_resolved``): whether the
+        # provider-identity CTE resolves the committed project id to exactly
+        # one active catalog row.
+        self.identity_resolved = identity_resolved
+        self.identity_check_fails = identity_check_fails
         self.watermark_params: list[dict[str, Any]] = []
+        self.identity_check_calls: list[dict[str, Any]] = []
         self.org_wide_enumerated = False
 
     async def __call__(
         self, _client: object, sql: str, params: dict[str, Any]
     ) -> list[dict[str, Any]]:
+        if "SELECT count() AS resolved FROM project" in sql:
+            # _PROJECT_IDENTITY_RESOLVED_SQL
+            self.identity_check_calls.append(dict(params))
+            if self.identity_check_fails:
+                raise RuntimeError("clickhouse unavailable")
+            return [{"resolved": 1 if self.identity_resolved else 0}]
         if "FROM work_items FINAL" in sql and "SELECT DISTINCT" in sql:
             # PROJECT_REPOSITORIES_SQL
             if self.fail:
@@ -212,7 +232,7 @@ async def test_project_with_zero_repositories_is_measured_empty_not_unavailable(
     exists to close).
     """
 
-    client = _FakeClient(derived=[])
+    client = _FakeClient(derived=[], identity_resolved=True)
     _install(monkeypatch, client)
 
     observations = await NativeDataHealthReader(object(), None).read(
@@ -223,9 +243,69 @@ async def test_project_with_zero_repositories_is_measured_empty_not_unavailable(
 
     assert client.watermark_params == []
     assert not client.org_wide_enumerated
+    # The identity-resolution disambiguation query ran and confirmed the
+    # project id still resolves -- that is what licenses "measured empty"
+    # rather than "unavailable" below.
+    assert client.identity_check_calls == [{"org_id": ORG_ID, "entity_id": PROJECT_ID}]
     assert observations[0].warning == "project_repository_scope_empty"
     assert observations[0].watermark is None
     assert observations[0].relevant_repository_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_project_with_unresolvable_identity_is_unavailable_not_measured_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3375 (post-CHAOS-3374 rebase): ``PROJECT_REPOSITORIES_SQL``
+
+    now ``INNER JOIN``s the provider-identity CTE (``HAVING count() = 1``,
+    ``is_active = 1``), so a retired project or a same-id cross-provider
+    collision empties the join and returns zero rows -- indistinguishable
+    from a genuinely repo-less project by row count alone. The standing
+    fail-closed ruling is that an unresolvable identity must never read as
+    a clean, measured-empty answer: this must be
+    ``project_repository_scope_unavailable``, not ``..._empty``.
+    """
+
+    client = _FakeClient(derived=[], identity_resolved=False)
+    _install(monkeypatch, client)
+
+    observations = await NativeDataHealthReader(object(), None).read(
+        org_id=ORG_ID,
+        scope=_project_resolution(),
+        source_systems=["work_items"],
+    )
+
+    assert client.watermark_params == []
+    assert not client.org_wide_enumerated
+    assert client.identity_check_calls == [{"org_id": ORG_ID, "entity_id": PROJECT_ID}]
+    assert observations[0].configured is None
+    assert observations[0].warning == "project_repository_scope_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_project_identity_check_failure_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed disambiguation query is itself treated as unresolved --
+
+    there is no honest "assume resolved" default when the check that would
+    prove it cannot run.
+    """
+
+    client = _FakeClient(derived=[], identity_check_fails=True)
+    _install(monkeypatch, client)
+
+    observations = await NativeDataHealthReader(object(), None).read(
+        org_id=ORG_ID,
+        scope=_project_resolution(),
+        source_systems=["work_items"],
+    )
+
+    assert client.watermark_params == []
+    assert not client.org_wide_enumerated
+    assert observations[0].configured is None
+    assert observations[0].warning == "project_repository_scope_unavailable"
 
 
 @pytest.mark.asyncio

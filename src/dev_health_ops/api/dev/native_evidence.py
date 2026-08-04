@@ -70,6 +70,13 @@ def default_native_freshness_policies() -> dict[str, SourceFreshnessPolicy]:
             "deployments",
             "incidents",
             "work_graph",
+            # CHAOS-3368: native_status_change._PROJECT_DECLARED_FACTS_SQL
+            # reads the projects catalog under this source name -- without
+            # a policy entry, ``_source_ref`` falls back to
+            # ``FreshnessState.UNKNOWN`` for every project declared-state
+            # read, which is a worse default than the same fallback-grace
+            # policy every other native source here already gets.
+            "projects",
         )
     }
 

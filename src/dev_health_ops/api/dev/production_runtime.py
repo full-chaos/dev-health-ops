@@ -1800,6 +1800,12 @@ async def _assemble_production_runtime(
             for fact in (
                 ([result.declared] if result.declared else [])
                 + list(result.children)
+                # CHAOS-3368: the project's own declared state/target date,
+                # wired through the exact same fact->evidence->status_fact
+                # path as declared/children/blockers so they reach the
+                # model's context (and, through it, the §10 answer)
+                # identically -- no separate rendering path.
+                + list(result.project_facts)
                 + list(result.blockers)
             )
         ]
@@ -1844,6 +1850,16 @@ async def _assemble_production_runtime(
             *(
                 evidence_id
                 for fact in required_children
+                for evidence_id in fact.evidence_ref_ids
+            ),
+            # CHAOS-3368: never let the declared-state/target-date facts be
+            # the ones an unrelated dense scope's evidence truncation
+            # silently drops -- prioritize them exactly like the declared
+            # fact and required children above.
+            *(
+                evidence_id
+                for fact in status_facts
+                if fact.fact_id.startswith("project:")
                 for evidence_id in fact.evidence_ref_ids
             ),
             *(

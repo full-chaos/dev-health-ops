@@ -304,6 +304,18 @@ class ActualCompletion:
 class RawStatusSnapshot:
     declared: StatusFact | None
     children: tuple[StatusFact, ...] = ()
+    # CHAOS-3368: the project's own DECLARED lifecycle state / target date
+    # (projects.state/target_date, migration 073) for PROJECT scope --
+    # additive display facts alongside the derived completion/blockers
+    # below. Deliberately NEVER read by ``_assess``: these describe what
+    # the PROVIDER declared for the project as a whole, not an input to
+    # the derived actual-completion verdict, and wiring them in would
+    # change that rule's behavior -- out of this ticket's scope. Empty
+    # when the scope is not PROJECT, the catalog row could not be
+    # resolved unambiguously, or the provider populated neither column --
+    # every one of those renders as an absent fact, never a fabricated one
+    # (see native_status_change._project_declared_facts).
+    project_facts: tuple[StatusFact, ...] = ()
     blockers: tuple[StatusFact, ...] = ()
     pull_requests: tuple[PullRequestFact, ...] = ()
     ci: tuple[CIFact, ...] = ()
@@ -372,6 +384,15 @@ class StatusSnapshotResult:
     incidents: tuple[IncidentFact, ...]
     source_refs: tuple[SourceReference, ...]
     warnings: tuple[str, ...]
+    # CHAOS-3368: see RawStatusSnapshot.project_facts -- carried through
+    # unbounded-assessment-then-display-bound identically to children/
+    # blockers above, never consumed by ``_assess``. Defaulted (unlike
+    # every other field on this frozen dataclass) so the many existing
+    # direct ``StatusSnapshotResult(...)`` test fixtures across the
+    # CHAOS-3303 service suite keep constructing valid instances without
+    # being touched by this change -- every one of them predates project
+    # declared-state facts and legitimately has none.
+    project_facts: tuple[StatusFact, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -539,6 +560,7 @@ class StatusChangeService:
         bounded = replace(
             raw,
             children=self._bounded(raw.children, request.max_items),
+            project_facts=self._bounded(raw.project_facts, request.max_items),
             blockers=self._bounded(raw.blockers, request.max_items),
             pull_requests=self._bounded(raw.pull_requests, request.max_items),
             ci=self._bounded(raw.ci, request.max_items),
@@ -625,6 +647,7 @@ class StatusChangeService:
             declared=bounded.declared,
             actual=actual,
             children=self._ordered_status(bounded.children),
+            project_facts=self._ordered_status(bounded.project_facts),
             blockers=self._ordered_status(bounded.blockers),
             pull_requests=tuple(sorted(bounded.pull_requests, key=self._pr_key)),
             ci=tuple(sorted(bounded.ci, key=self._ci_key)),

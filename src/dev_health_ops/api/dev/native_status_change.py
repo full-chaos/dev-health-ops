@@ -305,6 +305,37 @@ LIMIT {limit:UInt32}
 """
 )
 
+#: CHAOS-3368: the project's own DECLARED lifecycle state / target date
+#: (``projects.state``/``projects.target_date``, migration 073 -- see
+#: ``metrics.schemas.ProjectRecord``'s own docstring: "the provider's OWN
+#: lifecycle vocabulary, stored verbatim"). Read with the same RMT
+#: discipline every other catalog read in this module uses: ``FINAL`` for
+#: the current row, ``org_id`` in the WHERE, ``is_active = 1`` so a
+#: retired project row does not resurrect a stale declared state. Guarded
+#: by an explicit ``HAVING count() = 1`` for the same reason CHAOS-3374's
+#: ``_PROJECT_IDENTITY_CTE`` guards its own read of this table: the
+#: ReplacingMergeTree key is ``(org_id, provider, id)``, not ``(org_id,
+#: id)``, so a same-org, same-``id`` row minted by two different
+#: providers survives ``FINAL`` as two rows and an unguarded ``LIMIT 1``
+#: would pick one nondeterministically. This read is deliberately
+#: narrower than that CTE: it never resolves which provider a project
+#: SUBJECT belongs to (CHAOS-3374's turf) -- it only reads the declared-
+#: state columns of a subject the scope has ALREADY resolved and
+#: authorized, so an ambiguous match here is grounds to render the
+#: declared-state facts absent (fail closed), never to guess a provider.
+#: Selects ``last_synced`` under that exact alias so ``_read``'s existing
+#: watermark/freshness plumbing applies unchanged -- no bespoke handling
+#: needed here.
+_PROJECT_DECLARED_FACTS_SQL = """
+SELECT any(state) AS state,
+       any(target_date) AS target_date,
+       any(updated_at) AS updated_at,
+       any(last_synced) AS last_synced
+FROM projects FINAL
+WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
+HAVING count() = 1
+"""
+
 _BLOCKER_WATERMARK_SQL = """
 SELECT if(
          countIf(scope_repo_id IS NULL) > 0,
@@ -1509,6 +1540,28 @@ class ClickHouseStatusChangeSource:
                 warnings.append(warning)
 
         declared, children = self._work_item_facts(work_item_rows, scope, source_refs)
+
+        # CHAOS-3368: the project's own declared state/target date, additive
+        # to (never mixed into) `declared`/`children` above -- those still
+        # describe the derived work-item completion tree; this describes
+        # what the provider itself declared for the project as a whole.
+        # Only ever queried for PROJECT scope, mirroring every other
+        # project-only read in this method (_BLOCKERS_SQL's own guard,
+        # just above): an issue/work-unit/team/org/repository scope must
+        # see byte-identical behavior to before this change.
+        project_facts: tuple[StatusFact, ...] = ()
+        if scope.direct_scope is DirectScope.PROJECT:
+            project_rows, project_ref, warning = await self._read(
+                "projects", _PROJECT_DECLARED_FACTS_SQL, common, scope
+            )
+            source_refs.append(project_ref)
+            if warning:
+                warnings.append(warning)
+            if project_rows:
+                project_facts = self._project_declared_facts(
+                    project_rows[0], entity_id, project_ref.ref_id, as_of
+                )
+
         pull_requests = tuple(
             PullRequestFact(
                 entity_id=str(row.get("entity_id") or ""),
@@ -1649,6 +1702,7 @@ class ClickHouseStatusChangeSource:
         return RawStatusSnapshot(
             declared=declared,
             children=children,
+            project_facts=project_facts,
             blockers=tuple(
                 StatusFact(
                     entity_type="issue",
@@ -1986,6 +2040,67 @@ class ClickHouseStatusChangeSource:
         declared = next((fact for fact in facts if fact.entity_id == entity_id), None)
         children = tuple(fact for fact in facts if fact is not declared)
         return declared, children
+
+    @staticmethod
+    def _project_declared_facts(
+        row: dict[str, Any],
+        entity_id: str,
+        source_ref_id: str,
+        as_of: datetime,
+    ) -> tuple[StatusFact, ...]:
+        """The project's own declared state / target date (CHAOS-3368).
+
+        Folded into a SINGLE ``StatusFact`` (never two facts sharing the
+        same ``entity_type``/``entity_id``, which would collide on
+        ``production_runtime.wire_status_fact``'s ``fact_id =
+        f"{entity_type}:{entity_id}"`` convention) -- mirrors the existing
+        one-fact-per-entity shape every other category in this module
+        already uses (one issue = one ``StatusFact`` whose own ``status``
+        conveys its full state). ``status`` never feeds ``_assess`` for
+        this field (see ``RawStatusSnapshot.project_facts``), so combining
+        pieces of text into it is safe here in a way it would not be for a
+        real completion-rule input.
+
+        Present only when the catalog row carries at least one value.
+        ``projects.state`` defaults to ``''`` and ``target_date`` is
+        ``Nullable`` (migration 073) precisely because not every provider
+        populates a lifecycle for every project -- an empty/``NULL``
+        column is a real "the provider declared nothing" and must render
+        as an absent fact, never a fabricated status string or an
+        epoch/zero date (the absence-collapses-to-zero pattern this
+        codebase treats as unsafe). Neither piece is dropped silently when
+        only one is present: the returned text names exactly the piece(s)
+        this project's catalog row actually carries.
+        """
+        observed_at = ClickHouseStatusChangeSource._datetime(
+            row.get("updated_at"), as_of
+        )
+        state = str(row.get("state") or "").strip()
+        target_date = row.get("target_date")
+        target_date_text: str | None = None
+        if target_date is not None:
+            target_date_text = (
+                target_date.isoformat()
+                if hasattr(target_date, "isoformat")
+                else str(target_date)
+            )
+        parts = [
+            *([state] if state else []),
+            *([f"target date {target_date_text}"] if target_date_text else []),
+        ]
+        if not parts:
+            return ()
+        return (
+            StatusFact(
+                entity_type="project",
+                entity_id=entity_id,
+                display_label="Declared status",
+                status="; ".join(parts),
+                observed_at=observed_at,
+                source_ref_id=source_ref_id,
+                evidence_ref_ids=(),
+            ),
+        )
 
     @classmethod
     def _latest_ci_run_rows(cls, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

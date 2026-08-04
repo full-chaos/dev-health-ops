@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -1370,5 +1371,171 @@ async def test_ci_acceptance_checks_on_one_run_do_not_collide(
     texts = [fact.text for fact in get_execution.result.status_facts]
     assert len(texts) == 2
     assert all("Status: mixed." in text for text in texts)
+
+    await runtime.aclose()
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3368: the project's own declared state / target date must surface as
+# a status fact alongside the derived completion/blockers -- through the
+# exact same fact -> evidence -> status_fact wiring CHAOS-3259 pinned above,
+# not a separate rendering path.
+# ---------------------------------------------------------------------------
+
+
+class _FakeProjectStatusChangeSource(_FakeStatusChangeSource):
+    """Adds ``RawStatusSnapshot.project_facts`` to the otherwise-unchanged
+    ``_FakeStatusChangeSource`` fixture -- exactly the shape
+    ``ClickHouseStatusChangeSource._project_declared_facts`` now produces
+    for PROJECT scope. Every other field (declared/children/pull_requests/
+    ci/incidents) is untouched, so these tests exercise ONLY the new
+    project_facts wiring, not a parallel fixture that could drift from the
+    real one CHAOS-3259 already pins.
+    """
+
+    def __init__(self, *, project_facts: tuple[StatusFact, ...]) -> None:
+        super().__init__()
+        self._project_facts = project_facts
+
+    async def status_snapshot(
+        self, *, org_id: str, scope: DevScope, as_of: datetime, limit: int
+    ) -> RawStatusSnapshot:
+        raw = await super().status_snapshot(
+            org_id=org_id, scope=scope, as_of=as_of, limit=limit
+        )
+        return replace(raw, project_facts=self._project_facts)
+
+
+PROJECT_DECLARED_STATE_FACT = StatusFact(
+    entity_type="project",
+    entity_id="project_01",
+    display_label="Declared status",
+    status="started; target date 2026-09-01",
+    observed_at=FRESH_OBSERVED,
+    source_ref_id="ref:projects",
+    evidence_ref_ids=(),
+)
+
+
+@pytest.mark.asyncio
+async def test_status_snapshot_surfaces_project_declared_state_and_target_date(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 acceptance: a PROJECT-scope status_snapshot call surfaces
+    the project's own declared state / target date (projects.state/
+    target_date, migration 073) as a real, grounded status fact -- reaching
+    the tool result the model narrates into the §10 answer -- alongside the
+    derived completion/blockers this file already pins above.
+    """
+    source = _FakeProjectStatusChangeSource(
+        project_facts=(PROJECT_DECLARED_STATE_FACT,)
+    )
+    runtime = await _build_runtime(monkeypatch, status_source=source)
+    scope = _project_scope()
+    execution = await runtime.registry.execute(
+        DevToolRequest(
+            schema_version="dev_tool_request.v1",
+            run_id="run_01",
+            tool_call_id="tool_call_01",
+            tool_id=ToolID.STATUS_SNAPSHOT,
+            scope=scope,
+            limit=25,
+        ),
+        _context(scope),
+    )
+    result = execution.result
+
+    project_facts = [
+        fact for fact in result.status_facts if fact.fact_id == "project:project_01"
+    ]
+    assert len(project_facts) == 1, (
+        "expected exactly one project declared-state status fact, got "
+        f"status_facts={[fact.fact_id for fact in result.status_facts]}"
+    )
+    fact = project_facts[0]
+    assert "started" in fact.text
+    assert "2026-09-01" in fact.text
+    # Grounded: a real, signer-issued evidence reference, not a bare claim
+    # the model could not independently verify via get_evidence.v1.
+    assert fact.evidence_ref_ids
+
+    # The pre-existing declared/child facts (CHAOS-3259) are unaffected --
+    # this is additive wiring, not a replacement of the existing tree.
+    assert {"issue:issue_parent", "issue:issue_child"} <= {
+        f.fact_id for f in result.status_facts
+    }
+
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_status_snapshot_project_declared_state_absent_renders_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 negative control: a project whose catalog row carries
+    neither a declared state nor a target date (e.g. no migration-073
+    columns populated, or the catalog row itself could not be resolved)
+    must produce NO project declared-state status fact at all -- never a
+    fabricated empty-string status or an epoch/zero-date fact. Absence
+    must render as absence, not a zero-like value.
+    """
+    source = _FakeProjectStatusChangeSource(project_facts=())
+    runtime = await _build_runtime(monkeypatch, status_source=source)
+    scope = _project_scope()
+    execution = await runtime.registry.execute(
+        DevToolRequest(
+            schema_version="dev_tool_request.v1",
+            run_id="run_01",
+            tool_call_id="tool_call_01",
+            tool_id=ToolID.STATUS_SNAPSHOT,
+            scope=scope,
+            limit=25,
+        ),
+        _context(scope),
+    )
+    result = execution.result
+
+    assert not any(
+        fact.fact_id.startswith("project:") for fact in result.status_facts
+    ), (
+        "a project with no declared state/target date must not emit a "
+        "project declared-state status fact"
+    )
+    # The rest of the tree is unaffected.
+    assert any(fact.fact_id == "issue:issue_child" for fact in result.status_facts)
+
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_status_snapshot_non_project_scope_unchanged_by_project_facts_wiring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 negative control: an ISSUE-scope status_snapshot call must
+    never surface a project declared-state fact -- ``RawStatusSnapshot.
+    project_facts`` defaults to empty and the fake source here never sets
+    it, exactly mirroring today's real ``ClickHouseStatusChangeSource``,
+    which only ever populates it for PROJECT scope.
+    """
+    runtime = await _build_runtime(monkeypatch)
+    scope = _scope()
+    assert scope.direct_scope is DirectScope.ISSUE
+    execution = await runtime.registry.execute(
+        DevToolRequest(
+            schema_version="dev_tool_request.v1",
+            run_id="run_01",
+            tool_call_id="tool_call_01",
+            tool_id=ToolID.STATUS_SNAPSHOT,
+            scope=scope,
+            limit=25,
+        ),
+        _context(scope),
+    )
+    result = execution.result
+    assert not any(fact.fact_id.startswith("project:") for fact in result.status_facts)
+    assert {fact.fact_id for fact in result.status_facts} == {
+        "issue:issue_parent",
+        "issue:issue_child",
+    }
 
     await runtime.aclose()

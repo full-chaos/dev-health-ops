@@ -113,6 +113,7 @@ from .prompts import PromptComposer, PromptConversationTurn
 from .status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
+    render_declared_project_summary,
     render_verdict_summary,
     status_snapshot_result,
 )
@@ -2579,6 +2580,16 @@ class DevOrchestrator:
                 tool_results
             ),
         )
+        # CHAOS-3368 step 2: the project's own declared state/target date,
+        # appended to the same verdict/summary section -- ``status_result``
+        # is the identical scope-verified DevToolResult
+        # ``status_snapshot_result`` already selected above, so this rides
+        # that binding for free (no extra scope check needed: a
+        # declared_project_state set on a DIFFERENT tool result could never
+        # reach here, since only THIS result's fields are read).
+        declared_project_summary = render_declared_project_summary(status_result)
+        if declared_project_summary is not None:
+            direct_summary = f"{direct_summary} {declared_project_summary}"
         return status, direct_summary, claims
 
     def _deterministic_status_answer(

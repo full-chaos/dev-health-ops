@@ -8,6 +8,7 @@ objects into these models, but must not redeclare their wire shape.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 
@@ -1051,6 +1052,24 @@ class DevToolResult(ContractModel):
     warnings: list[ShortText] = Field(default_factory=list, max_length=20)
     error: DevError | None = None
     serialized_bytes: int = Field(ge=0, le=65_536)
+    # CHAOS-3368 step 2: the project's own DECLARED lifecycle state / target
+    # date (projects.state/target_date, migration 073), typed -- NEVER
+    # pre-joined display prose -- so the CHAOS-3377 deterministic §10
+    # renderer (status_answer_render.py) can consume it directly instead of
+    # parsing the interim status_facts display text back apart.
+    # ``declared_project_state`` is the RAW provider token (e.g. Linear's
+    # own "started"/"paused"/"completed"), exactly like ``DevCIFact.
+    # conclusion``/``DevPullRequestFact.state`` elsewhere in this contract --
+    # translation through a closed-vocabulary table happens at render time,
+    # never here, so a future provider's own vocabulary needs no wire change.
+    # ``None``/``None`` when the scope is not PROJECT, the catalog row could
+    # not be resolved unambiguously, or the provider populated neither
+    # column.
+    declared_project_state: OpaqueID | None = None
+    declared_project_target_date: date | None = None
+    declared_project_evidence_ref_ids: list[OpaqueID] = Field(
+        default_factory=list, max_length=25
+    )
 
     @model_validator(mode="after")
     def validate_error_state(self) -> Self:
@@ -1091,6 +1110,7 @@ class DevToolResult(ContractModel):
                 referenced.update(blocker.evidence_ref_ids)
             for conflict in self.actual_completion.conflicts:
                 referenced.update(conflict.evidence_ref_ids)
+        referenced.update(self.declared_project_evidence_ref_ids)
         if not referenced <= known:
             raise ValueError(
                 "tool result references evidence IDs missing from its evidence array"

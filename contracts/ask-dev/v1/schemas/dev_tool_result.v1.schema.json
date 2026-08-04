@@ -1689,6 +1689,45 @@
       "title": "Data Health",
       "type": "array"
     },
+    "declared_project_evidence_ref_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 25,
+      "title": "Declared Project Evidence Ref Ids",
+      "type": "array"
+    },
+    "declared_project_state": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Declared Project State"
+    },
+    "declared_project_target_date": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Declared Project Target Date"
+    },
     "deployments": {
       "items": {
         "$ref": "#/$defs/DevDeploymentFact"

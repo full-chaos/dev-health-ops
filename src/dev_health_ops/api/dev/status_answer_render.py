@@ -62,6 +62,7 @@ from .status_change_service import (
 from .status_completion_copy import (
     INCOMPLETE_DENOMINATOR_DISCLOSURE,
     any_tool_result_withheld_its_completion_denominator,
+    translate_project_state,
     translate_reason_code,
 )
 
@@ -72,6 +73,7 @@ __all__ = [
     "open_blockers",
     "open_required_children",
     "outstanding_facts",
+    "render_declared_project_summary",
     "render_verdict_summary",
     "status_snapshot_result",
     "translate_completion_state",
@@ -212,6 +214,48 @@ def render_verdict_summary(
         parts.append(INCOMPLETE_DENOMINATOR_DISCLOSURE.capitalize() + ".")
     if actual.display_truncated:
         parts.append(DISPLAY_TRUNCATED_DISCLOSURE.capitalize() + ".")
+    return " ".join(parts)
+
+
+def render_declared_project_summary(status_result: DevToolResult) -> str | None:
+    """The project's own declared state / target date (CHAOS-3368 step 2),
+    as a deterministic clause appended to the §10 verdict/summary section --
+    ``None`` when the bound ``status_snapshot.v1`` result has neither.
+
+    Reads ``DevToolResult.declared_project_state``/
+    ``declared_project_target_date`` -- typed fields on the SAME
+    scope-verified tool result ``status_snapshot_result`` already selected
+    (see that function's own scope-binding guarantee), never a re-parse of
+    the interim ``status_facts`` display text.
+
+    ``declared_project_state`` is translated through
+    ``status_completion_copy.translate_project_state`` -- NEVER interpolated
+    raw -- mirroring the exact rule ``outstanding_facts`` documents for
+    every other raw provider field this renderer touches (a provider string
+    is unconstrained and can coincidentally equal an internal denylisted
+    token). ``declared_project_target_date`` is a structured ISO date, not
+    provider vocabulary, so it renders directly -- it cannot coincidentally
+    collide with an underscore-bearing internal token.
+    """
+
+    if (
+        status_result.declared_project_state is None
+        and status_result.declared_project_target_date is None
+    ):
+        return None
+    parts: list[str] = []
+    if status_result.declared_project_state is not None:
+        parts.append(
+            "Declared state: "
+            + translate_project_state(status_result.declared_project_state)
+            + "."
+        )
+    if status_result.declared_project_target_date is not None:
+        parts.append(
+            "Target date: "
+            + status_result.declared_project_target_date.isoformat()
+            + "."
+        )
     return " ".join(parts)
 
 
@@ -510,6 +554,35 @@ def build_deterministic_status_claims(
             flags=DevClaimFlags(),
         )
     )
+    declared_project_summary = render_declared_project_summary(status_result)
+    if declared_project_summary is not None:
+        # CHAOS-3368 step 2: grounded independently of the verdict claim
+        # above -- its own evidence, never folded into
+        # ``actual.evidence_ref_ids`` (the declared state is deliberately
+        # never an input to ``_assess``'s completion verdict; see
+        # ``RawStatusSnapshot.declared_project_state``). Skipped, exactly
+        # like an outstanding fact below, if its evidence was truncated out
+        # of this tool result -- an OBSERVED claim requires at least one
+        # reference, and fabricating one would be worse than omitting it.
+        declared_project_evidence = [
+            ref
+            for ref in status_result.declared_project_evidence_ref_ids
+            if ref in canonical_evidence_ids
+        ][:25]
+        if declared_project_evidence:
+            claims.append(
+                DevClaim(
+                    schema_version="dev_claim.v1",
+                    claim_id=f"status-declared-project:{status_result.tool_call_id}",
+                    kind=ClaimKind.OBSERVED,
+                    text=declared_project_summary,
+                    confidence=1.0,
+                    evidence_ref_ids=declared_project_evidence,
+                    metric_ref_ids=[],
+                    validity_scope=validity_scope,
+                    flags=DevClaimFlags(),
+                )
+            )
     for fact in outstanding_facts(actual, status_result):
         evidence_ids = [
             ref for ref in fact.evidence_ref_ids if ref in canonical_evidence_ids

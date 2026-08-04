@@ -1560,6 +1560,123 @@ async def test_agent_refusal_after_status_snapshot_is_never_refused() -> None:
 
 
 @pytest.mark.asyncio
+async def test_status_snapshot_declared_project_state_reaches_the_final_verdict() -> (
+    None
+):
+    """CHAOS-3368 step 2 fail->pass, full orchestrator run: a status_snapshot.v1
+    result carrying a declared project state/target date (projects.state/
+    target_date, migration 073) must reach the final §10 answer's
+    direct_summary AND its own grounded claim -- translated (never the raw
+    provider token) -- riding the exact same scope-verified DevToolResult
+    the deterministic renderer already selects for the verdict/blockers.
+    """
+
+    script_id = "status-snapshot-declared-project"
+
+    async def status_snapshot(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": _scope_shaped_status_completion(
+                    direct_scope=request.scope.direct_scope.value
+                ),
+                "declared_project_state": "started",
+                "declared_project_target_date": "2026-09-01",
+                "declared_project_evidence_ref_ids": ["ev_01"],
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(decision=AgentRefusal(code="unsupported", message="no")),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    summary = result.answer.direct_summary
+    assert "Declared state: in progress." in summary
+    assert "Target date: 2026-09-01." in summary
+    # The raw provider token never reaches user-visible copy.
+    assert "started" not in summary.casefold()
+    assert any(
+        claim.claim_id.startswith("status-declared-project:")
+        for claim in result.answer.claims
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_snapshot_no_declared_project_state_renders_no_extra_clause() -> (
+    None
+):
+    """CHAOS-3368 negative control: a status_snapshot.v1 result with no
+    declared project state/target date (an ISSUE-scope run, or a PROJECT
+    scope whose catalog row carried neither) must not append any clause to
+    the deterministic verdict -- the pre-existing CHAOS-3377 verdict text
+    stays exactly as it was before this ticket.
+    """
+
+    script_id = "status-snapshot-no-declared-project"
+
+    async def status_snapshot(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": _scope_shaped_status_completion(
+                    direct_scope=request.scope.direct_scope.value
+                ),
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(decision=AgentRefusal(code="unsupported", message="no")),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert "Declared state:" not in result.answer.direct_summary
+    assert "Target date:" not in result.answer.direct_summary
+    assert not any(
+        claim.claim_id.startswith("status-declared-project:")
+        for claim in result.answer.claims
+    )
+
+
+@pytest.mark.asyncio
 async def test_budget_exhaustion_after_status_snapshot_renders_the_deterministic_verdict() -> (
     None
 ):

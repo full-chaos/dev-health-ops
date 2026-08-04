@@ -1120,6 +1120,9 @@ def _tool_result(
     graph_edges: list[DevGraphEdge] | None = None,
     data_health: list[DevDataHealth] | None = None,
     warnings: list[str] | None = None,
+    declared_project_state: str | None = None,
+    declared_project_target_date: date | None = None,
+    declared_project_evidence_ref_ids: list[str] | None = None,
 ) -> DevToolResult:
     return DevToolResult(
         schema_version="dev_tool_result.v1",
@@ -1142,6 +1145,9 @@ def _tool_result(
         data_health=data_health or [],
         warnings=(warnings or [])[:20],
         serialized_bytes=0,
+        declared_project_state=declared_project_state,
+        declared_project_target_date=declared_project_target_date,
+        declared_project_evidence_ref_ids=declared_project_evidence_ref_ids or [],
     )
 
 
@@ -2039,6 +2045,19 @@ async def _assemble_production_runtime(
             for ref in result.source_refs
         ]
         evidence_by_id.update({key: minted[key] for key in kept_evidence_ids})
+        # CHAOS-3368 step 2: the SAME post-truncation evidence the interim
+        # ``status_facts`` project entry ended up with (never re-minted --
+        # one evidence mint, two consumers: the interim narrated fact above
+        # and this typed wire field the CHAOS-3377 deterministic renderer
+        # reads instead of parsing that fact's display text).
+        declared_project_evidence_ref_ids = next(
+            (
+                list(fact.evidence_ref_ids)
+                for fact in status_facts
+                if fact.fact_id.startswith("project:")
+            ),
+            [],
+        )
         return _tool_result(
             request,
             status=_status(result.state.value),
@@ -2051,6 +2070,9 @@ async def _assemble_production_runtime(
             source_health=source_health,
             evidence=[minted[key] for key in sorted(kept_evidence_ids)],
             warnings=warnings,
+            declared_project_state=result.declared_project_state,
+            declared_project_target_date=result.declared_project_target_date,
+            declared_project_evidence_ref_ids=declared_project_evidence_ref_ids,
         )
 
     async def change_summary(context, request):

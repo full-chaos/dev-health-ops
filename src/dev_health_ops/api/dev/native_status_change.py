@@ -377,10 +377,30 @@ LIMIT {limit:UInt32}
 #: than answered with its current, not-yet-true-at-as_of state -- this
 #: ticket deliberately does not attempt a real history representation; an
 #: as-of snapshot of a since-changed declared state is simply unavailable.
+#: CHAOS-3377 residual defect (live acceptance probe, 2026-08-04): the
+#: aggregate below was originally aliased ``AS updated_at`` -- the SAME name
+#: as the raw column the ``WHERE`` clause filters on two lines down.
+#: ClickHouse resolves a bare ``WHERE`` identifier against a same-named
+#: ``SELECT`` alias in preference to the source column, so ``WHERE
+#: updated_at <= {as_of:...}`` was silently rewritten to filter on
+#: ``any(updated_at)`` -- an aggregate function, which ``WHERE`` (unlike
+#: ``HAVING``) can never contain. The result was ``Code: 184
+#: (ILLEGAL_AGGREGATION)`` raised on EVERY invocation of this query,
+#: unconditionally (never a timestamp-skew or evidence-cap artifact).
+#: ``_read`` (below) catches that exception and reports the ``projects``
+#: source as merely "unavailable" -- indistinguishable, from every caller's
+#: perspective, from a genuinely absent declared state, which is exactly why
+#: this went unnoticed: the declared-state clause simply never rendered, for
+#: any project, on any run. Aliased to ``declared_updated_at`` instead so the
+#: ``WHERE`` clause's ``updated_at`` reference stays bound to the raw
+#: column -- the fix is the rename alone; ``state``/``target_date``/
+#: ``last_synced`` are left untouched (not aggregation-clause hazards, since
+#: nothing filters on them) so ``_read``'s own generic
+#: ``row.get("last_synced")`` watermark lookup keeps working unchanged.
 _PROJECT_DECLARED_FACTS_SQL = """
 SELECT any(state) AS state,
        any(target_date) AS target_date,
-       any(updated_at) AS updated_at,
+       any(updated_at) AS declared_updated_at,
        any(last_synced) AS last_synced
 FROM projects FINAL
 WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
@@ -1628,7 +1648,7 @@ class ClickHouseStatusChangeSource:
                         target_date if target_date is not None else None
                     )
                     declared_project_observed_at = self._datetime(
-                        row.get("updated_at"), as_of
+                        row.get("declared_updated_at"), as_of
                     )
 
         pull_requests = tuple(

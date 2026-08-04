@@ -15,6 +15,7 @@ from dev_health_ops.api.dev.native_status_change import (
     _DEPLOYMENTS_SQL,
     _INCIDENT_CHANGES_SQL,
     _INCIDENTS_SQL,
+    _PROJECT_DECLARED_FACTS_SQL,
     _PULL_REQUEST_CHANGES_SQL,
     _PULL_REQUESTS_SQL,
     _RELATIONSHIPS_SQL,
@@ -137,6 +138,45 @@ def test_project_repository_derivation_parses_against_production_schema(
             f"project_repositories EXPLAIN failed: {exc}\nparams={params!r}\n{sql}"
         )
     assert plan.result_rows, "project_repositories returned an empty query plan"
+
+
+def test_project_declared_facts_query_parses_against_production_schema(
+    ch_client: Any,
+) -> None:
+    """Real-engine validation for ``_PROJECT_DECLARED_FACTS_SQL``
+    (CHAOS-3377 residual defect, live acceptance probe 2026-08-04).
+
+    The live acceptance probe never rendered a "Declared state: ..." clause
+    for a project whose catalog row unambiguously carried one. Root cause:
+    this query's ``SELECT`` aliased its aggregate to the SAME name as the
+    raw column the ``WHERE`` clause filters on (``any(updated_at) AS
+    updated_at``) -- ClickHouse resolves the ``WHERE`` reference against
+    that alias rather than the raw column, and rejects an aggregate
+    function inside ``WHERE`` with ``Code: 184
+    (ILLEGAL_AGGREGATION)``, on EVERY invocation, unconditionally (never a
+    timestamp-skew or evidence-cap artifact -- the unit fake in
+    ``test_chaos_3377_status_answer_render.py`` is a predicate evaluator,
+    not a SQL engine, so it could not have caught this; only the real
+    engine can). ``native_status_change.py``'s ``_read`` helper catches the
+    exception and reports the ``projects`` source as merely "unavailable" --
+    indistinguishable, from the caller's perspective, from a genuinely
+    absent declared state, which is exactly why this went unnoticed.
+    """
+
+    sql = _PROJECT_DECLARED_FACTS_SQL
+    assert "{org_id:String}" in sql, "declared-facts read lacks a tenant predicate"
+    params: dict[str, object] = {
+        "org_id": ORG_ID,
+        "entity_id": "project-target",
+        "as_of": NOW,
+    }
+    try:
+        plan = ch_client.query("EXPLAIN PLAN " + sql, parameters=params)
+    except Exception as exc:  # noqa: BLE001 - enrich the failing SQL fixture
+        pytest.fail(
+            f"project_declared_facts EXPLAIN failed: {exc}\nparams={params!r}\n{sql}"
+        )
+    assert plan.result_rows, "project_declared_facts returned an empty query plan"
 
 
 def test_direct_work_item_precedes_children_before_limit() -> None:

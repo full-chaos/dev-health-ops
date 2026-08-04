@@ -2929,3 +2929,67 @@ async def test_partial_unlinked_activity_alongside_linked_facts_stays_clean(
         "elsewhere in the team's repos) is the documented, deferred "
         "policy -- must NOT be flagged in this round"
     )
+
+
+# --- CHAOS-3377 residual defect (live acceptance probe, 2026-08-04): the
+# declared-state/target-date read must reach RawStatusSnapshot end to end for
+# a real PROJECT-scope call -- a fake-client unit test, unlike the live
+# ClickHouse EXPLAIN-PLAN test in test_status_change_clickhouse_live.py,
+# cannot see a SQL alias collision, but it DOES catch the complementary
+# failure mode: the Python side reading the wrong column key out of the row
+# (e.g. a rename on one side of the SQL/Python boundary without the other).
+# Together the two tests cover both halves of this fix. ---
+
+
+@pytest.mark.asyncio
+async def test_native_project_scope_surfaces_declared_state_and_target_date(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Deliberately distinct from ``as_of`` (below) -- ``_datetime``'s
+    # fallback-to-``as_of`` behavior for a missing/None value would
+    # otherwise mask a Python-side column-key mismatch: if the code read
+    # the wrong dict key, ``row.get(...)`` returns ``None`` and
+    # ``declared_project_observed_at`` would silently become ``as_of``
+    # rather than surfacing as wrong.
+    declared_updated_at = NOW.replace(hour=9)
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        # NOTE: ``_PROJECT_IDENTITY_CTE`` (embedded in
+        # ``PROJECT_REPOSITORIES_SQL`` below) ALSO contains the substring
+        # "FROM projects FINAL" -- match the declared-facts query's own
+        # unique ``SELECT`` clause first, or this branch wrongly answers
+        # the repository-derivation query too.
+        if "SELECT any(state) AS state" in sql:
+            return [
+                {
+                    "state": "started",
+                    "target_date": None,
+                    "declared_updated_at": declared_updated_at,
+                    "last_synced": NOW,
+                }
+            ]
+        if "INNER JOIN project ON 1 = 1" in sql:
+            # PROJECT_REPOSITORIES_SQL: derives the project's own
+            # repository set from its (sentinel, repo-less) work items.
+            return [{"repository_id": "00000000-0000-0000-0000-000000000000"}]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    source = ClickHouseStatusChangeSource(object(), now=NOW)
+    scope = _scope(
+        DirectScope.PROJECT,
+        entity_id="project-1",
+        repositories=[],
+    )
+    raw = await source.status_snapshot(
+        org_id="org-a", scope=scope, as_of=NOW, limit=100
+    )
+
+    assert raw.declared_project_state == "started"
+    assert raw.declared_project_target_date is None
+    assert raw.declared_project_observed_at == declared_updated_at.replace(tzinfo=UTC)
+    assert not any("projects" in warning for warning in raw.warnings)

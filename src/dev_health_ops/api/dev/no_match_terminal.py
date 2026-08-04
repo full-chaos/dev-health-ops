@@ -48,8 +48,10 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import get_args
 
+from .answer_validator import answer_has_material_grounding
 from .contracts import (
     AnswerStatus,
+    DevActualCompletion,
     DevAnswer,
     DevContractVersions,
     DevCoverage,
@@ -60,10 +62,12 @@ from .contracts import (
 )
 from .contracts_v2 import PublicOutcome, ResolutionOutcome
 from .orchestrator_states import RunState
+from .status_change_service import STATUS_REASON_CODES
 
 __all__ = [
     "INTERNAL_TOKEN_DENYLIST",
     "NEVER_ATTESTABLE_TOKENS",
+    "REFUSED_WITH_GROUNDING_SUMMARY",
     "WITHHELD_COPY",
     "attested_strings",
     "internal_token_leak",
@@ -81,6 +85,25 @@ def _underscore_members(values: Iterable[str]) -> frozenset[str]:
     return frozenset(value for value in values if "_" in value)
 
 
+#: CHAOS-3377 defect 2: the CHAOS-3367 denylist covered only scope-resolution
+#: and run/outcome vocabulary -- a live run showed the §10 completion
+#: assessment's own internal tokens (``not_ready``, ``open_blocker``,
+#: ``required_child_incomplete``, ...) and evidence-handle ids (``ev1_...``)
+#: leaking into user-visible prose instead. Widened here rather than only in
+#: ``status_answer_render.py``'s translation tables, because those tables
+#: only cover the module's OWN server-rendered copy; this denylist is the
+#: fail-closed backstop ``orchestrator.finish()`` runs over EVERY terminal
+#: (including any model-authored prose that still reaches a field this
+#: module scans), so a leak survives here even if a future producer forgets
+#: to route through the deterministic renderer at all.
+#:
+#: ``STATUS_REASON_CODES`` is ``status_change_service``'s own derived,
+#: pinned-total set (see that module), so this cannot silently fall behind a
+#: reason code added there. ``DevActualCompletion.state`` is a 3-member
+#: ``Literal`` on the wire, so its members are pulled the same way
+#: ``DevError.code`` already is below.
+_EXTRA_INTERNAL_TOKENS: frozenset[str] = frozenset({"actual_completion", "ev1_"})
+
 #: Every internal vocabulary token that must never reach a user-visible
 #: string, derived from the live enums. See the module docstring for why only
 #: underscore-bearing members are kept.
@@ -91,6 +114,11 @@ INTERNAL_TOKEN_DENYLIST: frozenset[str] = (
     | _underscore_members(member.value for member in PublicOutcome)
     | _underscore_members(member.value for member in ResolutionOutcome)
     | _underscore_members(get_args(DevError.model_fields["code"].annotation))
+    | _underscore_members(STATUS_REASON_CODES)
+    | _underscore_members(
+        get_args(DevActualCompletion.model_fields["state"].annotation)
+    )
+    | _EXTRA_INTERNAL_TOKENS
 )
 
 # NOT included, deliberately: ``ToolID``. A round-2 review argued that a
@@ -454,6 +482,70 @@ def named_subject_not_found_answer(
 #: not read as a claim the server made.
 WITHHELD_COPY = "This part of the answer could not be shown."
 
+#: CHAOS-3377 HIGH (codex adversarial web review, round 2): the read-time
+#: counterpart of ``answer_validator``'s "a refused answer cannot carry
+#: material grounding" write-time check. A row persisted before that check
+#: existed can still have ``status=refused`` alongside real claim/metric/
+#: evidence content. The web client's own defense-in-depth backstop
+#: (``AskDevAnswer.refusedDespiteMaterialGrounding``) was found relabeling
+#: that contradiction "Answered" while STILL rendering the model's original
+#: (rejected-shaped) prose underneath -- exactly the leak this server-side
+#: normalization now closes upstream, so the client never receives it in
+#: the first place. A neutral statement, not a redaction of the model's
+#: words: the original claim/direct_summary text is discarded entirely,
+#: never partially edited into something that could still read as a claim
+#: the server verified.
+REFUSED_WITH_GROUNDING_SUMMARY = (
+    "This answer's recorded status could not be reconciled with its own "
+    "content. The original narrative has been withheld; the structured "
+    "metrics and evidence below are unaffected."
+)
+
+
+def _normalize_refused_with_grounding(answer: DevAnswer) -> DevAnswer:
+    """The read-time mirror of ``answer_validator``'s "refused answer cannot
+    carry material grounding" check (CHAOS-3377 HIGH, web adversarial
+    review round 2).
+
+    A NEW run can no longer persist this contradiction (the write-time
+    check rejects it, repairable, and demotes through
+    ``Orchestrator._server_grounded_answer`` if the model still won't
+    self-correct -- see ``orchestrator.py``). A row written before that
+    check existed can still have it. This is the single read-time seam
+    both ``router.py`` call sites that hand a persisted answer back to a
+    client already go through (``redact_persisted_answer``, below) --
+    exactly one place, mirroring the write path's single seam
+    (``Orchestrator._deterministic_status_render``) rather than requiring
+    every future replay call site to remember to check.
+
+    The model's own ``claims``/``direct_summary`` are discarded outright --
+    the same "narrative loses when it disagrees with the frame" rule the
+    write-time demotion already applies -- while ``metrics``/``evidence``
+    (server-issued, unaffected by the contradiction) are kept.
+    ``status`` is recomputed from the answer's own persisted ``coverage``
+    (the same fully-covered test ``deterministic_answer_status`` uses),
+    never left as the self-contradicted ``REFUSED``.
+    """
+
+    if answer.status is not AnswerStatus.REFUSED or not answer_has_material_grounding(
+        answer
+    ):
+        return answer
+    coverage = answer.coverage
+    fully_covered = (
+        coverage.available_source_count == coverage.required_source_count
+        and not coverage.unavailable_required_sources
+        and not coverage.stale_required_sources
+        and not coverage.degraded_required_sources
+    )
+    return answer.model_copy(
+        update={
+            "status": AnswerStatus.COMPLETE if fully_covered else AnswerStatus.PARTIAL,
+            "direct_summary": REFUSED_WITH_GROUNDING_SUMMARY,
+            "claims": [],
+        }
+    )
+
 
 def redact_persisted_answer(
     answer: DevAnswer, *, question: str | None = None
@@ -477,8 +569,16 @@ def redact_persisted_answer(
     This redacts; it does not repair the stored row. Backfilling or
     quarantining already-persisted violating rows is a separate operational
     task, deliberately not done implicitly on a read path.
+
+    CHAOS-3377 HIGH (round 2): the refused-with-grounding normalization
+    (``_normalize_refused_with_grounding``) runs FIRST, unconditionally --
+    it is not an internal-token leak, so it is not gated behind the
+    ``internal_token_leak`` check below, which would otherwise skip it
+    entirely for a contradictory row whose prose happens not to contain a
+    denylisted token.
     """
 
+    answer = _normalize_refused_with_grounding(answer)
     attested = attested_strings(answer, question)
     if (
         internal_token_leak(user_visible_strings(answer=answer), attested=attested)

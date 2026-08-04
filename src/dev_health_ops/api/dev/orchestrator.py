@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
@@ -50,15 +50,18 @@ from dev_health_ops.metrics.prometheus import (
 
 from . import terminal_frames
 from .answer_frames import narrative_fallback
+from .answer_text_sanitizer import sanitize_model_text
 from .answer_validator import (
     AnswerValidationContext,
     AnswerValidationError,
+    any_tool_result_withheld_its_completion_denominator,
     completion_truncation_detail,
     validate_answer_candidate,
 )
 from .contracts import (
     AnswerStatus,
     DevAnswer,
+    DevClaim,
     DevContractVersions,
     DevCoverage,
     DevError,
@@ -107,6 +110,12 @@ from .preflight_outcomes import (
     project_preflight_error,
 )
 from .prompts import PromptComposer, PromptConversationTurn
+from .status_answer_render import (
+    build_deterministic_status_claims,
+    deterministic_answer_status,
+    render_verdict_summary,
+    status_snapshot_result,
+)
 from .subject_preflight import (
     SUBJECT_BEARING_TOOLS,
     PreflightDecision,
@@ -233,6 +242,11 @@ SERVER_GROUNDED_WARNING = (
 #: says what the verdict was.
 GUARD_DEMOTED_NAMED_ENTITY_STATUS = "advisory_named_entity"
 GUARD_DEMOTED_GROUNDING_FLOOR_STATUS = "advisory_grounding_floor"
+#: CHAOS-3377 defect 1: a model that still self-declared ``status=refused``
+#: over material grounding after its one repair attempt is demoted the same
+#: way a grounding-floor violation is -- never a hard FAILED, which would
+#: throw away real evidence the run already retrieved.
+GUARD_DEMOTED_REFUSAL_STATUS = "advisory_refused_with_grounding"
 
 _LEGACY_GUARD_TERMINALS: dict[str, tuple[str, str]] = {
     "resolve_scope_ambiguous": (
@@ -1912,6 +1926,59 @@ class DevOrchestrator:
                             "model": model.model_dump(mode="json"),
                         }
                     )
+                    # CHAOS-3377 defect 3: strip a trailing JSON-structural
+                    # artifact from every model-authored free-text field at
+                    # this seam -- before anything else reads or validates
+                    # them -- rather than special-casing the one reported
+                    # string later.
+                    if isinstance(candidate.get("direct_summary"), str):
+                        candidate["direct_summary"] = sanitize_model_text(
+                            candidate["direct_summary"]
+                        )
+                    if isinstance(candidate.get("claims"), list):
+                        candidate["claims"] = [
+                            {**claim, "text": sanitize_model_text(claim["text"])}
+                            if isinstance(claim, dict)
+                            and isinstance(claim.get("text"), str)
+                            else claim
+                            for claim in candidate["claims"]
+                        ]
+                    if isinstance(candidate.get("warnings"), list):
+                        candidate["warnings"] = [
+                            sanitize_model_text(warning)
+                            if isinstance(warning, str)
+                            else warning
+                            for warning in candidate["warnings"]
+                        ]
+                    # CHAOS-3377 defects 1/2/5 -- the §10 deterministic
+                    # renderer. When this run executed status_snapshot.v1
+                    # for the CURRENT resolved scope, the server already
+                    # computed a real completion verdict (`actual_completion`
+                    # bound to that scope -- see `_deterministic_status_
+                    # render`/`status_snapshot_result`); the direct verdict/
+                    # completion/blockers are rendered from THAT here,
+                    # overwriting whatever the model proposed for status/
+                    # direct_summary/claims -- exactly the same
+                    # "server-derived fields overwrite the model's" pattern
+                    # `metrics`/`evidence`/`coverage` already follow above.
+                    # The model cannot mislabel a substantive answer as
+                    # refused, narrate a raw internal token, or contradict
+                    # the frame's own blocker list, because none of its own
+                    # text for this content reaches the candidate at all.
+                    rendered_status = self._deterministic_status_render(
+                        resolution=resolution,
+                        tool_requests=tuple(tool_requests),
+                        tool_results=tuple(tool_results),
+                        server_coverage=server_coverage,
+                        canonical_evidence=canonical_evidence,
+                    )
+                    if rendered_status is not None:
+                        det_status, det_direct_summary, det_claims = rendered_status
+                        candidate["status"] = det_status.value
+                        candidate["direct_summary"] = det_direct_summary
+                        candidate["claims"] = [
+                            claim.model_dump(mode="json") for claim in det_claims
+                        ]
                     try:
                         answer = validate_answer_candidate(
                             candidate, validation_context
@@ -2017,6 +2084,47 @@ class DevOrchestrator:
                                     answer=demoted,
                                     grounding_validation_status=(
                                         GUARD_DEMOTED_GROUNDING_FLOOR_STATUS
+                                    ),
+                                )
+                            return await finish(
+                                RunState.INSUFFICIENT_EVIDENCE,
+                                error=error(
+                                    "insufficient_evidence",
+                                    "The answer did not include enough "
+                                    "grounded detail to present as a "
+                                    "result.",
+                                ),
+                            )
+                        if exc.code == "refused_with_material_grounding":
+                            # CHAOS-3377 defect 1: the model kept self-
+                            # declaring REFUSED over real grounding even
+                            # after the bounded repair pass. Same demotion
+                            # seam as the grounding floor above -- the run
+                            # has genuine server-verified material
+                            # (`_server_grounded_answer`'s own third guard
+                            # refuses to build on nothing), so it terminates
+                            # COMPLETED with that material rather than a
+                            # hard FAILED that would discard evidence the
+                            # run already retrieved.
+                            demoted = self._server_grounded_answer(
+                                answer_id=answer_id,
+                                conversation_id=conversation_id,
+                                resolution=resolution,
+                                coverage=server_coverage,
+                                tool_results=tuple(tool_results),
+                                investigation_result=investigation_result,
+                                model=model,
+                                now=now,
+                                cutover_active=self._frame_cutover_active(
+                                    preflight_result
+                                ),
+                            )
+                            if demoted is not None:
+                                return await finish(
+                                    RunState.COMPLETED,
+                                    answer=demoted,
+                                    grounding_validation_status=(
+                                        GUARD_DEMOTED_REFUSAL_STATUS
                                     ),
                                 )
                             return await finish(
@@ -2154,6 +2262,31 @@ class DevOrchestrator:
                         ),
                     )
                 if isinstance(decision, AgentRefusal):
+                    # CHAOS-3377 HIGH 2 (codex adversarial review): a
+                    # refusal reached AFTER a real status_snapshot.v1 result
+                    # already exists for the run's current resolved scope is
+                    # the same defect class the §10 deterministic renderer
+                    # exists to close -- the model declined to answer over
+                    # material the server already retrieved and can report
+                    # honestly. Checked before the unconditional REFUSED
+                    # terminal below, never after.
+                    deterministic_refusal_answer = self._deterministic_status_answer(
+                        answer_id=answer_id,
+                        conversation_id=conversation_id,
+                        resolution=resolution,
+                        tool_requests=tuple(tool_requests),
+                        tool_results=tuple(tool_results),
+                        now=datetime.now(UTC),
+                        model=DevModelMetadata(
+                            provider_source=self._provider_source,
+                            provider_family=self._provider_family,
+                            model_fingerprint=decision_result.model_fingerprint,
+                        ),
+                    )
+                    if deterministic_refusal_answer is not None:
+                        return await finish(
+                            RunState.COMPLETED, answer=deterministic_refusal_answer
+                        )
                     return await finish(
                         RunState.REFUSED,
                         error=error(
@@ -2190,6 +2323,7 @@ class DevOrchestrator:
                     answer_id=answer_id,
                     conversation_id=conversation_id,
                     resolution=resolution,
+                    tool_requests=tuple(tool_requests),
                     tool_results=tuple(tool_results),
                     model_fingerprint=model_fingerprint,
                 )
@@ -2393,16 +2527,151 @@ class DevOrchestrator:
             "required": sorted(properties),
         }
 
+    @staticmethod
+    def _deterministic_status_render(
+        *,
+        resolution: DevScopeResolution,
+        tool_requests: tuple[DevToolRequest, ...],
+        tool_results: tuple[DevToolResult, ...],
+        server_coverage: DevCoverage,
+        canonical_evidence: Sequence[DevEvidenceRef],
+    ) -> tuple[AnswerStatus, str, list[DevClaim]] | None:
+        """The §10 deterministic (status, direct_summary, claims), or
+        ``None`` if this run has no ``status_snapshot.v1`` result bound to
+        the CURRENT resolved scope.
+
+        The one seam every terminal that can carry an answer -- a validated
+        ``AgentFinalAnswer``, an ``AgentRefusal``, or a budget-exhaustion
+        partial -- renders §10 content through (CHAOS-3377 HIGH 2, codex
+        adversarial review: a prior revision only applied the override
+        inside the ``AgentFinalAnswer`` branch, so a provider that emitted
+        ``AgentRefusal`` -- or a run that hit ``BudgetExceeded`` -- AFTER a
+        real ``status_snapshot.v1`` result already existed could still
+        terminate REFUSED, or with generic budget boilerplate, without ever
+        inspecting the retrieved material. The reported defect class stayed
+        reachable from those two paths).
+        """
+
+        if resolution.resolved_scope is None:
+            return None
+        status_result = status_snapshot_result(
+            tool_requests, tool_results, authorized_scope=resolution.resolved_scope
+        )
+        if status_result is None or status_result.actual_completion is None:
+            return None
+        actual = status_result.actual_completion
+        canonical_evidence_ids = frozenset(
+            item.evidence_ref_id for item in canonical_evidence
+        )
+        claims = build_deterministic_status_claims(
+            actual=actual,
+            status_result=status_result,
+            validity_scope=resolution.resolved_scope,
+            canonical_evidence_ids=canonical_evidence_ids,
+            tool_results=tool_results,
+        )
+        status = deterministic_answer_status(
+            coverage=server_coverage, tool_results=tool_results
+        )
+        direct_summary = render_verdict_summary(
+            actual,
+            denominator_withheld=any_tool_result_withheld_its_completion_denominator(
+                tool_results
+            ),
+        )
+        return status, direct_summary, claims
+
+    def _deterministic_status_answer(
+        self,
+        *,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        tool_requests: tuple[DevToolRequest, ...],
+        tool_results: tuple[DevToolResult, ...],
+        now: datetime,
+        model: DevModelMetadata,
+    ) -> DevAnswer | None:
+        """A full, server-rendered §10 ``DevAnswer`` for this run, or
+        ``None`` if there is nothing to render (no bound status_snapshot
+        result, or no canonical grounding to attach it to). Used by the
+        ``AgentRefusal`` and ``BudgetExceeded`` terminals -- see
+        ``_deterministic_status_render`` for why those need this too, not
+        only the ``AgentFinalAnswer`` branch (which merges the same render
+        into an existing candidate instead of building a fresh answer).
+        """
+
+        canonical_data = self._canonical_answer_data(tool_results)
+        if canonical_data is None:
+            return None
+        canonical_metrics, canonical_evidence = canonical_data
+        server_coverage = self._coverage_with_plan_sources(
+            self._coverage_from_tool_results(tool_requests, tool_results, now),
+            None,
+        )
+        rendered = self._deterministic_status_render(
+            resolution=resolution,
+            tool_requests=tool_requests,
+            tool_results=tool_results,
+            server_coverage=server_coverage,
+            canonical_evidence=canonical_evidence,
+        )
+        if rendered is None:
+            return None
+        status, direct_summary, claims = rendered
+        return DevAnswer(
+            schema_version="dev_answer.v1",
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            generated_at=now,
+            resolved_scope=resolution,
+            as_of=now,
+            status=status,
+            direct_summary=direct_summary,
+            claims=claims,
+            metrics=canonical_metrics,
+            evidence=canonical_evidence,
+            conflicts=[],
+            coverage=server_coverage,
+            warnings=[],
+            suggested_follow_up_questions=[],
+            versions=self._versions,
+            model=model,
+        )
+
     def _budget_answer(
         self,
         *,
         answer_id: str,
         conversation_id: str,
         resolution: DevScopeResolution,
+        tool_requests: tuple[DevToolRequest, ...],
         tool_results: tuple[DevToolResult, ...],
         model_fingerprint: str,
     ) -> DevAnswer | None:
-        """Return only canonical retrieved data when a later model call is blocked."""
+        """Return canonical retrieved data when a later model call is
+        blocked -- the §10 deterministic render if this run has a
+        status_snapshot.v1 result bound to the current resolved scope
+        (CHAOS-3377 HIGH 2: budget exhaustion after a real completion
+        assessment must not discard it for generic boilerplate), otherwise
+        the prior generic "budget reached" summary.
+        """
+
+        deterministic = self._deterministic_status_answer(
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            resolution=resolution,
+            tool_requests=tool_requests,
+            tool_results=tool_results,
+            now=datetime.now(UTC),
+            model=DevModelMetadata(
+                provider_source=self._provider_source,
+                provider_family=self._provider_family,
+                model_fingerprint=model_fingerprint,
+            ),
+        )
+        if deterministic is not None:
+            return deterministic
 
         canonical_data = self._canonical_answer_data(tool_results)
         if canonical_data is None:

@@ -1810,6 +1810,11 @@ async def _assemble_production_runtime(
         required_children = [
             wire_required_child(fact) for fact in result.actual.required_children
         ]
+        # CHAOS-3377 HIGH 3: blockers get the exact same evidence-minting and
+        # truncation treatment as required_children below, so the §10
+        # deterministic renderer can build a grounded claim from a blocker
+        # exactly as it does from a required child.
+        blockers = [wire_required_child(fact) for fact in result.actual.blockers]
 
         # DevToolResult.evidence caps at 25 entries; a dense scope can mint
         # far more across six independently-bounded categories. Bound the
@@ -1839,6 +1844,11 @@ async def _assemble_production_runtime(
             *(
                 evidence_id
                 for fact in required_children
+                for evidence_id in fact.evidence_ref_ids
+            ),
+            *(
+                evidence_id
+                for fact in blockers
                 for evidence_id in fact.evidence_ref_ids
             ),
             *(
@@ -1887,6 +1897,10 @@ async def _assemble_production_runtime(
         required_children = [
             fact.model_copy(update={"evidence_ref_ids": _kept(fact.evidence_ref_ids)})
             for fact in required_children
+        ]
+        blockers = [
+            fact.model_copy(update={"evidence_ref_ids": _kept(fact.evidence_ref_ids)})
+            for fact in blockers
         ]
 
         category_facts: Mapping[str, Sequence[Any]] = {
@@ -1940,6 +1954,7 @@ async def _assemble_production_runtime(
             display_truncated=result.actual.display_truncated,
             conflicts=conflicts,
             evidence_ref_ids=aggregate_evidence_ids,
+            blockers=blockers,
         )
         source_health = [
             DevSourceHealth(

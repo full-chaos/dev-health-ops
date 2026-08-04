@@ -17,6 +17,7 @@ from .contract_fixtures import (
     stream_fixtures,
 )
 from .contracts import CONTRACT_MODELS, DevStreamEvent, validate_stream
+from .status_change_service import STATUS_REASON_CODES
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 ARTIFACT_ROOT = REPOSITORY_ROOT / "contracts" / "ask-dev" / "v1"
@@ -149,6 +150,28 @@ def expected_artifacts() -> dict[str, str]:
     for label, stream_payloads in stream_fixtures().items():
         path = f"examples/streams/{label}.json"
         artifacts[path] = _json(stream_payloads)
+    # CHAOS-3377 (web adversarial review, MEDIUM: no drift guard on the
+    # client's internal-token denylist). The §10 completion-assessment
+    # internal vocabulary a client must never render raw -- the same set
+    # ``no_match_terminal.INTERNAL_TOKEN_DENYLIST`` derives on the ops side
+    # -- published as a checked-in artifact so a web-side sync (mirroring
+    # ``ask-dev-contracts.mjs``'s existing pinned-commit pattern for the
+    # JSON-schema artifacts above) can generate/verify its own denylist
+    # against this file instead of a hand-maintained, driftable copy.
+    # ``evidence_handle_pattern`` is a regex, not a literal token: an
+    # evidence handle carries a random 40-hex-char suffix, so the client
+    # must match it by SHAPE, not by a fixed string (see
+    # ``contracts_v2/base.py``'s own ``ev1_[0-9a-f]{40}`` pattern).
+    denylist_contents = _json(
+        {
+            "schema_version": "ask_dev_internal_prose_denylist.v1",
+            "reason_codes": sorted(STATUS_REASON_CODES),
+            "completion_states": ["not_ready"],
+            "extra_tokens": ["actual_completion"],
+            "evidence_handle_pattern": "^ev1_[0-9a-f]{40}$",
+        }
+    )
+    artifacts["vocabulary/internal_prose_denylist.v1.json"] = denylist_contents
     manifest = {
         "schema_version": "ask_dev_contract_manifest.v1",
         "compatibility": "additive-within-v1",
@@ -156,6 +179,13 @@ def expected_artifacts() -> dict[str, str]:
         "stream_sequences": [
             {"case": label, "path": f"examples/streams/{label}.json"}
             for label in stream_fixtures()
+        ],
+        "vocabulary": [
+            {
+                "case": "internal_prose_denylist",
+                "path": "vocabulary/internal_prose_denylist.v1.json",
+                "sha256": _sha256(denylist_contents),
+            }
         ],
     }
     artifacts["manifest.json"] = _json(manifest)

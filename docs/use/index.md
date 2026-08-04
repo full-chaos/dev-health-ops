@@ -109,6 +109,17 @@ Read AI-associated delivery, review, and risk signals with their attribution, co
 
 <article class="fc-topic-card" markdown>
 
+Evidence-backed investigation
+{: .fc-topic-card__label }
+
+### [Ask Dev](ask-dev/index.md)
+
+Investigate engineering status, pressure, causes, and supporting evidence, or choose the ACR and MCP path for an agent workflow.
+
+</article>
+
+<article class="fc-topic-card" markdown>
+
 Repeatable questions
 {: .fc-topic-card__label }
 

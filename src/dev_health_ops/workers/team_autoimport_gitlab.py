@@ -15,12 +15,14 @@ from dev_health_ops.api.services.configuration.clickhouse_team_drift_projector i
     project_team_rows_with_store,
 )
 from dev_health_ops.api.services.configuration.team_discovery import (
+    GitLabDiscoveredProject,
     TeamDiscoveryService,
 )
 from dev_health_ops.api.services.configuration.team_membership import (
     TeamMembershipService,
 )
 from dev_health_ops.metrics.schemas import (
+    ProjectRecord,
     TeamMembershipRecord,
     TeamProjectOwnershipRecord,
 )
@@ -115,6 +117,66 @@ async def _populate_async(
     resolver = load_identity_resolver()
     team_rows = _team_rows(org_id=org_id, teams=teams, now=now)
     project_rows = _project_ownership_rows(org_id=org_id, teams=teams, now=now)
+    # CHAOS-3380: import GitLab PROJECTS as their own catalog rows -- mirrors
+    # Linear's CHAOS-3365 native project import -- so a GitLab project name
+    # resolves as an Ask Dev subject. Sourced entirely from ``result.projects``
+    # (the flat, recursive listing ``discover_gitlab`` already fetched -- no
+    # separate network call here, so nothing in this block can fail on its
+    # own; a total discovery failure is already handled by the try/except
+    # around ``discover_gitlab`` above).
+    #
+    # CHAOS-3380 round 2 (Codex MEDIUM): a sync run only ever SYNCS the
+    # projects its enabled ``IntegrationSource`` rows selected, but discovery
+    # can see (and, before this filter, would catalog) every project the
+    # credential has read access to -- an unselected project would become a
+    # resolvable Ask Dev subject with retained-but-unsynced work items
+    # queryable through it. ``source_external_ids`` (populated by the
+    # reference-discovery scope, ``workers/reference_discovery.py``
+    # ``_load_discovery_context``) carries exactly the enabled sources'
+    # ``IntegrationSource.external_id`` values -- GitLab's numeric project id
+    # (``sync/discovery.py._map_gitlab_tuple``'s own docstring: "the
+    # canonical GitLab identifier"), the SAME id this worker mints the
+    # catalog row's id from. When present, only discovered projects whose
+    # numeric id is in that set are cataloged.
+    #
+    # Residual gap, reported rather than silently left: the more common
+    # POST-SYNC trigger (``workers/team_autoimport.py.
+    # run_post_sync_team_autoimport``) does not thread ``source_external_ids``
+    # into scope today, so this filter is a no-op on that path -- closing it
+    # there needs a change to that SHARED dispatcher (all 4 providers), out
+    # of this ticket's scope.
+    source_external_ids = _source_external_ids(scope)
+    native_project_rows = _gitlab_project_catalog_rows(
+        org_id=org_id,
+        projects=result.projects,
+        source_external_ids=source_external_ids,
+        now=now,
+    )
+    native_projects_filtered_by_selection = len(result.projects) - len(
+        native_project_rows
+    )
+    # CHAOS-3380 round 3 (Codex MEDIUM -- stale selected-source set reads as
+    # complete): the filter above only ever narrows discovered -> selected.
+    # A selected id that discovery did NOT return at all (the project was
+    # deleted/renamed out of reach, access was revoked, or discovery's own
+    # pagination bound was hit before reaching it) silently vanishes from
+    # the catalog with no signal -- a first import writes nothing for it, a
+    # re-import leaves whatever catalog row already existed stale, and
+    # neither was visible in native_projects_complete, which only reflected
+    # PAGINATION truncation, not a selected id going unaccounted for.
+    # Computed BEFORE writing, so the summary is honest about this run even
+    # though the (possibly partial) catalog write below still happens.
+    discovered_ids = {project.id for project in result.projects}
+    missing_selected_source_ids = (
+        sorted(source_external_ids - discovered_ids)
+        if source_external_ids is not None
+        else []
+    )
+    # Truncation on EITHER walk (teams/repo_patterns or the flat projects
+    # listing), OR a selected source discovery never returned, means the
+    # catalog this run wrote may be a partial view -- a partial catalog must
+    # never be recorded as a complete one.
+    native_projects_complete = not result.truncated and not missing_selected_source_ids
     membership_rows, _, observed_team_ids = await _membership_rows(
         org_id=org_id,
         token=token,
@@ -146,12 +208,33 @@ async def _populate_async(
     )
     sink.write_team_project_ownership(project_rows)
     sink.write_team_memberships(membership_rows)
+    catalog_projects = _dedupe_projects(native_project_rows)
+    if hasattr(sink, "write_projects"):
+        sink.write_projects(catalog_projects)
 
     summary: dict[str, Any] = {
         "teams_imported": len(team_rows),
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [],
         "projects_imported": len({row.project_id for row in project_rows}),
+        # The Ask Dev subject catalog rows written via write_projects(), distinct
+        # from "projects_imported" above (team-ownership project paths).
+        "native_projects_imported": len(catalog_projects),
+        # False when either discovery walk (teams or the flat projects
+        # listing) hit its pagination bound, OR a selected source id never
+        # showed up in discovery at all -- so a partial catalog is never
+        # recorded as a full one (mirrors Linear's native_projects_complete).
+        "native_projects_complete": native_projects_complete,
+        # Discovered-but-uncataloged projects, almost entirely from the
+        # source-selection filter above (a malformed listing entry is
+        # already dropped inside discover_gitlab itself). Observability for
+        # the intersection, not a correctness signal on its own.
+        "native_projects_filtered_by_selection": native_projects_filtered_by_selection,
+        # A selected IntegrationSource id discovery never returned -- the
+        # inverse gap from the filter above (selected but absent, not
+        # discovered but unselected). Surfaced by id so a caller can act on
+        # exactly which source is unaccounted for, not just a count.
+        "native_projects_missing_selected_source_ids": missing_selected_source_ids,
         "members_imported": len({row.member_id for row in membership_rows}),
         "team_memberships_imported": len(membership_rows),
         "team_project_ownership_imported": len(project_rows),
@@ -259,6 +342,114 @@ def _project_ownership_rows(
                 )
             )
     return rows
+
+
+def _project_id(org_id: str, provider: str, native_id: str) -> str:
+    return f"{org_id}:{provider}:{native_id}"
+
+
+def _source_external_ids(scope: Mapping[str, Any]) -> set[str] | None:
+    """The enabled ``IntegrationSource.external_id`` set for this sync run.
+
+    ``None`` (not an empty set) means "not scoped" -- catalog everything
+    discovery can see, today's behavior for the common post-sync trigger
+    path, which does not populate this key at all (see the caller's own
+    comment). An explicit empty list, in contrast, means the reference-
+    discovery scope enumerated zero enabled sources -- filter everything out,
+    not everything in.
+    """
+
+    raw = scope.get("source_external_ids")
+    if raw is None:
+        return None
+    return {str(value) for value in raw if str(value).strip()}
+
+
+def _gitlab_project_catalog_rows(
+    *,
+    org_id: str,
+    projects: Iterable[GitLabDiscoveredProject],
+    source_external_ids: set[str] | None,
+    now: datetime,
+) -> list[ProjectRecord]:
+    """Map discovered GitLab projects to Ask Dev subject catalog rows.
+
+    CHAOS-3380 round 2 (Codex HIGH -- mutable path as canonical identity):
+    ``id`` is GitLab's own IMMUTABLE numeric project id, prefixed like Jira's
+    catalog id (``team_autoimport_jira._project_id``) rather than raw like
+    Linear's -- because unlike Linear's project id, a GitLab project's PATH
+    is mutable (rename, group transfer) while its numeric id never changes.
+    ``project_key`` carries the CURRENT ``path_with_namespace`` instead.
+
+    CHAOS-3380 round 3 (Codex HIGH -- incremental sync strands historical
+    rows): a scope committed against this row's id resolves work items
+    through ``native_status_change._project_identity_match``'s compatibility
+    arm -- ``work_items.project_id = catalog.project_key`` -- NOT a
+    project_key-to-project_key match. ``providers/gitlab/normalize.py``
+    deliberately does NOT write anything onto ``work_items.project_key``
+    (stays empty, exactly as before this ticket); it never needed to, since
+    ``project_id`` already carries the raw path for every GitLab row, old and
+    new alike (an ``updated_after`` incremental sync never rewrites a row
+    that has not itself changed on the provider side). Comparing THAT
+    directly against this catalog row's current path is what makes rename
+    and incremental-sync history keep resolving without any change to
+    ``work_items`` at all -- see below.
+
+    Rename/transfer/reuse, made explicit rather than assumed correct:
+
+    * RENAME or TRANSFER (path changes, numeric id doesn't): the NEXT sync's
+      discovery reports the NEW path under the SAME numeric id, so this
+      function updates the SAME catalog row's ``project_key`` in place (a
+      new ReplacingMergeTree version, same ``(org_id, provider, id)`` key).
+      Work items already ingested under the OLD path (``project_id`` baked
+      in at ingestion time, and for GitLab the work_item_id itself is
+      ALSO path-derived -- ``f"gitlab:{path}#{iid}"`` -- a pre-existing,
+      out-of-scope characteristic of GitLab work-item identity) stop
+      matching this catalog row until the provider sync re-ingests them
+      under the new path. This ORPHANS old history rather than merging it
+      into anything -- the fail-safe direction Codex asked for -- at the
+      cost of a resolution gap until the next full provider sync catches
+      up; a smaller ticket than reconciling path aliases across a rename.
+    * PATH REUSE (an unrelated NEW project claims the exact string an OLD,
+      deleted project used to hold): the two mint DISTINCT catalog rows
+      (different numeric ids), so no two catalog rows ever collide. The
+      residual risk is at the WORK-ITEM level, not the catalog level: OLD
+      work items still on disk with the reused path baked into their own
+      ``project_id`` (from before the delete) would match the NEW catalog
+      row's ``project_key`` if they are never resynced -- because
+      ``work_items.project_id`` records what a path meant AT INGESTION
+      TIME, and nothing here rewrites historical rows when a path is
+      reassigned elsewhere. Closing this fully needs GitLab's immutable
+      numeric id threaded through ``work_items.project_id`` itself (not just
+      the catalog), a materially larger provider-identity change deferred
+      out of this ticket -- flagged for a follow-up rather than silently
+      left as an assumed non-issue. (``ask_dev_project_subject_oracle.py``
+      surfaces this same residual risk explicitly, per-row, as the
+      ``"path_match_unverified"`` gap kind -- CHAOS-3380 round 3, MEDIUM 3.)
+    """
+
+    rows: list[ProjectRecord] = []
+    for project in projects:
+        if source_external_ids is not None and project.id not in source_external_ids:
+            continue
+        rows.append(
+            ProjectRecord(
+                id=_project_id(org_id, PROVIDER, project.id),
+                org_id=org_id,
+                provider=PROVIDER,
+                project_key=project.path_with_namespace,
+                name=project.name or project.path_with_namespace,
+                is_active=0 if project.archived else 1,
+                updated_at=now,
+                last_synced=now,
+                url=project.web_url,
+            )
+        )
+    return rows
+
+
+def _dedupe_projects(rows: list[ProjectRecord]) -> list[ProjectRecord]:
+    return list({(row.org_id, row.provider, row.id): row for row in rows}.values())
 
 
 async def _membership_rows(

@@ -94,6 +94,13 @@ COLLIDING_PROJECT_ID = f"{ORG_ID}:collide:MULTI"
 #: retired (a newer ``is_active = 0`` row) before the identity read runs.
 RETIRED_PROJECT_ID = f"{ORG_ID}:jira:RETIRED"
 RETIRED_RAW_PROJECT_KEY = "RETIRED"
+#: CHAOS-3380 round 3 (Codex HIGH): GitLab's catalog id is prefixed and
+#: IMMUTABLE (its own numeric project id), while ``work_items.project_id``
+#: carries the RAW, mutable path -- neither the raw-id arm nor the
+#: key-to-key arm can match a GitLab row; only the compatibility arm
+#: (``project_id = catalog_project_key``) can.
+GITLAB_PROJECT_ID = f"{ORG_ID}:gitlab:501"
+GITLAB_CURRENT_PATH = "ops-group/ask-dev-service"
 
 #: Linear work items carry no repository: the sync lands them under the zero
 #: UUID, which has no ``repos`` row at all (verified against the live dev
@@ -122,6 +129,8 @@ MULTI_PROVIDER_REPOSITORY_ID = "11111111-0000-0000-0000-000000000007"
 #: Round 2: where ``RETIRED_PROJECT_ID``'s own (would-be, if the ``is_active``
 #: guard failed) work item lives.
 RETIRED_PROJECT_REPOSITORY_ID = "22222222-0000-0000-0000-000000000008"
+#: CHAOS-3380 round 3: where the GitLab-shaped project's own work item lives.
+GITLAB_KEYED_REPOSITORY_ID = "33333333-0000-0000-0000-000000000009"
 
 #: The org-scoped ``repos`` catalog. The zero UUID is deliberately absent: it
 #: is the repository-*less* sentinel, not a repository.
@@ -132,6 +141,7 @@ REPOS_CATALOG = {
         COLLISION_REPOSITORY_ID,
         MULTI_PROVIDER_REPOSITORY_ID,
         RETIRED_PROJECT_REPOSITORY_ID,
+        GITLAB_KEYED_REPOSITORY_ID,
     },
     OTHER_ORG_ID: {FOREIGN_REPOSITORY_ID},
 }
@@ -160,11 +170,15 @@ PROJECTS_CATALOG: dict[tuple[str, str], list[dict[str, Any]]] = {
             "is_active": 0,
         }
     ],
+    (ORG_ID, GITLAB_PROJECT_ID): [
+        {"provider": "gitlab", "project_key": GITLAB_CURRENT_PATH}
+    ],
     # GHOST_PROJECT_ID deliberately absent.
 }
 
 EXPECTED_DERIVED_REPOSITORY_IDS = sorted({LINEAR_NO_REPOSITORY_ID})
 JIRA_EXPECTED_REPOSITORY_IDS = sorted({KEYED_REPOSITORY_ID})
+GITLAB_EXPECTED_REPOSITORY_IDS = sorted({GITLAB_KEYED_REPOSITORY_ID})
 
 NO_REPOSITORY_SET_WARNING = (
     "Status reads require the complete authorized repository set; "
@@ -315,6 +329,20 @@ WORK_ITEM_STORE = [
         project_id="88888",
         project_key=RETIRED_RAW_PROJECT_KEY,
     ),
+    # CHAOS-3380 round 3: the GitLab project's own work item -- reached ONLY
+    # via the compatibility arm (project_id, the raw path, against the
+    # catalog's project_key, the SAME current path). project_key stays empty,
+    # exactly like every real GitLab work item (providers/gitlab/normalize.py
+    # never sets it).
+    _row(
+        work_item_id="gitlab:ops-group/ask-dev-service#42",
+        title="GitLab compatibility-arm attribution",
+        status="in_progress",
+        repository_id=GITLAB_KEYED_REPOSITORY_ID,
+        provider="gitlab",
+        project_id=GITLAB_CURRENT_PATH,
+        project_key="",
+    ),
 ]
 
 IN_SCOPE_WORK_ITEM_IDS = {
@@ -324,6 +352,10 @@ IN_SCOPE_WORK_ITEM_IDS = {
 
 JIRA_IN_SCOPE_WORK_ITEM_IDS = {
     "jira:ASK-9",
+}
+
+GITLAB_IN_SCOPE_WORK_ITEM_IDS = {
+    "gitlab:ops-group/ask-dev-service#42",
 }
 
 #: The collision rows above must never surface for EITHER scope.
@@ -431,6 +463,15 @@ class _FakeWorkItems:
                 lambda row: (
                     bool(catalog_project_key)
                     and row["project_key"] == catalog_project_key
+                )
+            )
+        # CHAOS-3380 round 3: GitLab's compatibility arm -- the work item's
+        # RAW project_id against the catalog's CURRENT path (project_key).
+        if "project_id = catalog_project_key" in sql:
+            arms.append(
+                lambda row: (
+                    bool(catalog_project_key)
+                    and row["project_id"] == catalog_project_key
                 )
             )
         # Legacy substring, kept so a regression back to comparing project_key
@@ -573,12 +614,22 @@ def test_derivation_matches_projects_exactly_as_the_queries_it_bounds_do() -> No
     match the catalog row's provider, and either the raw id or the raw native
     key to match -- never the catalog's (possibly provider-prefixed) id
     against a raw column on the other side of an OR.
+
+    CHAOS-3380 round 3 (Codex HIGH): a THIRD arm was added --
+    ``project_id = catalog_project_key`` -- GitLab's compatibility arm: its
+    catalog id is a prefixed, opaque, immutable numeric id (never equal to
+    any raw ``work_items`` column, so the first arm above can never match a
+    GitLab row), and ``work_items.project_key`` is always empty for GitLab
+    (so the second arm can't either) -- but ``work_items.project_id`` carries
+    the raw path for every GitLab row regardless of when it was synced, and
+    the catalog's own ``project_key`` carries that SAME current path.
     """
 
     project_predicate = (
         "ifNull(catalog_provider, '') != '' AND provider = catalog_provider"
         " AND (project_id = {entity_id:String}"
-        " OR (catalog_project_key != '' AND project_key = catalog_project_key))"
+        " OR (catalog_project_key != '' AND project_key = catalog_project_key)"
+        " OR (catalog_project_key != '' AND project_id = catalog_project_key))"
     )
     assert project_predicate in native_status_change.PROJECT_REPOSITORIES_SQL
     assert project_predicate in native_status_change._WORK_ITEMS_SQL
@@ -611,8 +662,8 @@ def test_derivation_sql_structure_is_pinned() -> None:
     assert (
         "  AND ifNull(catalog_provider, '') != '' AND provider = catalog_provider"
         " AND (project_id = {entity_id:String}"
-        " OR (catalog_project_key != '' AND project_key = catalog_project_key))\n"
-        in sql
+        " OR (catalog_project_key != '' AND project_key = catalog_project_key)"
+        " OR (catalog_project_key != '' AND project_id = catalog_project_key))\n" in sql
     )
     # No bound anywhere in this query: a truncated authorization set would be
     # a silently narrowed read, not a smaller page. The identity CTE bounds
@@ -810,6 +861,47 @@ async def test_jira_shaped_project_resolves_via_provider_scoped_identity(
     } == JIRA_IN_SCOPE_WORK_ITEM_IDS
     # None of the cross-provider collision rows sharing Jira's raw key (or,
     # adversarially, its prefixed catalog id) may leak in.
+    assert not COLLISION_WORK_ITEM_IDS & {
+        child.entity_id for child in snapshot.children
+    }
+
+
+@pytest.mark.asyncio
+async def test_gitlab_shaped_project_resolves_via_the_compatibility_arm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3380 round 3 (Codex HIGH): GitLab resolves through the THIRD arm.
+
+    Neither of the two arms CHAOS-3374 introduced can match a GitLab row: the
+    raw-id arm needs ``work_items.project_id`` to equal the catalog's
+    (here, prefixed) id, which it never does since GitLab's ``project_id`` is
+    the raw path; the key-to-key arm needs ``work_items.project_key`` to be
+    non-empty, which it never is for GitLab (``providers/gitlab/normalize.py``
+    leaves it unset for every row, old and new alike). Only the
+    compatibility arm -- the work item's raw ``project_id`` against the
+    catalog's CURRENT ``project_key`` (the path) -- resolves it, and this is
+    the same shape a HISTORICAL GitLab row (synced before this ticket) has:
+    proving this scenario is proving incremental-sync compatibility, not just
+    a today's-format one.
+    """
+
+    _install_catalog_client(monkeypatch, project_id=GITLAB_PROJECT_ID)
+    scope = await _committed_project_scope(project_id=GITLAB_PROJECT_ID)
+    assert scope.entity_refs[0].entity_id == GITLAB_PROJECT_ID
+
+    fake = _install_status_client(monkeypatch)
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert NO_REPOSITORY_SET_WARNING not in snapshot.warnings
+    bound = fake.work_item_read_params()["repository_ids"]
+    assert sorted(bound) == GITLAB_EXPECTED_REPOSITORY_IDS
+    assert {
+        child.entity_id for child in snapshot.children
+    } == GITLAB_IN_SCOPE_WORK_ITEM_IDS
     assert not COLLISION_WORK_ITEM_IDS & {
         child.entity_id for child in snapshot.children
     }

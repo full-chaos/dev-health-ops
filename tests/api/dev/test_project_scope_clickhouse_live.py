@@ -714,8 +714,10 @@ async def test_every_derivation_clause_changes_the_real_result(
         ),
         "project_id arm": (
             "(project_id = {entity_id:String}"
-            " OR (catalog_project_key != '' AND project_key = catalog_project_key))",
-            "(catalog_project_key != '' AND project_key = catalog_project_key)",
+            " OR (catalog_project_key != '' AND project_key = catalog_project_key)"
+            " OR (catalog_project_key != '' AND project_id = catalog_project_key))",
+            "(catalog_project_key != '' AND project_key = catalog_project_key"
+            " OR (catalog_project_key != '' AND project_id = catalog_project_key))",
         ),
         "repos authorization arm": (
             "    toString(repo_id) = '00000000-0000-0000-0000-000000000000'\n"
@@ -765,14 +767,17 @@ async def test_every_jira_identity_clause_changes_the_real_result(
         ),
         "native project_key arm": (
             "(project_id = {entity_id:String}"
-            " OR (catalog_project_key != '' AND project_key = catalog_project_key))",
+            " OR (catalog_project_key != '' AND project_key = catalog_project_key)"
+            " OR (catalog_project_key != '' AND project_id = catalog_project_key))",
             "(project_id = {entity_id:String})",
         ),
         "project disjunction (OR -> AND)": (
             "(project_id = {entity_id:String}"
-            " OR (catalog_project_key != '' AND project_key = catalog_project_key))",
+            " OR (catalog_project_key != '' AND project_key = catalog_project_key)"
+            " OR (catalog_project_key != '' AND project_id = catalog_project_key))",
             "(project_id = {entity_id:String}"
-            " AND (catalog_project_key != '' AND project_key = catalog_project_key))",
+            " AND (catalog_project_key != '' AND project_key = catalog_project_key)"
+            " AND (catalog_project_key != '' AND project_id = catalog_project_key))",
         ),
     }
 

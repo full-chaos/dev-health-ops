@@ -21,10 +21,12 @@ from dev_health_ops.api.services.configuration.team_membership import (
     TeamMembershipService,
 )
 from dev_health_ops.metrics.schemas import (
+    ProjectRecord,
     TeamMembershipRecord,
     TeamProjectOwnershipRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.providers.gitlab.client import GitLabAuth, GitLabWorkClient
 from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
 from dev_health_ops.providers.team_capabilities import team_provider_capabilities
 from dev_health_ops.storage.clickhouse import ClickHouseStore
@@ -115,6 +117,37 @@ async def _populate_async(
     resolver = load_identity_resolver()
     team_rows = _team_rows(org_id=org_id, teams=teams, now=now)
     project_rows = _project_ownership_rows(org_id=org_id, teams=teams, now=now)
+    # CHAOS-3380: import GitLab PROJECTS as their own catalog rows -- mirrors
+    # Linear's CHAOS-3365 native project import -- so a GitLab project name
+    # resolves as an Ask Dev subject. Kept independent of the ownership rows
+    # above: a metadata-fetch failure for one project must not discard team
+    # ownership, and vice versa.
+    native_project_rows: list[ProjectRecord] = []
+    native_projects_complete = True
+    project_paths = _unique_project_paths(teams)
+    if project_paths:
+        try:
+            native_project_rows, native_projects_complete = await asyncio.to_thread(
+                _gitlab_project_records,
+                org_id=org_id,
+                token=token,
+                url=url,
+                project_paths=project_paths,
+                now=now,
+                strict=strict,
+            )
+        except Exception as exc:
+            if strict:
+                raise
+            logger.warning(
+                "GitLab project catalog import failed for org_id=%s group=%s: %s",
+                org_id,
+                group_path,
+                exc,
+                exc_info=True,
+            )
+            native_project_rows = []
+            native_projects_complete = False
     membership_rows, _, observed_team_ids = await _membership_rows(
         org_id=org_id,
         token=token,
@@ -146,12 +179,22 @@ async def _populate_async(
     )
     sink.write_team_project_ownership(project_rows)
     sink.write_team_memberships(membership_rows)
+    catalog_projects = _dedupe_projects(native_project_rows)
+    if hasattr(sink, "write_projects"):
+        sink.write_projects(catalog_projects)
 
     summary: dict[str, Any] = {
         "teams_imported": len(team_rows),
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [],
         "projects_imported": len({row.project_id for row in project_rows}),
+        # The Ask Dev subject catalog rows written via write_projects(), distinct
+        # from "projects_imported" above (team-ownership project paths).
+        "native_projects_imported": len(catalog_projects),
+        # False when GitLab project metadata fetch failed for at least one
+        # discovered project path -- so a partial catalog is never recorded as
+        # a full one (mirrors Linear's native_projects_complete).
+        "native_projects_complete": native_projects_complete,
         "members_imported": len({row.member_id for row in membership_rows}),
         "team_memberships_imported": len(membership_rows),
         "team_project_ownership_imported": len(project_rows),
@@ -259,6 +302,108 @@ def _project_ownership_rows(
                 )
             )
     return rows
+
+
+def _unique_project_paths(teams: Iterable[Any]) -> list[str]:
+    """The distinct GitLab project full paths discovered across every team.
+
+    Each ``DiscoveredTeam`` from ``discover_gitlab`` carries its OWN group's
+    projects in ``associations["repo_patterns"]`` (``team_discovery.
+    discover_gitlab``: ``repo_patterns = [p.path_with_namespace for p in
+    projects]``) -- the same walk that already backs
+    ``_project_ownership_rows``. Reusing it here (rather than re-walking
+    groups/subgroups a second time) means the project catalog covers exactly
+    the projects team ownership already resolved, order-preserving so the
+    metadata fetch below is deterministic across runs.
+    """
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for team in teams:
+        associations = _mapping(getattr(team, "associations", None))
+        for path in _strings(associations.get("repo_patterns")):
+            if path not in seen:
+                seen.add(path)
+                ordered.append(path)
+    return ordered
+
+
+def _gitlab_project_records(
+    *,
+    org_id: str,
+    token: str,
+    url: str,
+    project_paths: Iterable[str],
+    now: datetime,
+    strict: bool,
+) -> tuple[list[ProjectRecord], bool]:
+    """Fetch GitLab project metadata for the Ask Dev subject catalog.
+
+    ``id`` is the RAW ``path_with_namespace`` requested -- deliberately the
+    SAME string ``providers/gitlab/normalize.gitlab_issue_to_work_item`` and
+    ``gitlab_mr_to_work_item`` write onto ``work_items.project_id``
+    (normalize.py: "For work tracking metrics, treat the GitLab project path
+    as the 'project' scope.") -- so a scope committed against one of these
+    rows selects work items with no query change, exactly like Linear's
+    raw-id catalog rows (``_linear_project_records``). The id is the path we
+    ASKED for, not ``project.path_with_namespace`` off the response: a
+    renamed project can still resolve its old path via GitLab's redirect,
+    which would otherwise mint a catalog row under a path no work item was
+    ever attributed to.
+
+    ``project_key`` is always ``None``: GitLab work items never set
+    ``project_key`` (normalize.py sets it to ``None`` for issues, merge
+    requests, and epics alike) -- so the identity join
+    (``native_status_change._project_identity_match``, CHAOS-3374) can only
+    ever resolve a GitLab project through the raw ``project_id`` arm, never
+    through the ``project_key`` arm.
+
+    Only what GitLab's project resource genuinely exposes is mapped:
+    ``archived`` retires the row (mirrors Linear's archived/trashed --
+    CHAOS-3372's absence-based retirement remains explicitly out of scope,
+    so a project that stops being discovered keeps its last-seen state
+    rather than being tombstoned), and ``web_url`` is the URL. GitLab
+    projects carry no lifecycle vocabulary beyond archived and no target
+    date, so ``state``/``target_date`` are left at their empty defaults
+    rather than inventing values.
+    """
+
+    client = GitLabWorkClient(auth=GitLabAuth(token=token, base_url=url), org_id=org_id)
+    rows: list[ProjectRecord] = []
+    complete = True
+    for path in project_paths:
+        try:
+            project = client.get_project(path)
+        except Exception as exc:
+            complete = False
+            if strict:
+                raise
+            logger.info(
+                "Skipping GitLab project catalog row for org_id=%s path=%s: %s",
+                org_id,
+                path,
+                exc,
+            )
+            continue
+        archived = bool(getattr(project, "archived", False))
+        rows.append(
+            ProjectRecord(
+                id=path,
+                org_id=org_id,
+                provider=PROVIDER,
+                project_key=None,
+                name=str(getattr(project, "name", None) or path),
+                is_active=0 if archived else 1,
+                updated_at=now,
+                last_synced=now,
+                url=str(getattr(project, "web_url", "") or ""),
+            )
+        )
+    return rows, complete
+
+
+def _dedupe_projects(rows: list[ProjectRecord]) -> list[ProjectRecord]:
+    return list({(row.org_id, row.provider, row.id): row for row in rows}.values())
 
 
 async def _membership_rows(

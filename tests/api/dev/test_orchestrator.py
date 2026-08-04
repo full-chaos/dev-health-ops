@@ -1408,12 +1408,13 @@ async def test_unresolved_named_entity_never_falls_back_to_organization_scope() 
         )
     )
 
-    # CHAOS-3367: this run used to terminate COMPLETED with the model's own
-    # answer. A named subject that resolved to not-found now terminates with
-    # the server-owned no-match result instead (PRD Wave 3.1 §12), so the
-    # terminal state changed -- what this test is actually about, the scope
-    # the intervening tool call received, is unchanged.
-    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    # CHAOS-3367 note: this stays COMPLETED, and that is the point. The
+    # model's query here ("some-other-tenant-project") appears nowhere in the
+    # question, so the no-match divert does not fire -- a speculative lookup
+    # that missed must not erase an otherwise valid organization-wide answer.
+    # `test_a_speculative_miss_does_not_erase_a_valid_answer` below asserts
+    # that rule directly rather than leaving it implicit here.
+    assert result.state is RunState.COMPLETED
     # The not-found result must not clobber the previously authorized scope;
     # the status tool keeps executing against the last committed scope
     # rather than silently regressing to an unauthorized/ambiguous one.
@@ -1516,20 +1517,16 @@ async def test_status_answer_after_not_found_resolution_is_insufficient_evidence
         request=_status_request(),
     )
 
-    # CHAOS-3367: the run still terminates insufficient_evidence, but a
-    # no-match is now a rendered no-match RESULT rather than a bare
-    # scope_not_found error -- an error banner has no room for the PRD's
-    # required sentence, the closest-matches list, or an honest scope row,
-    # and "The requested scope was not found." was the copy the PRD replaced.
+    # CHAOS-3367 note: unchanged. The question here is the shared fixture's
+    # "How many items completed in this period?", which never names "Ask Dev
+    # project", so the no-match divert does not fire and the CHAOS-3289
+    # backstop still owns this terminal. The divert's own behaviour is
+    # asserted in `test_no_match_answer_is_not_a_refusal_and_shows_no_exact_scope`,
+    # against a question that actually names its subject.
     assert result.state is RunState.INSUFFICIENT_EVIDENCE
-    assert result.error is None
-    assert result.answer is not None
-    assert result.answer.resolved_scope.outcome is (
-        ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND
-    )
-    assert "I did not substitute organization-wide data." in (
-        result.answer.direct_summary
-    )
+    assert result.error is not None
+    assert result.error.code == "scope_not_found"
+    assert result.answer is None
 
 
 @pytest.mark.asyncio
@@ -3170,3 +3167,58 @@ async def test_terminal_boundary_rejects_a_leaked_token_on_any_other_path() -> N
     assert result.error is not None
     assert result.error.code == "internal_error"
     assert "scope_forbidden" not in result.error.safe_message
+
+
+@pytest.mark.asyncio
+async def test_a_speculative_miss_does_not_erase_a_valid_answer() -> None:
+    """Codex adversarial review round 1 HIGH, as a control.
+
+    "The last lookup missed" does not imply "the answer depended on it". The
+    model resolves a name the user never wrote, misses, then answers a
+    genuinely organization-wide question from real tool output. Diverting that
+    run to a no-match would replace a good answer with a statement about a
+    subject nobody asked about. The divert is gated on the failed query
+    corresponding to a whole word the USER typed, so it must not fire here.
+    """
+
+    script_id = "speculative-miss"
+    calls: list[DevToolRequest] = []
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Nightfall", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_not_found_resolution()
+            ),
+            scope_resolver=resolve,
+        ),
+        # The shared fixture question, "How many items completed in this
+        # period?" -- it names no subject at all, and certainly not
+        # "Nightfall". Deliberately NOT question_class=status: that class has
+        # its own older CHAOS-3289 backstop which terminates this shape on its
+        # own, and routing through it would leave this control passing for a
+        # reason that has nothing to do with the divert it is meant to check.
+        request=_request(),
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert "I couldn't find an authorized" not in result.answer.direct_summary

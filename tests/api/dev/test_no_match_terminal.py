@@ -22,14 +22,14 @@ from dev_health_ops.api.dev.contracts import (
     DevScopeResolution,
     ScopeResolutionOutcome,
 )
-from dev_health_ops.api.dev.contracts_v2 import PublicOutcome
 from dev_health_ops.api.dev.no_match_terminal import (
     INTERNAL_TOKEN_DENYLIST,
-    NO_MATCH_PUBLIC_OUTCOME,
-    NO_MATCH_PUBLIC_OUTCOME_LABEL,
+    WITHHELD_COPY,
+    attested_strings,
     internal_token_leak,
     named_subject_not_found_answer,
     no_match_summary,
+    redact_persisted_answer,
     user_supplied_subject_label,
     user_visible_strings,
 )
@@ -341,16 +341,6 @@ def test_no_match_answer_refuses_a_resolution_that_is_not_a_no_match() -> None:
         )
 
 
-def test_public_outcome_mapping_matches_the_trd_table() -> None:
-    """TRD §7.1: the internal not-found outcome maps to the ``not_found``
-    public class, rendered as "No authorized match found". The web renderer
-    reads the same label, so there is one string rather than two that drift."""
-
-    assert NO_MATCH_PUBLIC_OUTCOME is PublicOutcome.NOT_FOUND
-    assert NO_MATCH_PUBLIC_OUTCOME_LABEL == "No authorized match found"
-    assert internal_token_leak([NO_MATCH_PUBLIC_OUTCOME_LABEL]) is None
-
-
 def test_a_no_match_resolution_may_carry_closest_matches() -> None:
     """CHAOS-3367 contract change, so CHAOS-3366 is additive: the PRD's
     sentence ends "Here are the closest matches, if any", and before this the
@@ -375,3 +365,100 @@ def test_a_committed_scope_still_rejects_candidates() -> None:
 
     with pytest.raises(ValueError, match="candidates are allowed only"):
         _resolution(outcome="exact", candidates=[_closest_match()])
+
+
+# --- round 2: the codex adversarial-review findings, as controls -----------
+
+
+def test_a_name_the_user_never_wrote_is_never_echoed() -> None:
+    """Codex round 1 MEDIUM: a bare substring search let a model-authored
+    query of "Falcon" match inside the user's "Falconary" and the server then
+    named a subject the user never mentioned."""
+
+    assert user_supplied_subject_label(
+        "What is the status of project Falconary?", "Falcon"
+    ) is (None)
+    assert "Falcon'" not in no_match_summary(
+        "What is the status of project Falconary?", "Falcon"
+    )
+
+
+def test_an_ambiguous_repeated_label_is_not_echoed() -> None:
+    """Two occurrences give the noun lookup two neighbourhoods and no reason
+    to prefer either, so no kind can be asserted -- and a name that appears
+    twice is not obviously the one subject the question is about."""
+
+    assert user_supplied_subject_label("Compare Falcon to Falcon", "Falcon") is None
+
+
+def test_two_different_nouns_around_one_name_assert_neither() -> None:
+    assert (
+        "authorized subject named"
+        in no_match_summary(
+            "How does the Atlas repository compare with project Atlas?", "Atlas"
+        )
+        or user_supplied_subject_label(
+            "How does the Atlas repository compare with project Atlas?", "Atlas"
+        )
+        is None
+    )
+
+
+def test_an_authorized_entity_named_like_an_enum_does_not_fail_its_own_answer() -> None:
+    """Codex round 1 MEDIUM, with a working repro: a substring scan with no
+    provenance failed a healthy run whose authorized project is genuinely
+    called ``not_found``. The token is exempt only because THIS answer already
+    carries it as an authorized label -- provenance, not a hard-coded
+    exception."""
+
+    summary = "The authorized project not_found has validated status data."
+    assert internal_token_leak([summary]) == "not_found"
+    assert internal_token_leak([summary], attested=["not_found"]) is None
+
+
+def test_provenance_never_exempts_a_genuinely_leaked_token() -> None:
+    """A sentence that mixes an attested name with a real leak still fails on
+    the leak: the exemption is per token, not per string."""
+
+    assert (
+        internal_token_leak(
+            ["The project not_found returned forbidden_or_not_found."],
+            attested=["not_found"],
+        )
+        == "forbidden_or_not_found"
+    )
+
+
+def test_attested_strings_come_only_from_this_answer() -> None:
+    answer = _answer("What is the status of the Falcon project?", "Falcon")
+    attested = attested_strings(answer, "What is the status of the Falcon project?")
+    assert any("Falcon" in text for text in attested)
+
+
+def test_a_persisted_leak_is_replaced_on_read() -> None:
+    """Codex round 1 HIGH: ``orchestrator.finish()`` is a write-time boundary
+    and cannot reach rows written before it existed -- the reported live
+    payload is already one of them. A read must not hand it back verbatim."""
+
+    stored = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={
+            "direct_summary": (
+                "Scope resolution for the requested entity returned "
+                "forbidden_or_not_found."
+            ),
+            "warnings": ["Rejected with scope_forbidden."],
+        }
+    )
+    redacted = redact_persisted_answer(stored)
+
+    assert redacted.direct_summary == WITHHELD_COPY
+    assert redacted.warnings == [WITHHELD_COPY]
+    assert internal_token_leak(user_visible_strings(answer=redacted)) is None
+
+
+def test_a_clean_persisted_answer_is_returned_untouched() -> None:
+    """Identity, not a rebuild: a read path that rewrote every row would be
+    indistinguishable from one that quietly dropped fields."""
+
+    stored = _answer("What is the status of the Falcon project?", "Falcon")
+    assert redact_persisted_answer(stored) is stored

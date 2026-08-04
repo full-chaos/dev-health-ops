@@ -63,13 +63,16 @@ from .orchestrator_states import RunState
 
 __all__ = [
     "INTERNAL_TOKEN_DENYLIST",
-    "NO_MATCH_PUBLIC_OUTCOME",
-    "NO_MATCH_PUBLIC_OUTCOME_LABEL",
+    "WITHHELD_COPY",
+    "attested_strings",
     "internal_token_leak",
     "named_subject_not_found_answer",
     "no_match_summary",
+    "redact_persisted_answer",
+    "redact_persisted_error",
     "user_supplied_subject_kind",
     "user_supplied_subject_label",
+    "user_visible_strings",
 ]
 
 
@@ -107,13 +110,30 @@ def assert_denylist_covers_prd_tokens() -> None:
 assert_denylist_covers_prd_tokens()
 
 
-#: The TRD §7.1 public class a named-subject no-match maps to, and the label
-#: that class renders as. The internal ``forbidden_or_not_found`` outcome
-#: stays on the wire (it is baked into five published v1 JSON Schemas); this
-#: is the public side of that boundary mapping, and the web renderer reads the
-#: same label so there is one string, not two that can drift.
-NO_MATCH_PUBLIC_OUTCOME = PublicOutcome.NOT_FOUND
-NO_MATCH_PUBLIC_OUTCOME_LABEL = "No authorized match found"
+# KNOWN DIVERGENCE, stated rather than papered over (codex adversarial review,
+# round 1 MEDIUM). TRD §7.1 maps this internal outcome to the `not_found`
+# public class, and the web renderer labels the row "No authorized match
+# found". The v2 FRAME this terminal produces does NOT carry `not_found`:
+# `terminal_frames.wrap_legacy_answer_as_frame` stamps every legacy answer
+# `answered_with_gaps`, and switching it here is not a one-line change --
+# `not_found` is one of `NO_ANSWER_OUTCOMES`, so
+# `validate_no_answer_projection` would require the frame's `direct_answer` to
+# equal `CANONICAL_NO_ANSWER_COPY["not_found"]` exactly and carry no content,
+# which is precisely NOT the PRD's subject-naming sentence.
+#
+# Reconciling the two needs the canonical no-answer copy policy to admit a
+# subject-naming variant, which is a v2 wire decision beyond this fix. No
+# client reads a frame today (streaming sends `result.answer`; router replay
+# prefers the stored v1 answer), so the divergence is invisible to users --
+# but it IS recorded in `dev_runs.public_outcome`, so an operator reading that
+# column sees `answered_with_gaps` for a no-match. Filed as follow-up.
+#
+# An earlier revision of this module exported NO_MATCH_PUBLIC_OUTCOME /
+# NO_MATCH_PUBLIC_OUTCOME_LABEL constants here. They were removed: nothing in
+# production read them, so the only thing asserting the mapping was a test
+# asserting the constants against themselves -- a claim of coverage where
+# there was none. The label lives where it is actually rendered (web's
+# SCOPE_OUTCOME_LABELS).
 
 
 # The PRD fixes this wording verbatim. Split into its three sentences so the
@@ -163,22 +183,68 @@ _SUBJECT_KIND_BY_NOUN: Mapping[str, str] = {
 _MAX_SUBJECT_LABEL_CHARS = 120
 
 
-def internal_token_leak(values: Iterable[str | None]) -> str | None:
+def internal_token_leak(
+    values: Iterable[str | None], *, attested: Iterable[str | None] = ()
+) -> str | None:
     """The first denylisted internal token found in ``values``, or ``None``.
 
-    Case-insensitive, substring-based: the reported defect rendered
+    Case-insensitive and substring-based: the reported defect rendered
     ``forbidden_or_not_found`` inside a longer sentence, so an equality check
-    would not have seen it.
+    against the whole field would not have seen it.
+
+    ``attested`` is the provenance escape hatch, and the reason this is not a
+    naive substring scan. Some denylisted tokens are also plausible real names
+    -- an authorized repository can genuinely be called ``not_found``, and a
+    claim can genuinely mention ``app/not_found.tsx``. Without provenance the
+    fail-closed check in ``orchestrator.finish()`` would destroy that healthy
+    answer (codex adversarial review, round 1 MEDIUM, with a working repro).
+
+    So a token is a leak only when NOTHING in ``attested`` -- the user's own
+    question and the authorized entity labels this very answer already carries
+    -- contains it. That is the difference between "the model narrated an
+    internal enum" and "the run is about a thing whose name looks like one":
+    the second has a server-authorized source for the string, the first does
+    not. It is a per-token exemption rather than a per-string one, so a
+    sentence that mixes an attested name with a genuinely leaked token still
+    fails on the leaked one.
     """
 
+    attested_text = " ".join(text.casefold() for text in attested if text)
     for value in values:
         if not value:
             continue
         lowered = value.casefold()
         for token in sorted(INTERNAL_TOKEN_DENYLIST):
-            if token in lowered:
+            if token in lowered and token not in attested_text:
                 return token
     return None
+
+
+def attested_strings(
+    answer: DevAnswer | None, question: str | None = None
+) -> tuple[str, ...]:
+    """Every string with a server-authorized or user-typed provenance.
+
+    The authorized entity labels are read off the answer's OWN scope and
+    evidence, never off a catalog lookup: an entity that is not already part
+    of this answer has no business exempting a token in it.
+    """
+
+    texts: list[str] = [question or ""]
+    if answer is not None:
+        for scope in (
+            answer.resolved_scope.requested_scope,
+            answer.resolved_scope.resolved_scope,
+        ):
+            if scope is None:
+                continue
+            texts.extend(ref.display_label for ref in scope.entity_refs)
+            texts.extend(scope.repositories)
+        for candidate in answer.resolved_scope.candidates:
+            texts.append(candidate.entity_ref.display_label)
+        texts.extend(item.display_label for item in answer.evidence)
+        texts.extend(metric.label for metric in answer.metrics)
+    return tuple(text for text in texts if text)
 
 
 def user_visible_strings(
@@ -221,11 +287,19 @@ def user_supplied_subject_label(question: str, query: str | None) -> str | None:
     needle = " ".join(query.split()).strip()
     if not needle or len(needle) > _MAX_SUBJECT_LABEL_CHARS:
         return None
-    haystack = question.casefold()
-    start = haystack.find(needle.casefold())
-    if start < 0:
+    # Word-boundary and UNIQUE, not a bare substring search. A bare search let
+    # the model claim a name the user never wrote: for the question "What is
+    # the status of project Falconary?" a model-authored query of "Falcon"
+    # matched inside "Falconary", and the server then stated 'I couldn't find
+    # an authorized project named "Falcon"' (codex adversarial review, round 1
+    # MEDIUM). Requiring a whole-word match kills that; requiring the match to
+    # be unique keeps the noun lookup below unambiguous, since with two
+    # occurrences there is no single neighbourhood to read a kind from.
+    pattern = re.compile(rf"(?<!\w){re.escape(needle)}(?!\w)", re.IGNORECASE)
+    found = pattern.findall(question)
+    if len(found) != 1:
         return None
-    return question[start : start + len(needle)]
+    return found[0]
 
 
 def user_supplied_subject_kind(question: str, label: str | None) -> str:
@@ -242,14 +316,24 @@ def user_supplied_subject_kind(question: str, label: str | None) -> str:
     nouns = "|".join(
         re.escape(noun) for noun in sorted(_SUBJECT_KIND_BY_NOUN, key=len, reverse=True)
     )
-    escaped = re.escape(label)
-    trailing = re.compile(rf"{escaped}\s+({nouns})\b", re.IGNORECASE)
+    # Word-boundary on both sides of the label for the same reason
+    # `user_supplied_subject_label` needs it: "Falcon project" must not be
+    # matched by a label of "Falcon" sitting inside "Falconary project".
+    escaped = rf"(?<!\w){re.escape(label)}(?!\w)"
+    trailing = re.compile(rf"{escaped}(?:'s)?\s+({nouns})\b", re.IGNORECASE)
     leading = re.compile(rf"\b({nouns})\s+{escaped}", re.IGNORECASE)
-    for pattern in (leading, trailing):
-        found = pattern.search(question)
-        if found:
-            return _SUBJECT_KIND_BY_NOUN[" ".join(found.group(1).split()).casefold()]
-    return _DEFAULT_SUBJECT_KIND
+    matched = [
+        found.group(1)
+        for pattern in (leading, trailing)
+        if (found := pattern.search(question))
+    ]
+    # Two different nouns around the same name ("the Falcon repository in the
+    # Falcon project") is the caller telling us two things at once. Asserting
+    # either would state a kind the server never confirmed, so state neither.
+    kinds = {
+        _SUBJECT_KIND_BY_NOUN[" ".join(noun.split()).casefold()] for noun in matched
+    }
+    return kinds.pop() if len(kinds) == 1 else _DEFAULT_SUBJECT_KIND
 
 
 def no_match_summary(question: str, query: str | None) -> str:
@@ -330,4 +414,106 @@ def named_subject_not_found_answer(
         suggested_follow_up_questions=[],
         versions=versions,
         model=model,
+    )
+
+
+#: What one leaked prose field is replaced with on a READ of persisted data.
+#: A neutral statement, not a redaction of the token alone: a sentence built
+#: around a leaked enum does not become true when the enum is deleted from it
+#: ("Scope resolution returned ." is worse than saying nothing), and it must
+#: not read as a claim the server made.
+WITHHELD_COPY = "This part of the answer could not be shown."
+
+
+def redact_persisted_answer(
+    answer: DevAnswer, *, question: str | None = None
+) -> DevAnswer:
+    """One stored answer with any leaked prose field replaced.
+
+    ``orchestrator.finish()`` is a WRITE-time boundary: it cannot reach rows
+    written before it existed, and the reported live defect is already one of
+    those rows. Idempotent replay and transcript reads hand a persisted
+    ``answer_payload`` straight back to the client, so without this the exact
+    payload from the screenshot keeps rendering on every reload (codex
+    adversarial review, round 1 HIGH).
+
+    Read-time behaviour deliberately differs from write-time. ``finish()``
+    fails the whole terminal closed because the run can still be honestly
+    reported as failed; a read cannot -- the run is over, and discarding a
+    stored answer would also discard real metrics and evidence that are not
+    the problem. So the offending FIELDS are replaced and everything checkable
+    is preserved.
+
+    This redacts; it does not repair the stored row. Backfilling or
+    quarantining already-persisted violating rows is a separate operational
+    task, deliberately not done implicitly on a read path.
+    """
+
+    attested = attested_strings(answer, question)
+    if (
+        internal_token_leak(user_visible_strings(answer=answer), attested=attested)
+        is None
+    ):
+        return answer
+
+    def clean(value: str) -> str:
+        return (
+            value
+            if internal_token_leak([value], attested=attested) is None
+            else WITHHELD_COPY
+        )
+
+    return answer.model_copy(
+        update={
+            "direct_summary": clean(answer.direct_summary),
+            "warnings": [clean(warning) for warning in answer.warnings],
+            "suggested_follow_up_questions": [
+                question_text
+                for question_text in answer.suggested_follow_up_questions
+                if internal_token_leak([question_text], attested=attested) is None
+            ],
+            "claims": [
+                claim.model_copy(update={"text": clean(claim.text)})
+                for claim in answer.claims
+            ],
+            "conflicts": [
+                conflict.model_copy(update={"summary": clean(conflict.summary)})
+                for conflict in answer.conflicts
+            ],
+            "resolved_scope": answer.resolved_scope.model_copy(
+                update={
+                    "warnings": [
+                        clean(warning) for warning in answer.resolved_scope.warnings
+                    ]
+                }
+            ),
+        }
+    )
+
+
+def redact_persisted_error(error: DevError) -> DevError:
+    """``redact_persisted_answer``'s sibling for a stored terminal error.
+
+    ``DevError.code`` is deliberately untouched: it is a machine field on the
+    wire contract, not copy, and clients switch on it. Only the two prose
+    fields a human reads are checked. No ``attested`` set: an error carries no
+    entity of its own to attest anything, so any denylisted token in its prose
+    is a leak.
+    """
+
+    if internal_token_leak(user_visible_strings(error=error)) is None:
+        return error
+    return error.model_copy(
+        update={
+            "safe_message": (
+                error.safe_message
+                if internal_token_leak([error.safe_message]) is None
+                else WITHHELD_COPY
+            ),
+            "remediation": [
+                item
+                for item in error.remediation
+                if internal_token_leak([item]) is None
+            ],
+        }
     )

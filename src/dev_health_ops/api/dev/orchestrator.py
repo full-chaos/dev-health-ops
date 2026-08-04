@@ -93,8 +93,10 @@ from .contracts_v2.plan import DevInvestigationPlan
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .no_match_terminal import (
+    attested_strings,
     internal_token_leak,
     named_subject_not_found_answer,
+    user_supplied_subject_label,
     user_visible_strings,
 )
 from .orchestrator_states import TERMINAL_STATES, RunState
@@ -771,7 +773,11 @@ class DevOrchestrator:
             # test_no_match_terminal.py), so this must never fire on a
             # healthy run.
             leaked_token = internal_token_leak(
-                user_visible_strings(answer=answer, error=error)
+                user_visible_strings(answer=answer, error=error),
+                # Provenance, so an authorized entity whose real name looks
+                # like an enum member does not fail its own answer. See
+                # `no_match_terminal.internal_token_leak`.
+                attested=attested_strings(answer, request.question),
             )
             if leaked_token is not None:
                 logger.error(
@@ -1793,9 +1799,29 @@ class DevOrchestrator:
                 # subject that could not be found, and a class restriction
                 # would leave the identical defect reachable from every other
                 # question class.
-                if (
-                    last_resolve_scope_outcome
+                #
+                # The third precondition is what makes this safe, and an
+                # earlier revision without it was wrong (codex adversarial
+                # review, round 1 HIGH, with a repro from this file's own
+                # fixtures): "the last lookup missed" does NOT imply "the
+                # answer depended on it". A model can speculatively resolve a
+                # name the user never wrote, miss, and then answer a genuinely
+                # organization-wide question correctly -- diverting that run
+                # replaces a good answer with a no-match about a subject
+                # nobody asked for. Requiring the failed query to correspond
+                # to a whole word the USER typed is the cheapest available
+                # proof that the miss was about the question's own subject,
+                # and it is the same span the copy would name.
+                missed_subject_label = (
+                    user_supplied_subject_label(
+                        request.question, last_resolve_scope_query
+                    )
+                    if last_resolve_scope_outcome
                     is ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND
+                    else None
+                )
+                if (
+                    missed_subject_label is not None
                     and last_resolve_scope_resolution is not None
                     and authorized_scope.direct_scope is DirectScope.ORGANIZATION
                     and isinstance(decision, (AgentFinalAnswer, AgentRefusal))

@@ -32,7 +32,7 @@ func ProviderRequestPlan(
 	var estimates []RequestEstimate
 	switch provider {
 	case "github":
-		estimates = githubRequestPlan(dataset, spanDays)
+		estimates = githubRequestPlan(dataset, spanDays, flags)
 	case "gitlab":
 		estimates = gitLabRequestPlan(dataset, spanDays)
 	case "linear":
@@ -89,17 +89,41 @@ func gitLabRequestPlan(dataset string, spanDays int) []RequestEstimate {
 	}
 }
 
-func githubRequestPlan(dataset string, spanDays int) []RequestEstimate {
-	if dataset != "cicd" && dataset != "tests" && dataset != "deployments" {
+func githubRequestPlan(dataset string, spanDays int, flags map[string]bool) []RequestEstimate {
+	switch dataset {
+	case "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments":
+		floor := 1
+		if dataset == "work-items" {
+			floor = 2
+		}
+		estimates := []RequestEstimate{{
+			Dimension: BudgetRESTCore, Units: max(floor, floor*spanDays),
+			Confidence: "medium", RouteFamily: "work_items",
+		}}
+		if flags["sync_prs"] {
+			estimates = append(estimates,
+				RequestEstimate{
+					Dimension: BudgetGraphQLCost, Units: max(3, 3*spanDays),
+					Confidence: "medium", RouteFamily: "work_item_prs",
+				},
+				RequestEstimate{
+					Dimension: BudgetSecondaryAbuseRisk, Units: 1,
+					Confidence: "low", RouteFamily: "work_item_prs",
+				},
+			)
+		}
+		return estimates
+	case "cicd", "tests", "deployments":
+		routeFamily := dataset
+		if dataset == "cicd" {
+			routeFamily = "tests"
+		}
+		return []RequestEstimate{
+			{BudgetRESTCore, 4 * spanDays, "low", routeFamily},
+			{BudgetContentsBlob, 2 * spanDays, "low", routeFamily},
+		}
+	default:
 		return nil
-	}
-	routeFamily := dataset
-	if dataset == "cicd" {
-		routeFamily = "tests"
-	}
-	return []RequestEstimate{
-		{BudgetRESTCore, 4 * spanDays, "low", routeFamily},
-		{BudgetContentsBlob, 2 * spanDays, "low", routeFamily},
 	}
 }
 

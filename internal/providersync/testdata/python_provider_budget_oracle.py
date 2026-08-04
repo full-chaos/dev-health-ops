@@ -68,26 +68,54 @@ def _linear_cases(linear: Any) -> list[dict[str, object]]:
 
 
 def _github_cases(github: Any) -> list[dict[str, object]]:
-    return [
-        {
-            "provider": "github",
-            "dataset": dataset,
-            "span_days": span_days,
-            "flags": {},
-            "estimates": _render(
-                github._dataset_estimates(
-                    dataset_key=dataset,
-                    flags={},
-                    org_id="org",
-                    host="fixture.example",
-                    credential_fingerprint="fingerprint",
-                    span_days=span_days,
-                )
-            ),
-        }
-        for span_days in (1, 3)
-        for dataset in ("cicd", "tests", "deployments")
-    ]
+    cases: list[dict[str, object]] = []
+    for span_days in (1, 3):
+        for dataset in ("cicd", "tests", "deployments"):
+            cases.append(
+                {
+                    "provider": "github",
+                    "dataset": dataset,
+                    "span_days": span_days,
+                    "flags": {},
+                    "estimates": _render(
+                        github._dataset_estimates(
+                            dataset_key=dataset,
+                            flags={},
+                            org_id="org",
+                            host="fixture.example",
+                            credential_fingerprint="fingerprint",
+                            span_days=span_days,
+                        )
+                    ),
+                }
+            )
+        for dataset in WORK_ITEM_DATASETS:
+            for flags in ({"sync_prs": False}, {"sync_prs": True}):
+                case: dict[str, object] = {
+                    "provider": "github",
+                    "dataset": dataset,
+                    "span_days": span_days,
+                    "flags": flags,
+                    "estimates": _render(
+                        github._dataset_estimates(
+                            dataset_key=dataset,
+                            flags=flags,
+                            org_id="org",
+                            host="fixture.example",
+                            credential_fingerprint="fingerprint",
+                            span_days=span_days,
+                        )
+                    ),
+                }
+                if flags["sync_prs"]:
+                    route_family, dimension = github.GITHUB_USAGE_RESOLVER.resolve(
+                        transport="graphql",
+                        operation="POST /graphql PR social data",
+                    )
+                    case["actual_route_family"] = route_family
+                    case["actual_dimension"] = dimension.value
+                cases.append(case)
+    return cases
 
 
 def _gitlab_cases(gitlab: Any) -> list[dict[str, object]]:

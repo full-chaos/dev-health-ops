@@ -288,37 +288,51 @@ def test_github_prs_invalid_value_fails_closed() -> None:
         )
 
 
-def test_github_prs_is_not_yet_route_ready() -> None:
-    """(github, prs) has a real Go handler (CHAOS-3122) but is deliberately
-    NOT route_ready: codex H1 found that first_review_at/reviews_count/
-    changes_requested_count on git_pull_requests are owned by Python's
-    review-enrichment phase, which the Go handler does not perform, so it
-    would always write fabricated zeros into columns it does not own. The
-    switch exists and is wired end to end (so flipping RouteReady later is a
-    one-line change, not new plumbing) but can never route traffic while the
-    matrix says not-ready -- routes_to_river must stay False even with the
-    switch on."""
+@pytest.mark.parametrize(
+    ("dataset", "field", "environment_name"),
+    [
+        ("prs", "github_prs", "WORKER_GITHUB_PRS_ENABLED"),
+        ("pr-reviews", "github_pr_reviews", "WORKER_GITHUB_PR_REVIEWS_ENABLED"),
+        ("pr-comments", "github_pr_comments", "WORKER_GITHUB_PR_COMMENTS_ENABLED"),
+    ],
+)
+def test_github_pr_social_routes_require_their_own_switch(
+    dataset: str, field: str, environment_name: str
+) -> None:
+    assert ProviderUnitRouteSwitches.is_route_ready("github", dataset)
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert getattr(off, field) is False
+    assert not off.routes_to_river("github", dataset)
 
-    assert not ProviderUnitRouteSwitches.is_route_ready("github", "prs")
+    on = ProviderUnitRouteSwitches.from_environment({environment_name: "true"})
+    assert getattr(on, field) is True
+    assert on.routes_to_river("github", dataset)
+    for other in {"prs", "pr-reviews", "pr-comments"} - {dataset}:
+        assert not on.routes_to_river("github", other)
 
-    on = ProviderUnitRouteSwitches.from_environment(
-        {"WORKER_GITHUB_PRS_ENABLED": "true"}
-    )
-    assert not on.routes_to_river("github", "prs")
+
+@pytest.mark.parametrize(
+    "environment_name",
+    ["WORKER_GITHUB_PR_REVIEWS_ENABLED", "WORKER_GITHUB_PR_COMMENTS_ENABLED"],
+)
+def test_github_pr_social_alias_invalid_values_fail_closed(
+    environment_name: str,
+) -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment({environment_name: "sometimes"})
 
 
-def test_github_prs_switch_does_not_open_pr_reviews_or_pr_comments() -> None:
-    """github/pr-reviews and github/pr-comments share the "prs" legacy target
-    in Python (they are the same _sync_github_prs_to_store_async execution),
-    but neither has its own Go handler yet and both stay route_ready=false in
-    the matrix, so turning on GithubPRs must never widen either open."""
-
-    switches = ProviderUnitRouteSwitches.from_environment(
-        {"WORKER_GITHUB_PRS_ENABLED": "true"}
-    )
-    for dataset in ("pr-reviews", "pr-comments"):
-        assert not ProviderUnitRouteSwitches.is_route_ready("github", dataset)
-        assert not switches.routes_to_river("github", dataset)
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("WORKER_GITHUB_PRS_ENABLED", "WORKER_GITHUB_PR_REVIEWS_ENABLED"),
+        ("WORKER_GITHUB_PRS_ENABLED", "WORKER_GITHUB_PR_COMMENTS_ENABLED"),
+        ("WORKER_GITHUB_PR_REVIEWS_ENABLED", "WORKER_GITHUB_PR_COMMENTS_ENABLED"),
+    ],
+)
+def test_github_pr_social_aliases_are_mutually_exclusive(left: str, right: str) -> None:
+    with pytest.raises(ProviderUnitRouteError, match="mutually exclusive"):
+        ProviderUnitRouteSwitches.from_environment({left: "true", right: "true"})
 
 
 def test_github_cicd_defaults_to_false() -> None:

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -224,11 +225,13 @@ func TestEnrichPullRequestsWithReviewsLeavesNoReviewRowsUntouched(t *testing.T) 
 	}
 }
 
-func TestGitHubPullRequestSocialRouteIsNotRegisteredUntilTheRegistryLayerLands(t *testing.T) {
+func TestGitHubPullRequestSocialRouteRegistryMatchesComposedEffects(t *testing.T) {
 	t.Parallel()
 	for _, dataset := range []string{"prs", "pr-reviews", "pr-comments"} {
 		descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", dataset)
-		if !ok || descriptor.RouteReady {
+		if !ok || !descriptor.RouteReady || descriptor.RouteEnabled ||
+			descriptor.Executor != ExecutorNativeGo ||
+			!slices.Equal(descriptor.Destinations, githubPRSocialRouteDestinations()) {
 			t.Fatalf("dataset=%s descriptor=%+v ok=%v", dataset, descriptor, ok)
 		}
 	}

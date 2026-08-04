@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "name": "github PR-social production registration",
+  "build": ["go", "build", "./..."],
+  "$limitation": "The review-fetch, composition, row parity, and alias-identity plans cover the handler and effects. This plan pins only the registry, independent route switches, production constructor, and Python admission boundary added when all three aliases become route-ready.",
+  "mutations": [
+    {
+      "id": "R1-pr-comments-native-executor",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "\"github/pr-comments\":         ExecutorNativeGo,",
+      "replace": "\"github/pr-comments\":         ExecutorNone,",
+      "rationale": "the checked-in matrix must not claim pr-comments is native unless the executor registry resolves it to the native Go path",
+      "proof": [["go", "test", "-count=1", "-run", "^TestProviderMatrixExecutorRegistryIsHonest$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R2-pr-reviews-route-ready",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "case provider == \"github\" && dataset == \"pr-reviews\":\n\t\tdescriptor.Destinations = githubPRSocialRouteDestinations()\n\t\tdescriptor.RouteReady = true",
+      "replace": "case provider == \"github\" && dataset == \"pr-reviews\":\n\t\tdescriptor.Destinations = githubPRSocialRouteDestinations()\n\t\tdescriptor.RouteReady = false",
+      "rationale": "review enrichment closes the prior fabricated-zero gap, so the registry must advertise pr-reviews as route-ready",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubPRSocialPairsRequireIndependentSwitches$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R3-production-constructs-pr-comments-handler",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "case session.Claim.Provider == \"github\" &&\n\t\t\t\t(session.Claim.Dataset == \"prs\" ||\n\t\t\t\t\tsession.Claim.Dataset == \"pr-reviews\" ||\n\t\t\t\t\tsession.Claim.Dataset == \"pr-comments\"):",
+      "replace": "case session.Claim.Provider == \"github\" &&\n\t\t\t\t(session.Claim.Dataset == \"prs\" ||\n\t\t\t\t\tsession.Claim.Dataset == \"pr-reviews\"):",
+      "rationale": "the production worker must construct the complete PR-social handler and composite sink for the pr-comments alias, not only advertise it in the matrix",
+      "proof": [["go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsGitHubPRSocialAliases/pr-comments$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "R4-config-maps-pr-comments-switch",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "GithubPRComments:         cfg.WorkerGithubPRCommentsEnabled,",
+      "replace": "GithubPRComments:         false,",
+      "rationale": "the explicit environment switch must reach the Go descriptor rather than leaving a route-ready pair permanently disabled",
+      "proof": [["go", "test", "-count=1", "-run", "^TestWorkerRouteSwitchesMapsEveryConfiguredRoute/github_pr_comments$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "R5-python-admission-maps-pr-reviews-switch",
+      "file": "src/dev_health_ops/workers/provider_unit_route.py",
+      "find": "github_pr_reviews=_flag(source, \"WORKER_GITHUB_PR_REVIEWS_ENABLED\"),",
+      "replace": "github_pr_reviews=False,",
+      "rationale": "Python dispatch admission must read the same default-off switch as the Go runtime so enabling pr-reviews actually routes that unit to River",
+      "proof": [[".venv/bin/pytest", "-q", "tests/workers/test_provider_unit_route.py", "-k", "github_pr_social_routes_require_their_own_switch and pr-reviews"]]
+    },
+    {
+      "id": "R6-go-startup-rejects-duplicate-social-writers",
+      "file": "internal/platform/config/config.go",
+      "find": "if githubPRSocialAliases > 1 {",
+      "replace": "if githubPRSocialAliases > 2 {",
+      "rationale": "two PR-social switches would schedule the same two-effect writer under distinct claim ledgers, so Go startup must reject every pairwise collision",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubPRSocialAliasesAreMutuallyExclusive$", "./internal/platform/config/"]]
+    },
+    {
+      "id": "R7-python-admission-rejects-duplicate-social-writers",
+      "file": "src/dev_health_ops/workers/provider_unit_route.py",
+      "find": ") > 1:\n            raise ProviderUnitRouteError(\n                \"github PR-social switches are mutually exclusive complete-unit aliases\"",
+      "replace": ") > 2:\n            raise ProviderUnitRouteError(\n                \"github PR-social switches are mutually exclusive complete-unit aliases\"",
+      "rationale": "Python admission must fail before dispatch when two alias switches would create duplicate provider work and ClickHouse effects",
+      "proof": [[".venv/bin/pytest", "-q", "tests/workers/test_provider_unit_route.py", "-k", "github_pr_social_aliases_are_mutually_exclusive"]]
+    }
+  ]
+}

@@ -143,7 +143,8 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 		cfg.WorkerGitlabCICDEnabled ||
 		cfg.WorkerGitlabTestsEnabled ||
 		cfg.WorkerGitlabIncidentsEnabled ||
-		cfg.WorkerGithubPRsEnabled ||
+		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubPRReviewsEnabled ||
+		cfg.WorkerGithubPRCommentsEnabled ||
 		cfg.WorkerGithubCICDEnabled || cfg.WorkerGithubCommitsEnabled ||
 		cfg.WorkerGithubDeploymentsEnabled || cfg.WorkerGithubSecurityEnabled ||
 		cfg.WorkerGithubFilesEnabled || cfg.WorkerGithubCommitStatsEnabled ||
@@ -160,6 +161,51 @@ func TestGitHubCompleteUnitAliasesAreMutuallyExclusive(t *testing.T) {
 	}))
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestGitHubPRSocialAliasesAreMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	aliases := []string{
+		"WORKER_GITHUB_PRS_ENABLED",
+		"WORKER_GITHUB_PR_REVIEWS_ENABLED",
+		"WORKER_GITHUB_PR_COMMENTS_ENABLED",
+	}
+	for left := 0; left < len(aliases); left++ {
+		for right := left + 1; right < len(aliases); right++ {
+			_, err := Load(workerSpec(map[string]string{
+				aliases[left]:  "true",
+				aliases[right]: "true",
+			}))
+			if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+				t.Fatalf("aliases=(%s,%s) error=%v", aliases[left], aliases[right], err)
+			}
+		}
+	}
+}
+
+func TestGitHubPRSocialAliasSwitchesParseIndependently(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		env  string
+		pick func(Config) bool
+	}{
+		{"prs", "WORKER_GITHUB_PRS_ENABLED", func(cfg Config) bool { return cfg.WorkerGithubPRsEnabled }},
+		{"pr-reviews", "WORKER_GITHUB_PR_REVIEWS_ENABLED", func(cfg Config) bool { return cfg.WorkerGithubPRReviewsEnabled }},
+		{"pr-comments", "WORKER_GITHUB_PR_COMMENTS_ENABLED", func(cfg Config) bool { return cfg.WorkerGithubPRCommentsEnabled }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load(workerSpec(map[string]string{test.env: "true"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !test.pick(cfg) {
+				t.Fatalf("%s did not enable its route switch", test.env)
+			}
+		})
 	}
 }
 
@@ -202,6 +248,8 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITLAB_CICD_ENABLED":                "true",
 		"WORKER_GITLAB_INCIDENTS_ENABLED":           "true",
 		"WORKER_GITHUB_PRS_ENABLED":                 "true",
+		"WORKER_GITHUB_PR_REVIEWS_ENABLED":          "false",
+		"WORKER_GITHUB_PR_COMMENTS_ENABLED":         "false",
 		"WORKER_GITHUB_CICD_ENABLED":                "false",
 		"WORKER_GITHUB_COMMITS_ENABLED":             "true",
 		"WORKER_GITHUB_DEPLOYMENTS_ENABLED":         "true",
@@ -244,7 +292,8 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		!cfg.WorkerGitlabCICDEnabled ||
 		cfg.WorkerGitlabTestsEnabled ||
 		!cfg.WorkerGitlabIncidentsEnabled ||
-		!cfg.WorkerGithubPRsEnabled ||
+		!cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubPRReviewsEnabled ||
+		cfg.WorkerGithubPRCommentsEnabled ||
 		cfg.WorkerGithubCICDEnabled || !cfg.WorkerGithubCommitsEnabled ||
 		!cfg.WorkerGithubDeploymentsEnabled || !cfg.WorkerGithubSecurityEnabled ||
 		!cfg.WorkerGithubFilesEnabled || !cfg.WorkerGithubCommitStatsEnabled ||
@@ -276,6 +325,8 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITLAB_TESTS_ENABLED":               "sometimes",
 		"WORKER_GITLAB_INCIDENTS_ENABLED":           "sometimes",
 		"WORKER_GITHUB_PRS_ENABLED":                 "sometimes",
+		"WORKER_GITHUB_PR_REVIEWS_ENABLED":          "sometimes",
+		"WORKER_GITHUB_PR_COMMENTS_ENABLED":         "sometimes",
 		"WORKER_GITHUB_COMMITS_ENABLED":             "sometimes",
 		"WORKER_GITHUB_COMMIT_STATS_ENABLED":        "sometimes",
 		"WORKER_GITHUB_BLAME_ENABLED":               "sometimes",

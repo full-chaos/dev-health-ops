@@ -119,8 +119,8 @@ func defaultGitHubPullRequestFixtures() map[string]string {
 }
 
 // TestGitHubPullRequestRouteEmitsOneBoundedEffect carries the CHAOS-3122
-// parity evidence for RouteReady: see gitHubPullRequestDetailFixture42's doc
-// comment.
+// REST collector parity evidence consumed by the composed PR-social route:
+// see gitHubPullRequestDetailFixture42's doc comment.
 func TestGitHubPullRequestRouteEmitsOneBoundedEffect(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
@@ -133,14 +133,6 @@ func TestGitHubPullRequestRouteEmitsOneBoundedEffect(t *testing.T) {
 	}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "prs")
-	if !ok {
-		t.Fatal("github/prs has no canonical descriptor")
-	}
-	if err := batch.validate(descriptor); err != nil {
-		t.Fatalf("batch does not satisfy the canonical destination manifest: %v", err)
 	}
 
 	// Only #42 falls inside the claim window, so exactly one detail request

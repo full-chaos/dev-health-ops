@@ -34,6 +34,8 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"launchdarkly/feature-flags": ExecutorNativeGo,
 	"github/repo-metadata":       ExecutorNativeGo,
 	"github/prs":                 ExecutorNativeGo,
+	"github/pr-reviews":          ExecutorNativeGo,
+	"github/pr-comments":         ExecutorNativeGo,
 	"github/cicd":                ExecutorNativeGo,
 	"github/commits":             ExecutorNativeGo,
 	"github/deployments":         ExecutorNativeGo,
@@ -148,16 +150,14 @@ type CompleteRouteSwitches struct {
 	GitlabTests bool
 	// GitlabIncidents gates the three-destination canonical operational batch.
 	GitlabIncidents bool
-	// GithubPRs gates (github, prs) only (CHAOS-3122/CHAOS-3123 follow-on).
-	// It must never gate github/pr-reviews or github/pr-comments: those two
-	// datasets share the "prs" legacy target and processor flag in Python
-	// (they are the SAME _sync_github_prs_to_store_async execution), but
-	// GitHubPullRequestRouteHandler only emits the git_pull_requests effect.
-	// Review-derived enrichment (first_review_at, reviews_count,
-	// changes_requested_count) and the git_pull_request_reviews table are
-	// left for github/pr-reviews, which needs its own GraphQL fetch — see
-	// deploy/go-workers/provider-sync-porting-recipe.md.
-	GithubPRs bool
+	// GithubPRs, GithubPRReviews, and GithubPRComments independently gate the
+	// three dataset identities Python maps to one complete PR-social execution.
+	// Every identity constructs the same enriched git_pull_requests and
+	// git_pull_request_reviews effects while retaining its own claim ledger.
+	// Go startup and Python admission reject enabling more than one alias.
+	GithubPRs        bool
+	GithubPRReviews  bool
+	GithubPRComments bool
 	// GithubCICD gates the shared complete TestOps route and its six effects.
 	// Configuration rejects enabling it together with GithubTests, so both
 	// aliases share one complete writer and one admission identity.
@@ -262,37 +262,24 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GitlabIncidents
 	case provider == "github" && dataset == "prs":
-		// GitHub has a native complete-route handler
-		// (GitHubPullRequestRouteHandler) and a git_pull_requests effect sink
-		// (GitHubPullRequestClickHouseEffects), fixture-level field parity
-		// evidence against the production Python collector
-		// (_collect_github_pr_objects / build_git_pull_request /
-		// normalize_pr_state / get_repo_uuid_from_repo /
-		// ClickHouseStore.insert_git_pull_requests), and a codex adversarial
-		// pass that found and fixed four HIGH-severity silent-data-loss
-		// defects (CHAOS-3122).
-		//
-		// RouteReady stays false deliberately -- this is NOT the same waiver
-		// CHAOS-3123 used for repo-metadata. The codex H1 finding: three
-		// columns on this pair's own destination table
-		// (first_review_at, reviews_count, changes_requested_count) are
-		// owned by Python's review-enrichment phase
-		// (_enrich_prs_with_reviews_batch), which this handler does not
-		// perform, so it always writes them as zero. route_ready is a
-		// promise that the Go path produces the product data for a pair;
-		// writing fabricated zeros into columns this pair does not own would
-		// let review-latency/rework/AI-impact tiles read "no reviews
-		// fetched" as "no reviews exist". github/prs and github/pr-reviews
-		// share one row (git_pull_requests) but are scheduled as
-		// independent, separately-committed units — see
-		// deploy/go-workers/provider-sync-porting-recipe.md's "column versus
-		// unit ownership" section for the write-conflict analysis this
-		// forced. Both pairs flip to RouteReady together when
-		// github/pr-reviews lands with a real review fetch. GithubPRs
-		// (below) stays wired and off by default in the meantime, so this
-		// is a no-op today and a one-line flip later, not new plumbing.
-		descriptor.Destinations = []string{"git_pull_requests"}
+		// The PR-social route mirrors Python's one
+		// _sync_github_prs_to_store_async boundary: REST PR detail (including
+		// comments_count), GraphQL review enrichment, the complete
+		// git_pull_requests row, and raw git_pull_request_reviews. D16 keeps
+		// the three dataset identities independent while their effects stay
+		// byte-identical. Every switch defaults off, so readiness alone moves
+		// no traffic.
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubPRs
+	case provider == "github" && dataset == "pr-reviews":
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubPRReviews
+	case provider == "github" && dataset == "pr-comments":
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubPRComments
 	case provider == "github" && dataset == "cicd":
 		// cicd and tests delegate to one complete-row unit. Startup rejects both
 		// switches enabled together, so ci_pipeline_runs has one active writer.
@@ -347,6 +334,10 @@ func launchDarklyRouteDestinations() []string {
 		"feature_flag_link",
 		"work_graph_edges",
 	}
+}
+
+func githubPRSocialRouteDestinations() []string {
+	return []string{"git_pull_requests", "git_pull_request_reviews"}
 }
 
 func workItemRouteDestinations() []string {

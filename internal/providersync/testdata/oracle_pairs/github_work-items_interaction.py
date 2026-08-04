@@ -11,8 +11,11 @@ from typing import Any
 from internal.providersync.testdata import oracle_registry
 from internal.providersync.testdata.field_reflection import dataclass_field_names
 from internal.providersync.testdata.oracle_pairs._github_work_items_helpers import (
+    install_minimal_oracle_imports,
     object_from_case,
 )
+
+install_minimal_oracle_imports()
 
 with (
     contextlib.redirect_stdout(io.StringIO()),

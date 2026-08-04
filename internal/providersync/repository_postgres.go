@@ -104,7 +104,13 @@ func (repository *PostgresRepository) Complete(
 		completedAt.Before(startedAt) {
 		return ErrInvalidConfiguration
 	}
-	encoded, err := json.Marshal(result)
+	datasetKeys, auditedResult, err := workItemAliasCompletionMetadata(
+		claim.Provider, claim.Dataset, claim.ProcessorFlags, result,
+	)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(auditedResult)
 	if err != nil {
 		return ErrInvalidConfiguration
 	}
@@ -121,11 +127,13 @@ func (repository *PostgresRepository) Complete(
 		return ErrLeaseLost
 	}
 	if watermark != nil {
-		if _, err := tx.Exec(ctx, upsertWatermarkSQL,
-			uuid.New(), claim.OrgID, claim.SourceExternalID, claim.Dataset,
-			watermark.UTC(), completedAt.UTC(),
-		); err != nil {
-			return ErrInvalidConfiguration
+		for _, datasetKey := range datasetKeys {
+			if _, err := tx.Exec(ctx, upsertWatermarkSQL,
+				uuid.New(), claim.OrgID, claim.SourceExternalID, datasetKey,
+				watermark.UTC(), completedAt.UTC(),
+			); err != nil {
+				return ErrInvalidConfiguration
+			}
 		}
 	}
 	if _, err := tx.Exec(ctx, upsertFinalizeSQL,

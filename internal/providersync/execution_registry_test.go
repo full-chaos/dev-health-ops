@@ -1,6 +1,9 @@
 package providersync
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // TestCanonicalDescriptorRecognisesEveryCapability proves the unification: the
 // production route descriptor and the dataset capability registry recognise
@@ -62,6 +65,20 @@ func TestCompleteRouteSwitchesCollapseWorkItemAliasesAndRemainIndependent(t *tes
 			"independent routes jira_work=%+v jira_incidents=%+v ld=%+v",
 			jiraWorkItems, jiraIncidents, launchDarkly,
 		)
+	}
+}
+
+// TestWorkItemRouteDestinationsMatchTheRetrySafePythonUnitSurface prevents the
+// route manifest from silently dropping an in-band Python write. The work-item
+// job emits AI attribution beside the other raw and derived rows, and recovery
+// already treats that table as part of the same indivisible unit.
+func TestWorkItemRouteDestinationsMatchTheRetrySafePythonUnitSurface(t *testing.T) {
+	t.Parallel()
+	want := slices.Clone(linearBackfillWorkItemRetrySurfaces)
+	slices.Sort(want)
+	got := workItemRouteDestinations()
+	if !slices.Equal(got, want) {
+		t.Fatalf("work-item destinations=%v want exact Python unit surfaces=%v", got, want)
 	}
 }
 

@@ -114,7 +114,7 @@ Evidence-backed investigation
 
 ### [Ask Dev and Context Fabric](ai-workflows/index.md#ask-dev-context-fabric-and-agent-context)
 
-Investigate engineering status, pressure, causes, and supporting evidence, or choose the ACR and MCP path for an agent workflow.
+Choose Ask Dev for a human investigation, ACR for an agent workflow, or Context Fabric Validation for platform diagnostics.
 
 </article>
 

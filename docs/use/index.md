@@ -112,7 +112,7 @@ Read AI-associated delivery, review, and risk signals with their attribution, co
 Evidence-backed investigation
 {: .fc-topic-card__label }
 
-### [Ask Dev](ask-dev/index.md)
+### [Ask Dev and Context Fabric](ai-workflows/index.md#ask-dev-context-fabric-and-agent-context)
 
 Investigate engineering status, pressure, causes, and supporting evidence, or choose the ACR and MCP path for an agent workflow.
 

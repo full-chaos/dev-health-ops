@@ -7,7 +7,7 @@
     {"name":"team_wellbeing","python":"compute_team_wellbeing_metrics_daily","writes":["team_metrics_daily"],"port":"next_core","golden":"required"},
     {"name":"file_hotspots","python":"compute_file_hotspots","writes":["file_metrics_daily"],"port":"pending","golden":"required"},
     {"name":"file_risk_hotspots","python":"compute_file_risk_hotspots","writes":["file_hotspot_daily"],"port":"pending","golden":"required"},
-    {"name":"work_item","python":"compute_work_item_metrics_daily","writes":["work_item_metrics_daily","work_item_user_metrics_daily","work_item_cycle_times_daily"],"port":"pending","golden":"required"},
+    {"name":"work_item","python":"compute_work_item_metrics_daily","writes":["work_item_metrics_daily","work_item_user_metrics_daily","work_item_cycle_times"],"port":"pending","golden":"required"},
     {"name":"work_item_estimate","python":"compute_estimate_coverage_metrics_daily","writes":["estimate_coverage_metrics_daily"],"port":"pending","golden":"required"},
     {"name":"work_item_attribution","python":"compute_work_item_team_attributions","writes":["work_item_team_attributions"],"port":"pending","golden":"required"},
     {"name":"work_item_state","python":"compute_work_item_state_durations_daily","writes":["work_item_state_durations_daily"],"port":"pending","golden":"required"},

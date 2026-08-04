@@ -752,6 +752,55 @@ def test_manual_fallback_applies_only_when_nothing_stronger() -> None:
     assert by_source["manual_fallback"].confidence == "manual"
 
 
+def test_manual_fallback_tie_break_is_independent_of_loader_order() -> None:
+    item = _wi(
+        "ghpr:full-chaos/ops#manual-tie",
+        "github",
+        type="pr",
+        project_id="full-chaos/ops",
+    )
+    rules = [
+        ManualFallbackRule(
+            provider="github",
+            scope_type="repo",
+            scope_id="full-chaos/ops",
+            team_id="ops",
+            team_name="Ops",
+            reason="repo rule",
+            priority=0,
+        ),
+        ManualFallbackRule(
+            provider="github",
+            scope_type="project",
+            scope_id="full-chaos/ops",
+            team_id="ops",
+            team_name="Ops",
+            reason="project rule",
+            priority=0,
+        ),
+    ]
+
+    def resolve(
+        input_rules: list[ManualFallbackRule],
+    ) -> list[TeamAttributionCandidate]:
+        _, _, candidates = resolve_team_attribution(
+            item,
+            None,
+            None,
+            attribution_context=TeamAttributionContext(manual_fallbacks=input_rules),
+        )
+        return candidates
+
+    forward = resolve(rules)
+    reversed_rows = resolve(list(reversed(rules)))
+    assert forward == reversed_rows
+    assert [candidate.evidence for candidate in forward] == [
+        "manual_fallback:project=full-chaos/ops (project rule)",
+        "manual_fallback:repo=full-chaos/ops (repo rule)",
+    ]
+    assert [candidate.is_primary for candidate in forward] == [1, 0]
+
+
 def test_manual_fallback_never_overrides_native_team() -> None:
     item = _wi("ghpr:x/y#1", "github", project_id="x/y", native_team_key="CHAOS")
     pkr = ProjectKeyTeamResolver(project_key_to_team={"CHAOS": ("CHAOS", "Chaos")})

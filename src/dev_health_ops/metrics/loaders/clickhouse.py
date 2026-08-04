@@ -419,7 +419,15 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                   {org_filter}
                 GROUP BY o.org_id, o.provider, o.project_id, o.team_id
             ) AS g
-            LEFT JOIN teams AS t ON t.org_id = g.org_id AND t.id = g.team_id
+            LEFT JOIN (
+                SELECT
+                    org_id,
+                    id,
+                    argMax(name, (updated_at, last_synced, name)) AS name
+                FROM teams
+                GROUP BY org_id, id
+            ) AS t ON t.org_id = g.org_id AND t.id = g.team_id
+            ORDER BY g.provider, g.project_id, g.team_id
             """,
             params,
         )
@@ -453,7 +461,15 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                   {org_filter}
                 GROUP BY o.org_id, o.provider, o.repo_full_name, o.team_id
             ) AS g
-            LEFT JOIN teams AS t ON t.org_id = g.org_id AND t.id = g.team_id
+            LEFT JOIN (
+                SELECT
+                    org_id,
+                    id,
+                    argMax(name, (updated_at, last_synced, name)) AS name
+                FROM teams
+                GROUP BY org_id, id
+            ) AS t ON t.org_id = g.org_id AND t.id = g.team_id
+            ORDER BY g.provider, g.repo_full_name, g.team_id
             """,
             params,
         )
@@ -493,7 +509,15 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                   {org_filter}
                 GROUP BY o.org_id, o.provider, o.team_id, o.member_id
             ) AS g
-            LEFT JOIN teams AS t ON t.org_id = g.org_id AND t.id = g.team_id
+            LEFT JOIN (
+                SELECT
+                    org_id,
+                    id,
+                    argMax(name, (updated_at, last_synced, name)) AS name
+                FROM teams
+                GROUP BY org_id, id
+            ) AS t ON t.org_id = g.org_id AND t.id = g.team_id
+            ORDER BY g.provider, g.member_id, g.team_id
             """,
             params,
         )
@@ -513,6 +537,14 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             WHERE o.valid_from <= {{as_of:DateTime}}
               AND (o.valid_to IS NULL OR o.valid_to > {{as_of:DateTime}})
               {org_filter}
+            ORDER BY
+                o.provider,
+                o.scope_type,
+                o.scope_id,
+                o.priority,
+                o.team_id,
+                o.team_name,
+                o.reason
             """,
             params,
         )
@@ -582,7 +614,9 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                     team_id=str(row.get("team_id") or ""),
                     team_name=str(row.get("team_name") or row.get("team_id") or ""),
                     reason=str(row.get("reason") or ""),
-                    priority=int(row.get("priority") or 100),
+                    priority=int(
+                        100 if row.get("priority") is None else row["priority"]
+                    ),
                 )
             )
         return context

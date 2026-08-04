@@ -169,7 +169,7 @@ def _identity_key(value: str | None) -> str:
 
 def _candidate_sort_key(
     candidate: TeamAttributionCandidate,
-) -> tuple[int, int, int, float, str]:
+) -> tuple[int, int, int, float, str, str, str, str, str]:
     updated_at = to_utc(candidate.updated_at)
     return (
         -int(candidate.is_primary),
@@ -177,6 +177,10 @@ def _candidate_sort_key(
         int(candidate.priority),
         -updated_at.timestamp(),
         candidate.team_id or "",
+        candidate.team_name or "",
+        candidate.confidence,
+        candidate.evidence,
+        candidate.source,
     )
 
 

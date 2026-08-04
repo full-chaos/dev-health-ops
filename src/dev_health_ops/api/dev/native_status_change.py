@@ -155,24 +155,155 @@ ORDER BY m.node_type, m.node_id
 LIMIT {{limit:UInt32}}
 """
 
-_WORK_ITEMS_SQL = """
+#: CHAOS-3374: every project-scoped fact arm below (plus ``PROJECT_REPOSITORIES_SQL``)
+#: joins through the catalog's OWN ``projects`` row for ``{entity_id:String}`` instead
+#: of comparing ``work_items.project_id``/``project_key`` against the catalog id
+#: directly. The two are NOT the same value space for every provider:
+#: ``team_autoimport_jira._project_id`` mints a Jira project's catalog id as
+#: ``f"{org_id}:jira:{project_key}"`` (workers/team_autoimport_jira.py:106-107)
+#: while ``providers/jira/normalize.py:517-518`` writes the RAW Jira id/key onto
+#: ``work_items`` -- so ``project_id = {entity_id:String} OR project_key =
+#: {entity_id:String}`` can never match a Jira row: neither side of the OR is ever
+#: the prefixed catalog id. Linear's catalog id IS the raw ``work_items.project_id``
+#: (see ``team_autoimport_linear._linear_project_records``'s own docstring), which
+#: is why Linear worked and Jira didn't with the identical predicate.
+#:
+#: The fix resolves the catalog row's ``provider`` and (nullable) ``project_key``
+#: through this shared CTE and requires BOTH ``work_items.provider = catalog_provider``
+#: and (``work_items.project_id = {entity_id:String}`` OR the two raw
+#: ``project_key`` values match) -- so a Jira project matches by its own raw key, a
+#: Linear project keeps matching by the raw id it always used, and neither can ever
+#: match the other's rows even if a raw key/id value collided (``provider`` is a
+#: real ``work_items`` column -- CHAOS-3374 requires this explicitly: GitLab's own
+#: ``work_items.project_id`` is a bare repo full path, e.g. "group/project", which
+#: could otherwise coincidentally equal another provider's project id/key string in
+#: the same org). GitLab does not populate ``projects`` today -- no ``write_projects``
+#: call anywhere in ``workers/team_autoimport_gitlab.py`` (audited separately,
+#: CHAOS-3374) -- so a GitLab project subject remains unresolvable at scope-commit
+#: time and never reaches these queries at all; the provider guard here is defense
+#: in depth for whenever that lands, not a fix for an observed GitLab collision.
+#:
+#: ``LEFT JOIN`` (every arm that also serves 'issue'/'work_unit'/'team'/
+#: 'organization'/'repository' scope types): a project-identity lookup miss must
+#: never blank out those OTHER scope types' rows -- only the project arm's own
+#: predicate is gated (``ifNull(catalog_provider, '') != ''`` in
+#: ``_project_identity_match``). ``PROJECT_REPOSITORIES_SQL`` is project-scope-only
+#: and uses ``INNER JOIN``: an unresolvable identity there means the derivation has
+#: nothing to derive, which IS the correct fail-closed answer (an empty repository
+#: set), not a silent bypass of the join.
+#:
+#: Codex adversarial review (MEDIUM, 2026-08-04), two findings against the first
+#: cut of this CTE, both fixed here rather than accepted as residual risk:
+#:
+#: 1. ``projects``' ReplacingMergeTree key is ``(org_id, provider, id)``, NOT
+#:    ``(org_id, id)`` -- ``id`` alone is only unique WITHIN one provider, not
+#:    across providers in the same org. A same-org, same-id row minted by two
+#:    different providers (today only a coincidence; nothing enforces cross-
+#:    provider id uniqueness) survives ``FINAL`` as TWO rows, since they differ
+#:    on the provider component of the key. The original ``LIMIT 1`` (no
+#:    ``ORDER BY``) would then pick one of them *nondeterministically*, and the
+#:    provider guard would faithfully protect the WRONG provider's identity.
+#:    Fixed by aggregating with no ``GROUP BY`` (the whole filtered set is one
+#:    implicit group) and admitting a result only when ``count() = 1`` --
+#:    exactly one row for this ``(org_id, id)``, at any provider. Two or more
+#:    (or zero) both correctly yield an empty CTE, which every call site above
+#:    already treats as an unresolvable identity (fail closed).
+#: 2. The authorized-entity catalog's own committing query
+#:    (``scope_catalog.ClickHouseAuthorizedEntityCatalog._query_for``,
+#:    ``EntityKind.PROJECT``) filters ``is_active = 1`` -- a project retired
+#:    AFTER a scope was committed against it (a newer ReplacingMergeTree row
+#:    with ``is_active = 0``) must not keep answering here just because this
+#:    CTE re-reads the same table without that filter. Added explicitly rather
+#:    than assumed from ``FINAL`` alone, since retirement is a data state
+#:    (``is_active``), not a version-ordering property ``FINAL`` enforces on
+#:    its own.
+_PROJECT_IDENTITY_CTE = """project AS (
+  SELECT any(provider) AS catalog_provider,
+         any(ifNull(project_key, '')) AS catalog_project_key
+  FROM projects FINAL
+  WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
+  HAVING count() = 1
+)"""
+
+
+def _project_identity_match(alias: str = "") -> str:
+    """Provider + native-key aware match against a work_items-shaped row.
+
+    ``alias`` is the table prefix (e.g. ``"item."``, ``"blocked."``) for a joined
+    reference; ``""`` for a bare, unaliased ``work_items`` FROM. Every
+    project-scoped arm splices this EXACT text (never a hand-copied variant),
+    joined against ``_PROJECT_IDENTITY_CTE`` as ``project``, so the derivation
+    (``PROJECT_REPOSITORIES_SQL``) can never admit a repository the fact queries
+    it bounds would not themselves draw from -- pinned by
+    ``test_derivation_matches_projects_exactly_as_the_queries_it_bounds_do``.
+    """
+    return (
+        "ifNull(catalog_provider, '') != ''"
+        f" AND {alias}provider = catalog_provider"
+        f" AND ({alias}project_id = {{entity_id:String}}"
+        f" OR (catalog_project_key != '' AND {alias}project_key = catalog_project_key))"
+    )
+
+
+def _project_scope_arm(alias: str = "") -> str:
+    """The full ``scope_type = 'project'`` disjunction arm, identity-scoped."""
+    return (
+        "({scope_type:String} = 'project'\n"
+        f"      AND {_project_identity_match(alias)})"
+    )
+
+
+_PROJECT_LINKED_WORK_ITEMS_CTE = (
+    _PROJECT_IDENTITY_CTE
+    + """, linked AS (
+  SELECT toString(link.repo_id) AS repository_id, link.pr_number
+  FROM work_graph_issue_pr AS link FINAL
+  INNER JOIN work_items AS item FINAL
+    ON item.org_id = link.org_id
+   AND item.repo_id = link.repo_id
+   AND item.work_item_id = link.work_item_id
+  LEFT JOIN project ON 1 = 1
+  WHERE link.org_id = {org_id:String}
+    AND item.org_id = {org_id:String}
+    AND toString(link.repo_id) IN {repository_ids:Array(String)}
+    AND (
+      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
+      OR """
+    + _project_scope_arm("item.")
+    + """
+      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+      ))
+    )
+)"""
+)
+
+
+_WORK_ITEMS_SQL = (
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """
 SELECT toString(repo_id) AS repository_id, work_item_id, title, status,
        parent_id, project_id, project_key, updated_at, last_synced
 FROM work_items FINAL
+LEFT JOIN project ON 1 = 1
 WHERE org_id = {org_id:String}
   AND toString(repo_id) IN {repository_ids:Array(String)}
   AND updated_at <= {as_of:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'issue'
       AND (work_item_id = {entity_id:String} OR parent_id = {entity_id:String}))
-    OR ({scope_type:String} = 'project'
-      AND (project_id = {entity_id:String} OR project_key = {entity_id:String}))
+    OR """
+    + _project_scope_arm()
+    + """
     OR ({scope_type:String} = 'work_unit'
       AND work_item_id IN {member_issue_ids:Array(String)})
   )
 ORDER BY (work_item_id = {entity_id:String}) DESC, updated_at DESC, work_item_id
 LIMIT {limit:UInt32}
 """
+)
 
 _BLOCKER_WATERMARK_SQL = """
 SELECT if(
@@ -195,7 +326,10 @@ HAVING countIf(scope_repo_id IS NULL) > 0
        = length({repository_ids:Array(String)})
 """
 
-_BLOCKERS_SQL = """
+_BLOCKERS_SQL = (
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """
 SELECT blocker.work_item_id AS entity_id,
        blocker.title AS display_label,
        blocker.status,
@@ -206,6 +340,7 @@ INNER JOIN work_items AS blocker FINAL
   ON blocker.org_id = edge.org_id AND blocker.work_item_id = edge.source_id
 INNER JOIN work_items AS blocked FINAL
   ON blocked.org_id = edge.org_id AND blocked.work_item_id = edge.target_id
+LEFT JOIN project ON 1 = 1
 WHERE edge.org_id = {org_id:String}
   AND edge.source_type = 'issue'
   AND edge.target_type = 'issue'
@@ -218,29 +353,34 @@ WHERE edge.org_id = {org_id:String}
   AND blocked.updated_at <= {as_of:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'issue' AND edge.target_id = {entity_id:String})
-    OR ({scope_type:String} = 'project'
-      AND (blocked.project_id = {entity_id:String} OR blocked.project_key = {entity_id:String}))
+    OR """
+    + _project_scope_arm("blocked.")
+    + """
     OR ({scope_type:String} = 'work_unit'
       AND edge.target_id IN {member_issue_ids:Array(String)})
   )
 ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
 """
+)
 
 _PULL_REQUESTS_SQL = (
-    """
-WITH linked AS (
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """, linked AS (
   SELECT toString(link.repo_id) AS repository_id, link.pr_number
   FROM work_graph_issue_pr AS link FINAL
   LEFT JOIN work_items AS item FINAL
     ON item.repo_id = link.repo_id AND item.work_item_id = link.work_item_id
+  LEFT JOIN project ON 1 = 1
   WHERE link.org_id = {org_id:String}
     AND item.org_id = {org_id:String}
     AND toString(link.repo_id) IN {repository_ids:Array(String)}
     AND (
       ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+      OR """
+    + _project_scope_arm("item.")
+    + """
       OR ({scope_type:String} = 'work_unit'
         AND link.work_item_id IN {member_issue_ids:Array(String)})
       OR ({scope_type:String} = 'team'
@@ -500,20 +640,22 @@ WHERE g.repo_id IS NOT NULL
 #: read bound for project scope alone. Every *real* repository id must therefore
 #: still resolve through the same org-scoped ``repos`` catalog.
 #:
-#: Provider scope, deliberate (Codex adversarial review HIGH, 2026-08-03;
-#: ruling: keep the arm provider-scoped rather than grow it). Sharing the fact
-#: queries' predicate exactly is also what stops this arm from *helping* a
-#: provider whose committed id those queries cannot match. Jira is that case:
-#: ``team_autoimport_jira._project_id`` mints the catalog id as
-#: ``f"{org_id}:jira:{project_key}"`` while ``providers/jira/normalize`` writes
-#: the raw Jira id/key onto ``work_items``, so neither arm matches. Deriving
-#: repositories for it anyway would be strictly *worse* than not: the fact
-#: queries would still match nothing and the run would report a confident empty
-#: answer for a project that has data, in place of the disclosed fail-closed
-#: one it reports today. Jira project subjects therefore keep exactly their
-#: current behavior here; making them answerable needs a coordinated
-#: provider-aware change across every project arm at once. Asserted by
-#: ``test_jira_shaped_project_keeps_todays_fail_closed_behaviour``.
+#: Provider-identity scoped (CHAOS-3374, superseding the prior "provider scope,
+#: deliberate" ruling below it superseded a "clean and small" derivation-only
+#: fix that would have made Jira *worse* -- a confident empty answer instead of
+#: a disclosed fail-closed one -- for exactly the reason described in
+#: ``_PROJECT_IDENTITY_CTE``'s own comment: ``team_autoimport_jira._project_id``
+#: mints the catalog id as ``f"{org_id}:jira:{project_key}"`` while
+#: ``providers/jira/normalize`` writes the raw Jira id/key onto ``work_items``.
+#: Rather than leaving the mismatch in place, this arm now joins through the
+#: catalog's own ``provider``/``project_key`` columns (``_project_identity_match``)
+#: so a Jira project matches its own raw key, a Linear project keeps matching
+#: the raw id it always used, and neither can match the other's (or a future
+#: GitLab catalog row's) rows even on a coincidental key/id collision. Asserted
+#: end to end by ``test_jira_shaped_project_resolves_via_provider_scoped_identity``
+#: and the cross-provider collision coverage beside it; the derivation and
+#: ``_WORK_ITEMS_SQL`` share ``_project_identity_match``'s exact text, pinned by
+#: ``test_derivation_matches_projects_exactly_as_the_queries_it_bounds_do``.
 #:
 #: The zero UUID is admitted explicitly rather than by omitting that check.
 #: It is not a repository at all: it is the sentinel
@@ -524,12 +666,18 @@ WHERE g.repo_id IS NOT NULL
 #: existence join would re-empty the set for the exact provider this fix exists
 #: for -- while a blanket "skip the catalog" would have de-authorized nothing
 #: and admitted everything. Naming the sentinel keeps both properties.
-PROJECT_REPOSITORIES_SQL = """
+PROJECT_REPOSITORIES_SQL = (
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """
 SELECT DISTINCT toString(repo_id) AS repository_id
 FROM work_items FINAL
+INNER JOIN project ON 1 = 1
 WHERE org_id = {org_id:String}
   AND updated_at <= {as_of:DateTime64(3, 'UTC')}
-  AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
+  AND """
+    + _project_identity_match()
+    + """
   AND (
     toString(repo_id) = '00000000-0000-0000-0000-000000000000'
     OR toString(repo_id) IN (
@@ -537,9 +685,12 @@ WHERE org_id = {org_id:String}
     )
   )
 """
+)
 
 _TRANSITIONS_SQL = (
-    """
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """
 SELECT transition.work_item_id AS entity_id, item.title AS display_label,
        transition.from_status, transition.to_status,
        transition.occurred_at AS observed_at, transition.last_synced
@@ -548,6 +699,7 @@ INNER JOIN work_items AS item FINAL
   ON item.org_id = transition.org_id
  AND item.repo_id = transition.repo_id
  AND item.work_item_id = transition.work_item_id
+LEFT JOIN project ON 1 = 1
 WHERE transition.org_id = {org_id:String}
   AND item.org_id = {org_id:String}
   AND toString(item.repo_id) IN {repository_ids:Array(String)}
@@ -555,8 +707,9 @@ WHERE transition.org_id = {org_id:String}
   AND transition.occurred_at < {end:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'issue' AND transition.work_item_id = {entity_id:String})
-    OR ({scope_type:String} = 'project'
-      AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+    OR """
+    + _project_scope_arm("item.")
+    + """
     OR ({scope_type:String} = 'team' AND transition.work_item_id IN ("""
     + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
     + """
@@ -569,7 +722,9 @@ LIMIT {limit:UInt32}
 )
 
 _RELATIONSHIPS_SQL = (
-    """
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """
 SELECT edge_id AS change_id, source_type, source_id, edge_type,
        target_type, target_id, provenance, confidence,
        discovered_at AS observed_at, last_synced
@@ -584,15 +739,21 @@ WHERE org_id = {org_id:String}
     OR ({scope_type:String} = 'project' AND (
       source_id IN (
         SELECT work_item_id FROM work_items FINAL
+        INNER JOIN project ON 1 = 1
         WHERE org_id = {org_id:String}
           AND toString(repo_id) IN {repository_ids:Array(String)}
-          AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
+          AND """
+    + _project_identity_match()
+    + """
       )
       OR target_id IN (
         SELECT work_item_id FROM work_items FINAL
+        INNER JOIN project ON 1 = 1
         WHERE org_id = {org_id:String}
           AND toString(repo_id) IN {repository_ids:Array(String)}
-          AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
+          AND """
+    + _project_identity_match()
+    + """
       )
     ))
     OR ({scope_type:String} = 'team' AND (
@@ -613,27 +774,9 @@ LIMIT {limit:UInt32}
 )
 
 _PULL_REQUEST_CHANGES_SQL = (
-    """
-WITH linked AS (
-  SELECT toString(link.repo_id) AS repository_id, link.pr_number
-  FROM work_graph_issue_pr AS link FINAL
-  INNER JOIN work_items AS item FINAL
-    ON item.org_id = link.org_id
-   AND item.repo_id = link.repo_id
-   AND item.work_item_id = link.work_item_id
-  WHERE link.org_id = {org_id:String}
-    AND item.org_id = {org_id:String}
-    AND toString(link.repo_id) IN {repository_ids:Array(String)}
-    AND (
-      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
-    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    "WITH "
+    + _PROJECT_LINKED_WORK_ITEMS_CTE
     + """
-      ))
-    )
-)
 SELECT concat(toString(pr.repo_id), '#pr', toString(pr.number), '#state#',
               if(isNotNull(pr.merged_at), 'merged',
                  if(isNotNull(pr.closed_at), 'closed', ifNull(pr.state, 'open')))) AS change_id,
@@ -663,27 +806,9 @@ LIMIT {limit:UInt32}
 )
 
 _REVIEW_CHANGES_SQL = (
-    """
-WITH linked AS (
-  SELECT toString(link.repo_id) AS repository_id, link.pr_number
-  FROM work_graph_issue_pr AS link FINAL
-  INNER JOIN work_items AS item FINAL
-    ON item.org_id = link.org_id
-   AND item.repo_id = link.repo_id
-   AND item.work_item_id = link.work_item_id
-  WHERE link.org_id = {org_id:String}
-    AND item.org_id = {org_id:String}
-    AND toString(link.repo_id) IN {repository_ids:Array(String)}
-    AND (
-      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
-    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    "WITH "
+    + _PROJECT_LINKED_WORK_ITEMS_CTE
     + """
-      ))
-    )
-)
 SELECT concat(toString(review.repo_id), '#pr', toString(review.number),
               '#review#', review.review_id) AS change_id,
        change_id AS entity_id,
@@ -710,27 +835,9 @@ LIMIT {limit:UInt32}
 )
 
 _CI_CHANGES_SQL = (
-    """
-WITH linked AS (
-  SELECT toString(link.repo_id) AS repository_id, link.pr_number
-  FROM work_graph_issue_pr AS link FINAL
-  INNER JOIN work_items AS item FINAL
-    ON item.org_id = link.org_id
-   AND item.repo_id = link.repo_id
-   AND item.work_item_id = link.work_item_id
-  WHERE link.org_id = {org_id:String}
-    AND item.org_id = {org_id:String}
-    AND toString(link.repo_id) IN {repository_ids:Array(String)}
-    AND (
-      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
-    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    "WITH "
+    + _PROJECT_LINKED_WORK_ITEMS_CTE
     + """
-      ))
-    )
-)
 SELECT concat(toString(run.repo_id), '#ci#', run.run_id) AS change_id,
        change_id AS entity_id,
        ifNull(run.pipeline_name, concat('CI run ', run.run_id)) AS display_label,
@@ -756,27 +863,9 @@ LIMIT {limit:UInt32}
 )
 
 _DEPLOYMENT_CHANGES_SQL = (
-    """
-WITH linked AS (
-  SELECT toString(link.repo_id) AS repository_id, link.pr_number
-  FROM work_graph_issue_pr AS link FINAL
-  INNER JOIN work_items AS item FINAL
-    ON item.org_id = link.org_id
-   AND item.repo_id = link.repo_id
-   AND item.work_item_id = link.work_item_id
-  WHERE link.org_id = {org_id:String}
-    AND item.org_id = {org_id:String}
-    AND toString(link.repo_id) IN {repository_ids:Array(String)}
-    AND (
-      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
-    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    "WITH "
+    + _PROJECT_LINKED_WORK_ITEMS_CTE
     + """
-      ))
-    )
-)
 SELECT concat(toString(deployment.repo_id), '#deployment#',
               deployment.deployment_id) AS change_id,
        change_id AS entity_id,
@@ -805,27 +894,9 @@ LIMIT {limit:UInt32}
 )
 
 _INCIDENT_CHANGES_SQL = (
-    """
-WITH linked AS (
-  SELECT toString(link.repo_id) AS repository_id, link.pr_number
-  FROM work_graph_issue_pr AS link FINAL
-  INNER JOIN work_items AS item FINAL
-    ON item.org_id = link.org_id
-   AND item.repo_id = link.repo_id
-   AND item.work_item_id = link.work_item_id
-  WHERE link.org_id = {org_id:String}
-    AND item.org_id = {org_id:String}
-    AND toString(link.repo_id) IN {repository_ids:Array(String)}
-    AND (
-      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
-    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    "WITH "
+    + _PROJECT_LINKED_WORK_ITEMS_CTE
     + """
-      ))
-    )
-)
 SELECT concat(incident.id, '#state#',
               ifNull(incident.normalized_status, 'unknown')) AS change_id,
        incident.id AS entity_id,

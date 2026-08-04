@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -43,6 +44,7 @@ def _context(
     source_is_org_wide_placeholder: bool = False,
     processor_flags: dict[str, bool] | None = None,
     credentials: Mapping[str, object] | None = None,
+    dataset_options: dict[str, object] | None = None,
 ) -> SyncTaskContext:
     return SyncTaskContext(
         unit_id="unit-1",
@@ -62,6 +64,7 @@ def _context(
         decrypted_credentials=dict(credentials or {"token": "secret-token"}),
         db_url="clickhouse://localhost/default",
         source_is_org_wide_placeholder=source_is_org_wide_placeholder,
+        dataset_options=dict(dataset_options or {}),
     )
 
 
@@ -1188,6 +1191,56 @@ def test_github_work_items_include_prs_when_prs_dataset_enabled() -> None:
     work_items.assert_called_once()
     assert work_items.call_args.kwargs["include_issues"] is True
     assert work_items.call_args.kwargs["include_pull_requests"] is True
+
+
+def test_github_work_items_threads_frozen_runtime_controls() -> None:
+    ctx = _context(
+        provider="github",
+        dataset_key="work-items",
+        processor_flags=_flags(sync_prs=True),
+        dataset_options={
+            "fetch_comments": False,
+            "fetch_milestones": True,
+            "comments_limit": 37,
+        },
+    )
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        run_dataset_unit(ctx, _runtime())
+
+    kwargs = work_items.call_args.kwargs
+    assert kwargs["fetch_comments"] is False
+    assert kwargs["fetch_milestones"] is True
+    assert kwargs["comments_limit"] == 37
+
+
+@patch.dict(
+    os.environ,
+    {
+        "GITHUB_FETCH_COMMENTS": "false",
+        "GITHUB_FETCH_MILESTONES": "false",
+        "GITHUB_COMMENTS_LIMIT": "7",
+    },
+)
+def test_github_work_items_unrepaired_options_use_safe_defaults_not_live_env() -> None:
+    ctx = _context(
+        provider="github",
+        dataset_key="work-items",
+        processor_flags=_flags(sync_prs=False),
+        dataset_options={},
+    )
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        run_dataset_unit(ctx, _runtime())
+
+    kwargs = work_items.call_args.kwargs
+    assert kwargs["fetch_comments"] is True
+    assert kwargs["fetch_milestones"] is True
+    assert kwargs["comments_limit"] == 500
 
 
 def test_github_work_items_threads_usage_observations_to_result() -> None:

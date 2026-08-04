@@ -92,6 +92,32 @@ def test_planner_dataset_options_scopes_mappings_to_pagerduty_services() -> None
     )
 
 
+def test_planner_dataset_options_freezes_github_work_item_runtime_controls() -> None:
+    controls = {
+        "fetch_comments": False,
+        "fetch_milestones": True,
+        "comments_limit": 37,
+    }
+
+    options = _planner_dataset_options("github", "work-items", ["work-items"], controls)
+
+    assert options == {"legacy_targets": ["work-items"], **controls}
+    assert "comments_limit" not in _planner_dataset_options(
+        "github", "prs", ["prs"], controls
+    )
+    assert "comments_limit" not in _planner_dataset_options(
+        "gitlab", "work-items", ["work-items"], controls
+    )
+
+
+def test_planner_dataset_options_freezes_explicit_github_defaults() -> None:
+    options = _planner_dataset_options("github", "work-items", ["work-items"], {})
+
+    assert options["fetch_comments"] is True
+    assert options["fetch_milestones"] is True
+    assert options["comments_limit"] == 500
+
+
 def test_pagerduty_malformed_legacy_target_is_flagged_before_planning() -> None:
     # Given: a pre-existing PagerDuty config that omits the operational target.
 

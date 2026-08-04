@@ -151,7 +151,11 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             else _wi_opts.fetch_milestones
         )
 
-        comments_limit = env_int("GITHUB_COMMENTS_LIMIT", 500)
+        comments_limit = (
+            env_int("GITHUB_COMMENTS_LIMIT", 500)
+            if _wi_opts.comments_limit is None
+            else _wi_opts.comments_limit
+        )
 
         sprint_cache: dict[str, Sprint] = {}
         repo_full_name = f"{owner}/{repo}"

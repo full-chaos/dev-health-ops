@@ -409,6 +409,7 @@ def run_work_items_sync_job(
     include_pull_requests: bool | None = None,
     fetch_comments: bool | None = None,
     fetch_milestones: bool | None = None,
+    comments_limit: int | None = None,
     require_source: bool = False,
 ) -> dict[str, Any] | None:
     """
@@ -906,6 +907,7 @@ def run_work_items_sync_job(
                         include_pull_requests=include_pull_requests,
                         fetch_comments=fetch_comments,
                         fetch_milestones=fetch_milestones,
+                        comments_limit=comments_limit,
                     ),
                 )
                 for batch in github_provider.iter_ingest(ctx):

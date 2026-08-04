@@ -486,6 +486,53 @@ def _incident_facts(incidents: Sequence[DevIncidentFact]) -> list[_OutstandingFa
     return facts
 
 
+def _deduplicated_facts(
+    facts: Sequence[_OutstandingFact],
+) -> list[_OutstandingFact]:
+    """Collapse outstanding facts to one per (category, entity), first
+    occurrence wins.
+
+    CHAOS-3377 residual defect (live acceptance probe, 2026-08-04): a single
+    project-scope blocker with ``blocks`` edges to several blocked issues IN
+    SCOPE produces one row PER EDGE from ``_BLOCKERS_SQL``
+    (``native_status_change.py``) -- nothing between that query and here
+    (``status_change_service._ordered_status`` only sorts; it never
+    dedupes) collapses those rows back to one per blocker entity. The live
+    answer rendered the identical "Blocked: ..." claim 5 times, each citing
+    the SAME evidence ref, for a single blocker that happened to block 5
+    in-scope issues.
+
+    ``claim_id_suffix`` is already ``f"{category}:{entity_or_fact_id}"``
+    (see ``outstanding_facts`` below) for every category this renderer
+    knows about, so it is exactly the (category, entity) key without
+    re-deriving either half -- and de-duplicating on it here closes the gap
+    regardless of WHICH upstream category produced the repeat (an edge-count
+    artifact today, any other duplicate source tomorrow), not just the one
+    arm the live probe happened to exercise.
+
+    Order is preserved and deterministic: every category's own fact list is
+    already produced in a fixed, sorted order (``status_change_service``'s
+    ``_ordered_status``/``_pr_key``/etc.), and categories are always visited
+    in the same fixed sequence below -- so "first occurrence wins" always
+    picks the same one across identical inputs.
+
+    A dedup key is scoped to ONE category by construction (the suffix
+    always starts with that category's own prefix), so the SAME entity
+    appearing in two DIFFERENT categories -- e.g. both a required child AND
+    a blocker, which are independently meaningful (CHAOS-3377 HIGH 3) --
+    still yields two distinct claims, never collapsed into one.
+    """
+
+    seen: set[str] = set()
+    deduplicated: list[_OutstandingFact] = []
+    for fact in facts:
+        if fact.claim_id_suffix in seen:
+            continue
+        seen.add(fact.claim_id_suffix)
+        deduplicated.append(fact)
+    return deduplicated
+
+
 def outstanding_facts(
     actual: DevActualCompletion, status_result: DevToolResult
 ) -> list[_OutstandingFact]:
@@ -538,7 +585,7 @@ def outstanding_facts(
     facts.extend(_ci_facts(status_result.ci_checks))
     facts.extend(_deployment_facts(status_result.deployments))
     facts.extend(_incident_facts(status_result.incidents))
-    return facts
+    return _deduplicated_facts(facts)
 
 
 def build_deterministic_status_claims(

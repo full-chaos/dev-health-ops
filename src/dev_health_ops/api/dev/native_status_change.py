@@ -377,10 +377,30 @@ LIMIT {limit:UInt32}
 #: than answered with its current, not-yet-true-at-as_of state -- this
 #: ticket deliberately does not attempt a real history representation; an
 #: as-of snapshot of a since-changed declared state is simply unavailable.
+#: CHAOS-3377 residual defect (live acceptance probe, 2026-08-04): the
+#: aggregate below was originally aliased ``AS updated_at`` -- the SAME name
+#: as the raw column the ``WHERE`` clause filters on two lines down.
+#: ClickHouse resolves a bare ``WHERE`` identifier against a same-named
+#: ``SELECT`` alias in preference to the source column, so ``WHERE
+#: updated_at <= {as_of:...}`` was silently rewritten to filter on
+#: ``any(updated_at)`` -- an aggregate function, which ``WHERE`` (unlike
+#: ``HAVING``) can never contain. The result was ``Code: 184
+#: (ILLEGAL_AGGREGATION)`` raised on EVERY invocation of this query,
+#: unconditionally (never a timestamp-skew or evidence-cap artifact).
+#: ``_read`` (below) catches that exception and reports the ``projects``
+#: source as merely "unavailable" -- indistinguishable, from every caller's
+#: perspective, from a genuinely absent declared state, which is exactly why
+#: this went unnoticed: the declared-state clause simply never rendered, for
+#: any project, on any run. Aliased to ``declared_updated_at`` instead so the
+#: ``WHERE`` clause's ``updated_at`` reference stays bound to the raw
+#: column -- the fix is the rename alone; ``state``/``target_date``/
+#: ``last_synced`` are left untouched (not aggregation-clause hazards, since
+#: nothing filters on them) so ``_read``'s own generic
+#: ``row.get("last_synced")`` watermark lookup keeps working unchanged.
 _PROJECT_DECLARED_FACTS_SQL = """
 SELECT any(state) AS state,
        any(target_date) AS target_date,
-       any(updated_at) AS updated_at,
+       any(updated_at) AS declared_updated_at,
        any(last_synced) AS last_synced
 FROM projects FINAL
 WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
@@ -409,39 +429,71 @@ HAVING countIf(scope_repo_id IS NULL) > 0
        = length({repository_ids:Array(String)})
 """
 
+#: CHAOS-3377 residual defect (Codex adversarial review HIGH, live
+#: acceptance probe 2026-08-04): this query used to ``SELECT`` directly off
+#: the ``edge``/``blocker``/``blocked`` join with no ``GROUP BY`` -- one row
+#: PER MATCHING EDGE, not per blocker. A blocker whose ``blocks`` edges
+#: target several blocked issues in the SAME project scope therefore
+#: returned its own entity ``N`` times (once per edge), and ``ORDER BY`` /
+#: ``LIMIT`` applied to those MULTIPLIED rows -- so a blocker with more
+#: edges than the page ``limit`` could fill the ENTIRE result page by
+#: itself, silently crowding out every other, genuinely distinct blocker
+#: (and the evidence minted from it) with no way for anything downstream
+#: (the renderer's own defense-in-depth dedup included) to recover what the
+#: page never contained. ``matched_edges`` now holds the pre-collapse,
+#: one-row-per-edge result the query used to return directly; the outer
+#: ``SELECT ... GROUP BY entity_id`` collapses it to one row per blocker
+#: BEFORE ``ORDER BY``/``LIMIT`` ever run, so a page of ``limit`` rows can
+#: hold up to ``limit`` DISTINCT blockers again, exactly as intended.
+#: ``max()`` (not ``any()``) for the three non-key columns: ``display_label``
+#: and ``status`` are properties of the ONE blocker work-item row joined
+#: repeatedly (identical across every duplicate, so any aggregate is
+#: equivalent in practice, but ``max()`` is deterministic even if that ever
+#: stops being true), while ``observed_at`` (a ``greatest()`` of two
+#: timestamps per edge) genuinely differs per edge and must take the
+#: latest, matching this query's own pre-existing "most recently observed"
+#: intent for ``ORDER BY``.
 _BLOCKERS_SQL = (
     "WITH "
     + _PROJECT_IDENTITY_CTE
-    + """
-SELECT blocker.work_item_id AS entity_id,
-       blocker.title AS display_label,
-       blocker.status,
-       greatest(blocker.updated_at, edge.event_ts) AS observed_at,
-       greatest(blocker.last_synced, edge.last_synced) AS last_synced
-FROM work_graph_edges AS edge FINAL
-INNER JOIN work_items AS blocker FINAL
-  ON blocker.org_id = edge.org_id AND blocker.work_item_id = edge.source_id
-INNER JOIN work_items AS blocked FINAL
-  ON blocked.org_id = edge.org_id AND blocked.work_item_id = edge.target_id
-LEFT JOIN project ON 1 = 1
-WHERE edge.org_id = {org_id:String}
-  AND edge.source_type = 'issue'
-  AND edge.target_type = 'issue'
-  AND edge.edge_type = 'blocks'
-  AND edge.provenance = 'native'
-  AND toString(blocker.repo_id) IN {repository_ids:Array(String)}
-  AND toString(blocked.repo_id) IN {repository_ids:Array(String)}
-  AND edge.event_ts <= {as_of:DateTime64(3, 'UTC')}
-  AND blocker.updated_at <= {as_of:DateTime64(3, 'UTC')}
-  AND blocked.updated_at <= {as_of:DateTime64(3, 'UTC')}
-  AND (
-    ({scope_type:String} = 'issue' AND edge.target_id = {entity_id:String})
-    OR """
+    + """, matched_edges AS (
+  SELECT blocker.work_item_id AS entity_id,
+         blocker.title AS display_label,
+         blocker.status AS status,
+         greatest(blocker.updated_at, edge.event_ts) AS observed_at,
+         greatest(blocker.last_synced, edge.last_synced) AS last_synced
+  FROM work_graph_edges AS edge FINAL
+  INNER JOIN work_items AS blocker FINAL
+    ON blocker.org_id = edge.org_id AND blocker.work_item_id = edge.source_id
+  INNER JOIN work_items AS blocked FINAL
+    ON blocked.org_id = edge.org_id AND blocked.work_item_id = edge.target_id
+  LEFT JOIN project ON 1 = 1
+  WHERE edge.org_id = {org_id:String}
+    AND edge.source_type = 'issue'
+    AND edge.target_type = 'issue'
+    AND edge.edge_type = 'blocks'
+    AND edge.provenance = 'native'
+    AND toString(blocker.repo_id) IN {repository_ids:Array(String)}
+    AND toString(blocked.repo_id) IN {repository_ids:Array(String)}
+    AND edge.event_ts <= {as_of:DateTime64(3, 'UTC')}
+    AND blocker.updated_at <= {as_of:DateTime64(3, 'UTC')}
+    AND blocked.updated_at <= {as_of:DateTime64(3, 'UTC')}
+    AND (
+      ({scope_type:String} = 'issue' AND edge.target_id = {entity_id:String})
+      OR """
     + _project_scope_arm("blocked.")
     + """
-    OR ({scope_type:String} = 'work_unit'
-      AND edge.target_id IN {member_issue_ids:Array(String)})
-  )
+      OR ({scope_type:String} = 'work_unit'
+        AND edge.target_id IN {member_issue_ids:Array(String)})
+    )
+)
+SELECT entity_id,
+       max(display_label) AS display_label,
+       max(status) AS status,
+       max(observed_at) AS observed_at,
+       max(last_synced) AS last_synced
+FROM matched_edges
+GROUP BY entity_id
 ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
 """
@@ -1628,7 +1680,7 @@ class ClickHouseStatusChangeSource:
                         target_date if target_date is not None else None
                     )
                     declared_project_observed_at = self._datetime(
-                        row.get("updated_at"), as_of
+                        row.get("declared_updated_at"), as_of
                     )
 
         pull_requests = tuple(

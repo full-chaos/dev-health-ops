@@ -136,7 +136,23 @@ _CLASS_FIXTURES = (
 )
 
 
+def _is_project_repository_derivation(sql: str) -> bool:
+    """The ``_PROJECT_REPOSITORIES_SQL`` round trip that precedes every read.
+
+    A committed PROJECT scope carries no repository dimension of its own (the
+    catalog selects ``NULL AS repository_id``), so ``_authorized_repository_ids``
+    re-derives the set from canonical work-item project attribution before any
+    delivery query runs. Fakes must answer it, and assertions about delivery
+    parameters must not mistake its parameters for a delivery query's.
+    """
+
+    return "FROM work_items FINAL" in sql and "SELECT DISTINCT" in sql
+
+
 def _fixture_for(sql: str) -> list[dict[str, Any]]:
+    if _is_project_repository_derivation(sql):
+        # Where production learns about ``repo-a`` for the scope below.
+        return [{"repository_id": "repo-a"}]
     for marker, _, _, row in _CLASS_FIXTURES:
         if marker in sql:
             return [row]
@@ -148,11 +164,15 @@ async def test_native_change_summary_emits_every_delivery_change_class(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed_params: list[dict[str, Any]] = []
+    derivation_params: list[dict[str, Any]] = []
 
     async def fake_query(
         _client: object, sql: str, params: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        observed_params.append(params)
+        if _is_project_repository_derivation(sql):
+            derivation_params.append(params)
+        else:
+            observed_params.append(params)
         return _fixture_for(sql)
 
     monkeypatch.setattr(
@@ -162,6 +182,12 @@ async def test_native_change_summary_emits_every_delivery_change_class(
         ClickHouseStatusChangeSource(object(), now=NOW)
     ).change_summary("org-a", "permission-v1", _request())
 
+    # The repository bound the delivery queries below are checked against is
+    # derived, not carried -- so assert it was derived from this org and this
+    # project rather than treating ["repo-a"] as a given.
+    assert [
+        (params["org_id"], params["entity_id"]) for params in derivation_params
+    ] == [("org-a", "project-a")]
     expected_categories = {fixture[2] for fixture in _CLASS_FIXTURES}
     assert {change.category for change in result.changes} == expected_categories
     assert all(change.claim_kind.value == "observed" for change in result.changes)
@@ -185,6 +211,8 @@ async def test_native_change_summary_preserves_blocker_category(
     async def fake_query(
         _client: object, sql: str, _params: dict[str, Any]
     ) -> list[dict[str, Any]]:
+        if _is_project_repository_derivation(sql):
+            return [{"repository_id": "repo-a"}]
         if "FROM work_graph_edges FINAL" in sql:
             return [
                 {
@@ -224,6 +252,8 @@ async def test_heuristic_deployment_incident_change_is_inferred_with_chain(
     async def fake_query(
         _client: object, sql: str, _params: dict[str, Any]
     ) -> list[dict[str, Any]]:
+        if _is_project_repository_derivation(sql):
+            return [{"repository_id": "repo-a"}]
         if "FROM operational_incidents AS incident" in sql:
             observed_incident_sql.append(sql)
             return [
@@ -330,7 +360,10 @@ async def test_native_change_summary_applies_one_global_deterministic_bound(
     async def fake_query(
         _client: object, sql: str, params: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        assert params["limit"] == 3
+        # The derivation query has no display bound of its own -- it resolves
+        # the repository set the bounded delivery queries are then run against.
+        if not _is_project_repository_derivation(sql):
+            assert params["limit"] == 3
         return _fixture_for(sql)
 
     monkeypatch.setattr(

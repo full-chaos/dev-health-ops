@@ -468,6 +468,38 @@ FROM (
 WHERE g.repo_id IS NOT NULL
 """
 
+#: Re-derive one project's repository set from canonical work-item attribution.
+#:
+#: A committed PROJECT subject can never carry a repository list of its own,
+#: exactly like the TEAM subject above: ``DevScope.repositories`` is only ever
+#: populated for a REPOSITORY commit
+#: (``scope_service.ScopeResolutionService.committed_scope_for`` /
+#: ``_resolved_scope``), and the catalog row a project commit is built from
+#: selects ``NULL AS repository_id``
+#: (``scope_catalog.ClickHouseAuthorizedEntityCatalog._query_for``) because a
+#: project spans repositories and has no repository dimension. So
+#: ``_repository_ids(scope)`` returned an empty set for *every* production
+#: project subject, and ``status_snapshot``/``change_summary`` took the
+#: fail-closed "authorized repository set" branch before running a single
+#: project query -- an empty snapshot for a project whose work items match.
+#:
+#: Bounded by the same ``org_id`` tenant boundary
+#: ``_ORGANIZATION_AUTHORIZED_REPOSITORIES_SQL`` enforces, by the same
+#: ``updated_at <= as_of`` bound ``_WORK_ITEMS_SQL`` applies, and by the same
+#: ``project_id``/``project_key`` disjunction every project SQL arm uses -- so
+#: the derived set is exactly the repositories this project's own facts can be
+#: drawn from, never wider. Deliberately NOT joined against ``repos``: Linear
+#: work items carry no repository and land under a zero-UUID ``repo_id`` that
+#: has no ``repos`` row, so an existence join would re-empty the set for the
+#: provider this fix exists for.
+_PROJECT_REPOSITORIES_SQL = """
+SELECT DISTINCT toString(repo_id) AS repository_id
+FROM work_items FINAL
+WHERE org_id = {org_id:String}
+  AND updated_at <= {as_of:DateTime64(3, 'UTC')}
+  AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
+"""
+
 _TRANSITIONS_SQL = (
     """
 SELECT transition.work_item_id AS entity_id, item.title AS display_label,
@@ -908,6 +940,36 @@ class ClickHouseStatusChangeSource:
             self._team_repository_cache.popitem(last=False)
         return result
 
+    async def _project_repository_ids(
+        self, org_id: str, entity_id: str, *, as_of: datetime
+    ) -> list[str]:
+        """Repositories this project's canonical work items live in.
+
+        A failed query returns an empty set, which lands the caller on the
+        same fail-closed "authorized repository set" branch an unmeasured
+        team attribution already takes -- an unreadable attribution source is
+        never allowed to read as "this project spans no repositories".
+        """
+
+        if not entity_id:
+            return []
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+                rows = await query_dicts(
+                    self._client,
+                    _PROJECT_REPOSITORIES_SQL,
+                    {
+                        "org_id": org_id,
+                        "entity_id": entity_id,
+                        "as_of": as_of.astimezone(UTC),
+                    },
+                )
+        except Exception:
+            return []
+        return sorted(
+            {str(row["repository_id"]) for row in rows if row.get("repository_id")}
+        )
+
     async def _authorized_repository_ids(
         self, org_id: str, scope: DevScope, *, as_of: datetime
     ) -> list[str]:
@@ -937,7 +999,21 @@ class ClickHouseStatusChangeSource:
         it), so without this branch every team subject would always resolve
         to an empty repository set and take the fail-closed path below,
         regardless of real ownership data.
+
+        A committed project *subject* (``direct_scope=PROJECT``) has the same
+        structural problem for a different reason -- the catalog resolves
+        projects with no repository dimension at all, so both
+        ``scope.repositories`` and ``entity_refs[0].repository_id`` are always
+        empty for a production project commit -- and is re-derived here from
+        canonical work-item project attribution
+        (``_PROJECT_REPOSITORIES_SQL``). Without this branch every project
+        subject failed closed below while its work items sat in ``work_items``
+        matching the very ``project_id`` the scope committed.
         """
+        if scope.direct_scope is DirectScope.PROJECT:
+            return await self._project_repository_ids(
+                org_id, self._entity_id(scope), as_of=as_of
+            )
         if scope.direct_scope is DirectScope.TEAM:
             # Unmeasured (failed lookup) and measured-but-empty both fall
             # through to the existing empty-repositories fail-closed branch

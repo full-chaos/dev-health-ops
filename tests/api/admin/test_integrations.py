@@ -618,6 +618,70 @@ async def test_patch_missing_dataset_rejects_provider_unsupported_key(
     assert dataset is None
 
 
+@pytest.mark.asyncio
+async def test_patch_missing_dataset_recovers_from_concurrent_insert(
+    client, session_maker, seeded_state, monkeypatch
+):
+    # Given: another transaction inserted a disabled tests row after the route's read.
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    await _seed_dataset(
+        session_maker,
+        seeded_state["org_id"],
+        integration_id,
+        dataset_key="tests",
+        is_enabled=False,
+    )
+    original_get_by_key = (
+        integrations_router_module.IntegrationDatasetService.get_by_key
+    )
+    read_count = 0
+
+    async def stale_once_get_by_key(service, requested_integration_id, dataset_key):
+        nonlocal read_count
+        read_count += 1
+        if read_count == 1:
+            return None
+        return await original_get_by_key(
+            service,
+            requested_integration_id,
+            dataset_key,
+        )
+
+    monkeypatch.setattr(
+        integrations_router_module.IntegrationDatasetService,
+        "get_by_key",
+        stale_once_get_by_key,
+    )
+
+    # When: the operator explicitly enables tests through the stale route state.
+    resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/datasets",
+        json={"datasets": [{"dataset_key": "tests", "is_enabled": True}]},
+    )
+
+    # Then: the conflict is recovered and the operator's requested state wins.
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[0]["is_enabled"] is True
+    async with session_maker() as session:
+        datasets = (
+            (
+                await session.execute(
+                    select(IntegrationDataset).where(
+                        IntegrationDataset.org_id == seeded_state["org_id"],
+                        IntegrationDataset.integration_id == uuid.UUID(integration_id),
+                        IntegrationDataset.dataset_key == "tests",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(datasets) == 1
+    assert datasets[0].is_enabled is True
+
+
 # ---------------------------------------------------------------------------
 # Sync trigger tests
 # ---------------------------------------------------------------------------

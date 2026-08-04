@@ -7,6 +7,7 @@ from collections import defaultdict
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -223,8 +224,15 @@ class IntegrationDatasetService:
             is_enabled=is_enabled,
             options={},
         )
-        self._session.add(dataset)
-        await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add(dataset)
+                await self._session.flush()
+        except IntegrityError:
+            existing = await self.get_by_key(str(integration_id), dataset_key)
+            if existing is None:
+                raise
+            return await self.set_enabled(existing, is_enabled)
         return dataset
 
     async def get_by_key(

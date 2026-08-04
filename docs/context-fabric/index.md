@@ -7,7 +7,7 @@ source_of_truth:
   - current Ask Dev window and /dev workspace
   - current Context Fabric Validation surface
   - Ask Dev Interaction Surface Amendment — Context Fabric relationship, chat window, and full-page workspace
-  - PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar
+  - "PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar"
   - full-chaos/dev-health-acr README.md
 applicability: current
 lifecycle: active
@@ -170,6 +170,8 @@ Evidence before confidence
 ## An answer should show its work. { #fc-cf-trust-title }
 
 Context Fabric does not quietly turn incomplete data into certainty. It keeps the scope, as-of time, freshness, coverage, conflicts, unavailable sources, and supporting evidence visible.
+
+What it can answer depends on the sources, permissions, freshness, and capabilities available to the organization.
 
 </div>
 

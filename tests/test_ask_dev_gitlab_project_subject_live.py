@@ -449,6 +449,31 @@ async def test_gitlab_project_resolves_end_to_end_through_the_native_status_chan
             },
         )
 
+        # The merged CHAOS-3374 join REQUIRES work_items.provider = the
+        # catalog row's own provider (native_status_change._project_identity_
+        # match: "provider = catalog_provider"). Verified here against the
+        # REAL rows this test just wrote, not assumed: both producers must
+        # agree on the literal string "gitlab", or every assertion below
+        # would pass or fail for the wrong reason.
+        work_item_providers = {
+            row[0]
+            for row in raw_client.query(
+                "SELECT DISTINCT provider FROM work_items "
+                "WHERE org_id = {org_id:String}",
+                parameters={"org_id": org_id},
+            ).result_rows
+        }
+        catalog_providers = {
+            row[0]
+            for row in raw_client.query(
+                "SELECT DISTINCT provider FROM projects FINAL "
+                "WHERE org_id = {org_id:String} AND id = {pid:String}",
+                parameters={"org_id": org_id, "pid": GITLAB_PROJECT_PATH},
+            ).result_rows
+        }
+        assert work_item_providers == {"gitlab"}, work_item_providers
+        assert catalog_providers == {"gitlab"}, catalog_providers
+
         catalog = ClickHouseAuthorizedEntityCatalog(sink)
         service = ScopeResolutionService(catalog)
         resolution = await service.resolve_contract(
@@ -518,6 +543,21 @@ async def test_archived_gitlab_project_is_not_resolvable(
         )
         assert resolution.outcome is ResolutionOutcome.NO_AUTHORIZED_MATCH, (
             "an archived GitLab project is still resolvable"
+        )
+
+        # And the OTHER entry point: an explicit committed ref (the path
+        # native_status_change.py's own _PROJECT_IDENTITY_CTE is-active
+        # guard exists for), not just name lookup -- both must fail closed.
+        contract = await service.resolve_contract(
+            org_id,
+            "permission-live",
+            ScopeResolveRequest(
+                explicit_refs=(ScopeRef(EntityKind.PROJECT, GITLAB_PROJECT_PATH),)
+            ),
+        )
+        assert contract.outcome.value != "exact", (
+            "an archived GitLab project still resolves as an explicit scope ref",
+            contract.outcome,
         )
     finally:
         _cleanup(raw_client, org_id)

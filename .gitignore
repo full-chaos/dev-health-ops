@@ -39,3 +39,8 @@ index.txt
 .codegraph/
 .build/
 .wrangler/
+
+# Agent tool scratch output (browser automation, session memory). These are
+# per-run artifacts and must never enter a commit.
+.playwright-mcp/
+.remember/

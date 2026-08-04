@@ -13,19 +13,21 @@ This is the authoring contract for published documentation. It defines the suppo
 
 ## Principles
 
-1. A page exists to help a reader complete one task, understand one concept, diagnose one failure, or look up one class of exact facts.
+1. A page exists to help a reader complete one task, understand one concept, diagnose one failure, look up one class of exact facts, or understand one product capability.
 2. Content type, audience, product area, and lifecycle are separate dimensions.
 3. A public page has one canonical URL and navigation location.
 4. Task pages link to canonical concepts and reference; they do not copy large definitions or tables.
-5. Internal plans, PRDs, QA specifications, evidence artifacts, and implementation notes use a separate internal schema and never become public by omission.
-6. Metadata is present only when it drives navigation, search, ownership, lifecycle, or factual validation.
-7. `/get-started/` content is authored from blank reader-task briefs. Existing onboarding titles, sequences, and prose are not templates.
+5. Marketing pages explain product value and supported use cases, then link to task guidance and technical sources instead of reproducing them.
+6. Internal plans, PRDs, QA specifications, evidence artifacts, and implementation notes use a separate internal schema and never become public by omission.
+7. Metadata is present only when it drives navigation, search, ownership, lifecycle, or factual validation.
+8. `/get-started/` content is authored from blank reader-task briefs. Existing onboarding titles, sequences, and prose are not templates.
 
 ## Public page types
 
 | Type | Reader intent | Required structure | Not this |
 | --- | --- | --- | --- |
 | `landing` | Choose a task within a domain | Scope, child task groups, one-sentence exclusions, troubleshooting entry | Marketing home, prose essay, complete sitemap |
+| `marketing` | Understand a product capability and decide whether to explore it | Audience problem, value proposition, supported use cases, representative example, trust boundaries, calls to task and technical guidance | User manual, implementation architecture, launch article, unsupported promise |
 | `tutorial` | Reach a first successful outcome while learning | Outcome, prerequisites, ordered path, checkpoints, result, next task | General reference, feature tour |
 | `task-guide` | Complete a specific action | Outcome, prerequisites, steps, expected result, failure path, related exact reference | Concept essay |
 | `workflow-guide` | Use and interpret a product workflow or view | Reader question, context, current UI path, interpretation sequence, evidence path, limitations, next actions, failure states | Screenshot gallery, feature specification |
@@ -99,7 +101,7 @@ Do not repeat these in front matter when the IA manifest already supplies them:
 | --- | --- | --- |
 | Critical | Credentials, destructive operations, upgrades, rollback, security incidents, data loss | Source owner, operations/security, content, and accessibility |
 | High | Permissions, provider setup, API contracts, calculations, AI/analytics interpretation | Source owner, content, IA, accessibility |
-| Medium | Ordinary feature workflows and concepts | Product/source owner and content |
+| Medium | Ordinary feature workflows, product marketing, and concepts | Product/source owner and content |
 | Low | Glossary, navigation index, non-behavioral explanation | Content/IA owner |
 
 Age alone does not make a page incorrect. Review is triggered by source changes, product changes, support findings, or the risk-based interval.
@@ -108,7 +110,8 @@ Age alone does not make a page incorrect. Review is triggered by source changes,
 
 * Literal keys, enums, defaults, schemas, and taxonomies should be generated or checked from code.
 * Procedures are verified against the supported UI, CLI, API, or deployment artifact.
-* Narrative interpretation is human-authored and reviewed.
+* Narrative interpretation and product positioning are human-authored and reviewed.
+* Marketing claims must map to supported product behavior and link to the canonical user or technical guidance that constrains them.
 * A page may cite several sources, but it has one accountable owner.
 * A source link is not a substitute for explaining the supported reader task.
 
@@ -116,7 +119,7 @@ Age alone does not make a page incorrect. Review is triggered by source changes,
 
 Before creating a page, answer:
 
-1. What exact reader task, concept, symptom, or lookup does it serve?
+1. What exact reader task, concept, symptom, lookup, or product capability does it serve?
 2. Which locked domain owns that outcome?
 3. Does a canonical page already answer it?
 4. Which content type fits?

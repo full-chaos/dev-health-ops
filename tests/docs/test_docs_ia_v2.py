@@ -44,7 +44,7 @@ def test_validator_rejects_duplicate_url_and_reused_onboarding_title() -> None:
                 "label": prefix,
                 "url": prefix,
                 "parent_id": "home",
-                "kind": "landing",
+                "kind": "marketing" if prefix == "/context-fabric/" else "landing",
                 "nav": "true",
                 "public_state": "public",
                 "lifecycle": "planned",
@@ -78,3 +78,30 @@ def test_validator_rejects_duplicate_url_and_reused_onboarding_title() -> None:
     errors = module.validate_nodes(nodes)
     assert any("current onboarding title" in error for error in errors)
     assert any("duplicate canonical URL" in error for error in errors)
+
+
+def test_context_fabric_url_is_limited_to_the_canonical_marketing_page() -> None:
+    module: Any = _load_validator()
+    root = Path(__file__).parents[2]
+    nodes = module.load_nodes(root / "docs-data/ia")
+    nodes.append(
+        {
+            "id": "use-context-fabric-copy",
+            "label": "Context Fabric copy",
+            "url": "/use/context-fabric/",
+            "parent_id": "use",
+            "kind": "marketing",
+            "nav": "true",
+            "public_state": "public",
+            "lifecycle": "active",
+            "provisional": "false",
+        }
+    )
+
+    errors = module.validate_nodes(nodes)
+
+    assert any(
+        "Context Fabric URLs are limited to the canonical top-level marketing page"
+        in error
+        for error in errors
+    )

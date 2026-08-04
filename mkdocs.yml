@@ -38,6 +38,7 @@ theme:
 
 nav:
   - Documentation home: index.md
+  - Context Fabric: context-fabric/index.md
   - Get started:
       - get-started/index.md
       - Choose a task: get-started/choose-a-task.md
@@ -272,6 +273,7 @@ extra_css:
   - stylesheets/extra.css
   - stylesheets/home.css
   - stylesheets/home-sections.css
+  - stylesheets/context-fabric.css
   - stylesheets/review-fixes.css
 
 extra:

@@ -753,7 +753,16 @@ def _target_feature_policy() -> None:
     _load_source_module("dev_health_ops.licensing.registry", _LICENSE_REGISTRY_SOURCE)
 
 
+def _target_fetch_utils() -> None:
+    _install_module("dev_health_ops.utils", {"BATCH_SIZE": 1000})
+
+
 ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
+    _FETCH_UTILS_SOURCE: (
+        "dev_health_ops.processors.fetch_utils",
+        _FETCH_UTILS_SOURCE,
+        _target_fetch_utils,
+    ),
     _BASE_GIT_SOURCE: (
         "dev_health_ops.processors.base_git",
         _BASE_GIT_SOURCE,

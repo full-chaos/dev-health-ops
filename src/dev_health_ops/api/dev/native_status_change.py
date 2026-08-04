@@ -23,6 +23,10 @@ from dev_health_ops.api.graphql.resolvers._membership_run_scope import (
 )
 from dev_health_ops.api.queries.client import query_dicts
 
+from ._project_identity import (
+    project_identity_cte,
+    project_identity_match,
+)
 from .contracts import ClaimKind, DevScope, DirectScope, FreshnessState
 from .native_evidence import (
     SourceFreshnessPolicy,
@@ -184,14 +188,48 @@ LIMIT {{limit:UInt32}}
 #: ``team_autoimport_gitlab.py``'s catalog ``id`` is GitLab's own IMMUTABLE
 #: numeric project id, prefixed like Jira's (``f"{org_id}:gitlab:{numeric_id}"``);
 #: ``project_key`` carries the CURRENT ``path_with_namespace``, refreshed on
-#: every discovery run. ``providers/gitlab/normalize.py`` writes that SAME
-#: current path onto ``work_items.project_key`` (not just ``project_id``, as
-#: of the same change) -- so a GitLab project resolves through the
-#: ``project_key`` arm, never the plain ``project_id = {entity_id:String}``
-#: one (the entity id is the prefixed numeric id, never equal to any raw
-#: ``work_items.project_id``, which stays the path). The provider guard keeps
-#: a same-org, same-string GitLab path from being answered by another
-#: provider's catalog row (or vice versa) if the two ever coincided.
+#: every discovery run.
+#:
+#: CHAOS-3380 round 3 (Codex HIGH -- incremental sync strands historical
+#: GitLab rows): unlike Jira, ``providers/gitlab/normalize.py`` does NOT
+#: write anything onto ``work_items.project_key`` -- it stays empty for
+#: EVERY GitLab row, old and new alike (an earlier revision of this comment
+#: had normalize.py mirror the path onto ``project_key`` too; reverted --
+#: pointless once the arm below exists, and it would have made "did this row
+#: sync after the cutover" a THIRD identity dimension for no reason).
+#: ``work_items.project_id`` is, and always has been, the raw path for every
+#: GitLab issue/MR row regardless of when it was synced -- ``updated_after``
+#: incremental syncs never rewrite a row that has not itself changed, so
+#: "before this ticket" and "after" rows are IDENTICAL in shape. The two arms
+#: above (raw id match, key-to-key match) both miss this: GitLab's entity id
+#: is prefixed (never equals any raw ``project_id``) and its ``project_key``
+#: is always empty (never satisfies ``catalog_project_key != ''`` on its own
+#: side). A THIRD arm closes it: ``{alias}project_id = catalog_project_key``
+#: (guarded by the same ``catalog_project_key != ''``) -- the work item's raw
+#: path against the catalog's CURRENT path, independent of when the row was
+#: synced. Provider-guarded like the other two, so it cannot cross-match:
+#: a Jira row's ``project_id`` is always empty (``providers/jira/normalize``
+#: never sets it), so it can never equal a non-empty ``catalog_project_key``;
+#: a Linear native project row's ``project_key`` is empty (this arm is a
+#: no-op for it), but a Linear TEAM-derived catalog row's ``project_key`` IS
+#: a real value (the team key) -- this arm still cannot false-match it in
+#: practice, since no Linear work item's ``project_id`` (Linear's own project
+#: UUID) is ever going to literally equal a short team-key string, but the
+#: claim "Linear's project_key is always empty" from the previous revision of
+#: this comment was not true of every catalog row Linear writes, only the
+#: native-project ones -- corrected here rather than left as a latent false
+#: assumption (see ``ask_dev_project_subject_oracle.py`` for where believing
+#: it uncritically actually mattered).
+#:
+#: ``_project_identity_cte``/``_project_identity_match`` both take an
+#: ``entity_param`` (default ``"entity_id"``, this module's own parameter
+#: name everywhere below) so ``native_evidence.py`` can reuse the EXACT same
+#: predicate text keyed off ITS OWN differently-named scope parameter
+#: (``scope_entity_id``) instead of hand-copying a variant that could drift
+#: (CHAOS-3380 round 3, Codex HIGH -- native_evidence project search/expand
+#: compared work_items directly against a prefixed catalog id and could never
+#: match a real row for any provider using the prefixed-id model, not just
+#: GitLab).
 #:
 #: ``LEFT JOIN`` (every arm that also serves 'issue'/'work_unit'/'team'/
 #: 'organization'/'repository' scope types): a project-identity lookup miss must
@@ -227,32 +265,23 @@ LIMIT {{limit:UInt32}}
 #:    than assumed from ``FINAL`` alone, since retirement is a data state
 #:    (``is_active``), not a version-ordering property ``FINAL`` enforces on
 #:    its own.
-_PROJECT_IDENTITY_CTE = """project AS (
-  SELECT any(provider) AS catalog_provider,
-         any(ifNull(project_key, '')) AS catalog_project_key
-  FROM projects FINAL
-  WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
-  HAVING count() = 1
-)"""
+#: Both helpers live in ``_project_identity.py`` (CHAOS-3380 round 3) so
+#: ``native_evidence.py`` can reuse them without a circular import (this
+#: module already imports FROM ``native_evidence.py``). Re-exported here
+#: under their historical private names -- every internal usage below, and
+#: the test assertions against ``native_status_change._PROJECT_IDENTITY_CTE``
+#: / ``native_status_change._project_identity_match``, keep working
+#: unchanged.
+_project_identity_cte = project_identity_cte
+_project_identity_match = project_identity_match
 
-
-def _project_identity_match(alias: str = "") -> str:
-    """Provider + native-key aware match against a work_items-shaped row.
-
-    ``alias`` is the table prefix (e.g. ``"item."``, ``"blocked."``) for a joined
-    reference; ``""`` for a bare, unaliased ``work_items`` FROM. Every
-    project-scoped arm splices this EXACT text (never a hand-copied variant),
-    joined against ``_PROJECT_IDENTITY_CTE`` as ``project``, so the derivation
-    (``PROJECT_REPOSITORIES_SQL``) can never admit a repository the fact queries
-    it bounds would not themselves draw from -- pinned by
-    ``test_derivation_matches_projects_exactly_as_the_queries_it_bounds_do``.
-    """
-    return (
-        "ifNull(catalog_provider, '') != ''"
-        f" AND {alias}provider = catalog_provider"
-        f" AND ({alias}project_id = {{entity_id:String}}"
-        f" OR (catalog_project_key != '' AND {alias}project_key = catalog_project_key))"
-    )
+#: The default-parameterized text, used verbatim by every arm in THIS module
+#: (all of which key off ``{entity_id:String}``) -- a plain string constant so
+#: existing ``_PROJECT_IDENTITY_CTE + "..."`` splices and ``in`` assertions
+#: keep working unchanged. ``native_evidence.py`` calls
+#: ``project_identity_cte("scope_entity_id")`` directly instead, for its own
+#: differently-named parameter.
+_PROJECT_IDENTITY_CTE = _project_identity_cte()
 
 
 def _project_scope_arm(alias: str = "") -> str:

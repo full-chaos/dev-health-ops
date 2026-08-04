@@ -327,18 +327,26 @@ async def test_gitlab_project_becomes_a_resolvable_subject(
         )
         # "missing"/"inactive"/"name_ambiguous" must be fully cleared -- those
         # are what CHAOS-3380 exists to fix, and the oracle now resolves a
-        # GitLab reference through project_key (CHAOS-3380 round 2), not raw
-        # id equality. "name_mismatch" survives here as a PRE-EXISTING,
-        # orthogonal gap: unlike Linear's issue normalizer (which caches
-        # project.name straight off the issue payload),
-        # ``gitlab_issue_to_work_item`` never sets ``WorkItem.project_name``
-        # at all, so ``work_items.project_name`` is always empty for GitLab
-        # today. That is a gap in the WORK-ITEM producer, not the catalog
-        # this ticket adds -- and it does not affect subject resolution,
-        # which reads the catalog's OWN name (proved below).
-        assert {gap.kind for gap in after} == {"name_mismatch"}, (
-            f"catalog still incomplete after autoimport: {after}"
-        )
+        # GitLab reference through the path-compatibility arm (CHAOS-3380
+        # round 3), not raw id equality. Two kinds survive here, both
+        # PRE-EXISTING/EXPECTED, not catalog defects:
+        # * "name_mismatch": unlike Linear's issue normalizer (which caches
+        #   project.name straight off the issue payload),
+        #   ``gitlab_issue_to_work_item`` never sets ``WorkItem.project_name``
+        #   at all, so ``work_items.project_name`` is always empty for GitLab
+        #   today -- a gap in the WORK-ITEM producer, not the catalog this
+        #   ticket adds, and it does not affect subject resolution, which
+        #   reads the catalog's OWN name (proved below).
+        # * "path_match_unverified": GitLab has no immutable-id or native-key
+        #   arm available at all (CHAOS-3380 round 3) -- every GitLab match
+        #   resolves ONLY through the mutable path-compatibility arm, by
+        #   construction. This is the oracle honestly disclosing that
+        #   provider's identity model is inherently weaker than Linear's/
+        #   Jira's, not a defect this run introduced.
+        assert {gap.kind for gap in after} == {
+            "name_mismatch",
+            "path_match_unverified",
+        }, f"catalog still incomplete after autoimport: {after}"
 
         service = ScopeResolutionService(ClickHouseAuthorizedEntityCatalog(sink))
         resolution = await service.resolve_mention(
@@ -522,6 +530,102 @@ async def test_gitlab_project_resolves_end_to_end_through_the_native_status_chan
         assert any(child.endswith(own_work_item_id) for child in seen), seen
         assert not any(child.endswith(other_work_item_id) for child in seen), (
             "a different GitLab project's work item leaked into this project's scope",
+            seen,
+        )
+    finally:
+        _cleanup(raw_client, org_id)
+
+
+@pytest.mark.asyncio
+async def test_gitlab_incremental_sync_never_strands_history(
+    sink: Any, raw_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-3380 round 3 (Codex HIGH -- incremental sync strands historical
+    rows), the reviewer-specified live test.
+
+    The original concern: a round-2 revision of ``providers/gitlab/
+    normalize.py`` wrote the current path onto ``work_items.project_key`` for
+    NEWLY-synced rows only, so an ALREADY-INGESTED row (never rewritten by a
+    subsequent ``updated_after`` incremental sync, since it has not itself
+    changed on GitLab's side) would carry empty ``project_key`` forever and
+    stop matching once the catalog's identity moved to the prefixed numeric
+    id. The fix taken here is stronger than "handle two shapes": ``providers/
+    gitlab/normalize.py`` writes NOTHING onto ``project_key`` for GitLab, not
+    for old rows and not for new ones -- so there is no "old shape" vs "new
+    shape" to reconcile at all. Every GitLab work item, regardless of when it
+    was ingested, resolves through ONE mechanism: ``work_items.project_id``
+    (the raw path, unchanged since before this ticket existed) against the
+    catalog's current ``project_key``.
+
+    Modeled here as two independently-ingested items under the SAME project
+    (an ``updated_after`` incremental sync run would produce exactly this:
+    one row from a prior full sync, one freshly touched) -- both must resolve
+    together, proving the join is insensitive to WHEN a row arrived.
+    """
+
+    org_id = f"chaos-3380-incremental-{uuid.uuid4().hex[:10]}"
+    try:
+        sink.org_id = org_id
+        # Simulates a row from a PRIOR sync (never rewritten since), and one
+        # from THIS run's incremental sync -- both produced by the same
+        # normalizer, so both carry the identical shape (project_id=path,
+        # project_key=None) that is the actual point of this test.
+        older_item = replace(
+            _normalize(1, GITLAB_PROJECT_PATH),
+            org_id=org_id,
+            updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        newer_item = replace(
+            _normalize(2, GITLAB_PROJECT_PATH),
+            org_id=org_id,
+            updated_at=datetime.now(timezone.utc),
+        )
+        assert older_item.project_key is None
+        assert newer_item.project_key is None
+        sink.write_work_items([older_item, newer_item])
+
+        await _run_autoimport(
+            monkeypatch,
+            org_id,
+            projects=[
+                GitLabDiscoveredProject(
+                    id=GITLAB_PROJECT_NUMERIC_ID,
+                    path_with_namespace=GITLAB_PROJECT_PATH,
+                    name=GITLAB_PROJECT_NAME,
+                    archived=False,
+                    web_url="",
+                ),
+            ],
+        )
+        entity_id = _catalog_id(org_id, GITLAB_PROJECT_NUMERIC_ID)
+
+        service = ScopeResolutionService(ClickHouseAuthorizedEntityCatalog(sink))
+        resolution = await service.resolve_contract(
+            org_id,
+            "permission-live",
+            ScopeResolveRequest(
+                explicit_refs=(ScopeRef(EntityKind.PROJECT, entity_id),)
+            ),
+        )
+        assert resolution.outcome.value == "exact"
+        scope = resolution.resolved_scope
+        assert scope is not None
+
+        snapshot = await StatusChangeService(
+            ClickHouseStatusChangeSource(sink)
+        ).status_snapshot(org_id, "permission-live", StatusSnapshotRequest(scope))
+
+        seen = {child.entity_id for child in snapshot.children}
+        assert any(
+            child.endswith(f"gitlab:{GITLAB_PROJECT_PATH}#1") for child in seen
+        ), (
+            "the OLDER (never-rewritten) row did not resolve",
+            seen,
+        )
+        assert any(
+            child.endswith(f"gitlab:{GITLAB_PROJECT_PATH}#2") for child in seen
+        ), (
+            "the NEWER (freshly-synced) row did not resolve",
             seen,
         )
     finally:
@@ -771,6 +875,161 @@ async def test_oracle_does_not_flag_a_gitlab_epic_group_path_as_missing(
         )
         assert "full-chaos/no-catalog-row" in gap_ids, (
             "the exclusion swallowed a genuine, uncataloged PROJECT reference too"
+        )
+    finally:
+        _cleanup(raw_client, org_id)
+
+
+@pytest.mark.asyncio
+async def test_oracle_measures_a_jira_project_referenced_only_by_key(
+    sink: Any, raw_client: Any
+) -> None:
+    """CHAOS-3380 round 3 (Codex MEDIUM) acceptance-set counterexample: Jira.
+
+    Before this fix, ``referenced`` filtered on ``project_id != ''`` alone --
+    but ``providers/jira/normalize.canonical_jira_issue_to_work_item`` NEVER
+    sets ``project_id`` (it stays empty for every Jira row; the raw key lives
+    in ``project_key`` only). So no Jira work item was EVER referenced, and
+    ``project_subject_gaps(provider="jira", ...)`` would unconditionally
+    raise ``OracleNotMeasured`` -- a latent bug this ticket's own fix
+    (reading BOTH columns on the reference side) surfaced and closed. This
+    must keep being true: a Jira project referenced only by its raw key, with
+    a real catalog row, measures with NO ``path_match_unverified`` (Jira
+    matches via the native key-to-key arm, an authoritative match, not the
+    mutable path-compatibility one) and NO "missing" gap. "name_mismatch"
+    is expected and orthogonal: ``atlassian.JiraIssue`` (the real producer's
+    input type) carries no project-name field at all, so
+    ``work_items.project_name`` is always empty for Jira, same latent gap in
+    the WORK-ITEM producer this file's GitLab tests already document -- not
+    a catalog defect and not what this test exists to prove.
+    """
+    from atlassian import JiraIssue
+
+    from dev_health_ops.providers.jira.normalize import (
+        canonical_jira_issue_to_work_item,
+    )
+
+    org_id = f"chaos-3380-jira-key-{uuid.uuid4().hex[:10]}"
+    now = datetime.now(timezone.utc)
+    try:
+        identity = MagicMock(spec=IdentityResolver)
+        identity.resolve.side_effect = lambda **kwargs: "user:dev@example.com"
+        status_mapping = MagicMock(spec=StatusMapping)
+        status_mapping.normalize_status.return_value = "in_progress"
+        status_mapping.normalize_type.return_value = "task"
+        issue = JiraIssue(
+            cloud_id="cloud-live",
+            key="ASK-1",
+            project_key="ASK",
+            issue_type="Task",
+            status="In Progress",
+            created_at=now.isoformat(),
+            updated_at=now.isoformat(),
+        )
+        jira_item = replace(
+            canonical_jira_issue_to_work_item(
+                issue=issue,
+                status_mapping=status_mapping,
+                identity=identity,
+                repo_id=None,
+            ),
+            org_id=org_id,
+            updated_at=now,
+        )
+        assert jira_item.project_id in (None, "")
+        assert jira_item.project_key == "ASK"
+        sink.org_id = org_id
+        sink.write_work_items([jira_item])
+
+        before = project_subject_gaps(raw_client, org_id=org_id, provider="jira")
+        assert {gap.project_id for gap in before} == {"ASK"}
+        assert {gap.kind for gap in before} == {"missing"}
+
+        sink.write_projects(
+            [
+                ProjectRecord(
+                    id=f"{org_id}:jira:ASK",
+                    org_id=org_id,
+                    provider="jira",
+                    project_key="ASK",
+                    name="Ask Dev (Jira)",
+                    is_active=1,
+                    updated_at=now,
+                    last_synced=now,
+                )
+            ]
+        )
+
+        after = project_subject_gaps(raw_client, org_id=org_id, provider="jira")
+        assert {gap.kind for gap in after} == {"name_mismatch"}, (
+            f"a key-referenced Jira project shows unexpected gaps: {after}"
+        )
+    finally:
+        _cleanup(raw_client, org_id)
+
+
+@pytest.mark.asyncio
+async def test_oracle_flags_a_reused_gitlab_path_as_unverified_not_a_clean_match(
+    sink: Any, raw_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-3380 round 3 (Codex MEDIUM) acceptance-set counterexample: reuse.
+
+    Pins the residual risk ``workers/team_autoimport_gitlab.
+    _gitlab_project_catalog_rows`` documents rather than silently assuming
+    it away: project A (numeric id) is renamed away from a path; project B
+    (a DIFFERENT numeric id) later claims that exact, now-free path. An OLD
+    work item -- never resynced, still carrying the original path in its own
+    ``project_id`` -- resolves to project B's catalog row (an unrelated
+    project) via the path-compatibility arm. This IS a false attribution,
+    and this test proves it happens -- but the oracle must never report it as
+    an ordinary clean match: it must carry ``kind="path_match_unverified"``,
+    so the ambiguity is visible rather than silently swallowed as a green
+    result.
+    """
+
+    org_id = f"chaos-3380-reuse-{uuid.uuid4().hex[:10]}"
+    now = datetime.now(timezone.utc)
+    reused_path = "grp/reused-slot"
+    try:
+        sink.org_id = org_id
+        # The OLD work item, never resynced after project A's rename -- its
+        # own project_id still carries the path project B now holds.
+        stale_item = replace(_normalize(1, reused_path), org_id=org_id)
+        sink.write_work_items([stale_item])
+
+        # Project A: renamed away, no longer at reused_path.
+        sink.write_projects(
+            [
+                ProjectRecord(
+                    id=f"{org_id}:gitlab:111",
+                    org_id=org_id,
+                    provider="gitlab",
+                    project_key="grp/project-a-renamed",
+                    name="Project A (renamed away)",
+                    is_active=1,
+                    updated_at=now,
+                    last_synced=now,
+                ),
+                # Project B: a DIFFERENT project that now claims the freed path.
+                ProjectRecord(
+                    id=f"{org_id}:gitlab:222",
+                    org_id=org_id,
+                    provider="gitlab",
+                    project_key=reused_path,
+                    name="Project B (new claimant)",
+                    is_active=1,
+                    updated_at=now,
+                    last_synced=now,
+                ),
+            ]
+        )
+
+        gaps = project_subject_gaps(raw_client, org_id=org_id, provider="gitlab")
+        reuse_gaps = [gap for gap in gaps if gap.project_id == reused_path]
+        assert reuse_gaps, "the reused-path reference produced no gap row at all"
+        assert {gap.kind for gap in reuse_gaps} >= {"path_match_unverified"}, (
+            "the reused-path match was reported clean, hiding a false "
+            f"attribution to an unrelated project: {reuse_gaps}"
         )
     finally:
         _cleanup(raw_client, org_id)

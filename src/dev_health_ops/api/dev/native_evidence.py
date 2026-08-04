@@ -14,6 +14,7 @@ from typing import Any
 from dev_health_ops.api.queries.client import query_dicts
 from dev_health_ops.api.services.sync_coverage import STALE_FALLBACK_GRACE
 
+from ._project_identity import project_identity_cte, project_identity_match
 from .contracts import DevEvidenceRef, FreshnessState
 from .evidence_service import (
     EvidenceAvailability,
@@ -136,34 +137,49 @@ _SPECS: dict[str, _SourceSpec] = {
     "work_items": _SourceSpec(
         "work_items",
         _COMMON_KINDS | {EntityKind.PROJECT, EntityKind.ISSUE},
+        # CHAOS-3380 round 3 (Codex HIGH): the project match below joins
+        # through the SAME provider-aware identity CTE
+        # native_status_change.py uses (dev_health_ops.api.dev.
+        # _project_identity), rather than comparing work_items.project_id/
+        # project_key directly against the resolved entity id -- which can
+        # never match for any provider whose catalog id isn't the raw value
+        # work_items carries (Jira since CHAOS-3374, GitLab since CHAOS-3380).
+        # ``LEFT JOIN`` (not INNER): a project-identity miss must not blank
+        # out ISSUE/ORGANIZATION/REPOSITORY-scoped results this same spec
+        # also serves -- only the project arm's own predicate is gated
+        # (``ifNull(catalog_provider, '') != ''`` inside project_identity_match).
         f"""
+        WITH {project_identity_cte()}
         SELECT work_item_id AS entity_id, title AS display_label,
                concat('Status: ', status, '. ', ifNull(description, '')) AS excerpt,
                provider AS provenance, updated_at AS observed_at,
                last_synced, toString(repo_id) AS repository_id,
                url AS source_url, 0 AS deleted, 1.0 AS confidence
         FROM work_items FINAL
+        LEFT JOIN project ON 1 = 1
         WHERE org_id = {{org_id:String}}
           AND updated_at >= {{start:DateTime64(3, 'UTC')}}
           AND updated_at < {{end:DateTime64(3, 'UTC')}}
           AND ({_search_predicate(("work_item_id", "title", "description", "status"))})
           AND (empty({{repository_ids:Array(String)}}) OR toString(repo_id) IN {{repository_ids:Array(String)}})
           AND ({{entity_id:String}} = '' OR work_item_id = {{entity_id:String}}
-               OR project_id = {{entity_id:String}} OR project_key = {{entity_id:String}})
+               OR ({project_identity_match()}))
         ORDER BY updated_at DESC, work_item_id
         LIMIT {{limit:UInt32}}
         """,
-        """
+        f"""
+        WITH {project_identity_cte("scope_entity_id")}
         SELECT work_item_id AS entity_id, title AS display_label,
                concat('Status: ', status, '. ', ifNull(description, '')) AS excerpt,
                provider AS provenance, updated_at AS observed_at,
                last_synced, toString(repo_id) AS repository_id,
                url AS source_url, 0 AS deleted, 1.0 AS confidence
         FROM work_items FINAL
-        WHERE org_id = {org_id:String} AND work_item_id = {entity_id:String}
-          AND (empty({repository_ids:Array(String)}) OR toString(repo_id) IN {repository_ids:Array(String)})
-          AND ({scope_entity_id:String} = '' OR work_item_id = {scope_entity_id:String}
-               OR project_id = {scope_entity_id:String} OR project_key = {scope_entity_id:String})
+        LEFT JOIN project ON 1 = 1
+        WHERE org_id = {{org_id:String}} AND work_item_id = {{entity_id:String}}
+          AND (empty({{repository_ids:Array(String)}}) OR toString(repo_id) IN {{repository_ids:Array(String)}})
+          AND ({{scope_entity_id:String}} = '' OR work_item_id = {{scope_entity_id:String}}
+               OR ({project_identity_match(entity_param="scope_entity_id")}))
         ORDER BY last_synced DESC LIMIT 1
         """,
     ),

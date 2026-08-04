@@ -737,6 +737,94 @@ def test_gitlab_source_selection_absent_catalogs_everything(
     assert len(sink.projects) == 2
 
 
+def test_gitlab_selected_source_missing_from_discovery_marks_the_catalog_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3380 round 3 (Codex MEDIUM -- stale selected-source set reads as
+    complete): the inverse gap from the filtering tests above. A selected id
+    that discovery never returned at all (deleted, access revoked, or simply
+    never reached before a pagination bound) must not vanish from the catalog
+    with ``native_projects_complete`` staying ``True`` -- the ORIGINAL bug
+    this fix closes: "first import creates nothing; re-import leaves a stale
+    row; the run still reports complete."
+    """
+
+    sink = _patch_single_group_gitlab_discovery(
+        monkeypatch,
+        repo_patterns=["full-chaos/present"],
+        projects=[_discovered_project("701", "full-chaos/present")],
+    )
+
+    # "702" is selected but discovery never returned it.
+    summary = _populate_gitlab(source_external_ids=["701", "702"])
+
+    assert summary["native_projects_imported"] == 1
+    assert {row.id for row in sink.projects} == {"org-1:gitlab:701"}
+    assert summary["native_projects_missing_selected_source_ids"] == ["702"]
+    assert summary["native_projects_complete"] is False, (
+        "a selected-but-undiscovered source must mark the catalog incomplete"
+    )
+
+
+def test_gitlab_selected_source_present_in_discovery_stays_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The positive case beside the one above: every selected id IS
+    discovered -> no missing ids, catalog stays complete."""
+
+    sink = _patch_single_group_gitlab_discovery(
+        monkeypatch,
+        repo_patterns=["full-chaos/present"],
+        projects=[_discovered_project("801", "full-chaos/present")],
+    )
+
+    summary = _populate_gitlab(source_external_ids=["801"])
+
+    assert summary["native_projects_imported"] == 1
+    assert {row.id for row in sink.projects} == {"org-1:gitlab:801"}
+    assert summary["native_projects_missing_selected_source_ids"] == []
+    assert summary["native_projects_complete"] is True
+
+
+def test_gitlab_selection_explicit_empty_has_no_missing_selected_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit empty selection (nothing enabled) trivially has no
+    MISSING selected source either -- vacuously complete, distinguished from
+    the stale-source case, which has at least one selected id to go missing."""
+
+    sink = _patch_single_group_gitlab_discovery(
+        monkeypatch,
+        repo_patterns=["full-chaos/a"],
+        projects=[_discovered_project("901", "full-chaos/a")],
+    )
+
+    summary = _populate_gitlab(source_external_ids=[])
+
+    assert sink.projects == []
+    assert summary["native_projects_missing_selected_source_ids"] == []
+    assert summary["native_projects_complete"] is True
+
+
+def test_gitlab_selection_absent_key_has_no_missing_selected_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No ``source_external_ids`` key at all (the common post-sync path) ->
+    nothing is "selected" in the first place, so nothing can be missing."""
+
+    sink = _patch_single_group_gitlab_discovery(
+        monkeypatch,
+        repo_patterns=["full-chaos/a"],
+        projects=[_discovered_project("902", "full-chaos/a")],
+    )
+
+    summary = _populate_gitlab()
+
+    assert len(sink.projects) == 1
+    assert summary["native_projects_missing_selected_source_ids"] == []
+    assert summary["native_projects_complete"] is True
+
+
 def test_gitlab_truncated_discovery_marks_the_catalog_incomplete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

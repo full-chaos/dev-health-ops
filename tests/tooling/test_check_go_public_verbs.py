@@ -37,7 +37,16 @@ def test_help_completes_and_documents_every_public_verb() -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stderr == ""
+    # The Go toolchain directive may fetch a newer patch release on a cold
+    # cache and announces it on stderr ("go: downloading go1.25.9 ...").
+    # That is environment noise, not help output — anything else on stderr
+    # still fails.
+    unexpected_stderr = [
+        line
+        for line in result.stderr.splitlines()
+        if line.strip() and not line.startswith("go: downloading ")
+    ]
+    assert unexpected_stderr == []
     documented_verbs = {
         line.split(maxsplit=1)[0]
         for line in result.stdout.splitlines()

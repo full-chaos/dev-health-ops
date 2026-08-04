@@ -485,19 +485,42 @@ WHERE g.repo_id IS NOT NULL
 #:
 #: Bounded by the same ``org_id`` tenant boundary
 #: ``_ORGANIZATION_AUTHORIZED_REPOSITORIES_SQL`` enforces, by the same
-#: ``updated_at <= as_of`` bound ``_WORK_ITEMS_SQL`` applies, and by the same
-#: ``project_id``/``project_key`` disjunction every project SQL arm uses -- so
-#: the derived set is exactly the repositories this project's own facts can be
-#: drawn from, never wider. Deliberately NOT joined against ``repos``: Linear
-#: work items carry no repository and land under a zero-UUID ``repo_id`` that
-#: has no ``repos`` row, so an existence join would re-empty the set for the
-#: provider this fix exists for.
+#: ``updated_at <= as_of`` bound ``_WORK_ITEMS_SQL`` applies, and by the
+#: byte-identical ``project_id``/``project_key`` disjunction every project SQL
+#: arm uses (pinned by
+#: ``test_derivation_matches_projects_exactly_as_the_queries_it_bounds_do``) --
+#: so the derived set can never admit a repository the fact queries it bounds
+#: would not themselves have drawn from.
+#:
+#: Codex adversarial review (HIGH, 2026-08-03): the first cut stopped there and
+#: trusted every ``work_items.repo_id`` outright. ClickHouse enforces no
+#: foreign key, so a repository revoked from ``repos`` -- de-authorized, and
+#: correctly invisible to the ORGANIZATION branch, which enumerates ``repos``
+#: itself -- can keep its ``work_items`` rows and would have become an admitted
+#: read bound for project scope alone. Every *real* repository id must therefore
+#: still resolve through the same org-scoped ``repos`` catalog.
+#:
+#: The zero UUID is admitted explicitly rather than by omitting that check.
+#: It is not a repository at all: it is the sentinel
+#: ``ClickHouseMetricsSink`` writes whenever a record has no repository
+#: (``metrics/sinks/clickhouse/core.py`` -- ``row.repo_id or uuid.UUID(int=0)``),
+#: which is every Linear work item (``providers/linear/normalize.py`` sets
+#: ``repo_id=None``). It has no ``repos`` row and never will, so a bare
+#: existence join would re-empty the set for the exact provider this fix exists
+#: for -- while a blanket "skip the catalog" would have de-authorized nothing
+#: and admitted everything. Naming the sentinel keeps both properties.
 _PROJECT_REPOSITORIES_SQL = """
 SELECT DISTINCT toString(repo_id) AS repository_id
 FROM work_items FINAL
 WHERE org_id = {org_id:String}
   AND updated_at <= {as_of:DateTime64(3, 'UTC')}
   AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
+  AND (
+    toString(repo_id) = '00000000-0000-0000-0000-000000000000'
+    OR toString(repo_id) IN (
+      SELECT toString(id) FROM repos FINAL WHERE org_id = {org_id:String}
+    )
+  )
 """
 
 _TRANSITIONS_SQL = (
@@ -1009,8 +1032,21 @@ class ClickHouseStatusChangeSource:
         (``_PROJECT_REPOSITORIES_SQL``). Without this branch every project
         subject failed closed below while its work items sat in ``work_items``
         matching the very ``project_id`` the scope committed.
+
+        A *team-filtered* project scope (``direct_scope=PROJECT`` alongside
+        ``scope.team_ids``, a filter -- ``DevScope`` permits the combination,
+        and ``ScopeResolutionService._resolved_scope`` populates ``team_ids``
+        from ``resolution.team_filters`` for any direct scope) is excluded
+        from that derivation for exactly the reason the team-filtered
+        ORGANIZATION case below is excluded, and the exclusion is checked
+        first: no project SQL arm applies a team filter, so deriving the
+        project's full repository set would silently answer a "project P, team
+        A only" request with team B's work from the same project. Falling
+        through to the caller's own (empty) bounded fields preserves the
+        fail-closed behavior such a request already had before this branch
+        existed. Codex adversarial review (HIGH, 2026-08-03).
         """
-        if scope.direct_scope is DirectScope.PROJECT:
+        if scope.direct_scope is DirectScope.PROJECT and not scope.team_ids:
             return await self._project_repository_ids(
                 org_id, self._entity_id(scope), as_of=as_of
             )

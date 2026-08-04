@@ -360,6 +360,26 @@ class DevDisambiguationCandidate(ContractModel):
     reason: ShortText
 
 
+#: Outcomes a ``DevScopeResolution`` may carry ``candidates`` for.
+#:
+#: ``ambiguous`` REQUIRES them (several authorized entities matched and the
+#: caller must pick one). ``forbidden_or_not_found`` MAY carry them (CHAOS-3367):
+#: the Wave 3.1 PRD's no-match sentence ends "Here are the closest matches, if
+#: any", so the closest-match list needs somewhere to live, and the alternative
+#: -- a second, parallel candidate field -- would give two producers of the same
+#: thing. Every other outcome still forbids them: an ``exact`` commit with a
+#: candidate list beside it is a contradiction, not extra context.
+#:
+#: The set is deliberately narrow. Widening it is a wire-behaviour change, so
+#: it is an edit here rather than a condition inlined in the validator.
+CANDIDATE_BEARING_OUTCOMES: frozenset[ScopeResolutionOutcome] = frozenset(
+    {
+        ScopeResolutionOutcome.AMBIGUOUS,
+        ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND,
+    }
+)
+
+
 class DevScopeResolution(ContractModel):
     schema_version: Literal["dev_scope_resolution.v1"]
     requested_scope: DevScope
@@ -388,8 +408,10 @@ class DevScopeResolution(ContractModel):
             raise ValueError("resolved outcome requires resolved_scope")
         if self.outcome is ScopeResolutionOutcome.AMBIGUOUS and not self.candidates:
             raise ValueError("ambiguous outcome requires candidates")
-        if self.outcome is not ScopeResolutionOutcome.AMBIGUOUS and self.candidates:
-            raise ValueError("candidates are allowed only for ambiguous outcomes")
+        if self.outcome not in CANDIDATE_BEARING_OUTCOMES and self.candidates:
+            raise ValueError(
+                "candidates are allowed only for ambiguous and not-found outcomes"
+            )
         if self.outcome is ScopeResolutionOutcome.ORGANIZATION_FALLBACK:
             if (
                 self.resolved_scope is None

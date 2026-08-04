@@ -62,6 +62,7 @@ from .entitlement import (
     AskDevEntitlementDeniedError,
     CanonicalAskDevEntitlementAuthorizer,
 )
+from .no_match_terminal import redact_persisted_answer, redact_persisted_error
 from .orchestrator import OrchestratorEvent, OrchestratorResult, RunState
 from .orchestrator_persistence import PersistenceRunRecorder
 from .org_policy import load_ask_dev_org_policy
@@ -634,7 +635,13 @@ def _replayed_result(
     error = None
     terminal_error_payload = getattr(run, "terminal_error_payload", None)
     if answer_payload is not None:
-        answer = DevAnswer.model_validate(answer_payload)
+        # CHAOS-3367: orchestrator.finish() is a WRITE-time boundary and
+        # cannot reach rows written before it existed -- including the run
+        # from the reported live screenshot, which is already stored and
+        # still schema-valid. Replaying it verbatim would keep rendering the
+        # leaked token on every reload, so the same rule is applied on the
+        # way out (codex adversarial review, round 1 HIGH).
+        answer = redact_persisted_answer(DevAnswer.model_validate(answer_payload))
     elif terminal_error_payload is not None:
         # CHAOS-3297 Codex review HIGH #1: the exact validated v1 DevError
         # `PersistenceRunRecorder.terminal` persisted at terminal time, for
@@ -651,7 +658,12 @@ def _replayed_result(
         # not catch). A row that has this column is authoritative on its
         # own; it never needs the frame at all.
         try:
-            error = DevError.model_validate(terminal_error_payload)
+            # Redacted on the same read boundary and for the same reason as
+            # the answer above (CHAOS-3367). `code` is untouched: it is a
+            # machine field clients switch on, not copy.
+            error = redact_persisted_error(
+                DevError.model_validate(terminal_error_payload)
+            )
         except ValidationError:
             error = _replay_fallback_error(run)
     elif (
@@ -1117,7 +1129,12 @@ async def get_conversation_transcript(
                     DevTranscriptEntry(
                         **common,
                         role="assistant",
-                        answer=DevAnswer.model_validate(message.answer_payload),
+                        # Same read boundary as `_replayed_result` above: a
+                        # transcript read hands stored model prose straight to
+                        # the client (CHAOS-3367).
+                        answer=redact_persisted_answer(
+                            DevAnswer.model_validate(message.answer_payload)
+                        ),
                     )
                 )
     except Exception as exc:

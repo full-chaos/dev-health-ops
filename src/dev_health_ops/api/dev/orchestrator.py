@@ -41,6 +41,7 @@ from dev_health_ops.llm.agent.errors import (
 )
 from dev_health_ops.llm.budget import budget_idempotency_scope
 from dev_health_ops.metrics.prometheus import (
+    ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL,
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
     ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL,
     ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL,
@@ -91,6 +92,13 @@ from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
+from .no_match_terminal import (
+    attested_strings,
+    internal_token_leak,
+    named_subject_not_found_answer,
+    user_supplied_subject_label,
+    user_visible_strings,
+)
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from .preflight_outcomes import (
@@ -712,6 +720,14 @@ class DevOrchestrator:
         # organization scope that was never confirmed to exist.
         resolve_scope_attempted = False
         last_resolve_scope_outcome: ScopeResolutionOutcome | None = None
+        # CHAOS-3367: the not-found resolution itself, and the query that
+        # produced it, so the no-match terminal can render the run's OWN
+        # resolution (never the previously committed organization scope --
+        # that juxtaposition is the "Scope outcome: exact while a named
+        # subject could not be found" the PRD prohibits) and look the query
+        # up in the user's own question text.
+        last_resolve_scope_resolution: DevScopeResolution | None = None
+        last_resolve_scope_query: str | None = None
         selected_event_sink = event_sink or self._event_sink
         # CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02): set
         # by the CHAOS-3295 plan-execution block below when a plan actually
@@ -740,6 +756,51 @@ class DevOrchestrator:
             nonlocal terminal_written
             if terminal_written:
                 raise RuntimeError("terminal state already written")
+            # CHAOS-3367: the one place every terminal in this module passes
+            # through, and therefore the only place a user-visible-copy rule
+            # can be enforced structurally rather than by asking ~35 call
+            # sites to remember it.
+            #
+            # It fails CLOSED. A leaked internal token is a producer defect,
+            # and the PRD's requirement is "must never show", not "show it
+            # with a warning" -- so the offending terminal is discarded and
+            # replaced with a canonical internal_error rather than repaired
+            # in place, which would leave the rest of a defective payload on
+            # the wire. Every increment of the counter is a bug to fix at its
+            # source; the denylist is derived from the live enums and is
+            # disjoint from the completion reason-code vocabulary that
+            # legitimately appears in copy (pinned by
+            # test_no_match_terminal.py), so this must never fire on a
+            # healthy run.
+            leaked_token = internal_token_leak(
+                user_visible_strings(answer=answer, error=error),
+                # Provenance, so an authorized entity whose real name looks
+                # like an enum member does not fail its own answer. See
+                # `no_match_terminal.internal_token_leak`.
+                attested=attested_strings(answer, request.question),
+            )
+            if leaked_token is not None:
+                logger.error(
+                    "ask_dev.orchestrator.internal_token_leak",
+                    extra={
+                        "run_id": run_id,
+                        "token": leaked_token,
+                        "terminal_kind": "answer" if answer is not None else "error",
+                    },
+                )
+                ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL.labels(
+                    token=leaked_token,
+                    terminal_kind="answer" if answer is not None else "error",
+                ).inc()
+                state = RunState.FAILED
+                answer = None
+                error = DevError(
+                    schema_version="dev_error.v1",
+                    request_id=request.request_id,
+                    code="internal_error",
+                    safe_message="The request could not be completed.",
+                    retryable=False,
+                )
             # CHAOS-3297 Codex review round 3 Finding 2: materialize and
             # validate the terminal error input before any record_*() write
             # is attempted -- not after answer/frame are already flushed on
@@ -1665,6 +1726,8 @@ class DevOrchestrator:
                         # covers "resolve_scope.v1 was never called".
                         resolve_scope_attempted = True
                         last_resolve_scope_outcome = committed_resolution.outcome
+                        last_resolve_scope_resolution = committed_resolution
+                        last_resolve_scope_query = tool_request.query
                     if (
                         tool_request.tool_id is ToolID.RESOLVE_SCOPE
                         and execution.result.status == "success"
@@ -1698,6 +1761,89 @@ class DevOrchestrator:
                         execution=execution,
                     )
                     continue
+
+                # CHAOS-3367: the run's most recent named-subject resolution
+                # came back not-found, and the model is now trying to close
+                # the run. Whatever it wants to say, the server owns this
+                # terminal.
+                #
+                # This runs BEFORE the decision dispatch, so it covers both
+                # shapes the model can take here, which previously diverged:
+                #
+                # * AgentFinalAnswer -- the CHAOS-3289 backstop below already
+                #   treats `resolve_scope_not_found` as terminal, but only for
+                #   an answer whose own status is substantive. A model that
+                #   set status=refused/insufficient_evidence walked straight
+                #   past it with its prose intact -- that is the reported live
+                #   defect, where the summary read "Scope resolution ...
+                #   returned forbidden_or_not_found" under a "Refused" chip.
+                # * AgentRefusal -- terminated with the generic
+                #   "not supported by Ask Dev" refusal, which labels a
+                #   no-match as a refusal (PRD Wave 3.1 §12).
+                #
+                # Two preconditions keep this from diverting a run that is
+                # legitimately about something else:
+                #
+                # * `last_resolve_scope_outcome` is the LAST outcome, not any
+                #   outcome -- a run that failed to resolve "A" and then
+                #   resolved "B" exactly is answering about B.
+                # * the run is still on organization scope -- if an earlier
+                #   resolve_scope.v1 committed a real entity scope, the answer
+                #   is about that entity and a later miss on some other name
+                #   must not erase it. This is the same precondition
+                #   `_legacy_named_entity_guard_reason` uses, for the same
+                #   reason.
+                #
+                # Deliberately NOT restricted to `QuestionClass.STATUS` the
+                # way that guard is: §12's prohibition is about a named
+                # subject that could not be found, and a class restriction
+                # would leave the identical defect reachable from every other
+                # question class.
+                #
+                # The third precondition is what makes this safe, and an
+                # earlier revision without it was wrong (codex adversarial
+                # review, round 1 HIGH, with a repro from this file's own
+                # fixtures): "the last lookup missed" does NOT imply "the
+                # answer depended on it". A model can speculatively resolve a
+                # name the user never wrote, miss, and then answer a genuinely
+                # organization-wide question correctly -- diverting that run
+                # replaces a good answer with a no-match about a subject
+                # nobody asked for. Requiring the failed query to correspond
+                # to a whole word the USER typed is the cheapest available
+                # proof that the miss was about the question's own subject,
+                # and it is the same span the copy would name.
+                missed_subject_label = (
+                    user_supplied_subject_label(
+                        request.question, last_resolve_scope_query
+                    )
+                    if last_resolve_scope_outcome
+                    is ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND
+                    else None
+                )
+                if (
+                    missed_subject_label is not None
+                    and last_resolve_scope_resolution is not None
+                    and authorized_scope.direct_scope is DirectScope.ORGANIZATION
+                    and isinstance(decision, (AgentFinalAnswer, AgentRefusal))
+                ):
+                    await transition(RunState.ANSWER_VALIDATION)
+                    return await finish(
+                        RunState.INSUFFICIENT_EVIDENCE,
+                        answer=named_subject_not_found_answer(
+                            answer_id=answer_id,
+                            conversation_id=conversation_id,
+                            question=request.question,
+                            query=last_resolve_scope_query,
+                            resolution=last_resolve_scope_resolution,
+                            versions=self._versions,
+                            model=DevModelMetadata(
+                                provider_source=self._provider_source,
+                                provider_family=self._provider_family,
+                                model_fingerprint=decision_result.model_fingerprint,
+                            ),
+                            now=datetime.now(UTC),
+                        ),
+                    )
 
                 if isinstance(decision, AgentFinalAnswer):
                     await transition(RunState.ANSWER_VALIDATION)

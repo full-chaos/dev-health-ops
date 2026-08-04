@@ -266,10 +266,20 @@ async def test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all(
 
 
 @pytest.mark.asyncio
-async def test_m3b_with_the_leakage_guard_also_disabled_a8_is_the_net(
+async def test_m3b_with_the_leakage_guard_disabled_the_terminal_boundary_is_the_net(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Layer two: defeat guardrail (a) as well, and watch A8's scan catch it."""
+    """Layer two: defeat guardrail (a) as well.
+
+    Before CHAOS-3367 this reached A8's acceptance scan, and that assertion is
+    now M3c's. What changed is that ``orchestrator.finish()`` gained a
+    terminal-boundary check of its own -- run over every terminal this module
+    writes, not only over a v2 frame -- so the leak is caught one layer
+    earlier and the run fails closed to ``internal_error``. Asserting the
+    layer it actually dies at is the point of a mutation test; letting it keep
+    the old assertion would have quietly recorded a death at a layer that is
+    no longer the one doing the work.
+    """
 
     from dev_health_ops.api.dev.contracts_v2 import validators as validators_module
 
@@ -280,6 +290,34 @@ async def test_m3b_with_the_leakage_guard_also_disabled_a8_is_the_net(
     )
     monkeypatch.setattr(
         validators_module, "validate_no_internal_leakage", lambda _frame: None
+    )
+    mutated = await case_a8()
+
+    assert mutated.result.error is not None
+    assert mutated.result.error.code == "internal_error"
+    assert scan_public_text(mutated.result.error.safe_message) == []
+
+
+@pytest.mark.asyncio
+async def test_m3c_with_every_server_guardrail_disabled_a8_is_the_net(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Layer three: defeat the CHAOS-3367 boundary check too, and watch A8's
+    own acceptance scan catch what nothing on the server did."""
+
+    from dev_health_ops.api.dev import orchestrator as orchestrator_module
+    from dev_health_ops.api.dev.contracts_v2 import validators as validators_module
+
+    monkeypatch.setitem(
+        no_answer_policy.CANONICAL_NO_ANSWER_COPY,
+        "not_found",
+        _LEAKY_COPY,
+    )
+    monkeypatch.setattr(
+        validators_module, "validate_no_internal_leakage", lambda _frame: None
+    )
+    monkeypatch.setattr(
+        orchestrator_module, "internal_token_leak", lambda _values, **_kwargs: None
     )
     mutated = await case_a8()
 

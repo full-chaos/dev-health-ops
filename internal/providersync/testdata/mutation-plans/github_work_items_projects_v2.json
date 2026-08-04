@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "name": "unregistered github projects v2 semantic foundation",
+  "build": ["go", "build", "./internal/providersync/"],
+  "$limitation": "This plan covers the unregistered Projects v2 fetch, normalization, and composition foundation. Route registration, effects, watermarking, readiness, and the unresolved fanout ownership decision are intentionally absent.",
+  "mutations": [
+    {
+      "id": "P1-credential-matches-claimed-credential",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "credential.ID == \"\" || credential.ID != claim.CredentialID || client == nil ||",
+      "replace": "credential.ID == \"\" || credential.ID == claim.CredentialID || client == nil ||",
+      "rationale": "Projects v2 must use the credential resolved for this claim, never a global or unrelated descriptor",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2FetcherRequiresClaimResolvedCredentialAndClient$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P2-nested-missing-cursor-fails-closed",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "if cursor == \"\" || strings.TrimSpace(item.ID) == \"\" {",
+      "replace": "if cursor == \"impossible-cursor\" || strings.TrimSpace(item.ID) == \"\" {",
+      "rationale": "hasNextPage without an endCursor cannot establish complete nested history and must not become a partial success",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2FetcherFailsClosedOnUnusableCursors$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P3-outer-missing-cursor-fails-closed",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "if next == \"\" || next == outerCursor {",
+      "replace": "if false && (next == \"\" || next == outerCursor) {",
+      "rationale": "hasNextPage without an endCursor cannot establish a complete project inventory",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2FetcherFailsClosedOnUnusableCursors$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P4-pull-requests-remain-skipped",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "if item.Content.Typename == \"PullRequest\" || (item.Content.Typename != \"Issue\" && item.Content.Typename != \"DraftIssue\") {",
+      "replace": "if item.Content.Typename != \"PullRequest\" && (item.Content.Typename != \"Issue\" && item.Content.Typename != \"DraftIssue\") {",
+      "rationale": "The active Python Projects v2 normalizer explicitly emits no WorkItem or transitions for PullRequest content",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2PullRequestSkipMatchesLivePythonProductionDecision$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P5-project-row-is-last-wins",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "merged.WorkItems[position] = row",
+      "replace": "merged.WorkItems[position] = merged.WorkItems[position]",
+      "rationale": "Python overwrites a repository row with the Projects v2 row at the original insertion position",
+      "proof": [["go", "test", "-count=1", "-run", "^TestMergeGitHubProjectV2RowsPreservesPythonLastWinsAndTransitionAppend$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P6-project-transitions-append",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "merged.StatusTransitions = append(append([]githubWorkItemTransitionRow{}, repository.StatusTransitions...), projects.StatusTransitions...)",
+      "replace": "merged.StatusTransitions = append([]githubWorkItemTransitionRow{}, repository.StatusTransitions...)",
+      "rationale": "Python appends all Projects v2 transitions after repository transitions instead of deduplicating or replacing them",
+      "proof": [["go", "test", "-count=1", "-run", "^TestMergeGitHubProjectV2RowsPreservesPythonLastWinsAndTransitionAppend$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P7-nested-pages-are-composed",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "item.Changes.Nodes = append(item.Changes.Nodes, more.Nodes...)",
+      "replace": "item.Changes.Nodes = append([]gitHubProjectV2ChangePayload{}, more.Nodes...)",
+      "rationale": "Every nested changes page participates in transition history; replacing the first page silently truncates history",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P8-documented-label-leaf-bound-is-preserved",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "expect_occurrences": 2,
+      "find": "labels(first: 50)",
+      "replace": "labels(first: 49)",
+      "rationale": "The port intentionally preserves the active producer's documented unpaginated labels(first: 50) leaf truncation",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P9-physical-attempts-are-counted",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "func (doer gitHubProjectV2CountingDoer) Do(request *http.Request) (*http.Response, error) {\n\t*doer.requests++",
+      "replace": "func (doer gitHubProjectV2CountingDoer) Do(request *http.Request) (*http.Response, error) {\n\tif false { *doer.requests++ }",
+      "rationale": "Fetch evidence counts every physical HTTP attempt, including retries inside one logical budget reservation",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2FetcherCountsPhysicalRetriesButReservesOnce$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P10-graphql-usage-counts-physical-attempts",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "if request.URL.EscapedPath() == doer.graphqlPath {\n\t\t*doer.graphqlRequests++",
+      "replace": "if false && request.URL.EscapedPath() == doer.graphqlPath {\n\t\t*doer.graphqlRequests++",
+      "rationale": "The work_item_prs GraphQL actual records every physical wire attempt rather than only successful logical pages",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2FetcherCountsPhysicalRetriesButReservesOnce$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P11-error-results-retain-request-evidence",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "expect_occurrences": 2,
+      "find": "return finishGitHubProjectV2Fetch(result), err",
+      "replace": "return GitHubProjectV2FetchResult{}, err",
+      "rationale": "Terminal fetch and normalization failures retain already-observed safe usage instead of returning an indistinguishable zero result",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2FetcherRetainsPhysicalUsageOnTerminalError$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P12-projects-v2-uses-python-budget-vocabulary",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "Transport: \"graphql\", RouteFamily: \"work_item_prs\", Dimension: BudgetGraphQLCost,",
+      "replace": "Transport: \"graphql\", RouteFamily: \"projects_v2\", Dimension: BudgetGraphQLCost,",
+      "rationale": "Projects v2 actual usage must use Python's work_item_prs/graphql_cost vocabulary so planned and actual usage remain joinable",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2FetcherCountsPhysicalRetriesButReservesOnce$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P13-draft-issues-are-emitted",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "workItemID := \"ghproj:\" + item.ID",
+      "replace": "workItemID := \"ghproj-draft:\" + item.ID",
+      "rationale": "The live Python Projects v2 producer emits DraftIssue rows with the project-native ghproj item identity",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubProjectV2DraftIssueMatchesLivePythonProductionRow$", "./internal/providersync/"]]
+    }
+  ]
+}

@@ -119,7 +119,17 @@ def test_project_repository_derivation_parses_against_production_schema(
 
     sql = PROJECT_REPOSITORIES_SQL
     assert "{org_id:String}" in sql, "derivation lacks an explicit tenant predicate"
-    assert "LIMIT" not in sql.upper(), "an authorization set must not be truncated"
+    # CHAOS-3374: the identity CTE's own ``LIMIT 1`` bounds a single unique
+    # catalog-row lookup by its ReplacingMergeTree key, not the derived
+    # repository set -- so a parameterised page bound must still never appear,
+    # but that one literal ``LIMIT 1`` is expected and is the ONLY "LIMIT" in
+    # the query.
+    assert "LIMIT {limit:UInt32}" not in sql, (
+        "an authorization set must not be truncated"
+    )
+    assert sql.upper().count("LIMIT") == 1, (
+        "expected exactly the identity CTE's own LIMIT 1, found a different count"
+    )
     params: dict[str, object] = {
         "org_id": ORG_ID,
         "entity_id": "project-target",

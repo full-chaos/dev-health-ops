@@ -122,6 +122,34 @@ def class_annotated_field_names(source: str, class_name: str) -> frozenset[str]:
     )
 
 
+def dataclass_field_names(source: str, class_name: str) -> frozenset[str]:
+    """Return every public annotated field declared by a production dataclass.
+
+    Provider work-item normalizers return dataclasses directly rather than a
+    dict literal or ORM row. Reflecting the owning class keeps the oracle's
+    completeness set tied to the real semantic batch contract: adding a field
+    to the dataclass makes every pair fail until it compares or explicitly
+    excludes that field.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name != class_name:
+            continue
+        fields = {
+            statement.target.id
+            for statement in node.body
+            if isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and not statement.target.id.startswith("_")
+        }
+        if fields:
+            return frozenset(fields)
+        break
+    raise ValueError(
+        f"dataclass_field_names: no annotated public fields found for {class_name!r}"
+    )
+
+
 def typed_dict_field_names(source: str, class_name: str) -> frozenset[str]:
     """Return every annotated field declared by one production TypedDict.
 

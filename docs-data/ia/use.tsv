@@ -28,6 +28,7 @@ use-ai-impact	use-ai	/use/ai-workflows/impact/	AI Impact	workflow-guide	true	pub
 use-ai-review	use-ai	/use/ai-workflows/review-load/	AI Review Load	workflow-guide	true	public	planned	false	
 use-ai-risk	use-ai	/use/ai-workflows/risk/	AI Risk	workflow-guide	true	public	planned	false	
 use-ai-attribution	use-ai	/use/ai-workflows/attribution/	AI Attribution	workflow-guide	true	public	planned	false	
+use-ask-dev	use	/use/ask-dev/	Ask Dev and agent context	concept	true	public	active	false	Use Ask Dev, understand Context Fabric, and choose ACR or MCP agent entry points.
 use-reports	use	/use/reports/	Create and read reports	landing	true	public	planned	false	
 use-report-create	use-reports	/use/reports/create-or-clone/	Create or clone a report	task-guide	true	public	planned	false	
 use-report-run	use-reports	/use/reports/run-and-schedule/	Run and schedule reports	task-guide	true	public	planned	false	

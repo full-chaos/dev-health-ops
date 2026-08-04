@@ -1,0 +1,43 @@
+- generic [active] [ref=f2e1]:
+  - navigation [ref=f2e2]:
+    - generic [ref=f2e3]:
+      - link "Full Chaos Dev Health home" [ref=f2e4] [cursor=pointer]:
+        - /url: /
+        - img "Full Chaos Dev Health logo" [ref=f2e5]
+        - generic [ref=f2e6]:
+          - generic [ref=f2e7]: Full Chaos
+          - generic [ref=f2e8]: Dev Health
+      - generic [ref=f2e9]:
+        - generic [ref=f2e10]: OSS
+        - generic [ref=f2e11]: Beta
+    - generic [ref=f2e12]:
+      - link "Pricing" [ref=f2e13] [cursor=pointer]:
+        - /url: /marketing/pricing
+      - link "Sign In" [ref=f2e14] [cursor=pointer]:
+        - /url: /auth/signin
+      - link "Get started" [ref=f2e15] [cursor=pointer]:
+        - /url: /auth/signup
+  - main [ref=f2e16]:
+    - generic [ref=f2e18]:
+      - generic [ref=f2e19]:
+        - link "Sign In" [ref=f2e20] [cursor=pointer]:
+          - /url: /auth/signin
+        - link "Create account" [ref=f2e21] [cursor=pointer]:
+          - /url: /auth/signup
+      - generic [ref=f2e22]:
+        - button "Continue with GitHub" [ref=f2e23]
+        - button "Continue with Google" [ref=f2e26]
+      - generic [ref=f2e32]: continue with email
+      - generic [ref=f2e36]:
+        - generic [ref=f2e37]:
+          - generic [ref=f2e38]: Email
+          - textbox "Email" [ref=f2e39]:
+            - /placeholder: name@example.com
+        - generic [ref=f2e40]:
+          - generic [ref=f2e41]: Password
+          - textbox "Password" [ref=f2e42]
+        - link "Forgot password?" [ref=f2e44] [cursor=pointer]:
+          - /url: /auth/forgot-password
+        - button "Sign In" [ref=f2e45]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f2e51] [cursor=pointer]

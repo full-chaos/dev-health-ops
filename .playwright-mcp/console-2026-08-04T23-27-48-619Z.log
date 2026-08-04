@@ -1,0 +1,7 @@
+[     133ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[     135ms] [ERROR] eval() is not supported in this environment. If this page was served with a `Content-Security-Policy` header, make sure that `unsafe-eval` is included. React requires eval() in development mode for various debugging features like reconstructing callstacks from a different environment.
+React will never use eval() in production mode @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:3331
+[     167ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://127.0.0.1:3005/auth/signin:0
+[     179ms] [LOG] [HMR] connected @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[     228ms] [INFO] [info] web-vital {metric: FCP, value: 132, rating: good} @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[     228ms] [INFO] [info] web-vital {metric: TTFB, value: 34.5, rating: good} @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490

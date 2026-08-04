@@ -128,6 +128,10 @@ type Config struct {
 	// Its Python counterpart is ProviderUnitRouteSwitches.github_prs, read
 	// from the same WORKER_GITHUB_PRS_ENABLED name.
 	WorkerGithubPRsEnabled bool
+	// WorkerGithubPRReviewsEnabled and WorkerGithubPRCommentsEnabled gate the
+	// two remaining dataset aliases for the same complete PR-social unit.
+	WorkerGithubPRReviewsEnabled  bool
+	WorkerGithubPRCommentsEnabled bool
 	// WorkerGithubCICDEnabled gates the isolated (github, cicd) route.
 	WorkerGithubCICDEnabled bool
 	// WorkerGithubCommitsEnabled gates the isolated (github, commits) route.
@@ -249,6 +253,14 @@ func Load(spec Spec) (Config, error) {
 			target: &cfg.WorkerGithubPRsEnabled,
 		},
 		{
+			name:   "WORKER_GITHUB_PR_REVIEWS_ENABLED",
+			target: &cfg.WorkerGithubPRReviewsEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_PR_COMMENTS_ENABLED",
+			target: &cfg.WorkerGithubPRCommentsEnabled,
+		},
+		{
 			name:   "WORKER_GITHUB_CICD_ENABLED",
 			target: &cfg.WorkerGithubCICDEnabled,
 		},
@@ -288,6 +300,19 @@ func Load(spec Spec) (Config, error) {
 	}
 	if cfg.WorkerGithubCICDEnabled && cfg.WorkerGithubTestsEnabled {
 		return Config{}, fmt.Errorf("WORKER_GITHUB_CICD_ENABLED and WORKER_GITHUB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
+	}
+	githubPRSocialAliases := 0
+	for _, enabled := range []bool{
+		cfg.WorkerGithubPRsEnabled,
+		cfg.WorkerGithubPRReviewsEnabled,
+		cfg.WorkerGithubPRCommentsEnabled,
+	} {
+		if enabled {
+			githubPRSocialAliases++
+		}
+	}
+	if githubPRSocialAliases > 1 {
+		return Config{}, fmt.Errorf("WORKER_GITHUB_PRS_ENABLED, WORKER_GITHUB_PR_REVIEWS_ENABLED, and WORKER_GITHUB_PR_COMMENTS_ENABLED are mutually exclusive: all delegate to one complete PR-social writer")
 	}
 	if cfg.WorkerGitlabCICDEnabled && cfg.WorkerGitlabTestsEnabled {
 		return Config{}, fmt.Errorf("WORKER_GITLAB_CICD_ENABLED and WORKER_GITLAB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
@@ -556,6 +581,8 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("worker_gitlab_tests_enabled", c.WorkerGitlabTestsEnabled),
 		slog.Bool("worker_gitlab_incidents_enabled", c.WorkerGitlabIncidentsEnabled),
 		slog.Bool("worker_github_prs_enabled", c.WorkerGithubPRsEnabled),
+		slog.Bool("worker_github_pr_reviews_enabled", c.WorkerGithubPRReviewsEnabled),
+		slog.Bool("worker_github_pr_comments_enabled", c.WorkerGithubPRCommentsEnabled),
 		slog.Bool("worker_github_commits_enabled", c.WorkerGithubCommitsEnabled),
 		slog.Bool("worker_github_security_enabled", c.WorkerGithubSecurityEnabled),
 		slog.Bool("worker_github_blame_enabled", c.WorkerGithubBlameEnabled),

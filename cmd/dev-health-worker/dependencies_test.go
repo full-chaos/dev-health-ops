@@ -191,30 +191,12 @@ func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing
 			},
 			wantErr: true,
 		},
-		{
-			// (github, prs) is NOT RouteReady (codex H1: the pair's own
-			// destination table has three columns owned by github/pr-reviews,
-			// which does not exist yet -- see execution_registry.go's
-			// github/prs case). Enabling its switch must fail this health
-			// check even with the runtime constructed, because
-			// switches.Descriptor("github","prs").RouteReady is false
-			// unconditionally right now. This is the deliberate fail-closed
-			// behavior an operator who flips WORKER_GITHUB_PRS_ENABLED early
-			// should see, not a bug.
-			name: "github prs enabled but not yet route-ready",
-			config: config.Config{
-				WorkerGithubPRsEnabled: true,
-			},
-			runtime: true,
-			wantErr: true,
-		},
-		{
-			name: "github prs missing runtime (also not route-ready)",
-			config: config.Config{
-				WorkerGithubPRsEnabled: true,
-			},
-			wantErr: true,
-		},
+		{name: "github prs complete", config: config.Config{WorkerGithubPRsEnabled: true}, runtime: true},
+		{name: "github prs missing runtime", config: config.Config{WorkerGithubPRsEnabled: true}, wantErr: true},
+		{name: "github pr reviews complete", config: config.Config{WorkerGithubPRReviewsEnabled: true}, runtime: true},
+		{name: "github pr reviews missing runtime", config: config.Config{WorkerGithubPRReviewsEnabled: true}, wantErr: true},
+		{name: "github pr comments complete", config: config.Config{WorkerGithubPRCommentsEnabled: true}, runtime: true},
+		{name: "github pr comments missing runtime", config: config.Config{WorkerGithubPRCommentsEnabled: true}, wantErr: true},
 		{
 			name:    "linear incomplete",
 			config:  config.Config{WorkerLinearWorkItemsEnabled: true},

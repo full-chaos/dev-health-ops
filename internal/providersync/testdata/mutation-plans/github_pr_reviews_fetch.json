@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "name": "github/pr-reviews non-routed fetch foundation",
+  "build": ["go", "build", "./..."],
+  "mutations": [
+    {
+      "id": "pagination-cap-marks-incomplete",
+      "file": "internal/providersync/github_pr_reviews_fetch.go",
+      "find": "if result.Evidence.Pages >= maxPages {",
+      "replace": "if false {",
+      "rationale": "a bounded GraphQL review traversal that has another page must return the typed incomplete marker, never silently accept an unbounded collection",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubPullRequestReviewFetcherReturnsTypedPaginationIncomplete$", "./internal/providersync/"]]
+    },
+    {
+      "id": "rate-limit-propagates-not-degrades",
+      "file": "internal/providersync/github_pr_reviews_fetch.go",
+      "find": "|| isRateLimited(err) {",
+      "replace": "|| false {",
+      "rationale": "a GitHub rate limit carries retry and deferral semantics, so it must stay an error instead of becoming optional-enrichment incompleteness",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubPullRequestReviewFetcherRateLimitPropagates$", "./internal/providersync/"]]
+    },
+    {
+      "id": "lease-loss-propagates-not-degrades",
+      "file": "internal/providersync/github_pr_reviews_fetch.go",
+      "find": "if errors.Is(err, providerfoundation.ErrLeaseLost) || errors.Is(err, context.Canceled) ||",
+      "replace": "if false || errors.Is(err, context.Canceled) ||",
+      "rationale": "a lost lease is control-plane loss before a provider request, never an optional provider failure that may be returned as an incomplete result",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubPullRequestReviewFetcherChecksLeaseBeforeRequest$", "./internal/providersync/"]]
+    },
+    {
+      "id": "non-rate-failure-has-explicit-marker",
+      "file": "internal/providersync/github_pr_reviews_fetch.go",
+      "find": "result.Incomplete = &GitHubPullRequestReviewFetchIncomplete{Cause: gitHubPullRequestReviewFailureCause(err)}",
+      "replace": "result.Incomplete = nil",
+      "rationale": "a swallowed non-rate failure must carry an explicit typed marker so an empty review list cannot be treated as complete or route-ready",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubPullRequestReviewFetcherMarksNonRateFailuresIncomplete$", "./internal/providersync/"]]
+    }
+  ]
+}

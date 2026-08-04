@@ -7,6 +7,7 @@ from collections import defaultdict
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -208,6 +209,30 @@ class IntegrationDatasetService:
     ) -> IntegrationDataset:
         dataset.is_enabled = enabled
         await self._session.flush()
+        return dataset
+
+    async def create(
+        self,
+        integration_id: uuid.UUID,
+        dataset_key: str,
+        is_enabled: bool,
+    ) -> IntegrationDataset:
+        dataset = IntegrationDataset(
+            org_id=self._org_id,
+            integration_id=integration_id,
+            dataset_key=dataset_key,
+            is_enabled=is_enabled,
+            options={},
+        )
+        try:
+            async with self._session.begin_nested():
+                self._session.add(dataset)
+                await self._session.flush()
+        except IntegrityError:
+            existing = await self.get_by_key(str(integration_id), dataset_key)
+            if existing is None:
+                raise
+            return await self.set_enabled(existing, is_enabled)
         return dataset
 
     async def get_by_key(

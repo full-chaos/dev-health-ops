@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING
 
+from sqlalchemy.exc import IntegrityError
+
 from dev_health_ops.backfill.chunker import chunk_date_range
 from dev_health_ops.credentials.fingerprint import (
     AUTH_SOURCE_ENVIRONMENT,
@@ -178,6 +180,7 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
             mode=mode,
             reason=repair_outcome,
         )
+    _reconcile_explicit_requested_datasets(session, integration, request)
     gate_datasets = _load_enabled_datasets(session, integration, request.dataset_keys)
     if sync_datasets_require_canonical_incident_feature(
         str(integration.provider),
@@ -420,6 +423,79 @@ def _load_enabled_sources(
     return list(query.order_by(IntegrationSource.full_name, IntegrationSource.id).all())
 
 
+def _reconcile_explicit_requested_datasets(
+    session: Session,
+    integration: Integration,
+    request: SyncPlanRequest,
+) -> None:
+    dataset_keys = request.dataset_keys
+    if dataset_keys is None:
+        return
+
+    provider = str(integration.provider).lower()
+    if (
+        provider in _CODE_HOST_SECURITY_PROVIDERS
+        and request.triggered_by == _SCHEDULED_SECURITY_TRIGGER
+    ):
+        dataset_keys = tuple(
+            dataset_key
+            for dataset_key in dataset_keys
+            if dataset_key != DatasetKey.SECURITY.value
+        )
+    requested_keys = {
+        dataset_key
+        for dataset_key in dataset_keys
+        if (spec := get_dataset_spec(provider, dataset_key)) is not None
+        and spec.supported
+    }
+    if not requested_keys:
+        return
+
+    existing_keys = {
+        dataset.dataset_key
+        for dataset in session.query(IntegrationDataset)
+        .filter(
+            IntegrationDataset.org_id == integration.org_id,
+            IntegrationDataset.integration_id == integration.id,
+            IntegrationDataset.dataset_key.in_(requested_keys),
+        )
+        .all()
+    }
+    for dataset_key in requested_keys - existing_keys:
+        _insert_dataset_if_missing(
+            session,
+            IntegrationDataset(
+                org_id=integration.org_id,
+                integration_id=integration.id,
+                dataset_key=dataset_key,
+                is_enabled=True,
+                options={},
+            ),
+        )
+
+
+def _insert_dataset_if_missing(
+    session: Session,
+    dataset: IntegrationDataset,
+) -> None:
+    try:
+        with session.begin_nested():
+            session.add(dataset)
+            session.flush()
+    except IntegrityError:
+        existing = (
+            session.query(IntegrationDataset)
+            .filter(
+                IntegrationDataset.org_id == dataset.org_id,
+                IntegrationDataset.integration_id == dataset.integration_id,
+                IntegrationDataset.dataset_key == dataset.dataset_key,
+            )
+            .one_or_none()
+        )
+        if existing is None:
+            raise
+
+
 _CODE_HOST_SECURITY_PROVIDERS = frozenset({"github", "gitlab"})
 _SCHEDULED_SECURITY_TRIGGER = "schedule"
 
@@ -457,16 +533,16 @@ def _ensure_security_dataset_for_scheduled_code_host_sync(
         .one_or_none()
     )
     if security_dataset is None:
-        session.add(
+        _insert_dataset_if_missing(
+            session,
             IntegrationDataset(
                 org_id=integration.org_id,
                 integration_id=integration.id,
                 dataset_key=DatasetKey.SECURITY.value,
                 is_enabled=True,
                 options={"auto_enabled_by": "scheduled_code_host_sync"},
-            )
+            ),
         )
-        session.flush()
     return requested
 
 

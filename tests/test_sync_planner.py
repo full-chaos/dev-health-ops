@@ -373,6 +373,112 @@ def test_disabled_dataset_produces_zero_units_without_hydrating_credentials(
     assert _planned_units(db_session, plan.sync_run_id) == []
 
 
+@pytest.mark.parametrize(
+    ("existing_enabled", "expected_units"),
+    [(None, 1), (False, 0)],
+    ids=["missing-row-is-enabled", "disabled-row-stays-disabled"],
+)
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+def test_requested_tests_dataset_reconciles_missing_row_without_overriding_disabled(
+    db_session,
+    provider: str,
+    existing_enabled: bool | None,
+    expected_units: int,
+):
+    # Given: an existing code-host integration with a source and either no tests
+    # row or an explicitly disabled tests row.
+    integration = _create_integration(db_session, provider)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    if existing_enabled is not None:
+        _create_dataset(
+            db_session,
+            integration,
+            "tests",
+            is_enabled=existing_enabled,
+        )
+
+    # When: the planner is asked to run the newly supported tests dataset.
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            dataset_keys=("tests",),
+        ),
+    )
+
+    # Then: a missing row becomes enabled and executable, while an explicit
+    # disabled row remains disabled and produces no unit.
+    dataset = (
+        db_session.query(IntegrationDataset)
+        .filter_by(integration_id=integration.id, dataset_key="tests")
+        .one_or_none()
+    )
+    assert dataset is not None
+    assert dataset.is_enabled is (existing_enabled is not False)
+    assert plan.total_units == expected_units
+    assert {
+        unit.dataset_key for unit in _planned_units(db_session, plan.sync_run_id)
+    } == ({"tests"} if expected_units else set())
+
+
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+def test_unrequested_tests_dataset_is_not_reconciled(db_session, provider: str):
+    # Given: an existing code-host integration with no persisted dataset rows.
+    integration = _create_integration(db_session, provider)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+
+    # When: the planner receives no explicit dataset selection.
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    # Then: tests remains opt-in and no dataset row or unit is created.
+    assert (
+        db_session.query(IntegrationDataset)
+        .filter_by(integration_id=integration.id, dataset_key="tests")
+        .one_or_none()
+        is None
+    )
+    assert plan.total_units == 0
+    assert _planned_units(db_session, plan.sync_run_id) == []
+
+
+def test_insert_dataset_if_missing_preserves_concurrent_disabled_row(db_session):
+    # Given: another transaction has already inserted the requested dataset as disabled.
+    integration = _create_integration(db_session)
+    existing = _create_dataset(db_session, integration, "tests", is_enabled=False)
+
+    # When: stale planner state attempts the same insert.
+    planner._insert_dataset_if_missing(
+        db_session,
+        IntegrationDataset(
+            org_id=integration.org_id,
+            integration_id=integration.id,
+            dataset_key="tests",
+            is_enabled=True,
+            options={},
+        ),
+    )
+
+    # Then: the uniqueness conflict is isolated and the disabled row is unchanged.
+    datasets = (
+        db_session.query(IntegrationDataset)
+        .filter_by(integration_id=integration.id, dataset_key="tests")
+        .all()
+    )
+    assert [dataset.id for dataset in datasets] == [existing.id]
+    assert datasets[0].is_enabled is False
+
+
 def test_incremental_window_starts_at_dataset_watermark(db_session):
     integration = _create_integration(db_session)
     source = _create_source(

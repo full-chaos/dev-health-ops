@@ -55,8 +55,15 @@ func TestProviderRequestPlansMatchLivePythonBudgetFunctions(t *testing.T) {
 			)
 		}
 		if test.ActualRouteFamily != "" {
-			if len(got) != 1 || got[0].RouteFamily != test.ActualRouteFamily ||
-				got[0].Dimension != test.ActualDimension {
+			matched := false
+			for _, estimate := range got {
+				if estimate.RouteFamily == test.ActualRouteFamily &&
+					estimate.Dimension == test.ActualDimension {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				t.Fatalf(
 					"%s/%s actual resolver=(%s,%s) request plan=%+v",
 					test.Provider, test.Dataset, test.ActualRouteFamily,
@@ -77,6 +84,47 @@ func TestProviderRequestPlansFailClosedForUnknownRoutes(t *testing.T) {
 	} {
 		if plan := ProviderRequestPlan(test.provider, test.dataset, 1, nil); len(plan) != 0 {
 			t.Fatalf("%s/%s plan=%+v", test.provider, test.dataset, plan)
+		}
+	}
+}
+
+func TestGitHubWorkItemRequestPlansCoverEveryAliasAndPRPressure(t *testing.T) {
+	t.Parallel()
+	for _, dataset := range []string{
+		"work-items", "work-item-labels", "work-item-projects",
+		"work-item-history", "work-item-comments",
+	} {
+		restUnits := 3
+		if dataset == "work-items" {
+			restUnits = 6
+		}
+		withoutPRs := ProviderRequestPlan(
+			"github", dataset, 3, map[string]bool{"sync_prs": false},
+		)
+		if want := []RequestEstimate{{
+			Dimension: BudgetRESTCore, Units: restUnits,
+			Confidence: "medium", RouteFamily: "work_items",
+		}}; !reflect.DeepEqual(withoutPRs, want) {
+			t.Fatalf("%s without PRs=%+v want=%+v", dataset, withoutPRs, want)
+		}
+		withPRs := ProviderRequestPlan(
+			"github", dataset, 3, map[string]bool{"sync_prs": true},
+		)
+		if want := []RequestEstimate{
+			{
+				Dimension: BudgetGraphQLCost, Units: 9,
+				Confidence: "medium", RouteFamily: "work_item_prs",
+			},
+			{
+				Dimension: BudgetSecondaryAbuseRisk, Units: 1,
+				Confidence: "low", RouteFamily: "work_item_prs",
+			},
+			{
+				Dimension: BudgetRESTCore, Units: restUnits,
+				Confidence: "medium", RouteFamily: "work_items",
+			},
+		}; !reflect.DeepEqual(withPRs, want) {
+			t.Fatalf("%s with PRs=%+v want=%+v", dataset, withPRs, want)
 		}
 	}
 }

@@ -8,7 +8,7 @@ may replace the rule result or widen the requested scope.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Protocol
 
@@ -304,6 +304,28 @@ class ActualCompletion:
 class RawStatusSnapshot:
     declared: StatusFact | None
     children: tuple[StatusFact, ...] = ()
+    # CHAOS-3368: the project's own DECLARED lifecycle state / target date
+    # (projects.state/target_date, migration 073) for PROJECT scope --
+    # additive data alongside the derived completion/blockers below.
+    # Deliberately NEVER read by ``_assess``: these describe what the
+    # PROVIDER declared for the project as a whole, not an input to the
+    # derived actual-completion verdict, and wiring them in would change
+    # that rule's behavior -- out of this ticket's scope. ``None``/``None``
+    # when the scope is not PROJECT, the catalog row could not be resolved
+    # unambiguously, the row was updated after ``as_of`` (no history left
+    # to answer an as-of read from once ``FINAL`` collapses it), or the
+    # provider populated neither column -- every one of those renders as
+    # an absent fact, never a fabricated one.
+    #
+    # Codex adversarial review (HIGH, 2026-08-04): kept as TYPED scalars,
+    # never pre-joined into a single presentation string -- a consumer
+    # (the interim status_facts wiring today, a future deterministic
+    # renderer tomorrow) must be able to use ``declared_project_state`` and
+    # ``declared_project_target_date`` independently without parsing
+    # semicolon-delimited prose back apart.
+    declared_project_state: str | None = None
+    declared_project_target_date: date | None = None
+    declared_project_observed_at: datetime | None = None
     blockers: tuple[StatusFact, ...] = ()
     pull_requests: tuple[PullRequestFact, ...] = ()
     ci: tuple[CIFact, ...] = ()
@@ -372,6 +394,16 @@ class StatusSnapshotResult:
     incidents: tuple[IncidentFact, ...]
     source_refs: tuple[SourceReference, ...]
     warnings: tuple[str, ...]
+    # CHAOS-3368: see RawStatusSnapshot's own declared_project_* fields --
+    # carried through unchanged, never consumed by ``_assess``. Defaulted
+    # (unlike every other field on this frozen dataclass) so the many
+    # existing direct ``StatusSnapshotResult(...)`` test fixtures across
+    # the CHAOS-3303 service suite keep constructing valid instances
+    # without being touched by this change -- every one of them predates
+    # project declared-state facts and legitimately has none.
+    declared_project_state: str | None = None
+    declared_project_target_date: date | None = None
+    declared_project_observed_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -539,6 +571,9 @@ class StatusChangeService:
         bounded = replace(
             raw,
             children=self._bounded(raw.children, request.max_items),
+            # declared_project_* fields are scalars, not a list -- no
+            # truncation bound applies; they pass through `replace`
+            # unchanged since they're not named here.
             blockers=self._bounded(raw.blockers, request.max_items),
             pull_requests=self._bounded(raw.pull_requests, request.max_items),
             ci=self._bounded(raw.ci, request.max_items),
@@ -625,6 +660,9 @@ class StatusChangeService:
             declared=bounded.declared,
             actual=actual,
             children=self._ordered_status(bounded.children),
+            declared_project_state=bounded.declared_project_state,
+            declared_project_target_date=bounded.declared_project_target_date,
+            declared_project_observed_at=bounded.declared_project_observed_at,
             blockers=self._ordered_status(bounded.blockers),
             pull_requests=tuple(sorted(bounded.pull_requests, key=self._pr_key)),
             ci=tuple(sorted(bounded.ci, key=self._ci_key)),

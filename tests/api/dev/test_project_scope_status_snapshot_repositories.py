@@ -38,13 +38,19 @@ not a stand-in for it.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
 
 from dev_health_ops.api.dev import native_status_change, scope_catalog
-from dev_health_ops.api.dev.contracts import DirectScope
+from dev_health_ops.api.dev.contracts import (
+    DevEntityRef,
+    DevScope,
+    DevTimeRange,
+    DirectScope,
+    EntityType,
+)
 from dev_health_ops.api.dev.native_status_change import ClickHouseStatusChangeSource
 from dev_health_ops.api.dev.scope_catalog import ClickHouseAuthorizedEntityCatalog
 from dev_health_ops.api.dev.scope_service import (
@@ -1050,3 +1056,244 @@ async def test_empty_project_id_never_issues_a_derivation_query(
 
     assert derived == []
     assert fake.sql == []
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3368: the project's own declared state / target date
+# (projects.state/target_date, migration 073) must surface as status facts
+# for a committed PROJECT subject, additive to (never a substitute for) the
+# derived work-item completion tree this file already pins above.
+# ---------------------------------------------------------------------------
+
+
+def _install_status_client_with_project_row(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    project_row: dict[str, Any] | None,
+) -> _FakeWorkItems:
+    """``_install_status_client`` plus a controllable ``projects`` catalog
+    read, without touching ``_FakeWorkItems`` itself (every other test in
+    this file depends on its existing, unmodified behavior -- an unhandled
+    query there already falls through to an empty result, which is exactly
+    what "no project row" needs, so only the new query is intercepted here).
+
+    Matched on ``"any(state) AS state"`` -- CHAOS-3368's
+    ``_PROJECT_DECLARED_FACTS_SQL`` own, unique SELECT list -- rather than
+    the broader ``"FROM projects FINAL"``: CHAOS-3374's
+    ``_PROJECT_IDENTITY_CTE`` is now spliced into EVERY project-scoped arm
+    (``_WORK_ITEMS_SQL``, ``PROJECT_REPOSITORIES_SQL``, ``_BLOCKERS_SQL``,
+    ...) and that CTE also reads ``FROM projects FINAL``, so the broader
+    substring would wrongly intercept those queries too and starve
+    ``_FakeWorkItems`` of the calls it needs to answer them.
+
+    Evaluates the ``updated_at <= {as_of:DateTime64(3, 'UTC')}`` predicate
+    against ``params["as_of"]`` (Codex adversarial review, MEDIUM,
+    2026-08-04) rather than always returning the canned row -- a fake that
+    ignores this predicate could not catch a regression that dropped it
+    from the real SQL and started leaking a future-dated declared state
+    into an as-of snapshot.
+    """
+
+    fake = _FakeWorkItems()
+
+    async def wrapped(_client: object, sql: str, params: dict[str, Any]) -> Any:
+        if "any(state) AS state" in sql:
+            fake.sql.append(sql)
+            fake.params.append(dict(params))
+            if (
+                project_row is None
+                or params.get("org_id") != ORG_ID
+                or params.get("entity_id") != PROJECT_ID
+            ):
+                return []
+            if (
+                "updated_at <= {as_of:DateTime64(3, 'UTC')}" in sql
+                and project_row.get("updated_at") is not None
+                and project_row["updated_at"] > params["as_of"]
+            ):
+                return []
+            return [project_row]
+        return await fake(_client, sql, params)
+
+    monkeypatch.setattr(native_status_change, "query_dicts", wrapped)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_committed_project_scope_surfaces_declared_state_and_target_date(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 acceptance: a committed PROJECT subject whose catalog row
+    carries both a declared state and a target date surfaces both as a
+    status fact, alongside (not instead of) the derived work-item tree this
+    file already pins in
+    ``test_committed_project_scope_status_snapshot_reads_its_work_items``.
+    """
+
+    _install_catalog_client(monkeypatch)
+    scope = await _committed_project_scope()
+
+    fake = _install_status_client_with_project_row(
+        monkeypatch,
+        project_row={
+            "state": "started",
+            "target_date": date(2026, 9, 1),
+            "updated_at": NOW,
+            "last_synced": NOW,
+        },
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert snapshot.declared_project_state == "started"
+    assert snapshot.declared_project_target_date == date(2026, 9, 1)
+    assert snapshot.declared_project_observed_at is not None
+    # The pre-existing derived work-item tree is unaffected.
+    assert {child.entity_id for child in snapshot.children} == IN_SCOPE_WORK_ITEM_IDS
+    # The declared-state read really was issued with this project's identity.
+    assert fake.sql, "the projects catalog read was never issued"
+    assert fake.params[0]["entity_id"] == PROJECT_ID
+    assert fake.params[0]["org_id"] == ORG_ID
+
+
+@pytest.mark.asyncio
+async def test_committed_project_scope_declared_state_absent_when_catalog_row_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 negative control: no matching ``projects`` catalog row (the
+    RED case on ``main`` today -- this ticket's whole premise is that the
+    column data exists since #1450 but nothing reads it) must render as an
+    absent fact, never a fabricated one, and must not disturb the derived
+    tree.
+    """
+
+    _install_catalog_client(monkeypatch)
+    scope = await _committed_project_scope()
+
+    _install_status_client_with_project_row(monkeypatch, project_row=None)
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None
+    assert {child.entity_id for child in snapshot.children} == IN_SCOPE_WORK_ITEM_IDS
+
+
+@pytest.mark.asyncio
+async def test_committed_project_scope_declared_state_absent_when_columns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 negative control: a real catalog row that carries neither a
+    declared state nor a target date (``state`` defaults to ``''``,
+    ``target_date`` is ``NULL`` -- most providers today) must not fabricate
+    an empty-string status or an epoch/zero date fact.
+    """
+
+    _install_catalog_client(monkeypatch)
+    scope = await _committed_project_scope()
+
+    _install_status_client_with_project_row(
+        monkeypatch,
+        project_row={
+            "state": "",
+            "target_date": None,
+            "updated_at": NOW,
+            "last_synced": NOW,
+        },
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None
+
+
+@pytest.mark.asyncio
+async def test_issue_scope_never_queries_the_projects_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 negative control: an ISSUE-scope status_snapshot call must
+    behave byte-identically to before this change -- in particular, it must
+    never issue the new declared-state read at all.
+    """
+
+    entity_id = next(iter(IN_SCOPE_WORK_ITEM_IDS))
+    scope = DevScope(
+        schema_version="dev_scope.v1",
+        organization_id=ORG_ID,
+        direct_scope=DirectScope.ISSUE,
+        repositories=[LINEAR_NO_REPOSITORY_ID],
+        entity_refs=[
+            DevEntityRef(
+                entity_type=EntityType.ISSUE,
+                entity_id=entity_id,
+                display_label=entity_id,
+                repository_id=LINEAR_NO_REPOSITORY_ID,
+            )
+        ],
+        time_range=DevTimeRange(start=NOW - timedelta(days=7), end=NOW, timezone="UTC"),
+    )
+
+    fake = _install_status_client(monkeypatch)
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None
+    # Matched on the declared-state read's own unique SELECT list, not the
+    # broader "FROM projects FINAL" -- CHAOS-3374's _PROJECT_IDENTITY_CTE is
+    # spliced into _WORK_ITEMS_SQL itself now, so that substring legitimately
+    # appears even for an ISSUE-scope call that never reaches CHAOS-3368's
+    # own query.
+    assert not any("any(state) AS state" in sql for sql in fake.sql)
+
+
+@pytest.mark.asyncio
+async def test_committed_project_scope_declared_state_absent_for_future_dated_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3368 Codex MEDIUM fix (confirmed): ``_PROJECT_DECLARED_FACTS_SQL``
+    read the current ``FINAL`` row with no ``updated_at <= as_of`` bound --
+    an as-of snapshot strictly BEFORE the project's last declared-state
+    update would have reported that (not-yet-true-at-as_of) state anyway.
+    Since ``FINAL`` collapses all history, there is nothing earlier to
+    answer with; the correct behavior is absence, not an anachronistic
+    answer -- asserted here with an update timestamp strictly after the
+    snapshot's own ``as_of`` (which defaults to ``scope.time_range.end``).
+    """
+
+    _install_catalog_client(monkeypatch)
+    scope = await _committed_project_scope()
+    assert scope.time_range.end < NOW + timedelta(days=1)
+
+    _install_status_client_with_project_row(
+        monkeypatch,
+        project_row={
+            "state": "started",
+            "target_date": date(2026, 9, 1),
+            "updated_at": scope.time_range.end + timedelta(days=1),
+            "last_synced": scope.time_range.end + timedelta(days=1),
+        },
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None
+    # The rest of the tree (bounded by the same as_of) is unaffected.
+    assert {child.entity_id for child in snapshot.children} == IN_SCOPE_WORK_ITEM_IDS

@@ -113,6 +113,7 @@ from .prompts import PromptComposer, PromptConversationTurn
 from .status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
+    render_declared_project_summary,
     render_verdict_summary,
     status_snapshot_result,
 )
@@ -2579,6 +2580,28 @@ class DevOrchestrator:
                 tool_results
             ),
         )
+        # CHAOS-3368 step 2: the project's own declared state/target date,
+        # appended to the same verdict/summary section -- ``status_result``
+        # is the identical scope-verified DevToolResult
+        # ``status_snapshot_result`` already selected above, so this rides
+        # that binding for free (no extra scope check needed: a
+        # declared_project_state set on a DIFFERENT tool result could never
+        # reach here, since only THIS result's fields are read).
+        #
+        # ``canonical_evidence_ids`` -- the SAME frozenset already passed to
+        # ``build_deterministic_status_claims`` above -- gates this exactly
+        # like it gates the claim (Codex HIGH, delta review, 2026-08-04):
+        # this run's OWN 25-entry canonical evidence cap
+        # (``Orchestrator._canonical_answer_data``) can truncate the
+        # declared-state evidence out even when its per-tool-call priority
+        # reservation let it survive onto the wire -- without this gate the
+        # summary sentence could assert a declared state with no claim and
+        # no evidence behind it anywhere in the answer.
+        declared_project_summary = render_declared_project_summary(
+            status_result, canonical_evidence_ids
+        )
+        if declared_project_summary is not None:
+            direct_summary = f"{direct_summary} {declared_project_summary}"
         return status, direct_summary, claims
 
     def _deterministic_status_answer(

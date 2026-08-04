@@ -29,12 +29,14 @@ from dev_health_ops.api.dev.contracts import (
     DevToolRequest,
     DevToolResult,
 )
+from dev_health_ops.api.dev.no_match_terminal import INTERNAL_TOKEN_DENYLIST
 from dev_health_ops.api.dev.status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
     open_blockers,
     open_required_children,
     outstanding_facts,
+    render_declared_project_summary,
     render_verdict_summary,
     status_snapshot_result,
     translate_completion_state,
@@ -44,6 +46,7 @@ from dev_health_ops.api.dev.status_change_service import (
     STATUS_REASON_CODES,
     is_required_child_open,
 )
+from dev_health_ops.api.dev.status_completion_copy import translate_project_state
 
 SCOPE = DevScope.model_validate(positive_fixtures()["dev_scope.v1"])
 OTHER_SCOPE = DevScope.model_validate(
@@ -194,6 +197,9 @@ def _tool_result(
     ci_checks: tuple[DevCIFact, ...] = (),
     deployments: tuple[DevDeploymentFact, ...] = (),
     incidents: tuple[DevIncidentFact, ...] = (),
+    declared_project_state: str | None = None,
+    declared_project_target_date: str | None = None,
+    declared_project_evidence_ref_ids: tuple[str, ...] = (),
 ) -> DevToolResult:
     payload = dict(positive_fixtures()["dev_tool_result.v1"])
     payload["tool_call_id"] = tool_call_id
@@ -205,6 +211,11 @@ def _tool_result(
     payload["ci_checks"] = [item.model_dump(mode="json") for item in ci_checks]
     payload["deployments"] = [item.model_dump(mode="json") for item in deployments]
     payload["incidents"] = [item.model_dump(mode="json") for item in incidents]
+    payload["declared_project_state"] = declared_project_state
+    payload["declared_project_target_date"] = declared_project_target_date
+    payload["declared_project_evidence_ref_ids"] = list(
+        declared_project_evidence_ref_ids
+    )
     # DevToolResult.validate_evidence_closure requires every evidence ID any
     # fact references to be present in `evidence` -- mint a stub for
     # whatever `actual_completion`/the category facts above reference so
@@ -220,6 +231,7 @@ def _tool_result(
     for group in (pull_requests, ci_checks, deployments, incidents):
         for item in group:
             referenced.update(item.evidence_ref_ids)
+    referenced.update(declared_project_evidence_ref_ids)
     payload["evidence"] = [_evidence_stub(ref_id) for ref_id in sorted(referenced)]
     return DevToolResult.model_validate(payload)
 
@@ -250,6 +262,192 @@ def test_unknown_reason_code_fails_closed_to_generic_copy() -> None:
     translated = translate_reason_code("some_future_reason_code_v7")
     assert translated == "an unresolved requirement"
     assert "some_future_reason_code_v7" not in translated
+
+
+# --- CHAOS-3368 step 2: declared project state/target date in §10 ---------
+
+
+def test_render_declared_project_summary_translates_state_and_names_target_date() -> (
+    None
+):
+    """CHAOS-3368 acceptance: a bound status_snapshot.v1 result carrying a
+    declared project state/target date renders both into the verdict/
+    summary section -- the state TRANSLATED (never the raw provider token),
+    the date as a plain ISO string (structured data, not vocabulary).
+    """
+
+    result = _tool_result(
+        actual_completion=_actual(state="ready", reason_codes=()),
+        declared_project_state="started",
+        declared_project_target_date="2026-09-01",
+        declared_project_evidence_ref_ids=("ev_01",),
+    )
+    canonical_evidence_ids = frozenset(item.evidence_ref_id for item in result.evidence)
+    summary = render_declared_project_summary(result, canonical_evidence_ids)
+    assert summary is not None
+    assert "in progress" in summary
+    assert "2026-09-01" in summary
+    assert "started" not in summary.casefold()
+
+
+def test_render_declared_project_summary_returns_none_when_absent() -> None:
+    """CHAOS-3368 negative control: no declared state/target date at all
+    (the RawStatusSnapshot layer's own absence case) renders no clause --
+    never a fabricated 'Declared state: None.' or similar.
+    """
+
+    result = _tool_result(actual_completion=_actual(state="ready", reason_codes=()))
+    assert result.declared_project_state is None
+    assert result.declared_project_target_date is None
+    canonical_evidence_ids = frozenset(item.evidence_ref_id for item in result.evidence)
+    assert render_declared_project_summary(result, canonical_evidence_ids) is None
+
+
+def test_render_declared_project_summary_unknown_state_falls_back_safely() -> None:
+    """CHAOS-3368: a provider state outside the known vocabulary (a future
+    Linear addition, or a different provider entirely) must render through
+    the safe generic fallback, never the raw token -- ``translate_project_state``
+    is deliberately NOT total/closed against a pinned set (unlike reason
+    codes), since this is external provider data.
+    """
+
+    result = _tool_result(
+        actual_completion=_actual(state="ready", reason_codes=()),
+        declared_project_state="archived",
+        declared_project_evidence_ref_ids=("ev_01",),
+    )
+    canonical_evidence_ids = frozenset(item.evidence_ref_id for item in result.evidence)
+    summary = render_declared_project_summary(result, canonical_evidence_ids)
+    assert summary is not None
+    assert "archived" not in summary.casefold()
+    assert "outside the known vocabulary" in summary
+
+
+def test_render_declared_project_summary_returns_none_when_evidence_is_not_canonical() -> (
+    None
+):
+    """CHAOS-3368 Codex HIGH fix (delta review, 2026-08-04): a bound
+    status_snapshot.v1 result with a real declared state, but whose
+    evidence did NOT survive this run's canonical evidence set (a run-wide
+    cap this function's caller controls, distinct from this one tool
+    result's own evidence array), must render NO clause -- never an
+    ungrounded assertion with no claim and no evidence behind it anywhere
+    in the final answer.
+    """
+
+    result = _tool_result(
+        actual_completion=_actual(state="ready", reason_codes=()),
+        declared_project_state="started",
+        declared_project_target_date="2026-09-01",
+        declared_project_evidence_ref_ids=("ev_01",),
+    )
+    # Deliberately excludes "ev_01" -- simulates the run-wide canonical
+    # evidence cap having truncated it out before this function ever runs.
+    assert render_declared_project_summary(result, frozenset()) is None
+
+
+@pytest.mark.parametrize(
+    "raw_state", ["planned", "started", "paused", "completed", "canceled", "cancelled"]
+)
+def test_project_state_translation_covers_the_known_linear_vocabulary(
+    raw_state: str,
+) -> None:
+    """Every state Linear's own API can report today translates to
+    non-empty, deterministic copy -- not a fabricated pass-through of
+    whatever the caller supplied, and not the fail-closed default (which is
+    reserved for values this table has genuinely never seen).
+    """
+
+    translated = translate_project_state(raw_state)
+    assert translated
+    assert translated != "a declared state outside the known vocabulary"
+
+
+def test_declared_project_state_translation_never_produces_a_denylisted_token() -> None:
+    """CHAOS-3368 (Codex point 4, this fix round): the exact failure mode
+    that bit CHAOS-3377's own renderer -- a legitimate value colliding with
+    an internal denylisted token and flipping the answer to
+    ``internal_error`` -- must not be reachable through this table. Every
+    known translation, AND the fail-closed default, must be clear of every
+    ``no_match_terminal.INTERNAL_TOKEN_DENYLIST`` member.
+    """
+
+    candidates = [
+        translate_project_state(state)
+        for state in ("planned", "started", "paused", "completed", "canceled")
+    ] + [translate_project_state("some_future_provider_state")]
+    for text in candidates:
+        lowered = text.casefold()
+        for token in INTERNAL_TOKEN_DENYLIST:
+            assert token not in lowered, (
+                f"translated declared-project-state copy {text!r} contains "
+                f"the denylisted token {token!r}"
+            )
+
+
+def test_build_deterministic_status_claims_includes_declared_project_claim_when_grounded() -> (
+    None
+):
+    """CHAOS-3368: the declared-state/target-date content reaches the §10
+    claims list as its own grounded, translated claim -- not only folded
+    into the verdict sentence.
+    """
+
+    actual = _actual(state="ready", reason_codes=())
+    result = _tool_result(
+        actual_completion=actual,
+        declared_project_state="paused",
+        declared_project_target_date="2026-12-25",
+        declared_project_evidence_ref_ids=("ev_02",),
+    )
+    canonical_evidence_ids = frozenset(item.evidence_ref_id for item in result.evidence)
+    claims = build_deterministic_status_claims(
+        actual=actual,
+        status_result=result,
+        validity_scope=SCOPE,
+        canonical_evidence_ids=canonical_evidence_ids,
+    )
+    declared_claims = [
+        claim
+        for claim in claims
+        if claim.claim_id.startswith("status-declared-project:")
+    ]
+    assert len(declared_claims) == 1
+    claim = declared_claims[0]
+    assert "paused" in claim.text
+    assert "2026-12-25" in claim.text
+    assert claim.evidence_ref_ids == ["ev_02"]
+
+
+def test_build_deterministic_status_claims_skips_declared_project_claim_when_evidence_is_truncated() -> (
+    None
+):
+    """CHAOS-3368: mirrors ``test_blocker_claim_skipped_rather_than_fabricated_when_evidence_is_truncated``
+    -- an outstanding declared-state clause whose own evidence was
+    truncated out of ``canonical_evidence_ids`` must be omitted from claims
+    entirely, never emitted ungrounded. The verdict/summary TEXT still
+    names it (``render_declared_project_summary`` has no evidence
+    dependency), but no claim backs it -- a caller wiring only claims would
+    correctly see nothing here.
+    """
+
+    actual = _actual(state="ready", reason_codes=())
+    result = _tool_result(
+        actual_completion=actual,
+        declared_project_state="paused",
+        declared_project_evidence_ref_ids=("ev_02",),
+    )
+    claims = build_deterministic_status_claims(
+        actual=actual,
+        status_result=result,
+        validity_scope=SCOPE,
+        # Deliberately excludes "ev_02" -- simulates the fact that minted
+        # it having been truncated out of this run's canonical evidence set.
+        canonical_evidence_ids=frozenset({"ev_01"}),
+    )
+    assert not any(
+        claim.claim_id.startswith("status-declared-project:") for claim in claims
+    )
 
 
 def test_verdict_summary_never_contains_raw_state_or_reason_tokens() -> None:

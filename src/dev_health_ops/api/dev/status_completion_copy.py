@@ -26,6 +26,7 @@ __all__ = [
     "any_tool_result_withheld_its_completion_denominator",
     "has_incomplete_denominator_disclosure",
     "is_completion_assessment_untrustworthy",
+    "translate_project_state",
     "translate_reason_code",
 ]
 
@@ -136,3 +137,44 @@ def translate_reason_codes(codes: Sequence[str]) -> list[str]:
             seen.add(text)
             translated.append(text)
     return translated
+
+
+# --- CHAOS-3368 step 2: closed-vocabulary declared PROJECT state -----------
+
+#: Translation for ``DevToolResult.declared_project_state`` -- the raw
+#: provider-declared project lifecycle token (``projects.state``, migration
+#: 073; Linear's own vocabulary today: planned/started/paused/completed/
+#: canceled). UNLIKE ``_REASON_CODE_COPY`` above, this table is deliberately
+#: NOT import-time-total against a pinned closed set: reason codes are
+#: emitted by ``_assess`` (this codebase's own, enumerable vocabulary), but
+#: a declared project state is raw PROVIDER data -- an unrecognized value
+#: (a future provider, a Linear vocabulary addition) is an expected, routine
+#: case, not a bug to raise on at import time.
+#:
+#: Still fail-closed exactly like every other translation table here: a raw
+#: provider string must never reach user-visible prose directly (CHAOS-3377
+#: MEDIUM 4's own rule -- an unconstrained provider string can coincidentally
+#: equal an internal denylisted token, e.g. a hypothetical provider literally
+#: naming a state ``not_ready``, which would flip ``orchestrator.finish()``'s
+#: fail-closed token scan to ``internal_error`` for an otherwise-valid
+#: answer). An unrecognized value renders as ``_DEFAULT_PROJECT_STATE_COPY``.
+_PROJECT_STATE_COPY: Mapping[str, str] = {
+    "planned": "planned",
+    "started": "in progress",
+    "paused": "paused",
+    "completed": "completed",
+    "canceled": "canceled",
+    "cancelled": "canceled",
+}
+_DEFAULT_PROJECT_STATE_COPY = "a declared state outside the known vocabulary"
+
+
+def translate_project_state(state: str) -> str:
+    """The safe, closed-vocabulary phrase for one raw declared project
+    state. Fail-closed: an unrecognized value renders as
+    ``_DEFAULT_PROJECT_STATE_COPY``, never the raw provider string.
+    """
+
+    return _PROJECT_STATE_COPY.get(
+        state.strip().casefold(), _DEFAULT_PROJECT_STATE_COPY
+    )

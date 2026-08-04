@@ -13,7 +13,7 @@ import json
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from dev_health_ops.api.graphql.resolvers._membership_run_scope import (
@@ -304,6 +304,50 @@ ORDER BY (work_item_id = {entity_id:String}) DESC, updated_at DESC, work_item_id
 LIMIT {limit:UInt32}
 """
 )
+
+#: CHAOS-3368: the project's own DECLARED lifecycle state / target date
+#: (``projects.state``/``projects.target_date``, migration 073 -- see
+#: ``metrics.schemas.ProjectRecord``'s own docstring: "the provider's OWN
+#: lifecycle vocabulary, stored verbatim"). Read with the same RMT
+#: discipline every other catalog read in this module uses: ``FINAL`` for
+#: the current row, ``org_id`` in the WHERE, ``is_active = 1`` so a
+#: retired project row does not resurrect a stale declared state. Guarded
+#: by an explicit ``HAVING count() = 1`` for the same reason CHAOS-3374's
+#: ``_PROJECT_IDENTITY_CTE`` guards its own read of this table: the
+#: ReplacingMergeTree key is ``(org_id, provider, id)``, not ``(org_id,
+#: id)``, so a same-org, same-``id`` row minted by two different
+#: providers survives ``FINAL`` as two rows and an unguarded ``LIMIT 1``
+#: would pick one nondeterministically. This read is deliberately
+#: narrower than that CTE: it never resolves which provider a project
+#: SUBJECT belongs to (CHAOS-3374's turf) -- it only reads the declared-
+#: state columns of a subject the scope has ALREADY resolved and
+#: authorized, so an ambiguous match here is grounds to render the
+#: declared-state facts absent (fail closed), never to guess a provider.
+#: Selects ``last_synced`` under that exact alias so ``_read``'s existing
+#: watermark/freshness plumbing applies unchanged -- no bespoke handling
+#: needed here.
+#:
+#: Codex adversarial review (MEDIUM, 2026-08-04): ``FINAL`` collapses the
+#: RMT to its single CURRENT row per key -- there is no history left to read
+#: here, so ``updated_at <= {as_of:DateTime64(3, 'UTC')}`` (mirroring every
+#: other as-of-bounded read in this module, e.g. ``_WORK_ITEMS_SQL``) is not
+#: a narrowing filter, it is the difference between "this project's
+#: declared state as of the requested instant" and "whatever it is RIGHT
+#: NOW, mislabeled as of an earlier instant". A project updated after
+#: ``as_of`` is excluded entirely (``count() = 0`` -> absent facts) rather
+#: than answered with its current, not-yet-true-at-as_of state -- this
+#: ticket deliberately does not attempt a real history representation; an
+#: as-of snapshot of a since-changed declared state is simply unavailable.
+_PROJECT_DECLARED_FACTS_SQL = """
+SELECT any(state) AS state,
+       any(target_date) AS target_date,
+       any(updated_at) AS updated_at,
+       any(last_synced) AS last_synced
+FROM projects FINAL
+WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
+  AND updated_at <= {as_of:DateTime64(3, 'UTC')}
+HAVING count() = 1
+"""
 
 _BLOCKER_WATERMARK_SQL = """
 SELECT if(
@@ -1509,6 +1553,45 @@ class ClickHouseStatusChangeSource:
                 warnings.append(warning)
 
         declared, children = self._work_item_facts(work_item_rows, scope, source_refs)
+
+        # CHAOS-3368: the project's own declared state/target date, additive
+        # to (never mixed into) `declared`/`children` above -- those still
+        # describe the derived work-item completion tree; this describes
+        # what the provider itself declared for the project as a whole.
+        # Only ever queried for PROJECT scope, mirroring every other
+        # project-only read in this method (_BLOCKERS_SQL's own guard,
+        # just above): an issue/work-unit/team/org/repository scope must
+        # see byte-identical behavior to before this change.
+        #
+        # Codex adversarial review (HIGH, 2026-08-04): kept as TYPED scalars
+        # here, never pre-joined into presentation text -- a renderer that
+        # only ever sees "started; target date 2026-09-01" would have to
+        # parse it back apart to use the pieces independently. Formatting
+        # into a display fact is production_runtime.py's job, sourced from
+        # these typed fields.
+        declared_project_state: str | None = None
+        declared_project_target_date: date | None = None
+        declared_project_observed_at: datetime | None = None
+        if scope.direct_scope is DirectScope.PROJECT:
+            project_rows, project_ref, warning = await self._read(
+                "projects", _PROJECT_DECLARED_FACTS_SQL, common, scope
+            )
+            source_refs.append(project_ref)
+            if warning:
+                warnings.append(warning)
+            if project_rows:
+                row = project_rows[0]
+                state = str(row.get("state") or "").strip()
+                target_date = row.get("target_date")
+                if state or target_date is not None:
+                    declared_project_state = state or None
+                    declared_project_target_date = (
+                        target_date if target_date is not None else None
+                    )
+                    declared_project_observed_at = self._datetime(
+                        row.get("updated_at"), as_of
+                    )
+
         pull_requests = tuple(
             PullRequestFact(
                 entity_id=str(row.get("entity_id") or ""),
@@ -1649,6 +1732,9 @@ class ClickHouseStatusChangeSource:
         return RawStatusSnapshot(
             declared=declared,
             children=children,
+            declared_project_state=declared_project_state,
+            declared_project_target_date=declared_project_target_date,
+            declared_project_observed_at=declared_project_observed_at,
             blockers=tuple(
                 StatusFact(
                     entity_type="issue",

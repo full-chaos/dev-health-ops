@@ -62,6 +62,7 @@ from .status_change_service import (
 from .status_completion_copy import (
     INCOMPLETE_DENOMINATOR_DISCLOSURE,
     any_tool_result_withheld_its_completion_denominator,
+    translate_project_state,
     translate_reason_code,
 )
 
@@ -72,6 +73,7 @@ __all__ = [
     "open_blockers",
     "open_required_children",
     "outstanding_facts",
+    "render_declared_project_summary",
     "render_verdict_summary",
     "status_snapshot_result",
     "translate_completion_state",
@@ -212,6 +214,90 @@ def render_verdict_summary(
         parts.append(INCOMPLETE_DENOMINATOR_DISCLOSURE.capitalize() + ".")
     if actual.display_truncated:
         parts.append(DISPLAY_TRUNCATED_DISCLOSURE.capitalize() + ".")
+    return " ".join(parts)
+
+
+def _grounded_declared_project_evidence(
+    status_result: DevToolResult, canonical_evidence_ids: frozenset[str]
+) -> list[str]:
+    """The declared-state/target-date evidence that actually survived this
+    RUN's canonical evidence set (not merely this one tool result's own,
+    per-call evidence budget) -- the single computation both
+    ``render_declared_project_summary`` and
+    ``build_deterministic_status_claims`` read, so the summary clause and
+    its backing claim can never disagree about whether this content is
+    grounded.
+
+    CHAOS-3368 Codex HIGH (2026-08-04, delta review of step 2): a prior
+    revision rendered the summary clause unconditionally while the claim
+    correctly required grounding -- in a run whose EARLIER tool results
+    already filled ``Orchestrator._canonical_answer_data``'s run-wide
+    25-entry cap, the declared-state fact's own evidence could be truncated
+    out of ``canonical_evidence_ids`` there (a cap this function's caller
+    does not control) while the per-tool-call priority reservation in
+    ``production_runtime.py`` still let it survive onto the wire. The
+    result: a summary sentence asserting a declared state with no claim and
+    no evidence behind it anywhere in the answer -- an ungrounded assertion
+    from the ONE renderer that exists to prevent exactly that class of
+    defect. Treated the same as any other externally-sourced fact this
+    renderer touches (mirrors ``outstanding_facts``'s "skip rather than
+    fabricate" rule) rather than like the verdict sentence, which is
+    server-DERIVED and therefore rendered regardless of evidence survival.
+    """
+
+    return [
+        ref
+        for ref in status_result.declared_project_evidence_ref_ids
+        if ref in canonical_evidence_ids
+    ][:25]
+
+
+def render_declared_project_summary(
+    status_result: DevToolResult, canonical_evidence_ids: frozenset[str]
+) -> str | None:
+    """The project's own declared state / target date (CHAOS-3368 step 2),
+    as a deterministic clause appended to the §10 verdict/summary section --
+    ``None`` when the bound ``status_snapshot.v1`` result has neither, OR
+    when its evidence did not survive this run's canonical evidence set
+    (see ``_grounded_declared_project_evidence`` -- this is never rendered
+    ungrounded, exactly like a blocker/required-child claim).
+
+    Reads ``DevToolResult.declared_project_state``/
+    ``declared_project_target_date`` -- typed fields on the SAME
+    scope-verified tool result ``status_snapshot_result`` already selected
+    (see that function's own scope-binding guarantee), never a re-parse of
+    the interim ``status_facts`` display text.
+
+    ``declared_project_state`` is translated through
+    ``status_completion_copy.translate_project_state`` -- NEVER interpolated
+    raw -- mirroring the exact rule ``outstanding_facts`` documents for
+    every other raw provider field this renderer touches (a provider string
+    is unconstrained and can coincidentally equal an internal denylisted
+    token). ``declared_project_target_date`` is a structured ISO date, not
+    provider vocabulary, so it renders directly -- it cannot coincidentally
+    collide with an underscore-bearing internal token.
+    """
+
+    if (
+        status_result.declared_project_state is None
+        and status_result.declared_project_target_date is None
+    ):
+        return None
+    if not _grounded_declared_project_evidence(status_result, canonical_evidence_ids):
+        return None
+    parts: list[str] = []
+    if status_result.declared_project_state is not None:
+        parts.append(
+            "Declared state: "
+            + translate_project_state(status_result.declared_project_state)
+            + "."
+        )
+    if status_result.declared_project_target_date is not None:
+        parts.append(
+            "Target date: "
+            + status_result.declared_project_target_date.isoformat()
+            + "."
+        )
     return " ".join(parts)
 
 
@@ -510,6 +596,43 @@ def build_deterministic_status_claims(
             flags=DevClaimFlags(),
         )
     )
+    # CHAOS-3368 step 2 (Codex HIGH, delta review): both the CLAIM here and
+    # the SUMMARY clause (``render_declared_project_summary``, called by
+    # ``orchestrator._deterministic_status_render`` against this exact same
+    # ``canonical_evidence_ids``) read ``_grounded_declared_project_evidence``
+    # -- the identical computation -- so the two can never disagree about
+    # whether this content is grounded. Never folded into
+    # ``actual.evidence_ref_ids`` (the declared state is deliberately never
+    # an input to ``_assess``'s completion verdict; see
+    # ``RawStatusSnapshot.declared_project_state``).
+    declared_project_evidence = _grounded_declared_project_evidence(
+        status_result, canonical_evidence_ids
+    )
+    if declared_project_evidence:
+        declared_project_summary = render_declared_project_summary(
+            status_result, canonical_evidence_ids
+        )
+        # Cannot be None here: the same grounding check that made
+        # ``declared_project_evidence`` non-empty is the only evidence-based
+        # gate ``render_declared_project_summary`` applies; the remaining
+        # gate (state/target_date both absent) would have kept
+        # ``declared_project_evidence_ref_ids`` empty in the first place
+        # (production_runtime.py only ever mints declared-state evidence
+        # alongside a non-None state/target_date).
+        if declared_project_summary is not None:
+            claims.append(
+                DevClaim(
+                    schema_version="dev_claim.v1",
+                    claim_id=f"status-declared-project:{status_result.tool_call_id}",
+                    kind=ClaimKind.OBSERVED,
+                    text=declared_project_summary,
+                    confidence=1.0,
+                    evidence_ref_ids=declared_project_evidence,
+                    metric_ref_ids=[],
+                    validity_scope=validity_scope,
+                    flags=DevClaimFlags(),
+                )
+            )
     for fact in outstanding_facts(actual, status_result):
         evidence_ids = [
             ref for ref in fact.evidence_ref_ids if ref in canonical_evidence_ids

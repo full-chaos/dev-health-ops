@@ -18,6 +18,7 @@ Understand what each Dev Health view shows, what data it needs, how to interpret
 <div class="fc-home-actions" markdown>
 
 [Use Dev Health](use/index.md){ .md-button .md-button--primary }
+[Explore Context Fabric](context-fabric/index.md){ .md-button }
 [Browse reference](reference/index.md){ .md-button }
 
 </div>
@@ -28,6 +29,7 @@ Understand what each Dev Health view shows, what data it needs, how to interpret
 **Start with a common task**
 {: .fc-home-routes__label }
 
+- [Understand Context Fabric](context-fabric/index.md)
 - [Investigate where effort appears to be going](use/investment/investigate-effort.md)
 - [Diagnose no or incomplete data](use/troubleshooting/no-or-incomplete-data.md)
 - [Look up weighting and aggregation](reference/metrics/weighting-and-aggregation.md)
@@ -167,6 +169,7 @@ Set up the repository, understand the runtime and data boundaries, run the corre
 
 ## Popular tasks
 
+- [Understand Context Fabric](context-fabric/index.md)
 - [Investigate where effort appears to be going](use/investment/investigate-effort.md)
 - [Diagnose no or incomplete data](use/troubleshooting/no-or-incomplete-data.md)
 - [Set scope and time](use/navigate/scope-and-time.md)

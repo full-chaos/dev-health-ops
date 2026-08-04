@@ -7,25 +7,26 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// GitHubPullRequestReviewRouteHandler is the production-constructible,
-// deliberately-unregistered complete route for github/pr-reviews. Python runs
-// PR collection, GraphQL review enrichment, and both writes in one
-// _sync_github_prs_to_store_async execution. The Go unit keeps the
-// pr-reviews claim for its own ledger/audit identity, but invokes the existing
-// prs collector as an implementation detail and emits the one enriched,
-// complete git_pull_requests row alongside git_pull_request_reviews.
+// GitHubPullRequestSocialRouteHandler is the production-constructible,
+// deliberately-unregistered complete route for the github PR-social aliases:
+// prs, pr-reviews, and pr-comments. Python runs PR collection, GraphQL review
+// enrichment, and both writes in one _sync_github_prs_to_store_async
+// execution, regardless of which of those dataset names caused the unit to be
+// scheduled. The Go unit preserves that outer claim for its ledger/audit and
+// watermark identity, while invoking the existing collectors under derived
+// internal prs and pr-reviews claims.
 //
 // This is the only safe ownership boundary for a ReplacingMergeTree complete
 // row: a separately scheduled review writer cannot patch just three columns,
 // and a base PR writer cannot safely write their defaults after enrichment.
-// The route remains unregistered until pr-comments joins this same unit and
-// the matrix can switch the complete three-way Python boundary atomically.
-type GitHubPullRequestReviewRouteHandler struct {
+// The route remains unregistered until the registry/matrix layer can switch
+// the complete three-way Python boundary atomically.
+type GitHubPullRequestSocialRouteHandler struct {
 	PullRequests GitHubPullRequestRouteHandler
 	Reviews      GitHubPullRequestReviewFetcher
 }
 
-func (handler GitHubPullRequestReviewRouteHandler) Collect(
+func (handler GitHubPullRequestSocialRouteHandler) Collect(
 	ctx context.Context,
 	claim Claim,
 	credential providerfoundation.Credential,
@@ -33,7 +34,7 @@ func (handler GitHubPullRequestReviewRouteHandler) Collect(
 	normalizedAt time.Time,
 ) (CompleteRouteBatch, error) {
 	if ctx == nil || claim.Validate() != nil || claim.Provider != "github" ||
-		claim.Dataset != "pr-reviews" || normalizedAt.IsZero() {
+		!isGitHubPRSocialDataset(claim.Dataset) || normalizedAt.IsZero() {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 
@@ -69,8 +70,13 @@ func (handler GitHubPullRequestReviewRouteHandler) Collect(
 	if len(rows) > 0 {
 		repoID = rows[0].RepoID
 	}
+	// The GraphQL fetcher's concrete contract is github/pr-reviews. Its claim
+	// is derived internally, never substituted for the outer unit claim: the
+	// caller's dataset remains what EffectCommitter later writes to the ledger.
+	reviewClaim := claim
+	reviewClaim.Dataset = "pr-reviews"
 	reviews, err := handler.Reviews.Fetch(
-		ctx, claim, client, repoID, targets, normalizedAt,
+		ctx, reviewClaim, client, repoID, targets, normalizedAt,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -116,6 +122,19 @@ func (handler GitHubPullRequestReviewRouteHandler) Collect(
 	}, nil
 }
 
+// isGitHubPRSocialDataset mirrors the three aliases that Python maps onto
+// _sync_github_prs_to_store_async. It is intentionally local to this
+// unregistered native unit: descriptor/matrix collapse is a later, atomic
+// routing change and must not be implied by this constructible handler.
+func isGitHubPRSocialDataset(dataset string) bool {
+	switch dataset {
+	case "prs", "pr-reviews", "pr-comments":
+		return true
+	default:
+		return false
+	}
+}
+
 // enrichPullRequestsWithReviews is the in-place equivalent of Python's
 // _enrich_prs_with_reviews_batch. It only changes a PR when at least one
 // review exists, preserving the base collector's zero values for a genuine
@@ -158,4 +177,9 @@ func enrichPullRequestsWithReviews(
 	return nil
 }
 
-var _ CompleteRouteHandler = GitHubPullRequestReviewRouteHandler{}
+// GitHubPullRequestReviewRouteHandler remains a source-compatible name for
+// the earlier foundation. It is now the complete PR-social handler, not an
+// independently owned review-only writer.
+type GitHubPullRequestReviewRouteHandler = GitHubPullRequestSocialRouteHandler
+
+var _ CompleteRouteHandler = GitHubPullRequestSocialRouteHandler{}

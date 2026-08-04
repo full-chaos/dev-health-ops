@@ -282,6 +282,129 @@ WHERE sync_run_id = $1 AND kind = 'finalize_sync_run' AND status = 'pending'`,
 			finalizeCount, persistedClaimToken, persistedClaimExpiry, availableAt,
 		)
 	}
+
+	// The Python planner collapses the enabled GitHub work-item family onto one
+	// canonical work-items unit. Completion keeps that claim identity while
+	// atomically fanning its watermark and result audit back out to the enabled
+	// aliases.
+	familyUnitID := uuid.NewString()
+	seedWorkItemAliasUnit(t, ctx, pool, familyUnitID, "incremental", `{
+		"sync_prs": true,
+		"family_dataset_work_items": true,
+		"family_dataset_work_item_labels": true,
+		"family_dataset_work_item_comments": true
+	}`)
+	familyClaimedAt := completedAt.Add(time.Second)
+	familyClaim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: familyUnitID, OrgID: "org-acme", Owner: uuid.NewString(),
+		Now: familyClaimedAt, LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	familyWatermark := familyClaimedAt.Add(time.Second)
+	if err := repository.Complete(
+		ctx, familyClaim, map[string]any{"records": 7}, &familyWatermark,
+		familyClaimedAt, familyClaimedAt.Add(2*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var familyStatus, familyDataset, watermarkKeys string
+	var familyAuditMatches bool
+	var watermarkCount int
+	if err := pool.QueryRow(ctx, `
+SELECT status, dataset_key,
+       result::jsonb -> 'family_datasets' =
+         '["work-items","work-item-labels","work-item-comments"]'::jsonb
+FROM public.sync_run_units
+WHERE id = $1`, familyUnitID).Scan(
+		&familyStatus, &familyDataset, &familyAuditMatches,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*), string_agg(dataset_key, ',' ORDER BY dataset_key)
+FROM public.sync_watermarks
+WHERE org_id = 'org-acme'
+  AND source_id = 'acme/api'
+  AND dataset_key IN ('work-items', 'work-item-labels', 'work-item-comments')
+  AND last_synced_at = $1`, familyWatermark).Scan(&watermarkCount, &watermarkKeys); err != nil {
+		t.Fatal(err)
+	}
+	if familyStatus != "success" || familyDataset != "work-items" || !familyAuditMatches ||
+		watermarkCount != 3 || watermarkKeys != "work-item-comments,work-item-labels,work-items" {
+		t.Fatalf(
+			"family status=%q dataset=%q audit=%t watermarks=%d keys=%q",
+			familyStatus, familyDataset, familyAuditMatches, watermarkCount, watermarkKeys,
+		)
+	}
+
+	// Unsupported family flags fail before the completion transaction. Even
+	// with a non-nil proposed watermark, the unit stays running and no alias
+	// watermark can be advanced.
+	malformedUnitID := uuid.NewString()
+	seedWorkItemAliasUnit(t, ctx, pool, malformedUnitID, "incremental", `{
+		"family_dataset_work_items": true,
+		"family_dataset_future_alias": false
+	}`)
+	malformedClaimedAt := familyClaimedAt.Add(3 * time.Second)
+	malformedClaim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: malformedUnitID, OrgID: "org-acme", Owner: uuid.NewString(),
+		Now: malformedClaimedAt, LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformedWatermark := familyWatermark.Add(time.Hour)
+	if err := repository.Complete(
+		ctx, malformedClaim, map[string]any{"records": 1}, &malformedWatermark,
+		malformedClaimedAt, malformedClaimedAt.Add(time.Second),
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("malformed family completion error=%v", err)
+	}
+	var malformedStatus string
+	var malformedWatermarkCount int
+	if err := pool.QueryRow(
+		ctx, "SELECT status FROM public.sync_run_units WHERE id = $1", malformedUnitID,
+	).Scan(&malformedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM public.sync_watermarks
+WHERE org_id = 'org-acme' AND source_id = 'acme/api' AND last_synced_at = $1`,
+		malformedWatermark,
+	).Scan(&malformedWatermarkCount); err != nil {
+		t.Fatal(err)
+	}
+	if malformedStatus != "running" || malformedWatermarkCount != 0 {
+		t.Fatalf(
+			"malformed status=%q advanced_watermarks=%d",
+			malformedStatus, malformedWatermarkCount,
+		)
+	}
+}
+
+func seedWorkItemAliasUnit(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	unitID string,
+	mode string,
+	processorFlags string,
+) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_run_units (
+    id, org_id, sync_run_id, integration_id, source_id, provider,
+    dataset_key, cost_class, mode, since_at, before_at, status,
+    processor_flags, updated_at
+) VALUES (
+    $1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium',
+    $5, '2026-07-22T12:00:00Z', '2026-07-23T12:00:00Z',
+    'dispatching', $6::jsonb, NOW()
+)`, unitID, firstRunID, firstIntegrationID, firstSourceID, mode, processorFlags); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {

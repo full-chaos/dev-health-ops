@@ -1062,10 +1062,10 @@ def run_work_items_sync_job(
                 "%s: extracted %d sprint records", providers_label, len(sprints)
             )
 
-        # Stamp org_id on work items, transitions AND dependencies before
-        # writing to sinks. Dependencies must be tagged too: the work_item_dependencies
-        # table is tenant-partitioned and the donor-read path filters by org_id,
-        # so unstamped edges would be invisible to tenant-scoped inheritance.
+        # Stamp org_id on every tenant-partitioned raw work-item row before
+        # writing to sinks. Leaving reopen, interaction, or sprint rows at the
+        # dataclass default ("") collapses unrelated organizations onto the
+        # same ClickHouse tenant key and makes org-scoped reads miss the data.
         if org_id:
             work_items = [
                 replace(wi, org_id=org_id) if hasattr(wi, "org_id") else wi
@@ -1078,6 +1078,18 @@ def run_work_items_sync_job(
             dependencies = [
                 replace(dep, org_id=org_id) if hasattr(dep, "org_id") else dep
                 for dep in dependencies
+            ]
+            reopen_events = [
+                replace(event, org_id=org_id) if hasattr(event, "org_id") else event
+                for event in reopen_events
+            ]
+            interactions = [
+                replace(event, org_id=org_id) if hasattr(event, "org_id") else event
+                for event in interactions
+            ]
+            sprints = [
+                replace(sprint, org_id=org_id) if hasattr(sprint, "org_id") else sprint
+                for sprint in sprints
             ]
 
         # Write raw work items and transitions to sinks

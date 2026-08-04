@@ -374,6 +374,22 @@ def read_work_item_partial_observations(
     return read_partial_observations(exc)
 
 
+def _merge_github_project_v2_rows(
+    repository_items: list[WorkItem],
+    repository_transitions: list[Any],
+    project_items: list[WorkItem],
+    project_transitions: list[Any] | None,
+) -> tuple[list[WorkItem], list[Any]]:
+    """Preserve the active producer's ordered last-wins/append composition."""
+    by_id = {item.work_item_id: item for item in repository_items}
+    for item in project_items:
+        by_id[item.work_item_id] = item
+    return list(by_id.values()), [
+        *repository_transitions,
+        *(project_transitions or []),
+    ]
+
+
 def run_work_items_sync_job(
     *,
     db_url: str,
@@ -920,11 +936,9 @@ def run_work_items_sync_job(
                     status_mapping=status_mapping,
                     identity=identity,
                 )
-                by_id = {w.work_item_id: w for w in work_items}
-                for w in proj_items:
-                    by_id[w.work_item_id] = w
-                work_items = list(by_id.values())
-                transitions.extend(list(proj_tr or []))
+                work_items, transitions = _merge_github_project_v2_rows(
+                    work_items, transitions, proj_items, proj_tr
+                )
 
         if "gitlab" in provider_set:
             # gl_token/gl_url were already resolved above (before the

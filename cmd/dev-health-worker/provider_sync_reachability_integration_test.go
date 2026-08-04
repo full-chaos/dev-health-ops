@@ -47,6 +47,8 @@ func TestBuildProviderSyncWorkerConstructsRealDependenciesForEveryRouteReadySwit
 		"gitlab_tests":               func(cfg *config.Config) { cfg.WorkerGitlabTestsEnabled = true },
 		"gitlab_incidents":           func(cfg *config.Config) { cfg.WorkerGitlabIncidentsEnabled = true },
 		"github_prs":                 func(cfg *config.Config) { cfg.WorkerGithubPRsEnabled = true },
+		"github_pr_reviews":          func(cfg *config.Config) { cfg.WorkerGithubPRReviewsEnabled = true },
+		"github_pr_comments":         func(cfg *config.Config) { cfg.WorkerGithubPRCommentsEnabled = true },
 		"github_cicd":                func(cfg *config.Config) { cfg.WorkerGithubCICDEnabled = true },
 		"github_commits":             func(cfg *config.Config) { cfg.WorkerGithubCommitsEnabled = true },
 		"github_deployments":         func(cfg *config.Config) { cfg.WorkerGithubDeploymentsEnabled = true },

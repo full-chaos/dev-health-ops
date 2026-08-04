@@ -61,46 +61,51 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 // here without it is the failure this guard exists to prevent.
 //
 //   - launchdarkly/feature-flags: CUT-08, native handler + live parity.
+//
 //   - github/repo-metadata: CHAOS-3123, fixture-level field parity against the
 //     Python collector (TestGitHubRepositoryRouteEmitsOneBoundedReposEffect).
 //     Canary staging and live-traffic parity are waived for this program.
+//
 //   - github/cicd: delegates to the same complete-row TestOps unit as
 //     github/tests; config enforces mutual exclusion between their switches.
+//
 //   - gitlab/cicd: delegates to the same complete-row TestOps unit as
 //     gitlab/tests; config enforces mutual exclusion between their switches.
+//
 //   - github/commits: CHAOS-3177, live producer oracle parity plus
 //     tenant-scoped FINAL readback.
+//
 //   - github/deployments: CHAOS-3176, differential row parity against the live
 //     Python normalizer and builder plus tenant-scoped FINAL readback.
+//
 //   - github/security: CHAOS-3178, differential row parity against the live
 //     production source mappings plus FINAL tenant-fenced ClickHouse effects.
+//
 //   - github/files: live traversal/row parity against backfill_file_records plus
 //     tenant-qualified FINAL readback.
+//
 //   - github/commit-stats: CHAOS-3033, live producer oracle parity plus
 //     tenant-scoped FINAL readback and production-worker construction.
+//
 //   - jira/incidents: CHAOS-3127, native JSM admission plus live whole-row
 //     OperationalIncident parity and tenant-scoped FINAL readback.
+//
 //   - github/blame: CHAOS-3343, live selection and row parity plus
 //     tenant-scoped persisted progress and crash-safe FINAL readback.
+//
 //   - gitlab/commits: CHAOS-3346, live producer oracle parity plus paginated
 //     no-partial-success collection and tenant-scoped FINAL readback.
+//
 //   - gitlab/commit-stats: live producer oracle parity plus accepted Python
 //     budget provenance and tenant-scoped FINAL retry convergence.
+//
 //   - github/tests: CHAOS-3336, live Python row/budget parity plus six
 //     tenant-scoped effects and fail-closed bounded fetches.
 //
-// github/prs (CHAOS-3122) is deliberately NOT in this set despite having a
-// real CompleteRouteHandler and passing fixture-level parity evidence: codex
-// H1 found that three columns on its own destination table
-// (first_review_at, reviews_count, changes_requested_count) are owned by
-// Python's review-enrichment phase, which this handler does not perform, so
-// it always writes them as zero. route_ready is a promise that the Go path
-// produces the product data for a pair, not merely that it compiles and
-// passes its own tests; writing fabricated zeros into columns it does not
-// own would corrupt review-latency/rework/AI-impact analytics. It flips
-// RouteReady together with github/pr-reviews when that pair lands with a
-// real review fetch — see execution_registry.go's github/prs case and
-// deploy/go-workers/provider-sync-porting-recipe.md.
+//   - github/prs, github/pr-reviews, github/pr-comments: one complete PR-social
+//     unit matching Python's _sync_github_prs_to_store_async boundary, with
+//     REST comment counts, GraphQL review enrichment, two exact readback
+//     effects, alias-preserving claim identity, and crash recovery.
 var routeReadyPairs = map[string]struct{}{
 	"launchdarkly/feature-flags": {},
 	"github/repo-metadata":       {},
@@ -119,6 +124,9 @@ var routeReadyPairs = map[string]struct{}{
 	"gitlab/incidents":           {},
 	"github/blame":               {},
 	"github/tests":               {},
+	"github/prs":                 {},
+	"github/pr-reviews":          {},
+	"github/pr-comments":         {},
 }
 
 // TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the freeze guard:
@@ -147,13 +155,14 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		GitlabCICD:         true,
 		GitlabTests:        true,
 		GitlabIncidents:    true,
-		GithubPRs:          true, GithubCICD: true, GithubCommits: true,
+		GithubPRs:          true, GithubPRReviews: true, GithubPRComments: true,
+		GithubCICD: true, GithubCommits: true,
 		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 		GithubCommitStats: true,
 		GithubBlame:       true,
 		GithubTests:       true,
 	}
-	if reflect.TypeOf(all).NumField() != 20 {
+	if reflect.TypeOf(all).NumField() != 22 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -270,31 +279,36 @@ func TestGitLabCICDRequiresItsOwnSwitch(t *testing.T) {
 	}
 }
 
-// TestGithubPRsSwitchAloneCannotOpenTheRoute pins codex's H1 finding: even
-// with its switch on, github/prs must stay RouteReady=false until
-// github/pr-reviews exists to own the three review-derived columns on the
-// same destination table. This is the opposite direction from
-// TestGithubRepoMetadataSwitchDoesNotOpenGitLab's "unrelated switch can't
-// open an unready pair" — here the pair's OWN switch is on, and it still
-// must not route, because RouteReady itself (not RouteEnabled) is the gate.
-func TestGithubPRsSwitchAloneCannotOpenTheRoute(t *testing.T) {
+// TestGitHubPRSocialPairsRequireIndependentSwitches pins the D16 boundary:
+// every PR-social identity is ready only after the complete review-enriched
+// route landed, while each identity still requires its own default-off switch.
+func TestGitHubPRSocialPairsRequireIndependentSwitches(t *testing.T) {
 	t.Parallel()
-	switches := CompleteRouteSwitches{GithubPRs: true}
-	descriptor, ok := switches.Descriptor("github", "prs")
-	if !ok {
-		t.Fatal("github/prs has no descriptor")
+	probes := []struct {
+		dataset  string
+		switches CompleteRouteSwitches
+	}{
+		{"prs", CompleteRouteSwitches{GithubPRs: true}},
+		{"pr-reviews", CompleteRouteSwitches{GithubPRReviews: true}},
+		{"pr-comments", CompleteRouteSwitches{GithubPRComments: true}},
 	}
-	if descriptor.RouteReady {
-		t.Fatalf("github/prs descriptor=%+v: RouteReady must stay false until "+
-			"github/pr-reviews lands (codex H1)", descriptor)
-	}
-	// The destination manifest and the fixed native_go executor are still
-	// recorded -- RouteReady is what fails closed, not the rest of the
-	// descriptor going dark.
-	if descriptor.Executor != ExecutorNativeGo ||
-		len(descriptor.Destinations) != 1 ||
-		descriptor.Destinations[0] != "git_pull_requests" {
-		t.Fatalf("github/prs descriptor=%+v", descriptor)
+	for _, probe := range probes {
+		descriptor, ok := probe.switches.Descriptor("github", probe.dataset)
+		if !ok || descriptor.Executor != ExecutorNativeGo || !descriptor.RouteReady ||
+			!descriptor.RouteEnabled || !slices.Equal(
+			descriptor.Destinations, githubPRSocialRouteDestinations(),
+		) {
+			t.Fatalf("github/%s descriptor=%+v ok=%v", probe.dataset, descriptor, ok)
+		}
+		for _, other := range []string{"prs", "pr-reviews", "pr-comments"} {
+			if other == probe.dataset {
+				continue
+			}
+			off, _ := probe.switches.Descriptor("github", other)
+			if off.RouteEnabled {
+				t.Fatalf("github/%s switch opened github/%s: %+v", probe.dataset, other, off)
+			}
+		}
 	}
 }
 
@@ -343,7 +357,9 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 	handlers := map[string]CompleteRouteHandler{
 		"launchdarkly/feature-flags": LaunchDarklyRouteHandler{},
 		"github/repo-metadata":       GitHubRepositoryRouteHandler{},
-		"github/prs":                 GitHubPullRequestRouteHandler{},
+		"github/prs":                 GitHubPullRequestSocialRouteHandler{},
+		"github/pr-reviews":          GitHubPullRequestSocialRouteHandler{},
+		"github/pr-comments":         GitHubPullRequestSocialRouteHandler{},
 		"github/cicd":                GitHubTestsRouteHandler{},
 		"github/commits":             GitHubCommitsRouteHandler{},
 		"github/deployments":         GitHubDeploymentsRouteHandler{},

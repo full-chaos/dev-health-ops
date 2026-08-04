@@ -141,6 +141,8 @@ class ProviderUnitRouteSwitches:
     # config.Config.WorkerGithubPRsEnabled, read from the same
     # WORKER_GITHUB_PRS_ENABLED environment name.
     github_prs: bool = False
+    github_pr_reviews: bool = False
+    github_pr_comments: bool = False
     github_cicd: bool = False
     github_commits: bool = False
     github_deployments: bool = False
@@ -170,6 +172,8 @@ class ProviderUnitRouteSwitches:
             gitlab_tests=_flag(source, "WORKER_GITLAB_TESTS_ENABLED"),
             gitlab_incidents=_flag(source, "WORKER_GITLAB_INCIDENTS_ENABLED"),
             github_prs=_flag(source, "WORKER_GITHUB_PRS_ENABLED"),
+            github_pr_reviews=_flag(source, "WORKER_GITHUB_PR_REVIEWS_ENABLED"),
+            github_pr_comments=_flag(source, "WORKER_GITHUB_PR_COMMENTS_ENABLED"),
             github_cicd=_flag(source, "WORKER_GITHUB_CICD_ENABLED"),
             github_commits=_flag(source, "WORKER_GITHUB_COMMITS_ENABLED"),
             github_deployments=_flag(source, "WORKER_GITHUB_DEPLOYMENTS_ENABLED"),
@@ -188,6 +192,10 @@ class ProviderUnitRouteSwitches:
         if self.github_cicd and self.github_tests:
             raise ProviderUnitRouteError(
                 "github cicd and tests switches are mutually exclusive complete-unit aliases"
+            )
+        if sum((self.github_prs, self.github_pr_reviews, self.github_pr_comments)) > 1:
+            raise ProviderUnitRouteError(
+                "github PR-social switches are mutually exclusive complete-unit aliases"
             )
         if self.gitlab_cicd and self.gitlab_tests:
             raise ProviderUnitRouteError(

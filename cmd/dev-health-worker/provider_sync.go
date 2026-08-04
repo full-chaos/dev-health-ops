@@ -270,11 +270,13 @@ func buildProviderSyncHandler(
 				routeHandler = providersync.GitLabIncidentsRouteHandler{}
 				sink, readback = glIncidentsSink, glIncidentsSink
 			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "prs":
-				ghPRSink := providersync.GitHubPullRequestClickHouseEffects{
+				(session.Claim.Dataset == "prs" ||
+					session.Claim.Dataset == "pr-reviews" ||
+					session.Claim.Dataset == "pr-comments"):
+				ghPRSink := providersync.GitHubPullRequestSocialClickHouseEffects{
 					Conn: clickhouseConnection, Lease: session,
 				}
-				routeHandler = providersync.GitHubPullRequestRouteHandler{}
+				routeHandler = providersync.GitHubPullRequestSocialRouteHandler{}
 				sink, readback = ghPRSink, ghPRSink
 			case session.Claim.Provider == "github" &&
 				session.Claim.Dataset == "cicd":
@@ -549,7 +551,8 @@ func providerSyncWorkerEnabled(cfg config.Config) bool {
 		cfg.WorkerGitlabCICDEnabled ||
 		cfg.WorkerGitlabTestsEnabled ||
 		cfg.WorkerGitlabIncidentsEnabled ||
-		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubCICDEnabled ||
+		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubPRReviewsEnabled ||
+		cfg.WorkerGithubPRCommentsEnabled || cfg.WorkerGithubCICDEnabled ||
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
 		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||
 		cfg.WorkerGithubCommitStatsEnabled || cfg.WorkerJiraIncidentsEnabled ||

@@ -89,7 +89,10 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
     assert coverage_step["env"][_POSTGRES_TEST_URI_ENV] == (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
     )
-    assert coverage_step["env"]["PYTEST_ADDOPTS"] == unit_step["env"]["PYTEST_ADDOPTS"]
+    assert "PYTEST_ADDOPTS" not in coverage_step["env"]
+    assert coverage_step["env"]["DEV_HEALTH_TEST_POSTGRES_ADMIN_URI"] == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/postgres"
+    )
     assert "./ci/run_tests.sh ci" in coverage_step["run"]
 
     for job_name in ("test-matrix", "coverage"):

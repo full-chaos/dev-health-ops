@@ -1958,6 +1958,9 @@ class ClickHouseStore:
                     "project_key": get("project_key"),
                     "name": str(get("name") or ""),
                     "is_active": int(get("is_active", 1) or 0),
+                    "state": str(get("state") or ""),
+                    "target_date": get("target_date"),
+                    "url": str(get("url") or ""),
                     "updated_at": self._normalize_datetime(get("updated_at"))
                     or synced_at,
                     "last_synced": self._normalize_datetime(get("last_synced"))
@@ -1973,6 +1976,9 @@ class ClickHouseStore:
                 "project_key",
                 "name",
                 "is_active",
+                "state",
+                "target_date",
+                "url",
                 "updated_at",
                 "last_synced",
             ],

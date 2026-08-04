@@ -20,7 +20,10 @@ import pytest
 from dev_health_ops.api.dev.contracts import QuestionClass, ToolID
 from dev_health_ops.api.dev.contracts_v2 import ResolutionOutcome, no_answer_policy
 from dev_health_ops.api.dev.contracts_v2.validators import scan_public_text
-from dev_health_ops.api.dev.orchestrator import DevOrchestrator
+from dev_health_ops.api.dev.orchestrator import (
+    SERVER_GROUNDED_SUMMARY,
+    DevOrchestrator,
+)
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.question_interpreter import (
     ClassifierProposal,
@@ -263,10 +266,20 @@ async def test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all(
 
 
 @pytest.mark.asyncio
-async def test_m3b_with_the_leakage_guard_also_disabled_a8_is_the_net(
+async def test_m3b_with_the_leakage_guard_disabled_the_terminal_boundary_is_the_net(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Layer two: defeat guardrail (a) as well, and watch A8's scan catch it."""
+    """Layer two: defeat guardrail (a) as well.
+
+    Before CHAOS-3367 this reached A8's acceptance scan, and that assertion is
+    now M3c's. What changed is that ``orchestrator.finish()`` gained a
+    terminal-boundary check of its own -- run over every terminal this module
+    writes, not only over a v2 frame -- so the leak is caught one layer
+    earlier and the run fails closed to ``internal_error``. Asserting the
+    layer it actually dies at is the point of a mutation test; letting it keep
+    the old assertion would have quietly recorded a death at a layer that is
+    no longer the one doing the work.
+    """
 
     from dev_health_ops.api.dev.contracts_v2 import validators as validators_module
 
@@ -277,6 +290,34 @@ async def test_m3b_with_the_leakage_guard_also_disabled_a8_is_the_net(
     )
     monkeypatch.setattr(
         validators_module, "validate_no_internal_leakage", lambda _frame: None
+    )
+    mutated = await case_a8()
+
+    assert mutated.result.error is not None
+    assert mutated.result.error.code == "internal_error"
+    assert scan_public_text(mutated.result.error.safe_message) == []
+
+
+@pytest.mark.asyncio
+async def test_m3c_with_every_server_guardrail_disabled_a8_is_the_net(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Layer three: defeat the CHAOS-3367 boundary check too, and watch A8's
+    own acceptance scan catch what nothing on the server did."""
+
+    from dev_health_ops.api.dev import orchestrator as orchestrator_module
+    from dev_health_ops.api.dev.contracts_v2 import validators as validators_module
+
+    monkeypatch.setitem(
+        no_answer_policy.CANONICAL_NO_ANSWER_COPY,
+        "not_found",
+        _LEAKY_COPY,
+    )
+    monkeypatch.setattr(
+        validators_module, "validate_no_internal_leakage", lambda _frame: None
+    )
+    monkeypatch.setattr(
+        orchestrator_module, "internal_token_leak", lambda _values, **_kwargs: None
     )
     mutated = await case_a8()
 
@@ -371,13 +412,27 @@ async def test_m4_ledger_overwrite_instead_of_append_is_rejected(
 
 
 @pytest.mark.asyncio
-async def test_m5_legacy_guard_must_not_terminate_a_preflight_run(
+async def test_m5_legacy_guard_must_not_decide_a_preflight_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Letting the backstop decide must still change what the user gets.
+
+    Pre-CHAOS-3297-stack-5 the mutation was observable as a terminal state
+    flip (COMPLETED -> INSUFFICIENT_EVIDENCE). The guard cutover removed
+    that particular consequence *on purpose*: a rejection no longer erases a
+    run holding server-verified material. So the mutation is killed here on
+    the sharper observation it always should have used -- what the run
+    actually ships. With the seam defeated, the model's own answer is
+    replaced by the server-grounded one, which is a different answer for a
+    user, not merely a different internal state.
+    """
+
     baseline = await case_a4()
     assert baseline.result.state is RunState.COMPLETED
     # The guard did fire — it just did not decide anything.
     assert baseline.guard_reasons() == ("no_evidence_backed_claims",)
+    assert baseline.result.answer is not None
+    baseline_summary = baseline.result.answer.direct_summary
 
     monkeypatch.setattr(
         DevOrchestrator,
@@ -386,7 +441,9 @@ async def test_m5_legacy_guard_must_not_terminate_a_preflight_run(
     )
     mutated = await case_a4()
 
-    assert mutated.result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert mutated.result.answer is not None
+    assert mutated.result.answer.direct_summary != baseline_summary
+    assert mutated.result.answer.direct_summary == SERVER_GROUNDED_SUMMARY
 
 
 # ---------------------------------------------------------------------------

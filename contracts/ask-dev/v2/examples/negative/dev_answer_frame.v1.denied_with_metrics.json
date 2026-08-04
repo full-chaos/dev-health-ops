@@ -33,6 +33,7 @@
       "definition_version": "ask_dev_metrics.v1",
       "dimensions": [],
       "display_precision": 1,
+      "evidence_classification": "legacy_v1_unminted",
       "evidence_ref_ids": [],
       "freshness": "fresh",
       "label": "Cycle time (p50)",

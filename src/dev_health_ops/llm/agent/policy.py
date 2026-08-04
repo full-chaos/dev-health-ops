@@ -60,15 +60,30 @@ class AgentProviderCandidate:
             )
             if self.provider in _LOCAL_PLATFORM_PROVIDERS:
                 credentials_present = bool(self.credentials.base_url)
+            # CHAOS-3358: the platform provider is operator-owned and assumed
+            # to work, so its stored certification is an operator-facing
+            # DIAGNOSTIC (the Platform Admin readiness badge and its "run
+            # preflight" copy) rather than a runtime gate. Requiring
+            # ``readiness_current`` here meant every READINESS_VERSION bump and
+            # every readiness-fingerprint format change -- both of which
+            # invalidate the stored certification by construction -- hard-blocked
+            # Ask Dev for every organization without BYO until a superadmin
+            # manually re-ran platform preflight. The remaining conjuncts still
+            # apply: an uncertified provider family, a missing operator
+            # credential, or an unsafe operator base URL keeps the candidate
+            # unusable. BYO keeps the strict gate below: a customer-supplied
+            # endpoint has demonstrated nothing until it is certified.
+            readiness_required = False
         else:
             valid_url, _ = validate_llm_base_url(self.credentials.base_url)
             credentials_present = bool(self.credentials.api_key)
+            readiness_required = True
         return (
             self.certified
             and bool(self.model)
             and credentials_present
             and valid_url
-            and self.readiness_current
+            and (self.readiness_current or not readiness_required)
         )
 
 

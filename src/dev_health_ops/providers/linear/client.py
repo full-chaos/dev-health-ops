@@ -79,6 +79,16 @@ class LinearRateLimitError(RateLimitException):
     """Linear kept returning HTTP 429 after exhausting all retry attempts."""
 
 
+class LinearPaginationIncomplete(RuntimeError):
+    """A connection could not be enumerated to the end.
+
+    Raised AFTER every node the server did return has been yielded, so a caller
+    that accumulates incrementally keeps the prefix it already has and still
+    learns the set is partial. Silently returning the prefix would let an
+    incomplete discovery run be recorded as a complete one.
+    """
+
+
 class _LinearHTTPRateLimit(RuntimeError):
     def __init__(self, retry_after_seconds: float | None) -> None:
         super().__init__("Linear HTTP 429")
@@ -338,19 +348,37 @@ query Cycles($first: Int!, $after: String, $filter: CycleFilter) {
 }
 """
 
+# ``status``, NOT the ``state`` field this query used to select: Linear marks
+# ``Project.state`` ``@deprecated(reason: Use project.status instead)``. That is
+# not a cosmetic concern -- removing a field makes the WHOLE GraphQL operation
+# fail, so a deprecated selection would take native project refresh down with it
+# rather than merely losing the lifecycle enrichment. ``status.type`` carries the
+# same closed category vocabulary the old ``state`` string did; ``status.name``
+# is the workspace's own customisable label, selected here so a consumer can use
+# it without another schema round trip.
+#
+# ``trashed`` is a SEPARATE soft-delete from ``archivedAt``: Linear trashes a
+# deleted project before it is purged, and a trashed project is not an archived
+# one. Reading only ``archivedAt`` would leave a deleted project resolvable.
 PROJECTS_QUERY = """
-query Projects($first: Int!, $after: String) {
-  projects(first: $first, after: $after) {
+query Projects($first: Int!, $after: String, $includeArchived: Boolean) {
+  projects(first: $first, after: $after, includeArchived: $includeArchived) {
     nodes {
       id
       name
       description
-      state
+      status {
+        id
+        name
+        type
+      }
+      trashed
       progress
       startDate
       targetDate
       createdAt
       updatedAt
+      archivedAt
       url
       lead {
         id
@@ -934,21 +962,85 @@ class LinearClient:
                 break
             cursor = page_info.get("endCursor")
 
-    def iter_projects(self) -> Iterable[dict[str, Any]]:
+    def iter_projects(
+        self, *, include_archived: bool = False
+    ) -> Iterable[dict[str, Any]]:
+        """Page through workspace projects.
+
+        ``include_archived`` opts into Linear's archived projects, which the
+        connection excludes by default. A caller maintaining a catalog needs
+        them: an archived project simply STOPS appearing in the response, so
+        without this it can never learn the project was retired and would serve
+        the stale subject forever.
+        """
+
         cursor: str | None = None
+        seen_cursors: set[str] = set()
 
         while True:
-            variables = {"first": self.per_page, "after": cursor}
+            variables: dict[str, Any] = {
+                "first": self.per_page,
+                "after": cursor,
+                "includeArchived": include_archived,
+            }
             data = self._execute(PROJECTS_QUERY, variables)
-            projects_data = data.get("projects", {})
-            nodes = projects_data.get("nodes", [])
+            # Validate the page STRUCTURALLY before trusting it. Defaulting a
+            # missing ``projects``/``nodes``/``pageInfo`` to empty would turn a
+            # malformed HTTP 200 -- or a truncated terminal page -- into what
+            # looks like clean exhaustion, and the caller would then treat a
+            # non-authoritative snapshot as the whole workspace. That snapshot
+            # drives absence-based retirement, so "empty because broken" must
+            # never be mistaken for "empty because that is the truth".
+            projects_data = data.get("projects")
+            if not isinstance(projects_data, dict):
+                raise LinearPaginationIncomplete(
+                    "Linear projects response has no 'projects' connection; "
+                    "refusing to treat it as an authoritative page"
+                )
+            nodes = projects_data.get("nodes")
+            page_info = projects_data.get("pageInfo")
+            if not isinstance(nodes, list) or not isinstance(page_info, dict):
+                raise LinearPaginationIncomplete(
+                    "Linear projects page is missing a nodes list or pageInfo "
+                    "object; refusing to treat it as an authoritative page"
+                )
+            # Must be a REAL boolean, not merely present. Testing a
+            # wrong-typed value by truthiness accepts ``null``/``0``/``""`` as a
+            # clean terminal page, so a malformed response carrying a genuine
+            # prefix would mark enumeration complete and authorise retiring
+            # everything it omitted. Presence alone is not a signal.
+            has_next = page_info.get("hasNextPage")
+            if not isinstance(has_next, bool):
+                raise LinearPaginationIncomplete(
+                    "Linear projects pageInfo.hasNextPage is "
+                    f"{type(has_next).__name__}, not a boolean; cannot tell "
+                    "exhaustion from truncation"
+                )
 
             yield from nodes
 
-            page_info = projects_data.get("pageInfo", {})
-            if not page_info.get("hasNextPage"):
+            if not has_next:
                 break
-            cursor = page_info.get("endCursor")
+            next_cursor = page_info.get("endCursor")
+            # A degraded pageInfo -- hasNextPage true with no cursor, or the same
+            # cursor twice -- would re-request one page forever, and per-request
+            # timeouts do not bound that loop, so it stalls the whole sync run
+            # instead of failing it. Never spin; but never let the truncated set
+            # be mistaken for the whole workspace either. Everything fetched has
+            # already been yielded, so a caller that accumulates incrementally
+            # keeps its prefix AND sees that enumeration was incomplete.
+            if not next_cursor or next_cursor in seen_cursors:
+                logger.warning(
+                    "Linear projects pagination stopped early: hasNextPage was "
+                    "true but the cursor did not advance (cursor=%r)",
+                    next_cursor,
+                )
+                raise LinearPaginationIncomplete(
+                    "Linear projects pagination could not advance past cursor "
+                    f"{next_cursor!r}; the project set is a partial prefix"
+                )
+            seen_cursors.add(str(next_cursor))
+            cursor = str(next_cursor)
 
     def iter_workflow_states(self) -> Iterable[dict[str, Any]]:
         cursor: str | None = None

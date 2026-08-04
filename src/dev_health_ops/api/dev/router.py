@@ -62,6 +62,7 @@ from .entitlement import (
     AskDevEntitlementDeniedError,
     CanonicalAskDevEntitlementAuthorizer,
 )
+from .no_match_terminal import redact_persisted_answer, redact_persisted_error
 from .orchestrator import OrchestratorEvent, OrchestratorResult, RunState
 from .orchestrator_persistence import PersistenceRunRecorder
 from .org_policy import load_ask_dev_org_policy
@@ -79,6 +80,7 @@ from .persistence.service import (
     DevRateLimitExceeded,
     TranscriptRecord,
 )
+from .platform_auto_certification import schedule_platform_recertification
 from .production_runtime import (
     build_production_runtime,
     expand_production_evidence,
@@ -633,7 +635,13 @@ def _replayed_result(
     error = None
     terminal_error_payload = getattr(run, "terminal_error_payload", None)
     if answer_payload is not None:
-        answer = DevAnswer.model_validate(answer_payload)
+        # CHAOS-3367: orchestrator.finish() is a WRITE-time boundary and
+        # cannot reach rows written before it existed -- including the run
+        # from the reported live screenshot, which is already stored and
+        # still schema-valid. Replaying it verbatim would keep rendering the
+        # leaked token on every reload, so the same rule is applied on the
+        # way out (codex adversarial review, round 1 HIGH).
+        answer = redact_persisted_answer(DevAnswer.model_validate(answer_payload))
     elif terminal_error_payload is not None:
         # CHAOS-3297 Codex review HIGH #1: the exact validated v1 DevError
         # `PersistenceRunRecorder.terminal` persisted at terminal time, for
@@ -650,7 +658,12 @@ def _replayed_result(
         # not catch). A row that has this column is authoritative on its
         # own; it never needs the frame at all.
         try:
-            error = DevError.model_validate(terminal_error_payload)
+            # Redacted on the same read boundary and for the same reason as
+            # the answer above (CHAOS-3367). `code` is untouched: it is a
+            # machine field clients switch on, not copy.
+            error = redact_persisted_error(
+                DevError.model_validate(terminal_error_payload)
+            )
         except ValidationError:
             error = _replay_fallback_error(run)
     elif (
@@ -684,6 +697,10 @@ def _replayed_result(
         from .contracts_v2.frame import DevAnswerFrame as _DevAnswerFrameV2
         from .contracts_v2.no_answer_policy import NO_ANSWER_OUTCOMES
         from .preflight_outcomes import project_preflight_error
+        from .terminal_frames import (
+            is_orchestrator_error_frame,
+            tolerant_parse_legacy_frame_payload,
+        )
 
         # project_preflight_error is only total over the no-answer outcomes
         # plus needs_clarification (CHAOS-3292's ratified vocabulary for a
@@ -701,7 +718,18 @@ def _replayed_result(
             PublicOutcome.NEEDS_CLARIFICATION.value
         }
         try:
-            frame_obj = _DevAnswerFrameV2.model_validate(frame_payload)
+            frame_obj = _DevAnswerFrameV2.model_validate(
+                # CHAOS-3297 s3 version-skew read posture: a row persisted
+                # before this branch's DevMetricRefV2.evidence_classification
+                # field existed has no way to satisfy F10's XOR check without
+                # this shim -- see terminal_frames.tolerant_parse_legacy_
+                # frame_payload's own docstring. This branch never carries a
+                # non-empty metrics tuple today (NO_ANSWER_FRAME_FIELD_POLICY
+                # forces it empty for every outcome reachable here), so this
+                # is defensive hardening ahead of a future read path, not a
+                # fix for an observed crash on this one.
+                tolerant_parse_legacy_frame_payload(frame_payload)
+            )
             if (
                 frame_obj.public_outcome.value not in _REPLAYABLE_PREFLIGHT_OUTCOMES
                 or run.public_outcome != frame_obj.public_outcome.value
@@ -746,7 +774,41 @@ def _replayed_result(
                 # object -- so if the frame's fixed reconstruction disagrees
                 # with it, the frame is not authoritative for this run and
                 # the exact-fidelity fallback below wins instead.
-                if run.safe_error_code and error.code != run.safe_error_code:
+                #
+                # CHAOS-3297 stack #5 -- reconciling that rule with
+                # frames-authoritative semantics. Two clauses, deliberately
+                # separate so a mutation can defeat either alone:
+                #
+                # * the ORIGIN clause. "Disagreeing codes" was only ever a
+                #   proxy for "this frame did not author the live copy", and
+                #   it is a coincidence-prone one: `scope_not_found`,
+                #   `internal_error` and `feature_not_enabled` each project
+                #   back to their own code, so the code check passed while
+                #   the replayed *message* was canonical preflight copy the
+                #   orchestrator's own call site never sent (live: "The
+                #   requested scope was not found."; replayed: "No matching
+                #   subject was found for this question."). An
+                #   orchestrator-origin frame is now identified structurally
+                #   -- its frame_id is a pure uuid5 over (run_id, code), see
+                #   terminal_frames.is_orchestrator_error_frame -- and never
+                #   speaks for the v1 error, regardless of whether the
+                #   projected code happens to match.
+                # * the CODE clause, kept as-is: a frame whose origin cannot
+                #   be established but whose projection disagrees is still
+                #   not authoritative.
+                #
+                # What this does NOT change: the frame remains the source of
+                # truth for content wherever content is what is being read.
+                # This branch is specifically the v1 *error* wire shape,
+                # which stack #1 ruled the frame never owns.
+                if run.safe_error_code and (
+                    error.code != run.safe_error_code
+                    or is_orchestrator_error_frame(
+                        frame_id=frame_obj.frame_id,
+                        run_id=str(run.id),
+                        code=run.safe_error_code,
+                    )
+                ):
                     error = _replay_fallback_error(run)
         except ValidationError:
             error = _replay_fallback_error(run)
@@ -1067,7 +1129,12 @@ async def get_conversation_transcript(
                     DevTranscriptEntry(
                         **common,
                         role="assistant",
-                        answer=DevAnswer.model_validate(message.answer_payload),
+                        # Same read boundary as `_replayed_result` above: a
+                        # transcript read hands stored model prose straight to
+                        # the client (CHAOS-3367).
+                        answer=redact_persisted_answer(
+                            DevAnswer.model_validate(message.answer_payload)
+                        ),
                     )
                 )
     except Exception as exc:
@@ -1198,6 +1265,24 @@ async def create_message(
             SettingsService(service.session, user.org_id)
         )
         provider_source = runtime.provider_source if runtime is not None else None
+        # CHAOS-3358: heal a stale platform certification automatically, so an
+        # operator never has to press the preflight button to recover from a
+        # READINESS_VERSION bump or a fingerprint-format change.
+        #
+        # This is the ONLY place that triggers it, and deliberately so. It sits
+        # after _require_ask_dev (entitlement AND emergency-disable both
+        # checked) and behind provider_source == "platform", so a run that
+        # selected BYO, a disabled or non-entitled organization, and the
+        # capabilities projection -- which resolves a provider before any Ask
+        # Dev authorization runs -- can never spend operator provider calls.
+        # Codex CHAOS-3358 review CONFIRMED that reachable path when this was
+        # scheduled from provider resolution instead.
+        if (
+            runtime is not None
+            and provider_source == "platform"
+            and runtime.platform_certification_stale
+        ):
+            schedule_platform_recertification()
         accepted = await service.append_user_message_and_run(
             org_id=org_id,
             user_id=user_id,

@@ -19,6 +19,319 @@
       "title": "AskDevSurfaceRouteID",
       "type": "string"
     },
+    "CalibrationState": {
+      "description": "The four-way split named verbatim in CHAOS-3302's calibration section.",
+      "enum": [
+        "provisional",
+        "product_approved",
+        "data_derived",
+        "policy_driven"
+      ],
+      "title": "CalibrationState",
+      "type": "string"
+    },
+    "DeficiencyCategory": {
+      "description": "The eight taxonomy categories named verbatim in CHAOS-3305.",
+      "enum": [
+        "data_integration",
+        "planning_relationships",
+        "delivery_flow",
+        "review_ci",
+        "deployment_reliability",
+        "ownership_code_risk",
+        "capacity_cognitive_load",
+        "investment_balance"
+      ],
+      "title": "DeficiencyCategory",
+      "type": "string"
+    },
+    "DeficiencyCategoryStatus": {
+      "additionalProperties": false,
+      "description": "One evaluation-status record per taxonomy category.\n\nAlways present for exactly the eight :data:`DEFICIENCY_CATEGORIES`\n(see :func:`OperationalDeficiencyInventory.validate_category_coverage`)\nso \"no deficiencies in this category\" (``evaluated=True,\nfinding_count=0``) is structurally distinguishable from \"this category\nwas never evaluated\" (``evaluated=False``) -- the same distinction\n``DataHealthState`` draws between a genuine zero and an unmeasured\nsource, applied one level up at the category granularity.",
+      "properties": {
+        "applicability_states_observed": {
+          "items": {
+            "$ref": "#/$defs/SourceRequirementState"
+          },
+          "maxItems": 8,
+          "title": "Applicability States Observed",
+          "type": "array"
+        },
+        "category": {
+          "$ref": "#/$defs/DeficiencyCategory"
+        },
+        "evaluated": {
+          "title": "Evaluated",
+          "type": "boolean"
+        },
+        "finding_count": {
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Finding Count",
+          "type": "integer"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "schema_version": {
+          "const": "deficiency_category_status.v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "category",
+        "evaluated",
+        "finding_count"
+      ],
+      "title": "DeficiencyCategoryStatus",
+      "type": "object"
+    },
+    "DeficiencyEvidenceClassification": {
+      "description": "Closed reasons a finding may carry no per-item evidence ref (F10).\n\nEvery :class:`DeficiencyFinding` carries either a non-empty\n``evidence_ref_ids`` or exactly one of these -- never neither (see\n:func:`DeficiencyFinding.validate_evidence_or_classification`).",
+      "enum": [
+        "structural_absence",
+        "aggregate_only",
+        "source_class_only"
+      ],
+      "title": "DeficiencyEvidenceClassification",
+      "type": "string"
+    },
+    "DeficiencyFinding": {
+      "additionalProperties": false,
+      "description": "One deterministic, evidence-backed operational deficiency.\n\n``rule_id``/``rule_version`` name the deterministic finding kind: for\ncategories drawn directly from :data:`.health_rule_registry.\nHEALTH_RULE_REGISTRY` (delivery flow, review/CI, deployment/\nreliability, ownership/code risk) these are the real\n``health_rule.<name>.vN`` ids from CHAOS-3302; for categories computed\ndirectly from canonical service results with no rule-registry\nequivalent yet (data/integration, planning/relationships), these are a\nparallel, equally closed ``deficiency_rule.<name>.v1`` namespace (see\n``operational_deficiency_service._DEFICIENCY_RULE_CATEGORY`` for the\nexhaustive table). Either way, ``rule_id`` is never a free-form or\ncaller-supplied string.\n\nSubclassing is structurally forbidden (:func:`__init_subclass__` below,\nplus :func:`typing.final` for the type checker) -- Codex finding,\nround 3, 2026-08-02, ratified decision: these contract models are a\nCLOSED family, and subclassing is not a supported use. A subclass\nchanges serialization semantics silently (``model_dump``/\n``model_json_schema`` honor the subclass's own fields, not the\ndeclared contract type) and can carry extra state (private\nattributes, computed fields) that pydantic's containment/revalidation\nmachinery was never designed to reason about when the subclass\ninstance is embedded in a ``DeficiencyFinding``-typed field elsewhere.\nMaking this structurally impossible closes that whole class of attack\nrather than chasing each individual symptom.",
+      "properties": {
+        "blast_radius": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Blast Radius",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/DeficiencyCategory"
+        },
+        "comparison_window_days": {
+          "anyOf": [
+            {
+              "maximum": 365,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comparison Window Days"
+        },
+        "coverage": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Coverage",
+          "type": "number"
+        },
+        "current_window_days": {
+          "maximum": 365,
+          "minimum": 1,
+          "title": "Current Window Days",
+          "type": "integer"
+        },
+        "data_semantics": {
+          "enum": [
+            "measured_zero",
+            "no_data",
+            "not_measured"
+          ],
+          "title": "Data Semantics",
+          "type": "string"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "evidence_classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeficiencyEvidenceClassification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "fact_kind": {
+          "enum": [
+            "observed",
+            "inferred",
+            "recommendation"
+          ],
+          "title": "Fact Kind",
+          "type": "string"
+        },
+        "finding_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "observed_state": {
+          "$ref": "#/$defs/SourceRequirementState"
+        },
+        "relationship_paths": {
+          "items": {
+            "$ref": "#/$defs/DevRelationshipPath"
+          },
+          "maxItems": 10,
+          "title": "Relationship Paths",
+          "type": "array"
+        },
+        "remediation": {
+          "$ref": "#/$defs/DeficiencyRemediation"
+        },
+        "rule_id": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "rule_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Rule Version",
+          "type": "string"
+        },
+        "sample_count": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Count"
+        },
+        "schema_version": {
+          "const": "deficiency_finding.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/DeficiencySeverity"
+        },
+        "subject_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Subject Id",
+          "type": "string"
+        },
+        "subject_kind": {
+          "$ref": "#/$defs/RuleApplicability"
+        }
+      },
+      "required": [
+        "schema_version",
+        "finding_id",
+        "category",
+        "rule_id",
+        "rule_version",
+        "subject_kind",
+        "subject_id",
+        "severity",
+        "fact_kind",
+        "observed_state",
+        "data_semantics",
+        "coverage",
+        "current_window_days",
+        "blast_radius",
+        "remediation",
+        "evaluated_at"
+      ],
+      "title": "DeficiencyFinding",
+      "type": "object"
+    },
+    "DeficiencyRemediation": {
+      "additionalProperties": false,
+      "description": "A bounded, server-owned remediation + verification pair.\n\nNever a rendering of arbitrary producer copy and never an action with\nwrite/execution side effects (explicit guardrail) -- both fields are\nfixed, code-owned template text per finding kind, mirroring\n``HealthRuleDefinition.remediation_template``'s own posture.",
+      "properties": {
+        "remediation_template": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Remediation Template",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "deficiency_remediation.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "verification_condition": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Verification Condition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "remediation_template",
+        "verification_condition"
+      ],
+      "title": "DeficiencyRemediation",
+      "type": "object"
+    },
+    "DeficiencySeverity": {
+      "description": "A deficiency's own severity -- deliberately not ``DimensionState``.\n\n``DimensionState`` (CHAOS-3302) also carries ``healthy``/``unknown``/\n``not_applicable``, which are never valid on a *finding* (a finding is,\nby definition, a real deficiency -- an unmeasured or healthy check is\nreported through :class:`DeficiencyCategoryStatus` instead, never\nminted as a zero-severity finding). Scoping this enum to the three\ngenuinely triggerable states keeps that guardrail structural rather\nthan conventional.",
+      "enum": [
+        "watch",
+        "at_risk",
+        "critical"
+      ],
+      "title": "DeficiencySeverity",
+      "type": "string"
+    },
     "DevAnswerFact": {
       "additionalProperties": false,
       "properties": {
@@ -131,6 +444,27 @@
         "coverage": {
           "$ref": "#/$defs/DevCoverageV2"
         },
+        "deficiency_category_statuses": {
+          "items": {
+            "$ref": "#/$defs/DeficiencyCategoryStatus"
+          },
+          "maxItems": 8,
+          "title": "Deficiency Category Statuses",
+          "type": "array"
+        },
+        "deficiency_findings": {
+          "items": {
+            "$ref": "#/$defs/DeficiencyFinding"
+          },
+          "maxItems": 50,
+          "title": "Deficiency Findings",
+          "type": "array"
+        },
+        "deficiency_findings_truncated": {
+          "default": false,
+          "title": "Deficiency Findings Truncated",
+          "type": "boolean"
+        },
         "deficiency_refs": {
           "items": {
             "maxLength": 128,
@@ -186,6 +520,19 @@
           "format": "date-time",
           "title": "Generated At",
           "type": "string"
+        },
+        "health_findings": {
+          "items": {
+            "$ref": "#/$defs/HealthRuleFinding"
+          },
+          "maxItems": 50,
+          "title": "Health Findings",
+          "type": "array"
+        },
+        "health_findings_truncated": {
+          "default": false,
+          "title": "Health Findings Truncated",
+          "type": "boolean"
         },
         "health_profile_refs": {
           "items": {
@@ -612,6 +959,14 @@
           "minimum": 0,
           "title": "Available Source Count",
           "type": "integer"
+        },
+        "degraded_required_sources": {
+          "items": {
+            "$ref": "#/$defs/SourceClass"
+          },
+          "maxItems": 25,
+          "title": "Degraded Required Sources",
+          "type": "array"
         },
         "required_source_count": {
           "maximum": 100,
@@ -1325,6 +1680,17 @@
           "title": "Display Precision",
           "type": "integer"
         },
+        "evidence_classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricEvidenceClassification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "evidence_ref_ids": {
           "items": {
             "maxLength": 44,
@@ -1794,7 +2160,7 @@
     },
     "DevRelationshipPath": {
       "additionalProperties": false,
-      "description": "One verifiable hop chain from a committed subject to supporting data.",
+      "description": "One verifiable hop chain from a committed subject to supporting data.\n\nLives in this leaf module (not ``result.py``, where it originated)\nbecause ``contracts_v2.deficiency`` needs it and also needs\n``contracts_v2.result`` to import ``DeficiencyFinding`` in the other\ndirection (CHAOS-3297 stack #3, ``DevSourceContent.deficiency_findings``)\n-- the same \"both sides of the seam read from the same leaf module\"\nreasoning ``FactDisclosure`` above was placed here for. ``result.py``\nre-exports this name unchanged, so no existing import site elsewhere in\nthe package needed to change.",
       "properties": {
         "confidence": {
           "maximum": 1,
@@ -2023,6 +2389,27 @@
           "title": "Ci Checks",
           "type": "array"
         },
+        "deficiency_category_statuses": {
+          "items": {
+            "$ref": "#/$defs/DeficiencyCategoryStatus"
+          },
+          "maxItems": 8,
+          "title": "Deficiency Category Statuses",
+          "type": "array"
+        },
+        "deficiency_findings": {
+          "items": {
+            "$ref": "#/$defs/DeficiencyFinding"
+          },
+          "maxItems": 50,
+          "title": "Deficiency Findings",
+          "type": "array"
+        },
+        "deficiency_findings_truncated": {
+          "default": false,
+          "title": "Deficiency Findings Truncated",
+          "type": "boolean"
+        },
         "deployments": {
           "items": {
             "$ref": "#/$defs/DevDeploymentFactV2"
@@ -2038,6 +2425,19 @@
           "maxItems": 25,
           "title": "Graph Edges",
           "type": "array"
+        },
+        "health_findings": {
+          "items": {
+            "$ref": "#/$defs/HealthRuleFinding"
+          },
+          "maxItems": 50,
+          "title": "Health Findings",
+          "type": "array"
+        },
+        "health_findings_truncated": {
+          "default": false,
+          "title": "Health Findings Truncated",
+          "type": "boolean"
         },
         "incidents": {
           "items": {
@@ -2359,6 +2759,19 @@
       "title": "DevTimeRange",
       "type": "object"
     },
+    "DimensionState": {
+      "description": "Per-dimension state. ``unknown``/``not_applicable`` are first-class,\n\nnever collapsed to ``healthy`` (the CHAOS-3302 exit criterion: \"Unknown\nand not-applicable states are preserved without being collapsed to\nhealthy/zero\").",
+      "enum": [
+        "healthy",
+        "watch",
+        "at_risk",
+        "critical",
+        "unknown",
+        "not_applicable"
+      ],
+      "title": "DimensionState",
+      "type": "string"
+    },
     "DirectScope": {
       "enum": [
         "organization",
@@ -2418,6 +2831,150 @@
       "title": "FreshnessState",
       "type": "string"
     },
+    "HealthDimension": {
+      "description": "The nine canonical dimensions named verbatim in CHAOS-3302.\n\nWave 3.1 does not implement a universal composite score (explicit\nnon-goal); this enum exists so every finding declares exactly one of\nthese, never a free-form category.",
+      "enum": [
+        "execution_completion",
+        "delivery_flow",
+        "reliability_release",
+        "review_ci_pressure",
+        "code_ownership_risk",
+        "cognitive_workload_pressure",
+        "investment_balance",
+        "dependencies_blockers",
+        "data_trust"
+      ],
+      "title": "HealthDimension",
+      "type": "string"
+    },
+    "HealthRuleFinding": {
+      "additionalProperties": false,
+      "description": "One rule's evaluated result for one subject/window.\n\n``shadow_only`` findings (from a ``provisional`` rule) are computed for\ncalibration review but must never reach a launch surface or the team\nqualification contract -- see\n``health_rule_registry.evaluate_registry``.",
+      "properties": {
+        "calibration_state": {
+          "$ref": "#/$defs/CalibrationState"
+        },
+        "dimension": {
+          "$ref": "#/$defs/HealthDimension"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "evidence_source_classes": {
+          "items": {
+            "$ref": "#/$defs/SourceClass"
+          },
+          "maxItems": 12,
+          "title": "Evidence Source Classes",
+          "type": "array"
+        },
+        "fact_kind": {
+          "enum": [
+            "observed",
+            "inferred",
+            "recommendation"
+          ],
+          "title": "Fact Kind",
+          "type": "string"
+        },
+        "finding_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "remediation_template": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Remediation Template",
+          "type": "string"
+        },
+        "rule_id": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "rule_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Rule Version",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "health_rule_finding.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "shadow_only": {
+          "title": "Shadow Only",
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/DimensionState"
+        },
+        "subject_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Subject Id",
+          "type": "string"
+        },
+        "subject_kind": {
+          "$ref": "#/$defs/RuleApplicability"
+        },
+        "suppressed_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "insufficient_sample",
+                "insufficient_coverage",
+                "insufficient_cohort",
+                "not_sustained",
+                "missing_denominator",
+                "missing_attribution"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suppressed Reason"
+        }
+      },
+      "required": [
+        "schema_version",
+        "finding_id",
+        "rule_id",
+        "rule_version",
+        "dimension",
+        "subject_kind",
+        "subject_id",
+        "state",
+        "fact_kind",
+        "shadow_only",
+        "remediation_template",
+        "calibration_state",
+        "evaluated_at"
+      ],
+      "title": "HealthRuleFinding",
+      "type": "object"
+    },
+    "MetricEvidenceClassification": {
+      "description": "Closed reasons a ``DevMetricRefV2`` may carry no per-metric evidence\nref (F10, CHAOS-3297 stack #3, ratified 2026-08-02) -- the same\n\"evidence XOR an explicit no-evidence classification\" pattern\n``contracts_v2.deficiency.DeficiencyEvidenceClassification`` already\nestablished, applied to metrics here.",
+      "enum": [
+        "legacy_v1_unminted"
+      ],
+      "title": "MetricEvidenceClassification",
+      "type": "string"
+    },
     "MetricID": {
       "enum": [
         "items_completed",
@@ -2447,6 +3004,16 @@
       "title": "PublicOutcome",
       "type": "string"
     },
+    "RuleApplicability": {
+      "description": "Closed to project/team/portfolio -- see module docstring.",
+      "enum": [
+        "project",
+        "team",
+        "portfolio"
+      ],
+      "title": "RuleApplicability",
+      "type": "string"
+    },
     "SourceClass": {
       "description": "The closed platform vocabulary of investigable source classes.\n\nA *source class* names a kind of platform data an investigation step can\ndraw on. It is deliberately a closed enum rather than an ``OpaqueID``,\nbecause the same token is what ``dev_coverage``'s\n``unavailable_required_sources``/``stale_required_sources`` disclose on a\n**denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):\nadversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle\na subject-derived identifier (``\"private/Nightfall\"``) out through a frame\nwhose every other field was correctly empty. A closed vocabulary means the\ncoverage counts stay answerable for a denial while carrying nothing a\nproducer chose.\n\nAdding a source class is therefore a deliberate contract change, not an\nincidental string: a new adapter must add its member here (and regenerate\nthe exported schemas) before it can appear on the wire.",
       "enum": [
@@ -2463,7 +3030,9 @@
         "operational_control",
         "source_health",
         "cognitive_load",
-        "investment_allocation"
+        "investment_allocation",
+        "health_profile",
+        "deficiency_inventory"
       ],
       "title": "SourceClass",
       "type": "string"

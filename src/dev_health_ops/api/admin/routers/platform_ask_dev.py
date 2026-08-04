@@ -22,6 +22,7 @@ from dev_health_ops.api.admin.middleware import (
     require_superuser,
 )
 from dev_health_ops.api.dev.production_runtime import (
+    certify_platform_resolution,
     resolve_platform_certification_provider,
 )
 from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
@@ -32,15 +33,12 @@ from dev_health_ops.llm.agent.readiness import (
     PLATFORM_READINESS_SETTING_KEY,
     PLATFORM_SETTINGS_ORG_ID,
     AgentReadinessOutcome,
-    AgentReadinessService,
     ReadinessState,
     SettingsAgentReadinessStore,
     readiness_failure_state,
 )
-from dev_health_ops.llm.agent.role_readiness import RoleReadinessService
 from dev_health_ops.llm.agent.roles import (
     PLATFORM_ROLE_CERTIFICATION_SETTING_KEY,
-    AgentRole,
     SettingsRoleCertificationStore,
 )
 
@@ -254,63 +252,20 @@ async def run_platform_ask_dev_readiness(
         current_user,
         detail="Platform Ask Dev administrative actions are unavailable while impersonating",
     )
+    # CHAOS-3358: this button is now a FORCE-REFRESH, not a requirement --
+    # a stale record re-certifies itself automatically (see
+    # dev_health_ops.api.dev.platform_auto_certification), and a stale record
+    # no longer blocks anyone's run either way. The button still certifies
+    # unconditionally and synchronously, so an operator who has just changed
+    # something can see the verdict immediately instead of waiting for the
+    # next Ask Dev question to trigger the automatic path.
+    #
+    # The certify sequence itself lives in production_runtime so this route
+    # and the automatic path are one implementation writing one record shape,
+    # not two that have to be kept in agreement.
     try:
         resolution = await resolve_platform_certification_provider()
     except DevRuntimeUnavailable:
         return await _platform_readiness_response(session)
-    try:
-        await AgentReadinessService(_platform_store(session)).certify(
-            resolution.provider,
-            provider_name=resolution.family,
-            model=resolution.model,
-            fingerprint=resolution.readiness_fingerprint,
-        )
-        try:
-            # CHAOS-3285: certify the legacy_agent role in the new per-role
-            # store too, on the same already-resolved provider, so the
-            # per-role projection reflects real preflight results rather
-            # than staying "not_yet_certified" forever. Best-effort: a bug
-            # here must never regress the existing (tested, relied-upon)
-            # binary certify() call above -- certify_legacy_agent already
-            # turns every AgentProviderError into a FAILED/INCOMPATIBLE
-            # record internally, so only a genuinely unexpected failure
-            # (e.g. store I/O) reaches this except.
-            #
-            # CHAOS-3285 round 2 (Codex MEDIUM): the whole attempt runs
-            # inside a SAVEPOINT (begin_nested), never bare. A DB error
-            # caught by a plain except -- without a rollback or savepoint --
-            # leaves the session's transaction unable to accept further
-            # operations; the NEXT query on it raises PendingRollbackError,
-            # and when the request's own session dependency later tries to
-            # commit, THAT failure rolls back the whole transaction --
-            # silently discarding the binary certify() write just above,
-            # despite this being "caught". begin_nested()'s __aexit__ rolls
-            # back only to the savepoint on an exception, leaving the outer
-            # transaction (and the binary write already flushed into it)
-            # intact and the session usable for the rest of this request.
-            async with session.begin_nested():
-                await RoleReadinessService(_platform_role_store(session)).certify_role(
-                    AgentRole.LEGACY_AGENT,
-                    resolution.provider,
-                    certification_key=resolution.readiness_fingerprint,
-                )
-        except Exception:
-            logger.warning(
-                "Failed to certify the legacy_agent role during platform "
-                "Ask Dev preflight",
-                exc_info=True,
-            )
-    finally:
-        try:
-            await resolution.provider.aclose()
-        except Exception:
-            # Best-effort cleanup only: the certify() call above has already
-            # persisted the readiness result (or its own failure state), so a
-            # transport-close error here must never mask that outcome or fail
-            # this request. Still worth knowing about (a leaked connection is
-            # an operational signal), so log it rather than swallow it.
-            logger.warning(
-                "Failed to close platform Ask Dev provider connection after preflight",
-                exc_info=True,
-            )
+    await certify_platform_resolution(session, resolution)
     return await _platform_readiness_response(session)

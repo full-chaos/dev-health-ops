@@ -17,6 +17,7 @@ fails the contract suite" acceptance clause, made attributable per-guard.
 from __future__ import annotations
 
 import itertools
+import json
 import re
 from copy import deepcopy
 from enum import StrEnum
@@ -27,6 +28,10 @@ from pydantic import BaseModel, ValidationError
 
 from dev_health_ops.api.dev import contracts_v2 as v2
 from dev_health_ops.api.dev.contract_fixtures import (
+    TEAM_ID,
+    committed_team_commit,
+)
+from dev_health_ops.api.dev.contract_fixtures import (
     positive_fixtures as positive_fixtures_v1,
 )
 from dev_health_ops.api.dev.contract_fixtures_v2 import (
@@ -36,6 +41,7 @@ from dev_health_ops.api.dev.contract_fixtures_v2 import (
     negative_fixtures,
     no_answer_answer_fixture,
     positive_fixtures,
+    positive_variant_fixtures,
     stream_fixtures,
 )
 from dev_health_ops.api.dev.contracts import (
@@ -59,6 +65,9 @@ from dev_health_ops.api.dev.contracts import DevError as DevErrorV1
 from dev_health_ops.api.dev.contracts_v2 import compat as compat_module
 from dev_health_ops.api.dev.contracts_v2 import validators as validators_module
 from dev_health_ops.api.dev.contracts_v2.validators import ANSWERED_CONTENT_OUTCOMES
+from dev_health_ops.api.dev.export_contracts import (
+    expected_artifacts as expected_artifacts_v1,
+)
 from dev_health_ops.api.dev.export_contracts_v2 import (
     check_artifacts,
     expected_artifacts,
@@ -99,18 +108,115 @@ def test_every_contract_requires_its_explicit_version(schema_version: str) -> No
         v2.CONTRACT_MODELS_V2[schema_version].model_validate(payload)
 
 
+#: CHAOS-3297 stack #4: both must validate cleanly -- the base lifecycle
+#: (run.started, answer.frame_ready, terminal, done) and the same lifecycle
+#: with an optional answer.narrative_fallback between frame_ready and the
+#: terminal result. Every other key in stream_fixtures() is a deliberate,
+#: isolated violation and must raise.
+_VALID_STREAM_FIXTURE_NAMES = frozenset({"valid", "valid_with_narrative_fallback"})
+
+
 def test_stream_sequences_require_exactly_one_terminal_then_done() -> None:
     fixtures = stream_fixtures()
-    v2.validate_stream_v2(
-        [v2.DevStreamEventV2.model_validate(item) for item in fixtures["valid"]]
-    )
+    for name in _VALID_STREAM_FIXTURE_NAMES:
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in fixtures[name]]
+        )
     for name, payloads in fixtures.items():
-        if name == "valid":
+        if name in _VALID_STREAM_FIXTURE_NAMES:
             continue
         with pytest.raises((ValidationError, ValueError)):
             v2.validate_stream_v2(
                 [v2.DevStreamEventV2.model_validate(item) for item in payloads]
             )
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "case", "payload"),
+    [
+        (schema_version, case, payload)
+        for schema_version, cases in positive_variant_fixtures().items()
+        for case, payload in cases
+    ],
+)
+def test_positive_variant_fixture_validates(
+    schema_version: str, case: str, payload: dict[str, object]
+) -> None:
+    v2.CONTRACT_MODELS_V2[schema_version].model_validate(payload)
+
+
+def test_v2_team_golden_is_the_same_producer_output_v1_exports() -> None:
+    """CHAOS-3338: one committed TEAM scope, exported into both trees.
+
+    ``DevScopeV2`` subclasses ``DevScope``, so there is exactly one correct
+    team wire shape. Exporting it twice from one producer call is what
+    makes the two trees' team examples unable to drift apart.
+    """
+
+    v1_team = json.loads(
+        expected_artifacts_v1()["examples/positive/dev_scope.v1.team_direct_scope.json"]
+    )
+    v2_request = json.loads(
+        expected_artifacts()[
+            "examples/positive/dev_message_request.v2.team_direct_scope.json"
+        ]
+    )
+
+    assert v2_request["scope"] == v1_team
+    assert v2.DevScopeV2.model_validate(v1_team).direct_scope.value == "team"
+
+
+def test_v2_scope_accepts_the_committed_team_scope() -> None:
+    """CHAOS-3338 regression, fail-before/pass-after.
+
+    ``DevScopeV2`` re-declares ``team_ids`` as a ``tuple``, while the
+    inherited ``DevScope.validate_direct_scope`` compared it against a
+    ``list`` literal -- and ``("t",) != ["t"]`` is always True, so the
+    branch rejected *every* v2 team scope, the real producer's included.
+    ``investigation_plans.builtin_steps._wire_metric_content``
+    revalidates the committed scope as a ``DevScopeV2``, so a committed
+    team subject raised there for the entire metrics step. Restoring the
+    ``!= [ ... ]`` comparison fails this test while leaving every v1 team
+    test green, which is what makes the sequence-type mismatch the
+    attributable cause.
+    """
+
+    committed = committed_team_commit().resolved_scope
+    assert committed is not None
+
+    scope_v2 = v2.DevScopeV2.model_validate(committed.model_dump(mode="json"))
+
+    assert scope_v2.team_ids == (TEAM_ID,)
+    assert tuple(committed.team_ids) == scope_v2.team_ids
+
+    # The invariant itself must still bite on a v2 scope, not merely have
+    # been loosened into accepting anything.
+    mismatched = committed.model_dump(mode="json")
+    mismatched["team_ids"] = []
+    with pytest.raises(ValidationError, match="team_ids to name exactly that team"):
+        v2.DevScopeV2.model_validate(mismatched)
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("team_scope_with_repository_list", "cannot carry a repository list"),
+        (
+            "team_scope_without_matching_team_id",
+            "team_ids to name exactly that team",
+        ),
+        (
+            "team_scope_entity_ref_is_not_a_team",
+            "direct entity scope requires one matching entity",
+        ),
+    ],
+)
+def test_v2_team_scope_negative_examples_fail_for_their_named_reason(
+    case: str, reason: str
+) -> None:
+    payload = dict(negative_fixtures()["dev_message_request.v2"])[case]
+    with pytest.raises(ValidationError, match=reason):
+        v2.DevMessageRequestV2.model_validate(payload)
 
 
 def test_checked_in_contract_artifacts_have_no_drift() -> None:
@@ -271,6 +377,11 @@ _FRAME_VALIDATOR_CASES: dict[str, tuple[str, str]] = {
     "validate_versions_presence": (
         "dev_answer_frame.v1",
         "answered_without_versions",
+    ),
+    # F10 (CHAOS-3297 stack #3, ratified 2026-08-02).
+    "validate_frame_grounding": (
+        "dev_answer_frame.v1",
+        "fact_missing_grounding",
     ),
 }
 
@@ -1207,6 +1318,114 @@ def test_finding6_stream_rejects_duplicate_done() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CHAOS-3297 stack #4: answer.frame_ready / answer.narrative_fallback added
+# to the lifecycle invariant.
+# ---------------------------------------------------------------------------
+
+
+def test_stream_valid_with_narrative_fallback_round_trips() -> None:
+    """The optional interior marker's happy path: present, after
+    frame_ready, before the terminal result, with its own
+    narrative_failure_code payload."""
+
+    payloads = stream_fixtures()["valid_with_narrative_fallback"]
+    v2.validate_stream_v2(
+        [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+    )
+
+
+def test_stream_rejects_an_invented_narrative_failure_code() -> None:
+    """CHAOS-3297 codex NO-SHIP finding round 1, MEDIUM #3: the closed
+    vocabulary is enforced at the schema layer itself, not only by
+    ``persistence.service`` and the DB CHECK constraint (migration 0083)
+    -- a value outside ``NarrativeFailureCode`` can never even construct a
+    valid ``DevStreamEventV2``, regardless of what produced it."""
+
+    payloads = deepcopy(stream_fixtures()["valid_with_narrative_fallback"])
+    narrative_fallback_events = [
+        item for item in payloads if item["event"] == "answer.narrative_fallback"
+    ]
+    assert narrative_fallback_events, "fixture must contain the event under test"
+    narrative_fallback_events[0]["narrative_failure_code"] = "an_invented_code"
+    with pytest.raises(ValidationError):
+        v2.DevStreamEventV2.model_validate(narrative_fallback_events[0])
+
+
+def test_stream_rejects_a_missing_frame_ready() -> None:
+    payloads = stream_fixtures()["invalid_missing_frame_ready"]
+    with pytest.raises(ValueError, match="exactly one answer.frame_ready"):
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+        )
+
+
+def test_stream_rejects_a_duplicate_frame_ready() -> None:
+    payloads = stream_fixtures()["invalid_duplicate_frame_ready"]
+    with pytest.raises(ValueError, match="exactly one answer.frame_ready"):
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+        )
+
+
+def test_stream_rejects_a_duplicate_narrative_fallback() -> None:
+    payloads = stream_fixtures()["invalid_duplicate_narrative_fallback"]
+    with pytest.raises(ValueError, match="at most one answer.narrative_fallback"):
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+        )
+
+
+def test_stream_rejects_a_narrative_fallback_before_frame_ready() -> None:
+    payloads = stream_fixtures()["invalid_narrative_fallback_before_frame_ready"]
+    with pytest.raises(ValueError, match="must occur after answer.frame_ready"):
+        v2.validate_stream_v2(
+            [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+        )
+
+
+def test_disabling_the_frame_ready_count_check_permits_a_missing_frame_ready(
+    monkeypatch,
+) -> None:
+    """Mutation control (rule 2/3): disable
+    ``validate_exactly_one_frame_ready`` specifically (a separate,
+    independently monkeypatchable function -- see its docstring), leaving
+    every other lifecycle check intact. The old test above (missing
+    frame_ready is rejected) must flip to accepting the same stream,
+    proving this guard, not something else, is what rejects it."""
+
+    from dev_health_ops.api.dev.contracts_v2 import stream as stream_module
+
+    payloads = stream_fixtures()["invalid_missing_frame_ready"]
+    monkeypatch.setattr(
+        stream_module, "validate_exactly_one_frame_ready", lambda events: None
+    )
+    v2.validate_stream_v2(
+        [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+    )
+
+
+def test_disabling_the_narrative_fallback_order_check_permits_a_reordered_stream(
+    monkeypatch,
+) -> None:
+    """Same mutation-control pattern for
+    ``validate_narrative_fallback_follows_frame_ready``: disabled, the
+    "narrative_fallback before frame_ready" stream must be silently
+    accepted instead of rejected."""
+
+    from dev_health_ops.api.dev.contracts_v2 import stream as stream_module
+
+    payloads = stream_fixtures()["invalid_narrative_fallback_before_frame_ready"]
+    monkeypatch.setattr(
+        stream_module,
+        "validate_narrative_fallback_follows_frame_ready",
+        lambda events: None,
+    )
+    v2.validate_stream_v2(
+        [v2.DevStreamEventV2.model_validate(item) for item in payloads]
+    )
+
+
+# ---------------------------------------------------------------------------
 # Round-2 adversarial review: three of the round-1 closures were bypassed via
 # adjacent variants, so each fix below is a *class* closure rather than a
 # patch. Every test in this section was first run against the pre-fix source
@@ -1808,6 +2027,9 @@ def _frame_absent_field_samples() -> dict[str, object]:
         "health_profile_refs": "denied_with_health_profile_refs",
         "finding_refs": "denied_with_finding_refs",
         "deficiency_refs": "denied_with_deficiency_refs",
+        "health_findings": "denied_with_health_findings",
+        "deficiency_findings": "denied_with_deficiency_findings",
+        "deficiency_category_statuses": "denied_with_deficiency_category_statuses",
         "conflicts": "denied_with_conflicts",
         "limitations": "denied_with_limitations",
         "source_observations": "denied_with_source_observations",

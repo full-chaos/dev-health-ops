@@ -38,6 +38,26 @@ through ``wrap_legacy_answer_as_frame`` via ``DevAnswerFact.disclosures``
 folded into the fact's disclosure tuple in canonical (enum) order. See
 ``contracts_v2.base.FactDisclosure`` and ``contracts_v2.compat``'s
 import-time bijection assertion against ``DevClaimFlags.model_fields``.
+
+Forward guidance for stack #4/#5's real frame-only builders (not a build
+order for this module today -- CHAOS-3297 stack #3 never constructs a NEW
+``DevAnswerFact`` from ``DevInvestigationResult`` content; it only embeds
+``HealthRuleFinding``/``DeficiencyFinding`` objects directly on
+``DevAnswerFrame.health_findings``/``deficiency_findings``, neither of
+which has a ``disclosures``-equivalent field): when a future builder DOES
+construct a ``DevAnswerFact`` from a ``DevSourceObservation``/
+``DevSourceContent`` fact (a status fact, a pull request, a CI check, ...),
+its ``disclosures`` must derive from that observation's own
+``SourceRequirementState`` (``AVAILABLE_STALE`` -> ``FactDisclosure.STALE``,
+``AVAILABLE_UNKNOWN`` -> ``FactDisclosure.UNCERTAIN``, etc.) -- NEVER from
+``DevEvidenceRefV2.flags.untrusted_content``, which defaults ``True`` on
+every minted handle (see ``production_runtime._mint_evidence``) and would
+mark nearly every fact ``UNTRUSTED_SOURCE`` if used this way, making
+``answered`` structurally unreachable for any observation-backed fact.
+Package placement note: this rule belongs in THIS module (not a new
+``answer_frames`` package) -- lane-3297-s4 already created that package on
+its own branch for the narrative-fallback work, so minting a second one
+here would collide.
 """
 
 from __future__ import annotations
@@ -46,12 +66,14 @@ import re
 import uuid
 from collections.abc import Mapping
 from datetime import datetime
+from typing import Any
 
 from .contracts import (
     ClaimKind,
     DevAnswer,
     DevClaimFlags,
     DevContractVersions,
+    DevMetricRef,
 )
 from .contracts import ToolID as _ToolID
 from .contracts_v2.base import (
@@ -60,7 +82,13 @@ from .contracts_v2.base import (
     PublicOutcome,
     SourceClass,
 )
-from .contracts_v2.embedded import DevCoverageV2, DevEvidenceRefV2, DevMetricRefV2
+from .contracts_v2.deficiency import DeficiencyCategoryStatus, DeficiencyFinding
+from .contracts_v2.embedded import (
+    DevCoverageV2,
+    DevEvidenceRefV2,
+    DevMetricRefV2,
+    MetricEvidenceClassification,
+)
 from .contracts_v2.frame import (
     DevAnswerFact,
     DevAnswerFrame,
@@ -69,7 +97,13 @@ from .contracts_v2.frame import (
     DevFrameConflict,
     DevFrameVersions,
 )
+from .contracts_v2.health_rules import HealthRuleFinding
 from .contracts_v2.no_answer_policy import CANONICAL_NO_ANSWER_COPY, NO_ANSWER_OUTCOMES
+from .contracts_v2.result import DevInvestigationResult, DevSourceContent
+from .investigation_plans.wave_3_1_plans import (
+    capped_deficiency_findings,
+    capped_health_findings,
+)
 
 __all__ = [
     "LEGACY_ANSWER_PLAN_ID",
@@ -78,6 +112,9 @@ __all__ = [
     "SOURCE_CLASS_BY_TOOL_ID",
     "UnregisteredTerminalCode",
     "build_error_frame",
+    "is_orchestrator_error_frame",
+    "orchestrator_error_frame_id",
+    "tolerant_parse_legacy_frame_payload",
     "wrap_legacy_answer_as_frame",
 ]
 
@@ -286,12 +323,116 @@ def _disclosures_from_claim_flags(flags: DevClaimFlags) -> tuple[FactDisclosure,
     )
 
 
+def _wrap_legacy_metric(metric: DevMetricRef) -> DevMetricRefV2:
+    """One v1 ``DevMetricRef`` (from ``answer.metrics``) mirrored into
+    ``DevMetricRefV2``, with F10's evidence_classification set
+    UNCONDITIONALLY (team-lead ruling, 2026-08-02) -- never inferred from
+    whether ``metric.evidence_ref_ids`` happens to be empty. Every v1-sourced
+    metric originates from the legacy model-tool-choice loop, ultimately from
+    ``production_runtime.py``'s ``query_metric.v1`` tool, which deliberately
+    scrubs ``evidence_ref_ids`` to ``()`` on every call -- so this is always
+    the correct classification for this path, by construction, not a guess.
+    If that invariant is ever violated (a v1 metric genuinely carrying real
+    evidence_ref_ids), ``DevMetricRefV2``'s own XOR validator rejects the
+    contradiction loudly rather than silently picking one side.
+    """
+
+    return DevMetricRefV2.model_validate(
+        {
+            **metric.model_dump(),
+            "evidence_classification": MetricEvidenceClassification.LEGACY_V1_UNMINTED,
+        }
+    )
+
+
+def tolerant_parse_legacy_frame_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Patch a raw ``dev_answer_frame.v1`` payload read back from storage so
+    it validates against today's ``DevAnswerFrame``, when the row predates a
+    field this branch (CHAOS-3297 stack #3) added additively without a
+    ``schema_version`` bump (version-skew read posture, team-lead ruling
+    2026-08-02).
+
+    Scope, deliberately narrow: this is a READ-time shim for a payload
+    freshly loaded from storage, never a substitute for constructing a
+    ``DevMetricRefV2`` correctly in application code. It must never run
+    before a payload is WRITTEN (``persistence/service.py``'s
+    ``record_frame`` stays strict -- a caller passing a metric with neither
+    ``evidence_ref_ids`` nor ``evidence_classification`` is a caller bug,
+    not data to quietly patch), and it is deliberately NOT implemented as a
+    ``DevMetricRefV2`` validator: putting this logic in the type itself
+    would silently default every future construction call that is missing
+    the classification by a genuine bug to ``LEGACY_V1_UNMINTED`` instead of
+    raising -- defeating F10's floor for every caller, not just replay.
+
+    Today's one skew case: every row ``wrap_legacy_answer_as_frame``
+    persisted before this branch's ``DevMetricRefV2.evidence_classification``
+    field existed has metrics with ``evidence_ref_ids: []`` and no
+    ``evidence_classification`` key at all (``production_runtime.py``'s
+    ``query_metric.v1`` tool scrubs evidence on every call -- see
+    ``_wrap_legacy_metric``'s docstring -- so this was already the
+    universal legacy-answer metric shape, not a rare one). A metric dict is
+    treated as pre-s3-shaped, and patched, only when BOTH hold: the
+    ``evidence_classification`` key is entirely absent (never when it is
+    present and ``null`` -- that is a different, already-invalid shape
+    ``DevMetricRefV2``'s own XOR validator must keep rejecting) AND
+    ``evidence_ref_ids`` is empty. A metric that already carries real
+    evidence is passed through untouched.
+
+    The health/deficiency findings fields added in the same branch need no
+    equivalent shim: both are ``default_factory``-backed, so a payload that
+    predates them simply omits the keys and pydantic supplies the (correct,
+    empty) default -- see ``test_chaos_3297_s3_version_skew.py``.
+    """
+
+    patched: dict[str, Any] = dict(payload)
+    metrics = patched.get("metrics")
+    if isinstance(metrics, list) and metrics:
+        patched_metrics: list[Any] = []
+        for metric in metrics:
+            if (
+                isinstance(metric, Mapping)
+                and "evidence_classification" not in metric
+                and not metric.get("evidence_ref_ids")
+            ):
+                patched_metric = dict(metric)
+                patched_metric["evidence_classification"] = (
+                    MetricEvidenceClassification.LEGACY_V1_UNMINTED.value
+                )
+                patched_metrics.append(patched_metric)
+            else:
+                patched_metrics.append(metric)
+        patched["metrics"] = patched_metrics
+    return patched
+
+
 def _source_class_for_legacy_token(token: str) -> SourceClass:
+    """Resolve one v1 coverage token to its ``SourceClass``.
+
+    Two token grammars reach these lists, and both must survive projection:
+
+    * a ``ToolID`` (``"status_snapshot.v1"``), written by
+      ``_coverage_from_tool_results`` for sources the *model* asked for;
+    * a ``SourceClass`` value (``"status_change"``), written by
+      ``_coverage_with_plan_sources`` for the plan's own required sources
+      (CHAOS-3334).
+
+    The second arm is not cosmetic. Without it every plan-sourced label fell
+    through to ``_LEGACY_COVERAGE_FALLBACK``, so a frame reported
+    ``source_health`` no matter which source actually degraded -- the client
+    was told the wrong source, which is the same misdisclosure the degraded
+    bucket exists to prevent, one layer down.
+    """
+
     try:
         tool_id = _ToolID(token)
     except ValueError:
+        pass
+    else:
+        return SOURCE_CLASS_BY_TOOL_ID[tool_id]
+    try:
+        return SourceClass(token)
+    except ValueError:
         return _LEGACY_COVERAGE_FALLBACK
-    return SOURCE_CLASS_BY_TOOL_ID[tool_id]
 
 
 def _platform_token(
@@ -318,6 +459,47 @@ _PLATFORM_TOKEN_RE = re.compile(
 
 def _looks_like_platform_token(value: str) -> bool:
     return bool(_PLATFORM_TOKEN_RE.match(value))
+
+
+def orchestrator_error_frame_id(*, run_id: str, code: str) -> str:
+    """The deterministic ``frame_id`` ``build_error_frame`` mints.
+
+    Split out so ``build_error_frame`` and ``router._replayed_result``'s
+    origin test derive it from ONE function (P3: deterministic identity). A
+    second, hand-copied uuid5 expression in the router would be a mint that
+    could silently drift from the real one -- and the failure mode of that
+    drift is the router deciding a frame it *did* build is foreign, which is
+    exactly the misclassification the origin test exists to prevent.
+    """
+
+    return str(uuid.uuid5(_NAMESPACE, f"error_frame:{run_id}:{code}"))
+
+
+def is_orchestrator_error_frame(*, frame_id: str, run_id: str, code: str) -> bool:
+    """Whether this stored frame is one ``build_error_frame`` produced.
+
+    CHAOS-3297 stack #5 (router reconciliation). "Frames are authoritative"
+    is a statement about *content*, not about the v1 wire error -- and it is
+    only true of a frame that actually authored what the live run streamed.
+    A preflight-origin frame did (``project_preflight_error`` is the same
+    projection live preflight uses, so replaying through it reproduces the
+    live copy exactly). An orchestrator-origin frame never did: stack #1
+    made ``finish()`` persist one purely so ``record_frame`` /
+    ``contract_generation = 'v2'`` / the CHAOS-3299 replay gate became
+    universally reachable, while the user-visible v1 message stayed the call
+    site's own ``error(code, message, ...)`` object (see the module
+    docstring). Projecting one of those back through the fixed,
+    outcome-keyed table substitutes canonical preflight copy for copy the
+    orchestrator authored -- a message the live run never sent.
+
+    Identity is recomputed rather than stored: the frame_id is a pure uuid5
+    of ``(namespace, run_id, code)``, so given the run row's own id and
+    ``safe_error_code`` the origin is decidable from data every affected row
+    already has -- no new column, no migration, and no reliance on a
+    heuristic like "the projected code happens to differ".
+    """
+
+    return frame_id == orchestrator_error_frame_id(run_id=run_id, code=code)
 
 
 def build_error_frame(
@@ -370,7 +552,7 @@ def build_error_frame(
         )
     return DevAnswerFrame(
         schema_version="dev_answer_frame.v1",
-        frame_id=str(uuid.uuid5(_NAMESPACE, f"error_frame:{run_id}:{code}")),
+        frame_id=orchestrator_error_frame_id(run_id=run_id, code=code),
         run_id=_canonical_run_id(run_id),
         generated_at=generated_at,
         public_outcome=outcome,
@@ -390,7 +572,104 @@ def build_error_frame(
     )
 
 
-def wrap_legacy_answer_as_frame(answer: DevAnswer, *, run_id: str) -> DevAnswerFrame:
+def _deficiency_category_statuses_from_contents(
+    contents: list[DevSourceContent],
+) -> tuple[DeficiencyCategoryStatus, ...]:
+    """The first non-empty ``content.deficiency_category_statuses`` found
+    across ``contents``, or ``()`` if none carry one.
+
+    Today's ``deficiency.operational.v1`` plan (``wave_3_1_plans.py``) is
+    SINGULAR-cardinality with exactly one mandatory step, so at most one
+    observation in any real ``DevInvestigationResult`` ever populates this
+    field -- unlike ``health_findings``/``deficiency_findings``, which can
+    legitimately accumulate across several observations, a coverage block
+    is one inventory's own fixed eight-category snapshot, and multiple
+    genuinely-full ones cannot be meaningfully merged (a category evaluated
+    in one but not another has no single correct combined status). If that
+    single-observation assumption is ever violated, taking the first
+    non-empty one is a conservative, non-fabricating choice -- never a
+    fabricated merge -- documented here so a future second producer is a
+    deliberate design decision, not a silent overwrite.
+    """
+
+    for content in contents:
+        if content.deficiency_category_statuses:
+            return content.deficiency_category_statuses
+    return ()
+
+
+def _findings_from_investigation_result(
+    investigation_result: DevInvestigationResult | None,
+) -> tuple[
+    tuple[HealthRuleFinding, ...],
+    bool,
+    tuple[DeficiencyFinding, ...],
+    bool,
+    tuple[DeficiencyCategoryStatus, ...],
+]:
+    """Flatten every observation's ``content.health_findings``/
+    ``deficiency_findings`` across ``investigation_result``, then re-sort
+    and cap at the frame's own bound via the SAME
+    ``capped_health_findings``/``capped_deficiency_findings`` functions
+    ``investigation_plans.wave_3_1_plans``'s own step wiring uses -- one
+    capping function, never a second copy that could disagree on which 50
+    survive.
+
+    A per-observation ``content.health_findings_truncated``/
+    ``deficiency_findings_truncated`` is preserved by ORing it into the
+    frame-level flag, never discarded: a source that already dropped
+    findings before this function ever saw them must still disclose that,
+    even if the flattened-and-recapped total this function computes
+    happens to land back under 50 (Codex-anticipated finding: re-deriving
+    truncation only from ``len(flattened) > 50`` would silently lose a
+    truncation signal from any single observation whose OWN pre-cap set
+    exceeded 50 but whose surviving 50 combine with few enough others to
+    read as untruncated overall).
+
+    ``deficiency_category_statuses`` (CHAOS-3297 s3 codex full-branch
+    review round 1, FINDING 2, 2026-08-02) rides alongside via
+    ``_deficiency_category_statuses_from_contents`` -- see that function's
+    own docstring for why "first non-empty" is the right posture rather
+    than a flatten-and-cap like the findings above.
+    """
+
+    if investigation_result is None:
+        return (), False, (), False, ()
+    contents = [
+        obs.content
+        for obs in investigation_result.observations
+        if obs.content is not None
+    ]
+    all_health = tuple(
+        finding for content in contents for finding in content.health_findings
+    )
+    all_deficiency = tuple(
+        finding for content in contents for finding in content.deficiency_findings
+    )
+    health, health_truncated = capped_health_findings(all_health)
+    deficiency, deficiency_truncated = capped_deficiency_findings(all_deficiency)
+    health_truncated = health_truncated or any(
+        content.health_findings_truncated for content in contents
+    )
+    deficiency_truncated = deficiency_truncated or any(
+        content.deficiency_findings_truncated for content in contents
+    )
+    deficiency_category_statuses = _deficiency_category_statuses_from_contents(contents)
+    return (
+        health,
+        health_truncated,
+        deficiency,
+        deficiency_truncated,
+        deficiency_category_statuses,
+    )
+
+
+def wrap_legacy_answer_as_frame(
+    answer: DevAnswer,
+    *,
+    run_id: str,
+    investigation_result: DevInvestigationResult | None = None,
+) -> DevAnswerFrame:
     """Mirror a fully-validated legacy v1 ``DevAnswer`` into a real frame.
 
     Always ``answered_with_gaps``, never plain ``answered``: the legacy
@@ -407,7 +686,29 @@ def wrap_legacy_answer_as_frame(answer: DevAnswer, *, run_id: str) -> DevAnswerF
     and ``contracts_v2.base.FactDisclosure``), so a v1 claim carrying
     stale/uncertain/conflicting/untrusted_source is no longer silently
     dropped when embedded into a frame.
+
+    CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02):
+    ``investigation_result``, when the run's plan executor produced one
+    ALONGSIDE the legacy model loop (both run unconditionally today --
+    see ``orchestrator.run()``), is embedded into this SAME frame's
+    ``health_findings``/``deficiency_findings`` -- never a second,
+    separate frame. ``direct_answer``/``public_outcome``/``completion``
+    stay driven purely by ``answer`` (the legacy loop is still what a
+    caller sees); the plan's structured findings ride alongside as
+    additional, independently-verifiable content. ``versions.plan_id``
+    stays ``LEGACY_ANSWER_PLAN_ID`` regardless -- it discloses provenance
+    of ``direct_answer``, which the plan never authored, not of every
+    field on the frame. Collapsing this divergence (the frame becoming
+    authoritative end to end) is explicitly stack #4/#5 territory.
     """
+
+    (
+        health_findings,
+        health_findings_truncated,
+        deficiency_findings,
+        deficiency_findings_truncated,
+        deficiency_category_statuses,
+    ) = _findings_from_investigation_result(investigation_result)
 
     facts = tuple(
         DevAnswerFact(
@@ -449,10 +750,12 @@ def wrap_legacy_answer_as_frame(answer: DevAnswer, *, run_id: str) -> DevAnswerF
         completion=DevCompletionBlock(calculable=False),
         sections=(section,),
         facts=facts,
-        metrics=tuple(
-            DevMetricRefV2.model_validate(metric.model_dump())
-            for metric in answer.metrics
-        ),
+        health_findings=health_findings,
+        health_findings_truncated=health_findings_truncated,
+        deficiency_findings=deficiency_findings,
+        deficiency_findings_truncated=deficiency_findings_truncated,
+        deficiency_category_statuses=deficiency_category_statuses,
+        metrics=tuple(_wrap_legacy_metric(metric) for metric in answer.metrics),
         evidence=tuple(
             DevEvidenceRefV2.model_validate(item.model_dump())
             for item in answer.evidence
@@ -475,6 +778,10 @@ def wrap_legacy_answer_as_frame(answer: DevAnswer, *, run_id: str) -> DevAnswerF
             stale_required_sources=tuple(
                 _source_class_for_legacy_token(token)
                 for token in answer.coverage.stale_required_sources
+            )[:25],
+            degraded_required_sources=tuple(
+                _source_class_for_legacy_token(token)
+                for token in answer.coverage.degraded_required_sources
             )[:25],
             as_of=answer.coverage.as_of,
         ),

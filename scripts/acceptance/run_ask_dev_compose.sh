@@ -34,6 +34,11 @@ expected_evidence_entity_fragment="$(read_oracle_field expected_evidence_entity_
 expected_claim_kind="$(read_oracle_field expected_claim_kind)"
 
 export ASK_DEV_WEB_CONTEXT="${web_root}"
+# 18080 collides with the normal dev-health stack's ACR API, which means a
+# developer with that stack up cannot run acceptance at all. Overridable so
+# both can coexist; the default preserves existing behaviour exactly.
+export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-18080}"
+acceptance_api_url="http://127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT}"
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-ask-dev-acceptance-unused}"
 
 compose=(
@@ -79,11 +84,89 @@ trap report_failure EXIT
   --with-work-graph
 
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18080 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${ops_root}/.venv/bin/python" \
   "${ops_root}/scripts/acceptance/prepare_ask_dev_acceptance.py"
+
+# CHAOS-3300: the "Ask Dev" not-found original defect reproduction, proven
+# through the real HTTP/SSE API surface (no Playwright/web needed for this
+# one -- it never reaches the web UI at all). PYTHONPATH must include
+# ops_root itself (not just src/) so `scripts.acceptance.*` imports resolve
+# the same way run_ask_dev_provider_profile.sh's smoke invocation does.
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_not_found.py"
+
+# CHAOS-3300: the "Ask Dev" exact-commit original defect reproduction --
+# the positive control the not-found negative control needs to hold against.
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_exact_commit.py"
+
+# CHAOS-3300: organization-wide DATA_TRUST and REMAINING_WORK questions,
+# proven the same way -- real HTTP/SSE API, no web/Playwright.
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_core_intents.py"
+
+# CHAOS-3300: re-verify the inherited positive-control oracle over the same
+# real HTTP/SSE surface (ops-side substance; the Playwright leg below still
+# proves web/window equivalence separately).
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_inherited_oracle.py"
+
+# CHAOS-3300: organization-wide multi-metric comparison (metric.comparison.v1).
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_metric_comparison.py"
+
+# CHAOS-3300/CHAOS-3332: the team-attribution attack, re-verified on the
+# fixed code -- a named TEAM subject now completes as a real (degraded but
+# honest) answer instead of crashing to internal_error.
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_team_attribution.py"
+
+# CHAOS-3300/CHAOS-3297 stack-3: the four newly-wired health/workload/
+# deficiency intents, plus the deliberately-unwired PORTFOLIO_STATUS
+# fallback proof.
+PYTHONPATH="${ops_root}/src:${ops_root}" \
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/smoke_ask_dev_stack3_intents.py"
+# CHAOS-3337 shipped (ops #1402): this no longer needs `|| true` -- all four
+# scenarios are expected to pass, and a hard failure here should now abort
+# the launcher like every other scenario, not be silently swallowed.
 
 "${compose[@]}" up -d --build --wait web
 
@@ -94,7 +177,7 @@ ASK_DEV_ACCEPTANCE_QUESTION="${acceptance_question}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_METRIC_ID="${expected_metric_id}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_EVIDENCE_FRAGMENT="${expected_evidence_entity_fragment}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_CLAIM_KIND="${expected_claim_kind}" \
-PLAYWRIGHT_LIVE_BACKEND_URL=http://127.0.0.1:18080 \
+PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${web_root}/node_modules/.bin/playwright" test \

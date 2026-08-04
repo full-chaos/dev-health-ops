@@ -50,6 +50,8 @@ from .question_interpreter import INTERPRETER_VERSION
 
 __all__ = [
     "CLARIFICATION_COPY",
+    "LEGACY_ONLY_QUESTION_INTENTS",
+    "NOT_FOUND_CLOSE_MATCHES_KEY",
     "PLAN_ID_BY_INTENT",
     "PREFLIGHT_OUTCOME_BY_RESOLUTION",
     "TERMINAL_STATE_BY_OUTCOME",
@@ -87,6 +89,33 @@ _unregistered = sorted(set(PLAN_ID_BY_INTENT.values()) - PLAN_REGISTRY)
 if _unregistered:
     raise RuntimeError(f"plan ids outside the landed plan registry: {_unregistered}")
 
+#: Intents that are correctly, permanently NEVER plan-governed -- falling
+#: through to the legacy model-tool-choice loop is their intended, designed
+#: behavior, not a capability gap (CHAOS-3300 finding, 2026-08-02).
+#: ``BOUNDED_INVESTIGATION`` is minted by ``question_interpreter.py`` itself
+#: as the "a miss degrades to this" catch-all when no deterministic intent
+#: recognizer fires; ``PLAN_ID_BY_INTENT``'s own entry for it
+#: (``"investigation.bounded.v1"``) is a *compatibility* plan-id token --
+#: registered in ``PLAN_REGISTRY``'s vocabulary so it can be disclosed on
+#: the wire, exactly like ``terminal_frames.LEGACY_ANSWER_PLAN_ID`` -- never
+#: a real, governed ``DevInvestigationPlan`` document, and none should ever
+#: be authored for it.
+#:
+#: Every OTHER member of ``PLAN_ID_BY_INTENT`` names an intent that SHOULD
+#: eventually resolve through a real plan. If ``orchestrator.py``'s own
+#: ``self._plan_registry.get(intent.intent_id)`` returns ``None`` for one of
+#: those at request time, that is a genuine, still-open capability gap (an
+#: intent CHAOS-3295/3297/3303/3304/3305 name a plan for, but this runtime's
+#: registry does not yet carry) -- ``orchestrator.run()`` emits
+#: ``ASK_DEV_PLAN_REGISTRY_GAP_TOTAL``/a structured warning for exactly this
+#: case, distinguishing "designed to be legacy" (this set, silent) from
+#: "should be plan-governed but isn't yet" (everything else, loud). Removing
+#: an intent from this set (because a real plan was finally authored for it)
+#: is a deliberate, reviewed edit here, never implicit.
+LEGACY_ONLY_QUESTION_INTENTS: frozenset[QuestionIntentID] = frozenset(
+    {QuestionIntentID.BOUNDED_INVESTIGATION}
+)
+
 #: Per-mention resolution outcome to the public v2 outcome. ``EXACT_MATCH`` is
 #: deliberately absent: it is not a termination, it is the path that proceeds.
 PREFLIGHT_OUTCOME_BY_RESOLUTION: Mapping[ResolutionOutcome, PublicOutcome] = {
@@ -108,6 +137,10 @@ TERMINAL_STATE_BY_OUTCOME: Mapping[PublicOutcome, RunState] = {
 #: contract's total field allowlist does not constrain its ``direct_answer``.
 #: Server-owned copy is supplied here instead, and — like the canonical
 #: no-answer table — it names nothing about the subject.
+#: CHAOS-3366's key into ``CLARIFICATION_COPY``. Named rather than spelled as
+#: a literal at both ends so the preflight and this table cannot drift apart.
+NOT_FOUND_CLOSE_MATCHES_KEY = "not_found_close_matches"
+
 CLARIFICATION_COPY: Mapping[str, str] = {
     "ambiguous": (
         "More than one authorized entity matches the name in this question. "
@@ -116,6 +149,16 @@ CLARIFICATION_COPY: Mapping[str, str] = {
     "uninterpretable": (
         "This question could not be interpreted confidently. Please rephrase "
         "it, naming the project, repository, or team you are asking about."
+    ),
+    # CHAOS-3366, provisional. The PRD sentence names the kind and the name
+    # back ("I couldn't find an authorized <kind> named 'X'"); interpolating
+    # request text into this table is a change to how public copy is governed,
+    # which is CHAOS-3367's contract to make, not this one's. Static
+    # server-owned text until then -- it says the same thing and, like every
+    # other value here, names nothing the catalog did not confirm.
+    NOT_FOUND_CLOSE_MATCHES_KEY: (
+        "I could not find an authorized entity of that kind with that name. "
+        "Here are the closest matches -- please ask again naming one of them."
     ),
 }
 

@@ -71,7 +71,11 @@ def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:
     assert api["depends_on"]["ask-dev-scripted-openai"] == {
         "condition": "service_healthy"
     }
-    assert api["ports"] == ["127.0.0.1:18080:8000"]
+    # Host port is parameterized so this stack can coexist with the normal
+    # dev-health stack (which already publishes 18080). The default must
+    # stay 18080, and the bind must stay loopback-only -- a bare "PORT:8000"
+    # would expose the acceptance API on every interface.
+    assert api["ports"] == ["127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-18080}:8000"]
 
 
 def test_web_is_compose_owned_and_points_only_at_the_ops_service() -> None:
@@ -91,7 +95,9 @@ def test_only_api_and_web_publish_host_ports() -> None:
     for service_name in ("postgres", "pgbouncer", "clickhouse", "valkey"):
         assert document["services"][service_name]["ports"] == []
     assert "ports" not in document["services"]["ask-dev-scripted-openai"]
-    assert document["services"]["api"]["ports"] == ["127.0.0.1:18080:8000"]
+    assert document["services"]["api"]["ports"] == [
+        "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-18080}:8000"
+    ]
     assert document["services"]["web"]["ports"] == ["127.0.0.1:3002:3000"]
 
 
@@ -121,6 +127,22 @@ def test_launcher_owns_seed_readiness_web_and_fixed_browser_oracle() -> None:
     assert "The deterministic acceptance provider grounded" not in launcher
     assert '"$@"' not in launcher
     assert "completed successfully" in launcher
+
+
+def test_launcher_runs_the_not_found_smoke_before_bringing_up_web() -> None:
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert "smoke_ask_dev_not_found.py" in launcher
+    prepare_index = launcher.index("prepare_ask_dev_acceptance.py")
+    smoke_index = launcher.index("smoke_ask_dev_not_found.py")
+    web_index = launcher.index("up -d --build --wait web")
+    # CHAOS-3300: proves the not-found original defect reproduction over the
+    # live HTTP/SSE API strictly after readiness is established and strictly
+    # before web is even brought up -- it needs neither.
+    assert prepare_index < smoke_index < web_index
+    # Live-validated 2026-08-02: without this, the smoke script's own
+    # `from scripts.acceptance...` import fails with ModuleNotFoundError
+    # (the script's directory, not ops_root, is on sys.path by default).
+    assert 'PYTHONPATH="${ops_root}/src:${ops_root}"' in launcher
 
 
 def test_oracle_is_versioned_and_requires_exact_grounded_answer_parts() -> None:

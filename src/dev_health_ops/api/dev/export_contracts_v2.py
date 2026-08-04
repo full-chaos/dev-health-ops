@@ -17,7 +17,12 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .contract_fixtures_v2 import negative_fixtures, positive_fixtures, stream_fixtures
+from .contract_fixtures_v2 import (
+    negative_fixtures,
+    positive_fixtures,
+    positive_variant_fixtures,
+    stream_fixtures,
+)
 from .contracts_v2 import CONTRACT_MODELS_V2, DevStreamEventV2, validate_stream_v2
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
@@ -41,6 +46,27 @@ def _schema(name: str) -> dict[str, Any]:
     }
 
 
+def _validate_positive_variants() -> None:
+    """CHAOS-3338: mirrors ``export_contracts._validate_positive_variants``."""
+
+    variants = positive_variant_fixtures()
+    unregistered = sorted(set(variants) - set(CONTRACT_MODELS_V2))
+    if unregistered:
+        raise RuntimeError(
+            f"positive variants name unregistered contracts: {unregistered}"
+        )
+    for name, cases in variants.items():
+        if not cases:
+            raise RuntimeError(f"{name} declares an empty positive variant list")
+        labels = [label for label, _ in cases]
+        if len(labels) != len(set(labels)):
+            raise RuntimeError(f"{name} has duplicate positive variant labels")
+        for label, payload in cases:
+            if not label:
+                raise RuntimeError(f"{name} has an unlabelled positive variant")
+            CONTRACT_MODELS_V2[name].model_validate(payload)
+
+
 def _validate_fixtures() -> None:
     positives = positive_fixtures()
     negatives = negative_fixtures()
@@ -50,6 +76,7 @@ def _validate_fixtures() -> None:
         raise RuntimeError("negative fixture coverage does not match contract registry")
     for name, payload in positives.items():
         CONTRACT_MODELS_V2[name].model_validate(payload)
+    _validate_positive_variants()
     for name, cases in negatives.items():
         if not cases:
             raise RuntimeError(f"{name} has no negative fixture")
@@ -60,10 +87,17 @@ def _validate_fixtures() -> None:
                 continue
             raise RuntimeError(f"negative fixture unexpectedly passed: {name}/{label}")
     streams = stream_fixtures()
-    parsed_valid = [DevStreamEventV2.model_validate(item) for item in streams["valid"]]
-    validate_stream_v2(parsed_valid)
+    # CHAOS-3297 stack #4: "valid_with_narrative_fallback" is the same
+    # lifecycle plus the optional answer.narrative_fallback marker -- also
+    # expected to validate cleanly, not a negative fixture. See
+    # test_contracts_v2._VALID_STREAM_FIXTURE_NAMES for the same exemption.
+    valid_stream_labels = {"valid", "valid_with_narrative_fallback"}
+    for label in valid_stream_labels:
+        validate_stream_v2(
+            [DevStreamEventV2.model_validate(item) for item in streams[label]]
+        )
     for label, payloads in streams.items():
-        if label == "valid":
+        if label in valid_stream_labels:
             continue
         try:
             validate_stream_v2(
@@ -80,6 +114,7 @@ def expected_artifacts() -> dict[str, str]:
     manifest_entries: list[dict[str, Any]] = []
     positives = positive_fixtures()
     negatives = negative_fixtures()
+    variants = positive_variant_fixtures()
     for name in CONTRACT_MODELS_V2:
         schema_path = f"schemas/{name}.schema.json"
         positive_path = f"examples/positive/{name}.json"
@@ -87,6 +122,20 @@ def expected_artifacts() -> dict[str, str]:
         positive_contents = _json(positives[name])
         artifacts[schema_path] = schema_contents
         artifacts[positive_path] = positive_contents
+        variant_entries = []
+        for label, payload in variants.get(name, []):
+            variant_path = f"examples/positive/{name}.{label}.json"
+            if variant_path in artifacts:
+                raise RuntimeError(f"positive variant path collides: {variant_path}")
+            variant_contents = _json(payload)
+            artifacts[variant_path] = variant_contents
+            variant_entries.append(
+                {
+                    "case": label,
+                    "path": variant_path,
+                    "sha256": _sha256(variant_contents),
+                }
+            )
         negative_entries = []
         for label, payload in negatives[name]:
             negative_path = f"examples/negative/{name}.{label}.json"
@@ -107,6 +156,7 @@ def expected_artifacts() -> dict[str, str]:
                     "path": positive_path,
                     "sha256": _sha256(positive_contents),
                 },
+                "positive_variants": variant_entries,
                 "negative": negative_entries,
             }
         )

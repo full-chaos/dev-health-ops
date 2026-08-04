@@ -11,6 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .contract_fixtures import committed_team_commit
 from .contracts_v2.validators import CANONICAL_NO_ANSWER_COPY
 
 NOW = "2026-07-28T12:00:00Z"
@@ -34,6 +35,22 @@ def _scope() -> dict[str, Any]:
         "comparison_range": None,
         "surface_context": None,
     }
+
+
+def _team_scope() -> dict[str, Any]:
+    """The committed TEAM scope, from the same real producer v1 exports.
+
+    CHAOS-3338. ``DevScopeV2`` subclasses ``DevScope``, so the one payload
+    ``ScopeResolutionService.committed_resolution_for`` emits is the golden
+    for both trees; deriving it here rather than restating it keeps the two
+    exported team examples from drifting apart (asserted in
+    ``tests/api/dev/test_contracts_v2.py``).
+    """
+
+    resolved = committed_team_commit().resolved_scope
+    if resolved is None:  # pragma: no cover - an exact commit always resolves
+        raise RuntimeError("committed team resolution produced no resolved scope")
+    return resolved.model_dump(mode="json")
 
 
 def _entity_ref() -> dict[str, Any]:
@@ -427,7 +444,102 @@ def _metric_ref() -> dict[str, Any]:
         "freshness": "fresh",
         "coverage": 1.0,
         "evidence_ref_ids": [],
+        # F10 (CHAOS-3297 stack #3): evidence_ref_ids XOR evidence_classification.
+        "evidence_classification": "legacy_v1_unminted",
     }
+
+
+def _health_finding() -> dict[str, Any]:
+    """A valid, standalone ``health_rule_finding.v1`` (CHAOS-3297 stack #3)."""
+
+    return {
+        "schema_version": "health_rule_finding.v1",
+        "finding_id": "0f1a2b3c-000a-4a00-8000-000000000001",
+        "rule_id": "health_rule.change_failure_rate.v1",
+        "rule_version": "health_rule.change_failure_rate.v1.1",
+        "dimension": "reliability_release",
+        "subject_kind": "project",
+        "subject_id": "repo_dev_health",
+        "state": "at_risk",
+        "fact_kind": "observed",
+        "shadow_only": True,
+        "evidence_source_classes": ["status_change"],
+        "remediation_template": "Investigate recent deployment failures.",
+        "calibration_state": "provisional",
+        "evaluated_at": NOW,
+        "suppressed_reason": None,
+    }
+
+
+def _deficiency_finding() -> dict[str, Any]:
+    """A valid, standalone ``deficiency_finding.v1`` (CHAOS-3297 stack #3)."""
+
+    return {
+        "schema_version": "deficiency_finding.v1",
+        "finding_id": "0f1a2b3c-000b-4a00-8000-000000000001",
+        "category": "data_integration",
+        "rule_id": "deficiency_rule.unconfigured_required_source.v1",
+        "rule_version": "deficiency_rule.unconfigured_required_source.v1",
+        "subject_kind": "project",
+        "subject_id": "repo_dev_health",
+        "severity": "at_risk",
+        "fact_kind": "observed",
+        "observed_state": "unconfigured",
+        "data_semantics": "not_measured",
+        "sample_count": None,
+        "coverage": 0.0,
+        "current_window_days": 30,
+        "comparison_window_days": None,
+        "relationship_paths": [],
+        "evidence_ref_ids": [],
+        "evidence_classification": "structural_absence",
+        "blast_radius": "Required source is unconfigured for this repository.",
+        "remediation": {
+            "schema_version": "deficiency_remediation.v1",
+            "remediation_template": "Configure the required source.",
+            "verification_condition": "Resolves once re-evaluated healthy.",
+        },
+        "limitations": [],
+        "evaluated_at": NOW,
+    }
+
+
+#: All eight closed deficiency categories, in taxonomy order -- mirrors
+#: ``contracts_v2.deficiency.DEFICIENCY_CATEGORIES`` by value (this module
+#: builds raw JSON-shaped dicts, so it cannot import the enum itself
+#: without coupling fixture construction to contract internals the same
+#: way every other raw-dict builder here avoids).
+_ALL_DEFICIENCY_CATEGORIES = (
+    "data_integration",
+    "planning_relationships",
+    "delivery_flow",
+    "review_ci",
+    "deployment_reliability",
+    "ownership_code_risk",
+    "capacity_cognitive_load",
+    "investment_balance",
+)
+
+
+def _deficiency_category_statuses() -> list[dict[str, Any]]:
+    """A valid, full eight-category ``deficiency_category_status.v1`` set
+    (CHAOS-3297 stack #3 codex round 1, FINDING 2) -- every category
+    genuinely evaluated with zero findings, the "evaluated-zero" shape.
+    ``deficiency_category_statuses`` requires either the empty tuple or
+    exactly these eight, never a partial set.
+    """
+
+    return [
+        {
+            "schema_version": "deficiency_category_status.v1",
+            "category": category,
+            "evaluated": True,
+            "finding_count": 0,
+            "applicability_states_observed": [],
+            "limitation": None,
+        }
+        for category in _ALL_DEFICIENCY_CATEGORIES
+    ]
 
 
 #: The canonical server copy a ``denied`` frame is allowed to render, taken
@@ -627,6 +739,20 @@ def _no_answer_outcome_prohibited_field_cases() -> list[tuple[str, dict[str, Any
             lambda v: v.__setitem__("deficiency_refs", ["deficiency_01"]),
         ),
         case(
+            "denied_with_health_findings",
+            lambda v: v.__setitem__("health_findings", [_health_finding()]),
+        ),
+        case(
+            "denied_with_deficiency_findings",
+            lambda v: v.__setitem__("deficiency_findings", [_deficiency_finding()]),
+        ),
+        case(
+            "denied_with_deficiency_category_statuses",
+            lambda v: v.__setitem__(
+                "deficiency_category_statuses", _deficiency_category_statuses()
+            ),
+        ),
+        case(
             "denied_with_subject_identity",
             lambda v: v.__setitem__("subject_ref", _entity_ref()),
         ),
@@ -710,6 +836,11 @@ def _coverage_source_vocabulary_cases() -> list[tuple[str, dict[str, Any]]]:
             "stale_required_sources",
             "Nightfall-deployments",
         ),
+        case(
+            "coverage_degraded_source_outside_vocabulary",
+            "degraded_required_sources",
+            "Nightfall-status-probe",
+        ),
     ]
 
 
@@ -789,13 +920,46 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
     }
 
 
+def _team_message_request() -> dict[str, Any]:
+    """A request whose committed scope is a TEAM subject (CHAOS-3338).
+
+    The canonical ``dev_message_request.v2`` carries a ``repository``
+    scope, so no exported v2 example showed a consumer the team arm of
+    ``DevScopeV2``'s inherited ``validate_direct_scope``.
+    """
+
+    request = _message_request()
+    request["question"] = "How is the Platform team doing?"
+    request["scope"] = _team_scope()
+    return request
+
+
+def positive_variant_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
+    """Extra *valid* payloads for contracts with more than one shipped shape.
+
+    Mirrors ``contract_fixtures.positive_variant_fixtures`` (v1); exported
+    as ``examples/positive/{schema}.{label}.json`` and listed under
+    ``positive_variants`` in the v2 manifest.
+    """
+
+    return {"dev_message_request.v2": [("team_direct_scope", _team_message_request())]}
+
+
 def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     """Return intentional failures; case labels explain the invariant exercised."""
 
     positives = positive_fixtures()
+    variants = {
+        schema: dict(cases) for schema, cases in positive_variant_fixtures().items()
+    }
 
     def changed(schema: str, mutator: Any) -> dict[str, Any]:
         value = deepcopy(positives[schema])
+        mutator(value)
+        return value
+
+    def changed_variant(schema: str, label: str, mutator: Any) -> dict[str, Any]:
+        value = deepcopy(variants[schema][label])
         mutator(value)
         return value
 
@@ -817,6 +981,12 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
         # test_disabling_one_frame_validator_flips_only_its_own_fixture).
         value["public_outcome"] = "needs_clarification"
         value["facts"][0]["evidence_ref_ids"] = []
+        # F10 (CHAOS-3297 stack #3): a fact with neither evidence_ref_ids nor
+        # a disclosure now fails validate_frame_grounding too, which would
+        # make this fixture attributable to TWO guardrails instead of one.
+        # A disclosure is this fact's explicit no-evidence classification,
+        # keeping it isolated to validate_outcome_consistency's own check.
+        value["facts"][0]["disclosures"] = ["untrusted_source"]
         value["facts"][0]["relationship_path_ids"] = []
         value["completion"] = None
         value["readiness"] = None
@@ -853,6 +1023,15 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     frame_answered_with_disclosure = changed(
         "dev_answer_frame.v1",
         lambda value: value["facts"][0].__setitem__("disclosures", ["stale"]),
+    )
+    # F10 (CHAOS-3297 stack #3, ratified 2026-08-02): a fact with neither
+    # evidence_ref_ids nor a disclosure -- isolated from every other frame
+    # guardrail (the base positive fixture is otherwise a valid 'answered'
+    # frame; only this one fact's evidence is cleared, with no disclosure
+    # substituted).
+    frame_fact_missing_grounding = changed(
+        "dev_answer_frame.v1",
+        lambda value: value["facts"][0].__setitem__("evidence_ref_ids", []),
     )
     # DevAnswerFact.validate_disclosures_canonical_order: declared out of
     # ascending FactDisclosure order.
@@ -1086,7 +1265,39 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                     "dev_message_request.v2",
                     lambda value: value.__setitem__("question", "é" * 4_097),
                 ),
-            )
+            ),
+            # CHAOS-3338: one case per clause of the TEAM branch of the
+            # inherited ``DevScope.validate_direct_scope``, mutating the
+            # shipped team golden so a clause that stops rejecting is
+            # attributable to that clause alone.
+            (
+                "team_scope_with_repository_list",
+                changed_variant(
+                    "dev_message_request.v2",
+                    "team_direct_scope",
+                    lambda value: value["scope"].__setitem__(
+                        "repositories", ["repo_dev_health"]
+                    ),
+                ),
+            ),
+            (
+                "team_scope_without_matching_team_id",
+                changed_variant(
+                    "dev_message_request.v2",
+                    "team_direct_scope",
+                    lambda value: value["scope"].__setitem__("team_ids", []),
+                ),
+            ),
+            (
+                "team_scope_entity_ref_is_not_a_team",
+                changed_variant(
+                    "dev_message_request.v2",
+                    "team_direct_scope",
+                    lambda value: value["scope"]["entity_refs"][0].__setitem__(
+                        "entity_type", "project"
+                    ),
+                ),
+            ),
         ],
         "dev_question_intent.v1": [
             (
@@ -1181,6 +1392,7 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             ("relationship_outside_frame", frame_relationship_outside_frame),
             ("answered_without_versions", frame_answered_without_versions),
             ("answered_with_disclosure", frame_answered_with_disclosure),
+            ("fact_missing_grounding", frame_fact_missing_grounding),
             ("disclosures_out_of_order", frame_disclosures_out_of_order),
             ("disclosures_duplicated", frame_disclosures_duplicated),
             (
@@ -1252,23 +1464,36 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
 
 def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
     started = deepcopy(positive_fixtures()["dev_stream_event.v2"])
-    terminal_error = {
+    # CHAOS-3297 requirement 9: every terminal run persists a frame (P1), so
+    # every valid stream carries exactly one interior answer.frame_ready
+    # milestone, strictly between run.started and the terminal result.
+    # Threaded into every fixture list below at sequence 1 (immediately
+    # after started) so each existing negative fixture stays isolated to
+    # the ONE violation its name claims, rather than also failing for the
+    # unrelated reason "missing frame_ready".
+    frame_ready = {
         **deepcopy(started),
         "sequence": 1,
+        "event": "answer.frame_ready",
+    }
+    terminal_error = {
+        **deepcopy(started),
+        "sequence": 2,
         "event": "error",
         "error": _error(),
     }
     done = {
         **deepcopy(started),
-        "sequence": 2,
+        "sequence": 3,
         "event": "done",
         "terminal_kind": "error",
     }
     duplicate_terminal = [
         deepcopy(started),
+        deepcopy(frame_ready),
         deepcopy(terminal_error),
-        {**deepcopy(terminal_error), "sequence": 2},
-        {**deepcopy(done), "sequence": 3},
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
     ]
 
     # Codex adversarial review (CHAOS-3294): "run.started, done, error, done"
@@ -1276,15 +1501,16 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
     # tripped the old check, which only looked at the *last* event.
     premature_done = {
         **deepcopy(started),
-        "sequence": 1,
+        "sequence": 2,
         "event": "done",
         "terminal_kind": "error",
     }
     premature_done_stream = [
         deepcopy(started),
+        deepcopy(frame_ready),
         premature_done,
-        {**deepcopy(terminal_error), "sequence": 2},
-        {**deepcopy(done), "sequence": 3},
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
     ]
 
     # Round-2 adversarial review: a second `run.started` never tripped any
@@ -1293,15 +1519,17 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
     duplicate_start_stream = [
         deepcopy(started),
         {**deepcopy(started), "sequence": 1},
-        {**deepcopy(terminal_error), "sequence": 2},
-        {**deepcopy(done), "sequence": 3},
+        {**deepcopy(frame_ready), "sequence": 2},
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
     ]
 
     duplicate_done_stream = [
         deepcopy(started),
-        {**deepcopy(terminal_error), "sequence": 1},
-        {**deepcopy(done), "sequence": 2},
+        deepcopy(frame_ready),
+        {**deepcopy(terminal_error), "sequence": 2},
         {**deepcopy(done), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
     ]
 
     # Codex adversarial review (CHAOS-3294): two `resolution.updated` events
@@ -1329,8 +1557,9 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
         deepcopy(started),
         resolution_v1,
         resolution_v2_rewrite,
-        {**deepcopy(terminal_error), "sequence": 3},
-        {**deepcopy(done), "sequence": 4},
+        {**deepcopy(frame_ready), "sequence": 3},
+        {**deepcopy(terminal_error), "sequence": 4},
+        {**deepcopy(done), "sequence": 5},
     ]
 
     # Codex adversarial review (CHAOS-3294): an `answer.completed` event's
@@ -1344,23 +1573,84 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
         )
     answer_completed_mismatch = {
         **deepcopy(started),
-        "sequence": 1,
+        "sequence": 2,
         "event": "answer.completed",
         "answer": mismatched_run_answer,
     }
     answer_run_id_mismatch_stream = [
         deepcopy(started),
+        deepcopy(frame_ready),
         answer_completed_mismatch,
-        {**deepcopy(done), "sequence": 2, "terminal_kind": "answer"},
+        {**deepcopy(done), "sequence": 3, "terminal_kind": "answer"},
+    ]
+
+    # CHAOS-3297 stack #4: answer.frame_ready itself is a new mandatory
+    # interior marker -- exercise the guard the way every other marker in
+    # this fixture set is exercised (missing entirely; duplicated; placed
+    # after the terminal result it must precede).
+    missing_frame_ready_stream = [
+        deepcopy(started),
+        {**deepcopy(terminal_error), "sequence": 1},
+        {**deepcopy(done), "sequence": 2},
+    ]
+    duplicate_frame_ready_stream = [
+        deepcopy(started),
+        deepcopy(frame_ready),
+        {**deepcopy(frame_ready), "sequence": 2},
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
+    ]
+    # No "frame_ready after terminal" fixture: given the three fixed-position
+    # checks (run.started@0, terminal@len-2, done@len-1) already passed, a
+    # single frame_ready occurrence is pigeonholed into the open interior --
+    # see stream._validate_run_lifecycle's docstring for why that range is
+    # not independently checked (it cannot independently fail).
+
+    # CHAOS-3297 stack #4: answer.narrative_fallback is optional, at most
+    # once, and must occur after answer.frame_ready when present -- exercise
+    # both halves of that guard.
+    narrative_fallback = {
+        **deepcopy(started),
+        "sequence": 2,
+        "event": "answer.narrative_fallback",
+        "narrative_failure_code": "narrative_grounding_failed",
+    }
+    valid_with_narrative_fallback_stream = [
+        deepcopy(started),
+        deepcopy(frame_ready),
+        deepcopy(narrative_fallback),
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
+    ]
+    duplicate_narrative_fallback_stream = [
+        deepcopy(started),
+        deepcopy(frame_ready),
+        deepcopy(narrative_fallback),
+        {**deepcopy(narrative_fallback), "sequence": 3},
+        {**deepcopy(terminal_error), "sequence": 4},
+        {**deepcopy(done), "sequence": 5},
+    ]
+    narrative_fallback_before_frame_ready_stream = [
+        deepcopy(started),
+        {**deepcopy(narrative_fallback), "sequence": 1},
+        {**deepcopy(frame_ready), "sequence": 2},
+        {**deepcopy(terminal_error), "sequence": 3},
+        {**deepcopy(done), "sequence": 4},
     ]
 
     return {
-        "valid": [started, terminal_error, done],
+        "valid": [started, frame_ready, terminal_error, done],
+        "valid_with_narrative_fallback": valid_with_narrative_fallback_stream,
         "invalid_duplicate_terminal": duplicate_terminal,
-        "invalid_missing_done": [deepcopy(started), deepcopy(terminal_error)],
+        "invalid_missing_done": [
+            deepcopy(started),
+            deepcopy(frame_ready),
+            deepcopy(terminal_error),
+        ],
         "invalid_out_of_order": [
             {**deepcopy(started), "sequence": 1},
-            {**deepcopy(terminal_error), "sequence": 0},
+            {**deepcopy(frame_ready), "sequence": 0},
+            {**deepcopy(terminal_error), "sequence": 2},
             deepcopy(done),
         ],
         "invalid_premature_done": premature_done_stream,
@@ -1368,6 +1658,12 @@ def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
         "invalid_duplicate_start": duplicate_start_stream,
         "invalid_ledger_rewrite": ledger_rewrite_stream,
         "invalid_answer_run_id_mismatch": answer_run_id_mismatch_stream,
+        "invalid_missing_frame_ready": missing_frame_ready_stream,
+        "invalid_duplicate_frame_ready": duplicate_frame_ready_stream,
+        "invalid_duplicate_narrative_fallback": duplicate_narrative_fallback_stream,
+        "invalid_narrative_fallback_before_frame_ready": (
+            narrative_fallback_before_frame_ready_stream
+        ),
     }
 
 
@@ -1376,5 +1672,6 @@ __all__ = [
     "negative_fixtures",
     "no_answer_answer_fixture",
     "positive_fixtures",
+    "positive_variant_fixtures",
     "stream_fixtures",
 ]

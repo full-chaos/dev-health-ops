@@ -41,6 +41,12 @@ reproduced against those five:
     subject's canonical identity, or a recommendation reference cannot be
     verified without a model in the loop. That layer is the TRD v2 §11
     layer-6 narrative-consistency validator, tracked as CHAOS-3297.
+(h) ``validate_frame_grounding`` — F10 (CHAOS-3297 stack #3, ratified
+    2026-08-02): every frame fact AND every metric block carries
+    signer-minted evidence or an explicit no-evidence classification
+    (``fact.disclosures`` / ``DevMetricRefV2.evidence_classification``).
+    The grounding floor ``contracts_v2/validators.py`` was missing before
+    stack #3.
 
 Where the code lives
 --------------------
@@ -287,6 +293,7 @@ __all__ = [
     "register_no_answer_policy",
     "scan_public_text",
     "validate_completion_denominator",
+    "validate_frame_grounding",
     "validate_narrative_fact_references",
     "validate_narrative_frame_consistency",
     "validate_narrative_numeric_containment",
@@ -452,6 +459,81 @@ def validate_outcome_consistency(frame: _frame.DevAnswerFrame) -> None:
                 "'answered_with_gaps' requires disclosed limitations or a "
                 "non-calculable completion block"
             )
+
+
+def validate_frame_grounding(frame: _frame.DevAnswerFrame) -> None:
+    """F10 (CHAOS-3297 stack #3, ratified 2026-08-02): every frame fact AND
+    every metric block carries signer-minted evidence or an explicit
+    no-evidence classification. Mirrors ``answer_validator.
+    _answer_has_material_grounding``'s v1 shape (a grounding floor at the
+    contract layer, not merely documented) applied here at the per-fact/
+    per-metric granularity F10's own text specifies, rather than v1's
+    whole-answer "something somewhere is grounded" check.
+
+    ``fact.disclosures`` (CHAOS-3297 flags gap, ratified 2026-08-02) is the
+    "explicit no-evidence classification" channel for a
+    ``DevAnswerFact`` -- no new field is needed: a fact whose evidence
+    the server does not trust enough to cite (stale/uncertain/conflicting/
+    untrusted_source) still satisfies F10 by disclosing exactly why it has
+    none, the same way ``DeficiencyFinding.evidence_classification``
+    satisfies its own F10 requirement one layer down. A fact with BOTH
+    empty ``evidence_ref_ids`` and empty ``disclosures`` is the one
+    combination F10 forbids: neither real evidence nor an honest
+    explanation for its absence.
+
+    ``DevMetricRefV2.evidence_classification`` (CHAOS-3297 F10 metric half,
+    ratified 2026-08-02, option (a) over scoping the requirement away in
+    validator logic) closes the metric half of the SAME rule:
+    ``wrap_legacy_answer_as_frame`` sets ``legacy_v1_unminted``
+    unconditionally on every v1-sourced metric (that path's evidence is
+    always scrubbed by ``production_runtime.py``'s ``query_metric.v1``
+    tool), and the v2 investigation-plan path's ``_wire_metric_content``
+    mints real evidence directly. ``DevMetricRefV2`` already enforces
+    evidence XOR classification via its own ``model_validator`` -- this
+    frame-level re-check is defense in depth (the SAME posture
+    ``validate_frame_semantics`` takes for structural closure before its
+    other guards), not the only enforcement point: a metric that reached
+    ``frame.metrics`` via ``model_copy`` (which never reruns validators --
+    see ``builtin_steps.py``'s construct-then-mint pattern) could otherwise
+    carry an un-revalidated, silently invalid combination.
+    """
+
+    ungrounded_facts = [
+        fact.fact_id
+        for fact in frame.facts
+        if not fact.evidence_ref_ids and not fact.disclosures
+    ]
+    if ungrounded_facts:
+        raise ValueError(
+            "F10: fact(s) "
+            f"{sorted(ungrounded_facts)} carry neither evidence_ref_ids nor "
+            "a disclosure -- every fact requires signer-minted evidence or "
+            "an explicit no-evidence classification"
+        )
+    ungrounded_metrics = [
+        metric.metric_ref_id
+        for metric in frame.metrics
+        if not metric.evidence_ref_ids and metric.evidence_classification is None
+    ]
+    if ungrounded_metrics:
+        raise ValueError(
+            "F10: metric(s) "
+            f"{sorted(ungrounded_metrics)} carry neither evidence_ref_ids "
+            "nor an evidence_classification -- every metric requires "
+            "signer-minted evidence or an explicit no-evidence classification"
+        )
+    overgrounded_metrics = [
+        metric.metric_ref_id
+        for metric in frame.metrics
+        if metric.evidence_ref_ids and metric.evidence_classification is not None
+    ]
+    if overgrounded_metrics:
+        raise ValueError(
+            "F10: metric(s) "
+            f"{sorted(overgrounded_metrics)} carry BOTH evidence_ref_ids and "
+            "an evidence_classification -- the classification exists only "
+            "for the no-evidence case"
+        )
 
 
 def validate_versions_presence(frame: _frame.DevAnswerFrame) -> None:

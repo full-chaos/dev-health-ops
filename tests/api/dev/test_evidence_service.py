@@ -483,6 +483,62 @@ async def test_authorized_https_link_and_redacted_expansion_are_preserved() -> N
 
 
 @pytest.mark.asyncio
+async def test_organization_wide_search_admits_evidence_from_multiple_repositories() -> (
+    None
+):
+    """CHAOS-3300 attack.unrelated-evidence.availability: the other half of
+    the unrelated-evidence attack. The negative control (elsewhere in this
+    file's coverage of expand()) proves a *named* repository subject
+    excludes an unrelated repository. This proves the converse: an
+    organization-wide resolved scope -- no committed repository subject --
+    must NOT silently restrict search() to a single repository. ``search()``
+    merges every adapter's records with no repository filter of its own
+    (see evidence_service.py's ``records = [record for result in
+    source_results ...]``); the non-obvious part is ``valid_entity_ids``,
+    computed via ``_authorized_entity_ids``, which excludes ORGANIZATION and
+    REPOSITORY kinds by design -- so an org-wide resolution's only entity
+    (kind ORGANIZATION) yields an *empty* ``valid_entity_ids``, and
+    ``_authorize_expansion`` treats an empty ``valid_entity_ids`` as
+    unrestricted (``if evidence.valid_entity_ids and not ... <= allowed``),
+    not as "nothing authorized". This is exactly the property this test
+    pins: an org-wide resolution admits an entity it never explicitly named.
+    """
+    authorizer = Authorizer()
+    repo_a_record = _record(1)
+    repo_b_record = replace(
+        _record(2),
+        entity_id="issue-repo-b-1",
+        repository_ids=("repo-b",),
+    )
+    adapter = Adapter([repo_a_record, repo_b_record])
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=authorizer,
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[adapter],
+    )
+
+    searched = await service.search(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(kind=EntityKind.ORGANIZATION, value="org-a"),
+        query="Ask Dev",
+    )
+
+    observed_repository_ids = {
+        repository_id
+        for item in searched.evidence
+        for repository_id in item.repository_ids
+    }
+    assert observed_repository_ids == {"repo-a", "repo-b"}
+    # The non-obvious authorization property itself: an org-wide resolution
+    # commits no explicit non-organization/repository entity, so every
+    # returned ref's valid_entity_ids is empty -- which _authorize_expansion
+    # treats as unrestricted, not as "nothing is authorized".
+    assert all(item.valid_entity_ids == [] for item in searched.evidence)
+
+
+@pytest.mark.asyncio
 async def test_no_matches_is_distinct_from_unconfigured_optional_source() -> None:
     result = await EvidenceService(
         entitlement=Entitlement(),

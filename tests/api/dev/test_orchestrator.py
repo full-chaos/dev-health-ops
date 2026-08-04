@@ -10,15 +10,18 @@ import pytest
 
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import (
+    AnswerStatus,
     DevAnswer,
     DevContractVersions,
     DevMessageRequest,
     DevScopeResolution,
     DevToolRequest,
     DevToolResult,
+    ScopeResolutionOutcome,
     ToolID,
 )
 from dev_health_ops.api.dev.contracts_v2 import DevInvestigationResult, DevSubjectSet
+from dev_health_ops.api.dev.no_match_terminal import user_visible_strings
 from dev_health_ops.api.dev.orchestrator import (
     DevOrchestrator,
     DevRunLimits,
@@ -40,7 +43,11 @@ from dev_health_ops.llm.agent.scripted import ScriptedAgentProvider, ScriptedSte
 
 class Recorder:
     def __init__(
-        self, *, fail_answer_write: bool = False, fail_frame_write: bool = False
+        self,
+        *,
+        fail_answer_write: bool = False,
+        fail_frame_write: bool = False,
+        fail_narrative_write: bool = False,
     ) -> None:
         self.transitions: list[RunState] = []
         self.tools: list[DevToolRequest] = []
@@ -50,10 +57,13 @@ class Recorder:
         self.terminal_errors: list[Any] = []
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
         self.frames: list[Any] = []
+        self.narratives: list[Any] = []
+        self.terminal_calls: list[dict[str, Any]] = []
         self.resolutions: list[Any] = []
         self.rollbacks = 0
         self.fail_answer_write = fail_answer_write
         self.fail_frame_write = fail_frame_write
+        self.fail_narrative_write = fail_narrative_write
 
     async def transition(self, state: RunState) -> None:
         self.transitions.append(state)
@@ -89,9 +99,15 @@ class Recorder:
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
 
+    async def record_narrative(self, narrative: Any) -> None:
+        if self.fail_narrative_write:
+            raise RuntimeError("narrative storage unavailable")
+        self.narratives.append(narrative)
+
     async def terminal(self, **values) -> None:
         self.terminals.append(values["state"])
         self.terminal_errors.append(values.get("error"))
+        self.terminal_calls.append(values)
 
 
 class RecordingProvider:
@@ -179,6 +195,61 @@ def _answer(*, script_id: str, invalid_schema: bool = False) -> dict:
     return payload
 
 
+def _signed_evidence_ref_id(script_id: str) -> str:
+    """A real signed-shaped evidence ref (``ev1_<40 hex>``, matching
+    ``EvidenceReferenceSigner.issue()``'s actual output), deterministic per
+    ``script_id`` so a test's answer and its mock tool result agree on the
+    same ID. See ``_answer_with_signed_evidence``'s docstring for why this
+    exists."""
+
+    return "ev1_" + hashlib.sha256(script_id.encode()).hexdigest()[:40]
+
+
+def _answer_with_signed_evidence(*, script_id: str) -> dict:
+    """``_answer()``, but with a real signed-shaped evidence ref rather than
+    the shared ``dev_claim.v1`` fixture's legacy placeholder ``"ev_01"``.
+
+    CHAOS-3297 stack #4 finding: the shared fixture's placeholder predates
+    the v2 ``EvidenceHandle`` shape (``ev1_`` + 40 hex chars) and fails it,
+    which makes ``terminal_frames.wrap_legacy_answer_as_frame`` raise and
+    silently fall back to an ``internal_error`` frame for *every* test in
+    this file that uses the shared fixture -- including the pre-existing
+    ``test_scripted_tool_to_validated_answer_exercises_the_state_machine``,
+    confirmed by adding a ``recorder.frames[0].public_outcome`` assertion
+    to it and watching it fail with 'failed' instead of 'answered_with_gaps'
+    (`ask_dev.orchestrator.frame_construction_failed` fires but nothing
+    before this stack ever asserted on the frame closely enough to notice).
+    Real production evidence refs are minted by
+    ``production_runtime._mint_evidence`` -> ``EvidenceReferenceSigner.issue``,
+    which already emits the correct shape, so this is a test-fixture gap,
+    not a live production defect -- but it is a real, silent test-coverage
+    gap: those tests believe they exercise the answered_with_gaps frame
+    path and instead exercise the internal_error fallback. Filed as a
+    finding, not fixed here (terminal_frames.py / the shared fixture are
+    outside this stack's claimed scope) -- this local override, paired
+    with ``_registry_with_signed_evidence`` so the claim's evidence ID
+    also matches what the mock tool actually returned (answer-grounding
+    validation requires that), keeps this stack's own narrative-
+    reachability tests correct regardless.
+    """
+
+    payload = _answer(script_id=script_id)
+    signed_evidence_ref_id = _signed_evidence_ref_id(script_id)
+    payload["claims"][0]["evidence_ref_ids"] = [signed_evidence_ref_id]
+    # Real production v1 metrics never carry evidence_ref_ids at all --
+    # production_runtime.py's query_metric.v1 tool deliberately scrubs them
+    # to () (F10 finding), which is exactly why
+    # wrap_legacy_answer_as_frame's metric conversion unconditionally
+    # stamps evidence_classification=LEGACY_V1_UNMINTED (the F10 XOR
+    # constraint rejects a metric carrying both). Matching that shape here
+    # rather than giving the metric its own fabricated evidence.
+    payload["metrics"][0]["evidence_ref_ids"] = []
+    # DevAnswer's own v1 validator requires every claim evidence_ref_id to
+    # be present in the answer's top-level evidence list.
+    payload["evidence"][0]["evidence_ref_id"] = signed_evidence_ref_id
+    return payload
+
+
 def _tool_result(**overrides: object) -> DevToolResult:
     payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
     payload.update(overrides)
@@ -203,6 +274,35 @@ def _registry(*, calls: list[DevToolRequest] | None = None) -> AskDevToolRegistr
                 "tool_id": request.tool_id.value,
             }
         )
+        return DevToolResult.model_validate(payload)
+
+    return AskDevToolRegistry({tool_id: execute for tool_id in ToolID})
+
+
+def _registry_with_signed_evidence(evidence_ref_id: str) -> AskDevToolRegistry:
+    """Like ``_registry()``, but the tool result's own evidence carries
+    ``evidence_ref_id`` -- paired with ``_answer_with_signed_evidence``'s
+    matching claim so answer-grounding validation finds the claim's
+    evidence ID among what the tool actually returned (the shared
+    ``dev_tool_result.v1`` fixture has the same stale ``"ev_01"``
+    placeholder as the answer fixture -- see
+    ``_answer_with_signed_evidence``'s docstring). Also clears the tool
+    result's own metric evidence_ref_ids to ``[]``, matching
+    ``_answer_with_signed_evidence``'s metric -- ``validate_answer_candidate``
+    requires the answer's echoed metric to equal the canonical tool-result
+    metric *exactly*, field for field, not just share a ``metric_ref_id``."""
+
+    async def execute(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+            }
+        )
+        payload["evidence"][0]["evidence_ref_id"] = evidence_ref_id
+        payload["metrics"][0]["evidence_ref_ids"] = []
         return DevToolResult.model_validate(payload)
 
     return AskDevToolRegistry({tool_id: execute for tool_id in ToolID})
@@ -285,6 +385,108 @@ async def test_scripted_tool_to_validated_answer_exercises_the_state_machine() -
     assert RunState.ANSWER_VALIDATION in recorder.transitions
     assert recorder.terminals == [RunState.COMPLETED]
     assert len(recorder.answers) == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_answer_synthesizes_and_persists_a_deterministic_fallback_narrative() -> (
+    None
+):
+    """CHAOS-3297 stack #4 reachability: a content-bearing (answered_with_gaps
+    -- wrap_legacy_answer_as_frame never emits plain 'answered', see its
+    module docstring) terminal run must call narrative_fallback.synthesize_narrative,
+    persist the result via record_narrative, and thread narrative_mode/
+    narrative_failure_code into terminal(). No certified provider is wired
+    yet (CHAOS-3285), so mode must be deterministic_fallback with no failure
+    code -- a configuration state, not a failure.
+
+    Drives the real DevOrchestrator.run(), not a hand-rolled diagnostic --
+    the recorder is the only test double, matching this file's own house
+    rule (Recorder implements the real RunRecorder protocol, including the
+    record_narrative method this stack added)."""
+
+    script_id = "narrative-reachability"
+    recorder = Recorder()
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={"metric_id": "items_completed", "limit": 12},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_signed_evidence(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            recorder=recorder,
+            registry=_registry_with_signed_evidence(_signed_evidence_ref_id(script_id)),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert len(recorder.frames) == 1
+    assert recorder.frames[0].public_outcome.value == "answered_with_gaps"
+    assert len(recorder.narratives) == 1
+    assert recorder.narratives[0].mode == "deterministic_fallback"
+    assert recorder.narratives[0].frame_id == recorder.frames[0].frame_id
+    assert len(recorder.terminal_calls) == 1
+    assert recorder.terminal_calls[0]["narrative_mode"] == "deterministic_fallback"
+    assert recorder.terminal_calls[0]["narrative_failure_code"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_narrative_persistence_failure_never_strands_an_otherwise_completed_run() -> (
+    None
+):
+    """Mirrors test_answer_storage_failure's own posture for record_answer,
+    applied to record_narrative: a persistence failure on the narrative
+    sub-artifact must not crash or downgrade an otherwise-successful run --
+    the frame (and the v1 answer) already committed in this flush and
+    remain authoritative. The run must still reach COMPLETED.
+
+    codex NO-SHIP finding round 1 (HIGH #2b): narrative_mode/
+    narrative_failure_code must stay at their None default when the write
+    failed, not claim a mode the row never durably received -- the
+    original defect was exactly dev_runs asserting
+    'deterministic_fallback' for a narrative that was never written."""
+
+    script_id = "narrative-write-failure"
+    recorder = Recorder(fail_narrative_write=True)
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={"metric_id": "items_completed", "limit": 12},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_signed_evidence(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            recorder=recorder,
+            registry=_registry_with_signed_evidence(_signed_evidence_ref_id(script_id)),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert recorder.narratives == []  # the failed write never landed
+    assert len(recorder.terminal_calls) == 1
+    assert recorder.terminal_calls[0]["narrative_mode"] is None
+    assert recorder.terminal_calls[0]["narrative_failure_code"] is None
 
 
 @pytest.mark.asyncio
@@ -491,6 +693,13 @@ async def test_answer_storage_failure_becomes_one_safe_failed_terminal() -> None
     assert result.answer is None
     assert result.error is not None and result.error.code == "internal_error"
     assert recorder.terminals == [RunState.FAILED]
+    # CHAOS-3297 stack #4: "internal_error" maps to PublicOutcome.FAILED, a
+    # NO_ANSWER_OUTCOMES member -- narrative synthesis must be skipped
+    # entirely (no free-form channel on a no-answer outcome), not merely
+    # produce an empty/fallback narrative.
+    assert recorder.narratives == []
+    assert recorder.terminal_calls[0]["narrative_mode"] is None
+    assert recorder.terminal_calls[0]["narrative_failure_code"] is None
 
 
 @pytest.mark.asyncio
@@ -1199,6 +1408,12 @@ async def test_unresolved_named_entity_never_falls_back_to_organization_scope() 
         )
     )
 
+    # CHAOS-3367 note: this stays COMPLETED, and that is the point. The
+    # model's query here ("some-other-tenant-project") appears nowhere in the
+    # question, so the no-match divert does not fire -- a speculative lookup
+    # that missed must not erase an otherwise valid organization-wide answer.
+    # `test_a_speculative_miss_does_not_erase_a_valid_answer` below asserts
+    # that rule directly rather than leaving it implicit here.
     assert result.state is RunState.COMPLETED
     # The not-found result must not clobber the previously authorized scope;
     # the status tool keeps executing against the last committed scope
@@ -1302,6 +1517,12 @@ async def test_status_answer_after_not_found_resolution_is_insufficient_evidence
         request=_status_request(),
     )
 
+    # CHAOS-3367 note: unchanged. The question here is the shared fixture's
+    # "How many items completed in this period?", which never names "Ask Dev
+    # project", so the no-match divert does not fire and the CHAOS-3289
+    # backstop still owns this terminal. The divert's own behaviour is
+    # asserted in `test_no_match_answer_is_not_a_refusal_and_shows_no_exact_scope`,
+    # against a question that actually names its subject.
     assert result.state is RunState.INSUFFICIENT_EVIDENCE
     assert result.error is not None
     assert result.error.code == "scope_not_found"
@@ -2278,6 +2499,98 @@ async def test_second_false_complete_claim_still_fails_closed() -> None:
     assert result.error.code == "answer_validation_failed"
 
 
+@pytest.mark.asyncio
+async def test_repair_exhausted_completion_ratio_claim_surfaces_truncation_detail() -> (
+    None
+):
+    """CHAOS-3297 s2 round 5 (codex MEDIUM): rejecting a fabricated
+    completion ratio must not leave the user with only a generic
+    "validation failed" if the one bounded repair pass also fails -- the
+    FAILED terminal's DevError.safe_message must still surface the reason
+    codes and how many required items were actually displayed, end to
+    end through the real orchestrator run loop (not just the validator
+    function in isolation).
+    """
+    script_id = "repair-exhausted-completion-ratio"
+
+    async def status_with_withheld_completion(
+        _context: Any, request: DevToolRequest
+    ) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": {
+                    "state": "indeterminate",
+                    "rule_id": "actual-completion",
+                    "rule_version": "actual-completion.v4",
+                    "reason_codes": ["assessment_source_limit_reached"],
+                    "required_children": [
+                        {
+                            "fact_id": "issue:child-1",
+                            "text": "Child 1",
+                            "status": "done",
+                            "evidence_ref_ids": ["ev_01"],
+                        }
+                    ],
+                    "required_child_total": None,
+                    "required_child_complete": None,
+                    "display_truncated": True,
+                    "conflicts": [],
+                    "evidence_ref_ids": [],
+                },
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry(
+        {tool_id: status_with_withheld_completion for tool_id in ToolID}
+    )
+    fabricated_answer = _answer(script_id=script_id)
+    fabricated_answer.update(
+        {
+            "status": "partial",
+            "direct_summary": "See the linked claim for details.",
+            "claims": [
+                {
+                    **fabricated_answer["claims"][0],
+                    "text": "All required work is 100% complete.",
+                }
+            ],
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(fabricated_answer)),
+                ScriptedStep(decision=AgentFinalAnswer(fabricated_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.FAILED
+    assert result.error is not None
+    # DevError.code is a closed wire vocabulary (dev_error.v1); the
+    # specific "completion_denominator_withheld" classification is
+    # internal-only (AnswerValidationError.code), used to select this
+    # enriched message, not to widen the wire contract.
+    assert result.error.code == "answer_validation_failed"
+    assert "assessment_source_limit_reached" in result.error.safe_message
+    assert "1 required item" in result.error.safe_message
+
+
 # --- CHAOS-3262: an invalid model tool request degrades, it does not kill the run ---
 
 
@@ -2676,3 +2989,236 @@ async def test_repair_turn_overflow_is_a_classified_budget_limit_not_internal_er
     assert result.state is RunState.FAILED
     assert result.error is not None
     assert result.error.code == "tool_limit_reached"
+
+
+# --- CHAOS-3367: a named-subject no-match is a no-match result, never a
+# --- refusal, and never carries an internal vocabulary token.
+
+
+def _refused_answer_leaking_the_scope_outcome(*, script_id: str) -> dict:
+    """The live payload, reproduced. A model that saw ``resolve_scope.v1``
+    return ``forbidden_or_not_found`` narrated the enum straight into
+    ``direct_summary`` and marked its own answer ``refused`` -- which walked
+    past the CHAOS-3289 backstop, because that backstop returns None for a
+    ``refused``/``insufficient_evidence``/``error`` answer by design."""
+
+    payload = _answer_with_no_claims(script_id=script_id)
+    payload["status"] = "refused"
+    payload["direct_summary"] = (
+        "Scope resolution for the requested entity returned "
+        "forbidden_or_not_found. No authorized entity matched the requested "
+        "name under the current authorization."
+    )
+    return payload
+
+
+def _no_match_run(*, script_id: str, final_step: ScriptedStep, question: str):
+    calls: list[DevToolRequest] = []
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    return _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Falcon", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                final_step,
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_not_found_resolution()
+            ),
+            scope_resolver=resolve,
+        ),
+        request=_status_request_naming_entity(question=question),
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_match_answer_never_carries_an_internal_scope_token() -> None:
+    """The reported live defect, asserted as the string-level prohibition the
+    PRD writes: no user-visible field may contain ``forbidden_or_not_found``
+    (or ``scope_forbidden``), whatever the model wrote."""
+
+    script_id = "no-match-token-leak"
+    result = await _no_match_run(
+        script_id=script_id,
+        final_step=ScriptedStep(
+            decision=AgentFinalAnswer(
+                _refused_answer_leaking_the_scope_outcome(script_id=script_id)
+            )
+        ),
+        question="What is the status of the Falcon project?",
+    )
+
+    assert result.answer is not None
+    rendered = user_visible_strings(answer=result.answer, error=result.error)
+    for token in ("forbidden_or_not_found", "scope_forbidden"):
+        assert not any(token in text for text in rendered), (token, rendered)
+
+
+@pytest.mark.asyncio
+async def test_no_match_answer_is_not_a_refusal_and_shows_no_exact_scope() -> None:
+    """PRD §12, all three remaining prohibitions at once: not labelled
+    ``refused``; no ``exact`` scope outcome beside a not-found subject; no
+    "1 of N sources" when no source plan ran."""
+
+    script_id = "no-match-shape"
+    result = await _no_match_run(
+        script_id=script_id,
+        final_step=ScriptedStep(
+            decision=AgentFinalAnswer(
+                _refused_answer_leaking_the_scope_outcome(script_id=script_id)
+            )
+        ),
+        question="What is the status of the Falcon project?",
+    )
+
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.answer is not None
+    assert result.answer.status is not AnswerStatus.REFUSED
+    assert (
+        result.answer.resolved_scope.outcome
+        is ScopeResolutionOutcome.FORBIDDEN_OR_NOT_FOUND
+    )
+    assert result.answer.coverage.required_source_count == 0
+    assert result.answer.coverage.available_source_count == 0
+    assert "I couldn't find an authorized project named" in (
+        result.answer.direct_summary
+    )
+    assert "Falcon" in result.answer.direct_summary
+    assert "I did not substitute organization-wide data." in (
+        result.answer.direct_summary
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_refusal_after_a_no_match_becomes_a_no_match_result() -> None:
+    """The other shape the model can close with. Previously this terminated
+    with the generic "not supported by Ask Dev" refusal, which is exactly the
+    "labelled a no-match result as refused" §12 prohibits."""
+
+    result = await _no_match_run(
+        script_id="no-match-refusal",
+        final_step=ScriptedStep(
+            decision=AgentRefusal(code="unsupported", message="no")
+        ),
+        question="What is the status of the Falcon project?",
+    )
+
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.error is None
+    assert result.answer is not None
+    assert "I couldn't find an authorized project named" in (
+        result.answer.direct_summary
+    )
+
+
+@pytest.mark.asyncio
+async def test_terminal_boundary_rejects_a_leaked_token_on_any_other_path() -> None:
+    """Defense in depth for every terminal the no-match branch does not own.
+    A run that never resolved a named subject, whose model still wrote an
+    internal token into its summary, must not reach the client at all -- the
+    boundary check in ``finish()`` fails closed rather than repairing the
+    payload in place."""
+
+    script_id = "boundary-token-leak"
+    calls: list[DevToolRequest] = []
+    payload = _answer_with_no_claims(script_id=script_id)
+    payload["direct_summary"] = (
+        "The request was rejected with scope_forbidden for this repository."
+    )
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    # A run that resolved its named subject EXACTLY, so the no-match branch
+    # above is not what rejects this -- only the boundary check is.
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Ask Dev project", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(payload)),
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_project_resolution()
+            ),
+            scope_resolver=resolve,
+        )
+    )
+
+    assert result.state is RunState.FAILED
+    assert result.answer is None
+    assert result.error is not None
+    assert result.error.code == "internal_error"
+    assert "scope_forbidden" not in result.error.safe_message
+
+
+@pytest.mark.asyncio
+async def test_a_speculative_miss_does_not_erase_a_valid_answer() -> None:
+    """Codex adversarial review round 1 HIGH, as a control.
+
+    "The last lookup missed" does not imply "the answer depended on it". The
+    model resolves a name the user never wrote, misses, then answers a
+    genuinely organization-wide question from real tool output. Diverting that
+    run to a no-match would replace a good answer with a statement about a
+    subject nobody asked about. The divert is gated on the failed query
+    corresponding to a whole word the USER typed, so it must not fire here.
+    """
+
+    script_id = "speculative-miss"
+    calls: list[DevToolRequest] = []
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Nightfall", "limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(input_tokens=100, output_tokens=10),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=_resolve_scope_registry(
+                calls=calls, resolve_scope_result=_not_found_resolution()
+            ),
+            scope_resolver=resolve,
+        ),
+        # The shared fixture question, "How many items completed in this
+        # period?" -- it names no subject at all, and certainly not
+        # "Nightfall". Deliberately NOT question_class=status: that class has
+        # its own older CHAOS-3289 backstop which terminates this shape on its
+        # own, and routing through it would leave this control passing for a
+        # reason that has nothing to do with the divert it is meant to check.
+        request=_request(),
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert "I couldn't find an authorized" not in result.answer.direct_summary

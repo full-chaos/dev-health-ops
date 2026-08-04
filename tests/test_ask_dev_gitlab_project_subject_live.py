@@ -576,6 +576,14 @@ async def test_gitlab_incremental_sync_never_strands_history(
         # from THIS run's incremental sync -- both produced by the same
         # normalizer, so both carry the identical shape (project_id=path,
         # project_key=None) that is the actual point of this test.
+        # Fixed, safely-past timestamps -- NOT ``datetime.now(timezone.utc)``
+        # at write time, which lost a race against this test's own read-time
+        # ``as_of`` (computed independently, moments later, by
+        # ``StatusChangeService``) on this ClickHouse/driver's apparent
+        # timezone handling: a "now" written here landed several hours in
+        # ClickHouse's future relative to the "now" the read path computed
+        # right after, so ``updated_at <= {as_of}`` silently excluded it.
+        # "newer" only needs to be AFTER "older", not actually current time.
         older_item = replace(
             _normalize(1, GITLAB_PROJECT_PATH),
             org_id=org_id,
@@ -584,7 +592,7 @@ async def test_gitlab_incremental_sync_never_strands_history(
         newer_item = replace(
             _normalize(2, GITLAB_PROJECT_PATH),
             org_id=org_id,
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
         )
         assert older_item.project_key is None
         assert newer_item.project_key is None
@@ -975,22 +983,48 @@ async def test_oracle_measures_a_jira_project_referenced_only_by_key(
 
 
 @pytest.mark.asyncio
-async def test_oracle_flags_a_reused_gitlab_path_as_unverified_not_a_clean_match(
+async def test_path_reuse_cross_attribution_is_a_known_residual_until_chaos_3383(
     sink: Any, raw_client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CHAOS-3380 round 3 (Codex MEDIUM) acceptance-set counterexample: reuse.
+    """CHAOS-3380 round 4 (Codex HIGH): ACCEPTED residual, not a bug to fix here.
 
-    Pins the residual risk ``workers/team_autoimport_gitlab.
-    _gitlab_project_catalog_rows`` documents rather than silently assuming
-    it away: project A (numeric id) is renamed away from a path; project B
-    (a DIFFERENT numeric id) later claims that exact, now-free path. An OLD
-    work item -- never resynced, still carrying the original path in its own
-    ``project_id`` -- resolves to project B's catalog row (an unrelated
-    project) via the path-compatibility arm. This IS a false attribution,
-    and this test proves it happens -- but the oracle must never report it as
-    an ordinary clean match: it must carry ``kind="path_match_unverified"``,
-    so the ambiguity is visible rather than silently swallowed as a green
-    result.
+    Third review round on the same identity class. Draw-the-line closure per
+    the orchestrator's ruling: both reviewer remedies are out of scope or
+    self-defeating here --
+
+    * threading GitLab's immutable numeric id through ``work_items.
+      project_id`` itself (plus a backfill of existing rows) is exactly
+      CHAOS-3383, already filed as the structural fix; and
+    * failing closed on a path-only match at the query layer would disable
+      GitLab project resolution entirely, since every GitLab work item is
+      path-only today (see ``_project_identity.project_identity_match``'s
+      own "ACCEPTED RESIDUAL RISK" comment on arm 3) -- "fail closed on
+      path-only" and "fail closed on GitLab" are the same statement.
+
+    The exploit window (project A renamed off a path, project B later claims
+    it, an OLD work item from A never resynced since) requires a specific
+    PROVIDER-SIDE event sequence, not an app write path -- accepted as a
+    residual rather than chased through a fourth patch attempt.
+
+    This test is the acceptance-set discipline the ruling calls for: it pins
+    BOTH halves of the residual precisely, so CHAOS-3383's implementer must
+    rediscover and consciously retire it rather than leave a stale pin
+    behind --
+
+    1. the OFFLINE diagnostic (``ask_dev_project_subject_oracle.py``) DOES
+       disclose the match as ``kind="path_match_unverified"``, never a clean
+       green; and
+    2. PRODUCTION QUERIES (the same identity predicate, live, inside every
+       project-scoped fact arm) DO NOT consult that flag and ACCEPT the
+       cross-attribution -- proved here by actually resolving project B's
+       scope and reading project A's stale work item back out of its
+       snapshot, not merely asserting the oracle's opinion about it.
+
+    When CHAOS-3383 lands, assertion (2) below must FLIP: the stale item
+    must stop appearing in project B's snapshot. That flip -- a red
+    assertion where this test currently asserts green -- IS the signal this
+    pin exists to produce; do not delete this test to make the suite pass,
+    convert its assertions to prove the fix instead.
     """
 
     org_id = f"chaos-3380-reuse-{uuid.uuid4().hex[:10]}"
@@ -1004,10 +1038,12 @@ async def test_oracle_flags_a_reused_gitlab_path_as_unverified_not_a_clean_match
         sink.write_work_items([stale_item])
 
         # Project A: renamed away, no longer at reused_path.
+        project_a_id = f"{org_id}:gitlab:111"
+        project_b_id = f"{org_id}:gitlab:222"
         sink.write_projects(
             [
                 ProjectRecord(
-                    id=f"{org_id}:gitlab:111",
+                    id=project_a_id,
                     org_id=org_id,
                     provider="gitlab",
                     project_key="grp/project-a-renamed",
@@ -1018,7 +1054,7 @@ async def test_oracle_flags_a_reused_gitlab_path_as_unverified_not_a_clean_match
                 ),
                 # Project B: a DIFFERENT project that now claims the freed path.
                 ProjectRecord(
-                    id=f"{org_id}:gitlab:222",
+                    id=project_b_id,
                     org_id=org_id,
                     provider="gitlab",
                     project_key=reused_path,
@@ -1030,12 +1066,43 @@ async def test_oracle_flags_a_reused_gitlab_path_as_unverified_not_a_clean_match
             ]
         )
 
+        # (1) The offline diagnostic discloses it, not as a clean match.
         gaps = project_subject_gaps(raw_client, org_id=org_id, provider="gitlab")
         reuse_gaps = [gap for gap in gaps if gap.project_id == reused_path]
         assert reuse_gaps, "the reused-path reference produced no gap row at all"
         assert {gap.kind for gap in reuse_gaps} >= {"path_match_unverified"}, (
             "the reused-path match was reported clean, hiding a false "
             f"attribution to an unrelated project: {reuse_gaps}"
+        )
+
+        # (2) Production queries do NOT consult that flag: resolving project
+        # B's scope for real and reading its snapshot returns project A's
+        # stale item. THIS is the accepted residual, proved rather than
+        # assumed -- and the assertion CHAOS-3383 must invert.
+        service = ScopeResolutionService(ClickHouseAuthorizedEntityCatalog(sink))
+        resolution = await service.resolve_contract(
+            org_id,
+            "permission-live",
+            ScopeResolveRequest(
+                explicit_refs=(ScopeRef(EntityKind.PROJECT, project_b_id),)
+            ),
+        )
+        assert resolution.outcome.value == "exact"
+        scope = resolution.resolved_scope
+        assert scope is not None
+
+        snapshot = await StatusChangeService(
+            ClickHouseStatusChangeSource(sink)
+        ).status_snapshot(org_id, "permission-live", StatusSnapshotRequest(scope))
+
+        seen = {child.entity_id for child in snapshot.children}
+        assert any(child.endswith(f"gitlab:{reused_path}#1") for child in seen), (
+            "the accepted residual did not reproduce: project A's stale item "
+            "no longer leaks into project B's snapshot -- if CHAOS-3383 (or "
+            "any other change) closed this gap, RETIRE this pin consciously "
+            "(update this docstring and assertion) rather than treating a "
+            "newly-green run as nothing to look at",
+            seen,
         )
     finally:
         _cleanup(raw_client, org_id)

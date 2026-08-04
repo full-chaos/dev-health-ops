@@ -84,7 +84,10 @@ spec:
       initContainers:
         - name: wait-for-postgresql
           image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The PostgreSQL image's own policy, never image.pullPolicy: this
+          # container runs a registry image, not the application image a local
+          # profile side-loads and marks Never.
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
             runAsUser: 70

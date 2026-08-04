@@ -633,6 +633,13 @@ postgresql:
   image:
     repository: postgres
     tag: "18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+    # -- Pull policy for the PostgreSQL image specifically. This is a registry
+    #    image, so it must NOT inherit image.pullPolicy, which local profiles
+    #    set to Never for the commit-tagged application image they side-load
+    #    into the cluster. Applying Never here fails a fresh cluster with
+    #    ErrImageNeverPull on the migration hook's wait-for-postgresql init
+    #    container, which has no way to obtain the image.
+    pullPolicy: IfNotPresent
   resources:
     requests:
       memory: "256Mi"

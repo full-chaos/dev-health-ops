@@ -1,0 +1,610 @@
+- generic [ref=f3e1]:
+  - generic [ref=f3e2]:
+    - banner [ref=f3e3]:
+      - navigation "Account" [ref=f3e4]:
+        - link "Full Chaos Dev Health cockpit" [ref=f3e5] [cursor=pointer]:
+          - /url: /dashboard
+          - img "Full Chaos Dev Health logo" [ref=f3e6]
+          - generic [ref=f3e7]: Full Chaos Dev Health
+        - button "Account options" [ref=f3e9]:
+          - generic [ref=f3e10]: A
+          - generic [ref=f3e11]: Account
+          - generic [ref=f3e12]: admin
+    - generic [ref=f3e14]:
+      - complementary [ref=f3e15]:
+        - generic [ref=f3e17]:
+          - generic [ref=f3e18]:
+            - paragraph [ref=f3e19]:
+              - text: Cockpit
+              - generic [ref=f3e20]: Beta
+            - paragraph [ref=f3e21]: Observe patterns, drill into evidence.
+          - generic [ref=f3e22]:
+            - text: Current organization
+            - combobox "Current organization" [disabled] [ref=f3e23]:
+              - option "Test • data" [selected]
+            - paragraph [ref=f3e24]: Data through 8/4/2026 · Only organization on this account
+          - navigation "Primary areas" [ref=f3e25]:
+            - link "Cockpit" [ref=f3e27] [cursor=pointer]:
+              - /url: /dashboard?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+            - link "Diagnose" [ref=f3e30] [cursor=pointer]:
+              - /url: /diagnose?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+            - link "Plan" [ref=f3e33] [cursor=pointer]:
+              - /url: /plan?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+            - link "Improve" [ref=f3e36] [cursor=pointer]:
+              - /url: /improve?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+            - link "Govern" [ref=f3e39] [cursor=pointer]:
+              - /url: /govern?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+            - link "AI" [ref=f3e42] [cursor=pointer]:
+              - /url: /ai?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+          - generic [ref=f3e44]:
+            - link "Reports" [ref=f3e46] [cursor=pointer]:
+              - /url: /reports?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+            - link "Admin" [ref=f3e49] [cursor=pointer]:
+              - /url: /org/admin?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+          - generic [ref=f3e51]: The active area expands to its destinations; open one to drill in.
+      - main [ref=f3e52]:
+        - generic [ref=f3e54]:
+          - generic [ref=f3e56]:
+            - paragraph [ref=f3e57]: Status
+            - heading "Developer Health Ops Cockpit" [level=1] [ref=f3e58]
+            - paragraph [ref=f3e59]: System patterns over the last 14 days.
+          - paragraph [ref=f3e61]:
+            - generic [ref=f3e62]: "Last updated: Aug 4, 4:06 PM"
+        - region "Global context" [ref=f3e63]:
+          - generic [ref=f3e64]:
+            - generic [ref=f3e65]:
+              - generic [ref=f3e66]: Org
+              - button "Test" [ref=f3e67]
+            - generic [ref=f3e68]: ·
+            - button "Team All ▾" [ref=f3e70]:
+              - generic [ref=f3e71]: Team
+              - generic [ref=f3e72]: All
+              - generic [ref=f3e73]: ▾
+            - generic [ref=f3e74]: ·
+            - generic [ref=f3e75]:
+              - generic [ref=f3e76]: Window
+              - generic [ref=f3e77]:
+                - button "7d" [ref=f3e78]
+                - button "14d" [ref=f3e79]
+                - button "30d" [ref=f3e80]
+                - button "90d" [ref=f3e81]
+            - generic [ref=f3e82]: ·
+            - button "Repo All ▾" [ref=f3e84]:
+              - generic [ref=f3e85]: Repo
+              - generic [ref=f3e86]: All
+              - generic [ref=f3e87]: ▾
+        - generic [ref=f3e90]:
+          - generic [ref=f3e91]:
+            - button "Developer ▾" [ref=f3e93]:
+              - generic [ref=f3e94]: Developer
+              - generic [ref=f3e95]: ▾
+            - button "Work ▾" [ref=f3e97]:
+              - generic [ref=f3e98]: Work
+              - generic [ref=f3e99]: ▾
+          - generic [ref=f3e100]:
+            - button "Filters" [ref=f3e101]
+            - button "Reset filters" [ref=f3e102]
+            - button "Copy" [ref=f3e103]
+        - 'region "Data confidence: Medium confidence" [ref=f3e104]':
+          - generic [ref=f3e105]:
+            - generic [ref=f3e106]: Medium confidence
+            - generic [ref=f3e109]: 74% coverage
+          - paragraph [ref=f3e110]: Some sources are missing or sparse — read trends, not point values.
+          - generic [ref=f3e111]:
+            - generic [ref=f3e112]: Connected
+            - generic [ref=f3e113]: ci
+            - generic [ref=f3e114]: github
+            - generic [ref=f3e115]: linear
+        - generic [ref=f3e116]:
+          - generic [ref=f3e117]:
+            - generic [ref=f3e118]: Engineering health
+            - generic [ref=f3e119]: Critical
+          - heading "Code Churn appears up across org" [level=1] [ref=f3e120]
+          - paragraph [ref=f3e121]: The strongest signal suggests Code Churn appears rising; higher churn suggests effort may be cycling through rework rather than durable progress.
+          - generic [ref=f3e122]:
+            - paragraph [ref=f3e123]: Top change
+            - generic [ref=f3e124]:
+              - heading "Code Churn appears up" [level=2] [ref=f3e125]
+              - generic [ref=f3e126]:
+                - generic [ref=f3e127]: critical
+                - generic "org" [ref=f3e128]
+                - generic [ref=f3e129]: ↑ +64%
+            - paragraph [ref=f3e130]: Code Churn appears rising; higher churn suggests effort may be cycling through rework rather than durable progress.
+            - generic [ref=f3e131]:
+              - paragraph [ref=f3e132]: Recommended action
+              - paragraph [ref=f3e133]: Inspect hotspots and stabilize rework loops before expanding the change set.
+            - button "Open evidence" [ref=f3e134]:
+              - text: Open evidence
+              - generic [ref=f3e135]: ↗
+        - generic [ref=f3e136]:
+          - generic [ref=f3e138]:
+            - paragraph [ref=f3e139]: Ranked signals
+            - paragraph [ref=f3e140]: Ordered by severity and confidence for the selected window.
+          - generic [ref=f3e141]:
+            - article [ref=f3e142]:
+              - paragraph [ref=f3e143]: Top signal
+              - generic [ref=f3e144]:
+                - heading "Code Churn appears up" [level=3] [ref=f3e145]
+                - generic [ref=f3e146]: Critical
+              - generic [ref=f3e147]:
+                - generic [ref=f3e148]: 790494 loc
+                - generic [ref=f3e149]:
+                  - generic [ref=f3e150]: ↑
+                  - text: +64%
+                - generic [ref=f3e151]: from 481263 loc prior
+              - generic [ref=f3e152]:
+                - generic [ref=f3e153]: medium confidence
+                - generic [ref=f3e155]: org
+                - generic [ref=f3e156]: 11 artifacts
+              - paragraph [ref=f3e157]: Code Churn appears rising; higher churn suggests effort may be cycling through rework rather than durable progress.
+              - generic [ref=f3e158]:
+                - paragraph [ref=f3e159]: Recommended action
+                - paragraph [ref=f3e160]: Inspect hotspots and stabilize rework loops before expanding the change set.
+              - button "Open evidence" [ref=f3e161]:
+                - text: Open evidence
+                - generic [ref=f3e162]: ↗
+            - generic [ref=f3e163]:
+              - article [ref=f3e164]:
+                - generic [ref=f3e165]:
+                  - heading "Throughput appears up" [level=3] [ref=f3e166]
+                  - generic [ref=f3e167]: High
+                - generic [ref=f3e168]:
+                  - generic [ref=f3e169]: 266 items
+                  - generic [ref=f3e170]:
+                    - generic [ref=f3e171]: ↑
+                    - text: +116%
+                  - generic [ref=f3e172]: from 123 items prior
+                - generic [ref=f3e173]:
+                  - generic [ref=f3e174]: medium confidence
+                  - generic [ref=f3e176]: org
+                  - generic [ref=f3e177]: 14 artifacts
+                - paragraph [ref=f3e178]: Throughput appears rising; throughput movement changes the team's ability to keep commitments credible.
+                - generic [ref=f3e179]:
+                  - paragraph [ref=f3e180]: Recommended action
+                  - paragraph [ref=f3e181]: Review WIP and dependency queues before changing delivery commitments.
+                - button "Open evidence" [ref=f3e182]:
+                  - text: Open evidence
+                  - generic [ref=f3e183]: ↗
+              - article [ref=f3e184]:
+                - generic [ref=f3e185]:
+                  - heading "WIP Saturation appears up" [level=3] [ref=f3e186]
+                  - generic [ref=f3e187]: High
+                - generic [ref=f3e188]:
+                  - generic [ref=f3e189]: 628 %
+                  - generic [ref=f3e190]:
+                    - generic [ref=f3e191]: ↑
+                    - text: +43%
+                  - generic [ref=f3e192]: from 439 % prior
+                - generic [ref=f3e193]:
+                  - generic [ref=f3e194]: medium confidence
+                  - generic [ref=f3e196]: org
+                  - generic [ref=f3e197]: 14 artifacts
+                - paragraph [ref=f3e198]: WIP Saturation appears rising; saturation suggests active work may exceed the team's coordination capacity.
+                - generic [ref=f3e199]:
+                  - paragraph [ref=f3e200]: Recommended action
+                  - paragraph [ref=f3e201]: Set a short-term WIP limit and finish active items before starting more.
+                - button "Open evidence" [ref=f3e202]:
+                  - text: Open evidence
+                  - generic [ref=f3e203]: ↗
+              - article [ref=f3e204]:
+                - generic [ref=f3e205]:
+                  - heading "Rework Ratio appears up" [level=3] [ref=f3e206]
+                  - generic [ref=f3e207]: Medium
+                - generic [ref=f3e208]:
+                  - generic [ref=f3e209]: 51.8 %
+                  - generic [ref=f3e210]:
+                    - generic [ref=f3e211]: ↑
+                    - text: +23%
+                  - generic [ref=f3e212]: from 42.1 % prior
+                - generic [ref=f3e213]:
+                  - generic [ref=f3e214]: medium confidence
+                  - generic [ref=f3e216]: org
+                  - generic [ref=f3e217]: 11 artifacts
+                - paragraph [ref=f3e218]: Rework Ratio appears rising; rework suggests unclear requirements or fragile implementation paths may be taxing focus.
+                - generic [ref=f3e219]:
+                  - paragraph [ref=f3e220]: Recommended action
+                  - paragraph [ref=f3e221]: Review reopened or rewritten work and pick one root-cause experiment.
+                - button "Open evidence" [ref=f3e222]:
+                  - text: Open evidence
+                  - generic [ref=f3e223]: ↗
+              - article [ref=f3e224]:
+                - generic [ref=f3e225]:
+                  - heading "Compounding risk appears elevated for full-chaos/dev-health-web" [level=3] [ref=f3e226]
+                  - generic [ref=f3e227]: Medium
+                - generic [ref=f3e228]:
+                  - generic [ref=f3e229]: 50.0 %
+                  - generic [ref=f3e230]: no prior period
+                - generic [ref=f3e231]:
+                  - generic [ref=f3e232]: low confidence
+                  - generic [ref=f3e234]: repos
+                  - generic [ref=f3e235]: 1 artifact
+                - paragraph [ref=f3e236]: Compounding Risk appears flat; compounding risk combines churn, complexity, ownership, and review pressure into one persisted signal.
+                - generic [ref=f3e237]:
+                  - paragraph [ref=f3e238]: Recommended action
+                  - paragraph [ref=f3e239]: Inspect the highest-risk scope and reduce the strongest component before adding scope.
+                - button "Open evidence" [ref=f3e240]:
+                  - text: Open evidence
+                  - generic [ref=f3e241]: ↗
+              - article [ref=f3e242]:
+                - generic [ref=f3e243]:
+                  - heading "Compounding risk appears elevated for full-chaos/dev-health-ops" [level=3] [ref=f3e244]
+                  - generic [ref=f3e245]: Medium
+                - generic [ref=f3e246]:
+                  - generic [ref=f3e247]: 50.0 %
+                  - generic [ref=f3e248]: no prior period
+                - generic [ref=f3e249]:
+                  - generic [ref=f3e250]: low confidence
+                  - generic [ref=f3e252]: repos
+                  - generic [ref=f3e253]: 1 artifact
+                - paragraph [ref=f3e254]: Compounding Risk appears flat; compounding risk combines churn, complexity, ownership, and review pressure into one persisted signal.
+                - generic [ref=f3e255]:
+                  - paragraph [ref=f3e256]: Recommended action
+                  - paragraph [ref=f3e257]: Inspect the highest-risk scope and reduce the strongest component before adding scope.
+                - button "Open evidence" [ref=f3e258]:
+                  - text: Open evidence
+                  - generic [ref=f3e259]: ↗
+              - article [ref=f3e260]:
+                - generic [ref=f3e261]:
+                  - heading "Cycle Time appears down" [level=3] [ref=f3e262]
+                  - generic [ref=f3e263]: Low
+                - generic [ref=f3e264]:
+                  - generic [ref=f3e265]: 1.3 days
+                  - generic [ref=f3e266]:
+                    - generic [ref=f3e267]: ↓
+                    - text: "-39%"
+                  - generic [ref=f3e268]: from 2.2 days prior
+                - generic [ref=f3e269]:
+                  - generic [ref=f3e270]: medium confidence
+                  - generic [ref=f3e272]: org
+                  - generic [ref=f3e273]: 14 artifacts
+                - paragraph [ref=f3e274]: Cycle Time appears falling; longer cycle time suggests delivery work may spend more time waiting than moving.
+                - generic [ref=f3e275]:
+                  - paragraph [ref=f3e276]: Recommended action
+                  - paragraph [ref=f3e277]: Inspect the slowest stage and rebalance active work before adding scope.
+                - button "Open evidence" [ref=f3e278]:
+                  - text: Open evidence
+                  - generic [ref=f3e279]: ↗
+              - article [ref=f3e280]:
+                - generic [ref=f3e281]:
+                  - heading "Deploy Frequency appears down" [level=3] [ref=f3e282]
+                  - generic [ref=f3e283]: Low
+                - generic [ref=f3e284]:
+                  - generic [ref=f3e285]: 211 deploys
+                  - generic [ref=f3e286]:
+                    - generic [ref=f3e287]: ↓
+                    - text: "-9%"
+                  - generic [ref=f3e288]: from 233 deploys prior
+                - generic [ref=f3e289]:
+                  - generic [ref=f3e290]: medium confidence
+                  - generic [ref=f3e292]: org
+                  - generic [ref=f3e293]: 6 artifacts
+                - paragraph [ref=f3e294]: Deploy Frequency appears falling; deployment cadence suggests whether finished work can reach users smoothly.
+                - generic [ref=f3e295]:
+                  - paragraph [ref=f3e296]: Recommended action
+                  - paragraph [ref=f3e297]: Check release blockers and restore the smallest safe deployment path.
+                - button "Open evidence" [ref=f3e298]:
+                  - text: Open evidence
+                  - generic [ref=f3e299]: ↗
+              - article [ref=f3e300]:
+                - generic [ref=f3e301]:
+                  - heading "CI Success Rate appears flat" [level=3] [ref=f3e302]
+                  - generic [ref=f3e303]: Low
+                - generic [ref=f3e304]:
+                  - generic [ref=f3e305]: 87.4 %
+                  - generic [ref=f3e306]:
+                    - generic [ref=f3e307]: →
+                    - text: "-1%"
+                  - generic [ref=f3e308]: from 88.0 % prior
+                - generic [ref=f3e309]:
+                  - generic [ref=f3e310]: medium confidence
+                  - generic [ref=f3e312]: org
+                  - generic [ref=f3e313]: 14 artifacts
+                - paragraph [ref=f3e314]: CI Success Rate appears flat; CI health suggests whether the delivery path is dependable.
+                - generic [ref=f3e315]:
+                  - paragraph [ref=f3e316]: Recommended action
+                  - paragraph [ref=f3e317]: Inspect failing pipelines and restore the most common broken check first.
+                - button "Open evidence" [ref=f3e318]:
+                  - text: Open evidence
+                  - generic [ref=f3e319]: ↗
+              - article [ref=f3e320]:
+                - generic [ref=f3e321]:
+                  - heading "Review Latency appears up" [level=3] [ref=f3e322]
+                  - generic [ref=f3e323]: Low
+                - generic [ref=f3e324]:
+                  - generic [ref=f3e325]: 0.1 hours
+                  - generic [ref=f3e326]:
+                    - generic [ref=f3e327]: ↑
+                    - text: +1%
+                  - generic [ref=f3e328]: from 0.1 hours prior
+                - generic [ref=f3e329]:
+                  - generic [ref=f3e330]: medium confidence
+                  - generic [ref=f3e332]: org
+                  - generic [ref=f3e333]: 11 artifacts
+                - paragraph [ref=f3e334]: Review Latency appears rising; review queues shape how quickly teams can learn from completed work.
+                - generic [ref=f3e335]:
+                  - paragraph [ref=f3e336]: Recommended action
+                  - paragraph [ref=f3e337]: Rebalance reviewer rotation and clear stale review queues.
+                - button "Open evidence" [ref=f3e338]:
+                  - text: Open evidence
+                  - generic [ref=f3e339]: ↗
+              - article [ref=f3e340]:
+                - generic [ref=f3e341]:
+                  - heading "Change Failure Rate appears flat" [level=3] [ref=f3e342]
+                  - generic [ref=f3e343]: Low
+                - generic [ref=f3e344]:
+                  - generic [ref=f3e345]: 0 %
+                  - generic [ref=f3e346]:
+                    - generic [ref=f3e347]: →
+                    - text: +0%
+                  - generic [ref=f3e348]: from 0 % prior
+                - generic [ref=f3e349]:
+                  - generic [ref=f3e350]: medium confidence
+                  - generic [ref=f3e352]: org
+                  - generic [ref=f3e353]: 11 artifacts
+                - paragraph [ref=f3e354]: Change Failure Rate appears flat; failed changes suggest reliability work may be competing with delivery.
+                - generic [ref=f3e355]:
+                  - paragraph [ref=f3e356]: Recommended action
+                  - paragraph [ref=f3e357]: Inspect recent failed changes and tighten pre-release checks around the common failure mode.
+                - button "Open evidence" [ref=f3e358]:
+                  - text: Open evidence
+                  - generic [ref=f3e359]: ↗
+              - article [ref=f3e360]:
+                - generic [ref=f3e361]:
+                  - heading "PR Rework Ratio appears flat" [level=3] [ref=f3e362]
+                  - generic [ref=f3e363]: Low
+                - generic [ref=f3e364]:
+                  - generic [ref=f3e365]: 0 %
+                  - generic [ref=f3e366]:
+                    - generic [ref=f3e367]: →
+                    - text: +0%
+                  - generic [ref=f3e368]: from 0 % prior
+                - generic [ref=f3e369]:
+                  - generic [ref=f3e370]: medium confidence
+                  - generic [ref=f3e372]: org
+                  - generic [ref=f3e373]: 11 artifacts
+                - paragraph [ref=f3e374]: PR Rework Ratio appears flat; PR Rework Ratio movement suggests an operating signal to inspect.
+                - generic [ref=f3e375]:
+                  - paragraph [ref=f3e376]: Recommended action
+                  - paragraph [ref=f3e377]: Inspect supporting evidence and choose one reversible operating experiment.
+                - button "Open evidence" [ref=f3e378]:
+                  - text: Open evidence
+                  - generic [ref=f3e379]: ↗
+              - article [ref=f3e380]:
+                - generic [ref=f3e381]:
+                  - heading "Blocked Work appears flat" [level=3] [ref=f3e382]
+                  - generic [ref=f3e383]: Low
+                - generic [ref=f3e384]:
+                  - generic [ref=f3e385]: 0 hours
+                  - generic [ref=f3e386]:
+                    - generic [ref=f3e387]: →
+                    - text: +0%
+                  - generic [ref=f3e388]: from 0 hours prior
+                - generic [ref=f3e389]:
+                  - generic [ref=f3e390]: low confidence
+                  - generic [ref=f3e392]: org
+                  - generic [ref=f3e393]: 0 artifacts
+                - paragraph [ref=f3e394]: Blocked Work appears flat; blocked time suggests dependencies may be consuming delivery capacity.
+                - generic [ref=f3e395]:
+                  - paragraph [ref=f3e396]: Recommended action
+                  - paragraph [ref=f3e397]: Triage blocked items by owner and unblock the oldest high-impact queue first.
+                - button "Open evidence" [ref=f3e398]:
+                  - text: Open evidence
+                  - generic [ref=f3e399]: ↗
+        - generic [ref=f3e400]:
+          - generic [ref=f3e401]: AI workflow signals are quiet in this window.
+          - link "Open AI Workflows" [ref=f3e402] [cursor=pointer]:
+            - /url: /ai?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+        - generic [ref=f3e403]:
+          - generic [ref=f3e404]:
+            - generic [ref=f3e405]:
+              - paragraph [ref=f3e406]: Monitoring views
+              - paragraph [ref=f3e407]: Tabs for steady trend monitoring.
+            - link "Open metrics" [ref=f3e408] [cursor=pointer]:
+              - /url: /metrics?tab=dora&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+          - generic [ref=f3e409]:
+            - link "Flow Open Idea to merge insight. Review latency, throughput, WIP." [ref=f3e410] [cursor=pointer]:
+              - /url: /metrics?tab=flow&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+              - generic [ref=f3e411]:
+                - generic [ref=f3e412]: Flow
+                - generic [ref=f3e413]: Open
+              - paragraph [ref=f3e414]: Idea to merge insight.
+              - paragraph [ref=f3e415]: Review latency, throughput, WIP.
+            - link "Throughput Open Delivery volume and pacing. Throughput, WIP saturation, blocked work." [ref=f3e416] [cursor=pointer]:
+              - /url: /metrics?tab=throughput&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+              - generic [ref=f3e417]:
+                - generic [ref=f3e418]: Throughput
+                - generic [ref=f3e419]: Open
+              - paragraph [ref=f3e420]: Delivery volume and pacing.
+              - paragraph [ref=f3e421]: Throughput, WIP saturation, blocked work.
+            - link "DORA Open Release speed and stability. Deploy frequency, cycle time, failure rate." [ref=f3e422] [cursor=pointer]:
+              - /url: /metrics?tab=dora&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+              - generic [ref=f3e423]:
+                - generic [ref=f3e424]: DORA
+                - generic [ref=f3e425]: Open
+              - paragraph [ref=f3e426]: Release speed and stability.
+              - paragraph [ref=f3e427]: Deploy frequency, cycle time, failure rate.
+        - generic [ref=f3e428]:
+          - generic [ref=f3e429]:
+            - generic [ref=f3e430]:
+              - paragraph [ref=f3e431]: Key Shifts
+              - paragraph [ref=f3e432]: Metric movements ordered for your role.
+            - link "Open evidence" [ref=f3e433] [cursor=pointer]:
+              - /url: /explore?role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+          - generic [ref=f3e434]:
+            - link "Review Latency 0h ↑ +1%" [ref=f3e435] [cursor=pointer]:
+              - /url: /explore?metric=review_latency&role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+              - paragraph [ref=f3e436]: Review Latency
+              - paragraph [ref=f3e437]: 0h
+              - generic [ref=f3e438]: ↑ +1%
+            - link "Throughput 266 items ↑ +116%" [ref=f3e439] [cursor=pointer]:
+              - /url: /explore?metric=throughput&role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+              - paragraph [ref=f3e440]: Throughput
+              - paragraph [ref=f3e441]: 266 items
+              - generic [ref=f3e442]: ↑ +116%
+            - link "Cycle Time 1.3d ↓ -39%" [ref=f3e443] [cursor=pointer]:
+              - /url: /explore?metric=cycle_time&role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+              - paragraph [ref=f3e444]: Cycle Time
+              - paragraph [ref=f3e445]: 1.3d
+              - generic [ref=f3e446]: ↓ -39%
+            - link "Deploy Frequency 211 deploys ↓ -9%" [ref=f3e447] [cursor=pointer]:
+              - /url: /explore?metric=deploy_freq&role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+              - paragraph [ref=f3e448]: Deploy Frequency
+              - paragraph [ref=f3e449]: 211 deploys
+              - generic [ref=f3e450]: ↓ -9%
+            - link "CI Success Rate 87% ↓ -1%" [ref=f3e451] [cursor=pointer]:
+              - /url: /explore?metric=ci_success&role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+              - paragraph [ref=f3e452]: CI Success Rate
+              - paragraph [ref=f3e453]: 87%
+              - generic [ref=f3e454]: ↓ -1%
+            - link "Change Failure Rate 0% · 0%" [ref=f3e455] [cursor=pointer]:
+              - /url: /explore?metric=change_failure_rate&role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+              - paragraph [ref=f3e456]: Change Failure Rate
+              - paragraph [ref=f3e457]: 0%
+              - generic "No change" [ref=f3e458]: · 0%
+            - link "Code Churn 790.5K ↑ +64%" [ref=f3e459] [cursor=pointer]:
+              - /url: /explore?metric=churn&role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+              - paragraph [ref=f3e460]: Code Churn
+              - paragraph [ref=f3e461]: 790.5K
+              - generic [ref=f3e462]: ↑ +64%
+            - link "Rework Ratio 52% ↑ +23%" [ref=f3e463] [cursor=pointer]:
+              - /url: /explore?metric=rework_ratio&role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+              - paragraph [ref=f3e464]: Rework Ratio
+              - paragraph [ref=f3e465]: 52%
+              - generic [ref=f3e466]: ↑ +23%
+        - generic [ref=f3e467]:
+          - generic [ref=f3e468]:
+            - heading "Notable shifts" [level=2] [ref=f3e469]
+            - paragraph [ref=f3e470]: Short shifts from the selected window.
+            - button "Throughput rose 116% driven by CHAOS." [ref=f3e472]
+          - generic [ref=f3e473]:
+            - generic [ref=f3e474]:
+              - heading "Investigation threads" [level=3] [ref=f3e475]
+              - link "View all" [ref=f3e476] [cursor=pointer]:
+                - /url: /opportunities?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+            - generic [ref=f3e477]:
+              - button [ref=f3e478]:
+                - paragraph [ref=f3e479]: Understand
+                - paragraph [ref=f3e480]: Flow stages
+                - paragraph [ref=f3e481]: Evidence
+              - button [ref=f3e482]:
+                - paragraph [ref=f3e483]: Measure
+                - paragraph [ref=f3e484]: Coverage & freshness
+                - paragraph [ref=f3e485]: Evidence
+              - button [ref=f3e486]:
+                - paragraph [ref=f3e487]: Align
+                - paragraph [ref=f3e488]: Investment mix
+                - paragraph [ref=f3e489]: Evidence
+              - button [ref=f3e490]:
+                - paragraph [ref=f3e491]: Execute
+                - paragraph [ref=f3e492]: Top opportunities
+                - paragraph [ref=f3e493]: Evidence
+              - link [ref=f3e494] [cursor=pointer]:
+                - /url: /opportunities?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+                - paragraph [ref=f3e495]: Focus thread
+                - paragraph [ref=f3e496]: "This week's constraint: Throughput"
+                - paragraph [ref=f3e497]: Throughput rose 116% over the last 14 days.
+        - generic [ref=f3e498]:
+          - generic [ref=f3e499]:
+            - generic [ref=f3e500]:
+              - heading "Limiting factor" [level=3] [ref=f3e501]
+              - button "Open evidence" [ref=f3e502]
+            - paragraph [ref=f3e503]: Code Churn appears up appears to be the current limiting factor.
+            - paragraph [ref=f3e504]: Code Churn appears rising; higher churn suggests effort may be cycling through rework rather than durable progress.
+            - generic [ref=f3e505]:
+              - paragraph [ref=f3e506]: Recommended action
+              - paragraph [ref=f3e507]: Inspect hotspots and stabilize rework loops before expanding the change set.
+            - button "Drill into Throughput" [ref=f3e509]
+            - generic [ref=f3e510]:
+              - generic [ref=f3e511]: Rebalance reviewer rotation to reduce queueing.
+              - generic [ref=f3e512]: Set WIP limits per team and auto-alert at saturation.
+          - generic [ref=f3e513]:
+            - generic [ref=f3e514]:
+              - heading "Recent events" [level=3] [ref=f3e515]
+              - link "Open evidence" [ref=f3e516] [cursor=pointer]:
+                - /url: /explore?role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+            - generic [ref=f3e517]:
+              - button "spike Aug 4, 4:28 PM Cycle Time shifted -39% over the last 14 days." [ref=f3e518]:
+                - generic [ref=f3e519]:
+                  - generic [ref=f3e520]: spike
+                  - generic [ref=f3e521]: Aug 4, 4:28 PM
+                - paragraph [ref=f3e522]: Cycle Time shifted -39% over the last 14 days.
+              - button "regression Aug 4, 4:28 PM Throughput shifted 116% over the last 14 days." [ref=f3e523]:
+                - generic [ref=f3e524]:
+                  - generic [ref=f3e525]: regression
+                  - generic [ref=f3e526]: Aug 4, 4:28 PM
+                - paragraph [ref=f3e527]: Throughput shifted 116% over the last 14 days.
+              - button "regression Aug 4, 4:28 PM Code Churn shifted 64% over the last 14 days." [ref=f3e528]:
+                - generic [ref=f3e529]:
+                  - generic [ref=f3e530]: regression
+                  - generic [ref=f3e531]: Aug 4, 4:28 PM
+                - paragraph [ref=f3e532]: Code Churn shifted 64% over the last 14 days.
+              - button "regression Aug 4, 4:28 PM WIP Saturation shifted 43% over the last 14 days." [ref=f3e533]:
+                - generic [ref=f3e534]:
+                  - generic [ref=f3e535]: regression
+                  - generic [ref=f3e536]: Aug 4, 4:28 PM
+                - paragraph [ref=f3e537]: WIP Saturation shifted 43% over the last 14 days.
+        - generic [ref=f3e539]:
+          - heading "Investment mix" [level=3] [ref=f3e540]
+          - paragraph [ref=f3e541]: Work allocation snapshot for the selected window.
+          - generic [ref=f3e542]:
+            - link "Open Work view" [ref=f3e543] [cursor=pointer]:
+              - /url: /work?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ&role=ic
+            - link "Open evidence" [ref=f3e544] [cursor=pointer]:
+              - /url: /explore?metric=throughput&role=ic&f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ
+    - region "Notifications alt+T"
+  - generic [ref=f3e550] [cursor=pointer]:
+    - button "Open Next.js Dev Tools" [ref=f3e551]
+    - generic [ref=f3e555]:
+      - button "Open issues overlay" [ref=f3e556]:
+        - generic [ref=f3e557]:
+          - generic [ref=f3e558]: "0"
+          - generic [ref=f3e559]: "1"
+        - generic [ref=f3e560]: Issue
+      - button "Collapse issues badge" [ref=f3e561]
+  - alert [ref=f3e564]
+  - region "Ask Dev" [ref=f3e572]:
+    - generic [ref=f3e573]:
+      - generic [ref=f3e574]:
+        - paragraph [ref=f3e575]: Evidence-backed investigation
+        - heading "Ask Dev" [level=2] [ref=f3e576]
+      - generic [ref=f3e577]:
+        - link "Ask Dev workspace" [ref=f3e578] [cursor=pointer]:
+          - /url: /dev
+        - button "Expand Ask Dev panel" [ref=f3e579]: ↖
+        - button "Close panel" [ref=f3e580]: —
+    - generic [ref=f3e582]:
+      - generic [ref=f3e584]:
+        - generic [ref=f3e585]:
+          - text: "Proposed context:"
+          - strong [ref=f3e586]: Organization
+        - generic [ref=f3e587]:
+          - text: "Committed scope:"
+          - strong [ref=f3e588]: Organization
+        - generic [ref=f3e589]:
+          - text: "Direct scope:"
+          - strong [ref=f3e590]: organization
+        - generic [ref=f3e591]:
+          - text: "Teams:"
+          - strong [ref=f3e592]: All
+        - generic [ref=f3e593]:
+          - text: "Time:"
+          - strong [ref=f3e594]: Jul 21, 2026 – Aug 4, 2026
+        - generic [ref=f3e595]:
+          - text: Comparison
+          - combobox "Comparison" [ref=f3e596]:
+            - option "Previous period" [selected]
+            - option "No comparison"
+      - generic "Ask Dev transcript" [ref=f3e597]:
+        - list [ref=f3e610]:
+          - listitem [ref=f3e611]:
+            - generic [ref=f3e612]: What's the status of the ACR Project and what drivers are blocking it? What's left to complete?
+          - alert [ref=f3e613]:
+            - paragraph [ref=f3e614]: The investigation stopped safely.
+            - paragraph [ref=f3e615]: "I could not find an authorized entity of that kind with that name. Here are the closest matches -- please ask again naming one of them. Candidates: 5. Compose ACR and edge routing into the canonical release, [CHAOS-2911] Harden ACR runtime client boundary, [Govern] change_failure_rate serves 0% across Quality + Incident Correlation (CFR card, Contributors, Associations), [P3.7] Normalize dependency versions across packages, [P4] Adopt ChartFrame + MetricDelta across charts/KPIs; consolidate the AI mini-design-system."
+      - generic [ref=f3e604]:
+        - generic [ref=f3e605]: Ask Dev question
+        - generic [ref=f3e606]:
+          - textbox "Ask Dev question" [active] [ref=f3e607]:
+            - /placeholder: Ask about the evidence in this scope…
+          - button "Ask" [disabled] [ref=f3e608]
+        - generic [ref=f3e609]: Enter to ask · Shift+Enter for a new line

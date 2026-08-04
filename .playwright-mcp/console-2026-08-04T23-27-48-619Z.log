@@ -5,3 +5,54 @@ React will never use eval() in production mode @ http://127.0.0.1:3005/_next/sta
 [     179ms] [LOG] [HMR] connected @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
 [     228ms] [INFO] [info] web-vital {metric: FCP, value: 132, rating: good} @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
 [     228ms] [INFO] [info] web-vital {metric: TTFB, value: 34.5, rating: good} @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   27223ms] [INFO] [info] web-vital {metric: LCP, value: 21208, rating: poor} @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   27711ms] [LOG] [Fast Refresh] rebuilding @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   28963ms] [LOG] [Fast Refresh] done in 1354ms @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   29444ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   29446ms] [ERROR] eval() is not supported in this environment. If this page was served with a `Content-Security-Policy` header, make sure that `unsafe-eval` is included. React requires eval() in development mode for various debugging features like reconstructing callstacks from a different environment.
+React will never use eval() in production mode @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:3331
+[   29597ms] [LOG] [HMR] connected @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   29646ms] [INFO] [info] web-vital {metric: FCP, value: 1932, rating: needs-improvement} @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   29646ms] [INFO] [info] web-vital {metric: TTFB, value: 1827.1000000238419, rating: poor} @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   29711ms] [WARNING] Image with src "/_next/static/media/fc-logo.2ll0i5fz-krbk.png" has either width or height modified, but not the other. If you use CSS to change the size of your image, also include the styles 'width: "auto"' or 'height: "auto"' to maintain the aspect ratio. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   29822ms] [LOG] [Fast Refresh] rebuilding @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   29861ms] [LOG] [Fast Refresh] done in 141ms @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30533ms] [WARNING] Feature Delivery series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30533ms] [WARNING] Quality series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30533ms] [WARNING] Operational series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30533ms] [WARNING] Maintenance series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30533ms] [WARNING] Risk series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30543ms] [WARNING] Feature Delivery series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30543ms] [WARNING] Quality series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30543ms] [WARNING] Operational series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30543ms] [WARNING] Maintenance series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30543ms] [WARNING] Risk series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30551ms] [WARNING] Feature Delivery series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30551ms] [WARNING] Quality series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30552ms] [WARNING] Operational series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30552ms] [WARNING] Maintenance series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30552ms] [WARNING] Risk series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30556ms] [WARNING] [ECharts] Instance ec_1785886098876 has been disposed @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30657ms] [LOG] [Fast Refresh] rebuilding @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   30667ms] [LOG] [Fast Refresh] done in 109ms @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31559ms] [WARNING] Feature Delivery series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31559ms] [WARNING] Quality series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31559ms] [WARNING] Operational series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31559ms] [WARNING] Maintenance series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31559ms] [WARNING] Risk series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31561ms] [WARNING] Feature Delivery series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31561ms] [WARNING] Quality series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31561ms] [WARNING] Operational series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31561ms] [WARNING] Maintenance series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31561ms] [WARNING] Risk series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31563ms] [WARNING] Feature Delivery series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31563ms] [WARNING] Quality series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31563ms] [WARNING] Operational series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31563ms] [WARNING] Maintenance series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   31563ms] [WARNING] Risk series not exists. Legend data should be same with series name or data name. @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   33312ms] [WARNING] The resource http://127.0.0.1:3005/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Ffc-logo.2ll0i5fz-krbk.png&w=64&q=75 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ http://127.0.0.1:3005/dashboard?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ:0
+[   42676ms] [WARNING] The resource http://127.0.0.1:3005/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Ffc-logo.2ll0i5fz-krbk.png&w=64&q=75 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ http://127.0.0.1:3005/dashboard?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ:0
+[   63816ms] [INFO] [info] web-vital {metric: LCP, value: 2180, rating: good} @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   77545ms] [LOG] [Fast Refresh] rebuilding @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   77558ms] [LOG] [Fast Refresh] done in 113ms @ http://127.0.0.1:3005/_next/static/chunks/0i6k_next_dist_0hxu4dv._.js:2490
+[   81255ms] [WARNING] The resource http://127.0.0.1:3005/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Ffc-logo.2ll0i5fz-krbk.png&w=64&q=75 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ http://127.0.0.1:3005/dashboard?f=eyJob3ciOnt9LCJzY29wZSI6eyJpZHMiOltdLCJsZXZlbCI6InRlYW0ifSwidGltZSI6eyJjb21wYXJlX2RheXMiOjE0LCJyYW5nZV9kYXlzIjoxNH0sIndoYXQiOnt9LCJ3aG8iOnt9LCJ3aHkiOnt9fQ:0

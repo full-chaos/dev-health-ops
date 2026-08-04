@@ -25,6 +25,7 @@ from dev_health_ops.models.settings import (
 from .entitlement import AskDevEntitlementAuthorizer
 from .evidence_service import EvidenceScopeAuthorizer
 from .native_evidence import SourceFreshnessPolicy, default_native_freshness_policies
+from .native_status_change import PROJECT_REPOSITORIES_SQL
 from .scope_service import (
     EntityKind,
     ScopeResolution,
@@ -269,12 +270,53 @@ class NativeDataHealthReader:
         configurations = configuration_rows or []
         schedules = await self._schedules(org_id)
         repository_ids = sorted(_repository_ids(scope))
+        # A committed PROJECT subject carries no repository dimension (the
+        # catalog resolves projects with ``NULL AS repository_id``), so
+        # ``_repository_ids`` is empty for one and the ``empty(array) OR ...``
+        # arm in ``_watermark`` below then disables repository filtering
+        # entirely -- measuring the whole organization and reporting it as the
+        # project's coverage. Because source health is a *mandatory* source for
+        # the project status plan, unrelated healthy repositories could make a
+        # project's evidence coverage read complete. Resolve the same
+        # repository set the status/change reader derives, from the same shared
+        # query, or fail closed. Codex adversarial review (HIGH, 2026-08-03).
+        project_scope_unresolved = False
+        if not repository_ids:
+            project_ids = [
+                entity.canonical_id
+                for entity in scope.entities
+                if entity.kind is EntityKind.PROJECT
+            ]
+            if project_ids:
+                if scope.team_filters:
+                    # No data-health query applies a team filter either, so a
+                    # team-filtered project must not be answered with the whole
+                    # project's repository set.
+                    project_scope_unresolved = True
+                else:
+                    repository_ids = await self._project_repositories(
+                        org_id, project_ids[0]
+                    )
+                    project_scope_unresolved = not repository_ids
         observations: list[SourceHealthObservation] = []
         for source in source_systems:
             if source == "acr":
                 observations.append(
                     SourceHealthObservation(
                         source, False, False, warning="acr_optional"
+                    )
+                )
+                continue
+            if project_scope_unresolved:
+                # ``configured=None`` maps to DataHealthState.UNAVAILABLE --
+                # an explicit "this could not be measured for this subject",
+                # never a silent organization-wide substitute.
+                observations.append(
+                    SourceHealthObservation(
+                        source,
+                        None,
+                        False,
+                        warning="project_repository_scope_unavailable",
                     )
                 )
                 continue
@@ -333,6 +375,38 @@ class NativeDataHealthReader:
                 )
             )
         return tuple(observations)
+
+    async def _project_repositories(self, org_id: str, project_id: str) -> list[str]:
+        """The project's repository set, from the one shared derivation.
+
+        Deliberately the same ``PROJECT_REPOSITORIES_SQL`` the status/change
+        reader uses rather than a second query with the same intent: two
+        independently-drifting notions of "which repositories is this project
+        in" is exactly the class of bug this fix exists to close. A failed or
+        empty derivation returns ``[]`` and the caller fails closed -- an
+        unreadable attribution source is never "this project spans no
+        repositories", and never an excuse to widen to the organization.
+        """
+
+        if not project_id:
+            return []
+        try:
+            rows = await query_dicts(
+                self._client,
+                PROJECT_REPOSITORIES_SQL,
+                {
+                    "org_id": org_id,
+                    "entity_id": project_id,
+                    # Data health is a "right now" measurement, unlike a
+                    # snapshot's caller-supplied as_of.
+                    "as_of": datetime.now(UTC),
+                },
+            )
+        except Exception:
+            return []
+        return sorted(
+            {str(row["repository_id"]) for row in rows if row.get("repository_id")}
+        )
 
     async def _repositories(self, org_id: str) -> set[str]:
         rows = await query_dicts(

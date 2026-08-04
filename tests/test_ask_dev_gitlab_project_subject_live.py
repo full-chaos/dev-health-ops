@@ -21,13 +21,19 @@ Identity choice under test (CHAOS-3380 round 2, Codex HIGH -- mutable path
 as canonical identity): GitLab's catalog id is GitLab's own IMMUTABLE
 numeric project id, prefixed like Jira's (``f"{org_id}:gitlab:{numeric_id}"``)
 -- NOT the raw, MUTABLE ``path_with_namespace`` a first cut of this ticket
-used. ``project_key`` carries the CURRENT path instead, and
-``providers/gitlab/normalize.py`` now writes that SAME current path onto
-``work_items.project_key`` (not just ``project_id``) -- so a GitLab project
-resolves through ``native_status_change._project_identity_match``'s
-project_key arm, mirroring Jira rather than Linear. This is because a
-GitLab project's PATH is mutable (rename, group transfer) while Linear's and
-Jira's own native ids are not.
+used. ``project_key`` carries the CURRENT path instead.
+
+Round 3 (Codex HIGH -- incremental sync strands historical rows) corrects
+round 2's own follow-through: ``providers/gitlab/normalize.py`` does NOT
+write anything onto ``work_items.project_key`` (it stays empty, exactly as
+before this ticket ever existed) -- a GitLab project instead resolves
+through ``native_status_change._project_identity_match``'s THIRD,
+compatibility arm: the work item's raw ``project_id`` (the path, unchanged
+regardless of when the row was synced) against the catalog's CURRENT
+``project_key``. Round 2's normalize.py change (writing the path onto
+project_key for newly-synced rows only) would have made "was this row
+synced before or after the cutover" a real, silent failure mode -- reverted
+rather than kept as an unnecessary second identity dimension.
 
 CHAOS-3374 (``native_status_change._PROJECT_IDENTITY_CTE`` /
 ``_project_identity_match``) merged to main as 61aae46af (#1460): every

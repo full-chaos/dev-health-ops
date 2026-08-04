@@ -220,7 +220,7 @@ def completion_truncation_detail(tool_results: tuple[DevToolResult, ...]) -> str
     return "The required-work assessment could not verify a complete total."
 
 
-def _answer_has_material_grounding(answer: DevAnswer) -> bool:
+def answer_has_material_grounding(answer: DevAnswer) -> bool:
     """Whether the answer carries anything an evidence-linked reader could
     actually check: a metric, an evidence entry, or a claim that references
     at least one of either. A claim with no reference at all (an
@@ -545,7 +545,7 @@ def validate_answer_candidate(
     # mistake the model can correct in the same bounded repair pass
     # CHAOS-3257 already gives a status/coverage mismatch, by reissuing the
     # same grounded content under an accurate status.
-    if answer.status is AnswerStatus.REFUSED and _answer_has_material_grounding(answer):
+    if answer.status is AnswerStatus.REFUSED and answer_has_material_grounding(answer):
         raise AnswerValidationError(
             "a refused answer cannot carry claim, metric, or evidence "
             "grounding -- reissue with an accurate status (complete, "
@@ -560,7 +560,7 @@ def validate_answer_candidate(
     # so this never overrides a real rejection; it only catches the shape
     # those checks vacuously allow through: nothing to check because there
     # is nothing there.
-    if not _answer_has_material_grounding(answer):
+    if not answer_has_material_grounding(answer):
         summary = answer.direct_summary.strip()
         if answer.status is AnswerStatus.COMPLETE:
             if _tool_results_offer_groundable_material(context.tool_results):
@@ -608,6 +608,7 @@ __all__ = [
     "INCOMPLETE_DENOMINATOR_DISCLOSURE",
     "AnswerValidationContext",
     "AnswerValidationError",
+    "answer_has_material_grounding",
     "any_tool_result_withheld_its_completion_denominator",
     "completion_truncation_detail",
     "validate_answer_candidate",

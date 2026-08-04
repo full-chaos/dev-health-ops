@@ -504,6 +504,82 @@ def test_a_clean_persisted_answer_is_returned_untouched() -> None:
     assert redact_persisted_answer(stored) is stored
 
 
+# --- CHAOS-3377 HIGH (codex adversarial web review, round 2): a persisted
+# refused-with-grounding row must be normalized on read, not handed back
+# verbatim for the client to relabel around.
+
+
+def _refused_with_grounding_answer():
+    from dev_health_ops.api.dev.contracts import DevAnswer
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "refused"
+    payload["direct_summary"] = "I can't help with that request."
+    return DevAnswer.model_validate(payload)
+
+
+def test_a_persisted_refused_with_grounding_row_is_normalized_on_read() -> None:
+    """Fail->pass: a row written before ``answer_validator``'s write-time
+    check existed can still say status=refused while carrying real
+    claim/metric/evidence content. The read boundary must not hand this
+    back verbatim -- the client backstop that used to relabel it 'Answered'
+    while still rendering the rejected-shaped prose underneath is exactly
+    the leak this closes upstream.
+    """
+
+    stored = _refused_with_grounding_answer()
+    assert stored.claims  # the fixture answer has real, grounded claims
+
+    normalized = redact_persisted_answer(stored)
+
+    assert normalized.status.value != "refused"
+    assert normalized.direct_summary != "I can't help with that request."
+    assert normalized.claims == []
+    # Structured, server-issued content survives -- only the model's own
+    # prose (the part that disagreed with its own status) is discarded.
+    assert normalized.metrics == stored.metrics
+    assert normalized.evidence == stored.evidence
+
+
+def test_normalization_runs_even_when_the_prose_has_no_denylisted_token() -> None:
+    """The refused-with-grounding contradiction is not itself an
+    internal-token leak (its direct_summary here is ordinary English) -- it
+    must not be gated behind the ``internal_token_leak`` check, which would
+    silently skip a clean-looking but self-contradictory row.
+    """
+
+    stored = _refused_with_grounding_answer()
+    assert internal_token_leak(user_visible_strings(answer=stored)) is None
+
+    normalized = redact_persisted_answer(stored)
+    assert normalized.status.value != "refused"
+    assert normalized.claims == []
+
+
+def test_a_genuine_refusal_with_no_grounding_is_not_normalized() -> None:
+    """Negative control: a row that is REFUSED with no material grounding at
+    all is a genuine refusal, not a contradiction -- normalization must
+    leave it untouched.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload.update(
+        {
+            "status": "refused",
+            "direct_summary": "I can't help with that request.",
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+        }
+    )
+    from dev_health_ops.api.dev.contracts import DevAnswer
+
+    stored = DevAnswer.model_validate(payload)
+    normalized = redact_persisted_answer(stored)
+    assert normalized.status.value == "refused"
+    assert normalized.direct_summary == "I can't help with that request."
+
+
 # --- round 3: the codex web-review findings that apply to the server --------
 
 

@@ -425,5 +425,12 @@
       "case": "invalid_out_of_order",
       "path": "examples/streams/invalid_out_of_order.json"
     }
+  ],
+  "vocabulary": [
+    {
+      "case": "internal_prose_denylist",
+      "path": "vocabulary/internal_prose_denylist.v1.json",
+      "sha256": "621ed38192bb17f3c9e9f826a3b3572c29cc8cd58865c77e9ea4ad9296990e7a"
+    }
   ]
 }

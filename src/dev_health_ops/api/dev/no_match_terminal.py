@@ -63,6 +63,7 @@ from .orchestrator_states import RunState
 
 __all__ = [
     "INTERNAL_TOKEN_DENYLIST",
+    "NEVER_ATTESTABLE_TOKENS",
     "WITHHELD_COPY",
     "attested_strings",
     "internal_token_leak",
@@ -91,6 +92,33 @@ INTERNAL_TOKEN_DENYLIST: frozenset[str] = (
     | _underscore_members(member.value for member in ResolutionOutcome)
     | _underscore_members(get_args(DevError.model_fields["code"].annotation))
 )
+
+# NOT included, deliberately: ``ToolID``. A round-2 review argued that a
+# model-authored "resolve_scope.v1 returned no matches" is the same class of
+# leak, and adding it was tried. It is not: tool ids are a *disclosed*
+# vocabulary, published in the tool contract and already named in
+# server-authored copy on purpose -- ``scripted_openai_service`` emits the
+# warning "Provider health was measured through data_health.v1", which is
+# provenance a reader benefits from, and the acceptance oracle asserts it.
+# Denying tool ids failed that healthy run. §12's prohibition is about Ask
+# Dev's own internal STATE (which outcome the resolver reached, which error
+# code was chosen), not about which tool ran.
+
+#: Tokens no provenance may ever exempt.
+#:
+#: The ``attested`` mechanism exists so an authorized entity genuinely called
+#: ``not_found`` does not fail its own answer. Left unbounded, it also became a
+#: hole: an evidence label named ``scope_forbidden`` would exempt a genuinely
+#: leaked ``scope_forbidden`` anywhere else in the same answer (codex
+#: adversarial review, round 2 MEDIUM).
+#:
+#: These are the tokens that describe Ask Dev's own scope-resolution decision.
+#: An entity cannot plausibly be named after one, and they are exactly what §12
+#: prohibits by name -- so the escape hatch does not apply to them at all, and
+#: no reviewer has to reason about whether some label earned it.
+NEVER_ATTESTABLE_TOKENS: frozenset[str] = _underscore_members(
+    member.value for member in ScopeResolutionOutcome
+) | frozenset({"scope_forbidden", "scope_not_found", "scope_ambiguous"})
 
 #: The two tokens Wave 3.1 §12 prohibits by name. Pinned at import time
 #: against the derived set: if an enum is renamed or re-homed such that
@@ -215,7 +243,9 @@ def internal_token_leak(
             continue
         lowered = value.casefold()
         for token in sorted(INTERNAL_TOKEN_DENYLIST):
-            if token in lowered and token not in attested_text:
+            if token not in lowered:
+                continue
+            if token in NEVER_ATTESTABLE_TOKENS or token not in attested_text:
                 return token
     return None
 

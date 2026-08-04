@@ -462,3 +462,51 @@ def test_a_clean_persisted_answer_is_returned_untouched() -> None:
 
     stored = _answer("What is the status of the Falcon project?", "Falcon")
     assert redact_persisted_answer(stored) is stored
+
+
+# --- round 3: the codex web-review findings that apply to the server --------
+
+
+def test_a_scope_token_can_never_be_exempted_by_provenance() -> None:
+    """Codex round 2 MEDIUM: unbounded attestation was itself a hole. An
+    evidence label named ``scope_forbidden`` would otherwise exempt a genuinely
+    leaked ``scope_forbidden`` anywhere else in the same answer."""
+
+    assert (
+        internal_token_leak(
+            ["Resolution returned scope_forbidden."], attested=["scope_forbidden"]
+        )
+        == "scope_forbidden"
+    )
+    assert (
+        internal_token_leak(
+            ["Resolution returned forbidden_or_not_found."],
+            attested=["forbidden_or_not_found"],
+        )
+        == "forbidden_or_not_found"
+    )
+
+
+def test_a_non_scope_token_is_still_exemptable() -> None:
+    """The escape hatch still does its job for the case it exists for."""
+
+    assert (
+        internal_token_leak(
+            ["The authorized project not_found has validated status data."],
+            attested=["not_found"],
+        )
+        is None
+    )
+
+
+def test_tool_identifiers_are_not_denied_copy() -> None:
+    """Deliberate, and the opposite of what a round-2 review proposed. Tool
+    ids are a disclosed vocabulary: server copy already names them on purpose
+    ("Provider health was measured through data_health.v1"), and the
+    acceptance oracle asserts that warning. §12 is about Ask Dev's internal
+    STATE, not about which tool ran."""
+
+    assert (
+        internal_token_leak(["Provider health was measured through data_health.v1."])
+        is None
+    )

@@ -35,6 +35,7 @@ from dev_health_ops.api.services.integrations import (
 from dev_health_ops.sync.canonical_incident_gate import (
     CanonicalIncidentFeatureDisabledError,
 )
+from dev_health_ops.sync.datasets import get_dataset_spec
 from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.trigger_routing import map_sync_mode
@@ -390,7 +391,8 @@ async def update_integration_datasets(
 ) -> list[IntegrationDatasetResponse]:
     """Enable or disable dataset rows by dataset_key."""
     int_svc = IntegrationService(session, org_id)
-    if await int_svc.get_by_id(integration_id) is None:
+    integration = await int_svc.get_by_id(integration_id)
+    if integration is None:
         raise HTTPException(status_code=404, detail="Integration not found")
 
     svc = IntegrationDatasetService(session, org_id)
@@ -398,11 +400,19 @@ async def update_integration_datasets(
     for item in payload.datasets:
         dataset = await svc.get_by_key(integration_id, item.dataset_key)
         if dataset is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Dataset '{item.dataset_key}' not found",
+            if get_dataset_spec(str(integration.provider), item.dataset_key) is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Dataset '{item.dataset_key}' not found",
+                )
+            dataset = await svc.create(
+                integration.id,
+                item.dataset_key,
+                item.is_enabled,
             )
-        updated.append(await svc.set_enabled(dataset, item.is_enabled))
+        else:
+            dataset = await svc.set_enabled(dataset, item.is_enabled)
+        updated.append(dataset)
     return [_dataset_to_response(d) for d in updated]
 
 

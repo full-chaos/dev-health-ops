@@ -172,7 +172,14 @@ async def _seed_source(session_maker, org_id: str, integration_id: str) -> str:
     return str(source_id)
 
 
-async def _seed_dataset(session_maker, org_id: str, integration_id: str) -> str:
+async def _seed_dataset(
+    session_maker,
+    org_id: str,
+    integration_id: str,
+    *,
+    dataset_key: str = "git",
+    is_enabled: bool = True,
+) -> str:
     """Directly insert an IntegrationDataset row and return its id."""
     dataset_id = uuid.uuid4()
     async with session_maker() as session:
@@ -180,8 +187,8 @@ async def _seed_dataset(session_maker, org_id: str, integration_id: str) -> str:
             id=dataset_id,
             org_id=org_id,
             integration_id=uuid.UUID(integration_id),
-            dataset_key="git",
-            is_enabled=True,
+            dataset_key=dataset_key,
+            is_enabled=is_enabled,
             options={},
         )
         session.add(dataset)
@@ -545,6 +552,70 @@ async def test_patch_datasets_not_found(client):
         json={"datasets": [{"dataset_key": "nonexistent", "is_enabled": False}]},
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_enabled", [True, False])
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+async def test_patch_missing_dataset_upserts_requested_state(
+    client, session_maker, seeded_state, provider, is_enabled
+):
+    # Given: an existing integration created before the tests dataset existed.
+    ac, _ = client
+    created = await _create_integration(ac, provider=provider)
+    integration_id = created["id"]
+
+    # When: the caller updates the missing tests dataset row.
+    resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/datasets",
+        json={"datasets": [{"dataset_key": "tests", "is_enabled": is_enabled}]},
+    )
+
+    # Then: the row is created with the explicitly requested enabled state.
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[0]["dataset_key"] == "tests"
+    assert resp.json()[0]["is_enabled"] is is_enabled
+    async with session_maker() as session:
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.org_id == seeded_state["org_id"],
+                    IntegrationDataset.integration_id == uuid.UUID(integration_id),
+                    IntegrationDataset.dataset_key == "tests",
+                )
+            )
+        ).scalar_one()
+    assert dataset.is_enabled is is_enabled
+
+
+@pytest.mark.asyncio
+async def test_patch_missing_dataset_rejects_provider_unsupported_key(
+    client, session_maker, seeded_state
+):
+    # Given: a Jira integration with no tests dataset row.
+    ac, _ = client
+    created = await _create_integration(ac, provider="jira")
+    integration_id = created["id"]
+
+    # When: the caller requests a dataset that exists but Jira does not support.
+    resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/datasets",
+        json={"datasets": [{"dataset_key": "tests", "is_enabled": True}]},
+    )
+
+    # Then: the API rejects the request without materializing the row.
+    assert resp.status_code == 404
+    async with session_maker() as session:
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.org_id == seeded_state["org_id"],
+                    IntegrationDataset.integration_id == uuid.UUID(integration_id),
+                    IntegrationDataset.dataset_key == "tests",
+                )
+            )
+        ).scalar_one_or_none()
+    assert dataset is None
 
 
 # ---------------------------------------------------------------------------

@@ -210,6 +210,23 @@ class IntegrationDatasetService:
         await self._session.flush()
         return dataset
 
+    async def create(
+        self,
+        integration_id: uuid.UUID,
+        dataset_key: str,
+        is_enabled: bool,
+    ) -> IntegrationDataset:
+        dataset = IntegrationDataset(
+            org_id=self._org_id,
+            integration_id=integration_id,
+            dataset_key=dataset_key,
+            is_enabled=is_enabled,
+            options={},
+        )
+        self._session.add(dataset)
+        await self._session.flush()
+        return dataset
+
     async def get_by_key(
         self, integration_id: str, dataset_key: str
     ) -> IntegrationDataset | None:

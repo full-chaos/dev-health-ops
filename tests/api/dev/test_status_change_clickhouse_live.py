@@ -15,6 +15,7 @@ from dev_health_ops.api.dev.native_status_change import (
     _DEPLOYMENTS_SQL,
     _INCIDENT_CHANGES_SQL,
     _INCIDENTS_SQL,
+    _PROJECT_REPOSITORIES_SQL,
     _PULL_REQUEST_CHANGES_SQL,
     _PULL_REQUESTS_SQL,
     _RELATIONSHIPS_SQL,
@@ -99,6 +100,38 @@ def test_status_change_query_parses_against_production_schema(
     except Exception as exc:  # noqa: BLE001 - enrich the failing SQL fixture
         pytest.fail(f"{name} EXPLAIN failed: {exc}\nparams={params!r}\n{sql}")
     assert plan.result_rows, f"{name} returned an empty query plan"
+
+
+def test_project_repository_derivation_parses_against_production_schema(
+    ch_client: Any,
+) -> None:
+    """Real-engine validation for ``_PROJECT_REPOSITORIES_SQL``.
+
+    Codex adversarial review (MEDIUM, 2026-08-03): the unit fake for this
+    query is a predicate evaluator, not a SQL engine, so nothing else proves
+    the text is valid ClickHouse -- in particular the ``repos`` sub-select and
+    the repository-less sentinel comparison. Kept out of the parametrized
+    inventory above only because that inventory asserts a ``{limit:UInt32}``
+    bound: this query resolves an *authorization* set, where a truncated
+    result is a silently narrowed read rather than a smaller page, so it
+    deliberately has none.
+    """
+
+    sql = _PROJECT_REPOSITORIES_SQL
+    assert "{org_id:String}" in sql, "derivation lacks an explicit tenant predicate"
+    assert "LIMIT" not in sql.upper(), "an authorization set must not be truncated"
+    params: dict[str, object] = {
+        "org_id": ORG_ID,
+        "entity_id": "project-target",
+        "as_of": NOW,
+    }
+    try:
+        plan = ch_client.query("EXPLAIN PLAN " + sql, parameters=params)
+    except Exception as exc:  # noqa: BLE001 - enrich the failing SQL fixture
+        pytest.fail(
+            f"project_repositories EXPLAIN failed: {exc}\nparams={params!r}\n{sql}"
+        )
+    assert plan.result_rows, "project_repositories returned an empty query plan"
 
 
 def test_direct_work_item_precedes_children_before_limit() -> None:

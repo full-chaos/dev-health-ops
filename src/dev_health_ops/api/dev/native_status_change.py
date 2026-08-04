@@ -468,6 +468,61 @@ FROM (
 WHERE g.repo_id IS NOT NULL
 """
 
+#: Re-derive one project's repository set from canonical work-item attribution.
+#:
+#: A committed PROJECT subject can never carry a repository list of its own,
+#: exactly like the TEAM subject above: ``DevScope.repositories`` is only ever
+#: populated for a REPOSITORY commit
+#: (``scope_service.ScopeResolutionService.committed_scope_for`` /
+#: ``_resolved_scope``), and the catalog row a project commit is built from
+#: selects ``NULL AS repository_id``
+#: (``scope_catalog.ClickHouseAuthorizedEntityCatalog._query_for``) because a
+#: project spans repositories and has no repository dimension. So
+#: ``_repository_ids(scope)`` returned an empty set for *every* production
+#: project subject, and ``status_snapshot``/``change_summary`` took the
+#: fail-closed "authorized repository set" branch before running a single
+#: project query -- an empty snapshot for a project whose work items match.
+#:
+#: Bounded by the same ``org_id`` tenant boundary
+#: ``_ORGANIZATION_AUTHORIZED_REPOSITORIES_SQL`` enforces, by the same
+#: ``updated_at <= as_of`` bound ``_WORK_ITEMS_SQL`` applies, and by the
+#: byte-identical ``project_id``/``project_key`` disjunction every project SQL
+#: arm uses (pinned by
+#: ``test_derivation_matches_projects_exactly_as_the_queries_it_bounds_do``) --
+#: so the derived set can never admit a repository the fact queries it bounds
+#: would not themselves have drawn from.
+#:
+#: Codex adversarial review (HIGH, 2026-08-03): the first cut stopped there and
+#: trusted every ``work_items.repo_id`` outright. ClickHouse enforces no
+#: foreign key, so a repository revoked from ``repos`` -- de-authorized, and
+#: correctly invisible to the ORGANIZATION branch, which enumerates ``repos``
+#: itself -- can keep its ``work_items`` rows and would have become an admitted
+#: read bound for project scope alone. Every *real* repository id must therefore
+#: still resolve through the same org-scoped ``repos`` catalog.
+#:
+#: The zero UUID is admitted explicitly rather than by omitting that check.
+#: It is not a repository at all: it is the sentinel
+#: ``ClickHouseMetricsSink`` writes whenever a record has no repository
+#: (``metrics/sinks/clickhouse/core.py`` -- ``row.repo_id or uuid.UUID(int=0)``),
+#: which is every Linear work item (``providers/linear/normalize.py`` sets
+#: ``repo_id=None``). It has no ``repos`` row and never will, so a bare
+#: existence join would re-empty the set for the exact provider this fix exists
+#: for -- while a blanket "skip the catalog" would have de-authorized nothing
+#: and admitted everything. Naming the sentinel keeps both properties.
+_PROJECT_REPOSITORIES_SQL = """
+SELECT DISTINCT toString(repo_id) AS repository_id
+FROM work_items FINAL
+WHERE org_id = {org_id:String}
+  AND updated_at <= {as_of:DateTime64(3, 'UTC')}
+  AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
+  AND (
+    toString(repo_id) = '00000000-0000-0000-0000-000000000000'
+    OR toString(repo_id) IN (
+      SELECT toString(id) FROM repos FINAL WHERE org_id = {org_id:String}
+    )
+  )
+"""
+
 _TRANSITIONS_SQL = (
     """
 SELECT transition.work_item_id AS entity_id, item.title AS display_label,
@@ -908,6 +963,36 @@ class ClickHouseStatusChangeSource:
             self._team_repository_cache.popitem(last=False)
         return result
 
+    async def _project_repository_ids(
+        self, org_id: str, entity_id: str, *, as_of: datetime
+    ) -> list[str]:
+        """Repositories this project's canonical work items live in.
+
+        A failed query returns an empty set, which lands the caller on the
+        same fail-closed "authorized repository set" branch an unmeasured
+        team attribution already takes -- an unreadable attribution source is
+        never allowed to read as "this project spans no repositories".
+        """
+
+        if not entity_id:
+            return []
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+                rows = await query_dicts(
+                    self._client,
+                    _PROJECT_REPOSITORIES_SQL,
+                    {
+                        "org_id": org_id,
+                        "entity_id": entity_id,
+                        "as_of": as_of.astimezone(UTC),
+                    },
+                )
+        except Exception:
+            return []
+        return sorted(
+            {str(row["repository_id"]) for row in rows if row.get("repository_id")}
+        )
+
     async def _authorized_repository_ids(
         self, org_id: str, scope: DevScope, *, as_of: datetime
     ) -> list[str]:
@@ -937,7 +1022,34 @@ class ClickHouseStatusChangeSource:
         it), so without this branch every team subject would always resolve
         to an empty repository set and take the fail-closed path below,
         regardless of real ownership data.
+
+        A committed project *subject* (``direct_scope=PROJECT``) has the same
+        structural problem for a different reason -- the catalog resolves
+        projects with no repository dimension at all, so both
+        ``scope.repositories`` and ``entity_refs[0].repository_id`` are always
+        empty for a production project commit -- and is re-derived here from
+        canonical work-item project attribution
+        (``_PROJECT_REPOSITORIES_SQL``). Without this branch every project
+        subject failed closed below while its work items sat in ``work_items``
+        matching the very ``project_id`` the scope committed.
+
+        A *team-filtered* project scope (``direct_scope=PROJECT`` alongside
+        ``scope.team_ids``, a filter -- ``DevScope`` permits the combination,
+        and ``ScopeResolutionService._resolved_scope`` populates ``team_ids``
+        from ``resolution.team_filters`` for any direct scope) is excluded
+        from that derivation for exactly the reason the team-filtered
+        ORGANIZATION case below is excluded, and the exclusion is checked
+        first: no project SQL arm applies a team filter, so deriving the
+        project's full repository set would silently answer a "project P, team
+        A only" request with team B's work from the same project. Falling
+        through to the caller's own (empty) bounded fields preserves the
+        fail-closed behavior such a request already had before this branch
+        existed. Codex adversarial review (HIGH, 2026-08-03).
         """
+        if scope.direct_scope is DirectScope.PROJECT and not scope.team_ids:
+            return await self._project_repository_ids(
+                org_id, self._entity_id(scope), as_of=as_of
+            )
         if scope.direct_scope is DirectScope.TEAM:
             # Unmeasured (failed lookup) and measured-but-empty both fall
             # through to the existing empty-repositories fail-closed branch

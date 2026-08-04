@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
+from dev_health_ops.api.dev import native_status_change as _native_status_change_module
 from dev_health_ops.api.dev.contracts import (
     DevEntityRef,
     DevScope,
@@ -24,6 +26,111 @@ from dev_health_ops.api.dev.status_change_service import (
 )
 
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
+
+
+# --- CHAOS-3377 residual defect (Codex adversarial review MEDIUM): the
+# alias-collision regression that actually caught the live defect
+# (test_status_change_clickhouse_live.py::
+# test_project_declared_facts_query_parses_against_production_schema) is
+# ``@pytest.mark.clickhouse``-gated -- opted OUT of every mandatory gate
+# (``ci/run_tests.sh`` and local validation both run ``-m "not clickhouse"``).
+# The exact defect class (an aggregate aliased to the SAME name as a raw
+# column its own WHERE clause filters on -- ClickHouse resolves the WHERE
+# reference to the alias, not the source column, and rejects an aggregate
+# there with ILLEGAL_AGGREGATION) could be reintroduced in ANY of this
+# module's SQL constants and pass every required gate. This is a plain
+# string-level structural check -- no live engine needed -- generic across
+# every ``*_SQL`` constant the module defines, so it closes the whole CLASS
+# of defect rather than re-pinning the one instance the live probe found.
+_AGGREGATE_ALIAS_RE = re.compile(
+    r"\b(?:any|anyLast|max|min|sum|avg|argMax|argMin|greatest|least)\s*\(\s*([\w.]+)\s*\)\s+AS\s+(\w+)",
+    re.IGNORECASE,
+)
+_WHERE_CLAUSE_RE = re.compile(
+    r"\bWHERE\b(.*?)(?:\bGROUP BY\b|\bHAVING\b|\bORDER BY\b|\bLIMIT\b|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _paren_depths(sql: str) -> list[int]:
+    """Parenthesis nesting depth active at (i.e. immediately after) each
+    character -- used to keep an aggregate alias from being compared
+    against a WHERE clause that belongs to a DIFFERENT, nested subquery
+    (e.g. a CTE's own ``SELECT ... WHERE ...`` one paren level deeper than
+    the outer query that reads FROM it). Only same-depth pairs are in the
+    same query scope and can actually collide the way ClickHouse resolves
+    identifiers; a naive whole-string search would false-positive on an
+    outer aggregate that happens to share a name with an inner CTE's own
+    (unrelated, differently-scoped) WHERE-filtered column.
+    """
+
+    depths = [0] * len(sql)
+    depth = 0
+    for index, char in enumerate(sql):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        depths[index] = depth
+    return depths
+
+
+def _self_named_aggregate_aliases_filtered_in_where(sql: str) -> list[str]:
+    """Aggregate aliases in ``sql`` that reuse their OWN input column's bare
+    name, where that same bare name is ALSO referenced (unqualified) inside
+    a WHERE clause AT THE SAME PAREN-NESTING DEPTH -- the exact CHAOS-3377
+    defect shape: ``any(updated_at) AS updated_at`` alongside
+    ``WHERE updated_at <= ...`` in the SAME (not a nested) query.
+    """
+
+    findings: list[str] = []
+    depths = _paren_depths(sql)
+    where_clauses = [
+        (match.group(1), depths[match.start()])
+        for match in _WHERE_CLAUSE_RE.finditer(sql)
+    ]
+    for match in _AGGREGATE_ALIAS_RE.finditer(sql):
+        raw_expr, alias = match.groups()
+        raw_col = raw_expr.rsplit(".", 1)[-1]
+        if raw_col.casefold() != alias.casefold():
+            continue
+        alias_depth = depths[match.start()]
+        bare_reference = re.compile(rf"(?<![.\w]){re.escape(alias)}\b(?!\s*\()")
+        if any(
+            bare_reference.search(clause)
+            for clause, where_depth in where_clauses
+            if where_depth == alias_depth
+        ):
+            findings.append(alias)
+    return findings
+
+
+def test_no_sql_constant_aliases_an_aggregate_to_its_own_filtered_column_name() -> None:
+    """Structural, unmarked regression for the CHAOS-3377 alias-collision
+    defect class -- runs in the plain unit suite, never opted out by
+    ``-m "not clickhouse"``. Scans every ``*_SQL`` string constant this
+    module defines (not just the one the live probe found broken), so a
+    future SQL constant introducing the same shape fails here immediately,
+    long before it could ever reach a live engine.
+    """
+
+    offenders: dict[str, list[str]] = {}
+    for name in dir(_native_status_change_module):
+        if not name.endswith("_SQL"):
+            continue
+        value = getattr(_native_status_change_module, name)
+        if not isinstance(value, str):
+            continue
+        findings = _self_named_aggregate_aliases_filtered_in_where(value)
+        if findings:
+            offenders[name] = findings
+    assert not offenders, (
+        "SQL constant(s) alias an aggregate to the SAME name as a raw "
+        f"column their own WHERE clause filters on: {offenders}. "
+        "ClickHouse resolves the WHERE reference to the alias (an "
+        "aggregate), not the source column, and rejects it with "
+        "ILLEGAL_AGGREGATION (CHAOS-3377) -- rename the alias."
+    )
 
 
 def _scope(

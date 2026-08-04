@@ -15,13 +15,13 @@ from dev_health_ops.api.dev.native_status_change import (
     _DEPLOYMENTS_SQL,
     _INCIDENT_CHANGES_SQL,
     _INCIDENTS_SQL,
-    _PROJECT_REPOSITORIES_SQL,
     _PULL_REQUEST_CHANGES_SQL,
     _PULL_REQUESTS_SQL,
     _RELATIONSHIPS_SQL,
     _REVIEW_CHANGES_SQL,
     _TRANSITIONS_SQL,
     _WORK_ITEMS_SQL,
+    PROJECT_REPOSITORIES_SQL,
 )
 
 CLICKHOUSE_URI = os.environ.get("CLICKHOUSE_URI")
@@ -105,7 +105,7 @@ def test_status_change_query_parses_against_production_schema(
 def test_project_repository_derivation_parses_against_production_schema(
     ch_client: Any,
 ) -> None:
-    """Real-engine validation for ``_PROJECT_REPOSITORIES_SQL``.
+    """Real-engine validation for ``PROJECT_REPOSITORIES_SQL``.
 
     Codex adversarial review (MEDIUM, 2026-08-03): the unit fake for this
     query is a predicate evaluator, not a SQL engine, so nothing else proves
@@ -117,7 +117,7 @@ def test_project_repository_derivation_parses_against_production_schema(
     deliberately has none.
     """
 
-    sql = _PROJECT_REPOSITORIES_SQL
+    sql = PROJECT_REPOSITORIES_SQL
     assert "{org_id:String}" in sql, "derivation lacks an explicit tenant predicate"
     assert "LIMIT" not in sql.upper(), "an authorization set must not be truncated"
     params: dict[str, object] = {

@@ -191,11 +191,38 @@ LIMIT {{limit:UInt32}}
 #: and uses ``INNER JOIN``: an unresolvable identity there means the derivation has
 #: nothing to derive, which IS the correct fail-closed answer (an empty repository
 #: set), not a silent bypass of the join.
+#:
+#: Codex adversarial review (MEDIUM, 2026-08-04), two findings against the first
+#: cut of this CTE, both fixed here rather than accepted as residual risk:
+#:
+#: 1. ``projects``' ReplacingMergeTree key is ``(org_id, provider, id)``, NOT
+#:    ``(org_id, id)`` -- ``id`` alone is only unique WITHIN one provider, not
+#:    across providers in the same org. A same-org, same-id row minted by two
+#:    different providers (today only a coincidence; nothing enforces cross-
+#:    provider id uniqueness) survives ``FINAL`` as TWO rows, since they differ
+#:    on the provider component of the key. The original ``LIMIT 1`` (no
+#:    ``ORDER BY``) would then pick one of them *nondeterministically*, and the
+#:    provider guard would faithfully protect the WRONG provider's identity.
+#:    Fixed by aggregating with no ``GROUP BY`` (the whole filtered set is one
+#:    implicit group) and admitting a result only when ``count() = 1`` --
+#:    exactly one row for this ``(org_id, id)``, at any provider. Two or more
+#:    (or zero) both correctly yield an empty CTE, which every call site above
+#:    already treats as an unresolvable identity (fail closed).
+#: 2. The authorized-entity catalog's own committing query
+#:    (``scope_catalog.ClickHouseAuthorizedEntityCatalog._query_for``,
+#:    ``EntityKind.PROJECT``) filters ``is_active = 1`` -- a project retired
+#:    AFTER a scope was committed against it (a newer ReplacingMergeTree row
+#:    with ``is_active = 0``) must not keep answering here just because this
+#:    CTE re-reads the same table without that filter. Added explicitly rather
+#:    than assumed from ``FINAL`` alone, since retirement is a data state
+#:    (``is_active``), not a version-ordering property ``FINAL`` enforces on
+#:    its own.
 _PROJECT_IDENTITY_CTE = """project AS (
-  SELECT provider AS catalog_provider, ifNull(project_key, '') AS catalog_project_key
+  SELECT any(provider) AS catalog_provider,
+         any(ifNull(project_key, '')) AS catalog_project_key
   FROM projects FINAL
-  WHERE org_id = {org_id:String} AND id = {entity_id:String}
-  LIMIT 1
+  WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
+  HAVING count() = 1
 )"""
 
 

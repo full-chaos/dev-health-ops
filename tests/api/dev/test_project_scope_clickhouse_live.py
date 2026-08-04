@@ -282,6 +282,13 @@ class _Seeded:
         #: A DIFFERENT provider's repository, holding a row that shares the
         #: Jira project's raw key -- must never be admitted by either scope.
         self.collision_repo = uuid.uuid4()
+        # CHAOS-3374 round 2 (Codex MEDIUM): projects' ReplacingMergeTree key
+        # is (org_id, provider, id), NOT (org_id, id) -- two providers can
+        # legitimately mint the SAME id in the SAME org and both survive
+        # FINAL. A bare LIMIT 1 (no ORDER BY) would pick one nondeterministically.
+        self.colliding_project_id = str(uuid.uuid4())
+        self.colliding_project_key = f"COLLIDE{uuid.uuid4().hex[:6].upper()}"
+        self.colliding_repo = uuid.uuid4()
 
     @property
     def expected(self) -> list[str]:
@@ -328,6 +335,12 @@ def seeded(sink: Any, raw_client: Any) -> Any:
             repo_id=str(data.collision_repo),
             name="org/collision",
         )
+        _insert_repo(
+            raw_client,
+            org_id=data.org_id,
+            repo_id=str(data.colliding_repo),
+            name="org/colliding",
+        )
 
         sink.org_id = data.org_id
         sink.write_projects(
@@ -367,6 +380,29 @@ def seeded(sink: Any, raw_client: Any) -> Any:
                     org_id=data.org_id,
                     provider="linear",
                     name=PROJECT_NAME + " (other tenant's reference)",
+                    is_active=1,
+                    updated_at=NOW,
+                    last_synced=NOW,
+                ),
+                # CHAOS-3374 round 2: two DIFFERENT providers minting the SAME
+                # catalog id in the SAME org. projects' ReplacingMergeTree key
+                # is (org_id, provider, id), so BOTH survive FINAL -- proving
+                # this is a real, not merely theoretical, engine shape.
+                ProjectRecord(
+                    id=data.colliding_project_id,
+                    org_id=data.org_id,
+                    provider="jira",
+                    project_key=data.colliding_project_key,
+                    name=PROJECT_NAME + " (colliding, jira)",
+                    is_active=1,
+                    updated_at=NOW,
+                    last_synced=NOW,
+                ),
+                ProjectRecord(
+                    id=data.colliding_project_id,
+                    org_id=data.org_id,
+                    provider="linear",
+                    name=PROJECT_NAME + " (colliding, linear)",
                     is_active=1,
                     updated_at=NOW,
                     last_synced=NOW,
@@ -430,6 +466,17 @@ def seeded(sink: Any, raw_client: Any) -> Any:
                     project_id="",
                     project_key=data.jira_project_key,
                     repo_id=data.collision_repo,
+                ),
+                # CHAOS-3374 round 2: the would-be member of the AMBIGUOUS
+                # (two-provider) colliding project. Must never be admitted --
+                # present so a regression back to a bare LIMIT 1 has something
+                # real to (nondeterministically) admit, rather than the test
+                # passing vacuously because nothing matches either way.
+                _jira_work_item(
+                    "COLLIDE-9",
+                    org_id=data.org_id,
+                    project_key=data.colliding_project_key,
+                    repo_id=data.colliding_repo,
                 ),
             ]
         )
@@ -527,6 +574,114 @@ async def test_jira_shaped_project_derivation_resolves_live(
     assert own == seeded.jira_expected
     # The cross-provider collision row must not leak in via the key arm.
     assert str(seeded.collision_repo) not in own
+
+
+@pytest.mark.asyncio
+async def test_cross_provider_id_collision_derivation_stays_fail_closed_live(
+    sink: Any, seeded: Any
+) -> None:
+    """Codex adversarial review (MEDIUM, 2026-08-04), round 2 -- real engine.
+
+    ``projects``' ReplacingMergeTree key is ``(org_id, provider, id)``, not
+    ``(org_id, id)``. Two rows sharing ``colliding_project_id`` under
+    different providers were both written above and BOTH survive ``FINAL``
+    (proven by the raw-row assertion below) -- a real, not merely
+    theoretical, collision. The original ``project AS (... LIMIT 1)`` CTE (no
+    ``ORDER BY``) would pick one of the two nondeterministically and answer
+    with ITS provider's repositories; the fix (``HAVING count() = 1``) must
+    instead derive nothing.
+    """
+
+    rows = await query_dicts(
+        sink,
+        "SELECT provider FROM projects FINAL WHERE org_id = {org_id:String} "
+        "AND id = {id:String} ORDER BY provider",
+        {"org_id": seeded.org_id, "id": seeded.colliding_project_id},
+    )
+    assert sorted(str(row["provider"]) for row in rows) == ["jira", "linear"], (
+        "both colliding rows must survive FINAL for this to be a real test "
+        f"of the collision guard, got {rows}"
+    )
+
+    own = await _derive(
+        sink, PROJECT_REPOSITORIES_SQL, seeded, project_id=seeded.colliding_project_id
+    )
+    assert own == [], (
+        f"an ambiguous (multi-provider) catalog id must derive nothing, got {own}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cross_provider_id_collision_snapshot_stays_fail_closed_live(
+    sink: Any, seeded: Any
+) -> None:
+    """The whole path, for the collision scenario: real catalog, real resolver,
+    real SQL, real engine -- must refuse rather than guess a provider."""
+
+    service = ScopeResolutionService(ClickHouseAuthorizedEntityCatalog(sink))
+    resolution = await service.resolve_contract(
+        seeded.org_id,
+        "permission-live",
+        ScopeResolveRequest(
+            explicit_refs=(ScopeRef(EntityKind.PROJECT, seeded.colliding_project_id),)
+        ),
+    )
+    scope = resolution.resolved_scope
+    assert scope is not None
+
+    snapshot = await StatusChangeService(
+        ClickHouseStatusChangeSource(sink)
+    ).status_snapshot(seeded.org_id, "permission-live", StatusSnapshotRequest(scope))
+
+    assert NO_REPOSITORY_SET_WARNING in snapshot.warnings
+    assert snapshot.children == ()
+
+
+@pytest.mark.asyncio
+async def test_retired_project_derivation_stays_fail_closed_live(
+    sink: Any, seeded: Any
+) -> None:
+    """Codex adversarial review (MEDIUM, 2026-08-04), round 2 -- real engine.
+
+    The Jira project resolves live (see
+    ``test_jira_shaped_project_derivation_resolves_live``). This writes a
+    NEWER row for the exact same ``(org_id, provider, id)`` with
+    ``is_active = 0`` -- the real ReplacingMergeTree retirement mechanism,
+    not a physically absent row -- and re-derives: it must now return
+    nothing, even though the SAME entity answered a moment ago.
+
+    Written through the SAME ``sink.write_projects`` path as the original row
+    (rather than a raw ``now64(3)`` INSERT): ``ClickHouseMetricsSink``'s own
+    datetime serialization is not wall-clock-comparable to the server's
+    ``now64(3)`` (a fixed offset apart), so only a version strictly LATER by
+    that same serialization path is guaranteed to win under ``FINAL`` --
+    exactly what real retirement writes (also through this sink) look like.
+    """
+
+    before = await _derive(
+        sink, PROJECT_REPOSITORIES_SQL, seeded, project_id=seeded.jira_project_id
+    )
+    assert before == seeded.jira_expected
+
+    sink.write_projects(
+        [
+            ProjectRecord(
+                id=seeded.jira_project_id,
+                org_id=seeded.org_id,
+                provider="jira",
+                project_key=seeded.jira_project_key,
+                name=PROJECT_NAME + " (Jira, retired)",
+                is_active=0,
+                updated_at=NOW + timedelta(seconds=1),
+                last_synced=NOW + timedelta(seconds=1),
+            )
+        ]
+    )
+
+    after = await _derive(
+        sink, PROJECT_REPOSITORIES_SQL, seeded, project_id=seeded.jira_project_id
+    )
+    assert after == [], f"a retired project must derive nothing, got {after}"
 
 
 @pytest.mark.asyncio

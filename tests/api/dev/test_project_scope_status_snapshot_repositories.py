@@ -79,6 +79,15 @@ JIRA_RAW_PROJECT_ID_ON_WORK_ITEMS = "10001"
 #: all -- simulates the identity read observing a scope the catalog read
 #: resolved a moment earlier (replication lag, a deleted project, etc.).
 GHOST_PROJECT_ID = f"{ORG_ID}:ghost:VANISHED"
+#: CHAOS-3374 round 2 (Codex MEDIUM): the catalog's real ReplacingMergeTree key
+#: is ``(org_id, provider, id)``, not ``(org_id, id)`` -- so the SAME id can
+#: legitimately survive ``FINAL`` twice, once per provider. Two catalog rows
+#: share this id under different providers.
+COLLIDING_PROJECT_ID = f"{ORG_ID}:collide:MULTI"
+#: CHAOS-3374 round 2 (Codex MEDIUM): a project committed while active, then
+#: retired (a newer ``is_active = 0`` row) before the identity read runs.
+RETIRED_PROJECT_ID = f"{ORG_ID}:jira:RETIRED"
+RETIRED_RAW_PROJECT_KEY = "RETIRED"
 
 #: Linear work items carry no repository: the sync lands them under the zero
 #: UUID, which has no ``repos`` row at all (verified against the live dev
@@ -101,23 +110,50 @@ REVOKED_REPOSITORY_ID = "dddddddd-0000-0000-0000-000000000004"
 #: leak is caught by the identity guard, not incidentally masked by repo
 #: authorization).
 COLLISION_REPOSITORY_ID = "ffffffff-0000-0000-0000-000000000006"
+#: Round 2: where ``COLLIDING_PROJECT_ID``'s own (would-be, if the collision
+#: guard failed) work item lives.
+MULTI_PROVIDER_REPOSITORY_ID = "11111111-0000-0000-0000-000000000007"
+#: Round 2: where ``RETIRED_PROJECT_ID``'s own (would-be, if the ``is_active``
+#: guard failed) work item lives.
+RETIRED_PROJECT_REPOSITORY_ID = "22222222-0000-0000-0000-000000000008"
 
 #: The org-scoped ``repos`` catalog. The zero UUID is deliberately absent: it
 #: is the repository-*less* sentinel, not a repository.
 REPOS_CATALOG = {
-    ORG_ID: {KEYED_REPOSITORY_ID, FUTURE_REPOSITORY_ID, COLLISION_REPOSITORY_ID},
+    ORG_ID: {
+        KEYED_REPOSITORY_ID,
+        FUTURE_REPOSITORY_ID,
+        COLLISION_REPOSITORY_ID,
+        MULTI_PROVIDER_REPOSITORY_ID,
+        RETIRED_PROJECT_REPOSITORY_ID,
+    },
     OTHER_ORG_ID: {FOREIGN_REPOSITORY_ID},
 }
 
 #: Simulates the ``projects`` ClickHouse table as read by the
-#: ``native_status_change`` identity CTE -- keyed exactly like the real table's
-#: ReplacingMergeTree ORDER BY prefix, ``(org_id, id)``.
-PROJECTS_CATALOG: dict[tuple[str, str], dict[str, str | None]] = {
-    (ORG_ID, PROJECT_ID): {"provider": "linear", "project_key": None},
-    (ORG_ID, JIRA_PROJECT_ID): {
-        "provider": "jira",
-        "project_key": JIRA_RAW_PROJECT_KEY,
-    },
+#: ``native_status_change`` identity CTE. Keyed by ``(org_id, id)`` for lookup
+#: convenience, but the VALUE is a list of candidate rows -- exactly because
+#: the real table's ReplacingMergeTree key is ``(org_id, provider, id)``, so
+#: more than one row can legitimately survive ``FINAL`` for one ``(org_id,
+#: id)`` pair (see ``COLLIDING_PROJECT_ID``). Each candidate carries its own
+#: ``is_active`` (default ``1``) so retirement (``RETIRED_PROJECT_ID``) can be
+#: modeled without a second dict shape.
+PROJECTS_CATALOG: dict[tuple[str, str], list[dict[str, Any]]] = {
+    (ORG_ID, PROJECT_ID): [{"provider": "linear", "project_key": None}],
+    (ORG_ID, JIRA_PROJECT_ID): [
+        {"provider": "jira", "project_key": JIRA_RAW_PROJECT_KEY}
+    ],
+    (ORG_ID, COLLIDING_PROJECT_ID): [
+        {"provider": "jira", "project_key": "MULTI"},
+        {"provider": "linear", "project_key": None},
+    ],
+    (ORG_ID, RETIRED_PROJECT_ID): [
+        {
+            "provider": "jira",
+            "project_key": RETIRED_RAW_PROJECT_KEY,
+            "is_active": 0,
+        }
+    ],
     # GHOST_PROJECT_ID deliberately absent.
 }
 
@@ -248,6 +284,31 @@ WORK_ITEM_STORE = [
         project_id=JIRA_PROJECT_ID,
         project_key="",
     ),
+    # Round 2: would-be members of COLLIDING_PROJECT_ID / RETIRED_PROJECT_ID.
+    # Neither may ever be admitted -- the first because its catalog id is
+    # ambiguous (two providers), the second because its only catalog row is
+    # retired. Present so a regression back to "pick arbitrarily" or "ignore
+    # is_active" has something real to wrongly admit, rather than the test
+    # passing vacuously because no work item exists to admit in the first
+    # place.
+    _row(
+        work_item_id="jira:MULTI-1",
+        title="Would-be member of the colliding project",
+        status="in_progress",
+        repository_id=MULTI_PROVIDER_REPOSITORY_ID,
+        provider="jira",
+        project_id="99999",
+        project_key="MULTI",
+    ),
+    _row(
+        work_item_id="jira:RETIRED-1",
+        title="Would-be member of the retired project",
+        status="in_progress",
+        repository_id=RETIRED_PROJECT_REPOSITORY_ID,
+        provider="jira",
+        project_id="88888",
+        project_key=RETIRED_RAW_PROJECT_KEY,
+    ),
 ]
 
 IN_SCOPE_WORK_ITEM_IDS = {
@@ -289,8 +350,11 @@ class _FakeWorkItems:
 
     CHAOS-3374: the identity join (``provider = catalog_provider`` / ``project_key
     = catalog_project_key``) is resolved against ``PROJECTS_CATALOG`` exactly
-    like the real ``project AS (SELECT provider, project_key FROM projects
-    FINAL WHERE ...)`` CTE -- keyed by ``(org_id, id)``, absent means no row.
+    like the real ``project AS (... HAVING count() = 1)`` CTE -- filtered to
+    ``is_active`` candidates for this ``(org_id, id)``, and an identity is only
+    admitted when EXACTLY ONE candidate survives that filter (zero -> no row;
+    two or more, e.g. a same-id cross-provider collision -> ambiguous, both
+    fail closed, mirroring ``HAVING count() = 1`` exactly).
     """
 
     def __init__(self) -> None:
@@ -323,13 +387,34 @@ class _FakeWorkItems:
             ]
 
         entity_id = params["entity_id"]
-        catalog = PROJECTS_CATALOG.get((params["org_id"], entity_id))
+        all_candidates = PROJECTS_CATALOG.get((params["org_id"], entity_id), [])
+        # Read which identity predicates the SQL under test actually contains,
+        # exactly like the rest of this fake -- so dropping ``is_active = 1``
+        # or ``HAVING count() = 1`` from the real CTE changes what this fake
+        # admits too, instead of the fake enforcing the fix independently of
+        # whether the SQL text still has it (CHAOS-3374 round 2).
+        if "is_active = 1" in sql:
+            candidates = [row for row in all_candidates if row.get("is_active", 1) == 1]
+        else:
+            candidates = list(all_candidates)
+        if "HAVING count() = 1" in sql:
+            catalog = candidates[0] if len(candidates) == 1 else None
+        else:
+            # Mirrors the old, unguarded ``LIMIT 1`` (no ``ORDER BY``): picks
+            # ARBITRARILY among candidates rather than failing closed on a
+            # collision -- modeled here as "the first one", which is exactly
+            # the nondeterministic-in-production, deterministic-in-this-fake
+            # bug the round-2 fix closes.
+            catalog = candidates[0] if candidates else None
         catalog_provider = catalog["provider"] if catalog else None
         catalog_project_key = (catalog.get("project_key") or "") if catalog else ""
         provider_gated = "provider = catalog_provider" in sql
         if provider_gated and catalog is None:
-            # Mirrors the real ``project`` CTE resolving zero rows: the
-            # provider-gated arm can never match anything.
+            # Mirrors the real ``project`` CTE resolving zero rows: zero
+            # active candidates (never existed, or retired), or more than one
+            # (a same-id, different-provider collision -- ``HAVING count() =
+            # 1`` fails), both leave the provider-gated arm unable to match
+            # anything.
             return []
 
         arms = []
@@ -523,13 +608,13 @@ def test_derivation_sql_structure_is_pinned() -> None:
         " OR (catalog_project_key != '' AND project_key = catalog_project_key))\n"
         in sql
     )
-    # No bound on the REPOSITORY read itself: a truncated authorization set
-    # would be a silently narrowed read, not a smaller page. The identity
-    # CTE's own ``LIMIT 1`` bounds a single unique catalog-row lookup by its
-    # ReplacingMergeTree key, not the derived repository set -- so it is the
-    # ONLY "LIMIT" in the whole query, never the parameterised page size.
-    assert "LIMIT {limit:UInt32}" not in sql
-    assert sql.count("LIMIT") == 1
+    # No bound anywhere in this query: a truncated authorization set would be
+    # a silently narrowed read, not a smaller page. The identity CTE bounds
+    # itself to at most one row via ``HAVING count() = 1`` (CHAOS-3374 round
+    # 2 -- a bare ``LIMIT 1`` would pick nondeterministically between two
+    # same-``(org_id, id)``, different-provider rows, since the catalog's own
+    # ReplacingMergeTree key is ``(org_id, provider, id)``), never a ``LIMIT``.
+    assert "LIMIT" not in sql.upper()
     # Both authorization arms survive, and the tenant/as_of bounds with them.
     assert "toString(repo_id) = '00000000-0000-0000-0000-000000000000'" in sql
     assert "SELECT toString(id) FROM repos FINAL WHERE org_id = {org_id:String}" in sql
@@ -771,6 +856,76 @@ async def test_unresolvable_project_identity_at_read_time_stays_fail_closed(
     _install_catalog_client(monkeypatch, project_id=GHOST_PROJECT_ID)
     scope = await _committed_project_scope(project_id=GHOST_PROJECT_ID)
     assert GHOST_PROJECT_ID not in {key[1] for key in PROJECTS_CATALOG}
+
+    fake = _install_status_client(monkeypatch)
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert NO_REPOSITORY_SET_WARNING in snapshot.warnings
+    assert snapshot.children == ()
+    assert not any("parent_id" in sql for sql in fake.sql), (
+        "no fact query may run on a repository set that was never resolved"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cross_provider_id_collision_at_read_time_stays_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex adversarial review (MEDIUM, 2026-08-04), round 2.
+
+    ``projects``' ReplacingMergeTree key is ``(org_id, provider, id)``, not
+    ``(org_id, id)`` -- ``id`` alone is only unique WITHIN one provider. Two
+    different providers minting the SAME id in the SAME org (nothing in the
+    schema forbids it) both survive ``FINAL`` as distinct rows. The original
+    ``project AS (... LIMIT 1)`` CTE (no ``ORDER BY``) would then pick one of
+    them *nondeterministically*, and the provider guard would faithfully
+    protect the WRONG provider's identity -- silently answering with a
+    different project's repositories/facts depending on ClickHouse's whim.
+    The fix (``HAVING count() = 1``) must instead treat this as unresolvable.
+    """
+
+    _install_catalog_client(monkeypatch, project_id=COLLIDING_PROJECT_ID)
+    scope = await _committed_project_scope(project_id=COLLIDING_PROJECT_ID)
+    assert len(PROJECTS_CATALOG[(ORG_ID, COLLIDING_PROJECT_ID)]) == 2
+
+    fake = _install_status_client(monkeypatch)
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert NO_REPOSITORY_SET_WARNING in snapshot.warnings
+    assert snapshot.children == ()
+    assert not any("parent_id" in sql for sql in fake.sql), (
+        "no fact query may run on a repository set that was never resolved"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retired_project_identity_stays_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex adversarial review (MEDIUM, 2026-08-04), round 2.
+
+    The authorized-entity catalog's own committing query
+    (``ClickHouseAuthorizedEntityCatalog._query_for(EntityKind.PROJECT)``)
+    filters ``is_active = 1``, so a project retired AFTER a scope was
+    committed against it (a newer ReplacingMergeTree row with
+    ``is_active = 0``) must not keep answering here just because the identity
+    CTE re-reads the same table without that filter. The scope-resolution
+    catalog fake below still resolves ``RETIRED_PROJECT_ID`` (modeling a
+    scope committed while the project was active); only the
+    native_status_change-side catalog reflects the later retirement.
+    """
+
+    _install_catalog_client(monkeypatch, project_id=RETIRED_PROJECT_ID)
+    scope = await _committed_project_scope(project_id=RETIRED_PROJECT_ID)
+    assert PROJECTS_CATALOG[(ORG_ID, RETIRED_PROJECT_ID)][0]["is_active"] == 0
 
     fake = _install_status_client(monkeypatch)
     service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))

@@ -65,6 +65,87 @@ STATUS_REASON_CODES: frozenset[str] = frozenset(
     }
 )
 
+# --- CHAOS-3377 HIGH 3 (codex adversarial review): the assessor's own
+# "is this outstanding" predicates, extracted into named, importable
+# functions rather than left as inline literals inside ``_assess`` below.
+# ``status_answer_render.py`` (the §10 deterministic renderer) imports and
+# calls these directly instead of re-deriving its own copy -- a prior
+# revision hand-copied a "safe superset" of the required-child predicate
+# that silently disagreed with this one (treated ``resolved``/``merged`` as
+# closed when this predicate does not), which could render an item as a
+# closed required-child while `_assess` itself still counted it as the
+# reason a verdict was NOT_READY. ``_assess`` below now calls these same
+# functions, so the two can never diverge again -- there is exactly one
+# place each predicate is written.
+#
+# Required children and blockers use two SLIGHTLY DIFFERENT closed-status
+# vocabularies (blockers additionally treat ``resolved`` as closed; neither
+# treats ``merged`` as closed for either category) -- this is not an
+# oversight to unify, it is `_assess`'s own pre-existing, tested behavior,
+# preserved exactly rather than "cleaned up" into one shared set.
+REQUIRED_CHILD_CLOSED_STATUS_TOKENS: frozenset[str] = frozenset(
+    {"complete", "completed", "done", "closed", "canceled", "cancelled"}
+)
+BLOCKER_CLOSED_STATUS_TOKENS: frozenset[str] = frozenset(
+    {"complete", "completed", "done", "closed", "resolved", "canceled", "cancelled"}
+)
+_CI_PASSING_TOKENS: frozenset[str] = frozenset({"success", "passed", "green"})
+_DEPLOYMENT_SUCCESS_TOKENS: frozenset[str] = frozenset(
+    {"success", "succeeded", "deployed", "complete", "completed"}
+)
+
+
+def is_required_child_open(status: str) -> bool:
+    """Whether a required child's own ``status`` reads as still outstanding."""
+
+    return status.casefold() not in REQUIRED_CHILD_CLOSED_STATUS_TOKENS
+
+
+def is_blocker_open(status: str) -> bool:
+    """Whether a blocker's own ``status`` reads as still outstanding."""
+
+    return status.casefold() not in BLOCKER_CLOSED_STATUS_TOKENS
+
+
+def is_pull_request_unmerged(*, required: bool, merged: bool) -> bool:
+    return required and not merged
+
+
+def is_pull_request_review_unresolved(
+    *, required: bool, review_state: str | None
+) -> bool:
+    return required and not review_state
+
+
+def is_pull_request_changes_requested(
+    *, required: bool, changes_requested: int
+) -> bool:
+    return required and changes_requested > 0
+
+
+def is_ci_skip_state_unknown(
+    *, required: bool | None, skipped_required_work: bool | None
+) -> bool:
+    return bool(required) and skipped_required_work is None
+
+
+def is_ci_work_skipped(
+    *, required: bool | None, skipped_required_work: bool | None
+) -> bool:
+    return bool(required) and skipped_required_work is True
+
+
+def is_ci_not_passing(*, required: bool | None, conclusion: str) -> bool:
+    return bool(required) and conclusion.casefold() not in _CI_PASSING_TOKENS
+
+
+def is_deployment_not_succeeded(*, required: bool, status: str) -> bool:
+    return required and status.casefold() not in _DEPLOYMENT_SUCCESS_TOKENS
+
+
+def is_incident_active_and_blocking(*, active: bool, blocking: bool) -> bool:
+    return blocking and active
+
 
 class StatusResultState(StrEnum):
     COMPLETE = "complete"
@@ -204,6 +285,19 @@ class ActualCompletion:
     conflicts: tuple[StatusConflict, ...]
     source_ref_ids: tuple[str, ...]
     evidence_ref_ids: tuple[str, ...]
+    # CHAOS-3377 HIGH 3 (codex adversarial review): the §10 deterministic
+    # renderer's blocker list previously came ONLY from ``required_children``
+    # -- ``raw.blockers`` never had a typed home on ``ActualCompletion`` at
+    # all, so a NOT_READY verdict caused entirely by ``open_blocker`` (no
+    # incomplete required child) rendered an empty blocker list, silently
+    # omitting the exact work making it not ready. Mirrors
+    # ``required_children``: ALL blockers (not pre-filtered to open ones),
+    # ordered the same way, so a consumer applies its own closed-vocabulary
+    # openness predicate (``is_blocker_open`` below) rather than trusting a
+    # pre-filtered list it cannot independently verify. Defaulted to ``()``
+    # so the ~10 existing direct-construction call sites across the test
+    # suite (predating this field) do not have to be touched.
+    blockers: tuple[StatusFact, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -743,55 +837,69 @@ class StatusChangeService:
         if release_evidence_required and not raw.deployments:
             reasons.add("required_release_evidence_missing")
         incomplete_children = [
-            child
-            for child in required_children
-            if child.status.casefold()
-            not in {"complete", "completed", "done", "closed", "canceled", "cancelled"}
+            child for child in required_children if is_required_child_open(child.status)
         ]
         if incomplete_children:
             reasons.add("required_child_incomplete")
+        blockers = self._ordered_status(raw.blockers)
         open_blockers = [
-            blocker
-            for blocker in raw.blockers
-            if blocker.status.casefold()
-            not in {
-                "complete",
-                "completed",
-                "done",
-                "closed",
-                "resolved",
-                "canceled",
-                "cancelled",
-            }
+            blocker for blocker in blockers if is_blocker_open(blocker.status)
         ]
         if open_blockers:
             reasons.add("open_blocker")
-        if any(pr.required and not pr.merged for pr in raw.pull_requests):
+        if any(
+            is_pull_request_unmerged(required=pr.required, merged=pr.merged)
+            for pr in raw.pull_requests
+        ):
             reasons.add("required_pull_request_unmerged")
-        if any(pr.required and not pr.review_state for pr in raw.pull_requests):
+        if any(
+            is_pull_request_review_unresolved(
+                required=pr.required, review_state=pr.review_state
+            )
+            for pr in raw.pull_requests
+        ):
             reasons.add("required_review_unresolved")
-        if any(pr.required and pr.changes_requested > 0 for pr in raw.pull_requests):
+        if any(
+            is_pull_request_changes_requested(
+                required=pr.required, changes_requested=pr.changes_requested
+            )
+            for pr in raw.pull_requests
+        ):
             reasons.add("review_changes_requested")
         if any(ci.required is None for ci in raw.ci):
             reasons.add("ci_requirement_unknown")
-        if any(ci.required and ci.skipped_required_work is None for ci in raw.ci):
+        if any(
+            is_ci_skip_state_unknown(
+                required=ci.required, skipped_required_work=ci.skipped_required_work
+            )
+            for ci in raw.ci
+        ):
             reasons.add("required_ci_skip_state_unknown")
-        if any(ci.required and ci.skipped_required_work is True for ci in raw.ci):
+        if any(
+            is_ci_work_skipped(
+                required=ci.required, skipped_required_work=ci.skipped_required_work
+            )
+            for ci in raw.ci
+        ):
             reasons.add("required_ci_work_skipped")
         if any(
-            ci.required
-            and ci.conclusion.casefold() not in {"success", "passed", "green"}
+            is_ci_not_passing(required=ci.required, conclusion=ci.conclusion)
             for ci in raw.ci
         ):
             reasons.add("required_ci_not_passing")
         if any(
-            deployment.required
-            and deployment.status.casefold()
-            not in {"success", "succeeded", "deployed", "complete", "completed"}
+            is_deployment_not_succeeded(
+                required=deployment.required, status=deployment.status
+            )
             for deployment in raw.deployments
         ):
             reasons.add("required_deployment_not_succeeded")
-        if any(incident.blocking and incident.active for incident in raw.incidents):
+        if any(
+            is_incident_active_and_blocking(
+                active=incident.active, blocking=incident.blocking
+            )
+            for incident in raw.incidents
+        ):
             reasons.add("active_blocking_incident")
 
         declared_complete = declared_optional or (
@@ -859,6 +967,7 @@ class StatusChangeService:
             conflicts=tuple(conflicts),
             source_ref_ids=used_source_ids,
             evidence_ref_ids=self._fact_evidence(raw),
+            blockers=blockers,
         )
 
     @staticmethod

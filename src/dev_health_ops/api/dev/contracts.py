@@ -953,6 +953,15 @@ class DevActualCompletion(ContractModel):
     display_truncated: bool = False
     conflicts: list[DevStatusConflict] = Field(default_factory=list, max_length=20)
     evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+    # CHAOS-3377 HIGH 3: blockers (``open_blocker``) previously had no typed
+    # wire representation distinct from ``required_children`` -- a NOT_READY
+    # verdict caused solely by an open blocker rendered no blocker detail at
+    # all. Reuses ``DevRequiredChildFact``'s shape (structurally identical:
+    # fact_id/text/status/evidence_ref_ids); mirrors ``required_children``
+    # by carrying ALL blockers, not a pre-filtered "open" subset, so a
+    # consumer applies its own openness predicate rather than trusting one
+    # it cannot verify.
+    blockers: list[DevRequiredChildFact] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
     def validate_required_child_counts(self) -> Self:
@@ -1078,6 +1087,8 @@ class DevToolResult(ContractModel):
             referenced.update(self.actual_completion.evidence_ref_ids)
             for child in self.actual_completion.required_children:
                 referenced.update(child.evidence_ref_ids)
+            for blocker in self.actual_completion.blockers:
+                referenced.update(blocker.evidence_ref_ids)
             for conflict in self.actual_completion.conflicts:
                 referenced.update(conflict.evidence_ref_ids)
         if not referenced <= known:

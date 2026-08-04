@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
@@ -61,6 +61,7 @@ from .answer_validator import (
 from .contracts import (
     AnswerStatus,
     DevAnswer,
+    DevClaim,
     DevContractVersions,
     DevCoverage,
     DevError,
@@ -1950,49 +1951,33 @@ class DevOrchestrator:
                             for warning in candidate["warnings"]
                         ]
                     # CHAOS-3377 defects 1/2/5 -- the §10 deterministic
-                    # renderer. When this run executed status_snapshot.v1,
-                    # the server already computed a real completion verdict
-                    # (`actual_completion`); the direct verdict/completion/
-                    # blockers are rendered from THAT here, overwriting
-                    # whatever the model proposed for status/direct_summary/
-                    # claims -- exactly the same "server-derived fields
-                    # overwrite the model's" pattern `metrics`/`evidence`/
-                    # `coverage` already follow above. The model cannot
-                    # mislabel a substantive answer as refused, narrate a raw
-                    # internal token, or contradict the frame's own blocker
-                    # list, because none of its own text for this content
-                    # reaches the candidate at all.
-                    status_result = status_snapshot_result(tuple(tool_results))
-                    if (
-                        status_result is not None
-                        and status_result.actual_completion is not None
-                        and resolution.resolved_scope is not None
-                    ):
-                        actual = status_result.actual_completion
-                        canonical_evidence_ids = frozenset(
-                            item.evidence_ref_id for item in canonical_evidence
-                        )
-                        deterministic_claims = build_deterministic_status_claims(
-                            actual=actual,
-                            validity_scope=resolution.resolved_scope,
-                            canonical_evidence_ids=canonical_evidence_ids,
-                            tool_results=tuple(tool_results),
-                        )
-                        candidate["status"] = deterministic_answer_status(
-                            coverage=server_coverage,
-                            tool_results=tuple(tool_results),
-                        ).value
-                        candidate["direct_summary"] = render_verdict_summary(
-                            actual,
-                            denominator_withheld=(
-                                any_tool_result_withheld_its_completion_denominator(
-                                    tuple(tool_results)
-                                )
-                            ),
-                        )
+                    # renderer. When this run executed status_snapshot.v1
+                    # for the CURRENT resolved scope, the server already
+                    # computed a real completion verdict (`actual_completion`
+                    # bound to that scope -- see `_deterministic_status_
+                    # render`/`status_snapshot_result`); the direct verdict/
+                    # completion/blockers are rendered from THAT here,
+                    # overwriting whatever the model proposed for status/
+                    # direct_summary/claims -- exactly the same
+                    # "server-derived fields overwrite the model's" pattern
+                    # `metrics`/`evidence`/`coverage` already follow above.
+                    # The model cannot mislabel a substantive answer as
+                    # refused, narrate a raw internal token, or contradict
+                    # the frame's own blocker list, because none of its own
+                    # text for this content reaches the candidate at all.
+                    rendered_status = self._deterministic_status_render(
+                        resolution=resolution,
+                        tool_requests=tuple(tool_requests),
+                        tool_results=tuple(tool_results),
+                        server_coverage=server_coverage,
+                        canonical_evidence=canonical_evidence,
+                    )
+                    if rendered_status is not None:
+                        det_status, det_direct_summary, det_claims = rendered_status
+                        candidate["status"] = det_status.value
+                        candidate["direct_summary"] = det_direct_summary
                         candidate["claims"] = [
-                            claim.model_dump(mode="json")
-                            for claim in deterministic_claims
+                            claim.model_dump(mode="json") for claim in det_claims
                         ]
                     try:
                         answer = validate_answer_candidate(
@@ -2277,6 +2262,31 @@ class DevOrchestrator:
                         ),
                     )
                 if isinstance(decision, AgentRefusal):
+                    # CHAOS-3377 HIGH 2 (codex adversarial review): a
+                    # refusal reached AFTER a real status_snapshot.v1 result
+                    # already exists for the run's current resolved scope is
+                    # the same defect class the §10 deterministic renderer
+                    # exists to close -- the model declined to answer over
+                    # material the server already retrieved and can report
+                    # honestly. Checked before the unconditional REFUSED
+                    # terminal below, never after.
+                    deterministic_refusal_answer = self._deterministic_status_answer(
+                        answer_id=answer_id,
+                        conversation_id=conversation_id,
+                        resolution=resolution,
+                        tool_requests=tuple(tool_requests),
+                        tool_results=tuple(tool_results),
+                        now=datetime.now(UTC),
+                        model=DevModelMetadata(
+                            provider_source=self._provider_source,
+                            provider_family=self._provider_family,
+                            model_fingerprint=decision_result.model_fingerprint,
+                        ),
+                    )
+                    if deterministic_refusal_answer is not None:
+                        return await finish(
+                            RunState.COMPLETED, answer=deterministic_refusal_answer
+                        )
                     return await finish(
                         RunState.REFUSED,
                         error=error(
@@ -2313,6 +2323,7 @@ class DevOrchestrator:
                     answer_id=answer_id,
                     conversation_id=conversation_id,
                     resolution=resolution,
+                    tool_requests=tuple(tool_requests),
                     tool_results=tuple(tool_results),
                     model_fingerprint=model_fingerprint,
                 )
@@ -2516,16 +2527,151 @@ class DevOrchestrator:
             "required": sorted(properties),
         }
 
+    @staticmethod
+    def _deterministic_status_render(
+        *,
+        resolution: DevScopeResolution,
+        tool_requests: tuple[DevToolRequest, ...],
+        tool_results: tuple[DevToolResult, ...],
+        server_coverage: DevCoverage,
+        canonical_evidence: Sequence[DevEvidenceRef],
+    ) -> tuple[AnswerStatus, str, list[DevClaim]] | None:
+        """The §10 deterministic (status, direct_summary, claims), or
+        ``None`` if this run has no ``status_snapshot.v1`` result bound to
+        the CURRENT resolved scope.
+
+        The one seam every terminal that can carry an answer -- a validated
+        ``AgentFinalAnswer``, an ``AgentRefusal``, or a budget-exhaustion
+        partial -- renders §10 content through (CHAOS-3377 HIGH 2, codex
+        adversarial review: a prior revision only applied the override
+        inside the ``AgentFinalAnswer`` branch, so a provider that emitted
+        ``AgentRefusal`` -- or a run that hit ``BudgetExceeded`` -- AFTER a
+        real ``status_snapshot.v1`` result already existed could still
+        terminate REFUSED, or with generic budget boilerplate, without ever
+        inspecting the retrieved material. The reported defect class stayed
+        reachable from those two paths).
+        """
+
+        if resolution.resolved_scope is None:
+            return None
+        status_result = status_snapshot_result(
+            tool_requests, tool_results, authorized_scope=resolution.resolved_scope
+        )
+        if status_result is None or status_result.actual_completion is None:
+            return None
+        actual = status_result.actual_completion
+        canonical_evidence_ids = frozenset(
+            item.evidence_ref_id for item in canonical_evidence
+        )
+        claims = build_deterministic_status_claims(
+            actual=actual,
+            status_result=status_result,
+            validity_scope=resolution.resolved_scope,
+            canonical_evidence_ids=canonical_evidence_ids,
+            tool_results=tool_results,
+        )
+        status = deterministic_answer_status(
+            coverage=server_coverage, tool_results=tool_results
+        )
+        direct_summary = render_verdict_summary(
+            actual,
+            denominator_withheld=any_tool_result_withheld_its_completion_denominator(
+                tool_results
+            ),
+        )
+        return status, direct_summary, claims
+
+    def _deterministic_status_answer(
+        self,
+        *,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        tool_requests: tuple[DevToolRequest, ...],
+        tool_results: tuple[DevToolResult, ...],
+        now: datetime,
+        model: DevModelMetadata,
+    ) -> DevAnswer | None:
+        """A full, server-rendered §10 ``DevAnswer`` for this run, or
+        ``None`` if there is nothing to render (no bound status_snapshot
+        result, or no canonical grounding to attach it to). Used by the
+        ``AgentRefusal`` and ``BudgetExceeded`` terminals -- see
+        ``_deterministic_status_render`` for why those need this too, not
+        only the ``AgentFinalAnswer`` branch (which merges the same render
+        into an existing candidate instead of building a fresh answer).
+        """
+
+        canonical_data = self._canonical_answer_data(tool_results)
+        if canonical_data is None:
+            return None
+        canonical_metrics, canonical_evidence = canonical_data
+        server_coverage = self._coverage_with_plan_sources(
+            self._coverage_from_tool_results(tool_requests, tool_results, now),
+            None,
+        )
+        rendered = self._deterministic_status_render(
+            resolution=resolution,
+            tool_requests=tool_requests,
+            tool_results=tool_results,
+            server_coverage=server_coverage,
+            canonical_evidence=canonical_evidence,
+        )
+        if rendered is None:
+            return None
+        status, direct_summary, claims = rendered
+        return DevAnswer(
+            schema_version="dev_answer.v1",
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            generated_at=now,
+            resolved_scope=resolution,
+            as_of=now,
+            status=status,
+            direct_summary=direct_summary,
+            claims=claims,
+            metrics=canonical_metrics,
+            evidence=canonical_evidence,
+            conflicts=[],
+            coverage=server_coverage,
+            warnings=[],
+            suggested_follow_up_questions=[],
+            versions=self._versions,
+            model=model,
+        )
+
     def _budget_answer(
         self,
         *,
         answer_id: str,
         conversation_id: str,
         resolution: DevScopeResolution,
+        tool_requests: tuple[DevToolRequest, ...],
         tool_results: tuple[DevToolResult, ...],
         model_fingerprint: str,
     ) -> DevAnswer | None:
-        """Return only canonical retrieved data when a later model call is blocked."""
+        """Return canonical retrieved data when a later model call is
+        blocked -- the §10 deterministic render if this run has a
+        status_snapshot.v1 result bound to the current resolved scope
+        (CHAOS-3377 HIGH 2: budget exhaustion after a real completion
+        assessment must not discard it for generic boilerplate), otherwise
+        the prior generic "budget reached" summary.
+        """
+
+        deterministic = self._deterministic_status_answer(
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            resolution=resolution,
+            tool_requests=tool_requests,
+            tool_results=tool_results,
+            now=datetime.now(UTC),
+            model=DevModelMetadata(
+                provider_source=self._provider_source,
+                provider_family=self._provider_family,
+                model_fingerprint=model_fingerprint,
+            ),
+        )
+        if deterministic is not None:
+            return deterministic
 
         canonical_data = self._canonical_answer_data(tool_results)
         if canonical_data is None:

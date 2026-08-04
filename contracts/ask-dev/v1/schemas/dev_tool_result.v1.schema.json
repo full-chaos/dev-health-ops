@@ -23,6 +23,14 @@
       "additionalProperties": false,
       "description": "Server-computed ``actual-completion`` rule result; the LLM explains, never derives, it.",
       "properties": {
+        "blockers": {
+          "items": {
+            "$ref": "#/$defs/DevRequiredChildFact"
+          },
+          "maxItems": 100,
+          "title": "Blockers",
+          "type": "array"
+        },
         "conflicts": {
           "items": {
             "$ref": "#/$defs/DevStatusConflict"

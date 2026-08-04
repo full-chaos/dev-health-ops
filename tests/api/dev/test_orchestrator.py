@@ -1364,6 +1364,263 @@ async def test_resolved_project_scope_is_committed_for_the_status_tool() -> None
     assert committed_scope.direct_scope.value == "project"
 
 
+def _scope_shaped_status_completion(*, direct_scope: str) -> dict:
+    """A distinct, recognizable ``actual_completion`` payload per scope kind
+    -- 'ready' for organization scope, 'not_ready' for anything else -- so a
+    test can prove WHICH of several status_snapshot.v1 results the
+    deterministic renderer actually used."""
+
+    if direct_scope == "organization":
+        return {
+            "state": "ready",
+            "rule_id": "actual-completion",
+            "rule_version": "actual-completion.v4",
+            "reason_codes": [],
+            "required_children": [],
+            "blockers": [],
+            "required_child_total": 1,
+            "required_child_complete": 1,
+            "display_truncated": False,
+            "conflicts": [],
+            # Non-empty: the verdict claim's text states the completion
+            # fraction (a number), and DevAnswer's numeric-claim check
+            # requires a metric or evidence reference on any claim
+            # containing one.
+            "evidence_ref_ids": ["ev_01"],
+        }
+    return {
+        "state": "not_ready",
+        "rule_id": "actual-completion",
+        "rule_version": "actual-completion.v4",
+        "reason_codes": ["open_blocker"],
+        "required_children": [],
+        "blockers": [
+            {
+                "fact_id": "issue:B1",
+                "text": "Open blocker for the resolved subject",
+                "status": "open",
+                "evidence_ref_ids": ["ev_01"],
+            }
+        ],
+        "required_child_total": 3,
+        "required_child_complete": 1,
+        "display_truncated": False,
+        "conflicts": [],
+        "evidence_ref_ids": ["ev_01"],
+    }
+
+
+def _multi_scope_status_registry(
+    *, resolve_scope_result: DevScopeResolution
+) -> AskDevToolRegistry:
+    """resolve_scope.v1 commits ``resolve_scope_result``; every
+    status_snapshot.v1 call gets an ``actual_completion`` shaped by ITS OWN
+    request scope, so a test can distinguish a stale (pre-commit) snapshot
+    from the current (post-commit) one purely by content.
+    """
+
+    async def execute(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+            }
+        )
+        if request.tool_id is ToolID.RESOLVE_SCOPE:
+            payload["scope_resolution"] = resolve_scope_result.model_dump(mode="json")
+        elif request.tool_id is ToolID.STATUS_SNAPSHOT:
+            payload["actual_completion"] = _scope_shaped_status_completion(
+                direct_scope=request.scope.direct_scope.value
+            )
+        return DevToolResult.model_validate(payload)
+
+    return AskDevToolRegistry({tool_id: execute for tool_id in ToolID})
+
+
+@pytest.mark.asyncio
+async def test_earlier_differently_scoped_status_snapshot_is_never_used_for_the_final_answer() -> (
+    None
+):
+    """CHAOS-3377 HIGH 1 fail->pass, full orchestrator run (codex adversarial
+    review): the model calls status_snapshot.v1 under organization scope
+    FIRST (a 'ready' verdict), then resolves to a more specific project
+    scope, then calls status_snapshot.v1 AGAIN under the newly-committed
+    scope (a 'not_ready' verdict with a real blocker). The deterministic
+    renderer must reflect ONLY the project-scoped (current) result -- the
+    stale organization-scoped 'ready' verdict must never leak into, or
+    overwrite, the final differently-scoped answer.
+    """
+
+    script_id = "multi-scope-status-snapshot"
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Ask Dev project", "limit": 25},
+                        call_id="tool_call_02",
+                    ),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_03",
+                    ),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=_multi_scope_status_registry(
+                resolve_scope_result=_project_resolution()
+            ),
+            scope_resolver=resolve,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status.value != "refused"
+    summary = result.answer.direct_summary.casefold()
+    # Reflects the SECOND (project-scoped, not_ready) snapshot...
+    assert "not ready" in summary
+    # ...never the first (organization-scoped, ready) one.
+    assert summary.strip() != "ready: every required item is complete."
+    assert any(
+        "Open blocker for the resolved subject" in claim.text
+        for claim in result.answer.claims
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_refusal_after_status_snapshot_is_never_refused() -> None:
+    """CHAOS-3377 HIGH 2 fail->pass: a provider that emits AgentRefusal
+    AFTER a real status_snapshot.v1 result already exists for the run's
+    current resolved scope must not terminate REFUSED -- the deterministic
+    §10 verdict is rendered instead, the same as it would be for a
+    validated AgentFinalAnswer.
+    """
+
+    script_id = "status-snapshot-then-refusal"
+
+    async def status_snapshot(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": _scope_shaped_status_completion(
+                    direct_scope=request.scope.direct_scope.value
+                ),
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(decision=AgentRefusal(code="unsupported", message="no")),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status.value != "refused"
+    assert "not ready" in result.answer.direct_summary.casefold()
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_after_status_snapshot_renders_the_deterministic_verdict() -> (
+    None
+):
+    """CHAOS-3377 HIGH 2 fail->pass: budget exhaustion AFTER a real
+    status_snapshot.v1 result already exists for the run's current resolved
+    scope must not discard it for the generic "budget reached" boilerplate
+    ``_budget_answer`` otherwise falls back to.
+    """
+
+    script_id = "status-snapshot-then-budget"
+
+    async def status_snapshot(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": _scope_shaped_status_completion(
+                    direct_scope=request.scope.direct_scope.value
+                ),
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(estimated_cost_microusd=600_000),
+                )
+            ],
+            script_id=script_id,
+            registry=registry,
+            limits=DevRunLimits(
+                max_estimated_cost_microusd=1_500_000,
+                estimated_cost_per_call_microusd=1_000_000,
+            ),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status.value != "refused"
+    assert "not ready" in result.answer.direct_summary.casefold()
+    assert result.answer.direct_summary != (
+        "The provider budget was reached. This answer contains only the "
+        "validated data retrieved before the limit."
+    )
+    assert any(
+        "Open blocker for the resolved subject" in claim.text
+        for claim in result.answer.claims
+    )
+
+
 @pytest.mark.asyncio
 async def test_unresolved_named_entity_never_falls_back_to_organization_scope() -> None:
     """An explicit reference that resolves to nothing must never leave the

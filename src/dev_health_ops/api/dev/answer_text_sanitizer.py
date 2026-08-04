@@ -1,20 +1,35 @@
 """CHAOS-3377 defect 3: structural JSON-tail sanitization for model prose.
 
 A live run showed a model-authored ``direct_summary`` ending in a stray
-``}}}{`` -- leftover structural JSON characters, not prose. The narrative
-provider boundary (``answer_frames/narrative_fallback.py``) already validates
-its own output strictly, but the legacy v1 path (``dict(decision.value)`` in
-``orchestrator.py``) takes the model's free-text fields as-is.
+``}}}{`` -- leftover structural JSON characters, not prose.
 
-This is fixed structurally, not by replacing the literal string ``'}}}{'``:
-that would fix the one reported string and nothing else shaped like it. The
-rule instead is general -- strip a TRAILING run of bare JSON-structural
-characters (``{ } [ ] " ,``) once real prose has ended, since ordinary English
-text does not end in a bare run of those characters with no surrounding word
-content. It is applied to every model-authored free-text field
-(``direct_summary``, each claim's ``text``, each warning) at the seam where
-the model's raw decision is turned into an answer candidate, before that
-candidate is validated or persisted.
+Where the leak can and cannot originate (verified, not assumed): the raw
+provider completion is parsed with a single strict ``json.loads`` call
+(``dev_health_ops/llm/agent/openai_compatible.py``, ``_normalize_response``,
+``payload = json.loads(str(message.content or ""))``). That call either
+succeeds -- producing a syntactically valid JSON object, whose ``value``
+dict becomes ``AgentFinalAnswer.value`` unchanged -- or raises
+``json.JSONDecodeError``, which is handled well above this module (a
+provider/schema-repair error, never silently reaching ``decision.value``).
+There is no lenient fallback parse (no fenced-JSON extraction, no
+best-effort regex) anywhere on that path. So a reported trailing artifact on
+``direct_summary`` cannot be an ENVELOPE malformation -- the envelope, by
+construction, parsed as valid JSON -- it can only be literal content the
+model put INSIDE an otherwise well-formed string value. There is no separate
+"envelope" boundary to validate; the anomaly is embedded in the prose itself,
+which is exactly why this module operates on the text, not the parse layer.
+
+That constrains the fix to a PRECISE text-level rule, not a blanket one.
+Codex adversarial review (round 2) reproduced three cases where the first
+revision's blanket "trailing run of >=2 JSON-structural characters" regex
+corrupted legitimate content: ``"Expected payload: {}"``, ``"Valid
+alternatives are []"``, ``"Use an empty object: { }"`` -- each ends in a
+syntactically VALID, balanced, well-nested bracket literal that is plausible
+real prose (an inline example), not leaked debris. The fix distinguishes the
+two with a real bracket-matching pass over the trailing run: a candidate tail
+is stripped only when it is NOT a validly balanced/nested bracket sequence
+(the reported ``'}}}{'`` opens nothing and closes from empty -- structurally
+invalid by construction), never merely because it is JSON-shaped.
 """
 
 from __future__ import annotations
@@ -23,32 +38,57 @@ import re
 
 __all__ = ["sanitize_model_text"]
 
-#: A trailing run of two or more bare JSON-structural characters, optionally
-#: preceded/interleaved with whitespace -- e.g. ``'}}}{'``, ``' }] '``,
-#: ``'"}'``. Two or more, not one: a single trailing brace/bracket is not by
-#: itself distinguishable from legitimate prose that happens to end a
-#: sentence inside a quotation of code or JSON ("the response was `{}`."),
-#: and one is a much weaker signal of a parser-boundary leak than a bare run
-#: of two or more with nothing else around them.
-_TRAILING_JSON_ARTIFACT = re.compile(r'[\s{}\[\]",:]{2,}\Z')
+#: The maximal trailing run of bare JSON-structural characters (braces,
+#: brackets, quotes, commas, colons, whitespace) -- the CANDIDATE tail to
+#: validate. Extracted once; validity (not shape) decides whether it is
+#: stripped. See ``_is_structurally_invalid``.
+_TRAILING_CANDIDATE = re.compile(r'[\s{}\[\]",:]+\Z')
+
+_OPENERS = {"{": "}", "[": "]"}
+_CLOSERS = {"}": "{", "]": "["}
+
+
+def _is_structurally_invalid(candidate: str) -> bool:
+    """Whether ``candidate`` (a run of only ``{ } [ ] " , :`` and whitespace)
+    is NOT a validly nested, fully-closed bracket sequence.
+
+    A real stack-based bracket match, not a character-count balance check:
+    counting opens vs. closes alone would call ``']['`` valid (one of each),
+    when a close before any matching open is exactly the "leftover fragment"
+    shape a leaked JSON tail has. Quotes/commas/colons are ignored for
+    nesting purposes -- they carry no structural relationship here -- but
+    still count as part of the candidate (so ``'": }'`` is still scanned).
+    """
+
+    stack: list[str] = []
+    for char in candidate:
+        if char in _OPENERS:
+            stack.append(char)
+        elif char in _CLOSERS:
+            if not stack or stack[-1] != _CLOSERS[char]:
+                return True
+            stack.pop()
+    return bool(stack)
 
 
 def sanitize_model_text(text: str) -> str:
-    """Strip a trailing JSON-structural artifact from model-authored prose.
+    """Strip a trailing JSON-structural artifact from model-authored prose,
+    but only when the trailing run is not itself validly bracketed.
 
-    Repeats until stable (a single pass can uncover a second artifact
-    directly behind the first, e.g. ``'... done.} }'``), then trims
-    surrounding whitespace. Text with no such tail is returned unchanged.
-    Never touches the interior of the string -- a legitimate brace pair
-    inside a sentence ("the payload is `{}`  by default") is left alone,
-    since the pattern only ever matches anchored at the very end.
+    ``"...done.}}}{"`` -> ``"...done."`` (the tail opens nothing and closes
+    from empty -- invalid, stripped). ``"Expected payload: {}"`` is returned
+    UNCHANGED (the tail is a balanced, well-nested, plausible inline
+    example). Text with no trailing structural run at all is returned
+    unchanged. Never touches the interior of the string -- the candidate
+    pattern is anchored at the very end.
     """
 
     if not text:
         return text
-    previous = None
-    cleaned = text
-    while previous != cleaned:
-        previous = cleaned
-        cleaned = _TRAILING_JSON_ARTIFACT.sub("", cleaned)
-    return cleaned.rstrip()
+    match = _TRAILING_CANDIDATE.search(text)
+    if match is None:
+        return text
+    candidate = match.group(0)
+    if not _is_structurally_invalid(candidate):
+        return text
+    return text[: match.start()].rstrip()

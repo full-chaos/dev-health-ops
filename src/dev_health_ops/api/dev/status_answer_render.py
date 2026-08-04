@@ -13,30 +13,51 @@ tool result's raw internal tokens (``not_ready``, ``open_blocker``,
 ``ev1_...`` evidence ids) verbatim, and it can misclassify a completed
 required item as a "current blocker".
 
-This module is the fix: build the verdict sentence and the blocker list
-directly from ``DevActualCompletion``, using closed, fail-closed translation
-tables, so a STATUS-class answer's §10 content is server-rendered rather than
-model-narrated. ``orchestrator.py`` calls this to OVERWRITE the model's
-``status``/``direct_summary``/``claims`` for a run whose tool results include
-an ``actual_completion`` assessment -- the model's own prose for that content
-never reaches the wire; the deterministic sections cannot be authored,
-contradicted, or polluted by it.
+This module is the fix: build the verdict sentence and the outstanding-work
+list directly from ``DevActualCompletion`` (plus the sibling fact lists on
+``DevToolResult`` -- pull requests, CI, deployments, incidents), using closed,
+fail-closed translation tables and the SAME openness predicates
+``status_change_service`` uses, so a STATUS-class answer's §10 content is
+server-rendered rather than model-narrated. ``orchestrator.py`` calls this to
+OVERWRITE the model's ``status``/``direct_summary``/``claims`` for a run whose
+tool results include an ``actual_completion`` assessment bound to the run's
+current resolved scope -- the model's own prose for that content never
+reaches the wire; the deterministic sections cannot be authored, contradicted,
+or polluted by it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from .contracts import (
     AnswerStatus,
     ClaimKind,
     DevActualCompletion,
+    DevCIFact,
     DevClaim,
     DevClaimFlags,
     DevCoverage,
+    DevDeploymentFact,
+    DevIncidentFact,
+    DevPullRequestFact,
     DevRequiredChildFact,
     DevScope,
+    DevToolRequest,
     DevToolResult,
+    ToolID,
+)
+from .status_change_service import (
+    is_blocker_open,
+    is_ci_not_passing,
+    is_ci_work_skipped,
+    is_deployment_not_succeeded,
+    is_incident_active_and_blocking,
+    is_pull_request_changes_requested,
+    is_pull_request_review_unresolved,
+    is_pull_request_unmerged,
+    is_required_child_open,
 )
 from .status_completion_copy import (
     INCOMPLETE_DENOMINATOR_DISCLOSURE,
@@ -47,8 +68,9 @@ from .status_completion_copy import (
 __all__ = [
     "build_deterministic_status_claims",
     "deterministic_answer_status",
-    "is_open_child_status",
+    "open_blockers",
     "open_required_children",
+    "outstanding_facts",
     "render_verdict_summary",
     "status_snapshot_result",
     "translate_completion_state",
@@ -57,8 +79,8 @@ __all__ = [
 
 #: Closed, total vocabulary for ``DevActualCompletion.state`` (the wire type
 #: is itself a 3-member ``Literal``, so this dict is exhaustive by
-#: construction -- ``test_status_answer_render.py`` pins totality against
-#: that ``Literal``'s own ``get_args``).
+#: construction -- ``test_chaos_3377_status_answer_render.py`` pins totality
+#: against that ``Literal``'s own ``get_args``).
 _COMPLETION_STATE_COPY: Mapping[str, str] = {
     "ready": "Ready: every required item is complete.",
     "not_ready": "Not ready: required work is still open.",
@@ -72,28 +94,6 @@ _DEFAULT_STATE_COPY = "The completion state could not be determined."
 #: shared with ``answer_validator.completion_truncation_detail`` so the two
 #: user-visible surfaces cannot render the reason codes two different ways
 #: (or one raw and one translated).
-
-#: A required child (or blocker -- both are wired onto ``required_children``
-#: as ``DevRequiredChildFact`` by ``production_runtime.status_snapshot``'s
-#: ``actual_completion`` construction) is CLOSED when its own ``status``
-#: reads as done. Mirrors the predicate ``status_change_service._assess``
-#: already uses to decide ``required_child_incomplete``/``open_blocker``
-#: (that function's own two closed-vocabulary sets, unioned): a status this
-#: module would call "open" can never be one ``_assess`` itself called
-#: "complete" for the *same* reason-code decision, and vice versa -- the two
-#: cannot disagree about which items are still outstanding.
-_CLOSED_CHILD_STATUS_TOKENS: frozenset[str] = frozenset(
-    {
-        "complete",
-        "completed",
-        "done",
-        "closed",
-        "canceled",
-        "cancelled",
-        "resolved",
-        "merged",
-    }
-)
 
 
 def translate_completion_state(state: str) -> str:
@@ -109,33 +109,44 @@ def translate_completion_state(state: str) -> str:
     return _COMPLETION_STATE_COPY.get(state, _DEFAULT_STATE_COPY)
 
 
-def is_open_child_status(status: str) -> bool:
-    """Whether a required-child/blocker's own ``status`` reads as outstanding."""
-
-    return status.strip().casefold() not in _CLOSED_CHILD_STATUS_TOKENS
-
-
 def open_required_children(
     actual: DevActualCompletion,
 ) -> list[DevRequiredChildFact]:
-    """The frame's own prioritized blocker list (CHAOS-3377 defect 5).
+    """Required children whose own ``status`` reads as outstanding.
 
-    Every ``DevRequiredChildFact`` on ``actual.required_children`` whose own
-    ``status`` field is NOT one of the closed-vocabulary "done" tokens.
-    Built entirely from the server-computed ``status`` field on each fact --
-    never from narrative -- so an item the frame itself marked
-    complete/done/closed/etc can never appear here, closing the exact
-    self-contradiction (a "completed" item listed under "Current blockers")
-    the ticket reported. Order is preserved from ``required_children``,
-    which ``status_change_service._ordered_status`` already produces in a
-    stable, deterministic priority order.
+    Uses ``status_change_service.is_required_child_open`` -- the SAME
+    predicate ``_assess`` itself calls to decide ``required_child_incomplete``
+    -- rather than a locally re-derived copy (CHAOS-3377 HIGH 3, codex
+    adversarial review: a prior revision's own "safe superset" of closed
+    tokens disagreed with the assessor, treating ``resolved``/``merged`` as
+    closed when ``_assess`` still counted them as the reason a verdict was
+    NOT_READY). Importing the one predicate both call makes that class of
+    disagreement structurally impossible, not just less likely.
     """
 
     return [
         child
         for child in actual.required_children
-        if is_open_child_status(child.status)
+        if is_required_child_open(child.status)
     ]
+
+
+def open_blockers(actual: DevActualCompletion) -> list[DevRequiredChildFact]:
+    """Blockers (``open_blocker``) whose own ``status`` reads as outstanding.
+
+    CHAOS-3377 HIGH 3: blockers previously had no typed wire representation
+    at all distinct from ``required_children`` -- a NOT_READY verdict caused
+    solely by an open blocker (no incomplete required child) rendered an
+    EMPTY outstanding-work list, silently omitting the exact work making it
+    not ready. ``DevActualCompletion.blockers`` (added alongside this fix)
+    closes that gap; this mirrors ``open_required_children`` but against the
+    blocker-specific closed-vocabulary predicate (``is_blocker_open``, which
+    treats ``resolved`` as closed and ``required_child``'s predicate does
+    not -- see ``status_change_service``'s own comment on why the two
+    vocabularies are intentionally different).
+    """
+
+    return [blocker for blocker in actual.blockers if is_blocker_open(blocker.status)]
 
 
 def render_verdict_summary(
@@ -147,7 +158,7 @@ def render_verdict_summary(
     dynamic piece is either a plain integer (the completion fraction) or
     routed through the closed-vocabulary translation tables above.
 
-    ``denominator_withheld`` mirrors ``answer_validator``'s own
+    ``denominator_withheld`` mirrors ``status_completion_copy``'s own
     ``any_tool_result_withheld_its_completion_denominator`` /
     ``INCOMPLETE_DENOMINATOR_DISCLOSURE`` positive-disclosure obligation
     (CHAOS-3297 s2 round 8): when the required-child source was truncated,
@@ -181,21 +192,50 @@ def render_verdict_summary(
 
 
 def status_snapshot_result(
+    tool_requests: Sequence[DevToolRequest],
     tool_results: Sequence[DevToolResult],
+    *,
+    authorized_scope: DevScope,
 ) -> DevToolResult | None:
-    """The first executed tool result carrying a completion assessment, if any.
+    """The most recent ``status_snapshot.v1`` result bound to the run's
+    CURRENT resolved scope, or ``None``.
 
-    A run may call more than one tool; this is the seam
-    ``orchestrator.py`` uses to decide whether THIS run has server-owned §10
-    material to render deterministically at all -- a non-STATUS question
-    (whose tool results never set ``actual_completion``) is untouched by this
-    module.
+    CHAOS-3377 HIGH 1 (codex adversarial review): a prior revision returned
+    the FIRST tool result carrying ``actual_completion``, with no check that
+    it was even a ``status_snapshot.v1`` call, let alone that its own request
+    scope matched the answer being rendered. A run's authorized scope can
+    change mid-run (a ``resolve_scope.v1`` commit narrows/widens it -- see
+    ``Orchestrator.run``'s ``resolution``/``authorized_scope`` reassignment),
+    and a model may call ``status_snapshot.v1`` more than once; an earlier
+    snapshot for a DIFFERENT subject would silently overwrite the final
+    answer's verdict/blockers with someone else's data -- confidently wrong
+    scope, not just stale content.
+
+    ``tool_requests``/``tool_results`` are the orchestrator's own
+    index-aligned lists (appended together at the same call sites), so they
+    are paired by position; ``tool_call_id`` is also cross-checked as a
+    cheap integrity assertion. Filtered to ``STATUS_SNAPSHOT`` calls whose
+    request scope equals ``authorized_scope`` -- the run's FINAL resolved
+    scope, passed by the caller -- and the LAST such match wins (a repeated
+    call for the same scope supersedes an earlier one). Ambiguity is never
+    guessed at: a call whose scope does not match is simply excluded, never
+    substituted.
     """
 
-    for result in tool_results:
-        if result.actual_completion is not None:
-            return result
-    return None
+    if len(tool_requests) != len(tool_results):
+        return None
+    latest: DevToolResult | None = None
+    for request, result in zip(tool_requests, tool_results, strict=True):
+        if request.tool_id is not ToolID.STATUS_SNAPSHOT:
+            continue
+        if result.actual_completion is None:
+            continue
+        if request.tool_call_id != result.tool_call_id:
+            continue
+        if request.scope != authorized_scope:
+            continue
+        latest = result
+    return latest
 
 
 def deterministic_answer_status(
@@ -225,25 +265,193 @@ def deterministic_answer_status(
     return AnswerStatus.COMPLETE if fully_covered else AnswerStatus.PARTIAL
 
 
+@dataclass(frozen=True, slots=True)
+class _OutstandingFact:
+    """One typed piece of "why not ready" content, from any blocker-producing
+    category, before it becomes a ``DevClaim``. See ``outstanding_facts``.
+    """
+
+    claim_id_suffix: str
+    text: str
+    evidence_ref_ids: tuple[str, ...]
+
+
+def _pull_request_facts(
+    pull_requests: Sequence[DevPullRequestFact],
+) -> list[_OutstandingFact]:
+    facts: list[_OutstandingFact] = []
+    for pr in pull_requests:
+        if is_pull_request_unmerged(required=pr.required, merged=pr.merged):
+            facts.append(
+                _OutstandingFact(
+                    claim_id_suffix=f"pr-unmerged:{pr.entity_id}",
+                    text=f"Blocked: pull request {pr.display_label} has not merged.",
+                    evidence_ref_ids=tuple(pr.evidence_ref_ids),
+                )
+            )
+        if is_pull_request_changes_requested(
+            required=pr.required, changes_requested=pr.changes_requested
+        ):
+            facts.append(
+                _OutstandingFact(
+                    claim_id_suffix=f"pr-changes-requested:{pr.entity_id}",
+                    text=(
+                        f"Blocked: pull request {pr.display_label} has "
+                        "requested changes outstanding."
+                    ),
+                    evidence_ref_ids=tuple(pr.evidence_ref_ids),
+                )
+            )
+        elif is_pull_request_review_unresolved(
+            required=pr.required, review_state=pr.review_state
+        ):
+            facts.append(
+                _OutstandingFact(
+                    claim_id_suffix=f"pr-review-unresolved:{pr.entity_id}",
+                    text=f"Blocked: pull request {pr.display_label} awaits review.",
+                    evidence_ref_ids=tuple(pr.evidence_ref_ids),
+                )
+            )
+    return facts
+
+
+def _ci_facts(ci_checks: Sequence[DevCIFact]) -> list[_OutstandingFact]:
+    facts: list[_OutstandingFact] = []
+    for ci in ci_checks:
+        if is_ci_work_skipped(
+            required=ci.required, skipped_required_work=ci.skipped_required_work
+        ):
+            facts.append(
+                _OutstandingFact(
+                    claim_id_suffix=f"ci-skipped:{ci.entity_id}",
+                    text=f"Blocked: required CI work was skipped for {ci.display_label}.",
+                    evidence_ref_ids=tuple(ci.evidence_ref_ids),
+                )
+            )
+        elif is_ci_not_passing(required=ci.required, conclusion=ci.conclusion):
+            facts.append(
+                _OutstandingFact(
+                    claim_id_suffix=f"ci-not-passing:{ci.entity_id}",
+                    text=f"Blocked: CI check {ci.display_label} is not passing.",
+                    evidence_ref_ids=tuple(ci.evidence_ref_ids),
+                )
+            )
+    return facts
+
+
+def _deployment_facts(
+    deployments: Sequence[DevDeploymentFact],
+) -> list[_OutstandingFact]:
+    facts: list[_OutstandingFact] = []
+    for deployment in deployments:
+        if is_deployment_not_succeeded(
+            required=deployment.required, status=deployment.status
+        ):
+            facts.append(
+                _OutstandingFact(
+                    claim_id_suffix=f"deployment-not-succeeded:{deployment.entity_id}",
+                    text=f"Blocked: deployment {deployment.display_label} has not succeeded.",
+                    evidence_ref_ids=tuple(deployment.evidence_ref_ids),
+                )
+            )
+    return facts
+
+
+def _incident_facts(incidents: Sequence[DevIncidentFact]) -> list[_OutstandingFact]:
+    facts: list[_OutstandingFact] = []
+    for incident in incidents:
+        if is_incident_active_and_blocking(
+            active=incident.active, blocking=incident.blocking
+        ):
+            facts.append(
+                _OutstandingFact(
+                    claim_id_suffix=f"incident:{incident.entity_id}",
+                    text=(
+                        f"Blocked: active incident {incident.display_label} "
+                        "is blocking this work."
+                    ),
+                    evidence_ref_ids=tuple(incident.evidence_ref_ids),
+                )
+            )
+    return facts
+
+
+def outstanding_facts(
+    actual: DevActualCompletion, status_result: DevToolResult
+) -> list[_OutstandingFact]:
+    """Every typed "why not ready" fact across ALL blocker-producing
+    categories (CHAOS-3377 HIGH 3), never only required children.
+
+    A NOT_READY verdict can be caused by an open blocker, an unmerged/
+    unreviewed/changes-requested pull request, failing/skipped required CI,
+    an undeployed release, or an active blocking incident -- ``_assess``
+    (``status_change_service.py``) computes a reason code for every one of
+    these independently. A blocker list built from ``required_children``
+    alone can be completely empty while the verdict itself is NOT_READY,
+    silently omitting the exact work making it so. This reads the same
+    typed fact lists ``_assess`` reads (``DevToolResult.pull_requests``/
+    ``.ci_checks``/``.deployments``/``.incidents``, plus
+    ``actual.required_children``/``.blockers``) and applies the exact same
+    predicates (imported from ``status_change_service``, never re-derived)
+    to each.
+
+    Never interpolates a fact's own raw ``status``/``conclusion``/etc.
+    string into claim text (CHAOS-3377 MEDIUM 4, codex adversarial review: a
+    provider-supplied status string is unconstrained and can coincidentally
+    equal an internal denylisted token -- e.g. a literal ``not_ready`` --
+    which would make ``orchestrator.finish()``'s fail-closed token scan
+    convert an otherwise-valid answer into ``internal_error``). Every phrase
+    here is a fixed, closed-vocabulary sentence naming only the fact's
+    ``display_label`` (an identifying name, already rendered as safe content
+    elsewhere in this contract, e.g. ``DevEvidenceRef.display_label``) --
+    never its raw status field.
+    """
+
+    facts: list[_OutstandingFact] = []
+    for child in open_required_children(actual):
+        facts.append(
+            _OutstandingFact(
+                claim_id_suffix=f"child:{child.fact_id}",
+                text=f"Blocked: {child.text}.",
+                evidence_ref_ids=tuple(child.evidence_ref_ids),
+            )
+        )
+    for blocker in open_blockers(actual):
+        facts.append(
+            _OutstandingFact(
+                claim_id_suffix=f"blocker:{blocker.fact_id}",
+                text=f"Blocked: {blocker.text}.",
+                evidence_ref_ids=tuple(blocker.evidence_ref_ids),
+            )
+        )
+    facts.extend(_pull_request_facts(status_result.pull_requests))
+    facts.extend(_ci_facts(status_result.ci_checks))
+    facts.extend(_deployment_facts(status_result.deployments))
+    facts.extend(_incident_facts(status_result.incidents))
+    return facts
+
+
 def build_deterministic_status_claims(
     *,
     actual: DevActualCompletion,
+    status_result: DevToolResult,
     validity_scope: DevScope,
     canonical_evidence_ids: frozenset[str],
     tool_results: Sequence[DevToolResult] = (),
 ) -> list[DevClaim]:
-    """Server-rendered §10 claims: one verdict claim, then one per open
-    required item/blocker -- never from model narrative.
+    """Server-rendered §10 claims: one verdict claim, then one per
+    outstanding fact across every blocker-producing category -- never from
+    model narrative.
 
     Every claim cites only evidence IDs already present in this run's
     canonical evidence set (``canonical_evidence_ids``, the same tuple
     ``Orchestrator._canonical_answer_data`` computed for this candidate), so
     the result satisfies ``DevAnswer``'s own "claim references unknown
-    evidence" invariant by construction. A blocker whose own evidence was
-    truncated out of the tool result is skipped rather than emitted
-    ungrounded -- an ``OBSERVED`` claim requires at least one reference
-    (``DevClaim.validate_grounding``), and fabricating one would be worse
-    than omitting the item.
+    evidence" invariant by construction. An outstanding fact whose own
+    evidence was truncated out of the tool result is skipped rather than
+    emitted ungrounded -- an ``OBSERVED`` claim requires at least one
+    reference (``DevClaim.validate_grounding``), and fabricating one would be
+    worse than omitting the item.
 
     ``tool_results`` (defaulting to empty, i.e. "denominator not withheld")
     drives the same positive-disclosure obligation ``render_verdict_summary``
@@ -278,18 +486,18 @@ def build_deterministic_status_claims(
             flags=DevClaimFlags(),
         )
     )
-    for child in open_required_children(actual):
+    for fact in outstanding_facts(actual, status_result):
         evidence_ids = [
-            ref for ref in child.evidence_ref_ids if ref in canonical_evidence_ids
+            ref for ref in fact.evidence_ref_ids if ref in canonical_evidence_ids
         ][:25]
         if not evidence_ids:
             continue
         claims.append(
             DevClaim(
                 schema_version="dev_claim.v1",
-                claim_id=f"status-blocker:{child.fact_id}",
+                claim_id=f"status-blocker:{fact.claim_id_suffix}",
                 kind=ClaimKind.OBSERVED,
-                text=f"Blocked: {child.text} ({child.status}){disclosure_suffix}",
+                text=f"{fact.text}{disclosure_suffix}",
                 confidence=1.0,
                 evidence_ref_ids=evidence_ids,
                 metric_ref_ids=[],
@@ -297,7 +505,9 @@ def build_deterministic_status_claims(
                 flags=DevClaimFlags(),
             )
         )
-    # DevAnswer.claims caps at 100 (contracts.py); required_children itself
-    # is already capped at 100 and the verdict adds one more, so this bound
-    # is defensive rather than expected to trim anything in practice.
+    # DevAnswer.claims caps at 100 (contracts.py); each contributing list is
+    # independently capped upstream (required_children/blockers at 100,
+    # pull_requests/ci_checks/deployments/incidents at 100 each on
+    # DevToolResult), so this bound is defensive rather than expected to
+    # trim anything in practice.
     return claims[:100]

@@ -1,9 +1,13 @@
 """CHAOS-3377 defect 3: structural JSON-tail sanitization.
 
-Fixed structurally (a trailing-artifact regex applied to any model-authored
-text), not by replacing the one literal reported string -- these tests prove
-that: the exact reported tail is covered, but so are shapes that are not a
-literal match for it.
+Fixed structurally (a real bracket-validity check over the trailing run of
+JSON-structural characters), not by replacing the one literal reported
+string, and NOT by a blanket "any trailing JSON-shaped punctuation" regex
+either -- codex adversarial review (round 2) reproduced three cases where
+that blanket rule corrupted legitimate content. These tests prove both
+halves: the exact reported tail (and other genuinely INVALID shapes) are
+still stripped, and the reviewer's three repro strings (and other genuinely
+VALID bracket literals) are left untouched.
 """
 
 from __future__ import annotations
@@ -25,38 +29,62 @@ def test_the_reported_live_tail_is_stripped() -> None:
     [
         ("Done for now.} }", "Done for now."),
         ("Verdict reached.]}", "Verdict reached."),
-        ("All set.{}{}", "All set."),
         ("No artifact at all.", "No artifact at all."),
         (
             "Ends in a real closing paren (see above)",
             "Ends in a real closing paren (see above)",
         ),
         ("Trailing brackets][", "Trailing brackets"),
+        # A single dangling closing brace with nothing to match is exactly
+        # as structurally invalid as a longer run -- the bracket-validity
+        # check does not need a length threshold to catch it.
+        ("The response is done}", "The response is done"),
     ],
 )
-def test_generic_trailing_artifact_shapes_are_stripped_not_just_the_literal_one(
-    raw: str, expected: str
-) -> None:
-    """The rule is structural (a trailing run of >=2 JSON-structural
-    characters), so it generalizes past the one literal '}}}{' the ticket
-    reported -- proving this is not a one-off string replace.
+def test_invalid_trailing_bracket_shapes_are_stripped(raw: str, expected: str) -> None:
+    """The rule is structural (bracket-matching validity), so it generalizes
+    past the one literal '}}}{' the ticket reported -- proving this is not a
+    one-off string replace.
     """
 
     assert sanitize_model_text(raw) == expected
 
 
-def test_does_not_touch_interior_braces_that_are_part_of_real_prose() -> None:
-    text = "The payload is `{}` by default in every environment."
+# --- codex adversarial review round 2: must-NOT-strip negative controls ---
+# (the exact three repro strings that defeated the first revision's blanket
+# "any trailing run of >=2 JSON-structural characters" rule)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Expected payload: {}",
+        "Valid alternatives are []",
+        "Use an empty object: { }",
+    ],
+)
+def test_valid_balanced_bracket_examples_are_never_stripped(text: str) -> None:
+    """Reviewer repros: each of these ends in a syntactically VALID,
+    balanced, well-nested bracket literal that reads as a plausible inline
+    example, not leaked debris. A blanket "trailing JSON-shaped punctuation"
+    rule corrupted all three; the bracket-validity check must not.
+    """
+
     assert sanitize_model_text(text) == text
 
 
-def test_single_trailing_brace_is_left_alone() -> None:
-    """A single trailing structural character is not, by itself, a strong
-    enough signal of a parser-boundary leak (the run threshold is >=2) --
-    this is the deliberate false-positive boundary, not a gap.
+def test_all_set_with_two_empty_object_literals_is_not_stripped() -> None:
+    """Two back-to-back empty object literals are still validly bracketed
+    (each opens and closes in turn) -- not the unbalanced, opens-nothing
+    shape a leaked tail has.
     """
 
-    text = "The response is done}"
+    text = "All set.{}{}"
+    assert sanitize_model_text(text) == text
+
+
+def test_does_not_touch_interior_braces_that_are_part_of_real_prose() -> None:
+    text = "The payload is `{}` by default in every environment."
     assert sanitize_model_text(text) == text
 
 
@@ -69,3 +97,8 @@ def test_repeated_application_is_idempotent() -> None:
     once = sanitize_model_text(text)
     twice = sanitize_model_text(once)
     assert once == twice
+
+
+def test_no_trailing_structural_run_is_a_no_op() -> None:
+    text = "A perfectly ordinary sentence with no trailing punctuation issue"
+    assert sanitize_model_text(text) == text

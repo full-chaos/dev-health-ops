@@ -177,14 +177,21 @@ LIMIT {{limit:UInt32}}
 #: real ``work_items`` column -- CHAOS-3374 requires this explicitly: GitLab's own
 #: ``work_items.project_id`` is a bare repo full path, e.g. "group/project", which
 #: could otherwise coincidentally equal another provider's project id/key string in
-#: the same org). CHAOS-3380 is that case made real: ``team_autoimport_gitlab.py``
-#: now calls ``write_projects`` with ``id`` set to the RAW ``path_with_namespace``
-#: (the same value space as ``work_items.project_id``, mirroring Linear's raw-id
-#: catalog rows rather than Jira's prefixed one) and ``project_key`` always
-#: ``None`` -- so a GitLab project resolves through the plain ``project_id =
-#: {entity_id:String}`` arm above, and the provider guard is what keeps a
-#: same-org, same-string GitLab path from being answered by another provider's
-#: catalog row (or vice versa) if the two ever coincided.
+#: the same org). CHAOS-3380 is that case made real, and (round 2, Codex HIGH)
+#: mints the catalog identity Jira-style rather than Linear-style for exactly
+#: the reason this paragraph names: a GitLab project's PATH is mutable
+#: (rename, group transfer) while Linear's/Jira's own ids are not.
+#: ``team_autoimport_gitlab.py``'s catalog ``id`` is GitLab's own IMMUTABLE
+#: numeric project id, prefixed like Jira's (``f"{org_id}:gitlab:{numeric_id}"``);
+#: ``project_key`` carries the CURRENT ``path_with_namespace``, refreshed on
+#: every discovery run. ``providers/gitlab/normalize.py`` writes that SAME
+#: current path onto ``work_items.project_key`` (not just ``project_id``, as
+#: of the same change) -- so a GitLab project resolves through the
+#: ``project_key`` arm, never the plain ``project_id = {entity_id:String}``
+#: one (the entity id is the prefixed numeric id, never equal to any raw
+#: ``work_items.project_id``, which stays the path). The provider guard keeps
+#: a same-org, same-string GitLab path from being answered by another
+#: provider's catalog row (or vice versa) if the two ever coincided.
 #:
 #: ``LEFT JOIN`` (every arm that also serves 'issue'/'work_unit'/'team'/
 #: 'organization'/'repository' scope types): a project-identity lookup miss must

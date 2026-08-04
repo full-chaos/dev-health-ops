@@ -8,8 +8,8 @@ migrated ClickHouse:
   normalizer) → ``ClickHouseMetricsSink.write_work_items``;
 * catalog side — ``team_autoimport_gitlab.populate`` (the production worker,
   CHAOS-3380) → ``ClickHouseMetricsSink.write_projects``, driven by the real
-  ``TeamDiscoveryService.discover_gitlab`` group/subgroup walk with only the
-  HTTP round trip replaced (``GitLabWorkClient.get_project``).
+  ``TeamDiscoveryService.discover_gitlab`` flat, recursive project listing,
+  with only the HTTP round trip replaced.
 
 and the comparison itself is the shipped oracle
 (``scripts/ask_dev_project_subject_oracle.py``), parametrized to
@@ -17,27 +17,28 @@ and the comparison itself is the shipped oracle
 exercised here rather than duplicated, so a change to the oracle's contract
 cannot silently stop applying to one provider.
 
-Identity choice under test: GitLab's catalog id is the RAW
-``path_with_namespace`` (``providers/gitlab/normalize.py``: "For work
-tracking metrics, treat the GitLab project path as the 'project' scope."),
-the SAME id space ``work_items.project_id`` already carries — mirroring
-Linear's raw-UUID catalog id, NOT Jira's ``{org}:jira:{key}`` prefixed id
-(CHAOS-3374). This is why the plain ``project_id = {entity_id}`` predicate
-already matched a GitLab project even before CHAOS-3374 landed (unlike
-Jira, which needed the provider-scoped identity join to resolve at all).
+Identity choice under test (CHAOS-3380 round 2, Codex HIGH -- mutable path
+as canonical identity): GitLab's catalog id is GitLab's own IMMUTABLE
+numeric project id, prefixed like Jira's (``f"{org_id}:gitlab:{numeric_id}"``)
+-- NOT the raw, MUTABLE ``path_with_namespace`` a first cut of this ticket
+used. ``project_key`` carries the CURRENT path instead, and
+``providers/gitlab/normalize.py`` now writes that SAME current path onto
+``work_items.project_key`` (not just ``project_id``) -- so a GitLab project
+resolves through ``native_status_change._project_identity_match``'s
+project_key arm, mirroring Jira rather than Linear. This is because a
+GitLab project's PATH is mutable (rename, group transfer) while Linear's and
+Jira's own native ids are not.
 
 CHAOS-3374 (``native_status_change._PROJECT_IDENTITY_CTE`` /
-``_project_identity_match``) merged as of this revision (main 61aae46af,
-#1460): every project-scoped fact arm and ``PROJECT_REPOSITORIES_SQL`` now
-join through the catalog's own ``provider``/``project_key`` columns rather
-than comparing ``work_items.project_id``/``project_key`` to the entity id
-directly.
+``_project_identity_match``) merged to main as 61aae46af (#1460): every
+project-scoped fact arm and ``PROJECT_REPOSITORIES_SQL`` join through the
+catalog's own ``provider``/``project_key`` columns rather than comparing
+``work_items.project_id``/``project_key`` to the entity id directly.
 ``test_gitlab_project_resolves_end_to_end_through_the_native_status_change_join``
 below exercises that merged join directly (``ScopeResolutionService.
 resolve_contract`` → ``StatusChangeService.status_snapshot``, both reading
 through ``native_status_change.py``) with a REAL catalog row from this
-ticket's worker — the "only works once 3374 merges" caveat from the original
-handoff no longer applies and this test is the evidence.
+ticket's worker.
 
 Opt-in (filtered from unit/CI by ``ci/run_tests.sh``'s
 ``-m "not benchmark and not clickhouse"`` in BOTH ``unit_tests()`` and
@@ -50,7 +51,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock
@@ -74,6 +75,7 @@ from dev_health_ops.api.dev.status_change_service import (
     StatusSnapshotRequest,
 )
 from dev_health_ops.api.services.configuration.team_discovery import (
+    GitLabDiscoveredProject,
     GitLabDiscoveryResult,
 )
 from dev_health_ops.metrics.schemas import ProjectRecord
@@ -97,8 +99,10 @@ pytestmark = [
     ),
 ]
 
+GITLAB_PROJECT_NUMERIC_ID = "9001"
 GITLAB_PROJECT_PATH = "full-chaos/dev-health"
 GITLAB_PROJECT_NAME = "Dev Health"
+OTHER_PROJECT_NUMERIC_ID = "9002"
 OTHER_PROJECT_PATH = "full-chaos/platform"
 OTHER_PROJECT_NAME = "Platform"
 
@@ -107,6 +111,10 @@ OTHER_PROJECT_NAME = "Platform"
 #: importing from another test module would make this file's protection
 #: depend on that module continuing to exist unchanged.
 _PROTECTED_DATABASES = frozenset({"", "default"})
+
+
+def _catalog_id(org_id: str, numeric_id: str) -> str:
+    return f"{org_id}:gitlab:{numeric_id}"
 
 
 def _scratch_database(dsn: str) -> str:
@@ -185,30 +193,12 @@ def _seed_reference_side(sink: Any, org_id: str) -> None:
     sink.write_work_items(work_items)
 
 
-@dataclass
-class _FakeGitLabProject:
-    name: str
-    archived: bool = False
-    web_url: str = ""
-
-
-def _fake_gitlab_work_client_cls(projects: dict[str, _FakeGitLabProject]) -> type:
-    class _FakeGitLabWorkClient:
-        def __init__(self, *, auth: Any, org_id: str | None = None) -> None:
-            self.auth = auth
-            self.org_id = org_id
-
-        def get_project(self, project_id_or_path: str) -> _FakeGitLabProject:
-            return projects[project_id_or_path]
-
-    return _FakeGitLabWorkClient
-
-
 async def _run_autoimport(
     monkeypatch: pytest.MonkeyPatch,
     org_id: str,
     *,
-    projects: dict[str, _FakeGitLabProject],
+    projects: list[GitLabDiscoveredProject],
+    source_external_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run the production worker with only GitLab's HTTP round trips replaced.
 
@@ -229,11 +219,12 @@ async def _run_autoimport(
                     provider_team_id="full-chaos",
                     name="Full Chaos",
                     associations={
-                        "repo_patterns": list(projects.keys()),
+                        "repo_patterns": [p.path_with_namespace for p in projects],
                         "provider_org": group_path,
                     },
                 )
-            ]
+            ],
+            projects=projects,
         )
 
     async def discover_members_gitlab(
@@ -251,22 +242,20 @@ async def _run_autoimport(
         "discover_members_gitlab",
         discover_members_gitlab,
     )
-    monkeypatch.setattr(
-        team_autoimport_gitlab,
-        "GitLabWorkClient",
-        _fake_gitlab_work_client_cls(projects),
-    )
 
     assert CLICKHOUSE_URI is not None
+    scope: dict[str, Any] = {
+        "mode": "sync_config",
+        "analytics_db": CLICKHOUSE_URI,
+        "sync_options": {"auto_import_teams": True},
+    }
+    if source_external_ids is not None:
+        scope["source_external_ids"] = source_external_ids
     return await asyncio.to_thread(
         team_autoimport_gitlab.populate,
         org_id=org_id,
         credentials={"token": "gl-token", "group_path": "full-chaos"},
-        scope={
-            "mode": "sync_config",
-            "analytics_db": CLICKHOUSE_URI,
-            "sync_options": {"auto_import_teams": True},
-        },
+        scope=scope,
     )
 
 
@@ -310,16 +299,22 @@ async def test_gitlab_project_becomes_a_resolvable_subject(
         summary = await _run_autoimport(
             monkeypatch,
             org_id,
-            projects={
-                GITLAB_PROJECT_PATH: _FakeGitLabProject(
+            projects=[
+                GitLabDiscoveredProject(
+                    id=GITLAB_PROJECT_NUMERIC_ID,
+                    path_with_namespace=GITLAB_PROJECT_PATH,
                     name=GITLAB_PROJECT_NAME,
+                    archived=False,
                     web_url=f"https://gitlab.com/{GITLAB_PROJECT_PATH}",
                 ),
-                OTHER_PROJECT_PATH: _FakeGitLabProject(
+                GitLabDiscoveredProject(
+                    id=OTHER_PROJECT_NUMERIC_ID,
+                    path_with_namespace=OTHER_PROJECT_PATH,
                     name=OTHER_PROJECT_NAME,
+                    archived=False,
                     web_url=f"https://gitlab.com/{OTHER_PROJECT_PATH}",
                 ),
-            },
+            ],
         )
         assert summary["native_projects_imported"] == 2
         assert summary["native_projects_complete"] is True
@@ -331,16 +326,16 @@ async def test_gitlab_project_becomes_a_resolvable_subject(
             acceptance_project_ids=(GITLAB_PROJECT_PATH,),
         )
         # "missing"/"inactive"/"name_ambiguous" must be fully cleared -- those
-        # are what CHAOS-3380 exists to fix. "name_mismatch" survives here as
-        # a PRE-EXISTING, orthogonal gap: unlike Linear's issue normalizer
-        # (which caches project.name straight off the issue payload),
+        # are what CHAOS-3380 exists to fix, and the oracle now resolves a
+        # GitLab reference through project_key (CHAOS-3380 round 2), not raw
+        # id equality. "name_mismatch" survives here as a PRE-EXISTING,
+        # orthogonal gap: unlike Linear's issue normalizer (which caches
+        # project.name straight off the issue payload),
         # ``gitlab_issue_to_work_item`` never sets ``WorkItem.project_name``
-        # at all (providers/gitlab/normalize.py has no such assignment), so
-        # ``work_items.project_name`` is always empty for GitLab today. That
-        # is a gap in the WORK-ITEM producer, not the catalog this ticket
-        # adds -- and it does not affect subject resolution, which reads the
-        # catalog's OWN name (proved by resolve_mention below, not by
-        # work_items.project_name).
+        # at all, so ``work_items.project_name`` is always empty for GitLab
+        # today. That is a gap in the WORK-ITEM producer, not the catalog
+        # this ticket adds -- and it does not affect subject resolution,
+        # which reads the catalog's OWN name (proved below).
         assert {gap.kind for gap in after} == {"name_mismatch"}, (
             f"catalog still incomplete after autoimport: {after}"
         )
@@ -354,7 +349,9 @@ async def test_gitlab_project_becomes_a_resolvable_subject(
         )
         assert resolution.outcome is ResolutionOutcome.EXACT_MATCH
         assert resolution.entity is not None
-        assert resolution.entity.canonical_id == GITLAB_PROJECT_PATH
+        assert resolution.entity.canonical_id == _catalog_id(
+            org_id, GITLAB_PROJECT_NUMERIC_ID
+        )
         assert resolution.entity.label == GITLAB_PROJECT_NAME
     finally:
         _cleanup(raw_client, org_id)
@@ -364,18 +361,15 @@ async def test_gitlab_project_becomes_a_resolvable_subject(
 async def test_gitlab_project_id_selects_the_projects_work_items(
     sink: Any, raw_client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The resolved canonical id must be usable as a ``work_items`` filter.
+    """The resolved subject's underlying identity must select real work items.
 
-    Deliberately checked with the SAME plain predicate
-    ``native_status_change._WORK_ITEMS_SQL`` uses on current ``main``
-    (``project_id = {entity_id} OR project_key = {entity_id}``) rather than
-    calling into that module: this repo has a sibling lane
-    (CHAOS-3374/chaos-3374-jira-project-identity, not merged as of this test)
-    reworking that file's project-identity join for Jira's PREFIXED catalog
-    id. GitLab's catalog id is the RAW path, the same id space Linear already
-    used successfully with this exact predicate, so this assertion holds
-    against ``main`` today and is expected to keep holding once 3374 merges
-    (its own CTE preserves the ``project_id = {entity_id}`` arm verbatim).
+    The resolved canonical id (``{org}:gitlab:{numeric_id}``) never appears
+    literally on ``work_items`` -- only the catalog row's OWN ``project_key``
+    (the current path) does, which is what the real
+    ``native_status_change._project_identity_match`` join actually compares
+    (proved end to end in the next test). This test isolates that one
+    property: the catalog row this subject resolved to carries a
+    ``project_key`` that genuinely selects the seeded work item.
     """
 
     org_id = f"chaos-3380-scope-{uuid.uuid4().hex[:12]}"
@@ -384,10 +378,22 @@ async def test_gitlab_project_id_selects_the_projects_work_items(
         await _run_autoimport(
             monkeypatch,
             org_id,
-            projects={
-                GITLAB_PROJECT_PATH: _FakeGitLabProject(name=GITLAB_PROJECT_NAME),
-                OTHER_PROJECT_PATH: _FakeGitLabProject(name=OTHER_PROJECT_NAME),
-            },
+            projects=[
+                GitLabDiscoveredProject(
+                    id=GITLAB_PROJECT_NUMERIC_ID,
+                    path_with_namespace=GITLAB_PROJECT_PATH,
+                    name=GITLAB_PROJECT_NAME,
+                    archived=False,
+                    web_url="",
+                ),
+                GitLabDiscoveredProject(
+                    id=OTHER_PROJECT_NUMERIC_ID,
+                    path_with_namespace=OTHER_PROJECT_PATH,
+                    name=OTHER_PROJECT_NAME,
+                    archived=False,
+                    web_url="",
+                ),
+            ],
         )
 
         service = ScopeResolutionService(ClickHouseAuthorizedEntityCatalog(sink))
@@ -399,16 +405,24 @@ async def test_gitlab_project_id_selects_the_projects_work_items(
         )
         assert resolution.entity is not None
         entity_id = resolution.entity.canonical_id
-        assert entity_id == GITLAB_PROJECT_PATH
+        assert entity_id == _catalog_id(org_id, GITLAB_PROJECT_NUMERIC_ID)
+
+        project_key_row = raw_client.query(
+            "SELECT project_key FROM projects FINAL "
+            "WHERE org_id = {org_id:String} AND id = {pid:String}",
+            parameters={"org_id": org_id, "pid": entity_id},
+        ).result_rows
+        assert project_key_row == [(GITLAB_PROJECT_PATH,)]
+        project_key = project_key_row[0][0]
 
         matched = raw_client.query(
             "SELECT count() FROM work_items WHERE org_id = {org_id:String} "
-            "AND (project_id = {entity_id:String} OR project_key = {entity_id:String})",
-            parameters={"org_id": org_id, "entity_id": entity_id},
+            "AND (project_id = {key:String} OR project_key = {key:String})",
+            parameters={"org_id": org_id, "key": project_key},
         ).result_rows[0][0]
         assert matched == 1, (
-            "the resolved project id selects no work items; the subject resolves "
-            "but every answer about it would be empty"
+            "the resolved project's catalog project_key selects no work items; "
+            "the subject resolves but every answer about it would be empty"
         )
     finally:
         _cleanup(raw_client, org_id)
@@ -425,16 +439,14 @@ async def test_gitlab_project_resolves_end_to_end_through_the_native_status_chan
     ``PROJECT_REPOSITORIES_SQL``, and the rest -- to join through
     ``_PROJECT_IDENTITY_CTE`` / ``_project_identity_match`` (catalog
     ``provider`` + native key) instead of comparing ``work_items.project_id``/
-    ``project_key`` to the entity id directly. Before this ticket, GitLab
-    never reached that join at all: no catalog row existed, so
-    ``ScopeResolutionService`` returned ``NO_AUTHORIZED_MATCH`` before
-    ``native_status_change.py`` was ever queried. This test goes past
-    resolution (already covered above) into the SAME two calls the sibling
-    Jira live test uses (``resolve_contract`` then ``status_snapshot``) to
-    prove the merged join actually joins for a GitLab project: a work item
-    committed against it comes back in the snapshot, and a work item under a
-    DIFFERENT GitLab project (same provider, so the provider guard alone
-    can't be what excludes it) does not.
+    ``project_key`` to the entity id directly. This test uses the SAME two
+    calls the sibling Jira live test uses (``resolve_contract`` then
+    ``status_snapshot``) to prove the merged join actually joins for a
+    GitLab project THROUGH THE PROJECT_KEY ARM (CHAOS-3380 round 2's
+    immutable-id model): a work item committed against it comes back in the
+    snapshot, and a work item under a DIFFERENT GitLab project (same
+    provider, so the provider guard alone can't be what excludes it) does
+    not.
     """
 
     org_id = f"chaos-3380-e2e-{uuid.uuid4().hex[:12]}"
@@ -443,18 +455,30 @@ async def test_gitlab_project_resolves_end_to_end_through_the_native_status_chan
         await _run_autoimport(
             monkeypatch,
             org_id,
-            projects={
-                GITLAB_PROJECT_PATH: _FakeGitLabProject(name=GITLAB_PROJECT_NAME),
-                OTHER_PROJECT_PATH: _FakeGitLabProject(name=OTHER_PROJECT_NAME),
-            },
+            projects=[
+                GitLabDiscoveredProject(
+                    id=GITLAB_PROJECT_NUMERIC_ID,
+                    path_with_namespace=GITLAB_PROJECT_PATH,
+                    name=GITLAB_PROJECT_NAME,
+                    archived=False,
+                    web_url="",
+                ),
+                GitLabDiscoveredProject(
+                    id=OTHER_PROJECT_NUMERIC_ID,
+                    path_with_namespace=OTHER_PROJECT_PATH,
+                    name=OTHER_PROJECT_NAME,
+                    archived=False,
+                    web_url="",
+                ),
+            ],
         )
+        entity_id = _catalog_id(org_id, GITLAB_PROJECT_NUMERIC_ID)
 
         # The merged CHAOS-3374 join REQUIRES work_items.provider = the
         # catalog row's own provider (native_status_change._project_identity_
-        # match: "provider = catalog_provider"). Verified here against the
-        # REAL rows this test just wrote, not assumed: both producers must
-        # agree on the literal string "gitlab", or every assertion below
-        # would pass or fail for the wrong reason.
+        # match: "provider = catalog_provider"), AND (round 2) matches
+        # through project_key, not id. Verified here against the REAL rows
+        # this test just wrote, not assumed.
         work_item_providers = {
             row[0]
             for row in raw_client.query(
@@ -463,16 +487,13 @@ async def test_gitlab_project_resolves_end_to_end_through_the_native_status_chan
                 parameters={"org_id": org_id},
             ).result_rows
         }
-        catalog_providers = {
-            row[0]
-            for row in raw_client.query(
-                "SELECT DISTINCT provider FROM projects FINAL "
-                "WHERE org_id = {org_id:String} AND id = {pid:String}",
-                parameters={"org_id": org_id, "pid": GITLAB_PROJECT_PATH},
-            ).result_rows
-        }
+        catalog_row = raw_client.query(
+            "SELECT provider, project_key FROM projects FINAL "
+            "WHERE org_id = {org_id:String} AND id = {pid:String}",
+            parameters={"org_id": org_id, "pid": entity_id},
+        ).result_rows
         assert work_item_providers == {"gitlab"}, work_item_providers
-        assert catalog_providers == {"gitlab"}, catalog_providers
+        assert catalog_row == [("gitlab", GITLAB_PROJECT_PATH)], catalog_row
 
         catalog = ClickHouseAuthorizedEntityCatalog(sink)
         service = ScopeResolutionService(catalog)
@@ -480,7 +501,7 @@ async def test_gitlab_project_resolves_end_to_end_through_the_native_status_chan
             org_id,
             "permission-live",
             ScopeResolveRequest(
-                explicit_refs=(ScopeRef(EntityKind.PROJECT, GITLAB_PROJECT_PATH),)
+                explicit_refs=(ScopeRef(EntityKind.PROJECT, entity_id),)
             ),
         )
         assert resolution.outcome.value == "exact"
@@ -519,18 +540,29 @@ async def test_archived_gitlab_project_is_not_resolvable(
         await _run_autoimport(
             monkeypatch,
             org_id,
-            projects={
-                GITLAB_PROJECT_PATH: _FakeGitLabProject(
-                    name=GITLAB_PROJECT_NAME, archived=True
+            projects=[
+                GitLabDiscoveredProject(
+                    id=GITLAB_PROJECT_NUMERIC_ID,
+                    path_with_namespace=GITLAB_PROJECT_PATH,
+                    name=GITLAB_PROJECT_NAME,
+                    archived=True,
+                    web_url="",
                 ),
-                OTHER_PROJECT_PATH: _FakeGitLabProject(name=OTHER_PROJECT_NAME),
-            },
+                GitLabDiscoveredProject(
+                    id=OTHER_PROJECT_NUMERIC_ID,
+                    path_with_namespace=OTHER_PROJECT_PATH,
+                    name=OTHER_PROJECT_NAME,
+                    archived=False,
+                    web_url="",
+                ),
+            ],
         )
+        entity_id = _catalog_id(org_id, GITLAB_PROJECT_NUMERIC_ID)
 
         row = raw_client.query(
             "SELECT is_active FROM projects FINAL "
             "WHERE org_id = {org_id:String} AND id = {pid:String} AND provider = 'gitlab'",
-            parameters={"org_id": org_id, "pid": GITLAB_PROJECT_PATH},
+            parameters={"org_id": org_id, "pid": entity_id},
         ).result_rows
         assert row == [(0,)]
 
@@ -552,7 +584,7 @@ async def test_archived_gitlab_project_is_not_resolvable(
             org_id,
             "permission-live",
             ScopeResolveRequest(
-                explicit_refs=(ScopeRef(EntityKind.PROJECT, GITLAB_PROJECT_PATH),)
+                explicit_refs=(ScopeRef(EntityKind.PROJECT, entity_id),)
             ),
         )
         assert contract.outcome.value != "exact", (
@@ -564,33 +596,35 @@ async def test_archived_gitlab_project_is_not_resolvable(
 
 
 @pytest.mark.asyncio
-async def test_gitlab_project_id_colliding_with_a_jira_catalog_id_stays_distinct(
+async def test_gitlab_project_key_colliding_with_a_jira_catalog_key_stays_distinct(
     sink: Any, raw_client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CHAOS-3380 cross-provider coverage.
+    """CHAOS-3380 round 2 cross-provider coverage.
 
-    ``projects``' ReplacingMergeTree key is ``(org_id, provider, id)``
-    (native_status_change._PROJECT_IDENTITY_CTE's own comment on the sibling
-    CHAOS-3374 branch) -- ``id`` alone is only unique WITHIN one provider. A
-    GitLab project's raw path can coincidentally equal another provider's raw
-    catalog id in the SAME org (nothing enforces cross-provider id
-    uniqueness); this pins that BOTH rows survive ``FINAL`` as distinct rows
-    scoped by provider, rather than one silently replacing the other.
+    Both Jira and GitLab now resolve through the SAME identity arm
+    (``project_key``, CHAOS-3380 round 2's immutable-id model mirrors
+    Jira's). A raw string shared between a GitLab project's current path and
+    a Jira project's raw key (nothing prevents this -- they are independent
+    id spaces) must never let one provider's project resolve into the
+    other's rows. The catalog ``id`` column itself can no longer collide
+    cross-provider now that GitLab's id is prefixed like Jira's (different
+    provider segment in the same string), so the meaningful collision surface
+    moved entirely to ``project_key`` -- this is that test, not a
+    ``id``-collision repeat of the pre-round-2 version.
     """
 
     org_id = f"chaos-3380-collide-{uuid.uuid4().hex[:10]}"
     now = datetime.now(timezone.utc)
-    colliding_id = f"collide-{uuid.uuid4().hex[:8]}"
+    colliding_key = f"collide-{uuid.uuid4().hex[:8]}"
     try:
-        # A Jira-provider row using the colliding string as its (prefixed-in-
-        # production, but here deliberately bare) id.
+        # A Jira-provider row using the colliding string as its raw key.
         sink.write_projects(
             [
                 ProjectRecord(
-                    id=colliding_id,
+                    id=f"{org_id}:jira:{colliding_key}",
                     org_id=org_id,
                     provider="jira",
-                    project_key="COLLIDE",
+                    project_key=colliding_key,
                     name="Jira Side",
                     is_active=1,
                     updated_at=now,
@@ -598,24 +632,145 @@ async def test_gitlab_project_id_colliding_with_a_jira_catalog_id_stays_distinct
                 )
             ]
         )
-        # A GitLab project whose raw path happens to be the SAME string,
+        # A GitLab project whose CURRENT path happens to be the same string,
         # written through the production worker.
         await _run_autoimport(
             monkeypatch,
             org_id,
-            projects={colliding_id: _FakeGitLabProject(name="GitLab Side")},
+            projects=[
+                GitLabDiscoveredProject(
+                    id="7001",
+                    path_with_namespace=colliding_key,
+                    name="GitLab Side",
+                    archived=False,
+                    web_url="",
+                )
+            ],
         )
 
         rows = sorted(
             raw_client.query(
                 "SELECT provider, name FROM projects FINAL "
-                "WHERE org_id = {org_id:String} AND id = {pid:String}",
-                parameters={"org_id": org_id, "pid": colliding_id},
+                "WHERE org_id = {org_id:String} AND project_key = {key:String}",
+                parameters={"org_id": org_id, "key": colliding_key},
             ).result_rows
         )
         assert rows == [("gitlab", "GitLab Side"), ("jira", "Jira Side")], (
-            "the two providers' rows did not both survive FINAL as distinct rows: "
-            f"{rows}"
+            "the two providers' rows did not both survive as distinct rows "
+            f"keyed by project_key: {rows}"
+        )
+
+        # And the resolver-visible property: naming the shared key resolves
+        # AMBIGUOUS (two active catalog rows share... no, they have DIFFERENT
+        # names here, so each name resolves to exactly its own provider's row.
+        service = ScopeResolutionService(ClickHouseAuthorizedEntityCatalog(sink))
+        gitlab_resolution = await service.resolve_mention(
+            org_id,
+            "permission-live",
+            lookup_text="GitLab Side",
+            kinds=(EntityKind.PROJECT,),
+        )
+        assert gitlab_resolution.outcome is ResolutionOutcome.EXACT_MATCH
+        assert gitlab_resolution.entity is not None
+        assert gitlab_resolution.entity.canonical_id == _catalog_id(org_id, "7001")
+    finally:
+        _cleanup(raw_client, org_id)
+
+
+@pytest.mark.asyncio
+async def test_gitlab_source_selection_filters_unselected_projects_live(
+    sink: Any, raw_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-3380 round 2 (Codex MEDIUM), verified against real ClickHouse
+    rows rather than only the fake-sink unit test: an unselected project
+    never becomes a resolvable Ask Dev subject."""
+
+    org_id = f"chaos-3380-selection-{uuid.uuid4().hex[:10]}"
+    try:
+        summary = await _run_autoimport(
+            monkeypatch,
+            org_id,
+            projects=[
+                GitLabDiscoveredProject(
+                    id=GITLAB_PROJECT_NUMERIC_ID,
+                    path_with_namespace=GITLAB_PROJECT_PATH,
+                    name=GITLAB_PROJECT_NAME,
+                    archived=False,
+                    web_url="",
+                ),
+                GitLabDiscoveredProject(
+                    id=OTHER_PROJECT_NUMERIC_ID,
+                    path_with_namespace=OTHER_PROJECT_PATH,
+                    name=OTHER_PROJECT_NAME,
+                    archived=False,
+                    web_url="",
+                ),
+            ],
+            source_external_ids=[GITLAB_PROJECT_NUMERIC_ID],
+        )
+        assert summary["native_projects_imported"] == 1
+
+        rows = raw_client.query(
+            "SELECT id FROM projects FINAL WHERE org_id = {org_id:String}",
+            parameters={"org_id": org_id},
+        ).result_rows
+        assert {r[0] for r in rows} == {_catalog_id(org_id, GITLAB_PROJECT_NUMERIC_ID)}
+
+        service = ScopeResolutionService(ClickHouseAuthorizedEntityCatalog(sink))
+        unselected = await service.resolve_mention(
+            org_id,
+            "permission-live",
+            lookup_text=OTHER_PROJECT_NAME,
+            kinds=(EntityKind.PROJECT,),
+        )
+        assert unselected.outcome is ResolutionOutcome.NO_AUTHORIZED_MATCH, (
+            "an unselected GitLab project resolved as an Ask Dev subject"
+        )
+    finally:
+        _cleanup(raw_client, org_id)
+
+
+@pytest.mark.asyncio
+async def test_oracle_does_not_flag_a_gitlab_epic_group_path_as_missing(
+    sink: Any, raw_client: Any
+) -> None:
+    """CHAOS-3380 round 2 (Codex MEDIUM, group-epics carve-out).
+
+    ``providers/gitlab/normalize.gitlab_epic_to_work_item`` sets
+    ``work_items.project_id`` to the GROUP path and ``type='epic'`` -- a
+    wholly different identity space with NO catalog entity in this ticket.
+    The oracle must not report that group path as a "missing" gap (it is a
+    documented carve-out, not a defect), while a genuine uncataloged
+    PROJECT-path reference still IS reported -- proving the exclusion is
+    precise, not a blanket "ignore everything" that would hide real gaps too.
+    """
+
+    org_id = f"chaos-3380-epic-{uuid.uuid4().hex[:10]}"
+    now = datetime.now(timezone.utc)
+    try:
+        sink.org_id = org_id
+        epic_group_path = "full-chaos/platform-group"
+        uncataloged_project = replace(
+            _normalize(1, "full-chaos/no-catalog-row"), org_id=org_id
+        )
+        epic_item = replace(
+            uncataloged_project,
+            work_item_id=f"gitlab:{epic_group_path}:epic:1",
+            project_id=epic_group_path,
+            project_key=None,
+            type="epic",
+            updated_at=now,
+        )
+        sink.write_work_items([uncataloged_project, epic_item])
+
+        gaps = project_subject_gaps(raw_client, org_id=org_id, provider="gitlab")
+        gap_ids = {gap.project_id for gap in gaps}
+        assert epic_group_path not in gap_ids, (
+            "the epic's group path was reported as a gap; it is an explicit, "
+            "out-of-scope carve-out, not a defect"
+        )
+        assert "full-chaos/no-catalog-row" in gap_ids, (
+            "the exclusion swallowed a genuine, uncataloged PROJECT reference too"
         )
     finally:
         _cleanup(raw_client, org_id)

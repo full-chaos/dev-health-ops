@@ -7,47 +7,34 @@ import pytest
 
 from dev_health_ops.api.admin.schemas_flat import DiscoveredMember, DiscoveredTeam
 from dev_health_ops.api.services.configuration.team_discovery import (
+    GitLabDiscoveredProject,
     GitLabDiscoveryResult,
 )
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.workers import team_autoimport_github, team_autoimport_gitlab
 
 
-@dataclass
-class _FakeGitLabProject:
-    """Stand-in for a python-gitlab ``Project`` RESTObject: attribute access only."""
-
-    name: str
-    archived: bool = False
-    web_url: str = ""
-
-
-def _fake_gitlab_work_client_cls(
-    projects: dict[str, _FakeGitLabProject],
+def _discovered_project(
+    id: str,
+    path: str,
     *,
-    fail_paths: frozenset[str] = frozenset(),
-) -> type:
-    """A ``GitLabWorkClient`` stand-in keyed by the SAME path used to fetch it.
-
-    Never makes a network call -- unit tests must not depend on GitLab being
-    reachable. ``fail_paths`` models a project whose metadata fetch fails
-    (e.g. a 404 for a project deleted since discovery ran) without touching
-    every other discovered project.
+    name: str | None = None,
+    archived: bool = False,
+    web_url: str = "",
+) -> GitLabDiscoveredProject:
+    """A ``GitLabDiscoveredProject`` exactly as ``discover_gitlab``'s flat,
+    recursive listing call produces it (CHAOS-3380 round 2): ``id`` is
+    GitLab's own immutable numeric project id, ``path`` is the CURRENT
+    ``path_with_namespace``.
     """
 
-    class _FakeGitLabWorkClient:
-        def __init__(self, *, auth: Any, org_id: str | None = None) -> None:
-            self.auth = auth
-            self.org_id = org_id
-
-        def get_project(self, project_id_or_path: str) -> _FakeGitLabProject:
-            if project_id_or_path in fail_paths:
-                raise RuntimeError(
-                    f"simulated GitLab fetch failure: {project_id_or_path}"
-                )
-            return projects[project_id_or_path]
-
-    return _FakeGitLabWorkClient
+    return GitLabDiscoveredProject(
+        id=id,
+        path_with_namespace=path,
+        name=name or path,
+        archived=archived,
+        web_url=web_url,
+    )
 
 
 @dataclass
@@ -354,7 +341,21 @@ def test_gitlab_group_import_writes_provider_access_project_ownership(
                         "provider_org": group_path,
                     },
                 ),
-            ]
+            ],
+            projects=[
+                _discovered_project(
+                    "101",
+                    "full-chaos/platform",
+                    name="Platform",
+                    web_url="https://gitlab.com/full-chaos/platform",
+                ),
+                _discovered_project(
+                    "102",
+                    "full-chaos/dev-health/api",
+                    name="API",
+                    web_url="https://gitlab.com/full-chaos/dev-health/api",
+                ),
+            ],
         )
 
     async def discover_members_gitlab(
@@ -384,20 +385,6 @@ def test_gitlab_group_import_writes_provider_access_project_ownership(
     monkeypatch.setattr(
         team_autoimport_gitlab, "load_identity_resolver", lambda: resolver
     )
-    monkeypatch.setattr(
-        team_autoimport_gitlab,
-        "GitLabWorkClient",
-        _fake_gitlab_work_client_cls(
-            {
-                "full-chaos/platform": _FakeGitLabProject(
-                    name="Platform", web_url="https://gitlab.com/full-chaos/platform"
-                ),
-                "full-chaos/dev-health/api": _FakeGitLabProject(
-                    name="API", web_url="https://gitlab.com/full-chaos/dev-health/api"
-                ),
-            }
-        ),
-    )
 
     summary = team_autoimport_gitlab.populate(
         org_id="org-1",
@@ -415,18 +402,25 @@ def test_gitlab_group_import_writes_provider_access_project_ownership(
     # above (which counts team-ownership project PATHS, not catalog rows).
     assert summary["native_projects_imported"] == 2
     assert summary["native_projects_complete"] is True
+    assert summary["native_projects_filtered_by_selection"] == 0
+    # CHAOS-3380 round 2 (Codex HIGH): the catalog id is GitLab's IMMUTABLE
+    # numeric project id, prefixed like Jira's -- never the mutable path.
     assert {row.id for row in sink.projects} == {
+        "org-1:gitlab:101",
+        "org-1:gitlab:102",
+    }
+    assert {row.provider for row in sink.projects} == {"gitlab"}
+    # project_key carries the CURRENT path -- the identity join
+    # (native_status_change._project_identity_match, CHAOS-3374) resolves a
+    # GitLab project through THIS arm, matching providers/gitlab/normalize.py
+    # now writing the SAME path onto work_items.project_key.
+    assert {row.project_key for row in sink.projects} == {
         "full-chaos/platform",
         "full-chaos/dev-health/api",
     }
-    assert {row.provider for row in sink.projects} == {"gitlab"}
-    # project_key is ALWAYS None: GitLab work items never set project_key
-    # (providers/gitlab/normalize.py), so the id is the only identity arm the
-    # native_status_change join (CHAOS-3374) can ever match a GitLab project
-    # through.
-    assert {row.project_key for row in sink.projects} == {None}
     assert {row.is_active for row in sink.projects} == {1}
-    platform_row = next(row for row in sink.projects if row.id == "full-chaos/platform")
+    platform_row = next(row for row in sink.projects if row.id == "org-1:gitlab:101")
+    assert platform_row.project_key == "full-chaos/platform"
     assert platform_row.name == "Platform"
     assert platform_row.url == "https://gitlab.com/full-chaos/platform"
     assert {row["id"] for row in sink.teams} == {
@@ -528,7 +522,12 @@ def test_github_personal_account_or_unsupported_response_skips_without_touching_
 
 
 def _patch_single_group_gitlab_discovery(
-    monkeypatch: pytest.MonkeyPatch, *, repo_patterns: list[str]
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    repo_patterns: list[str],
+    projects: list[GitLabDiscoveredProject] | None = None,
+    truncated: bool = False,
+    warnings: list[str] | None = None,
 ) -> RecordingSink:
     """Common CHAOS-3380 fixture: one GitLab group owning ``repo_patterns``."""
 
@@ -549,7 +548,10 @@ def _patch_single_group_gitlab_discovery(
                         "provider_org": group_path,
                     },
                 ),
-            ]
+            ],
+            projects=projects or [],
+            truncated=truncated,
+            warnings=warnings or [],
         )
 
     async def discover_members_gitlab(
@@ -576,6 +578,19 @@ def _patch_single_group_gitlab_discovery(
     return sink
 
 
+def _populate_gitlab(**scope_overrides: Any) -> dict[str, Any]:
+    scope: dict[str, Any] = {
+        "analytics_db": "clickhouse://test",
+        "sync_options": {"auto_import_teams": True},
+    }
+    scope.update(scope_overrides)
+    return team_autoimport_gitlab.populate(
+        org_id="org-1",
+        credentials={"token": "secret", "group_path": "full-chaos"},
+        scope=scope,
+    )
+
+
 def test_gitlab_archived_project_is_written_as_retired(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -591,95 +606,172 @@ def test_gitlab_archived_project_is_written_as_retired(
     """
 
     sink = _patch_single_group_gitlab_discovery(
-        monkeypatch, repo_patterns=["full-chaos/legacy"]
-    )
-    monkeypatch.setattr(
-        team_autoimport_gitlab,
-        "GitLabWorkClient",
-        _fake_gitlab_work_client_cls(
-            {"full-chaos/legacy": _FakeGitLabProject(name="Legacy", archived=True)}
-        ),
+        monkeypatch,
+        repo_patterns=["full-chaos/legacy"],
+        projects=[_discovered_project("201", "full-chaos/legacy", archived=True)],
     )
 
-    summary = team_autoimport_gitlab.populate(
-        org_id="org-1",
-        credentials={"token": "secret", "group_path": "full-chaos"},
-        scope={
-            "analytics_db": "clickhouse://test",
-            "sync_options": {"auto_import_teams": True},
-        },
-    )
+    summary = _populate_gitlab()
 
     assert summary["native_projects_imported"] == 1
-    assert sink.projects[0].id == "full-chaos/legacy"
+    assert sink.projects[0].id == "org-1:gitlab:201"
+    assert sink.projects[0].project_key == "full-chaos/legacy"
     assert sink.projects[0].is_active == 0
 
 
-def test_gitlab_project_metadata_fetch_failure_skips_only_that_project(
+def test_gitlab_project_rename_updates_the_same_catalog_row_by_immutable_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A single project's metadata fetch failing must not discard the rest.
+    """CHAOS-3380 round 2 (Codex HIGH): rename/transfer, made explicit.
 
-    Mirrors Linear's ``native_projects_complete`` contract: a partial catalog
-    is reported INCOMPLETE rather than silently passing as a full one, but
-    team ownership (independent of the catalog fetch) is unaffected.
+    The SAME numeric project id, discovered under a NEW path on a later run
+    (a rename or a group transfer), must mint a catalog row with the SAME
+    ``id`` -- so the ReplacingMergeTree row this becomes in production is a
+    new VERSION of the same subject, not a second, unrelated one -- with
+    ``project_key`` updated to the new path. Work items ingested under the
+    OLD path are NOT reattached by this (their own ``project_key`` was baked
+    in at ingestion time, and GitLab's own work_item_id is path-derived,
+    pre-existing and out of this ticket's scope) -- they simply stop
+    matching until the provider sync re-ingests them under the new path.
+    That is the fail-safe direction: orphaned, never silently merged into an
+    unrelated project's history.
     """
 
     sink = _patch_single_group_gitlab_discovery(
         monkeypatch,
-        repo_patterns=["full-chaos/ok", "full-chaos/gone"],
+        repo_patterns=["full-chaos/old-name"],
+        projects=[_discovered_project("301", "full-chaos/old-name")],
     )
-    monkeypatch.setattr(
-        team_autoimport_gitlab,
-        "GitLabWorkClient",
-        _fake_gitlab_work_client_cls(
-            {"full-chaos/ok": _FakeGitLabProject(name="OK")},
-            fail_paths=frozenset({"full-chaos/gone"}),
-        ),
+    before = _populate_gitlab()
+    assert sink.projects[-1].id == "org-1:gitlab:301"
+    assert sink.projects[-1].project_key == "full-chaos/old-name"
+
+    sink2 = _patch_single_group_gitlab_discovery(
+        monkeypatch,
+        repo_patterns=["full-chaos/new-name"],
+        projects=[_discovered_project("301", "full-chaos/new-name")],
     )
+    after = _populate_gitlab()
 
-    summary = team_autoimport_gitlab.populate(
-        org_id="org-1",
-        credentials={"token": "secret", "group_path": "full-chaos"},
-        scope={
-            "analytics_db": "clickhouse://test",
-            "sync_options": {"auto_import_teams": True},
-        },
-    )
-
-    assert summary["native_projects_imported"] == 1
-    assert summary["native_projects_complete"] is False
-    assert {row.id for row in sink.projects} == {"full-chaos/ok"}
-    # Team ownership is a separate fetch and must survive the partial catalog.
-    assert summary["team_project_ownership_imported"] == 2
+    assert before["native_projects_imported"] == 1
+    assert after["native_projects_imported"] == 1
+    # SAME catalog id across the rename.
+    assert sink2.projects[-1].id == "org-1:gitlab:301"
+    # project_key tracks the CURRENT path.
+    assert sink2.projects[-1].project_key == "full-chaos/new-name"
 
 
-def test_gitlab_no_discovered_projects_skips_the_metadata_fetch_entirely(
+def test_gitlab_source_selection_filters_unselected_projects_from_the_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No repo_patterns discovered -> no GitLab API call is even attempted.
+    """CHAOS-3380 round 2 (Codex MEDIUM): only ENABLED sources get cataloged.
 
-    ``GitLabWorkClient`` is patched to raise on construction, so this fails
-    loudly if the "nothing to fetch" guard is ever removed.
+    ``source_external_ids`` (populated by the reference-discovery scope,
+    ``workers/reference_discovery.py``) carries the enabled
+    ``IntegrationSource.external_id`` values -- GitLab's numeric project id.
+    A project the credential can see but this sync run did not select must
+    never become a resolvable Ask Dev subject.
     """
+
+    sink = _patch_single_group_gitlab_discovery(
+        monkeypatch,
+        repo_patterns=["full-chaos/selected", "full-chaos/unselected"],
+        projects=[
+            _discovered_project("401", "full-chaos/selected"),
+            _discovered_project("402", "full-chaos/unselected"),
+        ],
+    )
+
+    summary = _populate_gitlab(source_external_ids=["401"])
+
+    assert summary["native_projects_imported"] == 1
+    assert summary["native_projects_filtered_by_selection"] == 1
+    assert {row.id for row in sink.projects} == {"org-1:gitlab:401"}
+    assert "full-chaos/unselected" not in {row.project_key for row in sink.projects}
+
+
+def test_gitlab_source_selection_empty_list_catalogs_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit EMPTY enabled-sources list means "select none", not
+    "no restriction" -- distinguished from the key being absent entirely
+    (see the next test)."""
+
+    sink = _patch_single_group_gitlab_discovery(
+        monkeypatch,
+        repo_patterns=["full-chaos/a"],
+        projects=[_discovered_project("501", "full-chaos/a")],
+    )
+
+    summary = _populate_gitlab(source_external_ids=[])
+
+    assert summary["native_projects_imported"] == 0
+    assert sink.projects == []
+
+
+def test_gitlab_source_selection_absent_catalogs_everything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Documents the residual gap explicitly rather than leaving it silent:
+    the common POST-SYNC trigger (workers/team_autoimport.py.
+    run_post_sync_team_autoimport) does not populate ``source_external_ids``
+    in scope at all today, so this filter is a no-op on that path -- every
+    discovered project is cataloged, exactly as before this change. Closing
+    it there needs a change to that shared dispatcher (all 4 providers),
+    out of this ticket's scope.
+    """
+
+    sink = _patch_single_group_gitlab_discovery(
+        monkeypatch,
+        repo_patterns=["full-chaos/a", "full-chaos/b"],
+        projects=[
+            _discovered_project("601", "full-chaos/a"),
+            _discovered_project("602", "full-chaos/b"),
+        ],
+    )
+
+    summary = _populate_gitlab()  # no source_external_ids key at all
+
+    assert summary["native_projects_imported"] == 2
+    assert summary["native_projects_filtered_by_selection"] == 0
+    assert len(sink.projects) == 2
+
+
+def test_gitlab_truncated_discovery_marks_the_catalog_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3380 round 2 (Codex HIGH): a truncated discovery walk (either
+    the teams walk or the flat projects listing hitting its pagination
+    bound) must never be recorded as a complete catalog.
+    """
+
+    sink = _patch_single_group_gitlab_discovery(
+        monkeypatch,
+        repo_patterns=["full-chaos/a"],
+        projects=[_discovered_project("701", "full-chaos/a")],
+        truncated=True,
+        warnings=["GitLab team discovery truncated projects (...) at 5000 results"],
+    )
+
+    summary = _populate_gitlab()
+
+    assert summary["native_projects_complete"] is False
+    # The rows discovery DID return are still cataloged -- truncation means
+    # "possibly incomplete", not "discard everything we got".
+    assert summary["native_projects_imported"] == 1
+    assert sink.projects[0].project_key == "full-chaos/a"
+
+
+def test_gitlab_no_discovered_projects_writes_no_catalog_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No projects in the discovery result -> nothing written, no network
+    call attempted (the catalog rows are mapped straight off ``result.
+    projects``, never fetched separately per project)."""
 
     sink = _patch_single_group_gitlab_discovery(monkeypatch, repo_patterns=[])
 
-    def _explode(*, auth: Any, org_id: str | None = None) -> Any:
-        raise AssertionError(
-            "no project paths were discovered; GitLabWorkClient must not be constructed"
-        )
-
-    monkeypatch.setattr(team_autoimport_gitlab, "GitLabWorkClient", _explode)
-
-    summary = team_autoimport_gitlab.populate(
-        org_id="org-1",
-        credentials={"token": "secret", "group_path": "full-chaos"},
-        scope={
-            "analytics_db": "clickhouse://test",
-            "sync_options": {"auto_import_teams": True},
-        },
-    )
+    summary = _populate_gitlab()
 
     assert summary["native_projects_imported"] == 0
     assert summary["native_projects_complete"] is True

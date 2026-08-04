@@ -19,6 +19,7 @@ import os
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -490,3 +491,136 @@ async def test_discover_gitlab_not_truncated_under_bound(monkeypatch):
     assert result.truncated is False
     assert result.warnings == []
     assert len(result.teams) == 1
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3380 round 2 (Codex HIGH): the flat, recursive project listing
+# ---------------------------------------------------------------------------
+
+
+def _projects_list_side_effect(
+    *, per_group: list[SimpleNamespace], flat: list[SimpleNamespace]
+):
+    """``group.projects.list(...)`` returns different pages depending on
+    ``include_subgroups`` -- exactly what a real GitLab server does: the
+    per-group teams walk asks for one group's own projects (no kwarg), the
+    new flat catalog walk asks for the whole tree (``include_subgroups=True``).
+    """
+
+    def _side_effect(*args: object, **kwargs: object) -> Any:
+        return iter(flat if kwargs.get("include_subgroups") else per_group)
+
+    return _side_effect
+
+
+@pytest.mark.asyncio
+async def test_discover_gitlab_projects_walk_reaches_grandchild_subgroups(
+    monkeypatch,
+):
+    """The teams walk (root + DIRECT subgroups only) cannot see a project
+    under a grandchild subgroup nested two levels down -- ``result.projects``
+    must, via the ``include_subgroups=True`` flat listing, with no manual
+    recursion into that grandchild subgroup at all.
+    """
+    from dev_health_ops.api.services.configuration import team_discovery as td
+
+    root_group = MagicMock()
+    root_group.full_path = "root"
+    root_group.name = "Root"
+    root_group.description = None
+    # No direct subgroups discovered -- the OLD walk would see only root's
+    # own direct projects.
+    root_group.subgroups.list.return_value = iter([])
+    root_group.projects.list.side_effect = _projects_list_side_effect(
+        per_group=[SimpleNamespace(path_with_namespace="root/direct")],
+        flat=[
+            SimpleNamespace(
+                id=1,
+                path_with_namespace="root/direct",
+                name="Direct",
+                archived=False,
+                web_url="https://gitlab.example/root/direct",
+            ),
+            # Lives under root/child/grandchild -- a subgroup the teams walk
+            # above never enumerated at all.
+            SimpleNamespace(
+                id=2,
+                path_with_namespace="root/child/grandchild/deep-project",
+                name="Deep Project",
+                archived=True,
+                web_url="https://gitlab.example/root/child/grandchild/deep-project",
+            ),
+        ],
+    )
+
+    fake_gl = MagicMock()
+    fake_gl.groups.get.return_value = root_group
+
+    with patch("gitlab.Gitlab", return_value=fake_gl):
+        svc = td.TeamDiscoveryService(None, ORG_ID)
+        result = await svc.discover_gitlab(token="t", group_path="root")
+
+    # The teams walk is UNCHANGED: only root's own direct project.
+    assert result.teams[0].associations["repo_patterns"] == ["root/direct"]
+    # The flat projects walk covers the grandchild-nested project too.
+    assert {p.path_with_namespace for p in result.projects} == {
+        "root/direct",
+        "root/child/grandchild/deep-project",
+    }
+    deep = next(
+        p
+        for p in result.projects
+        if p.path_with_namespace == "root/child/grandchild/deep-project"
+    )
+    assert deep.id == "2"
+    assert deep.archived is True
+    assert deep.web_url == "https://gitlab.example/root/child/grandchild/deep-project"
+
+
+@pytest.mark.asyncio
+async def test_discover_gitlab_projects_walk_flags_truncation_independently(
+    monkeypatch,
+):
+    """A truncated FLAT projects walk must be reported even when the
+    per-group teams walk stays comfortably under ITS OWN bound -- the two
+    walks are separate calls with separate bounds, and either one hitting its
+    limit must mark the whole result truncated.
+    """
+    from dev_health_ops.api.services.configuration import team_discovery as td
+
+    monkeypatch.setattr(td, "MAX_GITLAB_DISCOVERY_ALL_PROJECTS", 2)
+    monkeypatch.setattr(td, "MAX_GITLAB_DISCOVERY_PROJECTS", 100)
+
+    root_group = MagicMock()
+    root_group.full_path = "big-group"
+    root_group.name = "Big Group"
+    root_group.description = None
+    root_group.subgroups.list.return_value = iter([])
+    root_group.projects.list.side_effect = _projects_list_side_effect(
+        per_group=[SimpleNamespace(path_with_namespace="big-group/only")],
+        flat=[
+            SimpleNamespace(
+                id=i,
+                path_with_namespace=f"big-group/p{i}",
+                name=f"P{i}",
+                archived=False,
+                web_url="",
+            )
+            for i in range(5)
+        ],
+    )
+
+    fake_gl = MagicMock()
+    fake_gl.groups.get.return_value = root_group
+
+    with patch("gitlab.Gitlab", return_value=fake_gl):
+        svc = td.TeamDiscoveryService(None, ORG_ID)
+        result = await svc.discover_gitlab(token="t", group_path="big-group")
+
+    assert result.truncated is True
+    assert any(
+        "truncated projects (including all subgroups)" in w for w in result.warnings
+    )
+    assert len(result.projects) == 2
+    # The per-group teams walk, well under ITS bound, is untouched.
+    assert result.teams[0].associations["repo_patterns"] == ["big-group/only"]

@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 # calls; cap the walk and log when results are truncated.
 MAX_GITLAB_DISCOVERY_SUBGROUPS = 500
 MAX_GITLAB_DISCOVERY_PROJECTS = 500
+#: CHAOS-3380 (Codex HIGH round 2): the project catalog walk below is a
+#: SEPARATE, flatter enumeration from the per-group ``MAX_GITLAB_DISCOVERY_
+#: PROJECTS`` walk above (which the ``teams``/``repo_patterns`` walk still
+#: uses, unchanged) -- it lists every project under the ENTIRE root group
+#: tree, including grandchild subgroups, in one paginated call
+#: (``include_subgroups=True``), so it needs its own, larger bound rather
+#: than reusing the per-group one.
+MAX_GITLAB_DISCOVERY_ALL_PROJECTS = 5000
 
 
 def _bounded_list(
@@ -58,16 +66,48 @@ def _bounded_list(
     return items
 
 
+@dataclass(frozen=True)
+class GitLabDiscoveredProject:
+    """One GitLab project as returned by a group's project LISTING call.
+
+    CHAOS-3380: sourced entirely from the listing response (``GET /groups/
+    :id/projects``, which GitLab's API documents as returning the same rich
+    project representation the single-project ``GET /projects/:id`` does --
+    ``id``, ``path_with_namespace``, ``name``, ``archived``, and ``web_url``
+    are all present on it), never from a per-project follow-up GET -- see
+    ``discover_gitlab``'s ``include_subgroups=True`` listing call below.
+
+    ``id`` is GitLab's own IMMUTABLE numeric project id (as a string) --
+    ``sync/discovery.py``'s ``_map_gitlab_tuple`` already documents this as
+    "the canonical GitLab identifier" and keys ``IntegrationSource.
+    external_id`` on it. ``path_with_namespace`` is the CURRENT, MUTABLE
+    slug -- renaming or transferring a project changes it without changing
+    ``id``.
+    """
+
+    id: str
+    path_with_namespace: str
+    name: str
+    archived: bool
+    web_url: str
+
+
 @dataclass
 class GitLabDiscoveryResult:
     """Outcome of a GitLab team discovery walk.
 
     ``truncated`` is True when any subgroup/project listing hit the discovery
-    pagination bound, meaning ``teams`` (or their ``repo_patterns``) are a
-    partial view; ``warnings`` carries the human-readable details.
+    pagination bound (either the per-group ``teams`` walk or the flat
+    ``projects`` walk below), meaning ``teams`` (or their ``repo_patterns``)
+    or ``projects`` are a partial view; ``warnings`` carries the
+    human-readable details.
     """
 
     teams: list[DiscoveredTeam]
+    #: CHAOS-3380. Additive: existing callers (``api/admin/routers/teams.py``,
+    #: ``workers/team_drift_sync.py``) read only ``teams``/``truncated``/
+    #: ``warnings`` and are unaffected by this new field.
+    projects: list[GitLabDiscoveredProject] = field(default_factory=list)
     truncated: bool = False
     warnings: list[str] = field(default_factory=list)
 
@@ -155,11 +195,33 @@ class TeamDiscoveryService:
         group_path: str,
         url: str = "https://gitlab.com",
     ) -> GitLabDiscoveryResult:
-        """Discover groups/subgroups from GitLab.
+        """Discover groups/subgroups (as teams) and projects from GitLab.
 
         Returns a :class:`GitLabDiscoveryResult`; ``truncated`` is set when
-        the subgroup/project walk hit the discovery pagination bounds, so
-        callers can tell a partial import apart from a complete one.
+        any walk below hit its discovery pagination bound, so callers can
+        tell a partial import apart from a complete one.
+
+        Two SEPARATE walks, deliberately not unified (CHAOS-3380, Codex HIGH
+        round 2):
+
+        * ``teams`` -- root + DIRECT subgroups only (unchanged from before
+          CHAOS-3380), each carrying its OWN ``projects.list()`` page as
+          ``repo_patterns``. Existing behavior for existing callers
+          (``api/admin/routers/teams.py``, ``workers/team_drift_sync.py``,
+          and this worker's OWN ``_project_ownership_rows``) is preserved
+          byte-for-byte -- this walk still misses grandchild subgroups, a
+          PRE-EXISTING limitation this change does not touch or expand the
+          blast radius of.
+        * ``projects`` -- the full project catalog CHAOS-3380 needs, listed
+          in ONE recursive, paginated call via ``include_subgroups=True``
+          (a real, documented ``GroupProjectManager`` list filter --
+          ``gitlab/v4/objects/projects.py``'s ``GroupProjectManager.
+          _list_filters`` includes it) against the ROOT group only. This
+          covers grandchildren and below with no manual subgroup recursion,
+          and reads project metadata (``id``, ``path_with_namespace``,
+          ``name``, ``archived``, ``web_url``) straight off the listing
+          response -- no per-project follow-up GET, so no N+1 fan-out
+          regardless of how many projects a large install has.
         """
 
         def _discover() -> GitLabDiscoveryResult:
@@ -203,8 +265,31 @@ class TeamDiscoveryService:
                     )
                 )
 
+            all_projects_raw = _bounded_list(
+                root_group.projects.list(
+                    include_subgroups=True, per_page=100, iterator=True
+                ),
+                MAX_GITLAB_DISCOVERY_ALL_PROJECTS,
+                what="projects (including all subgroups)",
+                scope=group_path,
+                warnings=warnings,
+            )
+            projects = [
+                GitLabDiscoveredProject(
+                    id=str(project_id),
+                    path_with_namespace=str(path),
+                    name=str(getattr(raw, "name", "") or path),
+                    archived=bool(getattr(raw, "archived", False)),
+                    web_url=str(getattr(raw, "web_url", "") or ""),
+                )
+                for raw in all_projects_raw
+                if (project_id := getattr(raw, "id", None)) is not None
+                and (path := (getattr(raw, "path_with_namespace", "") or "")).strip()
+            ]
+
             return GitLabDiscoveryResult(
                 teams=teams,
+                projects=projects,
                 truncated=bool(warnings),
                 warnings=warnings,
             )

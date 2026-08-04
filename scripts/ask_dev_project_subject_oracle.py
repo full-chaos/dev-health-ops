@@ -1,27 +1,50 @@
 #!/usr/bin/env python3
-"""Differential oracle: every referenced Linear project is a resolvable subject.
+"""Differential oracle: every referenced project is a resolvable subject.
 
 Two independent producers write the two sides:
 
-* the **work-item sync** writes ``work_items.project_id`` / ``project_name``
-  (``providers/linear/normalize.py``), and
+* the **work-item sync** writes ``work_items.project_id`` / ``project_key`` /
+  ``project_name`` (``providers/<provider>/normalize.py``), and
 * the **team auto-import** writes ``projects`` rows
-  (``workers/team_autoimport_linear.py``, CHAOS-3365).
+  (``workers/team_autoimport_<provider>.py``, CHAOS-3365/CHAOS-3380).
 
 Nothing in the schema forces them to agree, and no type checker or code index
 can tell you whether they do — so this compares them by execution. The
 invariant: **every project id any work item currently points at must exist in
 the catalog, under the same name, and be resolvable.** A gap here is exactly
-the Ask Dev symptom — a user names a real Linear project and gets
+the Ask Dev symptom — a user names a real project and gets
 ``NO_AUTHORIZED_MATCH``.
 
 READ-ONLY. It issues a single ``SELECT``; it never writes, and it is safe to
 point at the dev ``default`` database.
 
+Two providers, two id spaces (CHAOS-3380 round 2, matching
+``native_status_change._project_identity_match``): Linear's catalog ``id`` IS
+the raw ``work_items.project_id`` (a project's own id never changes), so the
+join below matches directly. Jira's and GitLab's catalog ``id`` is prefixed/
+opaque (``{org}:<provider>:<native_id>``, immutable) because their own native
+project identity is a KEY (Jira) or a MUTABLE path (GitLab) rather than a
+stable id work_items itself carries — for those, the join instead matches
+``work_items.project_id`` (which stays the raw key/path, unchanged from
+before) against the catalog row's own ``project_key`` column. A project id
+this oracle cannot join by either arm is a genuine gap, not a false negative
+of the join itself.
+
+GitLab epics are explicitly EXCLUDED from the reference side (a named,
+tested carve-out, not silence): ``providers/gitlab/normalize.
+gitlab_epic_to_work_item`` sets ``work_items.project_id`` to the GROUP path,
+not a PROJECT path — a wholly different identity space with, deliberately,
+no catalog entity of its own in this ticket (CHAOS-3380 covers GitLab
+PROJECTS; group/epic subjects are an explicit follow-up). Comparing a group
+path against the project catalog would report a permanent, un-closeable
+"missing" gap for every org with epics enabled — a false signal about a
+carve-out, not a real defect.
+
 What it deliberately does NOT check, so nobody reads more into a green run than
 is there: it does not execute the async resolver itself (the equivalent
 ``EXACT_MATCH`` assertion lives in
-``tests/test_ask_dev_linear_project_subject_live.py``), and it has no catalog
+``tests/test_ask_dev_linear_project_subject_live.py`` /
+``tests/test_ask_dev_gitlab_project_subject_live.py``), and it has no catalog
 freshness floor — a row that stopped being refreshed still reads as present.
 
 Usage::
@@ -53,8 +76,11 @@ DEFAULT_ACCEPTANCE_PROJECT_IDS = ("13e65c04-40ec-4a95-8216-f7c2ce233244",)
 
 #: The catalog-side fields this oracle compares. Asserted against the real
 #: ``ProjectRecord`` so a rename breaks the oracle loudly instead of quietly
-#: comparing nothing.
-_COMPARED_PROJECT_FIELDS = frozenset({"id", "name", "is_active", "provider", "org_id"})
+#: comparing nothing. ``project_key`` (CHAOS-3380 round 2) is the join arm
+#: Jira/GitLab resolve through -- comparing it too, not just reading it.
+_COMPARED_PROJECT_FIELDS = frozenset(
+    {"id", "name", "is_active", "provider", "org_id", "project_key"}
+)
 
 # ``work_items`` is a ReplacingMergeTree(last_synced) keyed
 # (org_id, repo_id, work_item_id). A plain DISTINCT would resurrect the OLD
@@ -62,6 +88,10 @@ _COMPARED_PROJECT_FIELDS = frozenset({"id", "name", "is_active", "provider", "or
 # no longer exist — hence the per-item argMax, which is the full key inside one
 # org, followed by a per-project argMax to pick the name from the most recently
 # synced item that still points at it.
+#
+# ``type != 'epic'`` excludes GitLab's group-path epic references (see module
+# docstring) — a no-op for every other provider, none of which ever write
+# ``type = 'epic'`` (only ``providers/gitlab/normalize.py`` does).
 #
 # The emptiness test on ``catalog_id`` is unambiguous because ``referenced``
 # excludes ``project_id = ''``: the join key is never the empty string, so a
@@ -78,6 +108,7 @@ WITH latest_items AS (
         max(last_synced) AS synced_at
     FROM work_items
     WHERE org_id = {org_id:String} AND provider = {provider:String}
+      AND type != 'epic'
     GROUP BY repo_id, work_item_id
 ),
 referenced AS (
@@ -87,7 +118,7 @@ referenced AS (
     GROUP BY project_id
 ),
 catalog AS (
-    SELECT id, name, is_active
+    SELECT id, name, is_active, ifNull(project_key, '') AS project_key
     FROM projects FINAL
     WHERE org_id = {org_id:String} AND provider = {provider:String}
 ),
@@ -105,7 +136,9 @@ SELECT
     c.is_active AS catalog_is_active,
     l.label_rows AS active_label_rows
 FROM referenced AS r
-LEFT JOIN catalog AS c ON r.project_id = c.id
+LEFT JOIN catalog AS c
+  ON r.project_id = c.id
+  OR (c.project_key != '' AND r.project_id = c.project_key)
 LEFT JOIN active_labels AS l ON lowerUTF8(r.project_name) = l.label
 ORDER BY project_id
 """

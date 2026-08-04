@@ -7,9 +7,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// GitHubPullRequestReviewClickHouseEffects is the non-routed persistence
-// foundation for github/pr-reviews. Both write and FINAL readback are guarded
-// by the authoritative unit lease; wiring this sink does not activate a route.
+// GitHubPullRequestReviewClickHouseEffects persists the two effects emitted by
+// the composed github/pr-reviews unit. Both write and FINAL readback are
+// guarded by the authoritative unit lease; wiring this sink does not activate
+// a route.
 type GitHubPullRequestReviewClickHouseEffects struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
@@ -19,8 +20,15 @@ func (sink GitHubPullRequestReviewClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "pr-reviews" ||
-		effect.Destination != "git_pull_request_reviews" {
+		claim.Provider != "github" || claim.Dataset != "pr-reviews" {
+		return ErrInvalidConfiguration
+	}
+	if effect.Destination == "git_pull_requests" {
+		return (GitHubPullRequestClickHouseEffects{
+			Conn: sink.Conn, Lease: sink.Lease,
+		}).writePullRequestEffect(ctx, claim, effect, "pr-reviews")
+	}
+	if effect.Destination != "git_pull_request_reviews" {
 		return ErrInvalidConfiguration
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
@@ -69,7 +77,15 @@ func (sink GitHubPullRequestReviewClickHouseEffects) InspectEffect(
 ) (EffectInspection, error) {
 	if ctx == nil || sink.Lease == nil || sink.Conn == nil ||
 		claim.Validate() != nil || claim.Provider != "github" ||
-		claim.Dataset != "pr-reviews" || effect.Destination != "git_pull_request_reviews" {
+		claim.Dataset != "pr-reviews" {
+		return EffectConflict, ErrInvalidConfiguration
+	}
+	if effect.Destination == "git_pull_requests" {
+		return (GitHubPullRequestClickHouseEffects{
+			Conn: sink.Conn, Lease: sink.Lease,
+		}).inspectPullRequestEffect(ctx, claim, effect, "pr-reviews")
+	}
+	if effect.Destination != "git_pull_request_reviews" {
 		return EffectConflict, ErrInvalidConfiguration
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {

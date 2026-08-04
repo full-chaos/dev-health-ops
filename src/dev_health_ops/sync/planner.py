@@ -57,6 +57,9 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.providers.github.work_item_options import (
+    snapshot_github_work_item_runtime_options,
+)
 from dev_health_ops.sync.canonical_incident_gate import (
     require_canonical_incident_feature_sync,
     sync_datasets_require_canonical_incident_feature,
@@ -169,6 +172,7 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
 
     integration = _load_integration(session, request.integration_id, request.org_id)
     repair_outcome = repair_pagerduty_operational_integration(session, integration)
+    _repair_github_work_item_runtime_options(session, integration)
     mode = _validate_mode(request.mode)
     if repair_outcome is not None:
         return _terminalize_pagerduty_disabled_plan(
@@ -422,6 +426,39 @@ def _load_enabled_sources(
 
 _CODE_HOST_SECURITY_PROVIDERS = frozenset({"github", "gitlab"})
 _SCHEDULED_SECURITY_TRIGGER = "schedule"
+
+
+def _repair_github_work_item_runtime_options(
+    session: Session, integration: Integration
+) -> None:
+    """Durably default legacy GitHub work-item datasets before unit planning."""
+    if str(integration.provider).lower() != "github":
+        return
+    integration_options = dict(integration.config or {})
+    dataset = (
+        session.query(IntegrationDataset)
+        .filter(
+            IntegrationDataset.org_id == integration.org_id,
+            IntegrationDataset.integration_id == integration.id,
+            IntegrationDataset.dataset_key == DatasetKey.WORK_ITEMS.value,
+        )
+        .one_or_none()
+    )
+    dataset_options = dict(dataset.options or {}) if dataset is not None else {}
+    canonical = snapshot_github_work_item_runtime_options(
+        {**integration_options, **dataset_options}
+    )
+    repaired_integration_options = {**integration_options, **canonical}
+    if repaired_integration_options != integration_options:
+        integration.config = repaired_integration_options
+
+    if dataset is None:
+        session.flush()
+        return
+    repaired_dataset_options = {**dataset_options, **canonical}
+    if repaired_dataset_options != dataset_options:
+        dataset.options = repaired_dataset_options
+    session.flush()
 
 
 def _ensure_security_dataset_for_scheduled_code_host_sync(

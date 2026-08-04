@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "name": "github work-item unregistered REST collector",
+  "build": ["go", "build", "./internal/providersync/"],
+  "$limitation": "This plan covers REST repository identity, selection, bounded traversal, optional-degradation markers, request evidence, and retry-stable semantic rows. PR GraphQL social data, effects, readback/recovery, watermark advancement, alias activation, and route readiness remain later stack layers.",
+  "mutations": [
+    {
+      "id": "R1-repository-identity-uses-api-full-name",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\trepoIdentity, identityErr := repositoryIdentity(result.RepoFullName)",
+      "replace": "\trepoIdentity, identityErr := repositoryIdentity(claim.SourceExternalID)",
+      "rationale": "the work-item rows must follow the API full_name used by the active Python repository model after a rename, not remain keyed to stale planner input",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorBuildsIssueRowsAndPullTargets$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R2-issues-endpoint-pr-stubs-are-not-issues",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\tif len(listed.PullRequest) != 0 && string(listed.PullRequest) != \"null\" {",
+      "replace": "\t\tif false && len(listed.PullRequest) != 0 && string(listed.PullRequest) != \"null\" {",
+      "rationale": "GitHub's issues endpoint includes PR stubs, which must be excluded so they cannot be fetched and normalized a second time as issues",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorBuildsIssueRowsAndPullTargets$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R3-active-until-boundary-excludes-future-issues",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\treturn updatedAt != nil && updatedAt.After(before.UTC())",
+      "replace": "\treturn updatedAt != nil && updatedAt.Before(before.UTC())",
+      "rationale": "GitHub has no issues-list active_until parameter, so the collector's client-side comparison is the only barrier against ingesting future-window issues",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorBuildsIssueRowsAndPullTargets$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R4-optional-milestone-cap-still-fails-closed",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\tif page.CapReached {\n\t\t\treturn result, ErrPaginationCapExceeded\n\t\t}\n\t\tfor _, raw := range page.Items {",
+      "replace": "\t\tif false && page.CapReached {\n\t\t\treturn result, ErrPaginationCapExceeded\n\t\t}\n\t\tfor _, raw := range page.Items {",
+      "rationale": "best-effort provider errors do not authorize accepting a known truncated milestone inventory as complete",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorFailsClosedOnOptionalAndRequiredChildCaps$/milestones$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R5-optional-failure-emits-a-typed-marker",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\t\tresult.addIncomplete(\"milestones\", \"\", pageErr)",
+      "replace": "\t\t\t_ = pageErr",
+      "rationale": "a swallowed milestone request failure must not become indistinguishable from a successful empty milestone list",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorMarksOptionalDegradationIncomplete$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R6-required-event-fetch-failure-propagates",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif eventPage.CapReached {",
+      "replace": "\t\tif false && err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif eventPage.CapReached {",
+      "rationale": "issue events drive status and reopen facts, so a failed traversal cannot be normalized as an event-free successful issue",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorRequiredFailuresReturnErrors$/repos/acme/api/issues/42/events$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R7-pr-detail-must-match-selected-number",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\tif json.Unmarshal(raw, &pull) != nil || pull.Number != number ||",
+      "replace": "\t\tif json.Unmarshal(raw, &pull) != nil || false ||",
+      "rationale": "a detail response for a different PR number must never be attached to the selected GraphQL target",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTPullPayloadNumberMatchesSelectedTarget$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R8-explicit-false-claim-options-disable-fetches",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\tparsed, ok := value.(bool)",
+      "replace": "\t\tparsed, ok := true, true",
+      "rationale": "explicit work-item claim options must override defaults so disabled issues, PRs, comments, and milestones do not issue provider requests",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorHonorsExplicitFalseOptions$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R9-request-evidence-counts-physical-attempts",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "func (doer githubWorkItemsRESTCountingDoer) Do(request *http.Request) (*http.Response, error) {\n\t*doer.requests = *doer.requests + 1\n\treturn doer.delegate.Do(request)\n}",
+      "replace": "func (doer githubWorkItemsRESTCountingDoer) Do(request *http.Request) (*http.Response, error) {\n\treturn doer.delegate.Do(request)\n}",
+      "rationale": "provider usage evidence must count actual wire attempts, including HTTP retries, rather than only successful logical pages",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorCountsPhysicalRetries$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R10-item-limit-stops-without-speculative-next-page",
+      "file": "internal/providerfoundation/pagination.go",
+      "find": "\t\t\tif options.MaxItems > 0 && len(result.Items) >= options.MaxItems {",
+      "replace": "\t\t\tif false && options.MaxItems > 0 && len(result.Items) >= options.MaxItems {",
+      "rationale": "the 500-comment and 1000-event iterator limits must stop on the exact item without spending or depending on one extra provider page",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubLinkPaginationStopsAtExplicitItemLimitWithoutExtraPage$", "./internal/providerfoundation/"]]
+    },
+    {
+      "id": "R11-rate-limits-never-degrade-as-optional",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\tisRateLimited(err) || ctx.Err() != nil {",
+      "replace": "\t\tfalse || ctx.Err() != nil {",
+      "rationale": "GitHub rate limits carry retry scheduling semantics and must propagate instead of becoming best-effort incompleteness",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorPropagatesOptionalRateLimits$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R12-lease-is-rechecked-before-optional-degradation",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\tif leaseErr := client.Lease.Assert(ctx); leaseErr != nil {",
+      "replace": "\tif leaseErr := client.Lease.Assert(ctx); false && leaseErr != nil {",
+      "rationale": "an optional provider failure cannot be swallowed after the collection lease has been lost",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorRechecksLeaseBeforeOptionalDegradation$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R13-events-caller-pins-the-active-thousand-item-limit",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\t\tcollector.maxPages(), githubWorkItemEventLimit,",
+      "replace": "\t\t\tcollector.maxPages(), githubWorkItemEventLimit/2,",
+      "rationale": "the REST caller must preserve the active Python event limit of exactly 1000 per issue rather than merely exercising generic item-limited pagination",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorStopsAtExactlyOneThousandEvents$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R14-comments-caller-uses-the-frozen-configured-limit",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\t\t\tcollector.maxPages(), options.commentsLimit,",
+      "replace": "\t\t\t\tcollector.maxPages(), githubWorkItemCommentLimit,",
+      "rationale": "comments_limit is a per-claim runtime control and must not collapse back to a Go-global default at the child collection call site",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorUsesConfiguredFullPageCommentLimit$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R15-comments-limit-is-read-from-the-frozen-claim",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\toptions.commentsLimit = commentsLimit",
+      "replace": "\toptions.commentsLimit = commentsLimit*0 + githubWorkItemCommentLimit",
+      "rationale": "the typed collector options must retain the planner-frozen comments_limit value instead of accepting it and then silently discarding it",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorUsesConfiguredFullPageCommentLimit$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R16-later-page-errors-retain-earlier-successful-pages",
+      "file": "internal/providerfoundation/pagination.go",
+      "find": "\t\tif err != nil {\n\t\t\treturn result, err\n\t\t}",
+      "replace": "\t\tif err != nil {\n\t\t\treturn PageCollection{}, err\n\t\t}",
+      "rationale": "a later GitHub page failure must return earlier decoded pages so optional Python-compatible collectors can retain already observed rows while marking typed degradation",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubLinkPaginationReturnsSuccessfulPagesBeforeLaterFailure$", "./internal/providerfoundation/"]]
+    },
+    {
+      "id": "R17-milestones-retain-rows-before-optional-page-failure",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\tfor _, raw := range page.Items {",
+      "replace": "\t\tfor _, raw := range []json.RawMessage{} {",
+      "rationale": "successfully decoded milestone pages remain valid observations when a later optional page fails and must be emitted beside the typed incomplete marker",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorRetainsOptionalRowsBeforeLaterPageFailure$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R18-comments-retain-rows-before-optional-page-failure",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\t\t\tresult.addIncomplete(\"issue_comments\", strconv.Itoa(listed.Number), commentErr)\n\t\t\t\tcomments = commentRows\n\t\t\tcase commentPage.CapReached:",
+      "replace": "\t\t\t\tresult.addIncomplete(\"issue_comments\", strconv.Itoa(listed.Number), commentErr)\n\t\t\t\tcomments = nil\n\t\t\tcase commentPage.CapReached:",
+      "rationale": "successfully decoded comment pages must still produce interaction rows when a later best-effort page fails",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorRetainsOptionalRowsBeforeLaterPageFailure$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R19-legacy-and-default-configs-use-canonical-runtime-defaults",
+      "file": "src/dev_health_ops/providers/github/work_item_options.py",
+      "find": "    \"comments_limit\": 500,",
+      "replace": "    \"comments_limit\": 501,",
+      "rationale": "an unrepaired in-flight Python unit must use the same safe fallback as Go without consulting mutable process-local environment at execution time",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/providers/github/work_item_options.py"],
+      "proof": [["pytest", "-q", "tests/test_dataset_adapters.py::test_github_work_items_unrepaired_options_use_safe_defaults_not_live_env"]]
+    },
+    {
+      "id": "R20-planner-durably-backfills-legacy-dataset-options",
+      "file": "src/dev_health_ops/sync/planner.py",
+      "find": "    if repaired_dataset_options != dataset_options:\n        dataset.options = repaired_dataset_options",
+      "replace": "    if repaired_dataset_options != dataset_options:\n        dataset.options = dataset_options",
+      "rationale": "legacy GitHub work-items datasets must be repaired durably before unit planning so later Go claims consume explicit persisted controls",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/sync/planner.py"],
+      "proof": [["pytest", "-q", "tests/test_sync_planner.py::test_planner_durably_snapshots_legacy_github_work_item_env"]]
+    },
+    {
+      "id": "R21-patch-cascades-controls-into-live-claim-options",
+      "file": "src/dev_health_ops/api/admin/routers/sync.py",
+      "find": "        if work_items_dataset is not None:\n            work_items_dataset.options = {\n                **dataset_options,\n                **canonical_runtime_options,\n            }",
+      "replace": "        if work_items_dataset is not None:\n            work_items_dataset.options = dataset_options",
+      "rationale": "PATCH must update the live IntegrationDataset options joined by a stale already-planned Go claim, not only the parent sync_options document",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/api/admin/routers/sync.py"],
+      "proof": [["pytest", "-q", "tests/api/admin/test_sync_configs.py::test_github_work_item_defaults_and_patch_controls_reach_stale_planned_claim"]]
+    },
+    {
+      "id": "R22-durable-boundaries-snapshot-legacy-env-values",
+      "file": "src/dev_health_ops/providers/github/work_item_options.py",
+      "find": "        source[\"comments_limit\"] = env_int(\"GITHUB_COMMENTS_LIMIT\", 500)",
+      "replace": "        source[\"comments_limit\"] = 500",
+      "rationale": "legacy documented environment controls must be snapshotted once into durable config and dataset options before Go can own the claim",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/providers/github/work_item_options.py"],
+      "proof": [["pytest", "-q", "tests/test_sync_planner.py::test_planner_durably_snapshots_legacy_github_work_item_env", "tests/api/admin/test_sync_configs.py::test_github_work_item_defaults_and_patch_controls_reach_stale_planned_claim"]]
+    },
+    {
+      "id": "R23-explicit-config-precedes-legacy-env-snapshot",
+      "file": "src/dev_health_ops/providers/github/work_item_options.py",
+      "find": "    if source.get(\"comments_limit\") is None:",
+      "replace": "    if True:",
+      "rationale": "an explicit persisted comments_limit must win over the legacy environment value at every durable snapshot boundary",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/providers/github/work_item_options.py"],
+      "proof": [["pytest", "-q", "tests/test_github_provider.py::test_github_work_item_runtime_snapshot_preserves_explicit_config"]]
+    },
+    {
+      "id": "R24-patch-seeds-from-the-durable-dataset-snapshot",
+      "file": "src/dev_health_ops/api/admin/routers/sync.py",
+      "find": "        canonical_runtime_options = snapshot_github_work_item_runtime_options(\n            {\n                **current_options,\n                **integration_options,\n                **dataset_options,\n                **sync_options,\n            }\n        )",
+      "replace": "        canonical_runtime_options = snapshot_github_work_item_runtime_options(\n            {\n                **current_options,\n                **integration_options,\n                **sync_options,\n            }\n        )",
+      "rationale": "an unrelated PATCH must seed missing legacy SyncConfiguration controls from the repaired work-items dataset before consulting a changed process environment",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/api/admin/routers/sync.py"],
+      "proof": [["pytest", "-q", "tests/api/admin/test_sync_configs.py::test_github_work_item_defaults_and_patch_controls_reach_stale_planned_claim"]]
+    },
+    {
+      "id": "R25-patch-seeds-from-the-durable-integration-snapshot",
+      "file": "src/dev_health_ops/api/admin/routers/sync.py",
+      "find": "        canonical_runtime_options = snapshot_github_work_item_runtime_options(\n            {\n                **current_options,\n                **integration_options,\n                **dataset_options,\n                **sync_options,\n            }\n        )",
+      "replace": "        canonical_runtime_options = snapshot_github_work_item_runtime_options(\n            {\n                **current_options,\n                **dataset_options,\n                **sync_options,\n            }\n        )",
+      "rationale": "a partial runtime PATCH must seed omitted controls from the repaired integration snapshot before consulting a changed process environment while explicit PATCH fields still win",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/api/admin/routers/sync.py"],
+      "proof": [["pytest", "-q", "tests/api/admin/test_sync_configs.py::test_github_work_item_defaults_and_patch_controls_reach_stale_planned_claim"]]
+    }
+  ]
+}

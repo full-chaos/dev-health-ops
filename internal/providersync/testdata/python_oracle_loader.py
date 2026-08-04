@@ -47,6 +47,9 @@ _LAUNCHDARKLY_BUDGET_SOURCE = _source("dev_health_ops/providers/launchdarkly/bud
 _DATASET_ADAPTERS_SOURCE = _source("dev_health_ops/processors/dataset_adapters.py")
 _BASE_GIT_SOURCE = _source("dev_health_ops/processors/base_git.py")
 _GITHUB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/github/code_client.py")
+_GITHUB_WORK_ITEM_OPTIONS_SOURCE = _source(
+    "dev_health_ops/providers/github/work_item_options.py"
+)
 _GITLAB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/gitlab/code_client.py")
 _GITLAB_COMMITS_SOURCE = _source("dev_health_ops/providers/gitlab/commits.py")
 _GITLAB_COMMIT_STATS_SOURCE = _source("dev_health_ops/providers/gitlab/commit_stats.py")
@@ -95,6 +98,7 @@ _SAFE_SOURCE_MODULES: dict[str, Path] = {
     "dev_health_ops.sync.budget_types": _BUDGET_TYPES_SOURCE,
     "dev_health_ops.sync.datasets": _DATASETS_SOURCE,
     "dev_health_ops.providers.usage": _USAGE_SOURCE,
+    "dev_health_ops.providers.github.work_item_options": _GITHUB_WORK_ITEM_OPTIONS_SOURCE,
 }
 
 
@@ -121,6 +125,14 @@ def _unsupported_dependency(*_args: Any, **_kwargs: Any) -> Any:
 
 def _target_dataset_adapters() -> None:
     _load_safe_source("dev_health_ops.sync.datasets")
+    _install_module(
+        "dev_health_ops.providers.utils",
+        {
+            "env_flag": lambda _name, default: default,
+            "env_int": lambda _name, default: default,
+        },
+    )
+    _load_safe_source("dev_health_ops.providers.github.work_item_options")
     _install_module(
         "dev_health_ops.credentials.resolver",
         {

@@ -72,6 +72,7 @@ class WorkItemIngestionOptions:
     include_pull_requests: bool | None = None
     fetch_comments: bool | None = None
     fetch_milestones: bool | None = None
+    comments_limit: int | None = None
 
 
 @dataclass(frozen=True)

@@ -10,6 +10,10 @@ source_of_truth:
   - docs/user-guide/views/ai-impact.md
   - docs/user-guide/views/ai-review-load.md
   - docs/user-guide/views/ai-risk.md
+  - TRD: Ask Dev — constrained agent runtime, graph query layer, and web experience
+  - Amendment TRD v2 — Ask Dev Wave 3.1: Deterministic investigation, health synthesis, and safe outcomes
+  - Ask Dev Interaction Surface Amendment — Context Fabric relationship, chat window, and full-page workspace
+  - PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar
   - full-chaos/dev-health-acr README.md
   - full-chaos/dev-health-acr docs/mcp-sidecar.md
 applicability: current
@@ -74,7 +78,7 @@ AI Attribution remains a preview route and is intentionally omitted from the pub
 
 Ask Dev and the Agent Context Runtime (ACR) expose related parts of Context Fabric to different users. **Ask Dev** is the human investigation surface inside Dev Health. **ACR** assembles scoped context packets and authorized evidence for compatible agents. The local **`acr-mcp`** sidecar connects an agent client to the hosted ACR API.
 
-Context Fabric is the federation and diagnosis layer above Dev Health's canonical evidence, provider data, and optional local code intelligence. It is not a synonym for an MCP server, a generic memory store, or a code graph.
+Context Fabric is the underlying Dev Health context, graph, evidence, metric, scope, and trust capability. Ask Dev is the user-facing conversational interaction layer for Context Fabric. It is not a synonym for an MCP server, a generic memory store, or a code graph.
 
 ### Choose the supported entry point
 
@@ -87,29 +91,61 @@ Context Fabric is the federation and diagnosis layer above Dev Health's canonica
 
 Ask Dev does not call the MCP, and the MCP is not a remote-control interface for Ask Dev. Both use the same evidence and authorization principles through separate runtime paths.
 
-### How the parts fit together
+### Ask Dev runtime architecture
+
+The authoritative Ask Dev TRD defines the application and service boundary as follows:
 
 ```mermaid
-flowchart TB
-    OPS["dev-health-ops<br/>canonical evidence, work graph, scopes, billing, and entitlements"]
-    ASK["Ask Dev orchestration<br/>bounded investigation and validated answers"]
-    WEB["dev-health-web<br/>Ask Dev window and /dev workspace"]
-    API["acr-api<br/>scoped context packets and authorized evidence"]
-    VALIDATE["Context Fabric Validation<br/>platform-admin packet inspection"]
-    MCP["acr-mcp<br/>local STDIO sidecar"]
-    LOCAL["Existing local CodeGraph index<br/>optional read-only evidence"]
-    CLIENTS["Compatible agent clients<br/>Codex, Claude Code, Cursor, OpenCode, and generic STDIO clients"]
+flowchart LR
+    U[Authenticated user] --> W[dev-health-web /dev]
+    W --> P[Same-origin /api/v1/dev proxy]
+    P --> D[dev-health-ops Dev API]
 
-    OPS --> ASK --> WEB
-    OPS --> API
-    API --> VALIDATE
-    API --> MCP --> CLIENTS
-    LOCAL -. supplemental, never authoritative .-> MCP
+    D --> A[Dev orchestrator]
+    A --> L[Agent LLM provider adapter]
+    A --> T[Versioned tool registry]
+
+    T --> S[Scope and entity service]
+    T --> M[Canonical metric service]
+    T --> G[Status/change/work-graph service]
+    T --> E[Evidence and data-health service]
+
+    S --> PG[(PostgreSQL)]
+    M --> CH[(ClickHouse)]
+    G --> CH
+    E --> CH
+    E -. optional .-> ACR[acr-api evidence endpoint]
+
+    D --> PG
+    D --> O[Audit, traces, Prometheus, LLM usage]
 ```
 
-In text: `dev-health-ops` remains the authority for engineering evidence, work relationships, scopes, billing, and organization entitlements. Ask Dev uses that authority to run a human-facing investigation. ACR uses it to assemble bounded context packets and evidence for agent-facing workflows. `dev-health-web` renders the human surfaces, while `acr-mcp` adapts the hosted ACR API to local Model Context Protocol clients.
+The chat window and `/dev` page are two presentations of this same backend path. There is no browser-side LLM orchestration and no separate chat-window service.
 
-Both paths support the same diagnosis loop:
+### Current investigation lifecycle
+
+The Wave 3.1 corrective TRD further constrains how an answer is built. Mandatory retrieval and synthesis occur before optional narrative generation:
+
+```mermaid
+flowchart LR
+    Q[Question + authorized page/conversation context]
+    --> I[Server intent interpreter]
+    I --> R[Subject preflight + per-mention resolution ledger]
+    R --> P[Versioned investigation plan registry]
+    P --> X[Bounded deterministic executor]
+    X --> S[Canonical source adapters]
+    S --> B[Typed investigation result bundle]
+    B --> F[Canonical answer-frame builder]
+    F --> N[Optional compact model narrative]
+    N --> V[Layered validation]
+    F --> D[Deterministic renderer fallback]
+    V --> O[Safe answer-v2 projection]
+    D --> O
+```
+
+The model may help present the result, but it does not own subject resolution, mandatory source selection, canonical facts, metrics, health states, evidence, or the final safe outcome.
+
+Both Ask Dev and ACR support the same diagnosis loop:
 
 > **State → Pressure → Cause → Evidence → Action**
 
@@ -148,6 +184,21 @@ ACR is a separate hosted Go service family with two primary binaries:
 
 - **`acr-api`** assembles context packets, expands authorized provenance, and exposes the hosted entitlement and credential boundary.
 - **`acr-mcp`** runs locally as a STDIO MCP server and connects a compatible client to `acr-api`.
+
+The agent-facing service path defined by the ACR design is:
+
+```text
+compatible agent client
+        ↓ STDIO MCP
+     acr-mcp
+        ↓ HTTPS + scoped ACR credential
+     acr-api
+        ↓
+Context assembly, evidence expansion, authorization,
+packet snapshots, audit, usage, and SLO telemetry
+        ↓
+Dev Health evidence and operational stores
+```
 
 The default MCP surface is deliberately small and read-only:
 

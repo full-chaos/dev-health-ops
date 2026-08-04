@@ -232,18 +232,20 @@ func disjointHandlerSets(left, right map[string]struct{}) bool {
 func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string]providersync.CompleteRouteSwitches{
-		"none":             {},
-		"github":           {GithubRepoMetadata: true},
-		"gitlab":           {GitlabRepoMetadata: true},
-		"gitlab_commits":   {GitlabCommits: true},
-		"gitlab_stats":     {GitlabCommitStats: true},
-		"gitlab_cicd":      {GitlabCICD: true},
-		"gitlab_tests":     {GitlabTests: true},
-		"gitlab_incidents": {GitlabIncidents: true},
-		"github_prs":       {GithubPRs: true},
-		"github_cicd":      {GithubCICD: true},
-		"github_security":  {GithubSecurity: true},
-		"both":             {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
+		"none":               {},
+		"github":             {GithubRepoMetadata: true},
+		"gitlab":             {GitlabRepoMetadata: true},
+		"gitlab_commits":     {GitlabCommits: true},
+		"gitlab_stats":       {GitlabCommitStats: true},
+		"gitlab_cicd":        {GitlabCICD: true},
+		"gitlab_tests":       {GitlabTests: true},
+		"gitlab_incidents":   {GitlabIncidents: true},
+		"github_prs":         {GithubPRs: true},
+		"github_pr_reviews":  {GithubPRReviews: true},
+		"github_pr_comments": {GithubPRComments: true},
+		"github_cicd":        {GithubCICD: true},
+		"github_security":    {GithubSecurity: true},
+		"both":               {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -346,6 +348,18 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 			},
 		},
 		{
+			name: "github pr reviews",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubPRReviewsEnabled: true,
+			},
+		},
+		{
+			name: "github pr comments",
+			cfg: config.Config{
+				Profile: "sync", WorkerGithubPRCommentsEnabled: true,
+			},
+		},
+		{
 			name: "github commits",
 			cfg: config.Config{
 				Profile: "sync", WorkerGithubCommitsEnabled: true,
@@ -444,6 +458,14 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 			cfg:  config.Config{WorkerGithubPRsEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubPRs: true},
 		},
+		"github_pr_reviews": {
+			cfg:  config.Config{WorkerGithubPRReviewsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubPRReviews: true},
+		},
+		"github_pr_comments": {
+			cfg:  config.Config{WorkerGithubPRCommentsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubPRComments: true},
+		},
 		"github_cicd": {
 			cfg:  config.Config{WorkerGithubCICDEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubCICD: true},
@@ -520,6 +542,33 @@ func TestBuildProviderSyncHandlerConstructsGitHubCommitStatsCapability(t *testin
 	}
 	if _, ok := executor.Committer.Sink.(providersync.GitHubCommitStatsClickHouseEffects); !ok {
 		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsGitHubPRSocialAliases(t *testing.T) {
+	t.Parallel()
+	for _, dataset := range []string{"prs", "pr-reviews", "pr-comments"} {
+		t.Run(dataset, func(t *testing.T) {
+			t.Parallel()
+			handler, _ := buildProviderSyncHandler(
+				nil, providersync.CompleteRouteSwitches{},
+				nil, nil, nil, nil, nil, nil, slog.Default(),
+			)
+			executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+				Claim: providersync.Claim{Unit: providersync.Unit{
+					Provider: "github", Dataset: dataset,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := executor.Handler.(providersync.GitHubPullRequestSocialRouteHandler); !ok {
+				t.Fatalf("executor handler=%T", executor.Handler)
+			}
+			if _, ok := executor.Committer.Sink.(providersync.GitHubPullRequestSocialClickHouseEffects); !ok {
+				t.Fatalf("executor sink=%T", executor.Committer.Sink)
+			}
+		})
 	}
 }
 

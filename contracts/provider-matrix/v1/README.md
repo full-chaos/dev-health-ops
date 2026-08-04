@@ -243,13 +243,18 @@ otherwise read as a conflict.
    the next merge. `src/dev_health_ops/api/queries/heatmap.py` is a known
    pre-existing example and is not a regression introduced by this contract.
 
-## Activation status for `(github, prs)`
+## Activation status for GitHub PR-social datasets
 
 CHAOS-3122 built a real `CompleteRouteHandler`
 (`GitHubPullRequestRouteHandler`) and `EffectSink`
-(`GitHubPullRequestClickHouseEffects`) — `go_executor: native_go` — but the
-pair is deliberately **`route_ready: false`**, not `true`. This is not the
-same shape as `(github, repo-metadata)`'s waiver.
+(`GitHubPullRequestClickHouseEffects`). The CHAOS-3123 follow-on composes that
+REST PR collection with the production review-enrichment boundary, writes the
+complete `git_pull_requests` row plus `git_pull_request_reviews`, and exposes
+the same complete execution under the `prs`, `pr-reviews`, and `pr-comments`
+dataset identities. All three are now `go_executor: native_go` and
+`route_ready: true`; their switches remain off by default and startup rejects
+enabling more than one alias because each delegates to the same complete
+writer.
 
 An adversarial (codex) review of the first draft returned BLOCK with four
 HIGH-severity findings, all fixed before this pair's code landed:
@@ -283,12 +288,13 @@ HIGH-severity findings, all fixed before this pair's code landed:
    dataset pair's (`github/pr-reviews`) job in this port's per-unit model.
    Writing them as zero while claiming route readiness would let
    review-latency/rework/AI-impact tiles read "never fetched" as "doesn't
-   exist". **Resolution: `route_ready` stays `false` until `github/pr-reviews`
-   lands and both pairs flip together** — see `CompleteRouteSwitches.Descriptor`'s
-   `github`/`prs` case and
-   `deploy/go-workers/provider-sync-porting-recipe.md`'s defect class 9 for
-   the full column-versus-unit-ownership analysis and the three resolutions
-   it lays out for future pairs in the same situation.
+   exist". **Resolution:** the follow-on now executes the real review fetch,
+   enriches those columns, emits the raw review rows, and commits both effects
+   as one crash-recoverable manifest. The three PR-social aliases share those
+   byte-identical effects while preserving their own claim generation,
+   evidence, ledger, and watermark identity. `pr-comments` does not invent a
+   separate raw table: Python's active producer obtains `comments_count` from
+   REST PR detail inside this same unit.
 
 Five MEDIUM findings, also fixed, on the ClickHouse effect sink specifically
 (`GitHubPullRequestClickHouseEffects`):

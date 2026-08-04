@@ -34,6 +34,37 @@ MAX_STATUS_ITEMS = 100
 MAX_CHANGE_ITEMS = 100
 MAX_STATUS_ASSESSMENT_ITEMS = 1_000
 
+#: CHAOS-3377: the closed vocabulary of ``ActualCompletion.reason_codes`` this
+#: module's ``_assess`` can emit, listed once here rather than only as the
+#: scattered ``reasons.add(...)`` literals below, so a consumer that must
+#: never let a raw reason code reach user-visible prose (the internal-token
+#: denylist in ``no_match_terminal.py``, and the closed-vocabulary
+#: translation table in ``status_answer_render.py``) has one place to derive
+#: its "every code this rule can produce" set from instead of hand-copying
+#: the list a second time. ``test_status_change_service.py`` pins this
+#: against the literal ``reasons.add(...)`` calls in ``_assess`` so the two
+#: cannot silently drift apart.
+STATUS_REASON_CODES: frozenset[str] = frozenset(
+    {
+        "child_requirement_unknown",
+        "declared_status_missing",
+        "required_source_not_fresh",
+        "assessment_source_limit_reached",
+        "required_release_evidence_missing",
+        "required_child_incomplete",
+        "open_blocker",
+        "required_pull_request_unmerged",
+        "required_review_unresolved",
+        "review_changes_requested",
+        "ci_requirement_unknown",
+        "required_ci_skip_state_unknown",
+        "required_ci_work_skipped",
+        "required_ci_not_passing",
+        "required_deployment_not_succeeded",
+        "active_blocking_incident",
+    }
+)
+
 
 class StatusResultState(StrEnum):
     COMPLETE = "complete"

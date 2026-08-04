@@ -50,6 +50,7 @@ from typing import get_args
 
 from .contracts import (
     AnswerStatus,
+    DevActualCompletion,
     DevAnswer,
     DevContractVersions,
     DevCoverage,
@@ -60,6 +61,7 @@ from .contracts import (
 )
 from .contracts_v2 import PublicOutcome, ResolutionOutcome
 from .orchestrator_states import RunState
+from .status_change_service import STATUS_REASON_CODES
 
 __all__ = [
     "INTERNAL_TOKEN_DENYLIST",
@@ -81,6 +83,25 @@ def _underscore_members(values: Iterable[str]) -> frozenset[str]:
     return frozenset(value for value in values if "_" in value)
 
 
+#: CHAOS-3377 defect 2: the CHAOS-3367 denylist covered only scope-resolution
+#: and run/outcome vocabulary -- a live run showed the §10 completion
+#: assessment's own internal tokens (``not_ready``, ``open_blocker``,
+#: ``required_child_incomplete``, ...) and evidence-handle ids (``ev1_...``)
+#: leaking into user-visible prose instead. Widened here rather than only in
+#: ``status_answer_render.py``'s translation tables, because those tables
+#: only cover the module's OWN server-rendered copy; this denylist is the
+#: fail-closed backstop ``orchestrator.finish()`` runs over EVERY terminal
+#: (including any model-authored prose that still reaches a field this
+#: module scans), so a leak survives here even if a future producer forgets
+#: to route through the deterministic renderer at all.
+#:
+#: ``STATUS_REASON_CODES`` is ``status_change_service``'s own derived,
+#: pinned-total set (see that module), so this cannot silently fall behind a
+#: reason code added there. ``DevActualCompletion.state`` is a 3-member
+#: ``Literal`` on the wire, so its members are pulled the same way
+#: ``DevError.code`` already is below.
+_EXTRA_INTERNAL_TOKENS: frozenset[str] = frozenset({"actual_completion", "ev1_"})
+
 #: Every internal vocabulary token that must never reach a user-visible
 #: string, derived from the live enums. See the module docstring for why only
 #: underscore-bearing members are kept.
@@ -91,6 +112,11 @@ INTERNAL_TOKEN_DENYLIST: frozenset[str] = (
     | _underscore_members(member.value for member in PublicOutcome)
     | _underscore_members(member.value for member in ResolutionOutcome)
     | _underscore_members(get_args(DevError.model_fields["code"].annotation))
+    | _underscore_members(STATUS_REASON_CODES)
+    | _underscore_members(
+        get_args(DevActualCompletion.model_fields["state"].annotation)
+    )
+    | _EXTRA_INTERNAL_TOKENS
 )
 
 # NOT included, deliberately: ``ToolID``. A round-2 review argued that a

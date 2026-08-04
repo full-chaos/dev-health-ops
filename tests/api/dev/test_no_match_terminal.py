@@ -125,17 +125,27 @@ def test_denylist_derives_every_token_the_prd_names(token: str) -> None:
     assert token in INTERNAL_TOKEN_DENYLIST
 
 
-def test_denylist_is_disjoint_from_the_completion_reason_vocabulary() -> None:
-    """``completion_truncation_detail`` renders ``ActualCompletion``'s reason
-    codes verbatim into a user-visible ``DevError.safe_message``, by design
-    (CHAOS-3297 s2: rejecting a fabricated total without saying why leaves the
-    user with nothing). Those codes are snake_case too, so a collision with an
-    internal enum member would make ``orchestrator.finish()``'s fail-closed
-    check destroy a legitimate terminal.
+def test_denylist_now_includes_the_completion_reason_vocabulary() -> None:
+    """CHAOS-3377 defect 2 REVERSES this file's prior invariant, so the
+    reversal is pinned explicitly rather than just deleting the old test.
 
-    Pinned here so a future reason code that collides is a build failure, not
-    a production incident. If this fails, rename the reason code -- do not
-    widen the denylist's exclusions.
+    Before CHAOS-3377, ``completion_truncation_detail`` rendered
+    ``ActualCompletion``'s reason codes VERBATIM into a user-visible
+    ``DevError.safe_message`` by design, so the denylist deliberately
+    excluded them (a collision would have made ``orchestrator.finish()``'s
+    fail-closed check destroy that legitimate terminal). A live run then
+    showed those same raw codes (``not_ready``, ``open_blocker``,
+    ``required_child_incomplete``, ...) leaking into ordinary answer prose --
+    a path this file's denylist was never watching, because the exclusion
+    covered the whole vocabulary rather than just the one sanctioned surface.
+
+    The fix (CHAOS-3377) is symmetric: ``completion_truncation_detail`` (see
+    ``status_completion_copy.translate_reason_codes``) now renders translated
+    copy instead of the raw codes, so nothing legitimate needs the exclusion
+    any more, and the denylist can cover the whole reason-code vocabulary
+    like every other internal enum it already derives from.
+    ``status_change_service.STATUS_REASON_CODES`` is the single source of
+    truth both this denylist and the translation table derive from.
     """
 
     completion_reason_codes = frozenset(
@@ -158,7 +168,37 @@ def test_denylist_is_disjoint_from_the_completion_reason_vocabulary() -> None:
             "active_blocking_incident",
         }
     )
-    assert not (completion_reason_codes & INTERNAL_TOKEN_DENYLIST)
+    assert completion_reason_codes <= INTERNAL_TOKEN_DENYLIST
+
+
+def test_completion_truncation_detail_never_renders_a_raw_reason_code() -> None:
+    """The other half of the reversal above: with the codes now denylisted,
+    ``completion_truncation_detail`` (the one sanctioned pre-CHAOS-3377
+    renderer of this vocabulary) MUST NOT emit them raw any more, or its own
+    output would fail ``orchestrator.finish()``'s fail-closed scan.
+    """
+
+    from dev_health_ops.api.dev.answer_validator import completion_truncation_detail
+    from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
+    from dev_health_ops.api.dev.contracts import DevToolResult
+
+    payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+    payload["actual_completion"] = {
+        "state": "not_ready",
+        "rule_id": "actual-completion",
+        "rule_version": "actual-completion.v4",
+        "reason_codes": ["open_blocker", "required_child_incomplete"],
+        "required_children": [],
+        "required_child_total": None,
+        "required_child_complete": None,
+        "display_truncated": False,
+        "conflicts": [],
+        "evidence_ref_ids": [],
+    }
+    detail = completion_truncation_detail((DevToolResult.model_validate(payload),))
+    assert internal_token_leak([detail]) is None
+    for raw_token in ("open_blocker", "required_child_incomplete"):
+        assert raw_token not in detail
 
 
 def test_internal_token_leak_finds_a_token_inside_a_sentence() -> None:

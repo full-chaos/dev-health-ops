@@ -1819,6 +1819,30 @@ def test_a_declaration_for_an_unknown_row_or_path_is_rejected(monkeypatch) -> No
     assert any("not covered dependencies" in e for e in validate_manifest(_ROOT))
 
 
+def test_full_manifest_rejects_orphan_among_valid_stale_declarations(
+    monkeypatch,
+) -> None:
+    """Subset validation may ignore declarations it does not own, but the
+    landed full-manifest gate must still catch a declaration whose row was
+    removed while leaving the other declarations valid.
+    """
+
+    declarations = dict(wave31_manifest.DECLARED_STALE_ARTIFACTS)
+    declarations["no.such.row"] = {"compose.yml": _current_hash(_ROOT, "compose.yml")}
+    monkeypatch.setattr(
+        wave31_manifest,
+        "DECLARED_STALE_ARTIFACTS",
+        declarations,
+    )
+
+    errors = validate_manifest(_ROOT)
+
+    assert any(
+        "no.such.row: declared stale but no manifest item has that id" in error
+        for error in errors
+    )
+
+
 def test_the_report_states_what_proven_e2e_does_not_assert() -> None:
     """codex finding (HIGH, 2026-08-03): nine row descriptions say a live
     run is "proven", while a hand-written artifact with correct hashes

@@ -1951,7 +1951,35 @@ PROVEN_E2E_CLAIM_LIMITS = (
 #:
 #: Whether a stale row is ACCEPTABLE is a wave-close decision, not a CI
 #: one. CI's only job here is that nobody can be surprised by one.
-DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {}
+# The feature-only Go worker migration added the disabled-by-default
+# WORKER_GITLAB_INCIDENTS_ENABLED Compose wiring after these 14 live scenarios
+# were recorded.  That changes the governed runtime surface without changing
+# what any scenario exercised, so acknowledge this exact compose.yml content
+# hash until the scenarios are re-minted.  The hash binding makes the next
+# Compose edit fail loudly again instead of turning this into a permanent
+# exemption.
+_GO_WORKER_FEATURE_COMPOSE_SHA256 = (
+    "0f7ea9fc8466fd413c6b6a13e6112c60afa1663dccf82845fd549a7e1f6ae765"
+)
+DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
+    item_id: {"compose.yml": _GO_WORKER_FEATURE_COMPOSE_SHA256}
+    for item_id in (
+        "defect.ask-dev-not-found.e2e-live-validated",
+        "defect.ask-dev-exact-commit.e2e-live-validated",
+        "positive-control.real-project-status",
+        "attack.unrelated-evidence.e2e-live-validated",
+        "attack.team-attribution.e2e-blocked-by-live-defect",
+        "matrix.exact-project-complete",
+        "matrix.registered-metric-catalog",
+        "matrix.multi-metric-comparison-organization-wide",
+        "matrix.remaining-work-exact-project",
+        "matrix.data-trust-organization-wide",
+        "matrix.team-health.e2e-live-validated",
+        "matrix.team-workload-balance.e2e-live-validated",
+        "matrix.operational-deficiency.e2e-live-validated",
+        "gate.plan-registry-gap-is-loud.e2e-live-validated",
+    )
+}
 
 #: A sha256 hex digest, the only shape a recorded dependency hash may take.
 _SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -2471,7 +2499,7 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
 
 
 def validate_manifest(
-    root: Path, items: tuple[ManifestItem, ...] = MANIFEST
+    root: Path, items: tuple[ManifestItem, ...] | None = None
 ) -> list[str]:
     """Return integrity errors. An empty list means every claim is honest.
 
@@ -2489,6 +2517,12 @@ def validate_manifest(
     artifact whose recorded content digests no longer match this tree, or citing a script whose
     bytes have changed since.
 
+    Omitting ``items`` validates the complete landed manifest and therefore
+    also rejects stale declarations whose row no longer exists. Passing an
+    explicit subset validates only declarations owned by that subset; this
+    keeps focused integrity checks composable without treating the complete
+    manifest's declarations as orphans.
+
     This function is deliberately fast and offline -- it does NOT run any
     live scenario itself, only checks artifacts scenarios already wrote and
     runs cheap local ``git`` queries. That keeps every commit's normal test
@@ -2496,17 +2530,23 @@ def validate_manifest(
     needing Docker/Compose.
     """
 
+    validate_declaration_ownership = items is None
+    items = MANIFEST if items is None else items
     errors: list[str] = []
     known_ids = {item.id for item in items}
     for declared_id, declared_paths in DECLARED_STALE_ARTIFACTS.items():
         # The declaration table is itself checked, or a typo becomes a
-        # silent no-op that reads like an acknowledged risk.
+        # silent no-op that reads like an acknowledged risk. Explicit subset
+        # validation ignores declarations for rows outside that subset; only
+        # the complete landed-manifest check owns orphan detection.
         if declared_id not in known_ids:
-            errors.append(
-                f"{declared_id}: declared stale but no manifest item has "
-                "that id -- a stale declaration for a row that does not "
-                "exist acknowledges nothing"
-            )
+            if validate_declaration_ownership:
+                errors.append(
+                    f"{declared_id}: declared stale but no manifest item has "
+                    "that id -- a stale declaration for a row that does not "
+                    "exist acknowledges nothing"
+                )
+            continue
         uncovered = sorted(set(declared_paths) - set(RUNTIME_DEPENDENCY_PATHS))
         if uncovered:
             errors.append(
@@ -2728,7 +2768,7 @@ def stale_rows(
 
 
 def build_report(
-    root: Path, items: tuple[ManifestItem, ...] = MANIFEST
+    root: Path, items: tuple[ManifestItem, ...] | None = None
 ) -> ManifestReportJSON:
     """Build the CHAOS-3300 deliverable #1 JSON report.
 
@@ -2738,7 +2778,13 @@ def build_report(
     failure mode this manifest exists to prevent.
     """
 
-    errors = validate_manifest(root, items)
+    validate_complete_manifest = items is None
+    items = MANIFEST if items is None else items
+    errors = (
+        validate_manifest(root)
+        if validate_complete_manifest
+        else validate_manifest(root, items)
+    )
     if errors:
         raise ManifestIntegrityError(
             "manifest integrity check failed:\n" + "\n".join(f"- {e}" for e in errors)

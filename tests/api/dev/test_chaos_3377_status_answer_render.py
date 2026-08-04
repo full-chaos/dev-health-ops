@@ -282,7 +282,8 @@ def test_render_declared_project_summary_translates_state_and_names_target_date(
         declared_project_target_date="2026-09-01",
         declared_project_evidence_ref_ids=("ev_01",),
     )
-    summary = render_declared_project_summary(result)
+    canonical_evidence_ids = frozenset(item.evidence_ref_id for item in result.evidence)
+    summary = render_declared_project_summary(result, canonical_evidence_ids)
     assert summary is not None
     assert "in progress" in summary
     assert "2026-09-01" in summary
@@ -298,7 +299,8 @@ def test_render_declared_project_summary_returns_none_when_absent() -> None:
     result = _tool_result(actual_completion=_actual(state="ready", reason_codes=()))
     assert result.declared_project_state is None
     assert result.declared_project_target_date is None
-    assert render_declared_project_summary(result) is None
+    canonical_evidence_ids = frozenset(item.evidence_ref_id for item in result.evidence)
+    assert render_declared_project_summary(result, canonical_evidence_ids) is None
 
 
 def test_render_declared_project_summary_unknown_state_falls_back_safely() -> None:
@@ -314,10 +316,34 @@ def test_render_declared_project_summary_unknown_state_falls_back_safely() -> No
         declared_project_state="archived",
         declared_project_evidence_ref_ids=("ev_01",),
     )
-    summary = render_declared_project_summary(result)
+    canonical_evidence_ids = frozenset(item.evidence_ref_id for item in result.evidence)
+    summary = render_declared_project_summary(result, canonical_evidence_ids)
     assert summary is not None
     assert "archived" not in summary.casefold()
     assert "outside the known vocabulary" in summary
+
+
+def test_render_declared_project_summary_returns_none_when_evidence_is_not_canonical() -> (
+    None
+):
+    """CHAOS-3368 Codex HIGH fix (delta review, 2026-08-04): a bound
+    status_snapshot.v1 result with a real declared state, but whose
+    evidence did NOT survive this run's canonical evidence set (a run-wide
+    cap this function's caller controls, distinct from this one tool
+    result's own evidence array), must render NO clause -- never an
+    ungrounded assertion with no claim and no evidence behind it anywhere
+    in the final answer.
+    """
+
+    result = _tool_result(
+        actual_completion=_actual(state="ready", reason_codes=()),
+        declared_project_state="started",
+        declared_project_target_date="2026-09-01",
+        declared_project_evidence_ref_ids=("ev_01",),
+    )
+    # Deliberately excludes "ev_01" -- simulates the run-wide canonical
+    # evidence cap having truncated it out before this function ever runs.
+    assert render_declared_project_summary(result, frozenset()) is None
 
 
 @pytest.mark.parametrize(

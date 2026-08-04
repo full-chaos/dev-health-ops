@@ -2587,7 +2587,19 @@ class DevOrchestrator:
         # that binding for free (no extra scope check needed: a
         # declared_project_state set on a DIFFERENT tool result could never
         # reach here, since only THIS result's fields are read).
-        declared_project_summary = render_declared_project_summary(status_result)
+        #
+        # ``canonical_evidence_ids`` -- the SAME frozenset already passed to
+        # ``build_deterministic_status_claims`` above -- gates this exactly
+        # like it gates the claim (Codex HIGH, delta review, 2026-08-04):
+        # this run's OWN 25-entry canonical evidence cap
+        # (``Orchestrator._canonical_answer_data``) can truncate the
+        # declared-state evidence out even when its per-tool-call priority
+        # reservation let it survive onto the wire -- without this gate the
+        # summary sentence could assert a declared state with no claim and
+        # no evidence behind it anywhere in the answer.
+        declared_project_summary = render_declared_project_summary(
+            status_result, canonical_evidence_ids
+        )
         if declared_project_summary is not None:
             direct_summary = f"{direct_summary} {declared_project_summary}"
         return status, direct_summary, claims

@@ -123,7 +123,7 @@ jobs:
           # 4 vCPUs, so this matches `-n auto` there while staying predictable on
           # larger runners. Override PYTEST_XDIST_WORKERS to tune.
           PYTEST_XDIST_WORKERS: "4"
-          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --ignore=tests/test_chaos_3337_source_class_postgres_migration.py
+          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --ignore=tests/test_chaos_3337_source_class_postgres_migration.py --ignore=tests/api/admin/test_add_member_visibility.py
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs
@@ -137,6 +137,15 @@ jobs:
       # from it instead. DEV_HEALTH_TEST_POSTGRES_ADMIN_URI's database component
       # must be literally `postgres`: the fixture connects to it to CREATE/DROP a
       # throwaway per-test database on the same server.
+      #
+      # test_add_member_visibility.py (CHAOS-3411) has the same CI-must-fail
+      # gate but only needs DEV_HEALTH_POSTGRES_TEST_URI (it isolates itself
+      # with a CREATE SCHEMA on that same database, not a whole separate
+      # database), so it doesn't need the admin URI -- it's listed here
+      # rather than alongside it so a stripped commit can't silently pass by
+      # having this step simply not exercise it (CHAOS-3411 Codex round 1:
+      # the module was collected by neither PR-gated step with its URI set,
+      # so it always skipped on pull_request).
       - name: Run PostgreSQL migration tests
         env:
           DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
@@ -145,7 +154,8 @@ jobs:
           pytest -q \
             tests/test_0066_celery_river_cutover_postgres.py \
             tests/test_chaos_3337_source_class_postgres_migration.py \
-            tests/test_canonical_incident_feature_flag_postgres_migration.py
+            tests/test_canonical_incident_feature_flag_postgres_migration.py \
+            tests/api/admin/test_add_member_visibility.py
 
       - name: Upload junit test reports
         if: always()

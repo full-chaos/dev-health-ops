@@ -20,9 +20,10 @@ Use this procedure after a product user has preserved the failing workspace, sco
 
 1. Confirm the expected provider connection exists for the Dev Health organization.
 2. Confirm the provider account, host, region, subdomain, installation, or namespace identity is the intended one.
-3. Confirm the credential is active and permission preflight passes for the selected datasets.
-4. Refresh source discovery and verify that the expected repositories, projects, services, or teams are visible.
-5. Confirm each discovered source is mapped to the intended Dev Health repository, team, or workspace scope.
+3. Confirm the missing dataset is selected for this connection. An unselected dataset produces no data — that is expected behavior, not a failure, and datasets are opt-in for every provider.
+4. Confirm the credential is active and permission preflight passes for the selected datasets.
+5. Refresh source discovery and verify that the expected repositories, projects, services, or teams are visible.
+6. Confirm each discovered source is mapped to the intended Dev Health repository, team, or workspace scope.
 
 For PagerDuty, verify the expected services are discoverable before diagnosing incident data. A connection with valid OAuth but no access to the relevant service cannot produce complete incident coverage.
 

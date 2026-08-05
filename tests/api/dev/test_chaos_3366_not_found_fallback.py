@@ -15,6 +15,7 @@ equals the name outright.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -406,13 +407,21 @@ async def test_a_nonsense_name_never_fabricates_an_acronym_match() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_literal_parenthetical_alias_commits_like_the_primary_label() -> None:
-    """CHAOS-3388: typing the parenthetical alias outright is a literal name.
+async def test_a_literal_parenthetical_alias_stays_candidate_only() -> None:
+    """CHAOS-3388 codex re-review (HIGH, confirmed): a derived parenthetical
+    match is never auto-commit eligible, only ever a candidate.
 
-    Unlike an acronym, "Context Fabric" is a real alternate name the catalog
-    itself carries (in parentheses) -- typing it is exactly as deliberate an
-    act as typing the primary label, so a unique hit commits instead of only
-    ever candidating.
+    A parenthetical segment is not an asserted alternate name the catalog
+    itself carries as a distinct alias field -- it is text this module
+    *derives* from splitting one label string, exactly as derived a signal as
+    an acronym. "Payments (Legacy)" proves the point: "Legacy" reads as a
+    qualifier on the primary label, not a real alternate name, and a unique
+    substring hit on it must not silently commit a wrong-guess project (see
+    the sibling ``test_a_qualifier_like_parenthetical_never_commits`` for the
+    negative-case fixtures). "Context Fabric" is a real alternate name in the
+    ordinary-language sense, but nothing about the catalog schema
+    distinguishes it from "Legacy" -- there is no explicit alias field, only
+    a parenthesis -- so both are held to the same candidate-only rule.
     """
 
     result = await _run(
@@ -420,12 +429,89 @@ async def test_a_literal_parenthetical_alias_commits_like_the_primary_label() ->
         request_for('What is the status of the "Context Fabric" project?'),
     )
 
-    assert result.decision is PreflightDecision.PROCEED
-    assert result.committed_resolution is not None
-    committed_ids = {
-        ref.entity_id for ref in result.committed_resolution.resolved_scope.entity_refs
-    }
-    assert committed_ids == {ACR_PROJECT.canonical_id}
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.NEEDS_CLARIFICATION
+    assert result.committed_resolution is None
+    assert result.answer is not None
+    candidates = result.answer.frame.clarification_candidates
+    assert len(candidates) == 1
+    assert candidates[0].entity_ref.display_label == ACR_PROJECT.label
+    assert candidates[0].entity_ref.entity_id == ACR_PROJECT.canonical_id
+
+
+@pytest.mark.asyncio
+async def test_a_qualifier_like_parenthetical_never_commits() -> None:
+    """CHAOS-3388 codex re-review (HIGH, confirmed) acceptance repro.
+
+    The live defect: a catalog label like "Payments (Legacy)" carries a
+    parenthetical that reads as a qualifier ("this is the legacy one"), not
+    an asserted alternate name -- yet the prior auto-commit check treated
+    every parenthetical identically, so "What is the status of the Legacy
+    project?" proceeded with ``payments-legacy`` COMMITTED, answering about
+    an entity the user never actually named. There is no catalog alias field
+    distinguishing a real alternate name from a qualifier, so parentheticals
+    are held to the same rule as an acronym: candidate-only, never a pick.
+    """
+
+    payments_legacy = AuthorizedEntity(
+        kind=EntityKind.PROJECT,
+        canonical_id="project-payments-legacy",
+        label="Payments (Legacy)",
+        repository_id=None,
+    )
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, payments_legacy)]),
+        request_for("What is the status of the Legacy project?"),
+    )
+
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.NEEDS_CLARIFICATION
+    assert result.committed_resolution is None
+    assert result.answer is not None
+    candidates = result.answer.frame.clarification_candidates
+    assert len(candidates) == 1
+    assert candidates[0].entity_ref.display_label == payments_legacy.label
+    assert candidates[0].entity_ref.entity_id == payments_legacy.canonical_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("label", "question"),
+    [
+        ("Reports (Archived)", "What is the status of the Archived project?"),
+        ("Roadmap (Team A)", 'What is the status of the "Team A" project?'),
+    ],
+)
+async def test_qualifier_like_parentheticals_never_commit(
+    label: str, question: str
+) -> None:
+    """More qualifier-shaped parentheticals from the reviewer's negative list.
+
+    "(Archived)" and "(Team A)" read exactly like "(Legacy)" -- a status or
+    ownership qualifier appended to the primary label, not a real alternate
+    name -- and must stay candidate-only for the same reason.
+    """
+
+    slug = re.sub(r"[^a-z0-9]+", "-", label.casefold()).strip("-")
+    entity = AuthorizedEntity(
+        kind=EntityKind.PROJECT,
+        canonical_id=f"project-{slug}",
+        label=label,
+        repository_id=None,
+    )
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, entity)]),
+        request_for(question),
+    )
+
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.NEEDS_CLARIFICATION
+    assert result.committed_resolution is None
+    assert result.answer is not None
+    candidates = result.answer.frame.clarification_candidates
+    assert len(candidates) == 1
+    assert candidates[0].entity_ref.display_label == entity.label
+    assert candidates[0].entity_ref.entity_id == entity.canonical_id
 
 
 # ---------------------------------------------------------------------------

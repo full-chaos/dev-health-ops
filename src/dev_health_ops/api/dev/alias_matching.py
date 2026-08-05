@@ -10,21 +10,34 @@ it. This module is the pure, catalog-independent scoring layer that closes
 that gap -- it never touches a database and never decides commit-vs-candidate
 policy; callers own both.
 
-Two distinct kinds of alias, scored differently by every caller in this
-codebase (see ``scope_service.py``'s broadened literal-match check and
-``subject_preflight.py``'s acronym-augmented closest-matches search):
+Two distinct kinds of alias, both scored here but held to the SAME
+commit policy by every caller in this codebase (see ``scope_service.py``'s
+exact-match check and ``subject_preflight.py``'s acronym-augmented
+closest-matches search):
 
-* **Literal aliases** -- a parenthetical segment of the name is itself a real
-  alternate name ("(Context Fabric)" -> "Context Fabric"), not a derived
-  abbreviation. Typing it is exactly as deliberate an act as typing the
-  primary label, so callers may treat an exact (casefolded) match the same
-  way they already treat a literal label/id match.
+* **Literal aliases** -- a parenthetical segment of the name, split out
+  mechanically from wherever a "(" / ")" pair appears in the label
+  ("(Context Fabric)" -> "Context Fabric"). Some read as a genuine
+  alternate name; others read as a qualifier on the primary label
+  ("Payments (Legacy)" -> "Legacy", "Reports (Archived)" -> "Archived").
+  Nothing about the catalog schema tells the two apart -- there is no
+  explicit alias field, only a parenthesis this module splits on -- so a
+  literal alias is exactly as *derived* a signal as an acronym is, despite
+  reading as more "literal" to a person. CHAOS-3388 codex re-review (HIGH,
+  confirmed): an earlier revision let a unique literal-alias match commit
+  outright, which auto-committed "the Legacy project" onto whichever
+  catalog entity happened to carry "(Legacy)" -- answering about an entity
+  the user never actually named.
 * **Acronyms** -- the initials of a contiguous run of two or more words,
-  taken over the primary name and over each literal alias in turn. This is
-  always a *derived* signal, never a name the catalog itself asserts, so it
-  is never eligible for the same auto-commit treatment as a literal alias:
-  every caller must offer it as a candidate, never a pick (CHAOS-3289 history
-  -- never guess into a wrong subject).
+  taken over the primary name and over each literal alias in turn. Also a
+  *derived* signal, never a name the catalog itself asserts.
+
+Neither kind is ever eligible for auto-commit: every caller must offer a
+match on either one as a candidate, never a pick (CHAOS-3289 history --
+never guess into a wrong subject). Should the catalog ever grow a real,
+explicit alias field distinct from this label-splitting, that field's
+values -- not this module's derived ``literal_aliases`` -- would be the
+input eligible for a different policy.
 
 Every acronym window (not only the whole-name acronym) is generated because
 a real display name routinely carries organization/product boilerplate a
@@ -116,7 +129,9 @@ class NameAliasForms:
     """
 
     #: Parenthetical alias text(s), verbatim minus surrounding whitespace --
-    #: eligible for the same literal-equality treatment as the primary label.
+    #: a *derived* signal like ``acronyms`` below (see the module docstring
+    #: for why), never eligible for auto-commit, only for the candidate
+    #: list.
     literal_aliases: frozenset[str]
     #: Derived acronyms of the primary name and of each literal alias --
     #: candidate-only, never auto-commit eligible.

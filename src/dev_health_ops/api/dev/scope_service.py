@@ -20,7 +20,6 @@ from enum import StrEnum
 from typing import Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .alias_matching import alias_forms
 from .contracts import (
     DevDisambiguationCandidate,
     DevEntityRef,
@@ -746,21 +745,30 @@ class ScopeResolutionService:
         # equal a label or canonical id outright; a partial name that matched
         # something real is offered back as candidates instead.
         #
-        # CHAOS-3388: a candidate's own parenthetical alias ("Dev Health
-        # Agent Context Runtime (Context Fabric)" -> "Context Fabric") is
-        # exactly as literal a name as its primary label -- typing it is a
-        # deliberate naming act, not a derived guess -- so it is eligible for
-        # the same outright-equality commit. A *derived* acronym
-        # ("ACR") is deliberately excluded from this check: it is never
-        # eligible for auto-commit, only for the candidate list, however
-        # unique the acronym match turns out to be (see ``alias_matching``'s
-        # module docstring).
+        # CHAOS-3388 codex re-review (HIGH, confirmed): a candidate's own
+        # parenthetical segment ("Dev Health Agent Context Runtime (Context
+        # Fabric)" -> "Context Fabric") is NOT eligible for the same
+        # outright-equality commit as its primary label, however real the
+        # alternate name reads in ordinary language. The catalog carries no
+        # explicit alias field -- ``alias_forms`` *derives* every
+        # parenthetical the same mechanical way, by splitting one label
+        # string on its parentheses, with no way to distinguish a genuine
+        # alternate name ("Context Fabric") from a qualifier appended to the
+        # primary label ("Payments (Legacy)", "Reports (Archived)"). The
+        # first commit of this check treated both identically and
+        # auto-committed "the Legacy project" onto ``payments-legacy`` --
+        # answering about an entity the user never actually named. So a
+        # parenthetical match is held to exactly the acronym rule: candidate
+        # list only, never a pick, however unique the match turns out to be
+        # (see ``alias_matching``'s module docstring). Should the catalog
+        # ever grow a real, explicit alias field -- distinct from splitting
+        # the display label -- that field's values would be the eligible
+        # input here instead; a derived parenthetical never is.
         wanted = lookup_text.strip().casefold()
         exact_matches = tuple(
             candidate
             for candidate in candidates
             if wanted in {candidate.canonical_id.casefold(), candidate.label.casefold()}
-            or wanted in alias_forms(candidate.label).literal_aliases
         )
         if len(exact_matches) == 1:
             return MentionResolution(

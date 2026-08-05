@@ -80,8 +80,9 @@ def test_alias_forms_names_the_real_repro_project() -> None:
     assert forms.literal_aliases == {"context fabric"}
     assert "acr" in forms.acronyms
     assert "cf" in forms.acronyms
-    # The acronym set is never eligible as a literal alias and vice versa --
-    # callers key auto-commit eligibility only off `literal_aliases`.
+    # The two sets are disjoint vocabularies -- neither stands in for the
+    # other -- even though CHAOS-3388 codex re-review holds both to the same
+    # candidate-only commit policy (see the module docstring).
     assert "acr" not in forms.literal_aliases
     assert "context fabric" not in forms.acronyms
 

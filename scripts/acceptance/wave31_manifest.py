@@ -1994,29 +1994,38 @@ _SCRIPTED_PROVIDER_AT_CHAOS_3219_LANE_1B = (
 
 #: CHAOS-3219 Wave 4 Phase 1 Lane 1c (compose env): the acceptance overlay,
 #: launcher, and seeder gained a required worker/beat jobs fleet with real
-#: healthchecks, an optional off-by-default ACR profile, quota env
-#: plumbing, second-org/disabled-entitlement-org provisioning, and a
-#: docker-compose interpolation env-hardening fix. None of it touches
-#: ``compose.yml`` (the existing datastore-reconciliation declaration above
-#: still covers that path unchanged) but all three DO touch these same
-#: fourteen rows' other covered dependencies. Same reasoning as the
-#: datastore reconciliation above: these fourteen rows are evidence about
-#: the PRE-Wave-4 acceptance environment (no required jobs fleet, no quota
-#: ceiling, single org, un-hardened interpolation env) -- a real runtime
-#: difference, not a formality -- and it is declarable rather than blocking
-#: because none of it touches the scenarios' own assertions (product code
-#: under src/ is the digested surface's boundary; these are
-#: launcher/compose/seeder-only changes). Bound to this lane's actual
-#: committed content, so any FURTHER edit to any of the three reds every
-#: one of these fourteen again -- same self-cleaning property as above.
+#: healthchecks, an optional off-by-default ACR profile (its own overlay,
+#: tests/acceptance/compose.ask-dev-acr.yml -- deliberately NOT added to
+#: RUNTIME_DEPENDENCY_PATHS yet; see acceptance_artifact.py's comment on
+#: why that specific addition is a Phase-1-barrier re-mint, not a
+#: per-branch declaration), quota env plumbing, second-org/disabled-
+#: entitlement-org provisioning, a docker-compose interpolation
+#: env-hardening fix, and (Codex round 2, 2026-08-05) an acr_armed field
+#: recorded by acceptance_artifact.py. None of it touches ``compose.yml``
+#: (the existing datastore-reconciliation declaration above still covers
+#: that path unchanged) but all of it DOES touch these same fourteen rows'
+#: other covered dependencies. Same reasoning as the datastore
+#: reconciliation above: these fourteen rows are evidence about the
+#: PRE-Wave-4 acceptance environment (no required jobs fleet, no quota
+#: ceiling, single org, un-hardened interpolation env, no acr_armed field)
+#: -- a real runtime difference, not a formality -- and it is declarable
+#: rather than blocking because none of it touches the scenarios' own
+#: assertions (product code under src/ is the digested surface's boundary;
+#: these are launcher/compose/seeder/recorder-only changes). Bound to this
+#: lane's actual committed content, so any FURTHER edit to any of these
+#: paths reds every one of these fourteen again -- same self-cleaning
+#: property as above.
 _RUN_ASK_DEV_COMPOSE_SH_AT_LANE_1C = (
-    "9cb95a2a12c2eeddfdb477e6d7ccd37aec8a1eedee7033ac32c76cc523180a90"
+    "b5c9fd6f060ac2c6320be033b3d76ff37adfb083931cf5dfeb026eb56fc0bbfb"
 )
 _COMPOSE_ASK_DEV_YML_AT_LANE_1C = (
-    "6da90fef2f0bd47068e74e03d88aea9bbc4c4483c98e3fc6f7fe4900595ba293"
+    "bd8d92bc96836e77dd8701a1e04e4178b63b4c65660fd48fe7e4a26306a290df"
 )
 _PREPARE_ASK_DEV_ACCEPTANCE_PY_AT_LANE_1C = (
     "5daf40ef225bbe8e8c4ccdef103c42343fb033d36caab03807f5407417967ff7"
+)
+_ACCEPTANCE_ARTIFACT_PY_AT_LANE_1C = (
+    "ae9fef3979883cefd19bccd921034bea83bd9252987656e8ca9f0d771cfce7bf"
 )
 
 DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
@@ -2029,6 +2038,9 @@ DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
         "tests/acceptance/compose.ask-dev.yml": _COMPOSE_ASK_DEV_YML_AT_LANE_1C,
         "scripts/acceptance/prepare_ask_dev_acceptance.py": (
             _PREPARE_ASK_DEV_ACCEPTANCE_PY_AT_LANE_1C
+        ),
+        "scripts/acceptance/acceptance_artifact.py": (
+            _ACCEPTANCE_ARTIFACT_PY_AT_LANE_1C
         ),
     }
     for item_id in (

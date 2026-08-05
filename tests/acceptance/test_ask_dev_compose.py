@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +25,11 @@ _BASE_COMPOSE = _ROOT / "compose.yml"
 _LAUNCHER = _ROOT / "scripts" / "acceptance" / "run_ask_dev_compose.sh"
 _PREPARE = _ROOT / "scripts" / "acceptance" / "prepare_ask_dev_acceptance.py"
 _ORACLE = _ROOT / "tests" / "acceptance" / "ask-dev-oracle.v1.json"
+_RESOLVE_ACR_SCRIPT = _ROOT / "scripts" / "acceptance" / "resolve_acr_parent_compose.sh"
+_WORKER_PROBE_SCRIPT = _ROOT / "scripts" / "acceptance" / "healthcheck_worker_probe.py"
+_BEAT_SENTINEL_SCRIPT = (
+    _ROOT / "scripts" / "acceptance" / "healthcheck_beat_sentinel.py"
+)
 
 
 class _ComposeLoader(yaml.SafeLoader):
@@ -316,29 +325,30 @@ def test_worker_and_beat_are_required_with_real_healthchecks() -> None:
     assert "profiles" not in services["worker"]
     assert "profiles" not in services["beat"]
 
+    # Codex finding (HIGH, 2026-08-05): `celery inspect ping` only proves
+    # the control-plane RPC answers, not that the task pool executes queued
+    # work -- a wedged pool can keep answering ping. Both healthchecks now
+    # invoke a dedicated probe script that round-trips a REAL task through a
+    # required queue (worker) or reads a worker-written receipt with a
+    # bounded timestamp (beat) -- see
+    # test_worker_probe_dispatches_a_real_task_through_a_required_queue and
+    # test_beat_sentinel_reads_a_freshness_bounded_worker_receipt below for
+    # execution-level proof these scripts do what they claim, and
+    # test_worker_probe_times_out_against_a_wedged_pool for the RED case.
     worker_check = services["worker"]["healthcheck"]
-    # "no required job may exit success after skipping substantive work"
-    # (plan §5): this must be a real functional receipt, not a bare
-    # container-is-running check -- `celery inspect ping` round-trips
-    # through the broker to the worker's own consumer loop.
     assert worker_check["test"] == [
         "CMD",
-        "celery",
-        "-A",
-        "dev_health_ops.workers.celery_app",
-        "inspect",
-        "ping",
+        "python",
+        "/app/scripts/acceptance/healthcheck_worker_probe.py",
     ]
     assert worker_check["retries"] > 1
 
     beat_check = services["beat"]["healthcheck"]
-    # celery beat has no inspect-style RPC; the receipt is that its
-    # persistent schedule file is being actively rewritten, not merely that
-    # it exists.
-    beat_test = beat_check["test"]
-    assert beat_test[0] == "CMD-SHELL"
-    assert "/tmp/celerybeat-schedule" in beat_test[1]
-    assert "-lt 90" in beat_test[1]
+    assert beat_check["test"] == [
+        "CMD",
+        "python",
+        "/app/scripts/acceptance/healthcheck_beat_sentinel.py",
+    ]
     assert beat_check["retries"] > 1
 
 
@@ -499,11 +509,15 @@ def test_launcher_boots_required_jobs_fleet_and_gates_acr_optionally() -> None:
     assert '"${compose[@]}" up -d --build --wait "${boot_services[@]}"' in launcher
     assert "acr-db-init acr-migrate acr-api" in launcher
     # ACR services are appended to boot_services only inside the arming
-    # branch, never unconditionally.
+    # branch, never unconditionally. The arming block now nests its own
+    # if/fi (parent-compose path resolution), so anchor the "closed before
+    # the block ends" check on `report_failure() {`, which is defined
+    # immediately after the whole arming `if` closes -- not on the first
+    # bare "fi\n", which now belongs to an inner if/else inside the block.
     arm_index = launcher.index('"${acr_armed}" == "1"')
     acr_boot_index = launcher.index("acr-db-init acr-migrate acr-api")
-    fi_index = launcher.index("fi\n", arm_index)
-    assert arm_index < acr_boot_index < fi_index
+    report_failure_def_index = launcher.index("report_failure() {")
+    assert arm_index < acr_boot_index < report_failure_def_index
 
 
 def test_launcher_provisions_second_org_and_writes_org_ids_artifact() -> None:
@@ -630,3 +644,318 @@ def test_provision_multi_org_fails_loud_if_disabled_org_leaks_entitlement() -> N
             email="admin@devhealth.example",
             password="devhealth123",
         )
+
+
+# ---------------------------------------------------------------------------
+# Codex round 2 (2026-08-05): 3 HIGH + 1 MEDIUM findings against 9844d44f7.
+# ---------------------------------------------------------------------------
+
+_docker_available = shutil.which("docker") is not None
+_requires_docker = pytest.mark.skipif(
+    not _docker_available, reason="docker is not available on this machine"
+)
+
+#: A structurally-valid but minimal stand-in for the parent dev-health
+#: repo's compose.yml -- enough for `extends: service: acr-*` to resolve,
+#: without needing the real ACR Go images. Proves PATH RESOLUTION (this
+#: finding); the real ACR service shape is proven separately by the live D3
+#: boot evidence in the PR description.
+_STUB_PARENT_COMPOSE = """\
+services:
+  acr-db-init:
+    image: busybox
+    command: ["true"]
+  acr-migrate:
+    image: busybox
+    command: ["true"]
+  acr-api:
+    image: busybox
+    command: ["true"]
+    ports:
+      - "127.0.0.1:18080:8080"
+"""
+
+
+def _assert_acr_config_resolves(ops_checkout: Path, parent_compose: Path) -> None:
+    """Run resolve_acr_parent_compose.sh from ``ops_checkout`` and assert the
+    ACR-armed `docker compose config --quiet` it enables actually succeeds --
+    the literal Codex repro (worktree layout: `docker compose config --quiet`
+    failed outright with the un-fixed relative default)."""
+
+    resolved = subprocess.run(
+        [
+            "bash",
+            str(
+                ops_checkout
+                / "scripts"
+                / "acceptance"
+                / "resolve_acr_parent_compose.sh"
+            ),
+            str(ops_checkout),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert resolved.returncode == 0, resolved.stderr
+    resolved_parent, resolved_acr_dev_dir = resolved.stdout.splitlines()
+    assert resolved_parent == str(parent_compose.resolve())
+    assert Path(resolved_parent).is_file()
+
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "ASK_DEV_WEB_CONTEXT": "/tmp",
+        "ASK_DEV_ACCEPTANCE_API_PORT": "18089",
+        "BUGSINK_SECRET_KEY": "x",
+        "ASK_DEV_ACCEPTANCE_PARENT_COMPOSE": resolved_parent,
+        "ASK_DEV_ACCEPTANCE_PARENT_ACR_DEV_DIR": resolved_acr_dev_dir,
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": "postgres",
+    }
+    config = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--project-name",
+            f"test-acr-path-{uuid.uuid4().hex[:8]}",
+            "--project-directory",
+            str(ops_checkout),
+            "-f",
+            str(ops_checkout / "compose.yml"),
+            "-f",
+            str(ops_checkout / "tests" / "acceptance" / "compose.ask-dev.yml"),
+            "-f",
+            str(ops_checkout / "tests" / "acceptance" / "compose.ask-dev-acr.yml"),
+            "--profile",
+            "ask-dev-acceptance",
+            "--profile",
+            "ask-dev-acceptance-acr",
+            "config",
+            "--quiet",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert config.returncode == 0, (
+        f"docker compose config --quiet failed from {ops_checkout}: {config.stderr}"
+    )
+    # The literal failure mode this finding closes: extended services
+    # silently disappearing from the merged config rather than erroring.
+    full_config = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--project-name",
+            f"test-acr-path-{uuid.uuid4().hex[:8]}",
+            "--project-directory",
+            str(ops_checkout),
+            "-f",
+            str(ops_checkout / "compose.yml"),
+            "-f",
+            str(ops_checkout / "tests" / "acceptance" / "compose.ask-dev.yml"),
+            "-f",
+            str(ops_checkout / "tests" / "acceptance" / "compose.ask-dev-acr.yml"),
+            "--profile",
+            "ask-dev-acceptance",
+            "--profile",
+            "ask-dev-acceptance-acr",
+            "config",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    parsed = yaml.safe_load(full_config.stdout)
+    for service in ("acr-db-init", "acr-migrate", "acr-api"):
+        assert service in parsed["services"], (
+            f"{service} disappeared from the ACR-armed merged config"
+        )
+
+
+@_requires_docker
+def test_resolve_acr_parent_compose_succeeds_from_the_canonical_layout(
+    tmp_path: Path,
+) -> None:
+    """`<checkout>/ops` directly under the parent -- resolve_acr_parent_compose.sh's
+    own default path arithmetic, unexercised by a worktree."""
+
+    parent_dir = tmp_path / "dev-health-canonical"
+    parent_dir.mkdir()
+    (parent_dir / "compose.yml").write_text(_STUB_PARENT_COMPOSE)
+    ops_checkout = parent_dir / "ops"
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", "-q", str(ops_checkout), "HEAD"],
+        cwd=_ROOT,
+        check=True,
+    )
+    try:
+        _assert_acr_config_resolves(ops_checkout, parent_dir / "compose.yml")
+    finally:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(ops_checkout)],
+            cwd=_ROOT,
+            check=True,
+        )
+
+
+@_requires_docker
+def test_resolve_acr_parent_compose_succeeds_from_a_worktree_layout(
+    tmp_path: Path,
+) -> None:
+    """The literal Codex repro: `<checkout>/ops-worktrees/<branch>`, one
+    level deeper than the canonical layout -- `../compose.yml` relative to
+    this ops checkout resolves to `ops-worktrees/compose.yml` (missing),
+    not the real parent. This is exactly the layout this session's own
+    Lane 1c worktree runs from."""
+
+    parent_dir = tmp_path / "dev-health-worktree"
+    parent_dir.mkdir()
+    (parent_dir / "compose.yml").write_text(_STUB_PARENT_COMPOSE)
+    ops_checkout = parent_dir / "ops-worktrees" / "some-branch"
+    ops_checkout.parent.mkdir(parents=True)
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", "-q", str(ops_checkout), "HEAD"],
+        cwd=_ROOT,
+        check=True,
+    )
+    try:
+        _assert_acr_config_resolves(ops_checkout, parent_dir / "compose.yml")
+    finally:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(ops_checkout)],
+            cwd=_ROOT,
+            check=True,
+        )
+
+
+def test_resolve_acr_parent_compose_fails_loud_with_no_sibling_checkout(
+    tmp_path: Path,
+) -> None:
+    """No docker needed: a worktree with no sibling dev-health/compose.yml
+    at all must fail loud (exit 64-equivalent) rather than silently
+    resolving to a nonexistent path that only breaks later at `docker
+    compose config`."""
+
+    orphan_root = tmp_path / "some-orphan-dir"
+    ops_checkout = orphan_root / "ops"
+    ops_checkout.parent.mkdir(parents=True)
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", "-q", str(ops_checkout), "HEAD"],
+        cwd=_ROOT,
+        check=True,
+    )
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                str(
+                    ops_checkout
+                    / "scripts"
+                    / "acceptance"
+                    / "resolve_acr_parent_compose.sh"
+                ),
+                str(ops_checkout),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 64
+        assert "requires a sibling dev-health checkout" in result.stderr
+    finally:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(ops_checkout)],
+            cwd=_ROOT,
+            check=True,
+        )
+
+
+def test_resolve_acr_parent_compose_honors_an_explicit_override(tmp_path: Path) -> None:
+    explicit = tmp_path / "somewhere-else" / "compose.yml"
+    explicit.parent.mkdir(parents=True)
+    explicit.write_text(_STUB_PARENT_COMPOSE)
+    result = subprocess.run(
+        ["bash", str(_RESOLVE_ACR_SCRIPT), str(_ROOT)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "ASK_DEV_ACCEPTANCE_PARENT_COMPOSE": str(explicit),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    resolved_parent, _ = result.stdout.splitlines()
+    assert resolved_parent == str(explicit.resolve())
+
+
+def test_resolve_acr_parent_compose_rejects_a_missing_explicit_override() -> None:
+    result = subprocess.run(
+        ["bash", str(_RESOLVE_ACR_SCRIPT), str(_ROOT)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "ASK_DEV_ACCEPTANCE_PARENT_COMPOSE": "/nonexistent/compose.yml",
+        },
+    )
+    assert result.returncode == 64
+    assert "does not exist" in result.stderr
+
+
+# --- worker/beat probe scripts: static (no-live-infra) coverage. The
+# behavioral proof that these actually detect a wedged pool -- Codex's
+# explicit "RED-verify by wedging it (pool=solo + blocking task)" -- is a
+# live docker-compose proof (see PR description), not a unit test: it needs
+# a real broker, a real second worker process, and a real blocking task,
+# which is exactly the class of live-infra dependency this repo's other
+# acceptance/live tests are already kept out of the fast unit tier for. ---
+
+
+def test_worker_probe_targets_a_required_queue_with_a_bounded_wait() -> None:
+    source = _WORKER_PROBE_SCRIPT.read_text(encoding="utf-8")
+    # "monitoring" must be a queue this stack's `worker` service actually
+    # consumes (compose.yml's `-Q ...,monitoring`) -- a probe routed to a
+    # queue nothing consumes would time out unconditionally, proving
+    # nothing about the pool's health either way.
+    assert '_PROBE_QUEUE = "monitoring"' in source
+    assert (
+        '_PROBE_TASK_NAME = "dev_health_ops.workers.tasks.monitor_queue_depths"'
+        in source
+    )
+    assert "task_id=" in source, (
+        "must be uniquely identified, not a bare fire-and-forget"
+    )
+    assert ".get(timeout=" in source, "must actually block for the receipt"
+
+
+def test_beat_sentinel_reads_a_freshness_bounded_worker_receipt() -> None:
+    source = _BEAT_SENTINEL_SCRIPT.read_text(encoding="utf-8")
+    assert "CELERY_RESULT_BACKEND" in source
+    assert "celery-task-meta-" in source
+    assert "_FRESHNESS_WINDOW_SECONDS" in source
+    # Matches by result SHAPE, not task name (the default Redis result
+    # payload carries no task name) -- assert the actual fingerprint field.
+    assert '"queues"' in source
+
+
+def test_beat_sentinel_date_parsing_handles_naive_and_aware_timestamps() -> None:
+    import importlib.util
+    from datetime import timezone
+
+    spec = importlib.util.spec_from_file_location(
+        "healthcheck_beat_sentinel", _BEAT_SENTINEL_SCRIPT
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    naive = module._parse_date_done("2026-08-05T13:45:28.474000")
+    assert naive is not None
+    assert naive.tzinfo == timezone.utc
+
+    aware = module._parse_date_done("2026-08-05T13:45:28.474000+00:00")
+    assert aware is not None
+    assert aware.tzinfo is not None
+
+    assert module._parse_date_done("not-a-timestamp") is None
+    assert module._parse_date_done(None) is None

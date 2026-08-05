@@ -71,7 +71,13 @@ oracle_file="${ops_root}/tests/acceptance/ask-dev-oracle.v1.json"
 # OFF by default -- arm with ASK_DEV_ACCEPTANCE_ACR=1. See
 # tests/acceptance/compose.ask-dev-acr.yml for the wiring rationale and the
 # sibling dev-health checkout it requires (ASK_DEV_ACCEPTANCE_PARENT_COMPOSE).
+# Normalized and exported (not just a local var) -- ScenarioRecorder.write
+# (acceptance_artifact.py) reads this in every smoke script's own process to
+# record acr_armed in its execution artifact, so ACR-backed case evidence is
+# provably from an ACR-armed run rather than one that merely happened to
+# pass while ACR was off (Codex finding, MEDIUM, 2026-08-05).
 acr_armed="${ASK_DEV_ACCEPTANCE_ACR:-0}"
+export ASK_DEV_ACCEPTANCE_ACR="${acr_armed}"
 # CHAOS-3219 Phase 1: where downstream corpus lanes read the second-org /
 # disabled-entitlement-org ids this run provisioned (see
 # provision_multi_org() in prepare_ask_dev_acceptance.py). Not committed
@@ -108,6 +114,12 @@ boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-ope
 log_services=(api ask-dev-scripted-openai worker beat web)
 
 if [[ "${acr_armed}" == "1" ]]; then
+  # See resolve_acr_parent_compose.sh for the worktree-layout bug this
+  # closes and why it is a separate, independently-tested script.
+  # shellcheck source=resolve_acr_parent_compose.sh
+  source "${script_dir}/resolve_acr_parent_compose.sh"
+  resolve_acr_parent_compose "${ops_root}"
+
   compose+=(-f "${acceptance_acr_compose_file}" --profile ask-dev-acceptance-acr)
   boot_services+=(acr-db-init acr-migrate acr-api)
   log_services+=(acr-api)

@@ -102,45 +102,53 @@ services:
   # ---------------------------------------------------------------------------
   worker:
     container_name: ask-dev-acceptance-worker
-    environment:
-      ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX: "100"
-      ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD: "10000000"
     healthcheck:
-      # Real functional receipt: round-trips a broadcast ping through the
-      # Valkey broker to the worker's own consumer loop and back. A worker
-      # that boots but never finishes subscribing (bad queue list, broker
-      # auth failure, crashed on import) fails this, unlike a bare
-      # "container is running" check.
+      # Codex finding (HIGH, 2026-08-05): `celery inspect ping` only proves
+      # the control-plane RPC answers -- it is served independently of the
+      # task pool, so a worker whose pool is wedged (deadlock, exhausted
+      # concurrency, a stuck task) can keep answering ping while never
+      # draining a single queued task. Real receipt instead: dispatch a
+      # uniquely-identified task through the SAME required queue
+      # (`monitoring`) the worker actually consumes and block for ITS
+      # result (scripts/acceptance/healthcheck_worker_probe.py -- reuses
+      # the existing monitor_queue_depths production task, no new
+      # production code). RED-verified: a `--pool=solo` worker occupied by
+      # a deliberately blocking task times this out and `up --wait`
+      # correctly reports unhealthy (see run history / PR description for
+      # the live proof).
       test:
         - "CMD"
-        - "celery"
-        - "-A"
-        - "dev_health_ops.workers.celery_app"
-        - "inspect"
-        - "ping"
+        - "python"
+        - "/app/scripts/acceptance/healthcheck_worker_probe.py"
       interval: 5s
-      timeout: 5s
+      timeout: 10s
       retries: 20
       start_period: 15s
 
   beat:
     container_name: ask-dev-acceptance-beat
     healthcheck:
-      # celery beat has no `inspect`-style RPC (that targets worker
-      # consumers, not the scheduler process) -- the closest real receipt is
-      # the persistent schedule store it owns: proof beat is actually
-      # ticking, not just alive, is that the file it periodically rewrites
-      # has been touched recently. 90s comfortably exceeds this stack's
-      # tightest beat interval so this does not flap under normal load.
+      # Codex finding (HIGH, 2026-08-05): the persistent schedule file's
+      # mtime is touched by beat's own bookkeeping regardless of whether a
+      # due task was actually published and consumed -- it does not prove
+      # publication or consumption. beat cannot itself execute a probe (it
+      # only schedules), so the real receipt is what its own dispatching
+      # already produces: the existing `monitor-queue-depths` beat entry
+      # (interval 60s, queue `monitoring`) is the sentinel, and a WORKER
+      # executing it writes a timestamped result into the shared Celery
+      # result backend -- read here
+      # (scripts/acceptance/healthcheck_beat_sentinel.py) and required to
+      # be within a bounded freshness window. A beat that stopped
+      # dispatching (or a fleet that stopped consuming) ages out and this
+      # reports unhealthy.
       test:
-        - "CMD-SHELL"
-        - >-
-          test -f /tmp/celerybeat-schedule &&
-          [ "$$(( $$(date +%s) - $$(stat -c %Y /tmp/celerybeat-schedule) ))" -lt 90 ]
-      interval: 10s
-      timeout: 5s
+        - "CMD"
+        - "python"
+        - "/app/scripts/acceptance/healthcheck_beat_sentinel.py"
+      interval: 15s
+      timeout: 10s
       retries: 20
-      start_period: 30s
+      start_period: 90s
 
   ask-dev-scripted-openai:
     container_name: ask-dev-acceptance-scripted-openai

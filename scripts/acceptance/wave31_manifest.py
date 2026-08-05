@@ -2091,111 +2091,44 @@ PROVEN_E2E_CLAIM_LIMITS = (
 #: Whether a stale row is ACCEPTABLE is a wave-close decision, not a CI
 #: one. CI's only job here is that nobody can be surprised by one.
 #:
-#: ``compose.yml`` at the datastore reconciliation (CHAOS-3312). The bundled
-#: datastore versions were converged onto the ones the Helm chart and the
-#: production compose stack already ran, so every scenario below recorded its
-#: evidence against the PREVIOUS pair:
+#: HISTORY: from the CHAOS-3312 datastore reconciliation through CHAOS-3419
+#: (Python version standardization), this mapping carried a running set of
+#: acknowledged-stale declarations for all fourteen ``proven_e2e`` rows
+#: above -- each entry named the exact drifted-path/hash pair a routine,
+#: non-product dependency bump (compose datastore versions, the scripted
+#: provider, the Lane 1c launcher/compose/seeder, pyproject.toml) left
+#: behind, per the self-cleaning rule below: a declaration whose named hash
+#: no longer matches the drift, or that names a row with no drift at all,
+#: fails loudly rather than silently expiring.
 #:
-#:     valkey/valkey:8-alpine            -> valkey/valkey:9-alpine@sha256:ee91f7a1...
-#:     clickhouse/clickhouse-server:latest -> ...:latest@sha256:d7556a38...
+#: CHAOS-3219 Wave 4 Phase 1 barrier re-proof (2026-08-05): all fourteen
+#: rows were re-minted live against merged main in the SAME change that
+#: bound ``tests/acceptance/compose.ask-dev-acr.yml`` into
+#: ``RUNTIME_DEPENDENCY_PATHS`` (see acceptance_artifact.py's comment).
+#: A fresh run against the current tree has, by construction, no drift left
+#: to acknowledge -- so every prior declaration above was removed here,
+#: exactly as this mechanism requires ("once the scenario is re-run the
+#: entry MUST be deleted or the manifest breaks"). Empty is the correct
+#: steady state until the next real, acknowledged drift.
 #:
-#: The Valkey change is a major version, not a repin, so this is a real
-#: runtime difference and not a formality: these rows are evidence about
-#: Valkey 8. The ClickHouse change binds a previously floating ``latest``,
-#: which is why the digest could not have been what any earlier run resolved
-#: it to either. Ask Dev's read path uses Valkey only as a cache in front of
-#: the ClickHouse/Postgres reads these scenarios assert on, which is the
-#: reason this is declarable rather than blocking -- but it is an
-#: acknowledgement, not a claim that the runs were re-verified.
-#:
-#: All fourteen bind the SAME hash because they drifted on the same file for
-#: the same reason. That does not weaken the gate: the hash is still bound,
-#: so the next edit to ``compose.yml`` produces a different digest and reds
-#: every one of these again.
-_COMPOSE_AT_DATASTORE_RECONCILIATION = (
-    "0beb7626fb984d736b0e65feb72209779c6b258e22c13f57b3cda10b946a8ceb"
+#: CHAOS-3437 (Codex adversarial review follow-up, same day): the CHAOS-3437
+#: residual-gap paragraph was added to acceptance_artifact.py's
+#: ``RUNTIME_DEPENDENCY_PATHS`` comment immediately after the re-mint above
+#: -- a covered-dependency-file edit, so it genuinely drifts all fourteen
+#: rows' ``scripts/acceptance/acceptance_artifact.py`` hash again. Comment
+#: text only; no behavioral change to the recorder, the digest, or any
+#: scenario. Declared per team-lead ruling (2026-08-05) rather than
+#: triggering a third live re-mint for a doc-only edit -- the same
+#: "routine, non-product dependency bump" reasoning the HISTORY note above
+#: already established for pyproject.toml.
+_ACCEPTANCE_ARTIFACT_PY_AT_CHAOS_3437_DOC = (
+    "38d9503d5bd0c4e0ab3da72e2a8eeb069f7c1171cd3a9bff86742acf2239a34b"
 )
-
-#: CHAOS-3219 Phase 1 Lane 1b: ``scripted_openai_service.py`` (a covered
-#: ``RUNTIME_DEPENDENCY_PATHS`` entry) was extended with role/fault-aware,
-#: question-fingerprint-routed scripted decision sequences -- the fixture
-#: provider these fourteen live scenarios all execute against, but never the
-#: system under test. Acknowledged for the same rows the compose datastore
-#: reconciliation above already covers; the same hash-binding rule applies:
-#: the next edit to this file reds every one of these rows again, so this
-#: entry cannot silently absorb a future, unrelated change to the scripted
-#: provider. Bound at the exact SHA emitted by
-#: ``acceptance_artifact.runtime_dependency_hashes()`` for this file at the
-#: tip of the CHAOS-3219 Phase 1 Lane 1b changeset.
-_SCRIPTED_PROVIDER_AT_CHAOS_3219_LANE_1B = (
-    "8efe7a5d1b26574fbd97c2df9c2aec961ebb3ce62a7419a667a0e4f28300b8a7"
-)
-
-#: CHAOS-3219 Wave 4 Phase 1 Lane 1c (compose env): the acceptance overlay,
-#: launcher, and seeder gained a required worker/beat jobs fleet with real
-#: healthchecks, an optional off-by-default ACR profile (its own overlay,
-#: tests/acceptance/compose.ask-dev-acr.yml -- deliberately NOT added to
-#: RUNTIME_DEPENDENCY_PATHS yet; see acceptance_artifact.py's comment on
-#: why that specific addition is a Phase-1-barrier re-mint, not a
-#: per-branch declaration), quota env plumbing, second-org/disabled-
-#: entitlement-org provisioning, a docker-compose interpolation
-#: env-hardening fix, and (Codex round 2, 2026-08-05) an acr_armed field
-#: recorded by acceptance_artifact.py. None of it touches ``compose.yml``
-#: (the existing datastore-reconciliation declaration above still covers
-#: that path unchanged) but all of it DOES touch these same fourteen rows'
-#: other covered dependencies. Same reasoning as the datastore
-#: reconciliation above: these fourteen rows are evidence about the
-#: PRE-Wave-4 acceptance environment (no required jobs fleet, no quota
-#: ceiling, single org, un-hardened interpolation env, no acr_armed field)
-#: -- a real runtime difference, not a formality -- and it is declarable
-#: rather than blocking because none of it touches the scenarios' own
-#: assertions (product code under src/ is the digested surface's boundary;
-#: these are launcher/compose/seeder/recorder-only changes). Bound to this
-#: lane's actual committed content, so any FURTHER edit to any of these
-#: paths reds every one of these fourteen again -- same self-cleaning
-#: property as above.
-_RUN_ASK_DEV_COMPOSE_SH_AT_LANE_1C = (
-    "b5c9fd6f060ac2c6320be033b3d76ff37adfb083931cf5dfeb026eb56fc0bbfb"
-)
-_COMPOSE_ASK_DEV_YML_AT_LANE_1C = (
-    "bd8d92bc96836e77dd8701a1e04e4178b63b4c65660fd48fe7e4a26306a290df"
-)
-_PREPARE_ASK_DEV_ACCEPTANCE_PY_AT_LANE_1C = (
-    "5daf40ef225bbe8e8c4ccdef103c42343fb033d36caab03807f5407417967ff7"
-)
-_ACCEPTANCE_ARTIFACT_PY_AT_LANE_1C = (
-    "ae9fef3979883cefd19bccd921034bea83bd9252987656e8ca9f0d771cfce7bf"
-)
-
-#: CHAOS-3419 (Python version standardization): ``pyproject.toml`` (a
-#: covered ``RUNTIME_DEPENDENCY_PATHS`` entry) gained requires-python
-#: ">=3.14", trimmed classifiers, and mypy's python_version bumped to
-#: 3.14 -- none of it touches the ask-dev scripted-provider fixture
-#: surface these fourteen rows execute against, only interpreter/type
-#: metadata, so this is declarable rather than blocking (see the
-#: comment above ``DECLARED_STALE_ARTIFACTS`` on why routine dependency
-#: metadata bumps must not red the whole repository). Bound at the
-#: exact sha256 of ``pyproject.toml`` as committed by this change; any
-#: FURTHER edit to it reds every one of these fourteen again.
-_PYPROJECT_TOML_AT_CHAOS_3419 = (
-    "b3306059b9cf888d4bb6b1021525576870f4a81c2576a1ca483e87ab874ebb06"
-)
-
 DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
     item_id: {
-        "compose.yml": _COMPOSE_AT_DATASTORE_RECONCILIATION,
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py": (
-            _SCRIPTED_PROVIDER_AT_CHAOS_3219_LANE_1B
-        ),
-        "scripts/acceptance/run_ask_dev_compose.sh": _RUN_ASK_DEV_COMPOSE_SH_AT_LANE_1C,
-        "tests/acceptance/compose.ask-dev.yml": _COMPOSE_ASK_DEV_YML_AT_LANE_1C,
-        "scripts/acceptance/prepare_ask_dev_acceptance.py": (
-            _PREPARE_ASK_DEV_ACCEPTANCE_PY_AT_LANE_1C
-        ),
         "scripts/acceptance/acceptance_artifact.py": (
-            _ACCEPTANCE_ARTIFACT_PY_AT_LANE_1C
+            _ACCEPTANCE_ARTIFACT_PY_AT_CHAOS_3437_DOC
         ),
-        "pyproject.toml": _PYPROJECT_TOML_AT_CHAOS_3419,
     }
     for item_id in (
         "attack.team-attribution.e2e-blocked-by-live-defect",

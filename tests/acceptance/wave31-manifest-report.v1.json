@@ -20,130 +20,46 @@
   "stale_row_count": 14,
   "stale_rows": {
     "attack.team-attribution.e2e-blocked-by-live-defect": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "attack.unrelated-evidence.e2e-live-validated": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "defect.ask-dev-exact-commit.e2e-live-validated": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "defect.ask-dev-not-found.e2e-live-validated": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "gate.plan-registry-gap-is-loud.e2e-live-validated": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "matrix.data-trust-organization-wide": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "matrix.exact-project-complete": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "matrix.multi-metric-comparison-organization-wide": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "matrix.operational-deficiency.e2e-live-validated": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "matrix.registered-metric-catalog": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "matrix.remaining-work-exact-project": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "matrix.team-health.e2e-live-validated": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "matrix.team-workload-balance.e2e-live-validated": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ],
     "positive-control.real-project-status": [
-      "compose.yml",
-      "pyproject.toml",
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/prepare_ask_dev_acceptance.py",
-      "scripts/acceptance/run_ask_dev_compose.sh",
-      "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-      "tests/acceptance/compose.ask-dev.yml"
+      "scripts/acceptance/acceptance_artifact.py"
     ]
   },
   "items": [
@@ -219,13 +135,7 @@
         "limitation_names_unavailable_metric_source"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -266,13 +176,7 @@
         "unrelated_repo_excluded_from_named_answer"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -345,13 +249,7 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -373,13 +271,7 @@
         "answer_status_not_error"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -449,13 +341,7 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -546,13 +432,7 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -747,13 +627,7 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -775,13 +649,7 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -875,13 +743,7 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -907,13 +769,7 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -1016,13 +872,7 @@
         "warnings_present_but_not_a_plan_registry_gap_signal"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -1289,13 +1139,7 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -1337,13 +1181,7 @@
         "safe_message_does_not_name_subject"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     },
     {
@@ -1464,13 +1302,7 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "compose.yml",
-        "pyproject.toml",
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/prepare_ask_dev_acceptance.py",
-        "scripts/acceptance/run_ask_dev_compose.sh",
-        "src/dev_health_ops/llm/agent/scripted_openai_service.py",
-        "tests/acceptance/compose.ask-dev.yml"
+        "scripts/acceptance/acceptance_artifact.py"
       ]
     }
   ]

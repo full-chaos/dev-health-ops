@@ -588,6 +588,82 @@ async def test_scope_search_is_bounded_and_deterministically_ordered() -> None:
     assert result.catalog_watermark == "org-a:watermark-1"
 
 
+@pytest.mark.asyncio
+async def test_resolved_at_anchors_the_window_it_stamps() -> None:
+    """``resolved_at`` must govern the window, not merely label it.
+
+    ``resolve_contract`` stamped the caller's instant on the contract while
+    ``resolve`` took the preset window from ``datetime.now``. Callers that
+    pinned the instant therefore got a scope that still moved with the wall
+    clock, and every assertion written against it held only until the next
+    local midnight -- a whole test module went red overnight on exactly that
+    (``tests/api/dev/test_project_scope_status_snapshot_repositories.py``),
+    with nothing in the diff that broke it.
+
+    The boundaries below are absolute, so this test cannot itself expire: a
+    30-day preset resolved at 2026-08-04T01:44Z is the half-open UTC window
+    [2026-07-06, 2026-08-05), whatever day it is read on.
+    """
+
+    service = ScopeResolutionService(FakeCatalog([]))
+    resolved_at = datetime(2026, 8, 4, 1, 44, tzinfo=timezone.utc)
+
+    result = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        ScopeResolveRequest(
+            explicit_refs=(ScopeRef(EntityKind.ORGANIZATION, "org-a"),),
+            time_range=TimeRangeRequest(preset_days=30, timezone="UTC"),
+        ),
+        resolved_at=resolved_at,
+    )
+
+    assert result.resolved_at == resolved_at
+    assert result.requested_scope.time_range.end == datetime(
+        2026, 8, 5, tzinfo=timezone.utc
+    )
+    assert result.requested_scope.time_range.start == datetime(
+        2026, 7, 6, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_instants_do_not_share_one_cached_resolution() -> None:
+    """The request cache must not serve a window resolved at another instant.
+
+    The window is derived from the instant but was absent from the cache key,
+    so the second of two resolutions differing only in ``resolved_at`` would
+    silently inherit the first one's window -- the same stale-window bug as
+    above, reintroduced through the cache.
+    """
+
+    service = ScopeResolutionService(FakeCatalog([]))
+    request = ScopeResolveRequest(
+        explicit_refs=(ScopeRef(EntityKind.ORGANIZATION, "org-a"),),
+        time_range=TimeRangeRequest(preset_days=7, timezone="UTC"),
+    )
+
+    first = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        request,
+        resolved_at=datetime(2026, 8, 4, 1, 44, tzinfo=timezone.utc),
+    )
+    second = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        request,
+        resolved_at=datetime(2026, 8, 5, 1, 44, tzinfo=timezone.utc),
+    )
+
+    assert first.requested_scope.time_range.end == datetime(
+        2026, 8, 5, tzinfo=timezone.utc
+    )
+    assert second.requested_scope.time_range.end == datetime(
+        2026, 8, 6, tzinfo=timezone.utc
+    )
+
+
 def test_relative_time_range_uses_local_day_boundaries_across_dst() -> None:
     service = ScopeResolutionService(FakeCatalog([]))
 

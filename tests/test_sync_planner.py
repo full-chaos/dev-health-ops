@@ -2547,3 +2547,136 @@ def test_family_dataset_with_empty_window_does_not_break_the_merge(db_session):
         "a dataset that resolved to no window must not be marked as covered by "
         "the composite crawl"
     )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412: FULL_RESYNC inherits the same window rules as INCREMENTAL.
+#
+# sync_units.py gates watermark stamping on exactly {INCREMENTAL, FULL_RESYNC},
+# so both modes stamp the watermark at the unit's window END and both inherit
+# the future-end and inverted-window defects. Both branches now share
+# ``_watermark_stamping_window``; these tests hold FULL_RESYNC to the contract
+# independently so the shared helper cannot be bypassed for one mode later.
+# ---------------------------------------------------------------------------
+
+
+def test_full_resync_window_end_is_clamped_to_now(db_session):
+    """A future ``before`` must not persist a future full_resync window end."""
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.FULL_RESYNC.value,
+            triggered_by="admin-api",
+            before=now + timedelta(days=45),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    _, before = _window(units[0])
+    assert before <= now + timedelta(seconds=2), (
+        f"full_resync window end {before} is in the future; full_resync IS in "
+        "the watermark-stamping set, so this would persist a future watermark"
+    )
+
+
+def test_full_resync_inverted_window_plans_no_unit(db_session):
+    """``before`` older than ``now - depth`` must plan zero units, not an
+    inverted one whose negative span floors to 1 day in admission."""
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.FULL_RESYNC.value,
+            triggered_by="admin-api",
+            before=datetime.now(timezone.utc) - timedelta(days=90),  # depth is 30d
+        ),
+    )
+
+    assert _planned_units(db_session, plan.sync_run_id) == []
+    assert plan.total_units == 0
+
+
+def test_full_resync_normal_window_is_unchanged(db_session):
+    """Regression guard: the ordinary full_resync window still spans the full
+    configured depth and ends at now."""
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 14}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.FULL_RESYNC.value,
+            triggered_by="admin-api",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    since, before = _window(units[0])
+    assert abs((since - (now - timedelta(days=14))).total_seconds()) < 2
+    assert abs((before - now).total_seconds()) < 2
+
+
+def test_backfill_windows_are_not_routed_through_the_watermark_normalizer(db_session):
+    """BACKFILL must keep its own bounds handling.
+
+    Backfill never stamps a watermark (CHAOS-2514) and legitimately targets a
+    historical range that ends well before ``now``. Routing it through the
+    watermark normalizer would be harmless for the clamp but would let the
+    empty-window rule silently drop chunks, so backfill stays out of it.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="admin-api",
+            since=now - timedelta(days=60),
+            before=now - timedelta(days=30),  # entirely in the past
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert units, "a historical backfill must still plan units"
+    for unit in units:
+        since, before = _window(unit)
+        assert since < before, "backfill chunks must stay forward-ordered"
+        assert before <= now

@@ -69,7 +69,7 @@ Consequences to expect when reading run state:
   The advancing watermark is the observable evidence of progress: read the
   dataset's latest successful source timestamp across consecutive runs rather
   than inferring coverage from run status. Surfacing this lag directly is
-  tracked separately as a CHAOS-3412 follow-up.
+  tracked separately as CHAOS-3430.
 - Catch-up is paced by the sync schedule. A heavy dataset that is far behind
   does not accelerate; to close a wide historical span faster, run a bounded
   backfill for that period instead.
@@ -81,3 +81,10 @@ Consequences to expect when reading run state:
   requested window was already covered", not as an ingestion fault. Scheduled
   runs do not request an upper bound and so never reach this state; only a
   manually requested past upper bound can.
+
+These window rules — the end never in the future, and no unit for an already
+covered range — apply to full resynchronization as well as incremental
+synchronization. Both stamp the watermark at the window end on success, so both
+carry the same consequences. Bounded backfills are separate: they never stamp a
+watermark and legitimately target a historical range, so they keep their own
+chunking and bounds.

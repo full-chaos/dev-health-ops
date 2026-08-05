@@ -45,14 +45,17 @@ Invariants:
     reports success. ``_effective_heavy_max_window_days`` clamps the cap above
     the overlap and logs a warning naming both values.
     See docs/operate/run/ingestion-and-backfills.md.
-  * INCREMENTAL windows never end in the future (``window_end = min(before,
-    now)``) — the success path stamps the watermark at the window END, so a
-    future end would persist a future watermark and the next run would start in
-    the future, silently skipping everything up to it. An empty or inverted
-    window (``end <= start``, i.e. the dataset is already synced past the
-    requested end) plans ZERO units rather than an inverted one: the admission
-    estimate floors a negative span to 1 day, so an inverted unit reads as cheap,
-    passes the budget guard, fetches nothing, and finalizes SUCCESS.
+  * Watermark-stamping window rules (CHAOS-3412), enforced once in
+    ``_watermark_stamping_window`` for BOTH modes whose success path stamps a
+    watermark (INCREMENTAL and FULL_RESYNC — ``sync_units`` gates on exactly
+    those two): (a) the end is clamped to ``now``, because a future ``before``
+    would persist a FUTURE watermark and the next run would start in the future
+    and silently skip everything up to it; (b) an empty or inverted window
+    (``end <= start``, i.e. already synced past the requested end) plans ZERO
+    units, because ``window_span_days`` floors a negative span to 1 day, so an
+    inverted unit is admitted at the cheapest possible cost, fetches nothing, and
+    finalizes SUCCESS — a false coverage claim. BACKFILL is deliberately excluded:
+    it never stamps a watermark (CHAOS-2514) and validates its own bounds.
   * total_units on the persisted SyncRun equals len(unit_ids).
 """
 
@@ -741,6 +744,39 @@ def _effective_heavy_max_window_days() -> int:
     return min_cap_days
 
 
+def _watermark_stamping_window(
+    window_start: datetime | None,
+    window_end: datetime,
+    now: datetime,
+) -> tuple[tuple[datetime | None, datetime | None], ...]:
+    """Normalize a window for any mode whose SUCCESS path stamps a watermark.
+
+    Both INCREMENTAL and FULL_RESYNC stamp the watermark at the unit's window END
+    (``sync_units.py`` gates on exactly those two modes), so both inherit the same
+    two failure modes. They are enforced HERE, once, rather than per branch —
+    CHAOS-3412 found the same defect in both branches, and one shared rule is also
+    one rule for any reimplementation of this contract to mirror.
+
+    1. The end is clamped to ``now``. A future ``before`` would otherwise persist
+       a FUTURE watermark, and the next run would start in the future and silently
+       skip everything up to it.
+    2. An empty or inverted window (``end <= start``) plans ZERO units. Persisting
+       ``since_at >= before_at`` is worse than useless: ``window_span_days`` floors
+       a negative span to 1 (``sync/budget_types.py``) and ``_scaled_units``
+       multiplies by that floor, so an inverted unit is admitted at the CHEAPEST
+       possible cost, fetches nothing, and finalizes SUCCESS — a false coverage
+       claim. ``set_watermark`` is monotonic, so the stamp itself is harmless; the
+       unit is the problem.
+
+    BACKFILL is deliberately NOT routed through here: it never stamps a watermark
+    (CHAOS-2514) and validates its own bounds in ``_backfill_windows``.
+    """
+    window_end = min(window_end, now)
+    if window_start is not None and window_end <= _as_utc(window_start):
+        return ()
+    return ((window_start, window_end),)
+
+
 def _is_heavy_dataset(provider: str, dataset_key: str) -> bool:
     """True when the (provider, dataset) pair is registered CostClass.HEAVY."""
     spec = get_dataset_spec(provider, dataset_key)
@@ -1068,11 +1104,7 @@ def _resolve_windows(
                 depth = resolve_initial_sync_depth(session, integration, dataset)
                 window_start = now - timedelta(days=depth)
         # WatermarkBehavior.NONE datasets keep window_start=None (registered behavior).
-        # An incremental window must never end in the future: the success path
-        # stamps the watermark at the window END, so a future ``before`` would
-        # persist a future watermark and the NEXT run would start in the future
-        # and silently skip everything up to it.
-        window_end = min(_request_before_or_now(request, now), now)
+        window_end = _request_before_or_now(request, now)
         if window_start is not None and _is_heavy_dataset(source_provider, dataset_key):
             # CHAOS-3412 ratchet: cap the span so a HEAVY unit can fit the sync
             # budget. Applies to BOTH cold-start and behind-watermark cases — a
@@ -1086,16 +1118,7 @@ def _resolve_windows(
                 days=_effective_heavy_max_window_days()
             )
             window_end = min(window_end, capped_end)
-        if window_start is not None and window_end <= _as_utc(window_start):
-            # Empty or inverted window: the dataset is already synced past the
-            # requested end. Plan NO unit rather than persisting since_at >=
-            # before_at — an inverted window's span floors to 1 day in the
-            # admission estimate and would sail through the budget guard as a
-            # cheap unit that fetches nothing and then stamps a BACKWARD-looking
-            # watermark end. ``set_watermark`` is monotonic so the stamp itself
-            # is harmless, but the unit is pure waste and reads as real coverage.
-            return ()
-        return ((window_start, window_end),)
+        return _watermark_stamping_window(window_start, window_end, now)
 
     if mode == SyncRunMode.BACKFILL.value:
         return _backfill_windows(
@@ -1106,7 +1129,9 @@ def _resolve_windows(
         # full_resync: use configured depth for all datasets (CHAOS-2569).
         depth = resolve_initial_sync_depth(session, integration, dataset)
         window_start_fr = now - timedelta(days=depth)
-        return ((window_start_fr, _request_before_or_now(request, now)),)
+        return _watermark_stamping_window(
+            window_start_fr, _request_before_or_now(request, now), now
+        )
 
     return ((None, _request_before_or_now(request, now)),)
 

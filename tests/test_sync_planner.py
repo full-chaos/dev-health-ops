@@ -1814,6 +1814,291 @@ _HEAVY_DATASET = "commit-stats"  # CostClass.HEAVY (sync/datasets.py _HEAVY_DATA
 _NON_HEAVY_DATASET = "commits"  # CostClass.MEDIUM
 
 
+# ---------------------------------------------------------------------------
+# Deterministic ratchet contract table.
+#
+# These cases pin the ratchet's behavioral clauses at EXACT timestamps with no
+# wall-clock dependency and no tolerance, by driving ``_resolve_windows``
+# directly with an injected ``now``. That makes them reproducible by any other
+# implementation of the same contract (e.g. a Go-native scheduler planner), so
+# this table is the Python side of a cross-implementation differential oracle:
+# feed the same (dataset, watermark, now, requested_before, depth, cap) inputs
+# to both implementations and the (since, before) pair must match exactly.
+#
+# Every case must stay expressible as pure data — no fixture reaching into
+# Python-only internals — or it stops being portable to the other side.
+# ---------------------------------------------------------------------------
+
+_ORACLE_NOW = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
+_ORACLE_DEPTH_DAYS = 30
+_ORACLE_CAP_DAYS = 7
+# _ORACLE_NOW - 30 days, i.e. the cold-start window_start for every case below.
+_ORACLE_COLD_START = datetime(2026, 5, 18, 12, 0, tzinfo=timezone.utc)
+
+
+def _dt(year: int, month: int, day: int, hour: int = 12) -> datetime:
+    return datetime(year, month, day, hour, 0, tzinfo=timezone.utc)
+
+
+# (case_id, dataset_key, watermark, requested_before, expected_since, expected_before)
+_RATCHET_CONTRACT_CASES: list[
+    tuple[str, str, datetime | None, datetime | None, datetime | None, datetime]
+] = [
+    # --- Clause: HEAVY cold-start is capped at window_start + cap ------------
+    (
+        "heavy-cold-start-is-capped",
+        "commit-stats",
+        None,
+        None,
+        _ORACLE_COLD_START,
+        _dt(2026, 5, 25),  # cold_start + 7d, NOT _ORACLE_NOW
+    ),
+    (
+        "heavy-cold-start-is-capped-for-every-heavy-key",
+        "files",
+        None,
+        None,
+        _ORACLE_COLD_START,
+        _dt(2026, 5, 25),
+    ),
+    # --- Clause: the cap is scoped to CostClass.HEAVY only -------------------
+    (
+        "medium-cold-start-is-uncapped",
+        "commits",
+        None,
+        None,
+        _ORACLE_COLD_START,
+        _ORACLE_NOW,
+    ),
+    (
+        "light-cold-start-is-uncapped",
+        "work-item-labels",
+        None,
+        None,
+        _ORACLE_COLD_START,
+        _ORACLE_NOW,
+    ),
+    (
+        "medium-behind-watermark-is-uncapped",
+        "commits",
+        _dt(2026, 3, 1),
+        None,
+        _dt(2026, 3, 1),
+        _ORACLE_NOW,
+    ),
+    # --- Clause: the cap applies to the behind-watermark case too ------------
+    (
+        "heavy-behind-watermark-is-capped",
+        "commit-stats",
+        _dt(2026, 3, 1),
+        None,
+        _dt(2026, 3, 1),
+        _dt(2026, 3, 8),  # watermark + 7d
+    ),
+    # --- Clause: the cap only ever moves the END in (it is a min, not a set) -
+    (
+        "heavy-watermark-inside-cap-keeps-natural-end",
+        "commit-stats",
+        _dt(2026, 6, 15),  # 2 days behind now
+        None,
+        _dt(2026, 6, 15),
+        _ORACLE_NOW,
+    ),
+    (
+        "heavy-watermark-exactly-at-cap-boundary-keeps-natural-end",
+        "commit-stats",
+        _dt(2026, 6, 10),  # exactly now - 7d; the tie must resolve to now
+        None,
+        _dt(2026, 6, 10),
+        _ORACLE_NOW,
+    ),
+    (
+        "heavy-requested-before-tighter-than-cap-wins",
+        "commit-stats",
+        _dt(2026, 3, 1),
+        _dt(2026, 3, 4),  # requested end is nearer than watermark + cap
+        _dt(2026, 3, 1),
+        _dt(2026, 3, 4),
+    ),
+    # --- Clause: a NONE-watermark-behavior dataset is never capped -----------
+    # NOTE: repo-metadata is the only NONE-behavior dataset and it is LIGHT, so
+    # this case exercises the NONE path end-to-end but short-circuits on the
+    # cost-class check and never reaches the ``window_start is not None`` guard.
+    # That guard is covered separately by
+    # ``test_open_start_window_is_never_capped_even_when_heavy``.
+    (
+        "none-watermark-behavior-keeps-open-start",
+        "repo-metadata",
+        None,
+        None,
+        None,  # window_start stays None; the cap must not synthesize one
+        _ORACLE_NOW,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "case_id,dataset_key,watermark,requested_before,expected_since,expected_before",
+    _RATCHET_CONTRACT_CASES,
+    ids=[case[0] for case in _RATCHET_CONTRACT_CASES],
+)
+def test_ratchet_window_contract(
+    db_session,
+    monkeypatch,
+    case_id,
+    dataset_key,
+    watermark,
+    requested_before,
+    expected_since,
+    expected_before,
+):
+    """CHAOS-3412: the exact (since, before) the ratchet must produce.
+
+    Behavioral clauses pinned by this table:
+
+    1. Cap default is 7 days, overridable via
+       ``SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS``.
+    2. The cap is scoped to ``CostClass.HEAVY`` datasets ONLY; LIGHT and MEDIUM
+       keep a single full-span window.
+    3. The cap applies to BOTH the cold-start case (no watermark, start =
+       ``now - initial_sync_depth``) and the behind-watermark case (start =
+       stored watermark less the configured overlap).
+    4. The cap only moves the window END inward: ``before = min(requested_before
+       or now, window_start + cap)``. ``window_start`` is never moved, so depth
+       resolution and the tier ``backfill_days`` cap are unaffected.
+    5. A ``WatermarkBehavior.NONE`` dataset keeps ``window_start = None`` and is
+       never capped.
+    """
+    from dev_health_ops.sync.datasets import get_dataset_spec
+
+    # Pin every input the contract depends on so the case is reproducible by
+    # another implementation: default cap, zero overlap, injected ``now``.
+    monkeypatch.delenv("SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS", raising=False)
+    monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", "0")
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": _ORACLE_DEPTH_DAYS}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    dataset = _create_dataset(db_session, integration, dataset_key)
+    if watermark is not None:
+        set_watermark(db_session, ORG_ID, source.external_id, dataset_key, watermark)
+
+    spec = get_dataset_spec("github", dataset_key)
+    assert spec is not None and spec.supported
+
+    windows = planner._resolve_windows(
+        session=db_session,
+        request=SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="scheduled",
+            before=requested_before,
+        ),
+        mode=SyncRunMode.INCREMENTAL.value,
+        org_id=ORG_ID,
+        source_provider="github",
+        watermark_source_key=source.external_id,
+        dataset_key=dataset_key,
+        watermark_behavior=spec.watermark_behavior,
+        now=_ORACLE_NOW,
+        integration=integration,
+        dataset=dataset,
+    )
+
+    assert len(windows) == 1, (
+        f"{case_id}: the ratchet must not split a unit into multiple windows; "
+        "it caps ONE window and lets the next scheduled tick continue"
+    )
+    since, before = windows[0]
+    since = None if since is None else _as_utc_for_test(since)
+    assert since == expected_since, f"{case_id}: window_start"
+    assert before is not None
+    assert _as_utc_for_test(before) == expected_before, f"{case_id}: window_end"
+
+
+def _as_utc_for_test(value: datetime) -> datetime:
+    """SQLite hands back naive datetimes; the contract is in UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def test_open_start_window_is_never_capped_even_when_heavy(db_session, monkeypatch):
+    """The ``window_start is not None`` guard, exercised for real.
+
+    No dataset is registered HEAVY *and* ``WatermarkBehavior.NONE`` today, so
+    the contract table above can never reach this guard — every NONE dataset
+    short-circuits on the cost-class check first. The guard is still load-
+    bearing: a future HEAVY dataset registered with NONE behavior would reach
+    ``window_start + cap`` with ``window_start=None`` and raise. Force that
+    combination so the guard is covered rather than merely present.
+    """
+    from dev_health_ops.sync.datasets import WatermarkBehavior
+
+    monkeypatch.delenv("SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS", raising=False)
+    monkeypatch.setattr(planner, "_is_heavy_dataset", lambda provider, key: True)
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": _ORACLE_DEPTH_DAYS}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    dataset = _create_dataset(db_session, integration, "repo-metadata")
+
+    windows = planner._resolve_windows(
+        session=db_session,
+        request=SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="scheduled",
+        ),
+        mode=SyncRunMode.INCREMENTAL.value,
+        org_id=ORG_ID,
+        source_provider="github",
+        watermark_source_key=source.external_id,
+        dataset_key="repo-metadata",
+        watermark_behavior=WatermarkBehavior.NONE,
+        now=_ORACLE_NOW,
+        integration=integration,
+        dataset=dataset,
+    )
+
+    assert windows == ((None, _ORACLE_NOW),), (
+        "an open-start window must pass through uncapped, not raise and not "
+        "acquire a synthesized start"
+    )
+
+
+def test_ratchet_contract_table_covers_every_heavy_dataset_key(db_session):
+    """The cap is a COST-CLASS rule, not a per-key list.
+
+    If a new dataset joins ``CostClass.HEAVY``, it inherits the cap
+    automatically — assert that directly against the registry so the contract
+    table above can never drift into describing only the keys it happens to
+    name.
+    """
+    from dev_health_ops.sync.datasets import get_dataset_spec
+    from dev_health_ops.sync.planner import _is_heavy_dataset
+
+    heavy_keys = [
+        key
+        for key in ("commit-stats", "files", "blame", "tests", "commits", "prs")
+        if (spec := get_dataset_spec("github", key)) is not None
+        and spec.default_cost_class.value == "heavy"
+    ]
+    assert heavy_keys == ["commit-stats", "files", "blame", "tests"]
+    for key in heavy_keys:
+        assert _is_heavy_dataset("github", key) is True
+    for key in ("commits", "prs", "work-item-labels", "repo-metadata"):
+        assert _is_heavy_dataset("github", key) is False
+
+
 def test_incremental_cold_start_heavy_dataset_is_capped(db_session):
     """CHAOS-3412: HEAVY cold-start plans ``[now - depth, now - depth + cap]``.
 

@@ -499,6 +499,40 @@ LIMIT {limit:UInt32}
 """
 )
 
+#: CHAOS-3376 residual defect (live EXPLAIN fixture repair, 2026-08-04; root
+#: cause corrected in codex review round 2, 2026-08-04): the ``latest_reviews``
+#: CTE below used to alias its per-reviewer watermark
+#: ``max(submitted_at) AS submitted_at`` -- the SAME name as the raw
+#: ``git_pull_request_reviews.submitted_at`` column it aggregates -- in the
+#: SAME SELECT LIST as ``argMax(state, (submitted_at, last_synced,
+#: review_id)) AS state``, which passes that bare ``submitted_at`` as one of
+#: ITS OWN arguments. ClickHouse resolves every bare identifier across a
+#: WHOLE SELECT list against any alias defined ANYWHERE in that SAME list
+#: as one order-independent unit (NOT sequentially/textually -- verified
+#: directly: the self-collision reproduces standalone, with no ``WITH`` CTE
+#: involved at all, and conversely a genuinely cross-CTE reference to a
+#: same-named column with NO same-list collision does not reproduce it), so
+#: the ``submitted_at`` argument inside ``argMax(state, (submitted_at, ...))``
+#: -- textually BEFORE the ``max(submitted_at) AS submitted_at`` alias it
+#: collides with -- resolved to that ALIASED aggregate expression instead of
+#: the plain column, nesting one aggregate function inside another, which
+#: ClickHouse rejects unconditionally with ``Code: 184 (ILLEGAL_AGGREGATION)``
+#: on every invocation. (The originally-shipped fix diagnosed this as a
+#: cross-CTE "WITH is inlined, not materialized" hazard -- reproduction
+#: disproved that: the ``reviews`` CTE's own, unrelated reference to
+#: ``state``/``latest_submitted_at`` from ``latest_reviews`` is completely
+#: safe, exactly because it is a DIFFERENT SELECT list / query block.) Exactly
+#: the same alias-shadowing hazard CLASS as ``_PROJECT_DECLARED_FACTS_SQL``'s
+#: CHAOS-3377 fix (WHERE resolving to a same-named aggregate alias instead of
+#: the raw column) -- here the collision is with a SIBLING SELECT-list
+#: expression instead of a WHERE predicate, in the SAME query block. Never
+#: reached by the unit fake (a predicate evaluator, not a SQL engine); only
+#: surfaced once the live EXPLAIN fixture's shared ``common`` params dict
+#: actually supplied every placeholder this query's text binds (CHAOS-3376)
+#: and the query ran against the real engine for the first time. Fixed by
+#: renaming the alias to ``latest_submitted_at`` so every reference to it --
+#: within ``latest_reviews`` itself and from ``reviews`` below -- stays bound
+#: to a plain per-row column, not the aggregate that produced it.
 _PULL_REQUESTS_SQL = (
     "WITH "
     + _PROJECT_IDENTITY_CTE
@@ -527,7 +561,7 @@ _PULL_REQUESTS_SQL = (
 ), latest_reviews AS (
   SELECT toString(repo_id) AS repository_id, number, reviewer,
          argMax(state, (submitted_at, last_synced, review_id)) AS state,
-         max(submitted_at) AS submitted_at
+         max(submitted_at) AS latest_submitted_at
   FROM git_pull_request_reviews FINAL
   WHERE org_id = {org_id:String}
     AND toString(repo_id) IN {repository_ids:Array(String)}
@@ -539,7 +573,7 @@ _PULL_REQUESTS_SQL = (
            'CHANGES_REQUESTED',
            countIf(upper(state) = 'APPROVED') > 0,
            'APPROVED',
-           argMax(state, submitted_at)
+           argMax(state, latest_submitted_at)
          ) AS review_state,
          countIf(upper(state) = 'CHANGES_REQUESTED') AS changes_requested
   FROM latest_reviews

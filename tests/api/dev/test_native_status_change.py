@@ -28,109 +28,499 @@ from dev_health_ops.api.dev.status_change_service import (
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 
 
-# --- CHAOS-3377 residual defect (Codex adversarial review MEDIUM): the
-# alias-collision regression that actually caught the live defect
-# (test_status_change_clickhouse_live.py::
-# test_project_declared_facts_query_parses_against_production_schema) is
-# ``@pytest.mark.clickhouse``-gated -- opted OUT of every mandatory gate
-# (``ci/run_tests.sh`` and local validation both run ``-m "not clickhouse"``).
-# The exact defect class (an aggregate aliased to the SAME name as a raw
-# column its own WHERE clause filters on -- ClickHouse resolves the WHERE
-# reference to the alias, not the source column, and rejects an aggregate
-# there with ILLEGAL_AGGREGATION) could be reintroduced in ANY of this
-# module's SQL constants and pass every required gate. This is a plain
-# string-level structural check -- no live engine needed -- generic across
-# every ``*_SQL`` constant the module defines, so it closes the whole CLASS
-# of defect rather than re-pinning the one instance the live probe found.
-_AGGREGATE_ALIAS_RE = re.compile(
-    r"\b(?:any|anyLast|max|min|sum|avg|argMax|argMin|greatest|least)\s*\(\s*([\w.]+)\s*\)\s+AS\s+(\w+)",
+# --- CHAOS-3377 / CHAOS-3386 / CHAOS-3376 (three occurrences of one defect
+# class -- generalized here per the "after three fixes of one class, ship a
+# closure argument" rule): an aggregate aliased to the SAME bare name as its
+# own input column, where that name is ALSO referenced, unqualified,
+# somewhere ClickHouse resolves identifiers against SELECT-list aliases
+# instead of (or in addition to) the raw source column, nesting an aggregate
+# inside another expression that rejects one -- ILLEGAL_AGGREGATION
+# (Code 184), unconditionally, on every invocation. Two SEPARATE mechanisms
+# have now each produced this symptom, and a single check only ever caught
+# one of them:
+#   1. WHERE-clause shadowing (CHAOS-3377 ``_PROJECT_DECLARED_FACTS_SQL``,
+#      CHAOS-3386): ``any(updated_at) AS updated_at`` alongside
+#      ``WHERE updated_at <= ...`` in the SAME query -- WHERE evaluates
+#      before the SELECT list exists, so ClickHouse still resolves the bare
+#      name against the alias and rejects the aggregate it names.
+#   2. Same-SELECT-list sibling shadowing (CHAOS-3376 ``_PULL_REQUESTS_SQL``):
+#      ``max(submitted_at) AS submitted_at`` and
+#      ``argMax(state, (submitted_at, ...)) AS state`` in the SAME SELECT
+#      list. ClickHouse resolves every bare identifier across a WHOLE SELECT
+#      list against any alias defined ANYWHERE in that list as one
+#      order-independent unit -- reproduced directly: the collision fires
+#      with NO ``WITH`` CTE involved at all (single ``SELECT`` list, self-
+#      contained), and TEXTUAL ORDER does not matter (the colliding
+#      reference sits BEFORE the alias definition in the source and still
+#      triggers it). A prior diagnosis of this as "WITH is inlined into its
+#      consumer, not materialized" was disproved by the same reproduction: a
+#      genuinely CROSS-CTE reference to a same-named column, with no
+#      same-list collision anywhere, is completely safe. This is exactly
+#      what ``_self_named_aggregate_aliases_filtered_in_where`` (the
+#      original, CHAOS-3377-era check below) could not see: it scans ONLY
+#      inside ``WHERE`` clauses, and this collision lives in a sibling
+#      SELECT-list aggregate argument instead -- confirmed by running the
+#      ORIGINAL checker against the pre-fix ``_PULL_REQUESTS_SQL`` text,
+#      which reported no offenders even though the live EXPLAIN suite
+#      (CHAOS-3376) reproduced Code 184 against it.
+# ``_self_named_aggregate_alias_referenced_in_nested_aggregate`` below closes
+# mechanism 2 the same way the original check closes mechanism 1: a plain,
+# unmarked, string-level structural scan over every ``*_SQL`` constant this
+# module defines, so either shape fails here immediately, long before it
+# could ever reach a live engine. Deliberately NOT a search for "any bare
+# reference anywhere in the same query block": that over-broad version
+# false-positived on ``_BLOCKERS_SQL``'s legitimate
+# ``max(observed_at) AS observed_at`` ... ``ORDER BY observed_at`` --
+# referencing a SELECT-list aggregate alias from ORDER BY is standard, valid
+# SQL (ORDER BY runs AFTER aggregation), not this defect. Scoped instead to
+# "bare reference used as the argument of ANOTHER recognized aggregate call,
+# in the SAME query block as its own definition", which is exactly (and
+# only) the shape that nests an aggregate inside an aggregate.
+#
+# codex review round 2 (HIGH, 2026-08-04): the FIRST version of this guard
+# recognized only ``func(single_identifier) AS alias`` against a fixed,
+# non-combinator function list -- it returned ``[]`` (silently, with no
+# positive control to catch the gap) for ClickHouse's "combinator" suffixed
+# aggregates (``argMaxIf``, ``maxIf``, ...: same hazard, an extra condition
+# argument) and for aggregate families outside that fixed list entirely
+# (``countIf``, ``uniqExact``, ...), and it treated "downstream of the
+# alias's own definition, textually" as the nested-aggregate mechanism's
+# scope, which -- per the corrected root-cause analysis above -- is not
+# actually how ClickHouse resolves this at all (order does not matter; QUERY
+# BLOCK does). ``_AGGREGATE_BASE_FUNCS``/``_AGGREGATE_COMBINATOR_SUFFIXES``
+# widen recognition to combinator-suffixed, multi-argument producers;
+# ``_query_block_spans``/``_query_block_id`` replace "downstream of
+# definition" and raw paren-DEPTH matching (which could not tell a sibling
+# CTE at the same depth from the SAME query block, and separately let a
+# WHERE clause's own end-boundary regex silently swallow text belonging to
+# an OUTER, unrelated query once a CTE's own WHERE had no
+# GROUP BY/HAVING/ORDER BY/LIMIT of its own to stop at) with the actual
+# scope ClickHouse resolves aliases within: same CTE body, or the final/
+# outer statement. ``test_alias_shadow_detectors_catch_every_synthetic_bad_sql_control``
+# below is the positive control codex asked for: parameterized, minimal,
+# KNOWN-BAD synthetic SQL this guard MUST flag, so a future weakening of
+# either the function-name recognition or the block-scoping shows up as a
+# RED test here, not as a silently-empty ``offenders`` dict.
+_AGGREGATE_BASE_FUNCS = (
+    "any",
+    "anyLast",
+    "anyHeavy",
+    "max",
+    "min",
+    "sum",
+    "avg",
+    "argMax",
+    "argMin",
+    "greatest",
+    "least",
+    "count",
+    "uniq",
+    "uniqExact",
+    "uniqCombined",
+    "uniqCombined64",
+    "uniqHLL12",
+    "groupArray",
+    "groupUniqArray",
+    "median",
+    "quantile",
+    "quantileExact",
+    "stddevPop",
+    "stddevSamp",
+    "varPop",
+    "varSamp",
+    "topK",
+)
+#: ClickHouse "combinator" suffixes -- any base aggregate above may carry
+#: ONE of these (``maxIf``, ``argMaxIf``, ``uniqExactIf``, ...). A
+#: combinator changes the argument SHAPE (usually adding a trailing
+#: condition argument) but the function is still a genuine aggregate,
+#: still subject to the same alias-shadowing hazard this guard exists to
+#: catch.
+_AGGREGATE_COMBINATOR_SUFFIXES = (
+    "If",
+    "Array",
+    "Merge",
+    "State",
+    "Distinct",
+    "OrDefault",
+    "OrNull",
+    "Resample",
+    "ForEach",
+    "Simple",
+)
+_AGGREGATE_CALL_START_RE = re.compile(
+    r"\b(?:"
+    + "|".join(_AGGREGATE_BASE_FUNCS)
+    + r")(?:"
+    + "|".join(_AGGREGATE_COMBINATOR_SUFFIXES)
+    + r")*\s*\(",
     re.IGNORECASE,
 )
-_WHERE_CLAUSE_RE = re.compile(
-    r"\bWHERE\b(.*?)(?:\bGROUP BY\b|\bHAVING\b|\bORDER BY\b|\bLIMIT\b|\Z)",
-    re.IGNORECASE | re.DOTALL,
+_CTE_HEADER_RE = re.compile(r"\b(\w+)\s+AS\s*\(", re.IGNORECASE)
+_WHERE_KEYWORD_RE = re.compile(r"\bWHERE\b", re.IGNORECASE)
+_STOP_KEYWORD_RE = re.compile(
+    r"\bGROUP BY\b|\bHAVING\b|\bORDER BY\b|\bLIMIT\b", re.IGNORECASE
 )
 
 
-def _paren_depths(sql: str) -> list[int]:
-    """Parenthesis nesting depth active at (i.e. immediately after) each
-    character -- used to keep an aggregate alias from being compared
-    against a WHERE clause that belongs to a DIFFERENT, nested subquery
-    (e.g. a CTE's own ``SELECT ... WHERE ...`` one paren level deeper than
-    the outer query that reads FROM it). Only same-depth pairs are in the
-    same query scope and can actually collide the way ClickHouse resolves
-    identifiers; a naive whole-string search would false-positive on an
-    outer aggregate that happens to share a name with an inner CTE's own
-    (unrelated, differently-scoped) WHERE-filtered column.
+def _bare_reference_re(alias: str) -> re.Pattern[str]:
+    """A bare (unqualified, non-function-call) occurrence of ``alias``:
+    excludes ``x.alias`` (qualified column refs) and ``alias(`` (alias
+    happening to collide with a function/table name)."""
+
+    return re.compile(rf"(?<![.\w]){re.escape(alias)}\b(?!\s*\()")
+
+
+def _matching_close_paren(sql: str, open_idx: int) -> int:
+    """The index of the ``)`` that closes the ``(`` at ``open_idx``,
+    balancing nested parens (tuples, nested function calls, subqueries)."""
+
+    depth = 0
+    for index in range(open_idx, len(sql)):
+        if sql[index] == "(":
+            depth += 1
+        elif sql[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return open_idx
+
+
+def _call_spans(sql: str, start_re: re.Pattern[str]) -> list[tuple[int, int, int]]:
+    """``(name_start, open_paren_index, matching_close_paren_index)`` for
+    every call matching ``start_re``, balancing nested parens (e.g.
+    ``argMax(state, (submitted_at, last_synced, review_id))``) so a
+    multi-argument or tuple-argument call is still attributed correctly."""
+
+    return [
+        (call.start(), call.end() - 1, _matching_close_paren(sql, call.end() - 1))
+        for call in start_re.finditer(sql)
+    ]
+
+
+def _query_block_spans(sql: str) -> list[tuple[int, int]]:
+    """``(start, end)`` character spans for every CTE body (`` AS ( ... )``
+    introduced directly by ``WITH`` or a top-level comma) plus one trailing
+    span for whatever follows the LAST CTE's closing paren -- the final/
+    outer statement, or the whole string if there are no CTEs at all.
+
+    This is the scope ClickHouse ACTUALLY resolves SELECT-list aliases
+    within (verified by direct reproduction: two sibling CTEs sit at the
+    exact same raw paren-nesting DEPTH yet do not share alias-resolution
+    scope, while two expressions in the SAME CTE body do, regardless of
+    which comes first textually) -- raw paren depth alone cannot
+    distinguish "sibling block, same depth" from "same block".
     """
 
-    depths = [0] * len(sql)
+    spans: list[tuple[int, int]] = []
+    last_close = 0
+    for header in _CTE_HEADER_RE.finditer(sql):
+        prefix = sql[: header.start()].rstrip()
+        if not (prefix.endswith("WITH") or prefix.endswith(",")):
+            continue  # a "name AS (" that isn't actually a CTE introducer
+        open_idx = header.end() - 1
+        close_idx = _matching_close_paren(sql, open_idx)
+        spans.append((open_idx, close_idx))
+        last_close = close_idx + 1
+    spans.append((last_close, len(sql)))
+    return spans
+
+
+def _query_block_id(spans: list[tuple[int, int]], pos: int) -> tuple[int, int] | None:
+    for start, end in spans:
+        if start <= pos <= end:
+            return (start, end)
+    return None
+
+
+def _split_top_level_args(args_text: str) -> list[str]:
+    """Split a function call's argument text on commas at PAREN DEPTH 0,
+    so a tuple argument (``(submitted_at, last_synced, review_id)``)
+    counts as ONE argument, not three."""
+
+    parts: list[str] = []
     depth = 0
-    for index, char in enumerate(sql):
+    current: list[str] = []
+    for char in args_text:
         if char == "(":
             depth += 1
         elif char == ")":
             depth -= 1
-        depths[index] = depth
-    return depths
+        if char == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    parts.append("".join(current))
+    return parts
+
+
+class _SelfNamedAlias:
+    """One ``<agg>(...args...) AS alias`` match where ``alias`` is the SAME
+    bare name as one of the call's own TOP-LEVEL arguments (case-
+    insensitively) -- the shared precondition both mechanisms below check a
+    same-query-block reference against. ``start``/``end`` bound the WHOLE
+    match (function name through the trailing ``AS alias``), used to locate
+    which query block the definition itself belongs to and to exclude the
+    definition's own occurrence from "is this alias referenced elsewhere"
+    scans.
+    """
+
+    __slots__ = ("start", "end", "alias")
+
+    def __init__(self, start: int, end: int, alias: str) -> None:
+        self.start = start
+        self.end = end
+        self.alias = alias
+
+
+def _self_named_aggregate_aliases(sql: str) -> list[_SelfNamedAlias]:
+    """Every aggregate call (base or combinator-suffixed, single- or
+    multi-argument) in ``sql`` aliased to the SAME bare name as one of its
+    OWN top-level arguments."""
+
+    results: list[_SelfNamedAlias] = []
+    for name_start, open_idx, close_idx in _call_spans(sql, _AGGREGATE_CALL_START_RE):
+        as_match = re.match(r"\s*AS\s+(\w+)", sql[close_idx + 1 :], re.IGNORECASE)
+        if not as_match:
+            continue
+        alias = as_match.group(1)
+        args_text = sql[open_idx + 1 : close_idx]
+        if any(
+            arg.strip().rsplit(".", 1)[-1].casefold() == alias.casefold()
+            for arg in _split_top_level_args(args_text)
+        ):
+            results.append(
+                _SelfNamedAlias(name_start, close_idx + 1 + as_match.end(), alias)
+            )
+    return results
 
 
 def _self_named_aggregate_aliases_filtered_in_where(sql: str) -> list[str]:
     """Aggregate aliases in ``sql`` that reuse their OWN input column's bare
     name, where that same bare name is ALSO referenced (unqualified) inside
-    a WHERE clause AT THE SAME PAREN-NESTING DEPTH -- the exact CHAOS-3377
-    defect shape: ``any(updated_at) AS updated_at`` alongside
-    ``WHERE updated_at <= ...`` in the SAME (not a nested) query.
+    a WHERE clause belonging to the SAME query block -- the exact
+    CHAOS-3377 / CHAOS-3386 defect shape: ``any(updated_at) AS updated_at``
+    alongside ``WHERE updated_at <= ...`` in the SAME (not a sibling) query.
     """
 
+    spans = _query_block_spans(sql)
+    where_clauses: list[tuple[str, tuple[int, int] | None]] = []
+    for keyword in _WHERE_KEYWORD_RE.finditer(sql):
+        block = _query_block_id(spans, keyword.start())
+        block_end = block[1] if block else len(sql)
+        end = block_end
+        for stop in _STOP_KEYWORD_RE.finditer(sql, keyword.end(), block_end):
+            if _query_block_id(spans, stop.start()) == block:
+                end = stop.start()
+                break
+        where_clauses.append((sql[keyword.end() : end], block))
+
     findings: list[str] = []
-    depths = _paren_depths(sql)
-    where_clauses = [
-        (match.group(1), depths[match.start()])
-        for match in _WHERE_CLAUSE_RE.finditer(sql)
-    ]
-    for match in _AGGREGATE_ALIAS_RE.finditer(sql):
-        raw_expr, alias = match.groups()
-        raw_col = raw_expr.rsplit(".", 1)[-1]
-        if raw_col.casefold() != alias.casefold():
-            continue
-        alias_depth = depths[match.start()]
-        bare_reference = re.compile(rf"(?<![.\w]){re.escape(alias)}\b(?!\s*\()")
+    for entry in _self_named_aggregate_aliases(sql):
+        alias_block = _query_block_id(spans, entry.start)
+        bare_reference = _bare_reference_re(entry.alias)
         if any(
             bare_reference.search(clause)
-            for clause, where_depth in where_clauses
-            if where_depth == alias_depth
+            for clause, block in where_clauses
+            if block == alias_block
         ):
-            findings.append(alias)
+            findings.append(entry.alias)
+    return findings
+
+
+def _self_named_aggregate_alias_referenced_in_nested_aggregate(
+    sql: str,
+) -> list[str]:
+    """Aggregate aliases in ``sql`` that reuse their OWN input column's bare
+    name, where that same bare name is ALSO passed as an argument to ANOTHER
+    recognized aggregate call in the SAME query block as the alias's own
+    definition -- the CHAOS-3376 ``_PULL_REQUESTS_SQL`` defect shape:
+    ``max(submitted_at) AS submitted_at`` and
+    ``argMax(state, (submitted_at, ...)) AS state`` in the SAME SELECT list
+    (order does not matter). ``Code: 184 (ILLEGAL_AGGREGATION)`` on every
+    invocation, exactly like the WHERE-clause mechanism above but
+    unreachable by that check (this collision never appears inside a WHERE
+    clause at all). Cross-block references (a downstream CTE reading a
+    same-named PLAIN column from an upstream CTE) are explicitly NOT
+    flagged -- verified safe by direct reproduction.
+    """
+
+    spans = _query_block_spans(sql)
+    call_spans = [
+        (open_idx, close_idx)
+        for _, open_idx, close_idx in _call_spans(sql, _AGGREGATE_CALL_START_RE)
+    ]
+    findings: list[str] = []
+    for entry in _self_named_aggregate_aliases(sql):
+        alias_block = _query_block_id(spans, entry.start)
+        bare_reference = _bare_reference_re(entry.alias)
+        for hit in bare_reference.finditer(sql):
+            hit_pos = hit.start()
+            if entry.start <= hit_pos < entry.end:
+                continue  # the alias's own defining occurrence, not a reference
+            if _query_block_id(spans, hit_pos) != alias_block:
+                continue  # a different query block -- verified safe
+            if any(
+                open_idx < hit_pos < close_idx for open_idx, close_idx in call_spans
+            ):
+                findings.append(entry.alias)
+                break
     return findings
 
 
 def test_no_sql_constant_aliases_an_aggregate_to_its_own_filtered_column_name() -> None:
-    """Structural, unmarked regression for the CHAOS-3377 alias-collision
-    defect class -- runs in the plain unit suite, never opted out by
-    ``-m "not clickhouse"``. Scans every ``*_SQL`` string constant this
-    module defines (not just the one the live probe found broken), so a
-    future SQL constant introducing the same shape fails here immediately,
-    long before it could ever reach a live engine.
+    """Structural, unmarked regression closing the WHERE-clause-shadowing
+    AND same-query-block-sibling-shadowing shapes of the CHAOS-3377 /
+    CHAOS-3386 / CHAOS-3376 alias-collision defect CLASS -- runs in the
+    plain unit suite, never opted out by ``-m "not clickhouse"``. Scans
+    every ``*_SQL`` string constant this module defines (not just the
+    instances the live probe found broken), so a future SQL constant
+    introducing EITHER shape fails here immediately, long before it could
+    ever reach a live engine.
+
+    This closes the class as far as static, string-level detection can go:
+    it does NOT attempt to prove every conceivable identifier-resolution
+    context ClickHouse might shadow an alias in -- that would require a
+    real SQL parser, and an over-broad regex-only version of the
+    nested-aggregate check (any bare reference anywhere in the same query
+    block, not just inside another aggregate call) was tried and rejected
+    here because it false-positived on ``_BLOCKERS_SQL``'s legitimate
+    ``max(observed_at) AS observed_at`` ... ``ORDER BY observed_at`` (valid:
+    ORDER BY runs after aggregation). The live EXPLAIN suite
+    (``test_status_change_clickhouse_live.py``, CHAOS-3376 fixture repair)
+    remains the backstop for whatever shape still slips past both
+    mechanisms here -- but ONLY now that its shared params fixture actually
+    supplies every placeholder each SQL constant's text binds, AND (codex
+    review round 2) now that it covers every ``*_SQL`` constant the module
+    defines, not just 14 of 22; before those two fixes it was
+    green-by-vacancy on both axes: which params each attempt supplied, and
+    which constants it even attempted.
     """
 
+    scanned = [
+        name
+        for name in dir(_native_status_change_module)
+        if name.endswith("_SQL")
+        and isinstance(getattr(_native_status_change_module, name), str)
+    ]
+    # codex review round 2 (HIGH): "a measurement that did not happen must
+    # FAIL, loudly" -- a broken/empty module scan would make the assertion
+    # below vacuously true (zero constants scanned, zero offenders found),
+    # indistinguishable from "every constant is clean".
+    assert scanned, "no *_SQL constants found on the module -- registry scan is broken"
+
     offenders: dict[str, list[str]] = {}
-    for name in dir(_native_status_change_module):
-        if not name.endswith("_SQL"):
-            continue
+    for name in scanned:
         value = getattr(_native_status_change_module, name)
-        if not isinstance(value, str):
-            continue
-        findings = _self_named_aggregate_aliases_filtered_in_where(value)
+        findings = [
+            f"{alias} (WHERE)"
+            for alias in _self_named_aggregate_aliases_filtered_in_where(value)
+        ] + [
+            f"{alias} (same-block nested aggregate)"
+            for alias in _self_named_aggregate_alias_referenced_in_nested_aggregate(
+                value
+            )
+        ]
         if findings:
             offenders[name] = findings
     assert not offenders, (
         "SQL constant(s) alias an aggregate to the SAME name as a raw "
-        f"column their own WHERE clause filters on: {offenders}. "
-        "ClickHouse resolves the WHERE reference to the alias (an "
-        "aggregate), not the source column, and rejects it with "
-        "ILLEGAL_AGGREGATION (CHAOS-3377) -- rename the alias."
+        f"column referenced in a way ClickHouse resolves against the alias "
+        f"instead: {offenders}. ClickHouse rejects the resulting nested/"
+        "pre-aggregation aggregate reference with ILLEGAL_AGGREGATION "
+        "(CHAOS-3377/CHAOS-3386/CHAOS-3376) -- rename the alias."
     )
+
+
+#: codex review round 2 (HIGH): parameterized, minimal, KNOWN-BAD synthetic
+#: SQL snippets the detectors above MUST flag -- a positive control the
+#: original guard never had, so a regex that silently stopped matching
+#: (weakened combinator support, a typo, a future refactor narrowing
+#: ``_AGGREGATE_BASE_FUNCS``/``_AGGREGATE_COMBINATOR_SUFFIXES``, or breaking
+#: the block-scoping in ``_query_block_spans``) would still report an empty
+#: ``offenders`` dict above and the guard would pass anyway, indistinguishable
+#: from "the codebase is actually clean". Verified directly against the
+#: PRE-widening detector: it returned ``[]`` for the ``argMaxIf``/``maxIf``
+#: (multi-arg, combinator-suffixed) and ``countIf``/``uniqExact`` (base name
+#: outside its fixed list) entries below, even though each is the EXACT
+#: self-named-alias shape the live-fixed instances already proved dangerous.
+#: (label, synthetic SQL, which mechanism must catch it)
+_SYNTHETIC_ALIAS_SHADOW_CONTROLS: tuple[tuple[str, str, str], ...] = (
+    (
+        "where/max/single-arg (original CHAOS-3377/3386 shape)",
+        "SELECT max(updated_at) AS updated_at FROM t WHERE updated_at <= now()",
+        "where",
+    ),
+    (
+        "nested/max/single-arg, same block (corrected CHAOS-3376 shape)",
+        "SELECT argMax(state, (submitted_at, x)) AS state, "
+        "max(submitted_at) AS submitted_at FROM t GROUP BY x",
+        "nested",
+    ),
+    (
+        "where/argMaxIf combinator, multi-arg",
+        "SELECT argMaxIf(state, updated_at, is_active) AS state FROM t "
+        "WHERE state = 'x'",
+        "where",
+    ),
+    (
+        "nested/maxIf combinator, multi-arg, same block",
+        "SELECT argMax(y, price) AS y2, maxIf(price, is_active) AS price "
+        "FROM t GROUP BY x",
+        "nested",
+    ),
+    (
+        "where/countIf (base name outside the original fixed list)",
+        "SELECT countIf(flag) AS flag FROM t WHERE flag > 0",
+        "where",
+    ),
+    (
+        "where/uniqExact (base name outside the original fixed list)",
+        "SELECT uniqExact(user_id) AS user_id FROM t WHERE user_id > 0",
+        "where",
+    ),
+    (
+        "cross-CTE reference is SAFE and must NOT be flagged (regression "
+        "guard for the corrected root cause)",
+        "WITH a AS (SELECT argMax(state, x) AS state, max(x) AS watermark "
+        "FROM t GROUP BY y), b AS (SELECT argMax(state, watermark) AS z "
+        "FROM a GROUP BY y) SELECT * FROM b",
+        "nested-safe",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "label,bad_sql,mechanism",
+    _SYNTHETIC_ALIAS_SHADOW_CONTROLS,
+    ids=[label for label, _, _ in _SYNTHETIC_ALIAS_SHADOW_CONTROLS],
+)
+def test_alias_shadow_detectors_catch_every_synthetic_bad_sql_control(
+    label: str, bad_sql: str, mechanism: str
+) -> None:
+    """The positive-control counterpart to the structural guard above --
+    see its module-level docstring for why each entry exists. If you
+    weaken ``_AGGREGATE_BASE_FUNCS``, ``_AGGREGATE_COMBINATOR_SUFFIXES``,
+    or the multi-argument / block-scoping logic in
+    ``_self_named_aggregate_aliases`` or its two callers, watch THIS test
+    go RED before you touch anything else -- that is the point of a
+    positive control.
+    """
+
+    if mechanism == "where":
+        findings = _self_named_aggregate_aliases_filtered_in_where(bad_sql)
+        assert findings, f"{label}: detector failed to catch a known-bad SQL control"
+    elif mechanism == "nested":
+        findings = _self_named_aggregate_alias_referenced_in_nested_aggregate(bad_sql)
+        assert findings, f"{label}: detector failed to catch a known-bad SQL control"
+    else:
+        assert mechanism == "nested-safe"
+        findings = _self_named_aggregate_alias_referenced_in_nested_aggregate(bad_sql)
+        assert not findings, (
+            f"{label}: detector over-flagged a genuinely safe cross-block "
+            f"reference: {findings}"
+        )
 
 
 def _scope(

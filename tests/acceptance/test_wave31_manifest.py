@@ -504,13 +504,21 @@ def test_every_blocked_item_reason_matches_independent_snapshot() -> None:
         assert by_id[item_id].blocked_reason == blocked_snapshot[item_id], item_id
 
 
-def test_blocked_reason_mutation_is_actually_caught() -> None:
+def test_blocked_reason_mutation_is_actually_caught(monkeypatch) -> None:
     """RED-then-GREEN proof for the fix above: plant codex's exact
     demonstrated bypass (a reason that is 'fabricated but nonempty') on a
     real blocked item and confirm the independent-snapshot check -- not
     validate_manifest's non-empty check -- is what catches it.
+
+    The declaration set is emptied because this validates a SYNTHETIC
+    one-item manifest: every real ``DECLARED_STALE_ARTIFACTS`` entry names a
+    row that manifest does not contain, and the cross-check would rightly
+    report each as acknowledging nothing. That is a different assertion than
+    the one this test makes, and letting it fire here would turn a targeted
+    RED-then-GREEN proof into a test that fails for an unrelated reason.
     """
 
+    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
     fabricated = ManifestItem(
         id="matrix.organization-portfolio-status",
         category="blocking_matrix",
@@ -630,7 +638,13 @@ def test_validate_manifest_catches_unknown_status() -> None:
 
 def test_validate_manifest_is_clean_over_a_single_well_formed_item(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    # Synthetic one-item manifest: see the note on the same monkeypatch in
+    # test_blocked_reason_mutation_is_actually_caught. "Clean" here means
+    # this item is well formed, not that the repository's real declaration
+    # set happens to be empty.
+    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
     commit_sha = _init_throwaway_git_repo(tmp_path)
     artifact_path = _write_valid_artifact(
         tmp_path,

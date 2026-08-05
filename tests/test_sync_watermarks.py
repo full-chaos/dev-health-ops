@@ -1221,3 +1221,142 @@ def test_real_postgres_future_write_is_clamped_at_the_boundary():
             )
             cleanup.commit()
         engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412 closure repair: the write boundary must cover EVERY write API.
+#
+# set_watermark was not the only writer. set_legacy_repo_watermark writes the
+# raw legacy row directly — unclamped on insert, and handing the raw value to
+# _monotonic_update on update. That row is the D4 bridge that get_watermark's
+# reverse-legacy fallback serves to ALL of a target's sibling datasets, so one
+# poisoned legacy row poisons commits, commit-stats and files at once.
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_write_api_clamps_future_on_insert(db_session):
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import (
+        get_legacy_repo_watermark,
+        set_legacy_repo_watermark,
+    )
+
+    now = datetime.now(timezone.utc)
+    set_legacy_repo_watermark(
+        db_session, "lg-org", "repo-1", "git", now + timedelta(days=30)
+    )
+    stored = get_legacy_repo_watermark(db_session, "lg-org", "repo-1", "git")
+    assert stored is not None
+    stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
+    assert stored <= datetime.now(timezone.utc) + timedelta(seconds=61), (
+        f"the legacy write API persisted a future watermark on INSERT ({stored}) "
+        "— it bypasses set_watermark's boundary clamp entirely"
+    )
+
+
+def test_legacy_write_api_clamps_future_on_update(db_session):
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import (
+        get_legacy_repo_watermark,
+        set_legacy_repo_watermark,
+    )
+
+    now = datetime.now(timezone.utc)
+    set_legacy_repo_watermark(
+        db_session, "lg-org", "repo-2", "git", now - timedelta(hours=2)
+    )
+    set_legacy_repo_watermark(
+        db_session, "lg-org", "repo-2", "git", now + timedelta(days=30)
+    )
+    stored = get_legacy_repo_watermark(db_session, "lg-org", "repo-2", "git")
+    assert stored is not None
+    stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
+    assert stored <= datetime.now(timezone.utc) + timedelta(seconds=61), (
+        f"the legacy write API persisted a future watermark on UPDATE ({stored})"
+    )
+
+
+def test_poisoned_legacy_row_cannot_leak_to_sibling_datasets(db_session):
+    """The amplification: one legacy row backs every sibling dataset.
+
+    get_watermark falls back to the raw legacy row for a canonical dataset with
+    no exact row of its own, so a future value written through the legacy API
+    would surface as a future watermark for commits, commit-stats AND files.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_legacy_repo_watermark
+
+    now = datetime.now(timezone.utc)
+    set_legacy_repo_watermark(
+        db_session, "lg-org", "repo-3", "git", now + timedelta(days=30)
+    )
+    for sibling in ("commits", "commit-stats", "files"):
+        seen = get_watermark(db_session, "lg-org", "repo-3", sibling)
+        if seen is None:
+            continue
+        seen = seen.replace(tzinfo=timezone.utc) if seen.tzinfo is None else seen
+        assert seen <= datetime.now(timezone.utc) + timedelta(seconds=61), (
+            f"sibling dataset {sibling!r} reads a FUTURE watermark ({seen}) via "
+            "the reverse-legacy fallback — one poisoned legacy row stalls them all"
+        )
+
+
+def test_every_watermark_write_api_routes_through_the_normalizer():
+    """DERIVED, not listed: a new write API fails this until it is wired.
+
+    The round-3 closure claimed the write boundary was closed while a second
+    write API bypassed it. Enumerating writers by hand is what let that stand,
+    so this derives them from the module's AST: any module-level function that
+    persists ``last_synced_at`` — by constructing a SyncWatermark with it, by
+    assigning to it, or by delegating to a helper that does — must call the
+    normalizer. Add a third writer and this test fails until it complies.
+    """
+    import ast
+    import inspect
+
+    from dev_health_ops.sync import watermarks as wm
+
+    NORMALIZER = "_normalize_watermark_write"
+    tree = ast.parse(inspect.getsource(wm))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def _persists_last_synced_at(node) -> bool:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.keyword) and sub.arg == "last_synced_at":
+                return True
+            if isinstance(sub, ast.Attribute) and sub.attr == "last_synced_at":
+                if isinstance(getattr(sub, "ctx", None), ast.Store):
+                    return True
+        return False
+
+    def _calls(node, name: str) -> bool:
+        return any(
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id == name
+            for sub in ast.walk(node)
+        )
+
+    # Writers = functions that persist last_synced_at, or delegate to one that
+    # does (_monotonic_update). Exclude the low-level helper and the normalizer.
+    writers = {
+        name
+        for name, node in functions.items()
+        if (_persists_last_synced_at(node) or _calls(node, "_monotonic_update"))
+        and name not in {"_monotonic_update", NORMALIZER}
+    }
+    assert writers, "derivation found no write APIs at all — the test is vacuous"
+
+    unnormalized = sorted(n for n in writers if not _calls(functions[n], NORMALIZER))
+    assert not unnormalized, (
+        f"these watermark write APIs bypass {NORMALIZER}(): {unnormalized}. "
+        "Every writer must route through the boundary — enforcing it at some "
+        "call sites is what CHAOS-3412 round 3 got wrong."
+    )

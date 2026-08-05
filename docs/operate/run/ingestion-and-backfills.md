@@ -82,6 +82,13 @@ Consequences to expect when reading run state:
   runs do not request an upper bound and so never reach this state; only a
   manually requested past upper bound can.
 
+A watermark is never recorded beyond what the run actually read. A synchronization
+timestamp reported by a provider is capped at the end of the unit's own window
+before it is stored, because the unit only fetched up to that point — a value
+beyond it would claim coverage of records that were never retrieved, and the next
+run would start after them. Such a value can itself be in the past, so capping at
+the current time alone does not prevent it.
+
 A watermark is never recorded ahead of the current time. Whatever a run reports —
 including a synchronization timestamp taken from a provider record — the recorded
 value is capped at the current time before it is stored. A record carrying a

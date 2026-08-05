@@ -5547,3 +5547,114 @@ def test_provider_future_watermark_cannot_repoison_a_repaired_one(
         f"a repaired watermark was re-poisoned to {stored} by the next "
         "provider-supplied future value — the repair is not durable"
     )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412 closure repair: a provider watermark_at may never exceed the
+# unit's window END.
+#
+# watermark_at is a COVERAGE CLAIM. The unit only fetched up to window_end, so a
+# stamp beyond it asserts coverage that was never read. Clamping to "now" is not
+# enough: a provider value between window_end and now is still in the past, so
+# it passes the not-future check while silently skipping every record whose
+# source time falls in (window_end, stamp]. The next plan starts after them and
+# they are never fetched.
+# ---------------------------------------------------------------------------
+
+
+def _run_unit_with_provider_watermark(
+    db_session, monkeypatch, *, since, before, provider_watermark
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    unit.since_at = since
+    unit.before_at = before
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "watermark_at": provider_watermark.isoformat(),
+        },
+    )
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+    assert result["status"] == "success"
+    return run
+
+
+def test_provider_watermark_cannot_exceed_the_units_window_end(db_session, monkeypatch):
+    """A past-but-beyond-window_end stamp overclaims coverage."""
+    from dev_health_ops.sync.watermarks import get_watermark
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=2)
+    before = now - timedelta(hours=6)
+    # In the PAST (so the not-future check passes) but 5h beyond what the unit
+    # actually fetched.
+    overclaim = before + timedelta(hours=5)
+
+    run = _run_unit_with_provider_watermark(
+        db_session,
+        monkeypatch,
+        since=since,
+        before=before,
+        provider_watermark=overclaim,
+    )
+
+    stored = get_watermark(db_session, run.org_id, "full-chaos/dev-health", "commits")
+    assert stored is not None
+    stored_aware = _aware(stored)
+    assert stored_aware <= _aware(before), (
+        f"watermark stamped at {stored_aware}, beyond the unit's window end "
+        f"{_aware(before)}. The unit only fetched up to window_end, so records "
+        "in between are silently skipped by the next run — a coverage claim for "
+        "data that was never read."
+    )
+
+
+@pytest.mark.parametrize("overlap_seconds", [0, 60], ids=["overlap-0", "overlap-60s"])
+def test_two_run_composition_leaves_no_gap(db_session, monkeypatch, overlap_seconds):
+    """Two successive runs must leave no unread span between them.
+
+    The second window starts at ``watermark - overlap``. If run 1 stamped beyond
+    its own window end, the span (window_end, stamp - overlap) is never fetched
+    by anyone. Uses an execution delay LARGER than the overlap so a gap would be
+    real rather than masked by the overlap.
+    """
+    from dev_health_ops.sync.watermarks import get_watermark
+
+    monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", str(overlap_seconds))
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=2)
+    before = now - timedelta(hours=6)
+    overclaim = before + timedelta(hours=5)  # >> any overlap under test
+
+    run = _run_unit_with_provider_watermark(
+        db_session,
+        monkeypatch,
+        since=since,
+        before=before,
+        provider_watermark=overclaim,
+    )
+    stamped_raw = get_watermark(
+        db_session, run.org_id, "full-chaos/dev-health", "commits"
+    )
+    assert stamped_raw is not None
+    stamped = _aware(stamped_raw)
+
+    next_window_start = stamped - timedelta(seconds=overlap_seconds)
+    assert next_window_start <= _aware(before), (
+        f"gap of {(next_window_start - _aware(before)).total_seconds()}s between "
+        f"run 1's fetched end ({_aware(before)}) and run 2's start "
+        f"({next_window_start}) — records in that span are never fetched by "
+        "either run"
+    )

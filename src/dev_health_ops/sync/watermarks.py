@@ -148,6 +148,74 @@ def _as_utc_ts(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _normalize_watermark_write(
+    timestamp: datetime,
+    *,
+    org_id: str,
+    source_id: str,
+    dataset_key: str,
+    coverage_upper_bound: datetime | None = None,
+) -> datetime:
+    """THE write-boundary normalizer. EVERY watermark writer must call this.
+
+    Two ceilings, both of which exist because a watermark is a COVERAGE CLAIM —
+    it asserts "everything up to here has been read":
+
+    1. ``now``. A watermark can never sit in the future, whatever a provider
+       reports. The unit worker prefers a provider-supplied ``watermark_at`` over
+       the planner's clamped window end, and PagerDuty derives that from source
+       record timestamps, so one skewed record would otherwise write a future
+       watermark past every planner-side clamp.
+    2. ``coverage_upper_bound`` — the unit's window END, when the caller knows
+       it. The unit only fetched up to its window end, so a stamp beyond that
+       claims data it never read. Such a value can be entirely in the PAST, so
+       the ``now`` ceiling does not catch it: the next run starts after the
+       overclaimed point and every record in between is silently skipped.
+
+    Enforcing this at each call site is what CHAOS-3412 got wrong twice — first
+    a provider stamp bypassing the planner clamp, then a second write API
+    bypassing the boundary entirely. It lives here so a writer cannot opt out;
+    ``test_every_watermark_write_api_routes_through_the_normalizer`` derives the
+    set of writers from the module AST and fails if a new one skips it.
+
+    Clamps beyond ``_FUTURE_WRITE_SKEW_TOLERANCE_SECONDS`` are warned about;
+    smaller ones are silent, because clocks routinely drift by seconds.
+    """
+    incoming = _as_utc_ts(timestamp)
+    now = datetime.now(timezone.utc)
+    ceiling = now
+    bound = "now"
+    if coverage_upper_bound is not None:
+        upper = _as_utc_ts(coverage_upper_bound)
+        if upper < ceiling:
+            ceiling, bound = upper, "window_end"
+    if incoming <= ceiling:
+        return incoming
+
+    overshoot = (incoming - ceiling).total_seconds()
+    if overshoot > _FUTURE_WRITE_SKEW_TOLERANCE_SECONDS:
+        logger.warning(
+            "sync.watermark.write_clamped",
+            extra={
+                "org_id": org_id,
+                "source_id": source_id,
+                "dataset_key": dataset_key,
+                "requested_last_synced_at": incoming.isoformat(),
+                "clamped_to": ceiling.isoformat(),
+                "ceiling": bound,
+                "overshoot_seconds": overshoot,
+                "reason": (
+                    "a watermark claims every record up to it has been read. "
+                    "Clamping to the highest point actually covered. A "
+                    "window_end clamp means a provider reported coverage beyond "
+                    "what the unit fetched; a now clamp usually means a source "
+                    "record carried a skewed timestamp."
+                ),
+            },
+        )
+    return ceiling
+
+
 def _monotonic_update(
     session: Session, row: SyncWatermark, timestamp: datetime
 ) -> None:
@@ -342,6 +410,8 @@ def set_watermark(
     source_id: str,
     dataset_key: str,
     timestamp: datetime,
+    *,
+    coverage_upper_bound: datetime | None = None,
 ) -> None:
     """Upsert the watermark. THE FULL RULE (CHAOS-2578 + CHAOS-3412):
 
@@ -355,8 +425,18 @@ def set_watermark(
        ``max(existing, new)``, so a late-arriving or out-of-order unit result can
        never roll a valid watermark backwards.
 
-    2. NEVER INTO THE FUTURE (CHAOS-3412, write boundary). The incoming value is
-       clamped to ``min(incoming, now)`` for EVERY caller, before anything else.
+    2. NEVER BEYOND WHAT WAS ACTUALLY READ (CHAOS-3412, write boundary). The
+       incoming value is clamped to ``min(incoming, coverage_upper_bound, now)``
+       for EVERY caller, before anything else, by
+       ``_normalize_watermark_write``. ``coverage_upper_bound`` is the unit's
+       window END where the caller knows it: the unit only fetched up to there,
+       so a stamp beyond it claims data it never read. That value can be wholly
+       in the PAST, so the ``now`` ceiling alone does not catch it — the next run
+       simply starts after the overclaimed point and the records in between are
+       never fetched by anyone.
+       Both write APIs route through the normalizer, and
+       ``test_every_watermark_write_api_routes_through_the_normalizer`` derives
+       the writer set from the module AST so a third one cannot quietly skip it.
        A watermark marks data already synchronized, so a future value is never
        meaningful. This is not theoretical: the unit worker prefers a
        provider-supplied ``watermark_at`` over the planner's clamped window end,
@@ -393,39 +473,13 @@ def set_watermark(
     constraint ``uq_sync_watermark_org_repo_target`` remains satisfied.
     """
     # Canonical lookup first.
-    # WRITE-BOUNDARY INVARIANT (CHAOS-3412): no future value is EVER persisted,
-    # by any caller. Clamping here rather than at each call site is deliberate —
-    # the callers are the leak. The worker prefers a provider-supplied
-    # ``watermark_at`` over the planner's clamped window end, and PagerDuty
-    # derives that from source record timestamps, so a skewed record writes a
-    # future watermark straight past every planner-side clamp. Enforcing it at
-    # the boundary covers provider stamps, worker stamps, the insert path (a
-    # first-ever row was previously written unclamped), and any future caller,
-    # and it makes the stored-future repair below durable: nothing can re-poison
-    # a watermark that has just been repaired.
-    now = datetime.now(timezone.utc)
-    incoming = _as_utc_ts(timestamp)
-    if incoming > now:
-        overshoot = (incoming - now).total_seconds()
-        if overshoot > _FUTURE_WRITE_SKEW_TOLERANCE_SECONDS:
-            logger.warning(
-                "sync.watermark.future_write_clamped",
-                extra={
-                    "org_id": org_id,
-                    "source_id": source_id,
-                    "dataset_key": dataset_key,
-                    "requested_last_synced_at": incoming.isoformat(),
-                    "clamped_to": now.isoformat(),
-                    "overshoot_seconds": overshoot,
-                    "reason": (
-                        "a watermark marks data already synchronized, so it can "
-                        "never sit in the future. Clamping to now. A large "
-                        "overshoot usually means a provider record carried a "
-                        "skewed timestamp."
-                    ),
-                },
-            )
-        timestamp = now
+    timestamp = _normalize_watermark_write(
+        timestamp,
+        org_id=org_id,
+        source_id=source_id,
+        dataset_key=dataset_key,
+        coverage_upper_bound=coverage_upper_bound,
+    )
 
     row = (
         session.query(SyncWatermark)
@@ -521,6 +575,13 @@ def set_legacy_repo_watermark(
     legacy completions cannot race and roll the watermark backwards
     (CHAOS-2578).  SQLite (tests only) falls back to Python-level comparison.
     """
+    timestamp = _normalize_watermark_write(
+        timestamp,
+        org_id=org_id,
+        source_id=repo_id,
+        dataset_key=target,
+    )
+
     # Look up the raw legacy row by (org_id, repo_id, target).
     row = (
         session.query(SyncWatermark)

@@ -1421,6 +1421,12 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                         ctx.source_external_id,
                         watermark_dataset_key,
                         watermark_at,
+                        # CHAOS-3412: a provider-supplied watermark_at may claim
+                        # coverage beyond what this unit actually fetched. The
+                        # unit only read up to its window end, so that is the
+                        # ceiling — a stamp past it silently skips every record
+                        # in between on the next run.
+                        coverage_upper_bound=ctx.window_end,
                     )
             session.flush()
             should_finalize = True

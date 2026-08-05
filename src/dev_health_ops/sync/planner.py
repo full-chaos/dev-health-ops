@@ -28,11 +28,53 @@ Invariants:
     ``initial_sync_depth`` after ``before``, the residual gap
     ``[before, now - depth]`` is an accepted, tracked limitation (CHAOS-2588)
     whose fix would require such a marker. See docs/architecture/data-pipeline.md.
+  * HEAVY incremental window ratchet (CHAOS-3412): unit cost is linear in window
+    span, so a HEAVY-cost-class dataset spanning a wide ``initial_sync_depth``
+    (or a long-stale watermark) can never fit the sync budget as ONE window — it
+    is deferred forever and, having never succeeded, never stamps a watermark.
+    INCREMENTAL windows for HEAVY datasets are therefore capped at
+    ``SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS`` (default 7): the window END moves
+    in to ``window_start + cap``; depth resolution and its tier ``backfill_days``
+    cap are untouched. A capped run is a healthy PARTIAL run — the success path
+    stamps the watermark at the unit's window END (``before_at``), so the next
+    scheduled tick resumes exactly there and coverage ratchets forward one capped
+    window per tick with no gap. Catch-up is paced by the scheduler cadence.
+    The cap must EXCEED ``SYNC_WATERMARK_OVERLAP``: the window starts at
+    ``watermark - overlap``, so a cap <= overlap ends at or before the watermark
+    and the monotonic write is discarded, stalling the ratchet while every run
+    reports success. ``_effective_heavy_max_window_days`` clamps the cap above
+    the overlap and logs a warning naming both values.
+    See docs/operate/run/ingestion-and-backfills.md.
+  * Watermark-stamping window rules (CHAOS-3412), enforced once in
+    ``_watermark_stamping_window`` for BOTH modes whose success path stamps a
+    watermark (INCREMENTAL and FULL_RESYNC — ``sync_units`` gates on exactly
+    those two): (a) the end is clamped to ``now``, because a future ``before``
+    would persist a FUTURE watermark and the next run would start in the future
+    and silently skip everything up to it; (b) an empty or inverted window
+    (``end <= start``, i.e. already synced past the requested end) plans ZERO
+    units, because ``window_span_days`` floors a negative span to 1 day, so an
+    inverted unit is admitted at the cheapest possible cost, fetches nothing, and
+    finalizes SUCCESS — a false coverage claim. BACKFILL is deliberately excluded:
+    it never stamps a watermark (CHAOS-2514) and validates its own bounds.
+    (c) A resolved start AHEAD of ``now`` means the stored watermark is corrupt
+    (skewed provider timestamp, or a future end persisted by pre-CHAOS-3412
+    code). Rule (b) alone would make that FATAL — zero units, FAILED forever, and
+    monotonic writes mean nothing can lower it. So the start is clamped back to a
+    bounded recovery window and warned about, and ``sync.watermarks`` permits the
+    single downward correction needed to restore a sane value.
+  * FULL_RESYNC HEAVY windows are deliberately UNCAPPED (CHAOS-3412, decided).
+    The heavy cap exists so repeated incremental ticks make progress; a one-shot
+    full resync has no next tick, so a capped window would cover the cap's span
+    and finalize SUCCESS — claiming a resync that did not happen. The wide-window
+    exposure is bounded instead by the budget exhaustion path, which terminalizes
+    visibly and names the scoped-backfill remedy. Pinned by
+    ``test_full_resync_heavy_window_is_deliberately_uncapped``.
   * total_units on the persisted SyncRun equals len(unit_ids).
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from collections.abc import Iterable, Mapping
@@ -64,6 +106,7 @@ from dev_health_ops.sync.canonical_incident_gate import (
     sync_datasets_require_canonical_incident_feature,
 )
 from dev_health_ops.sync.datasets import (
+    CostClass,
     DatasetSpec,
     WatermarkBehavior,
     get_dataset_spec,
@@ -76,10 +119,33 @@ from dev_health_ops.sync.guard import _resolve_total_unit_cap
 from dev_health_ops.sync.pagerduty_repair import (
     repair_pagerduty_operational_integration,
 )
-from dev_health_ops.sync.watermarks import get_watermark_with_overlap
+from dev_health_ops.sync.watermarks import (
+    _watermark_overlap_seconds,
+    get_watermark_with_overlap,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+_SECONDS_PER_DAY = 86_400
+
+# Recovery lookback when a stored watermark is found AHEAD of now (corrupt).
+# Small on purpose: the goal is to get ONE unit planned so the success path can
+# re-stamp a sane watermark, not to re-crawl history. See
+# _watermark_stamping_window.
+_FUTURE_WATERMARK_RECOVERY_SECONDS = 3600
+
+# (cap_days, overlap_seconds) pairs already warned about this process — see
+# _effective_heavy_max_window_days. Cleared by tests via
+# reset_heavy_cap_clamp_warnings.
+_WARNED_CAP_CLAMPS: set[tuple[int, int]] = set()
+
+
+def reset_heavy_cap_clamp_warnings() -> None:
+    """Clear the once-per-process clamp-warning cache (test hook)."""
+    _WARNED_CAP_CLAMPS.clear()
 
 
 @dataclass(frozen=True)
@@ -607,6 +673,170 @@ _DEFAULT_INITIAL_SYNC_DEPTH_DAYS: int = 30
 
 
 # ---------------------------------------------------------------------------
+# HEAVY incremental window ratchet (CHAOS-3412)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS: int = 7
+
+
+def _incremental_heavy_max_window_days() -> int:
+    """Max INCREMENTAL window span (days) for a HEAVY-cost-class dataset.
+
+    Reads ``SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS``; falls back to 7 days.
+
+    CHAOS-3412: unit cost is linear in window span (see
+    ``providers/github/budget._scaled_units``). A HEAVY dataset cold-starting on
+    a wide ``initial_sync_depth`` (or resuming from a long-stale watermark) used
+    to plan ONE window covering the whole span, which could not fit the sync
+    budget — the unit was deferred, no watermark was stamped, and the next tick
+    recomputed the identical unfittable span forever. Capping the span makes
+    each tick affordable; the success path stamps the watermark at the unit's
+    window END, so successive ticks ratchet forward until the dataset is caught
+    up. 7 days matches the proven ``_backfill_windows`` chunk size.
+    """
+    raw = os.getenv("SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS")
+    if raw is not None:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            # Non-integer env override: fall through to the default below.
+            pass
+    return _DEFAULT_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS
+
+
+def _effective_heavy_max_window_days() -> int:
+    """The HEAVY window cap, clamped to strictly exceed the watermark overlap.
+
+    CHAOS-3412: the incremental read subtracts ``SYNC_WATERMARK_OVERLAP`` from
+    the stored watermark, so a capped HEAVY window spans
+    ``[W - overlap, W - overlap + cap]``. When ``overlap >= cap`` that end lands
+    at or before ``W`` — and ``set_watermark`` enforces a monotonic advance
+    (``max(existing, new)``, see ``sync.watermarks``), so the write is silently
+    DISCARDED. Every later tick then re-plans the identical slice, re-fetches it,
+    and reports SUCCESS while the watermark never moves: the same permanent
+    stall this ticket exists to kill, wearing a different hat.
+
+    Clamp the cap to ``floor(overlap_days) + 1``, which is strictly greater than
+    the overlap for any real overlap value, so every successful capped run
+    advances the watermark by a positive amount.
+
+    The clamp is LOUD but never fatal. Refusing to plan would reproduce the
+    do-nothing failure mode; a visibly clamped window is wider and more expensive
+    than the operator asked for, but it makes progress, and the warning names
+    both values so the misconfiguration can be corrected.
+    """
+    cap_days = _incremental_heavy_max_window_days()
+    overlap_seconds = _watermark_overlap_seconds()
+    if overlap_seconds <= 0:
+        return cap_days
+    # floor(overlap_days) + 1 > overlap_days for every real overlap.
+    min_cap_days = overlap_seconds // _SECONDS_PER_DAY + 1
+    if min_cap_days <= cap_days:
+        return cap_days
+    # Warn ONCE per distinct (cap, overlap) per process. This helper runs once
+    # per (source x heavy dataset), so an unguarded warning would emit hundreds
+    # of identical lines per plan on a large org and bury whatever else the
+    # operator needs to see. Both values are restart-loaded env settings, so a
+    # single line per process is the complete signal.
+    warn_key = (cap_days, overlap_seconds)
+    if warn_key in _WARNED_CAP_CLAMPS:
+        return min_cap_days
+    _WARNED_CAP_CLAMPS.add(warn_key)
+    logger.warning(
+        "sync.planner.heavy_window_cap_clamped_below_watermark_overlap",
+        extra={
+            "configured_cap_days": cap_days,
+            "watermark_overlap_seconds": overlap_seconds,
+            "effective_cap_days": min_cap_days,
+            "reason": (
+                "SYNC_WATERMARK_OVERLAP >= SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS "
+                "would stall the HEAVY incremental ratchet: every capped window "
+                "would end at or before its own watermark and the monotonic "
+                "watermark write would be discarded. Widening the cap so each "
+                "run makes progress. Lower SYNC_WATERMARK_OVERLAP or raise "
+                "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS to remove this clamp."
+            ),
+        },
+    )
+    return min_cap_days
+
+
+def _watermark_stamping_window(
+    window_start: datetime | None,
+    window_end: datetime,
+    now: datetime,
+) -> tuple[tuple[datetime | None, datetime | None], ...]:
+    """Normalize a window for any mode whose SUCCESS path stamps a watermark.
+
+    Both INCREMENTAL and FULL_RESYNC stamp the watermark at the unit's window END
+    (``sync_units.py`` gates on exactly those two modes), so both inherit the same
+    two failure modes. They are enforced HERE, once, rather than per branch —
+    CHAOS-3412 found the same defect in both branches, and one shared rule is also
+    one rule for any reimplementation of this contract to mirror.
+
+    1. The end is clamped to ``now``. A future ``before`` would otherwise persist
+       a FUTURE watermark, and the next run would start in the future and silently
+       skip everything up to it.
+    2. An empty or inverted window (``end <= start``) plans ZERO units. Persisting
+       ``since_at >= before_at`` is worse than useless: ``window_span_days`` floors
+       a negative span to 1 (``sync/budget_types.py``) and ``_scaled_units``
+       multiplies by that floor, so an inverted unit is admitted at the CHEAPEST
+       possible cost, fetches nothing, and finalizes SUCCESS — a false coverage
+       claim. ``set_watermark`` is monotonic, so the stamp itself is harmless; the
+       unit is the problem.
+
+    BACKFILL is deliberately NOT routed through here: it never stamps a watermark
+    (CHAOS-2514) and validates its own bounds in ``_backfill_windows``.
+    """
+    window_end = min(window_end, now)
+    if window_start is not None:
+        start = _as_utc(window_start)
+        if start > now:
+            # CHAOS-3412: a resolved start AHEAD of now can only come from a
+            # corrupt watermark (a provider-supplied watermark_at derived from a
+            # source record with a skewed/bad timestamp, or a future window end
+            # persisted by pre-fix planner code). Left alone it is fatal: rule
+            # (b) below would plan ZERO units, the run finalizes FAILED, and with
+            # no unit there is nothing to re-stamp the watermark — a permanent
+            # stall, and ``set_watermark`` is monotonic so nothing else can lower
+            # it either. Clamp back far enough that a real window plans, and warn.
+            recovery_seconds = max(
+                _watermark_overlap_seconds(), _FUTURE_WATERMARK_RECOVERY_SECONDS
+            )
+            healed = now - timedelta(seconds=recovery_seconds)
+            logger.warning(
+                "sync.planner.future_watermark_clamped",
+                extra={
+                    "resolved_window_start": start.isoformat(),
+                    "now": now.isoformat(),
+                    "watermark_overlap_seconds": _watermark_overlap_seconds(),
+                    "healed_window_start": healed.isoformat(),
+                    "reason": (
+                        "resolved window start is ahead of now, which means the "
+                        "stored watermark is corrupt. Planning a bounded recovery "
+                        "window so a unit runs and re-stamps a sane watermark. "
+                        "Records between the true last-synced point and this "
+                        "recovery window are NOT re-fetched — run a bounded "
+                        "backfill if that span matters."
+                    ),
+                },
+            )
+            window_start = healed
+            start = healed
+        if window_end <= start:
+            return ()
+    return ((window_start, window_end),)
+
+
+def _is_heavy_dataset(provider: str, dataset_key: str) -> bool:
+    """True when the (provider, dataset) pair is registered CostClass.HEAVY."""
+    spec = get_dataset_spec(provider, dataset_key)
+    return spec is not None and spec.default_cost_class is CostClass.HEAVY
+
+
+# ---------------------------------------------------------------------------
 # Linear backfill chunk policy (CHAOS-2710, rebalanced in CHAOS-2717)
 # ---------------------------------------------------------------------------
 
@@ -730,26 +960,39 @@ def _build_work_item_family_units(
     # resolve windows independently then merge index-aligned (earliest start so
     # the single crawl covers every enabled dataset; over-fetch is safe because
     # set_watermark is monotonic).
-    per_dataset_windows = [
-        _resolve_windows(
-            session=session,
-            request=request,
-            mode=mode,
-            org_id=integration.org_id,
-            source_provider=provider,
-            watermark_source_key=source.external_id,
-            dataset_key=dataset.dataset_key,
-            watermark_behavior=spec.watermark_behavior,
-            now=now,
-            integration=integration,
-            dataset=dataset,
+    resolved = [
+        (
+            dataset,
+            _resolve_windows(
+                session=session,
+                request=request,
+                mode=mode,
+                org_id=integration.org_id,
+                source_provider=provider,
+                watermark_source_key=source.external_id,
+                dataset_key=dataset.dataset_key,
+                watermark_behavior=spec.watermark_behavior,
+                now=now,
+                integration=integration,
+                dataset=dataset,
+            ),
         )
         for dataset, spec in family_specs
     ]
-    composite_windows = _merge_family_windows(per_dataset_windows)
+    # CHAOS-3412: a family dataset already synced past the requested end resolves
+    # to ZERO windows. Drop it before the index-aligned merge — otherwise its
+    # empty tuple reads as a window-count mismatch and ``_merge_family_windows``
+    # raises, taking down a plan that is merely partially caught up. The
+    # remaining datasets still collapse into one composite; the dropped dataset
+    # simply has nothing to do this tick and keeps its (later) watermark, which
+    # the monotonic ``set_watermark`` preserves.
+    contributing = [(dataset, windows) for dataset, windows in resolved if windows]
+    if not contributing:
+        return []
+    composite_windows = _merge_family_windows([windows for _, windows in contributing])
 
     processor_flags: dict[str, bool] = dict(canonical_spec.processor_flags)
-    for dataset, _spec in family_specs:
+    for dataset, _windows in contributing:
         processor_flags[_family_dataset_flag(dataset.dataset_key)] = True
     if provider == "github":
         # CHAOS-646: thread the PRS-as-work-items signal onto the composite so
@@ -914,7 +1157,21 @@ def _resolve_windows(
                 depth = resolve_initial_sync_depth(session, integration, dataset)
                 window_start = now - timedelta(days=depth)
         # WatermarkBehavior.NONE datasets keep window_start=None (registered behavior).
-        return ((window_start, _request_before_or_now(request, now)),)
+        window_end = _request_before_or_now(request, now)
+        if window_start is not None and _is_heavy_dataset(source_provider, dataset_key):
+            # CHAOS-3412 ratchet: cap the span so a HEAVY unit can fit the sync
+            # budget. Applies to BOTH cold-start and behind-watermark cases — a
+            # long-idle org ratchets forward one capped window per tick. Depth
+            # resolution (and its tier backfill_days cap) is untouched; only the
+            # window END moves in.
+            # ``window_start`` may be naive when it came straight off a stored
+            # watermark row; normalize for the comparison only — the value
+            # persisted as ``since_at`` is left exactly as resolved.
+            capped_end = _as_utc(window_start) + timedelta(
+                days=_effective_heavy_max_window_days()
+            )
+            window_end = min(window_end, capped_end)
+        return _watermark_stamping_window(window_start, window_end, now)
 
     if mode == SyncRunMode.BACKFILL.value:
         return _backfill_windows(
@@ -925,7 +1182,9 @@ def _resolve_windows(
         # full_resync: use configured depth for all datasets (CHAOS-2569).
         depth = resolve_initial_sync_depth(session, integration, dataset)
         window_start_fr = now - timedelta(days=depth)
-        return ((window_start_fr, _request_before_or_now(request, now)),)
+        return _watermark_stamping_window(
+            window_start_fr, _request_before_or_now(request, now), now
+        )
 
     return ((None, _request_before_or_now(request, now)),)
 

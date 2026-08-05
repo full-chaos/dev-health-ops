@@ -446,7 +446,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1999
+        "line": 2005
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -2318,7 +2318,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1630
+        "line": 1636
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -2342,7 +2342,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2450
+        "line": 2456
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",

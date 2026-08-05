@@ -58,7 +58,7 @@ jobs:
           name: integration-junit
           path: test-results/junit/integration.xml
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 90
 
       - name: Upload integration logs on failure
         if: failure()

@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: ["**"]
   merge_group:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -153,7 +154,7 @@ jobs:
           name: junit-${{ matrix.python-version }}
           path: test-results/junit/*.xml
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 90
 
       - name: Upload pytest logs on failure
         if: failure()
@@ -245,10 +246,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: junit-coverage
+          # Named for what it actually is: JUnit output from the
+          # coverage-gated `ci` tier, not a coverage report. (See
+          # coverage-py312 below for the actual coverage artifact.)
+          name: junit-ci-gated
           path: test-results/junit/*.xml
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 90
 
       - name: Upload pytest logs on failure
         if: failure()
@@ -260,6 +264,15 @@ jobs:
             **/pytest.log
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Upload coverage.xml artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-py312
+          path: coverage.xml
+          if-no-files-found: ignore
+          retention-days: 90
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5

@@ -56,6 +56,19 @@ Invariants:
     inverted unit is admitted at the cheapest possible cost, fetches nothing, and
     finalizes SUCCESS — a false coverage claim. BACKFILL is deliberately excluded:
     it never stamps a watermark (CHAOS-2514) and validates its own bounds.
+    (c) A resolved start AHEAD of ``now`` means the stored watermark is corrupt
+    (skewed provider timestamp, or a future end persisted by pre-CHAOS-3412
+    code). Rule (b) alone would make that FATAL — zero units, FAILED forever, and
+    monotonic writes mean nothing can lower it. So the start is clamped back to a
+    bounded recovery window and warned about, and ``sync.watermarks`` permits the
+    single downward correction needed to restore a sane value.
+  * FULL_RESYNC HEAVY windows are deliberately UNCAPPED (CHAOS-3412, decided).
+    The heavy cap exists so repeated incremental ticks make progress; a one-shot
+    full resync has no next tick, so a capped window would cover the cap's span
+    and finalize SUCCESS — claiming a resync that did not happen. The wide-window
+    exposure is bounded instead by the budget exhaustion path, which terminalizes
+    visibly and names the scoped-backfill remedy. Pinned by
+    ``test_full_resync_heavy_window_is_deliberately_uncapped``.
   * total_units on the persisted SyncRun equals len(unit_ids).
 """
 
@@ -117,6 +130,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SECONDS_PER_DAY = 86_400
+
+# Recovery lookback when a stored watermark is found AHEAD of now (corrupt).
+# Small on purpose: the goal is to get ONE unit planned so the success path can
+# re-stamp a sane watermark, not to re-crawl history. See
+# _watermark_stamping_window.
+_FUTURE_WATERMARK_RECOVERY_SECONDS = 3600
 
 # (cap_days, overlap_seconds) pairs already warned about this process — see
 # _effective_heavy_max_window_days. Cleared by tests via
@@ -772,8 +791,42 @@ def _watermark_stamping_window(
     (CHAOS-2514) and validates its own bounds in ``_backfill_windows``.
     """
     window_end = min(window_end, now)
-    if window_start is not None and window_end <= _as_utc(window_start):
-        return ()
+    if window_start is not None:
+        start = _as_utc(window_start)
+        if start > now:
+            # CHAOS-3412: a resolved start AHEAD of now can only come from a
+            # corrupt watermark (a provider-supplied watermark_at derived from a
+            # source record with a skewed/bad timestamp, or a future window end
+            # persisted by pre-fix planner code). Left alone it is fatal: rule
+            # (b) below would plan ZERO units, the run finalizes FAILED, and with
+            # no unit there is nothing to re-stamp the watermark — a permanent
+            # stall, and ``set_watermark`` is monotonic so nothing else can lower
+            # it either. Clamp back far enough that a real window plans, and warn.
+            recovery_seconds = max(
+                _watermark_overlap_seconds(), _FUTURE_WATERMARK_RECOVERY_SECONDS
+            )
+            healed = now - timedelta(seconds=recovery_seconds)
+            logger.warning(
+                "sync.planner.future_watermark_clamped",
+                extra={
+                    "resolved_window_start": start.isoformat(),
+                    "now": now.isoformat(),
+                    "watermark_overlap_seconds": _watermark_overlap_seconds(),
+                    "healed_window_start": healed.isoformat(),
+                    "reason": (
+                        "resolved window start is ahead of now, which means the "
+                        "stored watermark is corrupt. Planning a bounded recovery "
+                        "window so a unit runs and re-stamps a sane watermark. "
+                        "Records between the true last-synced point and this "
+                        "recovery window are NOT re-fetched — run a bounded "
+                        "backfill if that span matters."
+                    ),
+                },
+            )
+            window_start = healed
+            start = healed
+        if window_end <= start:
+            return ()
     return ((window_start, window_end),)
 
 

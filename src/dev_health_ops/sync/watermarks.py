@@ -51,13 +51,17 @@ out-of-order unit result can never roll the watermark backwards.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, update
+from sqlalchemy import case, func, update
+from sqlalchemy import false as sa_false
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models.settings import SyncWatermark
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Reverse map: dataset_key → frozenset[legacy_target] (INCREMENTAL only)
@@ -131,6 +135,13 @@ def apply_watermark_overlap(ts: datetime) -> datetime:
 # ---------------------------------------------------------------------------
 
 
+def _as_utc_ts(value: datetime) -> datetime:
+    """Coerce a naive timestamp to UTC for comparison."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _monotonic_update(
     session: Session, row: SyncWatermark, timestamp: datetime
 ) -> None:
@@ -139,18 +150,47 @@ def _monotonic_update(
     On PostgreSQL uses ``GREATEST(COALESCE(last_synced_at, :ts), :ts)`` so the
     DB resolves concurrent-write races atomically.  On SQLite (tests only) falls
     back to a Python-level comparison.
+
+    ONE exception to monotonicity (CHAOS-3412): a stored ``last_synced_at`` that
+    is AHEAD of ``now`` is not a legitimate watermark — a watermark marks data
+    already synced, so it can never sit in the future. Such a value can be
+    written by a provider-supplied ``watermark_at`` derived from a source record
+    with a skewed timestamp, or by pre-CHAOS-3412 planner code that persisted a
+    future window end. Because the update is otherwise monotonic, nothing can
+    ever lower it again: the planner's window would start in the future, plan no
+    unit, and the run would finalize FAILED forever with nothing left to repair
+    it. So when the STORED value is in the future and the incoming one is not,
+    the incoming value wins and the corruption is corrected.
+
+    This preserves the CHAOS-2578 guarantee exactly where it matters — a late or
+    out-of-order result still cannot roll a LEGITIMATE (past) watermark backwards
+    — because the exception is gated on a state that is provably invalid.
     """
     dialect_name = session.bind.dialect.name if session.bind is not None else ""
+    now = datetime.now(timezone.utc)
     if dialect_name == "postgresql":
         session.execute(
             update(SyncWatermark)
             .where(SyncWatermark.id == row.id)
             .values(
-                last_synced_at=func.greatest(
-                    func.coalesce(SyncWatermark.last_synced_at, timestamp),
-                    timestamp,
+                last_synced_at=case(
+                    (
+                        # Corrupt future watermark + sane incoming value: correct
+                        # it downward. Evaluated in-database so it stays atomic
+                        # against concurrent writers.
+                        SyncWatermark.last_synced_at > now
+                        if _as_utc_ts(timestamp) <= now
+                        # An incoming FUTURE timestamp never corrects anything;
+                        # fall through to the plain monotonic path.
+                        else sa_false(),
+                        timestamp,
+                    ),
+                    else_=func.greatest(
+                        func.coalesce(SyncWatermark.last_synced_at, timestamp),
+                        timestamp,
+                    ),
                 ),
-                updated_at=datetime.now(timezone.utc),
+                updated_at=now,
             )
         )
     else:
@@ -167,10 +207,23 @@ def _monotonic_update(
                 if timestamp.tzinfo is None
                 else timestamp.astimezone(timezone.utc)
             )
-            if new_utc <= existing_utc:
+            if existing_utc > now and new_utc <= now:
+                # Corrupt future watermark: correct it downward (see docstring).
+                logger.warning(
+                    "sync.watermark.future_value_corrected",
+                    extra={
+                        "org_id": row.org_id,
+                        "source_id": row.source_id,
+                        "dataset_key": row.dataset_key,
+                        "stored_last_synced_at": existing_utc.isoformat(),
+                        "corrected_to": new_utc.isoformat(),
+                        "now": now.isoformat(),
+                    },
+                )
+            elif new_utc <= existing_utc:
                 return
         row.last_synced_at = timestamp
-        row.updated_at = datetime.now(timezone.utc)
+        row.updated_at = now
 
 
 # ---------------------------------------------------------------------------

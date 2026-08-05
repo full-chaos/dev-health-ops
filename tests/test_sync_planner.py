@@ -2680,3 +2680,282 @@ def test_backfill_windows_are_not_routed_through_the_watermark_normalizer(db_ses
         since, before = _window(unit)
         assert since < before, "backfill chunks must stay forward-ordered"
         assert before <= now
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412 round 2: a FUTURE watermark must self-heal, not stall forever.
+#
+# Suppressing empty/inverted windows means a watermark ahead of `now` makes
+# every scheduled tick plan ZERO units — which finalizes FAILED, and with no
+# unit there is nothing to re-stamp the watermark, so it never recovers.
+# set_watermark is monotonic, so a future value can never be lowered by a later
+# run either. Reachable: pagerduty derives watermark_at from source record
+# timestamps (provider clock skew / bad data), and pre-fix planner code could
+# persist a future window end directly, so live DBs may already hold one.
+#
+# The planner treats a start ahead of `now` as corrupt, clamps it back so a real
+# window plans, and warns loudly. One successful run then re-stamps a sane,
+# end-clamped watermark.
+# ---------------------------------------------------------------------------
+
+
+def test_future_watermark_still_plans_a_unit(db_session, caplog):
+    """A corrupt future watermark must NOT stall the scheduled path."""
+    import logging
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
+    now = datetime.now(timezone.utc)
+    corrupt = now + timedelta(days=30)
+    set_watermark(db_session, ORG_ID, source.external_id, _NON_HEAVY_DATASET, corrupt)
+
+    with caplog.at_level(logging.WARNING, logger="dev_health_ops.sync.planner"):
+        plan = plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=ORG_ID,
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="scheduled",  # scheduled path: no explicit before
+            ),
+        )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1, (
+        "a future watermark must still plan a unit; zero units finalizes FAILED "
+        "and leaves nothing to re-stamp the watermark, stalling forever"
+    )
+    since, before = _window(units[0])
+    assert since < before, "the healed window must be forward-ordered"
+    assert before <= now + timedelta(seconds=2)
+    assert since <= now
+
+    warned = [
+        r
+        for r in caplog.records
+        if "future_watermark" in r.getMessage()
+        or "watermark_ahead_of_now" in r.getMessage()
+    ]
+    assert warned, (
+        "clamping a corrupt future watermark must warn loudly; silently "
+        "rewriting a watermark is exactly the kind of invisible repair that "
+        "hides data loss"
+    )
+
+
+def test_future_watermark_recovers_after_one_success(db_session):
+    """After one successful run the watermark is sane again (self-healing)."""
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
+    now = datetime.now(timezone.utc)
+    set_watermark(
+        db_session,
+        ORG_ID,
+        source.external_id,
+        _NON_HEAVY_DATASET,
+        now + timedelta(days=30),
+    )
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="scheduled",
+        ),
+    )
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    _, before = _window(units[0])
+
+    # Healing REQUIRES lowering the stored value, which plain monotonic
+    # semantics would discard. Go through the REAL production write path so the
+    # test proves the correction actually happens rather than assuming it.
+    set_watermark(db_session, ORG_ID, source.external_id, _NON_HEAVY_DATASET, before)
+    healed = get_watermark(db_session, ORG_ID, source.external_id, _NON_HEAVY_DATASET)
+    assert healed is not None
+    healed_aware = (
+        healed.replace(tzinfo=timezone.utc) if healed.tzinfo is None else healed
+    )
+    assert healed_aware <= now + timedelta(seconds=2), (
+        f"watermark still in the future after a successful run: {healed_aware}"
+    )
+
+    # And the next tick plans a normal forward window from the healed value.
+    plan2 = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="scheduled",
+        ),
+    )
+    units2 = _planned_units(db_session, plan2.sync_run_id)
+    assert len(units2) == 1, "the tick after healing must plan normally"
+
+
+def test_full_resync_heavy_window_is_deliberately_uncapped(db_session):
+    """POLICY PIN (CHAOS-3412, decided): full_resync does NOT get the heavy cap.
+
+    A capped one-shot full resync would cover only the cap's span and then
+    finalize SUCCESS — a false coverage claim, which is worse than the exposure
+    it would avoid. The wide-window exposure is instead bounded by the budget
+    exhaustion path: an oversized unit terminalizes visibly as
+    ``budget_deferral_exhausted`` naming the scoped-backfill remedy, which
+    satisfies "syncs or fails visibly".
+
+    This is a DECISION, not an oversight. If a future change adds the cap here,
+    it must revisit that decision rather than assume this was missed.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, _HEAVY_DATASET)
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.FULL_RESYNC.value,
+            triggered_by="admin-api",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    since, before = _window(units[0])
+    assert abs((since - (now - timedelta(days=30))).total_seconds()) < 2
+    assert abs((before - now).total_seconds()) < 2, (
+        "full_resync of a HEAVY dataset must span the FULL configured depth. A "
+        "7-day capped window finalizing SUCCESS would misreport a 30-day resync "
+        "as complete."
+    )
+    span_days = (before - since).days
+    assert span_days >= 29, (
+        f"full_resync heavy span collapsed to {span_days} days — the heavy "
+        "incremental cap must not leak into full_resync"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412 CLOSURE ARGUMENT for the window-bounds defect family.
+#
+# Six members of one family were fixed on this branch: the heavy cap itself,
+# overlap >= cap, future end, inverted end, both halves again in FULL_RESYNC,
+# and a future start from a corrupt watermark. Rather than wait for a seventh to
+# be found, this enumerates the ENTIRE sign-region state space of
+# (window_start, window_end) relative to `now` and asserts the postcondition
+# that every member of the family violated in some way.
+#
+# The postcondition, which is what "no more siblings" actually means:
+#   for every input, the result is either
+#     - zero windows, or
+#     - exactly one window (s, e) with e <= now, and s < e when s is not None.
+#   It is NEVER a window that ends in the future, is inverted, or is zero-width.
+#
+# A new sibling can only exist if it violates this postcondition or escapes the
+# helper. This test closes the first; the mutation tests that break BOTH modes
+# when the helper changes close the second.
+# ---------------------------------------------------------------------------
+
+
+def test_watermark_window_postcondition_holds_across_the_whole_state_space():
+    from datetime import timedelta
+
+    from dev_health_ops.sync.planner import _watermark_stamping_window
+
+    now = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
+    offsets = [
+        ("far-past", -timedelta(days=10)),
+        ("near-past", -timedelta(hours=1)),
+        ("exactly-now", timedelta(0)),
+        ("near-future", timedelta(hours=1)),
+        ("far-future", timedelta(days=10)),
+    ]
+    starts = [(name, now + delta) for name, delta in offsets] + [("none", None)]
+    ends = [(name, now + delta) for name, delta in offsets]
+
+    checked = 0
+    for start_name, start in starts:
+        for end_name, end in ends:
+            case = f"start={start_name} end={end_name}"
+            windows = _watermark_stamping_window(start, end, now)
+            assert isinstance(windows, tuple)
+            assert len(windows) <= 1, f"{case}: helper must never split windows"
+            if not windows:
+                continue
+            s, e = windows[0]
+            assert e is not None, f"{case}: a planned window needs an end"
+            assert e <= now, f"{case}: window end {e} is in the future"
+            if s is not None:
+                assert _as_utc_for_test(s) < e, (
+                    f"{case}: window is inverted or zero-width ({s} -> {e})"
+                )
+            checked += 1
+
+    assert checked > 0, "the enumeration planned no windows at all — vacuous"
+
+
+def test_future_start_always_heals_on_the_self_healing_path():
+    """The precise anti-stall invariant, stated after analysing a near-miss.
+
+    Written first as "a future start must ALWAYS plan a window, for every end",
+    this FAILED for a future start combined with an explicitly requested PAST
+    ``before``. That looked like a seventh sibling; it is not, and the
+    distinction is the whole point:
+
+      - SCHEDULED runs send no ``before``, so the end is ``now``. This is the
+        only path that repeats unattended, so it is the only one where zero units
+        would perpetuate forever. It MUST plan a window, and does.
+      - A caller that explicitly asks for a bounded PAST range gets zero units.
+        That does not perpetuate — the next scheduled tick heals the watermark —
+        and planning a window anyway would fabricate a range the caller never
+        requested, which is how false coverage claims get made.
+
+    So the invariant is not "always plans", it is "always plans on the path that
+    would otherwise never recover". Forcing the other case would have been a
+    patch that made the system less correct.
+    """
+    from datetime import timedelta
+
+    from dev_health_ops.sync.planner import _watermark_stamping_window
+
+    now = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
+    for start_delta in (timedelta(seconds=1), timedelta(hours=1), timedelta(days=90)):
+        # end == now is exactly what the scheduled path resolves to.
+        windows = _watermark_stamping_window(now + start_delta, now, now)
+        assert len(windows) == 1, (
+            f"future start (+{start_delta}) planned no unit on the scheduled "
+            "path — that is the permanent stall, not a safe no-op"
+        )
+        s, e = windows[0]
+        assert s is not None and e is not None
+        assert _as_utc_for_test(s) < _as_utc_for_test(e) <= now
+
+    # The analysed non-defect, pinned so it stays a deliberate choice.
+    assert (
+        _watermark_stamping_window(
+            now + timedelta(days=30), now - timedelta(days=10), now
+        )
+        == ()
+    ), "an explicit past `before` should still plan nothing; it self-heals later"

@@ -904,3 +904,119 @@ class TestLegacyWriteMonotonicAtDBLevel:
             assert stored.replace(tzinfo=timezone.utc) == t_high, (
                 f"Sibling {dataset_key!r} got wrong timestamp: {stored}, expected {t_high}"
             )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412: the ONE exception to monotonic advance.
+# ---------------------------------------------------------------------------
+
+
+def test_future_watermark_is_corrected_downward(db_session):
+    """A stored value AHEAD of now is corrupt and must be correctable.
+
+    Nothing else can repair it: the planner would resolve a window starting in
+    the future, plan no unit, and the run would finalize FAILED forever.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+
+    org, source, dataset = "wm-org", "full-chaos/dev-health", "commits"
+    now = datetime.now(timezone.utc)
+    set_watermark(db_session, org, source, dataset, now + timedelta(days=30))
+
+    sane = now - timedelta(hours=1)
+    set_watermark(db_session, org, source, dataset, sane)
+
+    stored = get_watermark(db_session, org, source, dataset)
+    assert stored is not None
+    stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
+    assert abs((stored - sane).total_seconds()) < 2, (
+        f"a future watermark must be corrected downward; stored {stored}"
+    )
+
+
+def test_legitimate_watermark_is_still_never_rolled_backwards(db_session):
+    """The CHAOS-2578 guarantee is intact for every legitimate (past) value.
+
+    This is the guard that keeps the future-correction exception narrow: a late
+    or out-of-order unit result must still never lower a valid watermark.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+
+    org, source, dataset = "wm-org", "full-chaos/dev-health", "prs"
+    now = datetime.now(timezone.utc)
+    recent = now - timedelta(hours=1)
+    set_watermark(db_session, org, source, dataset, recent)
+
+    # A late-arriving older result — both values are in the past, so the
+    # correction exception must NOT apply.
+    set_watermark(db_session, org, source, dataset, now - timedelta(days=5))
+
+    stored = get_watermark(db_session, org, source, dataset)
+    assert stored is not None
+    stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
+    assert abs((stored - recent).total_seconds()) < 2, (
+        "an out-of-order PAST result must not roll the watermark backwards — "
+        "the future-correction exception must stay gated on a future stored value"
+    )
+
+
+def test_future_incoming_value_does_not_lower_a_future_stored_value(db_session):
+    """Two future values: monotonic behavior still applies, no correction."""
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+
+    org, source, dataset = "wm-org", "full-chaos/dev-health", "commit-stats"
+    now = datetime.now(timezone.utc)
+    far_future = now + timedelta(days=30)
+    set_watermark(db_session, org, source, dataset, far_future)
+    set_watermark(db_session, org, source, dataset, now + timedelta(days=10))
+
+    stored = get_watermark(db_session, org, source, dataset)
+    assert stored is not None
+    stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
+    assert abs((stored - far_future).total_seconds()) < 2, (
+        "the correction is for restoring a SANE value; a still-future incoming "
+        "value must not be treated as a repair"
+    )
+
+
+def test_future_correction_sql_compiles_for_postgresql():
+    """The PostgreSQL branch of the correction is otherwise UNTESTED.
+
+    The unit suite runs on SQLite, which takes the Python-level branch, so the
+    ``CASE ... GREATEST`` statement the real deployment executes never runs here.
+    Compiling it against the postgresql dialect is not equivalent to executing
+    it, but it does catch the failure this construct is most likely to have —
+    an invalid/untypeable clause — instead of leaving the branch entirely
+    unmeasured. Behavior on a live PostgreSQL remains unverified by this suite.
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import case, func, update
+    from sqlalchemy.dialects import postgresql
+
+    from dev_health_ops.models.settings import SyncWatermark
+
+    now = datetime.now(timezone.utc)
+    ts = now
+    stmt = (
+        update(SyncWatermark)
+        .where(SyncWatermark.id == "x")
+        .values(
+            last_synced_at=case(
+                (SyncWatermark.last_synced_at > now, ts),
+                else_=func.greatest(
+                    func.coalesce(SyncWatermark.last_synced_at, ts), ts
+                ),
+            ),
+            updated_at=now,
+        )
+    )
+    sql = str(stmt.compile(dialect=postgresql.dialect()))
+    assert "CASE" in sql.upper()
+    assert "greatest" in sql.lower()

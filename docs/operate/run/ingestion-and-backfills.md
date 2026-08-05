@@ -82,9 +82,30 @@ Consequences to expect when reading run state:
   runs do not request an upper bound and so never reach this state; only a
   manually requested past upper bound can.
 
+A stored watermark ahead of the current time is treated as corrupt. It can be
+produced by a provider record carrying a skewed timestamp, or by a version of the
+planner that predates these rules. Because watermark writes otherwise only move
+forward, such a value cannot be corrected by an ordinary run and would stop the
+dataset permanently: no unit would be planned, and the run would report "No sync
+units planned" on every attempt. The planner therefore plans a short recovery
+window instead, records a warning naming the stored value and the recovery
+window, and the next successful run replaces the corrupt watermark with a valid
+one. Records between the true last synchronized point and the recovery window are
+not re-fetched — run a bounded backfill if that span matters.
+
 These window rules — the end never in the future, and no unit for an already
 covered range — apply to full resynchronization as well as incremental
 synchronization. Both stamp the watermark at the window end on success, so both
 carry the same consequences. Bounded backfills are separate: they never stamp a
 watermark and legitimately target a historical range, so they keep their own
 chunking and bounds.
+
+Full resynchronization of a heavy record family is deliberately **not** capped.
+The cap exists so repeated incremental runs can make progress; a one-shot full
+resynchronization has no next run to continue from, so a capped window would
+cover only the cap's span and then report success — claiming a completed resync
+that did not happen. A full resync of a heavy family over a wide depth is
+therefore expected to be expensive, and where it exceeds the provider budget it
+terminalizes visibly and names the remedy rather than silently under-reading. To
+rebuild deep history for a heavy family, use bounded backfills for the period
+instead of a full resynchronization.

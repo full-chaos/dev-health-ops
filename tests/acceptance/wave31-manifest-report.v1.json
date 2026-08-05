@@ -17,8 +17,51 @@
     "real_project_positive_control": 1
   },
   "proven_e2e_claim_limits": "A proven_e2e row means: a live scenario was run by an operator, its per-assertion results were recorded by the scenario itself, and the script and shared fixture surface it ran against still match this tree. It does NOT mean the validator has established that the run happened. Execution artifacts are unsigned JSON and the validator recomputes exactly the values a forger would compute, so a fabricated artifact validates clean; occurrence rests on operator-recorded evidence and on re-running scenarios, not on this check. commit_sha is metadata only -- shape-checked, never resolved, so a well-formed id naming no commit is accepted. Product code under src/ is outside the digested surface, so for product changes these rows are historical records of a past run rather than statements about the current tree.",
-  "stale_row_count": 0,
-  "stale_rows": {},
+  "stale_row_count": 14,
+  "stale_rows": {
+    "attack.team-attribution.e2e-blocked-by-live-defect": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "attack.unrelated-evidence.e2e-live-validated": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "defect.ask-dev-exact-commit.e2e-live-validated": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "defect.ask-dev-not-found.e2e-live-validated": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "gate.plan-registry-gap-is-loud.e2e-live-validated": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "matrix.data-trust-organization-wide": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "matrix.exact-project-complete": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "matrix.multi-metric-comparison-organization-wide": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "matrix.operational-deficiency.e2e-live-validated": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "matrix.registered-metric-catalog": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "matrix.remaining-work-exact-project": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "matrix.team-health.e2e-live-validated": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "matrix.team-workload-balance.e2e-live-validated": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ],
+    "positive-control.real-project-status": [
+      "scripts/acceptance/acceptance_artifact.py"
+    ]
+  },
   "items": [
     {
       "id": "attack.missing-data",
@@ -91,7 +134,9 @@
         "metrics_empty_for_team_scope",
         "limitation_names_unavailable_metric_source"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "attack.unrelated-evidence.availability",
@@ -130,7 +175,9 @@
         "named_repository_committed",
         "unrelated_repo_excluded_from_named_answer"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "attack.unrelated-evidence.exclusion",
@@ -201,7 +248,9 @@
         "answer_status_not_error",
         "answer_summary_not_empty"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "matrix.exact-project-complete",
@@ -221,7 +270,9 @@
         "evidence_is_linked_to_the_committed_subject",
         "answer_status_not_error"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "matrix.legitimate-org-wide-status",
@@ -289,7 +340,9 @@
         "answer_status_not_error",
         "stream_terminated_as_answer"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "matrix.multi-metric-comparison-stale-source",
@@ -378,7 +431,9 @@
         "claimed_plan_step_completed",
         "stream_terminated_as_answer"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "matrix.organization-portfolio-status",
@@ -571,7 +626,9 @@
         "answer_status_not_error",
         "answer_summary_not_empty"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "matrix.remaining-work-exact-project",
@@ -591,7 +648,9 @@
         "answer_status_not_error",
         "answer_summary_not_empty"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "matrix.struggling-teams-insufficient-sample",
@@ -683,7 +742,9 @@
         "claimed_plan_step_completed",
         "stream_terminated_as_answer"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "matrix.team-workload-balance.e2e-live-validated",
@@ -707,7 +768,9 @@
         "claimed_plan_step_completed",
         "stream_terminated_as_answer"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "matrix.unwired-intent-safe-fallback",
@@ -808,7 +871,9 @@
         "stream_terminated_as_answer",
         "warnings_present_but_not_a_plan_registry_gap_signal"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "gate.repeated-certified-provider",
@@ -1073,7 +1138,9 @@
         "answer_status_not_error",
         "stream_terminated_as_answer"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "defect.ask-dev-not-found",
@@ -1113,7 +1180,9 @@
         "no_answer_produced",
         "safe_message_does_not_name_subject"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     },
     {
       "id": "defect.no-org-fallback-or-blank",
@@ -1232,7 +1301,9 @@
         "answer_status_not_error",
         "answer_summary_not_empty"
       ],
-      "stale_dependencies": []
+      "stale_dependencies": [
+        "scripts/acceptance/acceptance_artifact.py"
+      ]
     }
   ]
 }

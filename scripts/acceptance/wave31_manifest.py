@@ -2110,7 +2110,43 @@ PROVEN_E2E_CLAIM_LIMITS = (
 #: exactly as this mechanism requires ("once the scenario is re-run the
 #: entry MUST be deleted or the manifest breaks"). Empty is the correct
 #: steady state until the next real, acknowledged drift.
-DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {}
+#:
+#: CHAOS-3437 (Codex adversarial review follow-up, same day): the CHAOS-3437
+#: residual-gap paragraph was added to acceptance_artifact.py's
+#: ``RUNTIME_DEPENDENCY_PATHS`` comment immediately after the re-mint above
+#: -- a covered-dependency-file edit, so it genuinely drifts all fourteen
+#: rows' ``scripts/acceptance/acceptance_artifact.py`` hash again. Comment
+#: text only; no behavioral change to the recorder, the digest, or any
+#: scenario. Declared per team-lead ruling (2026-08-05) rather than
+#: triggering a third live re-mint for a doc-only edit -- the same
+#: "routine, non-product dependency bump" reasoning the HISTORY note above
+#: already established for pyproject.toml.
+_ACCEPTANCE_ARTIFACT_PY_AT_CHAOS_3437_DOC = (
+    "38d9503d5bd0c4e0ab3da72e2a8eeb069f7c1171cd3a9bff86742acf2239a34b"
+)
+DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
+    item_id: {
+        "scripts/acceptance/acceptance_artifact.py": (
+            _ACCEPTANCE_ARTIFACT_PY_AT_CHAOS_3437_DOC
+        ),
+    }
+    for item_id in (
+        "attack.team-attribution.e2e-blocked-by-live-defect",
+        "attack.unrelated-evidence.e2e-live-validated",
+        "defect.ask-dev-exact-commit.e2e-live-validated",
+        "defect.ask-dev-not-found.e2e-live-validated",
+        "gate.plan-registry-gap-is-loud.e2e-live-validated",
+        "matrix.data-trust-organization-wide",
+        "matrix.exact-project-complete",
+        "matrix.multi-metric-comparison-organization-wide",
+        "matrix.operational-deficiency.e2e-live-validated",
+        "matrix.registered-metric-catalog",
+        "matrix.remaining-work-exact-project",
+        "matrix.team-health.e2e-live-validated",
+        "matrix.team-workload-balance.e2e-live-validated",
+        "positive-control.real-project-status",
+    )
+}
 
 #: A sha256 hex digest, the only shape a recorded dependency hash may take.
 _SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")

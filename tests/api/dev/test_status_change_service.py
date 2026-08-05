@@ -695,6 +695,11 @@ async def test_organization_and_team_scope_withhold_the_required_child_denominat
     # "assessment hit a display limit" copy would be actively misleading
     # here -- nothing was ever attempted, let alone limited).
     assert "assessment_source_limit_reached" not in result.actual.reason_codes
+    # CHAOS-3409 codex adversarial review (HIGH): the explicit signal
+    # render_verdict_summary/is_completion_assessment_untrustworthy read --
+    # never inferred from reason-code absence, which missed the real
+    # denominator_withheld production wiring entirely.
+    assert result.actual.required_children_not_applicable is True
 
 
 @pytest.mark.asyncio
@@ -726,6 +731,7 @@ async def test_project_scope_with_genuinely_zero_required_children_is_a_real_zer
 
     assert result.actual.required_child_total == 0
     assert result.actual.required_child_complete == 0
+    assert result.actual.required_children_not_applicable is False
 
 
 def _many_blockers(n: int) -> tuple[StatusFact, ...]:

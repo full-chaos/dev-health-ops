@@ -298,6 +298,18 @@ class ActualCompletion:
     # so the ~10 existing direct-construction call sites across the test
     # suite (predating this field) do not have to be touched.
     blockers: tuple[StatusFact, ...] = ()
+    # CHAOS-3409 codex adversarial review (HIGH): distinguishes CHAOS-3408's
+    # structural non-applicability (ORGANIZATION/TEAM scope) from a genuine
+    # required_child_total-withholding source truncation -- both null out
+    # required_child_total/complete identically, but only a real truncation
+    # is "untrustworthy" (is_completion_assessment_untrustworthy,
+    # status_completion_copy.py). Deliberately NOT a reason code: reasons
+    # feeds state computation (any code not in contradiction_codes forces
+    # CompletionState.INDETERMINATE), and a structural absence must never
+    # do that -- the state/reason codes computed from real PR/CI/deployment/
+    # incident evidence for an org/team subject are fully trustworthy on
+    # their own.
+    required_children_not_applicable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1058,6 +1070,12 @@ class StatusChangeService:
             source_ref_ids=used_source_ids,
             evidence_ref_ids=self._fact_evidence(raw),
             blockers=blockers,
+            # CHAOS-3409: True ONLY for the structural flavor -- never set
+            # merely because the total is None, and never set for a real
+            # source truncation (children_source_truncated).
+            required_children_not_applicable=(
+                not required_children_applicable and not children_source_truncated
+            ),
         )
 
     @staticmethod

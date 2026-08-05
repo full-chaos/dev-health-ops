@@ -1871,6 +1871,140 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
     )
 
 
+def _readiness_and_resolution_safety_defects() -> tuple[ManifestItem, ...]:
+    """CHAOS-3408/3409/3421: the live "org-pinned wrong-subject + 0-of-0
+    readiness answer" investigation's three closed defects, each a codex
+    adversarial-review-prescribed fix over its own initial round (not
+    reviewer-prescribed fixes in the same sense as an ordinary review
+    round -- this is a genuinely new changeset with its own review).
+
+    Codex adversarial review finding (MED-2, confirmed): the initial cut of
+    these three fixes had NO manifest entries at all -- the readiness
+    report's executed-evidence set never touched them, so removing any of
+    the new guards (the explicit ``required_children_not_applicable``
+    field, the dedicated prompt branch, the leak-scan reroute) would leave
+    the report green. These three rows close that gap.
+    """
+
+    return (
+        ManifestItem(
+            id="defect.organization-readiness-honest-denominator",
+            category="readiness_and_resolution_safety_defect_reproduction",
+            description=(
+                "CHAOS-3408/3409: an ORGANIZATION/TEAM-scoped readiness "
+                "question must never report a fabricated '0 of 0 required "
+                "items are complete' -- the denominator is withheld via an "
+                "explicit, non-inferred signal (never conflated with a "
+                "genuine source truncation), and the real production "
+                "render/validation wiring (not just an isolated renderer "
+                "call) must render the distinct structural copy without "
+                "pairing it with the truncation disclosure."
+            ),
+            status="proven_unit",
+            evidence=(
+                "src/dev_health_ops/api/dev/status_change_service.py",
+                "src/dev_health_ops/api/dev/status_completion_copy.py",
+                "src/dev_health_ops/api/dev/status_answer_render.py",
+                "src/dev_health_ops/api/dev/contracts.py",
+                "src/dev_health_ops/api/dev/production_runtime.py",
+                "tests/api/dev/test_status_change_service.py",
+                "tests/api/dev/test_status_completion_copy.py",
+                "tests/api/dev/test_chaos_3377_status_answer_render.py",
+            ),
+            content_markers=("required_children_not_applicable",),
+            test_nodeids=(
+                "tests/api/dev/test_status_change_service.py::"
+                "test_organization_and_team_scope_withhold_the_required_child_denominator[_org_scope]",
+                "tests/api/dev/test_status_change_service.py::"
+                "test_organization_and_team_scope_withhold_the_required_child_denominator[_team_scope]",
+                "tests/api/dev/test_status_change_service.py::"
+                "test_project_scope_with_genuinely_zero_required_children_is_a_real_zero",
+                "tests/api/dev/test_status_completion_copy.py::"
+                "test_structural_non_applicability_is_trustworthy_not_untrustworthy",
+                "tests/api/dev/test_status_completion_copy.py::"
+                "test_a_genuine_source_truncation_is_untrustworthy",
+                "tests/api/dev/test_chaos_3377_status_answer_render.py::"
+                "test_production_wiring_never_pairs_the_scope_copy_with_the_truncation_disclosure",
+                "tests/api/dev/test_chaos_3377_status_answer_render.py::"
+                "test_production_wiring_still_discloses_a_genuine_truncation",
+            ),
+        ),
+        ManifestItem(
+            id="defect.bare-name-prompt-allowlist-consistency",
+            category="readiness_and_resolution_safety_defect_reproduction",
+            description=(
+                "CHAOS-3421 MED-1: the unresolved-bare-name organization-"
+                "wide-fallback preflight branch withholds resolve_scope.v1 "
+                "from allowed_tools, so the composed prompt must never "
+                "instruct the model to call it -- a dedicated prompt "
+                "section states resolution is unavailable and names the "
+                "permitted (organization-wide) fallback instead, and the "
+                "advertised tool registry and the prompt copy are proven "
+                "to agree, not merely asserted to."
+            ),
+            status="proven_unit",
+            evidence=(
+                "src/dev_health_ops/api/dev/prompts/composer.py",
+                "src/dev_health_ops/api/dev/subject_preflight.py",
+                "src/dev_health_ops/api/dev/orchestrator.py",
+                "tests/api/dev/test_prompt_composer.py",
+                "tests/api/dev/test_chaos_3292_review_findings.py",
+                "tests/api/dev/test_subject_preflight.py",
+            ),
+            content_markers=("resolution_unavailable",),
+            test_nodeids=(
+                "tests/api/dev/test_prompt_composer.py::"
+                "test_resolution_unavailable_never_instructs_calling_the_withheld_tool",
+                "tests/api/dev/test_prompt_composer.py::"
+                "test_resolution_unavailable_false_is_the_ordinary_uncommitted_section",
+                "tests/api/dev/test_prompt_composer.py::"
+                "test_subject_committed_wins_over_resolution_unavailable",
+                "tests/api/dev/test_chaos_3292_review_findings.py::"
+                "test_an_unresolved_bare_name_run_keeps_the_v1_prompt",
+                "tests/api/dev/test_chaos_3292_review_findings.py::"
+                "test_an_unresolved_bare_name_run_gets_a_dedicated_unavailable_section",
+                "tests/api/dev/test_subject_preflight.py::"
+                "test_an_unresolved_bare_name_withholds_resolve_scope",
+            ),
+        ),
+        ManifestItem(
+            id="defect.bare-name-leak-graceful-terminal",
+            category="readiness_and_resolution_safety_defect_reproduction",
+            description=(
+                "CHAOS-3421: a model that leaks the raw forbidden_or_"
+                "not_found outcome token (what resolve_scope.v1 returns "
+                "for a named subject the catalog cannot confirm) on the "
+                "organization-wide-fallback path must never fail the run "
+                "closed to a generic internal_error -- the leak scan "
+                "reroutes to the SAME graceful scope_not_found terminal "
+                "the legacy narration guard already ships for this exact "
+                "scenario class, reusing its copy verbatim rather than "
+                "forcing the stricter FORBIDDEN_OR_NOT_FOUND no-match "
+                "terminal open. Replicated directly against the real live-"
+                "incident question shape and the real CHAOS-3388 fixture "
+                "entity, with subject matching (CHAOS-3407) deliberately "
+                "left unfixed -- the run still misses, but never crashes."
+            ),
+            status="proven_unit",
+            evidence=(
+                "src/dev_health_ops/api/dev/orchestrator.py",
+                "src/dev_health_ops/api/dev/subject_preflight.py",
+                "src/dev_health_ops/api/dev/no_match_terminal.py",
+                "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py",
+            ),
+            content_markers=("legacy_guard_required", "scope_not_found"),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py::"
+                "test_a_leaked_resolution_outcome_on_a_bare_name_fallback_is_graceful",
+                "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py::"
+                "test_an_unrelated_leak_off_this_branch_still_fails_closed",
+                "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py::"
+                "test_the_live_incident_question_never_crashes_even_though_it_still_misses",
+            ),
+        ),
+    )
+
+
 def _build_manifest() -> tuple[ManifestItem, ...]:
     return (
         _core_defect_reproductions()
@@ -1880,6 +2014,7 @@ def _build_manifest() -> tuple[ManifestItem, ...]:
         + _blocking_matrix_blocked()
         + _gates()
         + _mutation_proofs()
+        + _readiness_and_resolution_safety_defects()
     )
 
 

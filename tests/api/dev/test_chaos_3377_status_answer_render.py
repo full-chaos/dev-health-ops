@@ -46,7 +46,10 @@ from dev_health_ops.api.dev.status_change_service import (
     STATUS_REASON_CODES,
     is_required_child_open,
 )
-from dev_health_ops.api.dev.status_completion_copy import translate_project_state
+from dev_health_ops.api.dev.status_completion_copy import (
+    any_tool_result_withheld_its_completion_denominator,
+    translate_project_state,
+)
 
 SCOPE = DevScope.model_validate(positive_fixtures()["dev_scope.v1"])
 OTHER_SCOPE = DevScope.model_validate(
@@ -64,6 +67,7 @@ def _actual(
     required_child_total: int | None = 69,
     required_child_complete: int | None = 39,
     evidence_ref_ids: tuple[str, ...] = ("ev_01",),
+    required_children_not_applicable: bool = False,
 ) -> DevActualCompletion:
     return DevActualCompletion(
         state=state,
@@ -77,6 +81,7 @@ def _actual(
         display_truncated=False,
         conflicts=[],
         evidence_ref_ids=list(evidence_ref_ids),
+        required_children_not_applicable=required_children_not_applicable,
     )
 
 
@@ -994,18 +999,19 @@ def test_verdict_carries_the_disclosure_when_denominator_withheld() -> None:
 
 
 def test_a_withheld_denominator_not_applicable_to_scope_gets_distinct_copy() -> None:
-    """CHAOS-3408's own non-applicability flavor: ``required_child_total``
-    is ``None`` and NOT because of a source truncation (no
-    ``assessment_source_limit_reached`` reason code) -- the distinct,
-    honest copy fires even with no other unknown/blocking reasons and no
-    caller-supplied ``denominator_withheld``, purely from ``actual``'s own
-    fields."""
+    """CHAOS-3408's own non-applicability flavor: an EXPLICIT signal
+    (``required_children_not_applicable``, never inferred from reason-code
+    absence -- codex adversarial review, HIGH: an inference misses the
+    production path entirely, see the end-to-end test below) -- the
+    distinct, honest copy fires purely from ``actual``'s own fields, with
+    no caller-supplied ``denominator_withheld`` needed."""
 
     actual = _actual(
         state="indeterminate",
         reason_codes=(),
         required_child_total=None,
         required_child_complete=None,
+        required_children_not_applicable=True,
     )
     summary = render_verdict_summary(actual)
 
@@ -1016,16 +1022,17 @@ def test_a_withheld_denominator_not_applicable_to_scope_gets_distinct_copy() -> 
 
 def test_a_withheld_denominator_from_truncation_does_not_get_the_scope_copy() -> None:
     """The other flavor of ``required_child_total is None`` -- a genuine
-    source truncation -- must render its OWN existing disclosure, never
-    CHAOS-3409's "not applicable to this scope" copy (that would be a
-    false claim: real required items exist, they were merely not all
-    fetched)."""
+    source truncation, ``required_children_not_applicable`` stays False --
+    must render its OWN existing disclosure, never CHAOS-3409's "not
+    applicable to this scope" copy (that would be a false claim: real
+    required items exist, they were merely not all fetched)."""
 
     actual = _actual(
         state="indeterminate",
         reason_codes=("assessment_source_limit_reached",),
         required_child_total=None,
         required_child_complete=None,
+        required_children_not_applicable=False,
     )
     summary = render_verdict_summary(actual, denominator_withheld=True)
 
@@ -1051,4 +1058,81 @@ def test_a_real_zero_denominator_still_renders_the_real_n_of_m_claim() -> None:
     summary = render_verdict_summary(actual)
 
     assert "0 of 0 required items are complete" in summary
+    assert "no required items are recorded for this scope" not in summary.casefold()
+
+
+# --- CHAOS-3409 codex adversarial review (HIGH, confirmed): the isolated
+# render_verdict_summary tests above never exercised the PRODUCTION
+# denominator_withheld wiring (any_tool_result_withheld_its_completion_
+# denominator, which status_change_service._assess's structural None and a
+# genuine source truncation BOTH satisfied identically before this fix) --
+# so the real orchestrator path emitted BOTH the new structural copy AND
+# the truncation disclosure together for ORGANIZATION/TEAM scope. These
+# drive the exact same production entry points orchestrator.py calls
+# (build_deterministic_status_claims / render_verdict_summary with
+# denominator_withheld computed from tool_results, never hand-supplied).
+
+
+def test_production_wiring_never_pairs_the_scope_copy_with_the_truncation_disclosure() -> (
+    None
+):
+    actual = _actual(
+        state="ready",
+        reason_codes=(),
+        required_child_total=None,
+        required_child_complete=None,
+        required_children_not_applicable=True,
+    )
+    status_result = _tool_result(actual_completion=actual)
+
+    claims = build_deterministic_status_claims(
+        actual=actual,
+        status_result=status_result,
+        validity_scope=SCOPE,
+        canonical_evidence_ids=frozenset({"ev_01"}),
+        tool_results=(status_result,),
+    )
+    summary = render_verdict_summary(
+        actual,
+        denominator_withheld=any_tool_result_withheld_its_completion_denominator(
+            (status_result,)
+        ),
+    )
+
+    verdict_claim = next(
+        claim for claim in claims if claim.claim_id.startswith("status-verdict:")
+    )
+    for text in (summary, verdict_claim.text):
+        assert "no required items are recorded for this scope" in text.casefold()
+        assert (
+            "the required-work completion total could not be fully verified"
+            not in text.casefold()
+        )
+
+
+def test_production_wiring_still_discloses_a_genuine_truncation() -> None:
+    """No regression on the other side of the same fix: a REAL source
+    truncation must still carry the truncation disclosure through the
+    exact same production wiring."""
+
+    actual = _actual(
+        state="indeterminate",
+        reason_codes=("assessment_source_limit_reached",),
+        required_child_total=None,
+        required_child_complete=None,
+        required_children_not_applicable=False,
+    )
+    status_result = _tool_result(actual_completion=actual)
+
+    summary = render_verdict_summary(
+        actual,
+        denominator_withheld=any_tool_result_withheld_its_completion_denominator(
+            (status_result,)
+        ),
+    )
+
+    assert (
+        "the required-work completion total could not be fully verified"
+        in summary.casefold()
+    )
     assert "no required items are recorded for this scope" not in summary.casefold()

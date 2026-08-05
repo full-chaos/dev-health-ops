@@ -345,7 +345,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "ec2b36b4b4f20f5203002e0661db826ae78b862a20880d74d3618b059397a5dd"
+        "sha256": "7e596208a1c2711a4d6b7d2e6ba202b971a1ae8eae0af215e06aa01511f3e07e"
       },
       "schema_version": "dev_tool_result.v1"
     },

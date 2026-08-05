@@ -220,6 +220,11 @@ def test_every_blocking_matrix_category_is_represented() -> None:
         "blocking_matrix",
         "gate",
         "mutation_proof",
+        # CHAOS-3408/3409/3421: the later "org-pinned wrong-subject +
+        # 0-of-0 readiness answer" investigation's own defect set --
+        # deliberately a distinct category from original_defect_
+        # reproduction (CHAOS-3292's), not folded into it.
+        "readiness_and_resolution_safety_defect_reproduction",
     }
 
 

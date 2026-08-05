@@ -102,6 +102,11 @@
           "title": "Required Children",
           "type": "array"
         },
+        "required_children_not_applicable": {
+          "default": false,
+          "title": "Required Children Not Applicable",
+          "type": "boolean"
+        },
         "rule_id": {
           "maxLength": 128,
           "minLength": 1,

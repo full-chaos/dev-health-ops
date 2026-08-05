@@ -1639,6 +1639,16 @@ class DevOrchestrator:
                             preflight_result is not None
                             and preflight_result.has_committed_subject
                         ),
+                        # CHAOS-3421 codex adversarial review (MED-1): the
+                        # ONE preflight branch that sets legacy_guard_required
+                        # (subject_preflight's proceeded_unresolved_bare_name)
+                        # withholds resolve_scope.v1 from allowed_tools -- the
+                        # prompt must say so, never instruct the model to
+                        # call a tool the registry will reject.
+                        resolution_unavailable=(
+                            preflight_result is not None
+                            and preflight_result.legacy_guard_required
+                        ),
                     )
                 except ValueError as exc:
                     # A synthetic repair turn (CHAOS-3288) added on top of an

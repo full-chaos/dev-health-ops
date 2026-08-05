@@ -3,6 +3,14 @@
 This module is not a product provider family. It is launched only by the
 Compose acceptance profile and exercises the production OpenAI-compatible
 adapter over real HTTP.
+
+CHAOS-3219 Phase 1 Lane 1b: a request whose question carries a
+``[[case:<case-id>]]`` tag (see ``provider_scripts.py``'s module docstring)
+is routed through the per-role, per-case scripted decision/fault engine in
+``provider_scripts``. A request with no tag is completely untouched -- every
+branch below this point that does not mention ``provider_scripts`` is the
+original, pre-CHAOS-3219 heuristic, preserved byte-for-byte so every existing
+smoke script and unit test against this server keeps passing unmodified.
 """
 
 from __future__ import annotations
@@ -14,6 +22,7 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from dev_health_ops.llm.agent import provider_scripts
 from dev_health_ops.llm.providers.openai_capabilities import is_wire_legal_tool_name
 
 SCRIPTED_OPENAI_MODEL = "ask-dev-scripted-v1"
@@ -401,7 +410,32 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
         tool_results = _tool_results_from_messages(payload)
         requested_tool_names = _requested_tool_names_from_messages(payload)
         result_tool_ids = {str(result.get("tool_id") or "") for result in tool_results}
-        if _question_from_messages(payload) == LIST_METRICS_QUESTION:
+        question = _question_from_messages(payload)
+
+        # CHAOS-3219 Phase 1 Lane 1b: case-tag routing. A tag absent from the
+        # question (the overwhelming common case pre-CHAOS-3219, and every
+        # existing smoke/unit test) leaves `case_id` None and every branch
+        # below behaves exactly as it did before this module existed.
+        case_id = provider_scripts.extract_case_id(question)
+        if case_id is not None:
+            try:
+                role = provider_scripts.current_role()
+                engine = provider_scripts.ScriptEngine.load(role)
+                resolution = engine.resolve(case_id, round_index=len(tool_results))
+            except provider_scripts.UnmappedCaseError as exc:
+                self._write_unmapped_case_error(exc)
+                return
+            if not isinstance(resolution, str):
+                self._serve_scripted_turn(payload, resolution, tool_names)
+                return
+            # DELEGATE_DEFAULT: fall through to the untagged heuristic below,
+            # exactly as if this request had never carried a tag -- strip the
+            # tag first so every heuristic downstream (the LIST_METRICS_QUESTION
+            # literal match, _evidence_query_from_question's repository-identity
+            # search) sees the identical text an untagged request would have.
+            question = provider_scripts.strip_case_tag(question)
+
+        if question == LIST_METRICS_QUESTION:
             list_metrics_message, list_metrics_finish_reason = _list_metrics_script(
                 tool_results
             )
@@ -460,9 +494,7 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
                                     # repository identity when the question names
                                     # one, otherwise an org-wide query that is not
                                     # restricted to a single repository.
-                                    "query": _evidence_query_from_question(
-                                        _question_from_messages(payload)
-                                    ),
+                                    "query": _evidence_query_from_question(question),
                                     "limit": 25,
                                 },
                                 separators=(",", ":"),
@@ -510,13 +542,142 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
             finish_reason = "stop"
         self._send_completion(payload, message, finish_reason)
 
-    def _write_json(self, status: int, payload: dict[str, Any]) -> None:
+    def _write_json(
+        self,
+        status: int,
+        payload: dict[str, Any],
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         encoded = json.dumps(payload, separators=(",", ":")).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(encoded)
+
+    def _write_unmapped_case_error(
+        self, exc: provider_scripts.UnmappedCaseError
+    ) -> None:
+        """CHAOS-3219 Phase 1 Lane 1b requirement 4: an unmapped case tag
+        must never accidentally pass as a generic canned answer. Always a
+        distinct HTTP 422 with a ``type`` no legitimate wire-protocol error
+        this server sends ever uses (``invalid_request_error`` is the
+        wire-legal-tool-name 400 above; every scripted fault below uses
+        ``scripted_provider_fault``), so a corpus runner or conformance test
+        can tell "your case id/script is wrong" apart from both.
+        """
+
+        self._write_json(
+            422,
+            {
+                "error": {
+                    "type": "scripted_provider_unmapped_case",
+                    "code": exc.code,
+                    "message": exc.message,
+                }
+            },
+        )
+
+    def _serve_scripted_turn(
+        self,
+        payload: dict[str, Any],
+        turn: provider_scripts.ScriptTurn,
+        tool_names: list[str],
+    ) -> None:
+        provider_scripts.sleep_for_fault(turn.delay_ms)
+        if turn.http_error is not None:
+            extra_headers = (
+                {"Retry-After": str(int(turn.http_error.retry_after_seconds))}
+                if turn.http_error.retry_after_seconds is not None
+                else None
+            )
+            self._write_json(
+                turn.http_error.status,
+                {
+                    "error": {
+                        "type": "scripted_provider_fault",
+                        "code": turn.http_error.code,
+                        "message": turn.http_error.message,
+                    }
+                },
+                extra_headers=extra_headers,
+            )
+            return
+
+        decision = turn.decision
+        message: dict[str, Any]
+        finish_reason: str
+        if isinstance(decision, provider_scripts.ToolCallDecision):
+            if decision.tool not in tool_names:
+                # The script asked for a tool the client never offered on
+                # this round -- a script/production drift, not a real
+                # provider failure. Fail loud rather than send a tool_call
+                # the client cannot possibly service.
+                self._write_unmapped_case_error(
+                    provider_scripts.UnmappedCaseError(
+                        "scripted_tool_not_offered",
+                        f"scripted decision requested tool {decision.tool!r}, "
+                        f"which was not among the offered tools {tool_names!r}",
+                    )
+                )
+                return
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "scripted-call-provider-scripts-v1",
+                        "type": "function",
+                        "function": {
+                            "name": decision.tool,
+                            "arguments": json.dumps(
+                                dict(decision.arguments), separators=(",", ":")
+                            ),
+                        },
+                    }
+                ],
+            }
+            finish_reason = "tool_calls"
+        elif isinstance(decision, provider_scripts.FinalAnswerDecision):
+            message = {
+                "role": "assistant",
+                "content": json.dumps(
+                    {"kind": "final_answer", "value": dict(decision.value)},
+                    separators=(",", ":"),
+                ),
+            }
+            finish_reason = "stop"
+        elif isinstance(decision, provider_scripts.DisambiguationDecision):
+            message = {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "kind": "disambiguation",
+                        "prompt": decision.prompt,
+                        "candidates": list(decision.candidates),
+                    },
+                    separators=(",", ":"),
+                ),
+            }
+            finish_reason = "stop"
+        else:
+            assert isinstance(decision, provider_scripts.RefusalDecision)  # noqa: S101
+            message = {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "kind": "refusal",
+                        "code": decision.code,
+                        "message": decision.message,
+                    },
+                    separators=(",", ":"),
+                ),
+            }
+            finish_reason = "stop"
+        self._send_completion(payload, message, finish_reason)
 
     def _send_completion(
         self,

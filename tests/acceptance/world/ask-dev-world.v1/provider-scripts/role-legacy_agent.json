@@ -1,0 +1,128 @@
+{
+  "schema_version": "ask_dev_provider_script.v1",
+  "role": "legacy_agent",
+  "note": "CHAOS-3219 Phase 1 Lane 1b. legacy_agent is the only Ask Dev provider role with a working, production-representative certification probe today (llm.agent.role_readiness.RoleReadinessService.certify_role raises NotImplementedError for every other AgentRole member; see llm/agent/roles.py + llm/agent/probes/legacy_agent.py). This file is a representative, explicitly incomplete slice of the 134-case frozen registry (registry-ids.v1.json) -- it proves the per-case decision-sequence mechanism, the delegate-to-default mechanism, and all 6 fault types named in the CHAOS-3219 issue. Phase 2 Lane 2b case authors add more entries here as they author tests/acceptance/world/ask-dev-world.v1/corpus/case-*.json; an id present in registry-ids.v1.json but absent from this file's 'cases' fails loud (case_not_scripted) rather than silently passing, so under-coverage is always visible, never masked.",
+  "cases": {
+    "status.single-project.positive-control-v1": {
+      "kind": "delegate_default",
+      "comment": "Preserves the Wave 3.1 inherited oracle's exact grounded flow (query_metric.v1 -> search_evidence.v1 -> data_health.v1 -> final answer) byte-for-byte -- this case is tagged, not re-scripted, so a corpus runner can address it by id without behavior drift from the pre-CHAOS-3219 default heuristic."
+    },
+    "unrelated-evidence.named-subject": {
+      "kind": "delegate_default",
+      "comment": "Reuses the existing named-subject search_evidence.v1 query derivation (_evidence_query_from_question) -- the named-repository literal in the question is what must reach the tool call verbatim, which the default heuristic already proves."
+    },
+    "scope.ambiguous": {
+      "kind": "decisions",
+      "decisions": [
+        {
+          "type": "disambiguation",
+          "prompt": "Which project named \"Atlas\" did you mean?",
+          "candidates": ["atlas/api", "atlas/web"]
+        }
+      ]
+    },
+    "scope.unsupported-request": {
+      "kind": "decisions",
+      "decisions": [
+        {
+          "type": "refusal",
+          "code": "unsupported_request",
+          "message": "Ask Dev cannot perform code-generation requests."
+        }
+      ]
+    },
+    "scope.prohibited-write": {
+      "kind": "decisions",
+      "decisions": [
+        {
+          "type": "refusal",
+          "code": "prohibited_write",
+          "message": "Ask Dev cannot execute write or command requests."
+        }
+      ]
+    },
+    "provider-fail.before-frame": {
+      "kind": "fault",
+      "fault": {
+        "type": "fail-before-frame",
+        "fires_from_round": 0,
+        "http_error": {
+          "status": 503,
+          "code": "scripted_fault_fail_before_frame",
+          "message": "Scripted acceptance fault: provider failure injected before any frame was created (round 0, no tool has ever been requested for this case)."
+        }
+      }
+    },
+    "provider-fail.after-frame": {
+      "kind": "fault",
+      "fault": {
+        "type": "fail-after-frame",
+        "fires_from_round": 1,
+        "pre_fault_decisions": [
+          {
+            "type": "tool_call",
+            "tool": "query_metric_v1",
+            "arguments": {
+              "metric_id": "items_completed",
+              "include_comparison": true,
+              "limit": 12
+            }
+          }
+        ],
+        "http_error": {
+          "status": 503,
+          "code": "scripted_fault_fail_after_frame",
+          "message": "Scripted acceptance fault: provider failure injected after a frame was committed (round 1, a query_metric.v1 result already exists)."
+        }
+      }
+    },
+    "adv.unsafe-error-text.provider": {
+      "kind": "fault",
+      "fault": {
+        "type": "unsafe-error-text",
+        "fires_from_round": 0,
+        "http_error": {
+          "status": 500,
+          "code": "scripted_fault_unsafe_error_text",
+          "message": "Upstream call failed: Bearer sk-scriptedFAKEsecretDONOTUSE0000001 while resolving forbidden_or_not_found for organization internal-audit-org (leak canary; must never reach a client)."
+        }
+      }
+    },
+    "adv.oversized.result": {
+      "kind": "fault",
+      "fault": {
+        "type": "oversized-output",
+        "fires_from_round": 0,
+        "min_bytes": 262144
+      }
+    },
+    "deg.timeout.status": {
+      "kind": "fault",
+      "fault": {
+        "type": "slow-response",
+        "fires_from_round": 0,
+        "delay_ms": 4000,
+        "decision": {
+          "type": "final_answer",
+          "value": {
+            "status": "degraded",
+            "direct_summary": "Scripted slow-response fault: status snapshot answered only after an injected 4000ms delay."
+          }
+        }
+      }
+    },
+    "adv.abuse.retry-storm": {
+      "kind": "fault",
+      "fault": {
+        "type": "retry-storm-trigger",
+        "fires_from_round": 0,
+        "http_error": {
+          "status": 429,
+          "code": "scripted_fault_retry_storm",
+          "message": "Scripted acceptance fault: transient rate limit on every call for this case, to trigger the caller's retry policy.",
+          "retry_after_seconds": 1
+        }
+      }
+    }
+  }
+}

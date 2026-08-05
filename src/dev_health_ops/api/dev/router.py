@@ -1133,26 +1133,20 @@ async def get_conversation_transcript(
                         scope=DevScope.model_validate(message.scope_snapshot),
                     )
                 )
-            elif (
-                isinstance(message.answer_payload, Mapping)
-                and message.answer_payload.get("schema_version") == "dev_error.v1"
-            ):
-                # CHAOS-3423 Codex adversarial review (HIGH, confirmed): a
-                # no-answer terminal's assistant row now exists in
-                # dev_messages (record_error_message) for persistence-layer
-                # completeness (audit, the Phase 2 corpus runner's direct
-                # DB reads) -- but the checked-in dev-health-web client's
-                # own AskDevProvider.toTranscriptEntry only recognizes an
-                # assistant entry that carries `answer` and throws for any
-                # that doesn't (dev_conversation_transcript.v1's wire shape
-                # is otherwise unchanged here on purpose: no `error` field
-                # was added, so old and new clients validate it identically
-                # either way). Until a coordinated client update ships,
-                # this row is deliberately omitted from the wire transcript
-                # -- exactly the pre-CHAOS-3423 behavior (the turn renders
-                # with no answer bubble, not a broken page).
-                continue
             else:
+                # CHAOS-3423/CHAOS-3440: a no-answer terminal's assistant row
+                # (record_error_message) is never returned here --
+                # list_transcript_records defaults include_errors=False for
+                # exactly this wire-facing read, because the checked-in
+                # dev-health-web client runtime-validates every response
+                # against the pinned v1 schema (closed-world: unknown keys
+                # rejected) and its own hand-written invariant requires
+                # every assistant entry to carry a real `answer`
+                # (jsonSchemaValidation.ts, contractValidation.ts). Every
+                # `message` reaching this branch is therefore still a real
+                # DevAnswer, exactly as before CHAOS-3423 -- surfacing a
+                # no-answer turn on this wire is CHAOS-3440, gated on a
+                # coordinated client update.
                 entries.append(
                     DevTranscriptEntry(
                         **common,

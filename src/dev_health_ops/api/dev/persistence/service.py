@@ -1315,8 +1315,27 @@ class DevPersistenceService:
         limit: int = 50,
         after: datetime | None = None,
         after_id: uuid.UUID | None = None,
+        include_errors: bool = False,
     ) -> TranscriptPage:
-        """Return only safe persisted user questions and validated answers."""
+        """Return only safe persisted user questions and validated answers.
+
+        ``include_errors`` (CHAOS-3423, CHAOS-3440): a no-answer terminal's
+        assistant row (``append_assistant_error``) defaults EXCLUDED --
+        this is the wire-facing v1 transcript read
+        (``router.get_conversation_transcript``), and the checked-in
+        ``dev-health-web`` client runtime-validates every response against
+        the pinned ``dev_conversation_transcript.v1`` schema with a
+        closed-world validator (unknown keys rejected) plus its own
+        hand-written invariant that every assistant entry carries a real
+        ``answer`` -- a no-answer row on the wire 502s every deployed web
+        client the moment it appears. The v1 wire shape is therefore left
+        byte-identical to before CHAOS-3423 (verified in
+        ``test_chaos_3423_3424_persistence_prerequisites.py`` against the
+        actual vendored schema file); surfacing these turns to web is
+        CHAOS-3440, gated on a coordinated client update. Pass
+        ``include_errors=True`` for an internal (non-wire) reader that
+        wants them -- see ``list_prompt_history_messages``.
+        """
 
         if limit < 1 or limit > 100:
             raise DevPersistenceValidationError("limit must be between 1 and 100")
@@ -1339,6 +1358,15 @@ class DevPersistenceService:
             DevMessage.org_id == org_id,
             DevMessage.user_id == user_id,
         ]
+        if not include_errors:
+            conditions.append(
+                or_(
+                    DevMessage.role != "assistant",
+                    DevMessage.answer_payload["schema_version"]
+                    .as_string()
+                    .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
+                )
+            )
         if after is not None and after_id is not None:
             conditions.append(
                 or_(
@@ -1517,8 +1545,19 @@ class DevPersistenceService:
         conversation_id: uuid.UUID,
         exclude_message_id: uuid.UUID,
         limit: int,
+        include_errors: bool = True,
     ) -> Sequence[DevMessage]:
-        """Return a bounded chronological suffix for safe prompt projection."""
+        """Return a bounded chronological suffix for safe prompt projection.
+
+        ``include_errors`` (CHAOS-3423) defaults ``True`` here, unlike
+        ``list_transcript_records``'s wire-facing default of ``False``:
+        this feeds the NEXT turn's model prompt (``router.
+        _bounded_prompt_history``), an internal server-to-provider channel
+        that never reaches a client, so a prior clarification/error turn's
+        ``safe_message`` is included for continuity -- no wire-compatibility
+        concern applies here the way it does for the transcript endpoint
+        (CHAOS-3440).
+        """
 
         if limit < 1 or limit > 100:
             raise DevPersistenceValidationError(
@@ -1529,16 +1568,26 @@ class DevPersistenceService:
             user_id=user_id,
             conversation_id=conversation_id,
         )
+        conditions = [
+            DevMessage.conversation_id == conversation_id,
+            DevMessage.org_id == org_id,
+            DevMessage.user_id == user_id,
+            DevMessage.id != exclude_message_id,
+        ]
+        if not include_errors:
+            conditions.append(
+                or_(
+                    DevMessage.role != "assistant",
+                    DevMessage.answer_payload["schema_version"]
+                    .as_string()
+                    .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
+                )
+            )
         messages = list(
             (
                 await self.session.scalars(
                     select(DevMessage)
-                    .where(
-                        DevMessage.conversation_id == conversation_id,
-                        DevMessage.org_id == org_id,
-                        DevMessage.user_id == user_id,
-                        DevMessage.id != exclude_message_id,
-                    )
+                    .where(*conditions)
                     .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
                     .limit(limit)
                 )

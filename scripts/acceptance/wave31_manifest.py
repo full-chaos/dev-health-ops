@@ -2028,6 +2028,20 @@ _ACCEPTANCE_ARTIFACT_PY_AT_LANE_1C = (
     "ae9fef3979883cefd19bccd921034bea83bd9252987656e8ca9f0d771cfce7bf"
 )
 
+#: CHAOS-3419 (Python version standardization): ``pyproject.toml`` (a
+#: covered ``RUNTIME_DEPENDENCY_PATHS`` entry) gained requires-python
+#: ">=3.14", trimmed classifiers, and mypy's python_version bumped to
+#: 3.14 -- none of it touches the ask-dev scripted-provider fixture
+#: surface these fourteen rows execute against, only interpreter/type
+#: metadata, so this is declarable rather than blocking (see the
+#: comment above ``DECLARED_STALE_ARTIFACTS`` on why routine dependency
+#: metadata bumps must not red the whole repository). Bound at the
+#: exact sha256 of ``pyproject.toml`` as committed by this change; any
+#: FURTHER edit to it reds every one of these fourteen again.
+_PYPROJECT_TOML_AT_CHAOS_3419 = (
+    "b3306059b9cf888d4bb6b1021525576870f4a81c2576a1ca483e87ab874ebb06"
+)
+
 DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
     item_id: {
         "compose.yml": _COMPOSE_AT_DATASTORE_RECONCILIATION,
@@ -2042,6 +2056,7 @@ DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
         "scripts/acceptance/acceptance_artifact.py": (
             _ACCEPTANCE_ARTIFACT_PY_AT_LANE_1C
         ),
+        "pyproject.toml": _PYPROJECT_TOML_AT_CHAOS_3419,
     }
     for item_id in (
         "attack.team-attribution.e2e-blocked-by-live-defect",

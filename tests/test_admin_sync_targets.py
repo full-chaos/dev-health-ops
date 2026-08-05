@@ -14,6 +14,29 @@ def test_provider_sync_targets_include_feature_flag_sources():
     assert PROVIDER_SYNC_TARGETS["launchdarkly"] == ["feature-flags"]
 
 
+def test_provider_sync_targets_surface_tests_dataset_for_code_hosts():
+    """CHAOS-3399: `GET /sync-targets` (backed by this constant) is how the
+    dataset-selection UI/API discovers which legacy targets a provider
+    supports. `tests` must be selectable for the two providers the registry
+    supports it for (`datasets.py::_PROVIDER_SUPPORTED_DATASETS`), and must
+    stay absent for providers that never wire up test-report ingestion.
+    """
+    assert "tests" in PROVIDER_SYNC_TARGETS["github"]
+    assert "tests" in PROVIDER_SYNC_TARGETS["gitlab"]
+    assert "tests" not in PROVIDER_SYNC_TARGETS["jira"]
+    assert "tests" not in PROVIDER_SYNC_TARGETS["linear"]
+    assert "tests" not in PROVIDER_SYNC_TARGETS["pagerduty"]
+    assert "tests" not in PROVIDER_SYNC_TARGETS["launchdarkly"]
+
+
+def test_planner_dataset_keys_resolves_tests_target_for_code_hosts():
+    assert _planner_dataset_keys("github", ["tests"]) == ["tests"]
+    assert _planner_dataset_keys("gitlab", ["tests"]) == ["tests"]
+    # Negative control: a sync_targets list that never mentions "tests" must
+    # never plan it -- this is what distinguishes "disabled" from "enabled".
+    assert "tests" not in _planner_dataset_keys("github", ["git", "prs"])
+
+
 def test_pagerduty_operational_target_expands_to_all_operational_datasets() -> None:
     # Given: the backend-owned PagerDuty operational sync target.
 

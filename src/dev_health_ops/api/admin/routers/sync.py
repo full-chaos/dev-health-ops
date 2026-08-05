@@ -34,6 +34,7 @@ from dev_health_ops.api.services.configuration import (
     IntegrationCredentialsService,
     SyncConfigurationService,
 )
+from dev_health_ops.api.services.integrations import IntegrationDatasetService
 from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.api.services.sync_coverage import (
     HISTORY_LOOKBACK_DAYS,
@@ -956,6 +957,48 @@ def _planner_dataset_keys(provider: str, sync_targets: list[str]) -> list[str]:
         for spec in supported_datasets(provider)
         if targets.intersection(spec.legacy_targets)
     ]
+
+
+async def _reconcile_dataset_rows_for_sync_targets(
+    session: AsyncSession,
+    org_id: str,
+    integration_id: uuid.UUID,
+    provider: str,
+    sync_targets: list[str],
+) -> None:
+    """Retro-create/re-enable ``IntegrationDataset`` rows for newly selected targets.
+
+    ``IntegrationDataset`` rows are only seeded once, at integration-create
+    time, from the config's ``sync_targets`` (see ``_planner_dataset_keys``
+    above). The planner (``sync/planner.py::_load_enabled_datasets``) plans
+    strictly from those rows, never from ``sync_targets`` directly, so an
+    operator who edits an *existing* sync configuration to add a target (e.g.
+    ``tests``) previously saw the checkbox flip on with no effect: the
+    dataset was never planned because no row was ever created (CHAOS-3398).
+    This mirrors the admin batch-update endpoint
+    (``PATCH /integrations/{id}/datasets``) so editing sync_targets on an
+    existing integration is a genuine, working enable path -- not just a
+    create-time-only one.
+
+    Purely additive: only creates missing rows or re-enables disabled ones
+    for datasets present in the new ``sync_targets``. Never disables a
+    dataset that isn't present anymore -- same non-destructive contract as
+    ``planner.py::_reconcile_explicit_requested_datasets``.
+    """
+    try:
+        desired_keys = _planner_dataset_keys(provider, sync_targets)
+    except ValueError:
+        return
+    if not desired_keys:
+        return
+
+    svc = IntegrationDatasetService(session, org_id)
+    for dataset_key in desired_keys:
+        dataset = await svc.get_by_key(str(integration_id), dataset_key)
+        if dataset is None:
+            await svc.create(integration_id, dataset_key, True)
+        elif not dataset.is_enabled:
+            await svc.set_enabled(dataset, True)
 
 
 def _planner_source_rows(
@@ -2125,6 +2168,15 @@ async def update_sync_config(
     mutable_config = cast(_MutableSyncConfiguration, config)
     if payload.sync_targets is not None:
         mutable_config.sync_targets = payload.sync_targets
+        config_integration_id = getattr(config, "integration_id", None)
+        if config_integration_id is not None:
+            await _reconcile_dataset_rows_for_sync_targets(
+                session,
+                org_id,
+                config_integration_id,
+                str(getattr(config, "provider", "")),
+                payload.sync_targets,
+            )
     if sync_options_provided:
         merged_options = {
             **dict(getattr(config, "sync_options") or {}),

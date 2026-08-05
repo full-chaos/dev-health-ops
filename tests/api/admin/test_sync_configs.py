@@ -956,6 +956,115 @@ async def test_update_sync_config_changes_is_active(client):
     assert data["id"] == config_id
 
 
+async def _tests_dataset_row(session_maker, integration_id: uuid.UUID):
+    async with session_maker() as session:
+        return (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == integration_id,
+                    IntegrationDataset.dataset_key == "tests",
+                )
+            )
+        ).scalar_one_or_none()
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_adding_tests_target_repairs_dataset_row(
+    client, session_maker
+):
+    """CHAOS-3399: IntegrationDataset rows are seeded once at integration-create
+    time from sync_targets; the planner (`_load_enabled_datasets`) plans strictly
+    from that row, never from sync_targets directly. Before this fix, editing an
+    EXISTING integration's sync_targets to add "tests" updated the Postgres
+    sync_targets column with zero effect on what the planner would ever plan --
+    exactly the CHAOS-3398 root cause. Editing the config now must retro-create
+    (repair) the row, mirroring the admin batch-update endpoint.
+    """
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="repair-path-tests")
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        integration_id = config.integration_id
+
+    # Given: sync_targets=[] at create time (see _create_sync_config) means no
+    # dataset row exists at all yet -- this integration predates "tests".
+    assert await _tests_dataset_row(session_maker, integration_id) is None
+
+    # When: the operator edits sync_targets to add "tests".
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git", "tests"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Then: the row now exists and is enabled -- the planner can plan it.
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None
+    assert dataset.is_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_without_tests_target_leaves_dataset_row_absent(
+    client, session_maker
+):
+    """Negative control for the repair-path test above: editing sync_targets
+    to add unrelated targets must NOT materialize a "tests" row -- the repair
+    is scoped to what was actually requested, not a blanket enable-everything.
+    """
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="repair-path-negative-control")
+    config_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        integration_id = config.integration_id
+
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git", "prs"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert await _tests_dataset_row(session_maker, integration_id) is None
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_re_enables_previously_disabled_tests_dataset(
+    client, session_maker
+):
+    """An operator who disabled "tests" via the batch endpoint and later
+    re-checks it in the edit form must have the existing row flipped back on,
+    not left disabled while sync_targets claims it's selected.
+    """
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="repair-path-reenable")
+    config_id = uuid.UUID(create_resp.json()["id"])
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        integration_id = config.integration_id
+
+    disable_resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/datasets",
+        json={"datasets": [{"dataset_key": "tests", "is_enabled": False}]},
+    )
+    assert disable_resp.status_code == 200, disable_resp.text
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None and dataset.is_enabled is False
+
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git", "tests"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None and dataset.is_enabled is True
+
+
 @pytest.mark.asyncio
 async def test_update_pagerduty_service_mappings_propagates_to_services_dataset(
     client, session_maker

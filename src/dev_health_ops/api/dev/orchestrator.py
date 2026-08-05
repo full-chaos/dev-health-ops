@@ -414,6 +414,19 @@ class RunRecorder(Protocol):
 
     async def record_answer(self, answer: DevAnswer) -> None: ...
 
+    async def record_error_message(
+        self, error: DevError, *, scope_snapshot: Mapping[str, Any]
+    ) -> None:
+        """Persist one assistant ``dev_messages`` row for a no-answer terminal (CHAOS-3423).
+
+        Called from ``finish()`` for every terminal that carries an ``error``
+        and no ``answer`` -- a clarification or any other orchestrator/
+        preflight error code -- so the conversation transcript always has a
+        row for the turn, mirroring what ``record_answer`` already does for
+        a genuine answer.
+        """
+        ...
+
     async def record_preflight(
         self,
         *,
@@ -537,6 +550,11 @@ class NullRunRecorder:
 
     async def record_answer(self, answer: DevAnswer) -> None:
         del answer
+
+    async def record_error_message(
+        self, error: DevError, *, scope_snapshot: Mapping[str, Any]
+    ) -> None:
+        del error, scope_snapshot
 
     async def record_preflight(
         self,
@@ -1044,6 +1062,40 @@ class DevOrchestrator:
                         safe_message="The validated answer could not be stored.",
                         retryable=True,
                     )
+            if answer is None and error is not None:
+                # CHAOS-3423: a deliberate second check, not `elif` chained
+                # to the block above -- the answer-write-failure branch just
+                # above can itself rewrite `answer` to None and mint a fresh
+                # `error`, and that terminal needs a transcript row exactly
+                # as much as one that started life as an error. Every
+                # no-answer terminal in this module reaches here with a
+                # non-None `error` (every `finish()` call site either passes
+                # one or the outer catch-all builds one), so this is
+                # effectively unconditional for that whole class of run --
+                # never only the clarification/preflight shape.
+                try:
+                    await self._recorder.record_error_message(
+                        error, scope_snapshot=request.scope.model_dump(mode="json")
+                    )
+                except Exception as error_message_write_fault:
+                    # Best-effort, mirroring record_frame's own failure
+                    # handling below: a transcript-row write failure must
+                    # never crash or further degrade an otherwise-terminal
+                    # run. `error` is already authoritative for replay via
+                    # `terminal_error_payload` (persisted by `terminal()`
+                    # below, which reads that column directly, never this
+                    # row) -- only this turn's transcript/prompt-history
+                    # rendering is degraded.
+                    logger.exception(
+                        "ask_dev.orchestrator.error_message_write_fault",
+                        extra={
+                            "run_id": run_id,
+                            "exception_type": type(error_message_write_fault).__name__,
+                        },
+                    )
+                    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                        exception_type=type(error_message_write_fault).__name__
+                    ).inc()
             # CHAOS-3297 stack #4: populated only inside the frame-construction
             # branch below (frame_already_recorded=True has no local `frame`
             # to synthesize a narrative from -- the preflight TERMINATE branch
@@ -1350,6 +1402,33 @@ class DevOrchestrator:
                     await self._recorder.record_subject_set(
                         preflight_result.subject_set
                     )
+                if (
+                    preflight_result.decision is PreflightDecision.PROCEED
+                    and preflight_result.ledger is not None
+                ):
+                    # CHAOS-3424: until this, dev_run_resolutions was only
+                    # ever appended from the TERMINATE branch below (one
+                    # entry, the ambiguous mention that produced the
+                    # frame's own clarification_candidates) -- every PROCEED
+                    # decision left the ledger this preflight already built
+                    # entirely unpersisted, including the organization-wide
+                    # widening fallback for an unresolved bare name
+                    # (`proceeded_unresolved_bare_name`). That is exactly
+                    # the run shape a widening/wrong-subject incident needs
+                    # to be auditable from data instead of a container log
+                    # line (live 2026-08-05 diagnosis, CHAOS-3421). Every
+                    # entry, in the ledger's own ordinal order -- not just
+                    # the mention(s) that ended up unresolved -- so a
+                    # cohort question's exact_match entries stay alongside
+                    # the ones that widened, exactly as the ledger recorded
+                    # them. Scoped to PROCEED only: TERMINATE's own single
+                    # terminating-entry write below already covers that
+                    # branch (and shares its `entry_ordinal` with this same
+                    # ledger), so persisting the whole ledger there too
+                    # would double-insert into the same
+                    # (run_id, entry_ordinal) unique constraint.
+                    for resolution_entry in preflight_result.ledger.entries:
+                        await self._recorder.append_resolution(resolution_entry)
                 if preflight_result.decision is PreflightDecision.TERMINATE:
                     assert preflight_result.answer is not None
                     assert preflight_result.outcome is not None

@@ -1340,6 +1340,16 @@ class DevPersistenceService:
                         or_(
                             DevRun.user_message_id.in_(user_message_ids),
                             DevRun.answer_id.in_(answer_ids),
+                            # CHAOS-3423: a no-answer terminal's assistant row
+                            # never sets dev_runs.answer_id (that column's
+                            # existing meaning -- "this run completed with a
+                            # real DevAnswer" -- must stay intact for
+                            # router._replayed_result's replay branch) --
+                            # its DevMessage.answer_id is the run's own id
+                            # instead (PersistenceRunRecorder.
+                            # record_error_message), so the owning run is
+                            # found here too.
+                            DevRun.id.in_(answer_ids),
                         ),
                     )
                 )
@@ -1349,12 +1359,13 @@ class DevPersistenceService:
             run.user_message_id: run for run in runs if run.user_message_id is not None
         }
         by_answer = {run.answer_id: run for run in runs if run.answer_id is not None}
+        by_id = {run.id: run for run in runs}
         records: list[TranscriptRecord] = []
         for message in messages:
             if message.role == "user":
                 run = by_user_message.get(message.id)
             elif message.answer_id is not None:
-                run = by_answer.get(message.answer_id)
+                run = by_answer.get(message.answer_id) or by_id.get(message.answer_id)
             else:
                 run = None
             if run is None:
@@ -1689,6 +1700,104 @@ class DevPersistenceService:
             existing = await self.session.scalar(
                 select(DevMessage).where(
                     DevMessage.answer_id == answer_id,
+                    DevMessage.org_id == org_id,
+                    DevMessage.user_id == user_id,
+                    DevMessage.conversation_id == conversation_id,
+                    DevMessage.role == "assistant",
+                )
+            )
+            if existing is None:
+                raise
+            return existing
+        self._touch(conversation)
+        return message
+
+    async def append_assistant_error(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+        message_id: uuid.UUID,
+        error_payload: Mapping[str, Any],
+        validator: AnswerPayloadValidator,
+        scope_snapshot: Mapping[str, Any],
+        rendered_content: str,
+    ) -> DevMessage:
+        """Persist one ``dev_error.v1``-shaped assistant transcript row (CHAOS-3423).
+
+        Mirrors ``append_assistant_answer``'s idempotent-insert shape, for the
+        terminal that carries no ``DevAnswer`` at all -- a clarification or
+        error terminal, which already validates and persists a real
+        ``dev_answer_frame.v1`` (``record_frame``) but, until this method
+        existed, never a ``dev_messages`` row, leaving the transcript
+        structurally incomplete for exactly the turns where guidance matters
+        most.
+
+        ``message_id`` doubles as ``DevMessage.answer_id`` -- the caller
+        derives it deterministically from the run (see
+        ``PersistenceRunRecorder.record_error_message``), so a retried flush
+        is idempotent the same way ``append_assistant_answer``'s own
+        ``answer_id`` already is. Deliberately a DISTINCT column value space
+        from a real ``DevAnswer.answer_id``: ``dev_runs.answer_id`` is never
+        pointed at this row (only a genuine completed answer sets that FK-ish
+        column), so the existing replay path
+        (``router._replayed_result``'s ``run.answer_id is not None`` branch)
+        is untouched -- it keeps reconstructing from ``terminal_error_payload``
+        / ``frame_payload`` exactly as before. This row exists purely for the
+        conversation-transcript and prompt-history read paths.
+        """
+
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        try:
+            validated = validator(error_payload)
+        except Exception as exc:
+            raise DevPersistenceValidationError(
+                "error payload validation failed"
+            ) from exc
+        payload = _json_copy(
+            dict(validated),
+            field="answer_payload",
+        )
+        if payload.get("schema_version") != "dev_error.v1":
+            raise DevPersistenceValidationError(
+                "validated error payload must use dev_error.v1"
+            )
+        existing = await self.session.scalar(
+            select(DevMessage).where(
+                DevMessage.answer_id == message_id,
+                DevMessage.org_id == org_id,
+                DevMessage.user_id == user_id,
+                DevMessage.conversation_id == conversation_id,
+                DevMessage.role == "assistant",
+            )
+        )
+        if existing is not None:
+            return existing
+        content = _bounded_text(
+            rendered_content, field="rendered_content", max_bytes=32 * 1024
+        )
+        message = DevMessage(
+            conversation_id=conversation_id,
+            org_id=org_id,
+            user_id=user_id,
+            role="assistant",
+            content=content,
+            answer_id=message_id,
+            answer_payload=payload,
+            scope_snapshot=_json_copy(dict(scope_snapshot), field="scope_snapshot"),
+            created_at=self._now(),
+        )
+        try:
+            async with self.session.begin_nested():
+                self.session.add(message)
+                await self.session.flush()
+        except IntegrityError:
+            existing = await self.session.scalar(
+                select(DevMessage).where(
+                    DevMessage.answer_id == message_id,
                     DevMessage.org_id == org_id,
                     DevMessage.user_id == user_id,
                     DevMessage.conversation_id == conversation_id,

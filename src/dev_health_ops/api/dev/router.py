@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
@@ -840,6 +840,15 @@ def _bounded_prompt_history(
     for message in messages:
         if message.role == "user":
             content = message.content
+        elif (
+            isinstance(message.answer_payload, Mapping)
+            and message.answer_payload.get("schema_version") == "dev_error.v1"
+        ):
+            # CHAOS-3423: a no-answer terminal's assistant row carries a
+            # dev_error.v1 payload, not a DevAnswer -- validate and project
+            # its safe_message the same defense-in-depth way the DevAnswer
+            # branch below does, rather than trusting message.content alone.
+            content = DevError.model_validate(message.answer_payload).safe_message
         else:
             content = DevAnswer.model_validate(message.answer_payload).direct_summary
         if content is None:
@@ -1122,6 +1131,23 @@ async def get_conversation_transcript(
                         role="user",
                         question=message.content,
                         scope=DevScope.model_validate(message.scope_snapshot),
+                    )
+                )
+            elif (
+                isinstance(message.answer_payload, Mapping)
+                and message.answer_payload.get("schema_version") == "dev_error.v1"
+            ):
+                # CHAOS-3423: a no-answer terminal's assistant row -- same
+                # read boundary as the DevAnswer branch below (CHAOS-3367),
+                # redacted the same way `_replayed_result` redacts a replayed
+                # `terminal_error_payload`.
+                entries.append(
+                    DevTranscriptEntry(
+                        **common,
+                        role="assistant",
+                        error=redact_persisted_error(
+                            DevError.model_validate(message.answer_payload)
+                        ),
                     )
                 )
             else:

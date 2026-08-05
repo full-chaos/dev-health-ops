@@ -289,6 +289,47 @@ class PersistenceRunRecorder:
             rendered_content=answer.direct_summary,
         )
 
+    async def record_error_message(
+        self, error: DevError, *, scope_snapshot: Mapping[str, Any]
+    ) -> None:
+        """Persist one assistant ``dev_messages`` row for a no-answer terminal (CHAOS-3423).
+
+        Called from ``orchestrator.finish()`` for every terminal that carries
+        an ``error`` and no ``answer`` -- a clarification (``scope_ambiguous``)
+        or any other orchestrator/preflight error code. Until this existed,
+        the conversation's own ``dev_messages`` table got no row at all for
+        these turns (only ``record_frame``'s ``dev_answer_frames`` row did),
+        so a transcript read rendered the question with no answer.
+
+        The row's ``DevMessage.answer_id`` is this run's OWN ``run_id`` --
+        deterministic (not ``uuid.uuid4()``) and already guaranteed unique
+        (it is ``dev_runs.id``'s own primary key), so no new minting scheme
+        is needed and a retried flush is naturally idempotent. Deliberately
+        NEVER written back onto ``dev_runs.answer_id`` itself (that column
+        stays ``None`` for a no-answer terminal, exactly as before this
+        method existed): a caller reading ``run.answer_id is not None`` as
+        "this run completed with a real ``DevAnswer``"
+        (``router._replayed_result``'s replay branch) must keep seeing
+        exactly that, unchanged -- only ``DevPersistenceService.
+        list_transcript_records``'s run lookup was taught the second,
+        symmetric join (``DevRun.id`` for a no-answer row, alongside
+        ``DevRun.answer_id`` for a real one).
+        """
+
+        def validate(payload):
+            return DevError.model_validate(payload).model_dump(mode="json")
+
+        await self._service.append_assistant_error(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            conversation_id=self._conversation_id,
+            message_id=self._run_id,
+            error_payload=error.model_dump(mode="json"),
+            validator=validate,
+            scope_snapshot=dict(scope_snapshot),
+            rendered_content=error.safe_message,
+        )
+
     async def terminal(
         self,
         *,

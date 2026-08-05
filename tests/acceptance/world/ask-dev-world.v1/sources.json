@@ -42,7 +42,8 @@
       "data_health_state": "DataHealthState.UNAVAILABLE",
       "realized_by": {"org_alias": "sibling", "repo_full_name": "sibling-only/private-repo"},
       "mechanism": "world.json sibling org sync_providers.local.state='active_failure' -> SyncConfiguration(provider='local', is_active=True, last_sync_success=False) org-wide. NativeDataHealthReader's `failure = any(config.last_sync_success is False and _provider_supports(source, config.provider) ...)` -> active_failure=True -> DataHealthState.UNAVAILABLE for every git-backed source in the sibling tenant.",
-      "source_classes": ["commits", "pull_requests", "reviews", "deployments", "work_units"]
+      "$comment_source_classes": "Live-verification correction (2026-08-05, first live fixtures-world run to exercise world_verify.verify_sources_against_production_data_health end to end): 'work_units' was listed here but does NOT belong -- source_health.PROVIDER_SUPPORTS_SOURCE['work_units'] is ('jira', 'linear', 'github', 'gitlab'), which does not include 'local'/'git' at all, so the sibling org's local-provider active_failure has no effect on it. Sibling's OTHER configured provider, jira, is active_success, so work_units correctly reads DataHealthState.COMPLETE for this org -- which is exactly what the real DataHealthService.inspect observed and world_verify caught the stale claim against. Removed from this list rather than leaving a false claim for a live check to keep failing on.",
+      "source_classes": ["commits", "pull_requests", "reviews", "deployments"]
     },
     {
       "state": "unconfigured",
@@ -62,8 +63,10 @@
       "state": "truncated",
       "data_health_state": "n/a (SourceRequirementState.TRUNCATED / WorkGraphNeighborsResult.truncated, not a DataHealthState member)",
       "realized_by": {"org_alias": "primary", "repo_full_name": "probe/source-truncated-workgraph"},
-      "mechanism": "Generated with elevated pr_count/commits_per_day and --with-work-graph so the work-graph neighbor fan-out for at least one committed issue/PR node exceeds work_graph_neighbors_service.MAX_NEIGHBORS (25) -- work_graph_expansion_run then always reports SourceRequirementState.TRUNCATED (result.truncated wins unconditionally per builtin_steps.py). Best-effort volume target verified empirically against a live scratch generation (see Lane 1a report); the exact edge count is data-dependent on the seeded RNG and is NOT hashed into WORLD_DIGEST's stable-content set for that reason (a >25 volume assertion belongs to Phase 2's corpus runner, not this digest).",
-      "source_classes": ["work_graph"]
+      "mechanism": "Generated with elevated pr_count/commits_per_day and --with-work-graph, intending the work-graph neighbor fan-out for at least one committed issue/PR node to exceed work_graph_neighbors_service.MAX_NEIGHBORS (25) so work_graph_expansion_run reports SourceRequirementState.TRUNCATED (result.truncated wins unconditionally per builtin_steps.py). CORRECTED 2026-08-05: the prior text here claimed this was 'verified empirically against a live scratch generation' -- that claim was never actually true; this is the FIRST time verify_truncated_work_graph (new HIGH-2 code) has run end to end, and it found the claim false (see status/blocked_by below). The elevated volume knobs (days/commits_per_day/pr_count) only control how much data is generated, not how issue<->PR linking clusters -- SyntheticDataGenerator's work-item count scales with `days` at roughly the same rate PRs are generated, so linking comes out close to 1:1 (observed live: 43 work items, 42 PRs, max fan-out 2 for this repo) -- there is currently no generator mechanism that concentrates many PRs onto one work item. Reaching fan-out > 25 requires generator work (a many-PRs-per-item clustering mechanism), not a fixture-world volume tuning change, and is out of Lane 1a's fixtures/** territory.",
+      "source_classes": ["work_graph"],
+      "status": "declared-blocked",
+      "blocked_by": "CHAOS-3428 generator fan-out clustering"
     },
     {
       "state": "conflicting",

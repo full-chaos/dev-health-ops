@@ -32,10 +32,10 @@
       "entity_kind": "team",
       "team_id": "ground-control-team",
       "team_display_name": "Platform Reliability (Ground Control)",
-      "mentions": ["Ground Control", "the Ground Control team"],
+      "mentions": ["Ground Control", "ground control"],
       "alias_form": "literal_parenthetical",
       "expected_terminal_resolution": "candidate_via_alias_matching.literal_aliases (CHAOS-3388)",
-      "notes": "The team-lead's explicit ask for 'a parenthetical-alias subject': alias_matching.strip_parentheticals('Platform Reliability (Ground Control)') -> literal alias 'Ground Control', distinct from the acronym form covered by subject.acronym-alias.mwa-project."
+      "notes": "The team-lead's explicit ask for 'a parenthetical-alias subject': alias_matching.strip_parentheticals('Platform Reliability (Ground Control)') -> literal alias 'Ground Control', distinct from the acronym form covered by subject.acronym-alias.mwa-project. Codex HIGH-3/live-verification correction (2026-08-05): `mentions` for the acronym-alias class are candidate SPANS fed directly to scope_catalog._alias_matches's own 'equals query outright' contract (see its docstring) -- not full user sentences. An earlier revision included 'the Ground Control team' here, which is realistic user-utterance text but is never what actually reaches `_alias_matches`/`alias_forms` as `query` (some upstream span-extraction step, out of this alias-matcher's scope, would need to isolate 'Ground Control' from that sentence first) -- world_verify.verify_acronym_alias_subject's live run against the real alias_matching.alias_forms caught this mismatch immediately (RED) the first time `fixtures world` actually ran end-to-end, which is exactly what that production-path check exists to catch. Both entries now differ only by case, demonstrating alias_forms' own casefold-normalization rather than re-testing sentence-level extraction this subject class was never meant to cover."
     },
     {
       "id": "subject.ambiguous.atlas",
@@ -87,7 +87,10 @@
       "team_id": "platform",
       "mentions": ["the platform team's mobile squad"],
       "expected_terminal_resolution": "resolves to the parent 'platform' team only (ScopeResolutionOutcome.FILTERED-ish) -- 'mobile squad' has no addressable sub-team scope in the teams catalog, so the mention narrows to a scope broader than literally asked",
-      "notes": "The fixture world models teams as a flat catalog (models.teams.Team carries no parent/child edge in the ClickHouse teams table's own hierarchy field usage here), so a sub-team mention structurally cannot resolve narrower than its parent -- this IS the partially-resolved condition, not a gap in the fixture."
+      "notes": "The fixture world models teams as a flat catalog (models.teams.Team carries no parent/child edge in the ClickHouse teams table's own hierarchy field usage here), so a sub-team mention structurally cannot resolve narrower than its parent -- this IS the partially-resolved condition, not a gap in the fixture.",
+      "verification_status": "realized-but-unverified-live",
+      "tracked_by": "CHAOS-3429 team-catalog live verification path",
+      "$comment_verification_status": "CHAOS-3429 (2026-08-05): this is the only subjects.json class with no live verification path -- verify_subjects_against_production only ever checks the 'repos' catalog table, and this subject is team-only (no repo_full_name/candidates/members). The fixture is believed correct (this team-id is seeded by the generator's curated team roster), but that belief has never been checked against a live database, unlike every other class here. Marked explicitly rather than left as the silent `if not repo_names: continue` that used to swallow this -- see world_verify.REALIZED_UNVERIFIED_LIVE_STATUS."
     },
     {
       "id": "subject.bounded-set.web-app-and-api-gateway",
@@ -101,8 +104,8 @@
     },
     {
       "id": "subject.tenant.sibling-only-private-repo",
-      "class": "bounded-set",
-      "$comment_class": "Filed under corpus registry's `tenant` family rather than a 9th subjects.json class -- the registry's 8 classes cover subject-mention SHAPE; cross-tenant is an AUTHORIZATION dimension orthogonal to shape. Listed here (not only in sources.json) because it is itself a named subject with an expected resolution outcome.",
+      "class": "exact",
+      "$comment_class": "Filed under corpus registry's `tenant` family rather than a 9th subjects.json class -- the registry's 8 classes cover subject-mention SHAPE; cross-tenant is an AUTHORIZATION dimension orthogonal to shape. Shape-wise this is a single, specific repo reference (class=exact), same as any other named-repo mention -- what makes it interesting is being asked from a DIFFERENT org (asked_from_org_alias), not a bounded/ambiguous SET of subjects. Corrected from an earlier 'bounded-set' mislabel (Codex HIGH-2 typed-schema review, 2026-08-05: the schema for bounded-set requires >=2 'members', which this single-repo entry never had -- 'exact' is the shape this entry actually has). Listed here (not only in sources.json) because it is itself a named subject with an expected resolution outcome.",
       "org_alias": "sibling",
       "asked_from_org_alias": "primary",
       "entity_kind": "repository",

@@ -1683,6 +1683,14 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     from_ts=config.from_date,
                     to_ts=config.to_date,
                     org_id=org_id,
+                    # Passthrough only: defaults to 5 (materialize_fixture_
+                    # investments' own default, unchanged for ordinary
+                    # `fixtures generate` callers). `fixtures world` sets
+                    # ns.llm_concurrency=1 to serialize LLM-categorization
+                    # completion order (Codex HIGH-4, 2026-08-05) -- see
+                    # world._generation_namespace and work_graph.runner.
+                    # materialize_fixture_investments's own docstring.
+                    llm_concurrency=getattr(ns, "llm_concurrency", 5),
                 )
         finally:
             builder.close()

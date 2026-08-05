@@ -159,6 +159,12 @@ def sources_configured_for_org(
     }
 
 
+class SourceAgingWriteError(RuntimeError):
+    """``age_source_rows`` could not confirm the aged replacement rows were
+    durably visible after writing them -- see the function's own docstring
+    (Codex HIGH-5, 2026-08-05) for what this guards against."""
+
+
 async def age_source_rows(
     client: Any,
     *,
@@ -169,21 +175,56 @@ async def age_source_rows(
 ) -> None:
     """Force ``source``'s watermark for ``repo_id`` to ``stale_watermark``.
 
-    Realized as a **delete-and-reinsert**, not an in-place ``ALTER TABLE ...
-    UPDATE``: every affected table (``git_commits``, ``git_pull_requests``,
-    ...) is a ``ReplacingMergeTree`` whose ``ORDER BY`` key INCLUDES
-    ``last_synced`` (empirically confirmed against a live scratch database --
-    the first cut of this function used ``ALTER ... UPDATE`` and ClickHouse
-    rejected it with ``Code: 420 CANNOT_UPDATE_COLUMN`` because a sorting-key
-    column can never be updated in place). Reading every row generically
-    (whatever columns the table actually has), deleting them, and
-    re-inserting the SAME rows with only the watermark column's value
-    swapped works regardless of a table's exact key definition and needs no
-    per-table column list maintained here.
+    Realized as **delete-then-insert**, not an in-place ``ALTER TABLE ...
+    UPDATE`` (every affected table's version column is a protected "key
+    column" for ``ALTER ... UPDATE`` purposes even when it is not part of
+    ``ORDER BY`` -- empirically confirmed live: ``Code: 420
+    CANNOT_UPDATE_COLUMN``), and NOT insert-then-delete either, despite that
+    being the more obvious way to avoid a delete-first zero-row window.
 
-    Both the delete and the reinsert are synchronous
-    (``mutations_sync=1`` / awaited) so the caller can trust the mutation is
-    visible before ``run_fixtures_world``'s digest is computed.
+    Codex HIGH-5 (2026-08-05) history, corrected same-day after a LIVE
+    two-generation run caught a worse bug than the one being fixed: an
+    earlier revision of this function inserted the aged replacement rows
+    BEFORE deleting the originals, reasoning that the worst a mid-operation
+    crash could do is leave both versions present, which a
+    ReplacingMergeTree resolves harmlessly via ``FINAL``. That reasoning
+    missed that this table family is a `ReplacingMergeTree(<watermark
+    column>)` and "aging" a row means writing a LOWER version value than
+    what is already there -- the exact case ReplacingMergeTree's own merge
+    rule (highest version wins) resolves the WRONG way. Live forensics via
+    ``system.part_log`` on a real scratch database caught it directly: the
+    aged INSERT landed (``NewPart``, 39 rows) and a background merge started
+    ~300 MICROSECONDS later, completing in ~2.4ms and silently collapsing
+    the just-inserted lower-version rows back to the pre-existing
+    higher-version ones -- with NO crash, NO exception, under completely
+    normal execution, on a table that already had many parts from earlier
+    inserts in the same generation run (ClickHouse's background merge
+    scheduler merges eagerly once a table accumulates enough small parts).
+    Insert-then-delete is therefore not just crash-unsafe here, it is
+    *plain-execution*-unsafe -- strictly worse than the bug it was meant to
+    fix, and the corruption is silent unless independently verified (which
+    is exactly what caught it: see the postcondition check below).
+
+    Delete-then-insert avoids that hazard structurally: once the higher-
+    version originals are gone, there is no competing row left for a merge
+    to prefer, so whatever the insert writes IS the row, with no version
+    race window at all. What delete-then-insert cannot avoid -- and nothing
+    can, short of ClickHouse gaining cross-statement transactions for
+    MergeTree tables -- is a process crash landing in the gap between the
+    two statements, which does leave zero rows for `org_id`/`repo_id` until
+    the next full regeneration. Given ``fixtures world`` runs exclusively
+    against disposable SCRATCH databases (enforced at the entrypoint) that
+    are always regenerated fresh rather than resumed in place after a
+    failure, that residual window's blast radius is bounded to "this
+    generation run failed and must be re-run," not "a live database is
+    silently wrong forever." The postcondition check below closes the
+    remaining, actually-preventable gap: an insert that returns success but
+    is not yet confirmed durable is now impossible to mistake for a
+    completed aging operation, whatever the underlying cause.
+
+    Both mutations are synchronous (``mutations_sync=1`` / awaited) so the
+    caller can trust the result is visible before ``run_fixtures_world``'s
+    digest is computed.
     """
 
     table, repo_column, watermark_column = _SOURCE_TABLES[source]
@@ -213,6 +254,50 @@ async def age_source_rows(
         parameters=params,
     )
     await asyncio.to_thread(client.insert, table, rows, column_names=column_names)
+
+    observed = await _count_rows_at_watermark(
+        client,
+        table=table,
+        where=where,
+        watermark_column=watermark_column,
+        params=params,
+        stale_watermark=stale_watermark,
+    )
+    if observed < len(rows):
+        raise SourceAgingWriteError(
+            f"age_source_rows: deleted the original rows and inserted "
+            f"{len(rows)} aged row(s) into {table!r} for org_id={org_id!r} "
+            f"repo_id={repo_id!r}, but only {observed} row(s) with "
+            f"{watermark_column}={stale_watermark!r} are visible "
+            "afterward -- the replacement was not confirmed durable. The "
+            "table may currently have zero rows for this org/repo; this "
+            "generation run must be treated as failed and re-run against a "
+            "fresh scratch database, never resumed in place."
+        )
+
+
+async def _count_rows_at_watermark(
+    client: Any,
+    *,
+    table: str,
+    where: str,
+    watermark_column: str,
+    params: dict[str, Any],
+    stale_watermark: datetime,
+) -> int:
+    """How many rows in ``table`` currently match ``where`` AND carry
+    ``watermark_column == stale_watermark`` -- the read-your-write check
+    ``age_source_rows`` uses to confirm its insert landed before it deletes
+    anything. Split out as its own function so a failure-injection test can
+    monkeypatch/stub it independently of the insert/delete calls."""
+
+    result = await asyncio.to_thread(
+        client.query,
+        f"SELECT count() FROM {table} WHERE {where} AND {watermark_column} = "  # noqa: S608
+        "{stale_watermark:DateTime64(3, 'UTC')}",
+        parameters={**params, "stale_watermark": stale_watermark},
+    )
+    return int(result.result_rows[0][0])
 
 
 async def zero_out_source(

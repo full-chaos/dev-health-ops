@@ -31,6 +31,7 @@ from dev_health_ops.fixtures.world import (
     _clickhouse_table_digest,
     _diff_components,
     _row_content_key,
+    _volatile_columns_for_table,
 )
 
 
@@ -64,7 +65,7 @@ class _ExplodingConnectivityClient:
 def test_row_content_key_excludes_volatile_columns() -> None:
     columns = ["id", "org_id", "name", "last_synced", "updated_at"]
     row = ("repo-1", "org-1", "web-app", "2026-08-01T00:00:00Z", "2026-08-01T00:00:00Z")
-    key = _row_content_key(columns, row)
+    key = _row_content_key(columns, row, volatile=_VOLATILE_COLUMNS)
     assert "last_synced" not in key
     assert "updated_at" not in key
     assert "id='repo-1'" in key
@@ -79,7 +80,36 @@ def test_row_content_key_stable_column_order_independent() -> None:
     columns_b = ["name", "id"]
     row_a = ("repo-1", "web-app")
     row_b = ("web-app", "repo-1")
-    assert _row_content_key(columns_a, row_a) == _row_content_key(columns_b, row_b)
+    assert _row_content_key(
+        columns_a, row_a, volatile=_VOLATILE_COLUMNS
+    ) == _row_content_key(columns_b, row_b, volatile=_VOLATILE_COLUMNS)
+
+
+def test_row_content_key_keeps_table_specific_watermark_column() -> None:
+    """Codex HIGH-3 (2026-08-05): for tables in
+    ``_WATERMARK_COLUMNS_TO_KEEP_BY_TABLE``, the listed watermark column is
+    NOT excluded -- it is exactly what a claimed source state (stale/
+    current/measured-zero) is about, so blanket-hashing it out would let a
+    regression in the aging/zeroing step go undetected forever."""
+
+    columns = ["id", "org_id", "last_synced"]
+    row = ("repo-1", "org-1", "2026-08-01T00:00:00Z")
+    key = _row_content_key(
+        columns, row, volatile=_volatile_columns_for_table("git_commits")
+    )
+    assert "last_synced='2026-08-01T00:00:00Z'" in key
+
+
+def test_volatile_columns_for_table_default_excludes_watermark() -> None:
+    """``_volatile_columns_for_table`` returns the EXCLUSION set. A table
+    with NO entry in the keep-list (e.g. plain ``repos``) still gets the
+    full blanket exclusion -- ``last_synced`` stays volatile (excluded) --
+    while a table WITH an entry (``git_commits``) has it removed from the
+    exclusion set, i.e. hashed. The per-table override is additive, not a
+    replacement of the default behavior."""
+
+    assert "last_synced" in _volatile_columns_for_table("repos")
+    assert "last_synced" not in _volatile_columns_for_table("git_commits")
 
 
 @pytest.mark.asyncio
@@ -129,7 +159,32 @@ async def test_digest_drift_red_on_content_mutation() -> None:
 async def test_digest_unaffected_by_volatile_only_mutation() -> None:
     """The inverse of the drift test: mutating ONLY a volatile column must
     NOT trip the digest (this is what makes two real generations, run at
-    different real times, reproducible)."""
+    different real times, reproducible). Uses ``teams`` -- NOT one of the
+    HIGH-3 watermark-keep tables -- deliberately: ``work_items`` (used here
+    before HIGH-3) now keeps ``last_synced`` in its digest on purpose, so it
+    would no longer demonstrate this property (see the paired test below,
+    which asserts exactly that difference for ``work_items``)."""
+
+    columns = ["id", "org_id", "status", "last_synced"]
+    row_a = [("t-1", "org-1", "done", "2026-08-01T00:00:00Z")]
+    row_b = [("t-1", "org-1", "done", "2026-08-02T12:34:56Z")]
+
+    digest_a = await _clickhouse_table_digest(
+        _StubClient(columns, row_a), "teams", "org-1"
+    )
+    digest_b = await _clickhouse_table_digest(
+        _StubClient(columns, row_b), "teams", "org-1"
+    )
+    assert digest_a["content_hash"] == digest_b["content_hash"]
+
+
+@pytest.mark.asyncio
+async def test_digest_affected_by_watermark_mutation_on_kept_table() -> None:
+    """Codex HIGH-3 (2026-08-05): the exact counterpart to the test above.
+    ``work_items`` IS one of the tables whose watermark column
+    (``last_synced``) is deliberately kept in the digest -- mutating ONLY
+    that column now DOES trip the digest, because a "stale" claim in
+    sources.json is a claim ABOUT that column."""
 
     columns = ["id", "org_id", "status", "last_synced"]
     row_a = [("wi-1", "org-1", "done", "2026-08-01T00:00:00Z")]
@@ -141,7 +196,11 @@ async def test_digest_unaffected_by_volatile_only_mutation() -> None:
     digest_b = await _clickhouse_table_digest(
         _StubClient(columns, row_b), "work_items", "org-1"
     )
-    assert digest_a["content_hash"] == digest_b["content_hash"]
+    assert digest_a["content_hash"] != digest_b["content_hash"], (
+        "work_items.last_synced must be part of the digest -- if this "
+        "passes with an unchanged hash, a regression in watermark aging "
+        "for work_items would go undetected"
+    )
 
 
 @pytest.mark.asyncio
@@ -216,5 +275,6 @@ def test_volatile_columns_cover_every_timestamp_this_world_writes() -> None:
             "finished_at",
             "last_sync_at",
             "feature_id",
+            "categorization_run_id",
         }
     )

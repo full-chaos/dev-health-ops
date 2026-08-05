@@ -259,3 +259,64 @@ def test_validate_world_manifest_rejects_zero_orgs() -> None:
     )
     with pytest.raises(WorldManifestError, match="zero orgs"):
         validate_world_manifest(manifest)
+
+
+def _minimal_valid_world(**overrides: object) -> dict:
+    base: dict[str, object] = {
+        "schema_version": WORLD_SCHEMA_VERSION,
+        "orgs": [{"alias": "primary", "id_seed": "org:primary"}],
+    }
+    base.update(overrides)
+    return base
+
+
+class TestCrossGenerationDigestStatus:
+    """CHAOS-3432 (2026-08-05): the whole-world analogue of sources.json's
+    DECLARED_BLOCKED_STATUS / subjects.json's REALIZED_UNVERIFIED_LIVE_STATUS
+    -- typed, ticketed, schema-checked, never a silent or false claim."""
+
+    def _manifest(self, cross_gen_status: object) -> WorldManifest:
+        return WorldManifest(
+            manifest_path=_MANIFEST_PATH,
+            world=_minimal_valid_world(cross_generation_digest_status=cross_gen_status),
+            subjects={"schema_version": WORLD_SCHEMA_VERSION, "subjects": []},
+            sources={"schema_version": WORLD_SCHEMA_VERSION, "matrix": []},
+        )
+
+    def test_absent_field_is_the_default_and_passes(self) -> None:
+        manifest = WorldManifest(
+            manifest_path=_MANIFEST_PATH,
+            world=_minimal_valid_world(),
+            subjects={"schema_version": WORLD_SCHEMA_VERSION, "subjects": []},
+            sources={"schema_version": WORLD_SCHEMA_VERSION, "matrix": []},
+        )
+        validate_world_manifest(manifest)
+
+    def test_red_wrong_status_value(self) -> None:
+        with pytest.raises(WorldManifestError, match="declared-blocked"):
+            validate_world_manifest(
+                self._manifest({"status": "proven", "blocked_by": "CHAOS-3432"})
+            )
+
+    def test_red_not_a_dict(self) -> None:
+        with pytest.raises(WorldManifestError, match="declared-blocked"):
+            validate_world_manifest(self._manifest("declared-blocked"))
+
+    def test_red_declared_blocked_without_ticket_reference(self) -> None:
+        with pytest.raises(WorldManifestError, match="blocked_by"):
+            validate_world_manifest(self._manifest({"status": "declared-blocked"}))
+
+    def test_green_well_formed(self) -> None:
+        validate_world_manifest(
+            self._manifest({"status": "declared-blocked", "blocked_by": "CHAOS-3432"})
+        )
+
+    def test_checked_in_manifest_declares_chaos_3432(self) -> None:
+        """End-to-end: the actual checked-in world.json carries this
+        field, correctly typed, referencing the real ticket."""
+
+        manifest = load_world_manifest(_MANIFEST_PATH)
+        status = manifest.world.get("cross_generation_digest_status")
+        assert isinstance(status, dict)
+        assert status.get("status") == "declared-blocked"
+        assert "CHAOS-3432" in str(status.get("blocked_by"))

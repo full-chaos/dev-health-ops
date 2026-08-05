@@ -5,6 +5,13 @@
   "pinned_now": "2026-08-05T00:00:00+00:00",
   "$comment_pinned_now": "The single reference instant every relative timestamp (staleness cutoffs, retention ages, conversation-rotation windows) is computed from. CHAOS-3392 lesson: the world generator must never call datetime.now()/utcnow() to decide freshness -- every age-relative fixture row is pinned off this value, threaded explicitly through dev_health_ops.fixtures.world's call graph.",
 
+  "cross_generation_digest_status": {
+    "status": "declared-blocked",
+    "blocked_by": "CHAOS-3432 concurrent ClickHouse batch-insert nondeterminism",
+    "note": "SINGLE-generation WORLD_DIGEST pinning IS proven: compute_world_digest + `fixtures world --verify-digest` correctly detect drift within one generated database (every HIGH-3/HIGH-5 mutation test in this round relies on exactly that, live). What is NOT proven, and was an explicit goal of this round's HIGH-4 work: that two INDEPENDENT `fixtures world` runs against fresh scratch databases produce an IDENTICAL digest. Root-caused down to five real, fixed defects (wall-clock modules missing from the clock-freeze list, a random per-run categorization_run_id needing digest exclusion, a postprocess handler running outside frozen-clock scope) -- each individually confirmed via live two-generation reruns. One residual remains open: an isolated, single-repo-at-a-time row-count divergence (ci_pipeline_runs/deployments/work_graph_pr_commit/work_unit_investments), narrowed to 'concurrent ClickHouse batch insertion via fixtures/runner.py's _insert_batches (asyncio.gather, MAX_WORKERS default 4)' as the leading hypothesis but not yet confirmed by the discriminating serialization experiment (stopped mid-run by explicit user direction, not by a negative result) -- see fixtures/world.py's _frozen_clock docstring for the full evidence trail and ruled-out theories (mock LLM provider has no randomness; PYTHONHASHSEED=0 did not converge and made drift worse/broader; global-random-desync-cascades-forward is contradicted by unaffected repos generated after the affected one). Any future claim of proven cross-generation digest reproducibility must update this field, not just prose elsewhere.",
+    "$comment_status_values": "Mirrors sources.json's DECLARED_BLOCKED_STATUS (CHAOS-3428) and subjects.json's REALIZED_UNVERIFIED_LIVE_STATUS (CHAOS-3429) -- the same discipline applied at the whole-world/digest level rather than a single manifest entry: an honest, ticketed, schema-validated 'not proven' beats either a false pass or a silent omission."
+  },
+
   "orgs": [
     {
       "alias": "primary",
@@ -48,7 +55,7 @@
         "jira": {"state": "active_success"},
         "pagerduty": {"state": "active_success"}
       },
-      "$comment_sync_providers": "local sync marked active_failure (last_sync_success=False) -> commits/pull_requests/reviews/deployments/work_units read UNAVAILABLE org-wide for the sibling tenant (sources.json deg.source-state.unavailable). A visibly degraded sibling is also a MORE realistic cross-tenant probe target than a pristine one.",
+      "$comment_sync_providers": "local sync marked active_failure (last_sync_success=False) -> commits/pull_requests/reviews/deployments read UNAVAILABLE org-wide for the sibling tenant (sources.json deg.source-state.unavailable). work_units is NOT in that list -- it is only provider-mapped to jira/linear/github/gitlab (source_health.PROVIDER_SUPPORTS_SOURCE), never 'local', and sibling's jira provider below is active_success, so work_units correctly reads COMPLETE (live-verification correction, 2026-08-05 -- see sources.json's matching $comment_source_classes). A visibly degraded sibling is also a MORE realistic cross-tenant probe target than a pristine one.",
       "retention_policies": [
         {"resource_type": "dev_conversation", "retention_days": 0}
       ],

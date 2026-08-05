@@ -51,7 +51,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
 
 from billiard.exceptions import SoftTimeLimitExceeded
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, SessionTransactionOrigin
 
@@ -1379,6 +1379,16 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     # (sync/budget_guard.py _rate_limit_deferral_exhausted).
                     rate_limit_deferrals=0,
                     rate_limit_first_seen_at=None,
+                    # CHAOS-3412, same reasoning for the BUDGET episode:
+                    # SUCCESS ends it too. A unit that got through is by
+                    # definition not permanently oversized, so its next
+                    # budget deferral must start a fresh count and a fresh
+                    # wall clock rather than inheriting a resolved episode's.
+                    budget_deferrals=0,
+                    budget_first_deferred_at=None,
+                    # The aggregate blocked clock stops here too: the unit
+                    # got through, so it is not "going nowhere" any more.
+                    first_blocked_at=None,
                     lease_owner=None,
                     lease_expires_at=None,
                     last_heartbeat_at=completed_at,
@@ -1496,6 +1506,17 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     available_at=not_before,
                     rate_limit_deferrals=deferral.attempts,
                     rate_limit_first_seen_at=first_seen_at,
+                    # CHAOS-3412 episode symmetry: a rate-limit deferral is
+                    # NOT a budget episode -- clear the budget pair, exactly
+                    # as _defer_unit_for_budget clears the rate-limit pair.
+                    budget_deferrals=0,
+                    budget_first_deferred_at=None,
+                    # AGGREGATE blocked clock (CHAOS-3412 review round 2):
+                    # set-if-null. A 429 deferral is still "this unit went
+                    # nowhere", so it starts the outer clock if nothing else
+                    # has -- but never restarts one already running, or the
+                    # budget/rate-limit alternation would reset it too.
+                    first_blocked_at=func.coalesce(SyncRunUnit.first_blocked_at, now),
                     error=sanitize_error_text(exc),
                     result=deferral_result_payload,
                     lease_owner=None,
@@ -1782,6 +1803,10 @@ def _stamp_sync_unit_soft_timeout(
                     # the budget-guard deferral clear).
                     rate_limit_deferrals=0,
                     rate_limit_first_seen_at=None,
+                    # CHAOS-3412 episode symmetry: nor is it a budget
+                    # episode -- clear that pair for the same reason.
+                    budget_deferrals=0,
+                    budget_first_deferred_at=None,
                     lease_owner=None,
                     lease_expires_at=None,
                     last_heartbeat_at=completed_at,
@@ -2601,7 +2626,16 @@ def _claim_units(
         session.execute(
             update(SyncRunUnit)
             .where(*planned_where)
-            .values(status=SyncRunUnitStatus.DISPATCHING.value, updated_at=now)
+            .values(
+                status=SyncRunUnitStatus.DISPATCHING.value,
+                updated_at=now,
+                # CHAOS-3412 (review round 2): a successful claim is the
+                # moment the unit stops being blocked, so the aggregate
+                # blocked clock stops with it. Set on PLANNED too (where it
+                # is already NULL) so the claim path has ONE rule rather than
+                # two that could drift.
+                first_blocked_at=None,
+            )
             .returning(SyncRunUnit.id)
             .execution_options(synchronize_session=False)
         )
@@ -2627,6 +2661,10 @@ def _claim_units(
                 status=SyncRunUnitStatus.DISPATCHING.value,
                 updated_at=now,
                 available_at=None,
+                # The claim that actually matters for CHAOS-3412: a
+                # previously-deferred unit is being dispatched, so it is no
+                # longer going nowhere and the aggregate clock resets.
+                first_blocked_at=None,
             )
             .returning(SyncRunUnit.id)
             .execution_options(synchronize_session=False)

@@ -441,12 +441,12 @@
       "notes": "only launchdarkly/feature-flags route-ready in Go"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1974",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1999",
       "surface": "finalize_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1974
+        "line": 1999
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -2313,12 +2313,12 @@
       "notes": "grep-evading form; internal to dispatch_sync_run fan-out"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1609",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1630",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1609
+        "line": 1630
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -2337,12 +2337,12 @@
       "notes": "grep-evading form; internal to unit completion"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2425",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2450",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2425
+        "line": 2450
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",
@@ -2361,12 +2361,12 @@
       "notes": "grep-evading form"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:843",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:849",
       "surface": "getattr(run_sync_reference_discovery,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 843
+        "line": 849
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_sync_reference_discovery",
@@ -2385,12 +2385,12 @@
       "notes": "grep-evading form; reconciler repair redrive"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:861",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:867",
       "surface": "getattr(dispatch_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 861
+        "line": 867
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_sync_run",
@@ -2409,12 +2409,12 @@
       "notes": "grep-evading form; reconciler repair redrive"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:869",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_reconciler.py:875",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 869
+        "line": 875
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -2481,12 +2481,12 @@
       "notes": "grep-evading form; POST /webhooks/pagerduty/{binding_id}"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/integrations.py:475",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/integrations.py:476",
       "surface": "getattr(dispatch_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/integrations.py",
-        "line": 475
+        "line": 476
       },
       "queue_or_cadence": "sync",
       "dispatches": "dispatch_sync_run",
@@ -2505,12 +2505,12 @@
       "notes": "grep-evading form; POST /integrations/{integration_id}/sync"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/integrations.py:547",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/integrations.py:548",
       "surface": "getattr(dispatch_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/integrations.py",
-        "line": 547
+        "line": 548
       },
       "queue_or_cadence": "sync",
       "dispatches": "dispatch_sync_run",
@@ -2602,12 +2602,12 @@
       "route_mount_prefix": ""
     },
     {
-      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/integrations.py:424",
+      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/integrations.py:425",
       "surface": "POST /integrations/{integration_id}/sync",
       "class": "api_trigger_endpoint",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/integrations.py",
-        "line": 424
+        "line": 425
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_sync_run",
@@ -2627,12 +2627,12 @@
       "route_mount_prefix": ""
     },
     {
-      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/integrations.py:496",
+      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/integrations.py:497",
       "surface": "POST /integrations/{integration_id}/backfill",
       "class": "api_trigger_endpoint",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/integrations.py",
-        "line": 496
+        "line": 497
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_sync_run",

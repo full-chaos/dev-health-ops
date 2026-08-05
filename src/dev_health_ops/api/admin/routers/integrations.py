@@ -165,6 +165,7 @@ def _unit_to_response(unit: object) -> SyncRunUnitResponse:
             "attempts": int(getattr(unit, "attempts")),
             "available_at": getattr(unit, "available_at"),
             "rate_limit_deferrals": int(getattr(unit, "rate_limit_deferrals")),
+            "budget_deferrals": int(getattr(unit, "budget_deferrals", 0) or 0),
             "duration_seconds": getattr(unit, "duration_seconds"),
             "error": getattr(unit, "error"),
             "error_category": error_category,
@@ -613,6 +614,17 @@ async def get_sync_run_units(
         )
     )
 
+    # CHAOS-3412: a unit the budget guard is holding back is 'retrying'
+    # with the guard's own error_category -- derived here rather than
+    # stored, so it stays true the moment the unit is admitted or fails.
+    budget_blocked_unit_count = sum(
+        1
+        for unit in units
+        if unit.status == "retrying"
+        and isinstance(unit.result, dict)
+        and unit.result.get("error_category") == "budget_deferred"
+    )
+
     return SyncRunUnitSummary(
         by_status=rollups["by_status"],
         by_source=rollups["by_source"],
@@ -625,6 +637,7 @@ async def get_sync_run_units(
         unit_count=total_units,
         next_retry_at=min(retry_times) if retry_times else None,
         retry_exhausted_unit_count=retry_exhausted_unit_count,
+        budget_blocked_unit_count=budget_blocked_unit_count,
         units=[
             _unit_to_response(u) for u in (units if limit is None else units[:limit])
         ],

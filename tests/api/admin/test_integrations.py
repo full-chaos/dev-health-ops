@@ -1230,6 +1230,94 @@ async def test_get_sync_run_units_exposes_error_category(
 
 
 @pytest.mark.asyncio
+async def test_get_sync_run_units_surfaces_budget_blocked_units(
+    client, session_maker, seeded_state
+):
+    """CHAOS-3412: budget-blocked units must be COUNTED, not just present.
+
+    Before this, a run whose units were all deferred by the budget guard
+    reported zero failures, zero exhausted retries, and nothing else an
+    operator could act on -- the run simply looked idle. The rollup now
+    carries budget_blocked_unit_count, and each unit carries how many times
+    it has been deferred, so "enabled but producing nothing" is visible.
+    """
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+
+    async with session_maker() as session:
+        session.add_all(
+            [
+                SyncRunUnit(
+                    org_id=seeded_state["org_id"],
+                    sync_run_id=uuid.UUID(run_id),
+                    integration_id=uuid.UUID(integration_id),
+                    source_id=uuid.UUID(source_id),
+                    provider="github",
+                    dataset_key="tests",
+                    cost_class="heavy",
+                    mode="incremental",
+                    status="retrying",
+                    attempts=0,
+                    budget_deferrals=6,
+                    result={"error_category": "budget_deferred"},
+                ),
+                # Retrying for an UNRELATED reason -- must not be counted.
+                SyncRunUnit(
+                    org_id=seeded_state["org_id"],
+                    sync_run_id=uuid.UUID(run_id),
+                    integration_id=uuid.UUID(integration_id),
+                    source_id=uuid.UUID(source_id),
+                    provider="github",
+                    dataset_key="prs",
+                    cost_class="standard",
+                    mode="incremental",
+                    status="retrying",
+                    attempts=1,
+                    result={"error_category": "rate_limit"},
+                ),
+                # Already terminalized by the exhaustion path -- it is a
+                # FAILURE now, not a block, so it must not be counted either.
+                SyncRunUnit(
+                    org_id=seeded_state["org_id"],
+                    sync_run_id=uuid.UUID(run_id),
+                    integration_id=uuid.UUID(integration_id),
+                    source_id=uuid.UUID(source_id),
+                    provider="github",
+                    dataset_key="commit-stats",
+                    cost_class="heavy",
+                    mode="incremental",
+                    status="failed",
+                    attempts=0,
+                    budget_deferrals=10,
+                    result={"error_category": "budget_deferral_exhausted"},
+                ),
+            ]
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["budget_blocked_unit_count"] == 1
+    blocked = next(unit for unit in data["units"] if unit["dataset_key"] == "tests")
+    assert blocked["budget_deferrals"] == 6
+    assert blocked["error_category"] == "budget_deferred"
+    exhausted = next(
+        unit for unit in data["units"] if unit["dataset_key"] == "commit-stats"
+    )
+    assert exhausted["budget_deferrals"] == 10
+    assert exhausted["error_category"] == "budget_deferral_exhausted"
+    # A unit that never met the budget guard reports a zero, not a null.
+    unrelated = next(unit for unit in data["units"] if unit["dataset_key"] == "prs")
+    assert unrelated["budget_deferrals"] == 0
+
+
+@pytest.mark.asyncio
 async def test_get_sync_run_units_non_dict_result_has_no_error_category(
     client, session_maker, seeded_state
 ):

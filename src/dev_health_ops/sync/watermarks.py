@@ -343,6 +343,27 @@ def set_watermark(
     late-arriving or out-of-order unit result can never roll the watermark
     backwards.  Both incremental and full-resync runs call this on success.
 
+    AMENDMENT (CHAOS-3412) — ONE exception to the rule above.
+    Gate: the STORED value is in the future AND the incoming value is not.
+    In that case the incoming value WINS and the stored value is lowered.
+
+    Why this does not weaken CHAOS-2578: a watermark marks data already
+    synchronized, so a value ahead of ``now`` is not a late result — it is
+    provably invalid state, reachable from a provider-supplied ``watermark_at``
+    derived from a source record with a skewed timestamp, or from a future
+    window end persisted by pre-CHAOS-3412 planner code. Without the exception
+    such a value is permanent: the planner resolves a window starting in the
+    future, plans no unit, the run finalizes FAILED, and no unit exists to
+    repair it. The guarantee is therefore untouched for every value it was
+    written to protect — an out-of-order result with a PAST timestamp still
+    cannot roll a valid watermark backwards.
+
+    Narrowness is pinned by ``test_legitimate_watermark_is_still_never_rolled_backwards``
+    and ``test_future_incoming_value_does_not_lower_a_future_stored_value``;
+    the correction itself by ``test_future_watermark_is_corrected_downward``
+    and, against live PostgreSQL, ``test_real_postgres_future_watermark_correction``.
+    See ``_monotonic_update`` for the implementation of both dialect branches.
+
     The ``target`` column is set to ``dataset_key`` (preserving the existing
     convention where ``target == dataset_key``) so that the legacy unique
     constraint ``uq_sync_watermark_org_repo_target`` remains satisfied.

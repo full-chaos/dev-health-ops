@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -1020,3 +1021,80 @@ def test_future_correction_sql_compiles_for_postgresql():
     sql = str(stmt.compile(dialect=postgresql.dialect()))
     assert "CASE" in sql.upper()
     assert "greatest" in sql.lower()
+
+
+@pytest.mark.skipif(
+    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
+    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
+)
+def test_real_postgres_future_watermark_correction():
+    """EXECUTE the CHAOS-3412 correction against live PostgreSQL.
+
+    The rest of the suite runs SQLite, which takes the Python branch of
+    ``_monotonic_update``. The statement a real deployment executes is the
+    ``CASE ... GREATEST`` update, and a dialect-compile check proves only that it
+    parses. This runs it: it asserts the stored row is genuinely lowered, and — on
+    the same branch — that a legitimate lower value is still discarded, so the
+    narrowness of the exception is verified where it actually runs.
+    """
+    import os as _os
+    import uuid as _uuid
+    from datetime import timedelta
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+
+    engine = create_engine(_os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    Base.metadata.create_all(engine)
+    SyncWatermark.metadata.create_all(engine)
+
+    org = f"pg-wm-{_uuid.uuid4()}"
+    source = "full-chaos/dev-health"
+    try:
+        with Session(engine) as session:
+            now = datetime.now(timezone.utc)
+
+            # --- the correction: stored future value must be lowered ---------
+            corrupt = now + timedelta(days=30)
+            set_watermark(session, org, source, "commits", corrupt)
+            session.commit()
+            stored = get_watermark(session, org, source, "commits")
+            assert stored is not None
+            assert _aware(stored) > now, "precondition: a future value is stored"
+
+            sane = now - timedelta(hours=1)
+            set_watermark(session, org, source, "commits", sane)
+            session.commit()
+            session.expire_all()
+            corrected = get_watermark(session, org, source, "commits")
+            assert corrected is not None
+            assert abs((_aware(corrected) - sane).total_seconds()) < 2, (
+                "live PostgreSQL did not lower the corrupt future watermark: "
+                f"{_aware(corrected)} (expected ~{sane}). The CASE branch is "
+                "what production executes; SQLite passing proves nothing here."
+            )
+
+            # --- narrowness, on the SAME branch ------------------------------
+            set_watermark(session, org, source, "prs", now - timedelta(hours=1))
+            session.commit()
+            set_watermark(session, org, source, "prs", now - timedelta(days=5))
+            session.commit()
+            session.expire_all()
+            kept = get_watermark(session, org, source, "prs")
+            assert kept is not None
+            assert (
+                abs((_aware(kept) - (now - timedelta(hours=1))).total_seconds()) < 2
+            ), (
+                "live PostgreSQL rolled a LEGITIMATE watermark backwards — the "
+                "GREATEST path must still win when the stored value is in the past"
+            )
+    finally:
+        with Session(engine) as cleanup:
+            cleanup.query(SyncWatermark).filter(SyncWatermark.org_id == org).delete(
+                synchronize_session=False
+            )
+            cleanup.commit()
+        engine.dispose()
+
+
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value

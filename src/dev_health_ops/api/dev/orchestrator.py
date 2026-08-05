@@ -768,6 +768,7 @@ class DevOrchestrator:
             error: DevError | None = None,
             frame_already_recorded: bool = False,
             grounding_validation_status: str | None = None,
+            extra_attested: tuple[str, ...] = (),
         ) -> OrchestratorResult:
             nonlocal terminal_written
             if terminal_written:
@@ -788,7 +789,20 @@ class DevOrchestrator:
             # legitimately appears in copy (pinned by
             # test_no_match_terminal.py), so this must never fire on a
             # healthy run.
-            attested = attested_strings(answer, request.question)
+            #
+            # CHAOS-3388 codex re-review (HIGH, confirmed): ``extra_attested``
+            # is the narrowly-scoped escape hatch for a caller that built its
+            # `error` from server-authorized data ``attested_strings`` cannot
+            # see (it reads only off ``answer``, which is ``None`` on an
+            # error-only path). The preflight TERMINATE branch is the one
+            # caller that passes it today: ``project_preflight_error``
+            # interpolates the same catalog-confirmed candidate display
+            # labels the persisted frame already carries
+            # (``clarification_candidates`` -- CHAOS-3325) into
+            # ``safe_message``, so those exact labels are attested here too,
+            # the same trust tier as everything else this scan already
+            # exempts.
+            attested = attested_strings(answer, request.question) + extra_attested
             # CHAOS-3377 leak-hardening: scrub model-authored AUXILIARY
             # fields (warnings/conflicts/suggested_follow_up_questions/
             # resolved_scope.warnings) BEFORE the fail-closed scan below --
@@ -1248,6 +1262,64 @@ class DevOrchestrator:
                 if preflight_result.decision is PreflightDecision.TERMINATE:
                     assert preflight_result.answer is not None
                     assert preflight_result.outcome is not None
+                    preflight_error = project_preflight_error(
+                        preflight_result.answer, request_id=request.request_id
+                    )
+                    # CHAOS-3388 codex re-review (HIGH, confirmed): the
+                    # candidate display labels this error's ``safe_message``
+                    # may interpolate (``project_preflight_error`` /
+                    # ``_name_candidates``) are the SAME catalog-confirmed
+                    # entities the frame below persists as
+                    # ``clarification_candidates`` -- authorized data, the
+                    # same trust tier ``finish()``'s own ``attested_strings``
+                    # already exempts off ``DevAnswer``. This path builds no
+                    # ``DevAnswer`` (it is error-only), so without this the
+                    # exemption never applied and a candidate label that
+                    # happened to contain a denylisted token (a real live
+                    # shape -- see ``no_match_terminal.internal_token_leak``'s
+                    # own docstring example) fail-closed rewrote the terminal
+                    # to a bare ``internal_error`` *after* the richer frame
+                    # below was already recorded, leaving the two
+                    # permanently inconsistent.
+                    #
+                    # The fix decides frame persistence and the terminal
+                    # error from the SAME leak scan ``finish()`` will run, so
+                    # the two can never disagree: attest the candidate labels
+                    # up front, and if the scan still flags something despite
+                    # that (a genuine leak, not a candidate-label collision),
+                    # skip the richer frame entirely rather than persist one
+                    # the terminal below will contradict.
+                    candidate_attestation = tuple(
+                        candidate.entity_ref.display_label
+                        for candidate in preflight_result.answer.frame.clarification_candidates
+                    )
+                    preflight_leak = internal_token_leak_field(
+                        user_visible_strings_by_field(error=preflight_error),
+                        attested=attested_strings(None, request.question)
+                        + candidate_attestation,
+                    )
+                    if preflight_leak is not None:
+                        leaked_field, leaked_token = preflight_leak
+                        logger.error(
+                            "ask_dev.orchestrator.preflight_frame_leak_guard "
+                            f"run_id={run_id} field={leaked_field} "
+                            f"token={leaked_token}",
+                            extra={
+                                "run_id": run_id,
+                                "token": leaked_token,
+                                "field": leaked_field,
+                            },
+                        )
+                        ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL.labels(
+                            token=leaked_token, terminal_kind="error"
+                        ).inc()
+                        return await finish(
+                            RunState.FAILED,
+                            error=error(
+                                "internal_error",
+                                "The request could not be completed.",
+                            ),
+                        )
                     # CHAOS-3297: persist the frame the preflight already
                     # built *before* finishing the run, so the terminal
                     # state and the frame's contract_generation='v2' tag
@@ -1294,10 +1366,9 @@ class DevOrchestrator:
                         )
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
-                        error=project_preflight_error(
-                            preflight_result.answer, request_id=request.request_id
-                        ),
+                        error=preflight_error,
                         frame_already_recorded=True,
+                        extra_attested=candidate_attestation,
                     )
                 if preflight_result.committed_resolution is not None:
                     committed = preflight_result.committed_resolution

@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from dev_health_ops.api.dev.alias_matching import alias_forms
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import (
     DevAnswer,
@@ -83,6 +84,10 @@ ATLAS_PROJECT_TWO = AuthorizedEntity(EntityKind.PROJECT, "project-atlas-2", "Atl
 PAGE_PROJECT = AuthorizedEntity(EntityKind.PROJECT, "project-page-ctx", "Beacon")
 
 
+def _label_sort_key(entity: AuthorizedEntity) -> tuple[str, str]:
+    return (entity.label.casefold(), entity.canonical_id)
+
+
 class SeededCatalog:
     """An ``AuthorizedEntityCatalog`` over a fixed, org-scoped entity list."""
 
@@ -125,6 +130,7 @@ class SeededCatalog:
         kinds: tuple[EntityKind, ...],
         *,
         limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]:
         self.search_calls.append((org_id, query))
         if self.fail_search:
@@ -140,11 +146,34 @@ class SeededCatalog:
                 or needle in entity.label.casefold()
             )
         ]
+        alias_matches: list[AuthorizedEntity] = []
+        if include_alias_matches:
+            # CHAOS-3388: mirrors ClickHouseAuthorizedEntityCatalog's roster
+            # scan over the *same* seeded org-scoped entities, so a test can
+            # exercise acronym/parenthetical-alias matching through this fake
+            # without a live ClickHouse.
+            matched_ids = {(entity.kind, entity.canonical_id) for entity in matched}
+            for owner, entity in self.entities:
+                if (
+                    owner == org_id
+                    and entity.kind in kinds
+                    and entity.kind in {EntityKind.PROJECT, EntityKind.TEAM}
+                    and (entity.kind, entity.canonical_id) not in matched_ids
+                ):
+                    forms = alias_forms(entity.label)
+                    if needle in forms.literal_aliases or needle in forms.acronyms:
+                        alias_matches.append(entity)
+                        matched_ids.add((entity.kind, entity.canonical_id))
         # ORDER BY lowerUTF8(label), canonical_id ... LIMIT n — the ordering and
         # the truncation both happen in SQL, so an exact label sorted past the
-        # page boundary never reaches the caller at all.
-        matched.sort(key=lambda entity: (entity.label.casefold(), entity.canonical_id))
-        return matched[:limit]
+        # page boundary never reaches the caller at all. Alias/acronym hits
+        # are ordered AHEAD of plain substring hits, before the truncation --
+        # mirrors ClickHouseAuthorizedEntityCatalog.search's own priority
+        # fix (CHAOS-3388): incidental substring noise must never crowd the
+        # real acronym match for a named project out of the returned page.
+        alias_matches.sort(key=_label_sort_key)
+        matched.sort(key=_label_sort_key)
+        return (alias_matches + matched)[:limit]
 
     async def organization_repository_ids(
         self, org_id: str, *, limit: int
@@ -607,6 +636,44 @@ async def case_a3() -> RunOutput:
         question="What's the status of the Atlas project?",
         entities=[(ORG_ID, ATLAS_PROJECT_ONE), (ORG_ID, ATLAS_PROJECT_TWO)],
         script_id="a3",
+    )
+
+
+#: CHAOS-3388 live repro fixture: the real production catalog row (org
+#: 70d529e0-3c06-4597-8480-794fd02328b6, read live from ClickHouse
+#: `projects`) and the exact question text from the incident report.
+CHAOS_3388_ACR_PROJECT = AuthorizedEntity(
+    EntityKind.PROJECT,
+    "60997592-f9f4-462b-87c3-ef82671df270",
+    "Dev Health Agent Context Runtime (Context Fabric)",
+)
+CHAOS_3388_ACR_QUESTION = (
+    "What's the status of the ACR Project and what drivers are blocking it? "
+    "What's left to complete?"
+)
+
+
+async def case_chaos_3388_acr_close_match() -> RunOutput:
+    """The live repro: an acronym-named project with no literal catalog match.
+
+    Orchestrator-level repro of the wrong-terminal defect. Before the
+    CHAOS-3388 fixes, "ACR Project" never typed a mention at all (the
+    kind-noun regex's case-sensitivity bug), so this run proceeded to the
+    model round exactly like ``case_a4`` -- and if the model then also never
+    tried (or mis-tried) ``resolve_scope.v1``, it fell all the way to the
+    grounding-floor ``insufficient_evidence``/"did not include enough
+    grounded detail" failure, never a deterministic no-match. The assertion
+    that matters here is the same shape as A2/A3: the preflight alone
+    decides the outcome, and the scripted provider is never invoked at all
+    (``output.provider.tool_ids == []``) -- proving the deterministic
+    machinery caught this before a single model token was spent, not that a
+    model happened to behave helpfully.
+    """
+
+    return await run_preflight_orchestrator(
+        question=CHAOS_3388_ACR_QUESTION,
+        entities=[(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, CHAOS_3388_ACR_PROJECT)],
+        script_id="chaos_3388_acr",
     )
 
 

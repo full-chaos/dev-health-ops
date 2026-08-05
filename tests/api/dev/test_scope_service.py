@@ -63,6 +63,7 @@ class FakeCatalog:
         kinds: tuple[EntityKind, ...],
         *,
         limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]:
         self.search_calls += 1
         return [

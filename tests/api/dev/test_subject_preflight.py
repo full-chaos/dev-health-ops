@@ -8,12 +8,19 @@ import pytest
 
 from dev_health_ops.api.dev.contracts import ToolID
 from dev_health_ops.api.dev.contracts_v2 import (
+    DevEntityRefV2,
     PublicOutcome,
     QuestionIntentID,
     ResolutionOutcome,
 )
+from dev_health_ops.api.dev.contracts_v2 import (
+    EntityKind as ContractEntityKind,
+)
 from dev_health_ops.api.dev.contracts_v2.plan import PLAN_REGISTRY
-from dev_health_ops.api.dev.contracts_v2.subject import UNRESOLVED_OUTCOMES
+from dev_health_ops.api.dev.contracts_v2.subject import (
+    UNRESOLVED_OUTCOMES,
+    DevResolutionCandidate,
+)
 from dev_health_ops.api.dev.orchestrator_states import TERMINAL_STATES
 from dev_health_ops.api.dev.preflight_outcomes import (
     PLAN_ID_BY_INTENT,
@@ -275,6 +282,93 @@ def test_each_outcome_projects_to_its_v1_error(
     assert error.code == expected_code
     assert error.retryable is expected_retryable
     assert error.request_id == "request_01"
+
+
+def _candidate(
+    display_label: str, entity_id: str = "project-acr"
+) -> DevResolutionCandidate:
+    return DevResolutionCandidate(
+        entity_ref=DevEntityRefV2(
+            entity_kind=ContractEntityKind.PROJECT,
+            entity_id=entity_id,
+            display_label=display_label,
+            repository_id=None,
+        ),
+        reason="Closest authorized match for the named subject.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_needs_clarification_v1_error_names_its_real_candidates() -> None:
+    """CHAOS-3388: the v1 wire must not discard the frame's own candidates.
+
+    Before this fix ``project_preflight_error`` always returned the fixed
+    "The requested scope is ambiguous." sentence for ``needs_clarification``,
+    whatever ``clarification_candidates`` the ledger actually authorized --
+    the client-visible half of the wrong-terminal defect: a run that found a
+    real close match still told the user nothing more than "ambiguous".
+    """
+
+    answer = build_preflight_answer(
+        outcome=PublicOutcome.NEEDS_CLARIFICATION,
+        intent_id=QuestionIntentID.ENTITY_STATUS,
+        versions=versions(),
+        run_id="run_01",
+        answer_id="answer_01",
+        conversation_id="conversation_01",
+        generated_at=fixed_now(),
+        clarification_key="not_found_close_matches",
+        clarification_candidates=(
+            _candidate("Dev Health Agent Context Runtime (Context Fabric)"),
+        ),
+    )
+    error = project_preflight_error(answer, request_id="request_01")
+
+    assert error.code == "scope_ambiguous"
+    assert "Dev Health Agent Context Runtime (Context Fabric)" in error.safe_message
+    # The base closest-matches sentence must still be present, not replaced.
+    assert "closest matches" in error.safe_message
+
+
+@pytest.mark.asyncio
+async def test_a_needs_clarification_v1_error_names_every_bounded_candidate() -> None:
+    answer = build_preflight_answer(
+        outcome=PublicOutcome.NEEDS_CLARIFICATION,
+        intent_id=QuestionIntentID.ENTITY_STATUS,
+        versions=versions(),
+        run_id="run_01",
+        answer_id="answer_01",
+        conversation_id="conversation_01",
+        generated_at=fixed_now(),
+        clarification_key="ambiguous",
+        clarification_candidates=(
+            _candidate("Atlas", entity_id="project-atlas-1"),
+            _candidate("Atlas Migration", entity_id="project-atlas-2"),
+        ),
+    )
+    error = project_preflight_error(answer, request_id="request_01")
+
+    assert "Atlas" in error.safe_message
+    assert "Atlas Migration" in error.safe_message
+
+
+def test_a_needs_clarification_v1_error_without_candidates_is_unchanged() -> None:
+    """No candidates (e.g. an uninterpretable question) -> the base sentence."""
+
+    answer = build_preflight_answer(
+        outcome=PublicOutcome.NEEDS_CLARIFICATION,
+        intent_id=QuestionIntentID.ENTITY_STATUS,
+        versions=versions(),
+        run_id="run_01",
+        answer_id="answer_01",
+        conversation_id="conversation_01",
+        generated_at=fixed_now(),
+        clarification_key="uninterpretable",
+    )
+    error = project_preflight_error(answer, request_id="request_01")
+
+    assert error.safe_message == answer.frame.direct_answer
+    assert "Candidates:" not in error.safe_message
 
 
 def test_a_no_answer_frame_carries_no_provenance_block_or_subject() -> None:

@@ -618,7 +618,17 @@ class SubjectPreflight:
                 ),
                 answer=None,
                 outcome=None,
-                allowed_tools=ALL_TOOLS,
+                # CHAOS-3421: a bare name already failed to resolve here --
+                # the model's own resolve_scope.v1 call could only ever
+                # repeat that exact failed lookup, and its raw
+                # forbidden_or_not_found outcome reaching the model is
+                # precisely the leak channel the committed-subject branch's
+                # own ALL_TOOLS - {RESOLVE_SCOPE} closes below (see that
+                # branch's comment). Withheld here for the identical reason:
+                # there is nothing left for the model to productively
+                # resolve, subject-bearing tools still execute against the
+                # organization scope just committed.
+                allowed_tools=ALL_TOOLS - {ToolID.RESOLVE_SCOPE},
                 blocking_mention_ids=blocking_ids,
                 legacy_guard_required=True,
                 unresolved_name_spans=frozenset(

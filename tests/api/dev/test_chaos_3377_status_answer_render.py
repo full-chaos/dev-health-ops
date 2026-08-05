@@ -984,3 +984,71 @@ def test_verdict_carries_the_disclosure_when_denominator_withheld() -> None:
         "the required-work completion total could not be fully verified"
         in summary.casefold()
     )
+
+
+# --- CHAOS-3409: distinct copy for a withheld (never a fabricated real)
+# zero denominator -- "0 of 0 required items are complete" must never
+# render identically whether required-work tracking was structurally
+# absent for this scope (CHAOS-3408: ORGANIZATION/TEAM) or the subject
+# genuinely has zero required items. ---
+
+
+def test_a_withheld_denominator_not_applicable_to_scope_gets_distinct_copy() -> None:
+    """CHAOS-3408's own non-applicability flavor: ``required_child_total``
+    is ``None`` and NOT because of a source truncation (no
+    ``assessment_source_limit_reached`` reason code) -- the distinct,
+    honest copy fires even with no other unknown/blocking reasons and no
+    caller-supplied ``denominator_withheld``, purely from ``actual``'s own
+    fields."""
+
+    actual = _actual(
+        state="indeterminate",
+        reason_codes=(),
+        required_child_total=None,
+        required_child_complete=None,
+    )
+    summary = render_verdict_summary(actual)
+
+    assert "no required items are recorded for this scope" in summary.casefold()
+    # Never the N-of-M numeric claim -- there is no real denominator to cite.
+    assert "required items are complete" not in summary.casefold()
+
+
+def test_a_withheld_denominator_from_truncation_does_not_get_the_scope_copy() -> None:
+    """The other flavor of ``required_child_total is None`` -- a genuine
+    source truncation -- must render its OWN existing disclosure, never
+    CHAOS-3409's "not applicable to this scope" copy (that would be a
+    false claim: real required items exist, they were merely not all
+    fetched)."""
+
+    actual = _actual(
+        state="indeterminate",
+        reason_codes=("assessment_source_limit_reached",),
+        required_child_total=None,
+        required_child_complete=None,
+    )
+    summary = render_verdict_summary(actual, denominator_withheld=True)
+
+    assert "no required items are recorded for this scope" not in summary.casefold()
+    assert (
+        "the required-work completion total could not be fully verified"
+        in summary.casefold()
+    )
+
+
+def test_a_real_zero_denominator_still_renders_the_real_n_of_m_claim() -> None:
+    """No regression: a genuinely-computed real zero (e.g. PROJECT scope, a
+    real query that found zero required children) must still render the
+    real "0 of 0" claim -- never CHAOS-3409's withheld-scope copy, which
+    would be dishonest about a real, meaningful zero."""
+
+    actual = _actual(
+        state="ready",
+        reason_codes=(),
+        required_child_total=0,
+        required_child_complete=0,
+    )
+    summary = render_verdict_summary(actual)
+
+    assert "0 of 0 required items are complete" in summary
+    assert "no required items are recorded for this scope" not in summary.casefold()

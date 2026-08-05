@@ -920,15 +920,46 @@ class DevOrchestrator:
                     token=leaked_token,
                     terminal_kind=terminal_kind,
                 ).inc()
-                state = RunState.FAILED
                 answer = None
-                error = DevError(
-                    schema_version="dev_error.v1",
-                    request_id=request.request_id,
-                    code="internal_error",
-                    safe_message="The request could not be completed.",
-                    retryable=False,
-                )
+                # CHAOS-3421: a leak on the ONE preflight branch that sets
+                # `legacy_guard_required` (subject_preflight's
+                # `unresolved_untyped` -> `proceeded_unresolved_bare_name`,
+                # an intentional, disclosed organization-wide fallback for a
+                # named subject the catalog could not confirm) is not a
+                # producer defect to hide behind a generic, opaque
+                # `internal_error` -- it is very often exactly the model
+                # echoing the raw `forbidden_or_not_found` outcome
+                # `resolve_scope.v1` returned for that same unresolved name
+                # (live incident). That run was always heading toward the
+                # legacy guard's own `resolve_scope_not_found` terminal
+                # (`_LEGACY_GUARD_TERMINALS`) -- reachable today only when
+                # the model's prose happens to NARRATE the unresolved name
+                # (`_legacy_named_entity_guard_reason`'s own text-similarity
+                # check), not when it leaks the raw outcome token instead.
+                # This closes that gap at the one shared choke-point every
+                # terminal passes through, rather than trying to anticipate
+                # every shape a leak on this branch could take.
+                if (
+                    preflight_result is not None
+                    and preflight_result.legacy_guard_required
+                ):
+                    state = RunState.INSUFFICIENT_EVIDENCE
+                    error = DevError(
+                        schema_version="dev_error.v1",
+                        request_id=request.request_id,
+                        code="scope_not_found",
+                        safe_message="The requested scope was not found.",
+                        retryable=False,
+                    )
+                else:
+                    state = RunState.FAILED
+                    error = DevError(
+                        schema_version="dev_error.v1",
+                        request_id=request.request_id,
+                        code="internal_error",
+                        safe_message="The request could not be completed.",
+                        retryable=False,
+                    )
             # CHAOS-3297 Codex review round 3 Finding 2: materialize and
             # validate the terminal error input before any record_*() write
             # is attempted -- not after answer/frame are already flushed on

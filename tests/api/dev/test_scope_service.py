@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, tzinfo
+from typing import Self
 
 import pytest
 
+from dev_health_ops.api.dev import scope_service as scope_service_module
 from dev_health_ops.api.dev.contracts import DevScope, DevTimeRange, DirectScope
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
@@ -15,6 +17,42 @@ from dev_health_ops.api.dev.scope_service import (
     ScopeSearchRequest,
     TimeRangeRequest,
 )
+
+
+class _ScriptedNow(datetime):
+    """A ``datetime`` subclass whose ``.now()`` pops from a scripted queue
+    instead of reading the real system clock.
+
+    CHAOS-3392 codex MEDIUM: ``ScopeResolutionService.resolve_contract``'s
+    "caller omitted ``resolved_at``" fallback is
+    ``resolved_at or datetime.now(timezone.utc)`` -- the REAL wall clock,
+    called fresh on every invocation. A test that wants to deterministically
+    prove two such "unpinned" calls collide (or don't) on the request-local
+    cache can't rely on real elapsed microseconds between two lines of test
+    code; monkeypatching ``scope_service.datetime`` to this subclass lets a
+    test script exactly which instant each ``datetime.now()`` call inside
+    the module returns while every OTHER ``datetime`` usage in that module
+    (``datetime.combine``, the ``datetime(...)`` constructor, etc.) keeps
+    working unchanged, since this class inherits the real implementation of
+    everything except ``now`` itself.
+    """
+
+    _queue: list[datetime] = []
+
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> Self:
+        value = cls._queue.pop(0)
+        result = value if tz is None else value.astimezone(tz)
+        return cls(
+            result.year,
+            result.month,
+            result.day,
+            result.hour,
+            result.minute,
+            result.second,
+            result.microsecond,
+            tzinfo=result.tzinfo,
+        )
 
 
 class FakeCatalog:
@@ -565,6 +603,131 @@ async def test_request_local_cache_is_partitioned_by_permission_and_watermark() 
     assert first == second == third
     assert catalog.exact_calls == 2
     assert catalog.watermark_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_resolve_contract_unpinned_repeated_calls_share_one_cache_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3392 codex MEDIUM regression (RED on commit 0e029a122):
+    production callers of ``resolve_contract`` never pass ``resolved_at``
+    -- it falls back to ``datetime.now(timezone.utc)`` INSIDE
+    ``resolve_contract`` itself, so two calls in the SAME request each got
+    their own fresh, microsecond-distinct instant even though neither
+    caller asked to pin anything. The fixed commit folded that raw instant
+    directly into ``resolve()``'s request-local cache key, so two such
+    "unpinned" calls never shared a cache entry -- defeating the whole
+    point of a request-local cache for the overwhelming majority
+    (unpinned) production callers. Scripted instants a few hundred
+    microseconds apart, same calendar day -- exactly what two real,
+    back-to-back ``datetime.now()`` calls in one request would produce.
+    """
+
+    repository = _entity(EntityKind.REPOSITORY, "repo-a", "full-chaos/dev-health")
+    catalog = FakeCatalog([repository])
+    service = ScopeResolutionService(catalog)
+    request = ScopeResolveRequest(
+        explicit_refs=(ScopeRef(EntityKind.REPOSITORY, repository.canonical_id),)
+    )
+    _ScriptedNow._queue = [
+        datetime(2026, 7, 28, 10, 0, 0, 111111, tzinfo=timezone.utc),
+        datetime(2026, 7, 28, 10, 0, 0, 999999, tzinfo=timezone.utc),
+    ]
+    monkeypatch.setattr(scope_service_module, "datetime", _ScriptedNow)
+
+    first = await service.resolve_contract("org-a", "perm-a", request)
+    second = await service.resolve_contract("org-a", "perm-a", request)
+
+    assert first.outcome is ScopeResolutionOutcome.EXACT
+    assert second.outcome is ScopeResolutionOutcome.EXACT
+    assert catalog.exact_calls == 1, (
+        "two unpinned calls in one request must share one cache entry, "
+        f"not each hit the catalog (exact_calls={catalog.exact_calls})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_contract_different_effective_days_do_not_collide(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cache-key fix must not COLLAPSE genuinely different preset
+    windows onto one entry -- two calls whose effective local day differs
+    (24h apart here) must each resolve, and cache, independently."""
+
+    repository = _entity(EntityKind.REPOSITORY, "repo-a", "full-chaos/dev-health")
+    catalog = FakeCatalog([repository])
+    service = ScopeResolutionService(catalog)
+    request = ScopeResolveRequest(
+        explicit_refs=(ScopeRef(EntityKind.REPOSITORY, repository.canonical_id),)
+    )
+    _ScriptedNow._queue = [
+        datetime(2026, 7, 28, 10, 0, tzinfo=timezone.utc),
+        datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc),
+    ]
+    monkeypatch.setattr(scope_service_module, "datetime", _ScriptedNow)
+
+    first = await service.resolve_contract("org-a", "perm-a", request)
+    second = await service.resolve_contract("org-a", "perm-a", request)
+
+    assert catalog.exact_calls == 2, (
+        "two calls landing on DIFFERENT effective days must not share a "
+        f"cache entry (exact_calls={catalog.exact_calls})"
+    )
+    assert first.resolved_scope is not None
+    assert second.resolved_scope is not None
+    assert (
+        first.resolved_scope.time_range.end != second.resolved_scope.time_range.end
+    ), "the two resolutions must carry genuinely different time windows"
+
+
+@pytest.mark.asyncio
+async def test_transient_catalog_failure_on_second_call_cannot_flip_a_cached_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3392 codex MEDIUM behavioral repro (RED on commit 0e029a122):
+    before the cache-key fix, two unpinned calls in one request never
+    shared a cache entry, so a TRANSIENT catalog failure on the SECOND
+    call re-ran full entity resolution (``exact()``, which only ever
+    fires on a cache MISS -- ``watermark()`` itself is intentionally
+    re-queried on every call regardless of caching, precisely so the
+    cache invalidates the instant the catalog's data changes; a
+    transient failure THERE can never be masked by any cache-key fix,
+    which is why this repro targets ``exact()`` instead) and flipped an
+    already-successfully-resolved, already-cacheable request from EXACT
+    to UNRESOLVED/``catalog_unavailable`` -- even though the first call,
+    microseconds earlier, had already proven the catalog reachable and
+    the resolution EXACT. A request-local cache exists precisely to make
+    this impossible: a cache HIT must never re-touch ``exact()`` at all.
+    """
+
+    repository = _entity(EntityKind.REPOSITORY, "repo-a", "full-chaos/dev-health")
+    catalog = FakeCatalog([repository])
+    service = ScopeResolutionService(catalog)
+    request = ScopeResolveRequest(
+        explicit_refs=(ScopeRef(EntityKind.REPOSITORY, repository.canonical_id),)
+    )
+    _ScriptedNow._queue = [
+        datetime(2026, 7, 28, 10, 0, 0, 111111, tzinfo=timezone.utc),
+        datetime(2026, 7, 28, 10, 0, 0, 999999, tzinfo=timezone.utc),
+    ]
+    monkeypatch.setattr(scope_service_module, "datetime", _ScriptedNow)
+
+    first = await service.resolve_contract("org-a", "perm-a", request)
+    assert first.outcome is ScopeResolutionOutcome.EXACT
+
+    catalog.fail_exact = True
+    second = await service.resolve_contract("org-a", "perm-a", request)
+
+    assert second.outcome is ScopeResolutionOutcome.EXACT, (
+        "a transient catalog failure on a second, cache-hit call must "
+        f"never surface -- got outcome={second.outcome!r} "
+        f"warnings={second.warnings!r}"
+    )
+    assert "catalog_unavailable" not in second.warnings
+    assert catalog.exact_calls == 1, (
+        "the second call must be a cache HIT and never re-invoke exact() "
+        f"at all (exact_calls={catalog.exact_calls})"
+    )
 
 
 @pytest.mark.asyncio

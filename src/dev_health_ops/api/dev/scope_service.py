@@ -472,13 +472,29 @@ class ScopeResolutionService:
         *,
         now: datetime | None = None,
     ) -> ScopeResolution:
-        """Resolve ``request`` as of ``now`` (default: the wall clock).
+        """Resolve ``request`` as of ``now`` (defaults to the real current
+        instant -- production callers never pass this explicitly).
 
-        ``now`` governs the *whole* resolution, not just part of it. A preset
-        window is anchored on the caller's instant, so a resolution that took
-        its window from the wall clock while its caller believed it had pinned
-        the instant was reproducible only for as long as the two agreed --
-        which, for a preset, means until the next local midnight.
+        ``now`` governs the *whole* resolution, not just part of it: a
+        preset window must be anchored on the SAME instant the caller
+        believes it pinned. CHAOS-3392: ``now`` used to be silently dropped
+        here -- every preset-relative ``time_range`` (the common case;
+        explicit ``start_date``/``end_date`` was unaffected) was always
+        computed against the REAL wall clock even when a caller resolved an
+        otherwise fully deterministic, watermark-cached result via
+        ``resolve_contract(resolved_at=...)`` (below), so a resolution that
+        took its window from the wall clock while its caller believed it
+        had pinned the instant was reproducible only until the next local
+        midnight. Threading ``now`` through closes that leak; the default
+        keeps today's production behavior (resolve against the actual
+        current moment) byte-for-byte unchanged.
+
+        (An independently-diagnosed fix for this same defect landed on
+        main as #1366 while this branch's own codex-hardened fix was in
+        flight; reconciled here onto this branch's semantics -- see the
+        cache-key comment below for why, and its ``resolved_at``-anchors-
+        the-window / two-instants-do-not-collide tests are kept alongside
+        this branch's own three.)
         """
         if not org_id or not permission_fingerprint:
             raise ValueError("Tenant and permission fingerprint are required")
@@ -494,6 +510,13 @@ class ScopeResolutionService:
                 key=lambda kind: kind.value,
             )
         )
+        # Resolved once, up front: the catalog-failure branch below, the
+        # cache key, and the eventual ``ScopeResolution.time_range`` all
+        # share this SAME value, so a transient catalog failure on a
+        # SECOND, microseconds-later call in the same request can never
+        # observe a different ``time_range`` than a first call that already
+        # succeeded and was cached (see the cache-key comment below).
+        time_range = self.resolve_time_range(request.time_range, now=now)
         try:
             watermark = await self._catalog.watermark(org_id, relevant_kinds)
         except Exception:
@@ -502,26 +525,51 @@ class ScopeResolutionService:
                 entities=(),
                 team_filters=(),
                 candidates=(),
-                time_range=self.resolve_time_range(request.time_range, now=now),
+                time_range=time_range,
                 warnings=("catalog_unavailable",),
             )
+        payload = _request_payload(request)
+        if request.time_range.start_date is None or request.time_range.end_date is None:
+            # Preset-relative window: ``now`` DOES affect the result, but
+            # the raw instant must never be the cache key material itself.
+            # CHAOS-3392 codex MEDIUM: keying on ``now.isoformat()`` (as
+            # main's independent #1366 fix for this same defect did too --
+            # reconciled here onto this branch's semantics, not main's) gave
+            # every call within one request its own microsecond-distinct
+            # key (``resolve_contract`` always resolves a concrete instant,
+            # even for callers who never pin one), which defeated the
+            # request-local cache entirely for the common, unpinned
+            # production path -- repeated calls in one request each re-hit
+            # the catalog instead of reusing the first result, and a
+            # transient catalog failure on that SECOND call could flip an
+            # already-resolved, already-cacheable request from exact to
+            # unresolved. Keyed instead by the EFFECTIVE resolved boundary
+            # (``time_range.utc_start``/``utc_end``): two calls landing on
+            # the same local day -- the only thing a preset window is
+            # actually sensitive to -- collapse onto the SAME cache entry,
+            # exactly like two calls with no ``now`` divergence at all did
+            # before CHAOS-3392 threaded ``now`` through in the first place.
+            payload = {
+                **payload,
+                "resolved_utc_start": time_range.utc_start.isoformat(),
+                "resolved_utc_end": time_range.utc_end.isoformat(),
+            }
+        # Absolute ``start_date``/``end_date`` ranges are left untouched:
+        # ``now`` cannot affect their result (``resolve_time_range`` never
+        # reads it in that branch), so the cache key stays byte-for-byte
+        # identical to pre-CHAOS-3392 -- no needless cache-busting for the
+        # case this ticket was never about.
         cache_key = self._cache_key(
             "resolve",
             org_id,
             permission_fingerprint,
-            _request_payload(request),
+            payload,
             watermark,
-            # A preset window is derived from the instant, so two resolutions
-            # of the same request at different instants are different results
-            # and must not share an entry. Production passes ``now=None`` and
-            # keys on the literal ``None``, exactly as before.
-            now.isoformat() if now is not None else None,
         )
         cached = self._cache.get(cache_key)
         if isinstance(cached, ScopeResolution):
             return cached
 
-        time_range = self.resolve_time_range(request.time_range, now=now)
         if not active_refs:
             result = ScopeResolution(
                 outcome=ScopeResolutionOutcome.UNRESOLVED,
@@ -980,10 +1028,14 @@ class ScopeResolutionService:
     ) -> DevScopeResolution:
         """Resolve ``resolve_scope.v1`` into the canonical CHAOS-3223 contract.
 
-        ``resolved_at`` is the instant the resolution is *made at*, so it also
-        anchors the resolved preset window -- it is not merely a label applied
-        to a window taken from a second, unrelated clock. Production callers
-        pass ``None`` and get the wall clock for both, unchanged.
+        ``resolved_at`` is the instant the resolution is *made at*, so it
+        also anchors the resolved preset window -- it is not merely a
+        label applied to a window taken from a second, unrelated clock.
+        Resolved early (was previously computed only for the OUTPUT
+        ``resolved_at`` field, at the very end of this method) so the SAME
+        instant also pins ``domain.time_range`` via ``self.resolve`` below
+        -- see that method's docstring. Production callers pass ``None``
+        and get the wall clock for both, unchanged.
         """
         resolved_at = resolved_at or datetime.now(timezone.utc)
         domain = await self.resolve(
@@ -1050,6 +1102,8 @@ class ScopeResolutionService:
             candidates=candidates,
             fallbacks=list(domain.fallbacks),
             warnings=warnings,
+            # Already resolved above (and threaded into ``self.resolve`` as
+            # ``now``) -- always non-None by this point.
             resolved_at=resolved_at,
         )
 
@@ -1315,8 +1369,19 @@ class ScopeResolutionService:
         permission_fingerprint: str,
         payload: dict[str, object],
         watermark: str,
-        resolved_as_of: str | None = None,
     ) -> str:
+        # CHAOS-3392 codex MEDIUM: a caller-pinned instant (``resolve``'s
+        # ``now``) must NOT be folded into this key as a raw timestamp --
+        # main's independent #1366 fix for this same defect did exactly
+        # that (a ``resolved_as_of`` parameter here, keyed on
+        # ``now.isoformat()``), reintroducing the round-1 flaw this
+        # branch's own codex review round refuted: ``resolve_contract``
+        # always resolves a concrete instant, even for callers who never
+        # pin one, so every "unpinned" production call got its own
+        # microsecond-distinct key and the request-local cache never hit.
+        # ``resolve``'s caller instead folds the EFFECTIVE resolved
+        # boundary into ``payload`` itself when it matters (preset-relative
+        # windows only) -- see that method's cache-key comment.
         raw = json.dumps(
             {
                 "operation": operation,
@@ -1325,7 +1390,6 @@ class ScopeResolutionService:
                 "input": payload,
                 "query_version": QUERY_VERSION,
                 "watermark": watermark,
-                "resolved_as_of": resolved_as_of,
             },
             sort_keys=True,
             separators=(",", ":"),

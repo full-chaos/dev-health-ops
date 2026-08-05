@@ -48,6 +48,8 @@ from .contracts import (
     DevToolResult,
     ToolID,
 )
+from .contracts_v2.health_rules import DevPortfolioProjectStatusV2
+from .contracts_v2.result import DevInvestigationResult
 from .status_change_service import (
     is_blocker_open,
     is_ci_not_passing,
@@ -74,6 +76,7 @@ __all__ = [
     "open_required_children",
     "outstanding_facts",
     "render_declared_project_summary",
+    "render_portfolio_summary",
     "render_verdict_summary",
     "status_snapshot_result",
     "translate_completion_state",
@@ -705,3 +708,158 @@ def build_deterministic_status_claims(
     # DevToolResult), so this bound is defensive rather than expected to
     # trim anything in practice.
     return claims[:100]
+
+
+#: Closed, total vocabulary for ``DimensionState`` display copy -- never the
+#: raw enum token (CHAOS-3377's own rule, applied here for CHAOS-3393's
+#: portfolio rollup).
+_DIMENSION_STATE_COPY: Mapping[str, str] = {
+    "healthy": "healthy",
+    "watch": "watch",
+    "at_risk": "at risk",
+    "critical": "critical",
+    "unknown": "unknown",
+    "not_applicable": "not applicable",
+}
+
+
+#: CHAOS-3393 codex MED-2. A portfolio project's ``display_label`` is
+#: provider/catalog-authored text (a project name) -- unlike every OTHER
+#: string this module ever interpolates into user-visible copy (all fixed,
+#: closed-vocabulary translations), it carries no guarantee against
+#: embedded control characters/newlines that could inject fake structure
+#: into a single narrative sentence, or an unbounded length. Mirrors
+#: ``preflight_outcomes._MAX_CANDIDATE_LABEL_CHARS`` (120) -- a person
+#: reads this sentence, not a data dump.
+_MAX_NARRATIVE_LABEL_CHARS = 120
+_UNNAMED_PROJECT_LABEL = "(unnamed project)"
+
+
+def _safe_narrative_label(raw: str) -> str:
+    """A bounded, single-line, inert rendering of one project's own
+    ``display_label`` for narrative (``direct_summary``) interpolation.
+
+    Every ASCII control character (newlines included -- CHAOS-3393 codex
+    MED-2: a label must never be able to inject a fake line break into
+    this renderer's single narrative sentence) collapses to a single
+    space, the result is truncated to :data:`_MAX_NARRATIVE_LABEL_CHARS`,
+    and an empty result after stripping falls back to a fixed, safe
+    placeholder rather than an empty/invisible list entry. Deliberately
+    does NOT scrub markup (``<script>``, ``**bold**``, ...) -- this is a
+    plain-text API response with no server-side HTML/Markdown rendering
+    downstream, so there is no injection surface for it; the load-bearing
+    guarantee here is single-line-ness and boundedness.
+
+    A denylisted-token collision (a project genuinely named e.g.
+    ``"not_ready"``) is deliberately NOT handled here: this function
+    controls SHAPE, not vocabulary membership. That case is instead
+    covered by attesting portfolio labels at the ``orchestrator.finish()``
+    leak-scan seam (the same trust tier ``no_match_terminal.
+    attested_strings`` already grants evidence/candidate display labels),
+    so a legitimate catalog-confirmed name is never fail-closed over a
+    coincidental token match.
+    """
+
+    inert = "".join(" " if ord(ch) < 0x20 else ch for ch in raw)
+    inert = " ".join(inert.split())
+    if not inert:
+        return _UNNAMED_PROJECT_LABEL
+    return inert[:_MAX_NARRATIVE_LABEL_CHARS]
+
+
+def render_portfolio_summary(
+    investigation_result: DevInvestigationResult | None,
+    *,
+    validity_scope: DevScope,
+    subject_set_warnings: Sequence[str] = (),
+) -> tuple[AnswerStatus, str, list[DevClaim]] | None:
+    """The §10 deterministic (status, direct_summary, claims) for a
+    ``status.portfolio.v1`` investigation, or ``None`` if this run carries
+    no portfolio content.
+
+    Mirrors ``_deterministic_status_render``'s shape (CHAOS-3377), but
+    sourced from the plan executor's own ``investigation_result`` rather
+    than a model-chosen ``status_snapshot.v1`` tool call: a portfolio batch
+    is evaluated by the plan executor directly (``PortfolioStatusService``,
+    CHAOS-3393), never through the model's own tool loop, so there is no
+    ``DevToolResult.actual_completion`` to bind this to. Rendered directly
+    from ``DevPortfolioProjectStatusV2`` -- never model-narrated -- per
+    project, worst-state-first (the content's own canonical order), plus
+    an org rollup and a disclosed failure list. Never fabricates a status
+    for a failed project and never reports a hard refusal over a partial
+    batch (CHAOS-3393 semantics) -- ``AnswerStatus.DEGRADED``, never
+    ``REFUSED``, whenever any project could not be evaluated.
+
+    Claims are ``INFERRED`` rather than ``OBSERVED``: a portfolio row is a
+    derived rollup with no per-row evidence handle to cite (mirrors
+    ``relationship_matrix.EVIDENCE_IDENTITY_TABLE``'s own
+    ``accepted_risk`` posture for this slot) -- the same "derived, not
+    primary" distinction the render_verdict_summary claim draws when its
+    own evidence does not survive canonicalization.
+
+    ``subject_set_warnings`` (CHAOS-3393): the committed ``DevSubjectSet``'s
+    own disclosure strings -- an omitted (unresolved/ambiguous) named
+    mention, or an ORGANIZATION_WIDE enumeration truncated at the batch
+    cap. Folded into ``direct_summary`` here because ``DevSubjectSet`` is
+    persisted separately from the v1 answer/frame this renders into
+    (``wrap_legacy_answer_as_frame``'s ``limitations`` reflect only
+    ``answer.warnings``, never the subject set's own) -- without this, a
+    disclosed-at-commit-time truncation would never actually reach the
+    user-visible answer, silently reducing "disclosed" to "recorded".
+    """
+
+    if investigation_result is None:
+        return None
+    rows: list[DevPortfolioProjectStatusV2] = []
+    for observation in investigation_result.observations:
+        if observation.content is None:
+            continue
+        rows.extend(observation.content.portfolio_project_statuses)
+    if not rows:
+        return None
+
+    evaluated = [row for row in rows if row.evaluated]
+    failed = [row for row in rows if not row.evaluated]
+    parts = [f"Portfolio status: {len(evaluated)} of {len(rows)} projects evaluated."]
+    if evaluated:
+        counts: dict[str, int] = {}
+        for row in evaluated:
+            counts[row.worst_state.value] = counts.get(row.worst_state.value, 0) + 1
+        state_parts = [
+            f"{count} {_DIMENSION_STATE_COPY[state]}"
+            for state, count in sorted(counts.items())
+        ]
+        parts.append("Worst state by project: " + ", ".join(state_parts) + ".")
+    if failed:
+        # Bounded to the same _MAX_NAMED_CANDIDATES-style discipline as
+        # preflight_outcomes._name_candidates -- a person reads this
+        # sentence, not a data dump. Each label is rendered through
+        # _safe_narrative_label (CHAOS-3393 codex MED-2) -- never the raw
+        # provider-authored display_label.
+        failed_labels = ", ".join(
+            _safe_narrative_label(row.display_label) for row in failed[:5]
+        )
+        suffix = "" if len(failed) <= 5 else f" (+{len(failed) - 5} more)"
+        parts.append(
+            f"{len(failed)} project(s) could not be evaluated: {failed_labels}{suffix}."
+        )
+    parts.extend(subject_set_warnings)
+    direct_summary = " ".join(parts)
+
+    status = AnswerStatus.DEGRADED if failed else AnswerStatus.COMPLETE
+    # Deliberately NO per-project v1 DevClaim here (Codex-anticipated
+    # finding: a real project's own display_label is provider-authored
+    # free text with no guarantee against digits -- "Q3 Roadmap", "API v2"
+    # -- and answer_validator's numeric-claim rule requires a metric/
+    # evidence reference for ANY digit in claim.text, which an INFERRED,
+    # per-row rollup claim never has; the F10 `uncertain` disclosure
+    # satisfies the CONTRACT layer's grounding rule but not this ANSWER-
+    # layer one, so a claim built from an arbitrary display_label is not
+    # reliably constructible here). The real, structured per-project
+    # disclosure already exists and survives independently of DevClaim: it
+    # rides ``DevAnswerFrame.portfolio_project_statuses``, populated
+    # directly from ``investigation_result`` by ``terminal_frames.
+    # _findings_from_investigation_result`` (never through ``answer.
+    # claims``) -- so no detail is lost, only redundant free-text
+    # restatement of it as an ungrounded claim.
+    return status, direct_summary, []

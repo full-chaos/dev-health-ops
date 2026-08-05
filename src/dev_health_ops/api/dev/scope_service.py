@@ -55,6 +55,30 @@ class EntityKind(StrEnum):
     TEAM = "team"
 
 
+def subject_set_fingerprint(kind: EntityKind, canonical_ids: Sequence[str]) -> str:
+    """Mint-derived, opaque set fingerprint (structural pattern 5).
+
+    ``"set1_" + sha256(kind, sorted(canonical_ids)).hexdigest()[:40]``.
+    Hex cannot spell a subject name, and the value is stable across runs
+    for the same (kind, member set), which is what makes it usable as a
+    batch cache key.
+
+    CHAOS-3393 codex HIGH-1: a public, module-level function (not a
+    ``ScopeResolutionService`` method) specifically so
+    ``investigation_plans.executor`` can recompute it from the SAME
+    canonical formula ``committed_subject_set_for`` used to mint the
+    caller's authorization receipt (``DevSubjectSet.fingerprint`` /
+    ``DevInvestigationResult.subject_set_fingerprint``), and cross-check a
+    step's actual batch against it before executing -- imported by
+    reference, never a second, divergent copy of the hash formula.
+    """
+
+    digest = hashlib.sha256(
+        "\0".join((kind.value, *sorted(canonical_ids))).encode()
+    ).hexdigest()[:40]
+    return f"set1_{digest}"
+
+
 #: Kinds with a real v1 ``DevScope.direct_scope`` representation. CHAOS-3301
 #: adds ``TEAM`` here: a client (or the subject preflight) can now commit and
 #: re-validate a team-direct ``DevScope`` through ``resolve_contract`` /
@@ -339,6 +363,17 @@ class AuthorizedEntityCatalog(Protocol):
         The total must reflect every repository authorized for ``org_id``,
         not just the returned page, so callers can detect when the org
         exceeds the public ``authorized_repository_ids`` contract cap.
+        """
+        ...
+
+    async def organization_project_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """CHAOS-3393: up to ``limit`` authorized projects (labeled,
+        deterministically ordered by display label then id), and the true
+        total authorized for ``org_id`` -- so a caller enumerating an
+        ORGANIZATION_WIDE portfolio can disclose truncation rather than
+        silently sampling.
         """
         ...
 
@@ -903,21 +938,6 @@ class ScopeResolutionService:
             resolved_at=resolved_at,
         )
 
-    @staticmethod
-    def _subject_set_fingerprint(kind: EntityKind, canonical_ids: Sequence[str]) -> str:
-        """Mint-derived, opaque set fingerprint (structural pattern 5).
-
-        ``"set1_" + sha256(kind, sorted(canonical_ids)).hexdigest()[:40]``.
-        Hex cannot spell a subject name, and the value is stable across runs
-        for the same (kind, member set), which is what makes it usable as a
-        batch cache key.
-        """
-
-        digest = hashlib.sha256(
-            "\0".join((kind.value, *sorted(canonical_ids))).encode()
-        ).hexdigest()[:40]
-        return f"set1_{digest}"
-
     def committed_subject_set_for(
         self,
         entities: Sequence[AuthorizedEntity],
@@ -966,7 +986,7 @@ class ScopeResolutionService:
             ambiguous_mention_ids=ambiguous_mention_ids,
             cohort_complete=omitted == 0,
             warnings=warnings,
-            fingerprint=self._subject_set_fingerprint(
+            fingerprint=subject_set_fingerprint(
                 kind, [entity.canonical_id for entity in entities]
             ),
         )
@@ -1216,6 +1236,64 @@ class ScopeResolutionService:
                 ],
             )
         return sorted(repo_ids), outcome, resolved, warnings
+
+    async def organization_committed_projects(
+        self,
+        org_id: str,
+        permission_fingerprint: str,
+        *,
+        limit: int,
+    ) -> tuple[list[AuthorizedEntity], int, bool]:
+        """CHAOS-3393: bounded, deterministic project enumeration for an
+        ORGANIZATION_WIDE ``status.portfolio.v1`` run (no named subjects).
+
+        Unlike :meth:`_organization_scope_repositories`, which DROPS the
+        whole set once ``total`` exceeds its cap (an authorized-repository
+        list is either complete or entirely re-derived native-side, never
+        partial), a portfolio batch is legitimate as a bounded, DISCLOSED
+        subset of a larger organization -- ``PortfolioStatusService`` itself
+        already caps at ``MAX_PORTFOLIO_PROJECTS`` and expects the caller
+        to say so, not omit the whole answer. ``limit`` is therefore always
+        honored as a page bound, never a completeness gate; the true
+        ``total`` is returned alongside so the caller can disclose
+        truncation. Watermark-cached exactly like the repository path
+        above.
+
+        CHAOS-3393 codex MED-3: the third element, ``catalog_available``,
+        distinguishes a genuine catalog OUTAGE from an authoritative,
+        confirmed-zero enumeration -- both used to collapse to the
+        identical ``([], 0)`` shape, and the caller
+        (``subject_preflight._organization_wide_portfolio_result``) could
+        not tell "the organization truly has no authorized projects" from
+        "the catalog could not be queried at all", so it silently widened
+        BOTH into an ordinary organization-wide PROCEED with unrestricted
+        ``ALL_TOOLS`` access -- exactly the wrong failure mode for an
+        outage. Only the ``except`` branch below returns ``False``; a
+        real, successful zero-row catalog read (including a cache hit,
+        which by definition came from a prior successful read) returns
+        ``True``.
+        """
+
+        try:
+            watermark = await self._catalog.watermark(org_id, (EntityKind.PROJECT,))
+            cache_key = self._cache_key(
+                "organization_portfolio_projects",
+                org_id,
+                permission_fingerprint,
+                {"limit": limit},
+                watermark,
+            )
+            cached = self._cache.get(cache_key)
+            if isinstance(cached, tuple) and len(cached) == 2:
+                entities, total = cached
+                return entities, total, True
+            entities, total = await self._catalog.organization_project_entities(
+                org_id, limit=limit
+            )
+            self._cache.put(cache_key, (entities, total))
+            return entities, total, True
+        except Exception:
+            return [], 0, False
 
     def _requested_scope(
         self,

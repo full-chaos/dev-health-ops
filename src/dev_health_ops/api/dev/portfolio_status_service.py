@@ -15,7 +15,9 @@ every project's own findings stay independent; only the *ordering* and
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import asyncio
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -26,9 +28,11 @@ from .project_health_service import ProjectHealthService
 
 __all__ = [
     "MAX_PORTFOLIO_PROJECTS",
+    "PortfolioProjectFailure",
     "PortfolioProjectScope",
     "PortfolioStatusResult",
     "PortfolioStatusService",
+    "worst_project_state",
 ]
 
 #: Mirrors ``DevSubjectSet``'s own bound (``contracts_v2.subject``:
@@ -36,6 +40,17 @@ __all__ = [
 #: a portfolio batch is exactly a subject set's worth of projects, never
 #: unbounded.
 MAX_PORTFOLIO_PROJECTS = 25
+
+#: CHAOS-3393 fallback per-project evaluation timeout when a caller does not
+#: pass its own (every real caller does -- see
+#: ``investigation_plans.wave_3_1_plans.PORTFOLIO_PROJECT_TIMEOUT_CEILING_
+#: SECONDS`` / ``PORTFOLIO_BATCH_DEADLINE_SECONDS``, which bound the plan's
+#: own 120s step budget across the batch via a monotonic deadline -- see
+#: ``evaluate_portfolio``'s own ``batch_deadline_seconds`` docstring, CHAOS-
+#: 3393 codex MED-4). Kept local and finite rather than unbounded so a
+#: caller that forgets to pass one still cannot let a single hung project
+#: stall the whole batch indefinitely.
+DEFAULT_PROJECT_TIMEOUT_SECONDS = 15.0
 
 #: Worst-to-best ordering for deterministic portfolio ranking. Lower sorts
 #: first (worst-first), matching "prioritized findings"/"ordered by
@@ -114,7 +129,7 @@ class PortfolioStatusResult:
     evaluated_at: datetime
 
 
-def _worst_state(result: HealthProfileResult) -> DimensionState:
+def worst_project_state(result: HealthProfileResult) -> DimensionState:
     """Launch-eligible findings only -- see ``PortfolioStatusResult``'s docstring."""
 
     if not result.launch_findings:
@@ -126,7 +141,7 @@ def _worst_state(result: HealthProfileResult) -> DimensionState:
 
 
 def _sort_key(result: HealthProfileResult) -> tuple[int, str]:
-    return (_DIMENSION_STATE_SEVERITY[_worst_state(result)], result.subject_id)
+    return (_DIMENSION_STATE_SEVERITY[worst_project_state(result)], result.subject_id)
 
 
 class PortfolioStatusService:
@@ -145,6 +160,9 @@ class PortfolioStatusService:
         unresolved_mention_ids: Sequence[str] = (),
         ambiguous_mention_ids: Sequence[str] = (),
         warnings: Sequence[str] = (),
+        per_project_timeout_seconds: float | None = None,
+        batch_deadline_seconds: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> PortfolioStatusResult:
         if not projects:
             raise ValueError("evaluate_portfolio requires at least one project")
@@ -169,16 +187,74 @@ class PortfolioStatusService:
         # execution costs determinism nothing and removes the concurrency
         # hazard outright, rather than introducing a second, parallel
         # per-task-session lifecycle this service does not own.
+        # CHAOS-3393: per-project timeout ceiling, so one slow/hung project
+        # cannot consume the whole batch's share of the step's own budget
+        # ceiling (``per_step_timeout_seconds`` on ``status.portfolio.v1``)
+        # -- isolated as a PortfolioProjectFailure("timeout"), exactly like
+        # any other per-project failure, never a whole-batch failure.
+        #
+        # CHAOS-3393 codex MED-4: a FIXED per-project slice (the original
+        # ``min(120/N, 15)`` division, computed once, up front) has ZERO
+        # margin against the step's own outer ``per_step_timeout_seconds``
+        # ceiling -- at N=25 each slice is exactly 4.8s, so any real
+        # per-project latency at all guarantees the whole batch is
+        # cancelled from OUTSIDE by the executor (a total, undisclosed
+        # "did not complete" failure -- see HIGH-2) rather than returning
+        # a partial, disclosed result. ``batch_deadline_seconds`` (when the
+        # caller passes one -- see ``investigation_plans.wave_3_1_plans``,
+        # which reserves overhead below the step's own ceiling) makes this
+        # a MONOTONIC budget instead: each project's own slice is derived
+        # from the time ACTUALLY REMAINING against that deadline, capped at
+        # the per-project ceiling, and the moment the deadline has already
+        # elapsed, every remaining unstarted project converts to a bounded
+        # timeout row immediately -- never even attempted -- so the batch
+        # as a whole always returns comfortably inside the outer ceiling.
+        # ``clock`` defaults to the real wall clock; tests inject a
+        # deterministic fake so this can be proven without ever sleeping.
+        ceiling_seconds = (
+            per_project_timeout_seconds
+            if per_project_timeout_seconds is not None
+            else DEFAULT_PROJECT_TIMEOUT_SECONDS
+        )
+        deadline = (
+            clock() + batch_deadline_seconds
+            if batch_deadline_seconds is not None
+            else None
+        )
         results: list[HealthProfileResult] = []
         failures: list[PortfolioProjectFailure] = []
         for item in projects:
+            if deadline is not None:
+                remaining = deadline - clock()
+                if remaining <= 0:
+                    failures.append(
+                        PortfolioProjectFailure(
+                            project_id=item.project_id, error="timeout"
+                        )
+                    )
+                    continue
+                slice_seconds = min(ceiling_seconds, remaining)
+            else:
+                slice_seconds = ceiling_seconds
             try:
-                result = await self._project_health_service.evaluate_project(
-                    org_id=org_id,
-                    permission_fingerprint=permission_fingerprint,
-                    scope=item.scope,
-                    now=now,
+                result = await asyncio.wait_for(
+                    self._project_health_service.evaluate_project(
+                        org_id=org_id,
+                        permission_fingerprint=permission_fingerprint,
+                        scope=item.scope,
+                        now=now,
+                    ),
+                    timeout=slice_seconds,
                 )
+            except (TimeoutError, asyncio.TimeoutError):
+                # A bare, fixed literal -- never str(exc) -- so a caller
+                # putting this on the wire (wave_3_1_plans._bounded_
+                # portfolio_failure_reason) never has to guess whether a
+                # timeout's own repr happens to carry disclosable detail.
+                failures.append(
+                    PortfolioProjectFailure(project_id=item.project_id, error="timeout")
+                )
+                continue
             except Exception as exc:  # noqa: BLE001 - isolate, never crash the batch
                 failures.append(
                     PortfolioProjectFailure(project_id=item.project_id, error=repr(exc))
@@ -189,7 +265,7 @@ class PortfolioStatusService:
         ordered = tuple(sorted(results, key=_sort_key))
         counts: dict[DimensionState, int] = {state: 0 for state in DimensionState}
         for result in ordered:
-            counts[_worst_state(result)] += 1
+            counts[worst_project_state(result)] += 1
 
         return PortfolioStatusResult(
             projects=ordered,

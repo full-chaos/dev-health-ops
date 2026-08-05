@@ -51,7 +51,7 @@ from .deficiency import (
     finding_sort_key,
 )
 from .embedded import DevCoverageV2, DevEvidenceRefV2, DevMetricRefV2
-from .health_rules import HealthRuleFinding
+from .health_rules import DevPortfolioProjectStatusV2, HealthRuleFinding
 from .plan import PlanRegistryID
 from .result import (
     HEALTH_FINDING_SEVERITY_RANK,
@@ -260,6 +260,15 @@ class DevAnswerFrame(ContractModelV2):
     deficiency_category_statuses: tuple[DeficiencyCategoryStatus, ...] = Field(
         default_factory=tuple, max_length=8
     )
+    #: CHAOS-3393: ``status.portfolio.v1``'s per-project batch rows, embedded
+    #: directly -- mirrors ``health_findings``/``deficiency_findings`` above
+    #: exactly, including the worst-state-first-then-``project_id`` order
+    #: (``validate_frame_semantics`` below) and an independent truncation
+    #: flag rather than a bare capped tuple.
+    portfolio_project_statuses: tuple[DevPortfolioProjectStatusV2, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+    portfolio_project_statuses_truncated: bool = False
     conflicts: tuple[DevFrameConflict, ...] = Field(
         default_factory=tuple, max_length=20
     )
@@ -313,6 +322,17 @@ class DevAnswerFrame(ContractModelV2):
             raise ValueError(
                 "deficiency_findings must be ordered per deficiency.finding_sort_key "
                 "(severity, category, finding_id)"
+            )
+        # CHAOS-3393: same canonical-order requirement as health_findings
+        # above, reusing the exact same imported-by-reference table.
+        portfolio_keys = [
+            (HEALTH_FINDING_SEVERITY_RANK[status.worst_state], status.project_id)
+            for status in self.portfolio_project_statuses
+        ]
+        if portfolio_keys != sorted(portfolio_keys):
+            raise ValueError(
+                "portfolio_project_statuses must be ordered worst-state-first, "
+                "then project_id"
             )
         if self.deficiency_category_statuses:
             assert_full_category_coverage(self.deficiency_category_statuses)

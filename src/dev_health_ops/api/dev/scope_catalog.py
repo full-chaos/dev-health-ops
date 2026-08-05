@@ -56,6 +56,24 @@ _ORGANIZATION_REPOSITORY_IDS_SQL = """
     LIMIT {limit:UInt32}
 """
 
+#: CHAOS-3393: bounded, deterministic, LABELED project enumeration for an
+#: ORGANIZATION_WIDE ``status.portfolio.v1`` run (no named subjects) --
+#: mirrors ``_ORGANIZATION_REPOSITORY_IDS_SQL``'s one-query "page + true
+#: total via count() OVER ()" shape (an atomic snapshot, not two racing
+#: queries), but returns ``(canonical_id, label)`` pairs directly rather
+#: than bare ids, like ``_ALIAS_ROSTER_SQL[EntityKind.PROJECT]`` -- a
+#: portfolio row needs a real display label, not a second lookup. Ordered
+#: by lowercased name then id, matching the alias roster's own
+#: deterministic order (never insertion/watermark order, which would make
+#: the "first N" truncation pick change between otherwise-identical calls).
+_ORGANIZATION_PROJECT_ENTITIES_SQL = """
+    SELECT id AS canonical_id, name AS label, count() OVER () AS total_authorized
+    FROM projects FINAL
+    WHERE org_id = {org_id:String} AND is_active = 1
+    ORDER BY lowerUTF8(name), canonical_id
+    LIMIT {limit:UInt32}
+"""
+
 
 def _entity_sort_key(entity: AuthorizedEntity) -> tuple[str, str, str]:
     return (entity.label.casefold(), entity.kind.value, entity.canonical_id)
@@ -234,6 +252,34 @@ class ClickHouseAuthorizedEntityCatalog:
         )
         total = int(rows[0]["total_authorized"])
         return ids, total
+
+    async def organization_project_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """CHAOS-3393: up to ``limit`` authorized projects (labeled,
+        deterministically ordered), and the true total -- see
+        ``_ORGANIZATION_PROJECT_ENTITIES_SQL`` for the one-query
+        page+total snapshot rationale.
+        """
+
+        rows = await query_dicts(
+            self._client,
+            _ORGANIZATION_PROJECT_ENTITIES_SQL,
+            {"org_id": org_id, "limit": limit},
+        )
+        if not rows:
+            return [], 0
+        entities = [
+            AuthorizedEntity(
+                kind=EntityKind.PROJECT,
+                canonical_id=str(row["canonical_id"]),
+                label=str(row["label"]),
+            )
+            for row in rows
+            if row.get("canonical_id")
+        ]
+        total = int(rows[0]["total_authorized"])
+        return entities, total
 
     async def _with_repository_display_names(
         self, org_id: str, entities: list[AuthorizedEntity]

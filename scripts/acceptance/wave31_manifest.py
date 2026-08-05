@@ -1081,11 +1081,13 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
     claimed live reachability, only that the service's own evaluation logic
     is correct, and that claim is untouched by a bug in a different layer
     (the orchestrator's persistence write path) these unit tests never
-    exercise. PORTFOLIO_STATUS stays deliberately, permanently unwired this
-    wave (wave_3_1_plans.py's own module docstring: a real StepContext
-    single-DevScope limitation, tracked on the CHAOS-3297 Linear issue) --
-    its row stays honestly blocked, not force-fit to a citation that does
-    not actually prove it.
+    exercise. CHAOS-3393 closes PORTFOLIO_STATUS's own gap additively
+    (``StepContext.subject_set_scopes``, wave_3_1_plans.py's updated module
+    docstring) -- its row now flips to ``proven_unit`` too, backed by real
+    orchestrator-level tests (``test_chaos_3393_portfolio_orchestrator.py``)
+    that exercise the preflight-commit -> StepContext.subject_set_scopes ->
+    PortfolioStatusService.evaluate_portfolio -> frame path end to end,
+    including the partial-failure and org-wide-enumeration cases.
     """
 
     return (
@@ -1112,25 +1114,27 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
             id="matrix.organization-portfolio-status",
             category="blocking_matrix",
             description="Organization portfolio status.",
-            status="blocked",
-            blocked_reason=(
-                "PORTFOLIO_STATUS is deliberately, not accidentally, "
-                "unwired this wave -- wave_3_1_plans.py's own module "
-                "docstring: PlanExecutor's StepContext carries exactly one "
-                "DevScope, but PortfolioStatusService.evaluate_portfolio "
-                "needs several project scopes at once, a real gap that "
-                "needs a StepContext-widening decision before this can be "
-                "wired (tracked on the CHAOS-3297 Linear issue). The "
-                "closest existing test, "
-                "test_chaos_3303_portfolio_status_service.py::"
-                "test_evaluate_portfolio_all_provisional_registry_reports_no_elevated_state, "
-                "is service-layer only and does not exercise the plan/"
-                "orchestrator path this row's claim needs -- not cited as "
-                "proof it would be overclaiming. The GAP itself being "
-                "handled honestly (loud, non-terminal fallback) is a "
-                "separate, already-proven claim -- see "
-                "gate.plan-registry-gap-is-loud and its e2e-live-validated "
-                "sibling."
+            status="proven_unit",
+            evidence=(
+                "tests/api/dev/test_chaos_3393_portfolio_orchestrator.py",
+                "tests/api/dev/test_chaos_3393_portfolio_preflight.py",
+            ),
+            content_markers=(
+                "test_named_project_cohort_batches_both_projects_through_"
+                "the_portfolio_step",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3393_portfolio_orchestrator.py::"
+                "test_named_project_cohort_batches_both_projects_through_"
+                "the_portfolio_step",
+                "tests/api/dev/test_chaos_3393_portfolio_orchestrator.py::"
+                "test_partial_failure_is_disclosed_never_fabricated_or_refused",
+                "tests/api/dev/test_chaos_3393_portfolio_preflight.py::"
+                "test_organization_wide_portfolio_commits_a_bounded_project_set",
+                "tests/api/dev/test_chaos_3393_portfolio_preflight.py::"
+                "test_organization_wide_portfolio_with_no_projects_falls_back_cleanly",
+                "tests/api/dev/test_chaos_3393_portfolio_preflight.py::"
+                "test_organization_wide_portfolio_discloses_truncation_past_the_cap",
             ),
         ),
         ManifestItem(

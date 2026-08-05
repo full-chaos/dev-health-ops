@@ -118,6 +118,7 @@ from .native_team_workload import ClickHouseTeamWorkloadSource
 from .operational_deficiency_service import OperationalDeficiencyService
 from .orchestrator import DevRunLimits
 from .org_policy import load_ask_dev_org_policy
+from .portfolio_status_service import PortfolioStatusService
 from .project_health_service import ProjectHealthService
 from .prompts import LEGACY_PROMPT_VERSION, PROMPT_VERSION
 from .question_interpreter import QuestionInterpreter
@@ -2395,7 +2396,7 @@ async def _assemble_production_runtime(
             data_health_service=data_health_service,
             evidence_signer=evidence_signer,
         )
-        # CHAOS-3297 stack #3: every CHAOS-3303/3304/3305 service is
+        # CHAOS-3297 stack #3: every CHAOS-3303/3304/3305/3393 service is
         # constructed over the SAME PlanExecutorRuntime instance the six
         # core plans' steps use -- never a second, parallel query path.
         # TeamHealthService/TeamWorkloadService/OperationalDeficiencyService
@@ -2403,6 +2404,7 @@ async def _assemble_production_runtime(
         # team_repository_ids lookup shares its (org_id, team_id, as_of)
         # cache with the runtime's own calls (see that instance's own
         # construction comment above).
+        project_health_service = ProjectHealthService(plan_executor_runtime)
         plan_executor = PlanExecutor(
             # CHAOS-3296 round 5 (structural inversion, 2026-08-02): passing
             # the exact ``EvidenceReferenceSigner`` every builtin step's
@@ -2415,11 +2417,12 @@ async def _assemble_production_runtime(
             #
             # build_registry_with_wave_3_1 registers the six core plans'
             # steps PLUS health.project.v1/health.team.v1/
-            # balance.team_workload.v1/deficiency.operational.v1's, all
-            # against ONE shared registry, validated together.
+            # balance.team_workload.v1/deficiency.operational.v1/
+            # status.portfolio.v1's, all against ONE shared registry,
+            # validated together.
             registry=build_registry_with_wave_3_1(
                 plan_executor_runtime,
-                project_health=ProjectHealthService(plan_executor_runtime),
+                project_health=project_health_service,
                 team_health=TeamHealthService(
                     plan_executor_runtime, status_change_source
                 ),
@@ -2429,6 +2432,10 @@ async def _assemble_production_runtime(
                 operational_deficiency=OperationalDeficiencyService(
                     plan_executor_runtime, status_change_source, team_workload_source
                 ),
+                # CHAOS-3393: PortfolioStatusService batches over the SAME
+                # ProjectHealthService instance the health.project.v1 step
+                # above uses -- never a second, parallel query path.
+                portfolio_status=PortfolioStatusService(project_health_service),
             ),
             evidence_signer=evidence_signer,
         )

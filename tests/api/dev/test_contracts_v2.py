@@ -1723,6 +1723,10 @@ _NON_HANDLE_IDENTIFIER_REASONS: dict[str, str] = {
     "DeficiencyFinding.subject_id": "provider entity key",
     "OperationalDeficiencyInventory.subject_id": "provider entity key",
     "DeficiencyFinding.evidence_ref_ids": "intra-document key",
+    # CHAOS-3393 status.portfolio.v1 batch rows (contracts_v2.health_rules)
+    # -- same category as HealthRuleFinding.subject_id above: names a real
+    # project entity.
+    "DevPortfolioProjectStatusV2.project_id": "provider entity key",
 }
 
 
@@ -2052,6 +2056,17 @@ def _frame_absent_field_samples() -> dict[str, object]:
             "evidence_ref_ids": [],
             "relationship_path_ids": [],
             "confidence": 1.0,
+        }
+    ]
+    samples["portfolio_project_statuses"] = [
+        {
+            "schema_version": "dev_portfolio_project_status.v1",
+            "project_id": "project-01",
+            "display_label": "Restricted Project",
+            "worst_state": "unknown",
+            "finding_count": 0,
+            "evaluated": True,
+            "failure_reason": None,
         }
     ]
     return samples

@@ -181,6 +181,22 @@ class SeededCatalog:
         del org_id, limit
         return [], 0
 
+    async def organization_project_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """CHAOS-3393: mirrors ``ClickHouseAuthorizedEntityCatalog``'s own
+        page+true-total shape over the seeded, org-scoped entities."""
+
+        if self.fail_search:
+            raise RuntimeError("catalog unavailable")
+        matched = [
+            entity
+            for owner, entity in self.entities
+            if owner == org_id and entity.kind is EntityKind.PROJECT
+        ]
+        matched.sort(key=_label_sort_key)
+        return matched[:limit], len(matched)
+
 
 def sequential_ids() -> Callable[[], str]:
     """Deterministic, canonical dashed lowercase UUIDs (CHAOS-3294 grammar)."""

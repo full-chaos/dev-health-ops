@@ -2529,12 +2529,12 @@
       "notes": "grep-evading form; POST /integrations/{integration_id}/backfill"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/sync.py:2385",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/sync.py:2432",
       "surface": "getattr(dispatch_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2385
+        "line": 2432
       },
       "queue_or_cadence": "sync",
       "dispatches": "dispatch_sync_run",
@@ -2553,12 +2553,12 @@
       "notes": "grep-evading form; POST /sync-configs/{config_id}/trigger"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/sync.py:2530",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/api/admin/routers/sync.py:2577",
       "surface": "getattr(dispatch_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2530
+        "line": 2577
       },
       "queue_or_cadence": "sync",
       "dispatches": "dispatch_sync_run",
@@ -2652,12 +2652,12 @@
       "route_mount_prefix": ""
     },
     {
-      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/sync.py:2283",
+      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/sync.py:2330",
       "surface": "POST /sync-configs/{config_id}/trigger",
       "class": "api_trigger_endpoint",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2283
+        "line": 2330
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_sync_run",
@@ -2677,12 +2677,12 @@
       "route_mount_prefix": ""
     },
     {
-      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/sync.py:2429",
+      "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/sync.py:2476",
       "surface": "POST /sync-configs/{config_id}/backfill",
       "class": "api_trigger_endpoint",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2429
+        "line": 2476
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_sync_run",

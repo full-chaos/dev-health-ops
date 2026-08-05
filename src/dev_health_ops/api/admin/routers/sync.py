@@ -2200,7 +2200,22 @@ async def update_sync_config(
         previous_sync_targets = list(getattr(config, "sync_targets") or [])
         mutable_config.sync_targets = payload.sync_targets
         config_integration_id = getattr(config, "integration_id", None)
-        if config_integration_id is not None:
+        # IntegrationDataset rows are shared across every SyncConfiguration
+        # that points at the same integration_id (CHAOS-2762: a planner
+        # parent plus its per-repo children can share one Integration).
+        # _load_enabled_datasets (sync/planner.py) always reads that SHARED
+        # row set for the whole integration; only a source_id-scoped CHILD
+        # config additionally narrows which dataset_keys it requests
+        # (trigger_routing.py::_dataset_keys_for_config). So reconciling from
+        # a child's sync_targets would let one repo's edit silently disable a
+        # dataset for every sibling config sharing the integration (Codex
+        # adversarial-review finding, round 2). Only the config that
+        # represents the WHOLE integration (source_id is None) may mutate
+        # the shared rows.
+        if (
+            config_integration_id is not None
+            and getattr(config, "source_id", None) is None
+        ):
             await _reconcile_dataset_rows_for_sync_targets(
                 session,
                 org_id,

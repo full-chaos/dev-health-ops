@@ -1158,6 +1158,88 @@ async def test_update_sync_config_removing_git_symmetrically_disables_blame(
 
 
 @pytest.mark.asyncio
+async def test_update_source_scoped_child_sync_config_does_not_touch_shared_datasets(
+    client, session_maker
+):
+    """Codex adversarial-review finding (round 2, HIGH): IntegrationDataset
+    rows are shared across every SyncConfiguration pointing at the same
+    integration_id (CHAOS-2762 -- a planner parent plus its per-repo
+    children). The planner (sync/planner.py::_load_enabled_datasets) always
+    reads that SHARED row set for the whole integration; only a
+    source_id-scoped CHILD config additionally narrows which dataset_keys IT
+    requests (trigger_routing.py::_dataset_keys_for_config). So editing one
+    child's sync_targets must NEVER disable (or enable) the shared row --
+    that would silently change what the parent and every sibling child
+    plans too. Only the config with no source_id (the whole-integration
+    view) may reconcile the shared rows.
+    """
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    create_resp = await _create_sync_config(ac, name="shared-integration-parent-2")
+    assert create_resp.status_code == 201, create_resp.text
+    parent_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        parent = await session.get(SyncConfiguration, parent_id)
+        integration_id = parent.integration_id
+
+        source = IntegrationSource(
+            org_id=org_id,
+            integration_id=integration_id,
+            provider="github",
+            source_type="repository",
+            external_id="full-chaos/child-repo",
+            name="child-repo",
+            full_name="full-chaos/child-repo",
+            metadata_={},
+            is_enabled=True,
+        )
+        session.add(source)
+        await session.flush()
+        child = SyncConfiguration(
+            org_id=org_id,
+            name="shared-integration-child-2",
+            provider="github",
+            sync_targets=["tests"],
+            sync_options={},
+            parent_id=parent_id,
+            integration_id=integration_id,
+            source_id=source.id,
+        )
+        session.add(child)
+        await session.commit()
+        child_id = str(child.id)
+
+    # Given: the whole-integration parent enables "tests" for the shared row.
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{parent_id}",
+        json={"sync_targets": ["git", "tests"]},
+    )
+    assert resp.status_code == 200, resp.text
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None and dataset.is_enabled is True
+
+    # When: the source-scoped CHILD is edited to remove "tests" from ITS OWN
+    # sync_targets.
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{child_id}",
+        json={"sync_targets": ["git"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Then: the SHARED "tests" row is untouched -- still enabled, so the
+    # parent and any other sibling sharing this integration keep planning
+    # it. A child's private view must never mutate the shared switch.
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None
+    assert dataset.is_enabled is True, (
+        "a source-scoped child's sync_targets edit must not disable a "
+        "dataset shared by the whole integration"
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_pagerduty_service_mappings_propagates_to_services_dataset(
     client, session_maker
 ):

@@ -78,7 +78,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_conversation_transcript.v1.schema.json",
-        "sha256": "7e2c787f9b9925cd68a9900e0e631804cd0c562bdec4579b6e484b237b49d16a"
+        "sha256": "d0df8dccbf190a280412e6d4872006459072128d87c7cf8d9e9facc016ab62a3"
       },
       "schema_version": "dev_conversation_transcript.v1"
     },

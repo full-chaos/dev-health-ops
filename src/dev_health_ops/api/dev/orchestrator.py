@@ -1220,6 +1220,25 @@ class DevOrchestrator:
                     # frame is recoverable, a dropped answer/transcript row
                     # is not, so this path deliberately leaves the session
                     # as-is and proceeds frame-less.
+                    #
+                    # Codex adversarial review round 2 (honest residual, not
+                    # closed here): if `record_frame`'s failure was a real
+                    # mid-flush database error (not a pre-flush/construction
+                    # exception), the session may already be rollback-only,
+                    # and the `terminal()` write further below could still
+                    # raise `PendingRollbackError` regardless of this
+                    # branch -- a pre-existing risk this codebase already
+                    # accepts for a real `DevAnswer` (see
+                    # `DevPersistenceService.force_terminal_fallback`'s own
+                    # docstring, CHAOS-3297 round 3 Finding 2: the system
+                    # still reaches a coherent terminal state via that
+                    # fresh-session fallback, but the just-flushed row can
+                    # rarely be lost in that narrow correlated-failure
+                    # window). This makes the no-answer path symmetric with
+                    # that existing tradeoff, not worse than it -- closing
+                    # it for both would mean SAVEPOINT-wrapping
+                    # `record_frame`/`record_narrative` generally, out of
+                    # this ticket's scope.
                 else:
                     # CHAOS-3297 stack #4: narrative synthesis only runs for
                     # a frame that actually persisted -- record_narrative's

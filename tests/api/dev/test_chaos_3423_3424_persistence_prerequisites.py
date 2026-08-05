@@ -456,13 +456,23 @@ async def test_completed_answer_still_persists_exactly_one_assistant_row(
 async def test_chaos_3423_new_row_shape_is_readable_by_prompt_history_and_transcript(
     seeded,
 ) -> None:
-    """The two existing readers of ``dev_messages.answer_payload``
-    (``router._bounded_prompt_history``, used to build the next turn's model
-    prompt, and ``router.get_conversation_transcript``, the transcript
-    endpoint) both unconditionally called ``DevAnswer.model_validate`` on
-    every assistant row before CHAOS-3423. A ``dev_error.v1``-shaped row
-    would crash both -- this is the regression guard proving the real
-    production router code handles the new shape instead.
+    """Both existing readers of ``dev_messages.answer_payload`` unconditionally
+    called ``DevAnswer.model_validate`` on every assistant row before
+    CHAOS-3423 -- a ``dev_error.v1``-shaped row would crash both. They now
+    diverge deliberately (Codex adversarial review round 2, confirmed with
+    direct evidence from the sibling ``dev-health-web`` checkout):
+
+    * ``router._bounded_prompt_history`` (internal-only -- feeds the next
+      turn's model prompt, never reaches a client) parses the row and
+      includes its ``safe_message``, so the model keeps continuity with a
+      prior clarification/error turn.
+    * ``router.get_conversation_transcript`` (client-facing wire response)
+      OMITS the row instead -- the checked-in web client's own
+      ``AskDevProvider.toTranscriptEntry`` throws for any assistant entry
+      without ``answer``, and the wire contract deliberately gained no new
+      field here, so an old or new client sees byte-identical transcript
+      responses either way (the turn simply has no answer bubble, exactly
+      the pre-CHAOS-3423 behavior) until a coordinated client update ships.
     """
 
     maker, org_id, user_id = seeded
@@ -533,11 +543,11 @@ async def test_chaos_3423_new_row_shape_is_readable_by_prompt_history_and_transc
             conversation_id,
             (user, service, "request-chaos-3423"),
         )
-        assert [item.role for item in transcript.items] == ["user", "assistant"]
-        assistant_entry = transcript.items[1]
-        assert assistant_entry.answer is None
-        assert assistant_entry.error is not None
-        assert assistant_entry.error.safe_message == output.result.error.safe_message
+        # CHAOS-3423 Codex round 2 pivot: the client-facing transcript
+        # endpoint omits the no-answer row entirely (never crashes, never
+        # exposes a new field the current web client cannot handle) -- the
+        # transcript looks exactly like it did before this change shipped.
+        assert [item.role for item in transcript.items] == ["user"]
 
 
 @pytest.mark.asyncio
@@ -555,6 +565,27 @@ async def test_chaos_3423_frame_write_failure_does_not_discard_the_transcript_ro
     frame. This drives that exact failure through a REAL
     ``DevPersistenceService.record_frame`` failure (not a recorder fake) and
     asserts the row survives.
+
+    Scope, stated honestly (Codex adversarial review round 2): this
+    ``record_frame`` failure is raised BEFORE any real ``session.flush()``
+    runs, so it proves the pre-flush/construction-failure case (e.g.
+    ``UnregisteredTerminalCode``, an unrelated Python bug in frame
+    construction) -- never a genuine mid-flush database error that marks
+    the session rollback-only. That narrower case is a PRE-EXISTING,
+    documented residual (``DevPersistenceService.force_terminal_fallback``'s
+    own docstring, CHAOS-3297 round 3 Finding 2): a real ``record_frame``
+    flush failure can already leave ``terminal()`` raising
+    ``PendingRollbackError`` for a genuine ``DevAnswer`` today (that write
+    is ALSO left un-rolled-back, for the identical "don't discard a
+    successful write" reason), recovered only at the system level (the run
+    still reaches a coherent terminal state via ``force_terminal_fallback``
+    on a fresh session -- the transcript row can rarely be lost in that
+    narrow correlated-failure window, exactly as a real answer already
+    could be). This change makes the no-answer path symmetric with that
+    existing, accepted tradeoff -- not worse than it -- rather than closing
+    it for either path; closing it fully would mean SAVEPOINT-wrapping
+    ``record_frame``/``record_narrative`` generally, which is a materially
+    larger change than this ticket's persistence-prerequisite scope.
     """
 
     maker, org_id, user_id = seeded

@@ -1137,19 +1137,21 @@ async def get_conversation_transcript(
                 isinstance(message.answer_payload, Mapping)
                 and message.answer_payload.get("schema_version") == "dev_error.v1"
             ):
-                # CHAOS-3423: a no-answer terminal's assistant row -- same
-                # read boundary as the DevAnswer branch below (CHAOS-3367),
-                # redacted the same way `_replayed_result` redacts a replayed
-                # `terminal_error_payload`.
-                entries.append(
-                    DevTranscriptEntry(
-                        **common,
-                        role="assistant",
-                        error=redact_persisted_error(
-                            DevError.model_validate(message.answer_payload)
-                        ),
-                    )
-                )
+                # CHAOS-3423 Codex adversarial review (HIGH, confirmed): a
+                # no-answer terminal's assistant row now exists in
+                # dev_messages (record_error_message) for persistence-layer
+                # completeness (audit, the Phase 2 corpus runner's direct
+                # DB reads) -- but the checked-in dev-health-web client's
+                # own AskDevProvider.toTranscriptEntry only recognizes an
+                # assistant entry that carries `answer` and throws for any
+                # that doesn't (dev_conversation_transcript.v1's wire shape
+                # is otherwise unchanged here on purpose: no `error` field
+                # was added, so old and new clients validate it identically
+                # either way). Until a coordinated client update ships,
+                # this row is deliberately omitted from the wire transcript
+                # -- exactly the pre-CHAOS-3423 behavior (the turn renders
+                # with no answer bubble, not a broken page).
+                continue
             else:
                 entries.append(
                     DevTranscriptEntry(

@@ -824,34 +824,18 @@ class DevTranscriptEntry(ContractModel):
     ) = Field(default=None, json_schema_extra={"x-max-utf8-bytes": 8_192})
     scope: DevScope | None = None
     answer: DevAnswer | None = None
-    #: CHAOS-3423: the persisted terminal for a no-answer turn (clarification
-    #: or any other error code) -- mutually exclusive with ``answer``, never
-    #: both. Added so a transcript entry can render the turn that never had
-    #: a ``DevAnswer`` at all, instead of the row simply not existing.
-    error: DevError | None = None
 
     @model_validator(mode="after")
     def validate_role_payload(self) -> Self:
         if self.role == "user":
-            if (
-                self.question is None
-                or self.scope is None
-                or self.answer is not None
-                or self.error is not None
-            ):
+            if self.question is None or self.scope is None or self.answer is not None:
                 raise ValueError(
                     "user transcript entries require question and scope only"
                 )
             if len(self.question.encode("utf-8")) > 8_192:
                 raise ValueError("question exceeds 8 KiB UTF-8")
-        elif self.question is not None or self.scope is not None:
-            raise ValueError(
-                "assistant transcript entries require answer or error only"
-            )
-        elif (self.answer is None) == (self.error is None):
-            raise ValueError(
-                "assistant transcript entries require exactly one of answer or error"
-            )
+        elif self.question is not None or self.scope is not None or self.answer is None:
+            raise ValueError("assistant transcript entries require answer only")
         return self
 
 

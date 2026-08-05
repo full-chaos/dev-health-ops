@@ -469,7 +469,17 @@ class ScopeResolutionService:
         org_id: str,
         permission_fingerprint: str,
         request: ScopeResolveRequest,
+        *,
+        now: datetime | None = None,
     ) -> ScopeResolution:
+        """Resolve ``request`` as of ``now`` (default: the wall clock).
+
+        ``now`` governs the *whole* resolution, not just part of it. A preset
+        window is anchored on the caller's instant, so a resolution that took
+        its window from the wall clock while its caller believed it had pinned
+        the instant was reproducible only for as long as the two agreed --
+        which, for a preset, means until the next local midnight.
+        """
         if not org_id or not permission_fingerprint:
             raise ValueError("Tenant and permission fingerprint are required")
 
@@ -492,7 +502,7 @@ class ScopeResolutionService:
                 entities=(),
                 team_filters=(),
                 candidates=(),
-                time_range=self.resolve_time_range(request.time_range),
+                time_range=self.resolve_time_range(request.time_range, now=now),
                 warnings=("catalog_unavailable",),
             )
         cache_key = self._cache_key(
@@ -501,12 +511,17 @@ class ScopeResolutionService:
             permission_fingerprint,
             _request_payload(request),
             watermark,
+            # A preset window is derived from the instant, so two resolutions
+            # of the same request at different instants are different results
+            # and must not share an entry. Production passes ``now=None`` and
+            # keys on the literal ``None``, exactly as before.
+            now.isoformat() if now is not None else None,
         )
         cached = self._cache.get(cache_key)
         if isinstance(cached, ScopeResolution):
             return cached
 
-        time_range = self.resolve_time_range(request.time_range)
+        time_range = self.resolve_time_range(request.time_range, now=now)
         if not active_refs:
             result = ScopeResolution(
                 outcome=ScopeResolutionOutcome.UNRESOLVED,
@@ -963,8 +978,17 @@ class ScopeResolutionService:
         *,
         resolved_at: datetime | None = None,
     ) -> DevScopeResolution:
-        """Resolve ``resolve_scope.v1`` into the canonical CHAOS-3223 contract."""
-        domain = await self.resolve(org_id, permission_fingerprint, request)
+        """Resolve ``resolve_scope.v1`` into the canonical CHAOS-3223 contract.
+
+        ``resolved_at`` is the instant the resolution is *made at*, so it also
+        anchors the resolved preset window -- it is not merely a label applied
+        to a window taken from a second, unrelated clock. Production callers
+        pass ``None`` and get the wall clock for both, unchanged.
+        """
+        resolved_at = resolved_at or datetime.now(timezone.utc)
+        domain = await self.resolve(
+            org_id, permission_fingerprint, request, now=resolved_at
+        )
         requested = self._requested_scope(org_id, request, domain.time_range)
         resolved = self._resolved_scope(org_id, request, domain)
         outcome = domain.outcome
@@ -1026,7 +1050,7 @@ class ScopeResolutionService:
             candidates=candidates,
             fallbacks=list(domain.fallbacks),
             warnings=warnings,
-            resolved_at=resolved_at or datetime.now(timezone.utc),
+            resolved_at=resolved_at,
         )
 
     async def _organization_scope_repositories(
@@ -1291,6 +1315,7 @@ class ScopeResolutionService:
         permission_fingerprint: str,
         payload: dict[str, object],
         watermark: str,
+        resolved_as_of: str | None = None,
     ) -> str:
         raw = json.dumps(
             {
@@ -1300,6 +1325,7 @@ class ScopeResolutionService:
                 "input": payload,
                 "query_version": QUERY_VERSION,
                 "watermark": watermark,
+                "resolved_as_of": resolved_as_of,
             },
             sort_keys=True,
             separators=(",", ":"),

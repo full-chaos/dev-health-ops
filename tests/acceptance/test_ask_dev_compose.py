@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,10 +11,13 @@ import yaml
 from scripts.acceptance.prepare_ask_dev_acceptance import (
     AcceptanceFailure,
     prepare,
+    provision_multi_org,
 )
 
 _ROOT = Path(__file__).resolve().parents[2]
 _OVERLAY = _ROOT / "tests" / "acceptance" / "compose.ask-dev.yml"
+_ACR_OVERLAY = _ROOT / "tests" / "acceptance" / "compose.ask-dev-acr.yml"
+_BASE_COMPOSE = _ROOT / "compose.yml"
 _LAUNCHER = _ROOT / "scripts" / "acceptance" / "run_ask_dev_compose.sh"
 _PREPARE = _ROOT / "scripts" / "acceptance" / "prepare_ask_dev_acceptance.py"
 _ORACLE = _ROOT / "tests" / "acceptance" / "ask-dev-oracle.v1.json"
@@ -33,6 +37,10 @@ _ComposeLoader.add_constructor(
 
 def _load_overlay() -> dict[str, Any]:
     return yaml.load(_OVERLAY.read_text(encoding="utf-8"), Loader=_ComposeLoader)
+
+
+def _load_acr_overlay() -> dict[str, Any]:
+    return yaml.load(_ACR_OVERLAY.read_text(encoding="utf-8"), Loader=_ComposeLoader)
 
 
 def test_scripted_openai_service_is_profiled_internal_and_unpublished() -> None:
@@ -66,6 +74,19 @@ def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:
         ),
         "ASK_DEV_ACCEPTANCE_OPENAI_API_KEY": "ask-dev-acceptance-local-v1",
         "JWT_SECRET_KEY": "ask-dev-acceptance-jwt-secret-key-v1",
+        # CHAOS-3219 Wave 4: the only two Ask Dev settings production code
+        # actually reads from the environment (org_policy.py
+        # platform_operator_request_limit / ..._cost_limit_microusd).
+        # Live-proven 2026-08-05 that pinning these to the documented hard
+        # floor (PLATFORM_MONTHLY_REQUEST_LIMIT_MIN=100 /
+        # PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD=10_000_000) makes
+        # DevMonthlyCostLimitExceeded fire for real -- but the floor broke
+        # the existing smoke suite, so the shared default here has headroom
+        # instead (still below the operator hard max); Phase 3c's
+        # quota-exceeded corpus case should use the floor values, scoped to
+        # just that case, not this shared default.
+        "ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX": "1000",
+        "ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD": "200000000",
     }
     assert api["networks"] == ["default", "ask-dev-acceptance"]
     assert api["depends_on"]["ask-dev-scripted-openai"] == {
@@ -279,3 +300,333 @@ def test_readiness_bootstrap_accepts_an_exact_live_profile_model() -> None:
         expected_model="google/gemma-4-e4b",
     )
     assert org_id == "0a155cab-8833-42ac-a4ef-0d121725a7b0"
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3219 Wave 4 Phase 1 Lane 1c: required worker/beat, env-hardening,
+# optional ACR profile, second-org/disabled-entitlement-org provisioning.
+# ---------------------------------------------------------------------------
+
+
+def test_worker_and_beat_are_required_with_real_healthchecks() -> None:
+    document = _load_overlay()
+    services = document["services"]
+    # Unprofiled (like postgres/api), not gated behind ask-dev-acceptance-acr
+    # -- these boot by default, same as the rest of the required set.
+    assert "profiles" not in services["worker"]
+    assert "profiles" not in services["beat"]
+
+    worker_check = services["worker"]["healthcheck"]
+    # "no required job may exit success after skipping substantive work"
+    # (plan §5): this must be a real functional receipt, not a bare
+    # container-is-running check -- `celery inspect ping` round-trips
+    # through the broker to the worker's own consumer loop.
+    assert worker_check["test"] == [
+        "CMD",
+        "celery",
+        "-A",
+        "dev_health_ops.workers.celery_app",
+        "inspect",
+        "ping",
+    ]
+    assert worker_check["retries"] > 1
+
+    beat_check = services["beat"]["healthcheck"]
+    # celery beat has no inspect-style RPC; the receipt is that its
+    # persistent schedule file is being actively rewritten, not merely that
+    # it exists.
+    beat_test = beat_check["test"]
+    assert beat_test[0] == "CMD-SHELL"
+    assert "/tmp/celerybeat-schedule" in beat_test[1]
+    assert "-lt 90" in beat_test[1]
+    assert beat_check["retries"] > 1
+
+
+def test_quota_env_documents_what_production_code_actually_reads() -> None:
+    """org_policy.py's platform_operator_request_limit / ..._cost_limit_
+    microusd (os.getenv) are the ONLY two Ask Dev settings production code
+    reads from the environment. Retention (0/30-day) has no env var --
+    it's a per-conversation request field plus a settings-DB org default
+    (models/dev_persistence.DEV_RETENTION_DAYS, org_policy.
+    ASK_DEV_RETENTION_KEY = "ask_dev_retention_days"). This overlay must
+    wire the two real env vars and must NOT fabricate a retention env var
+    nothing reads -- it must instead document the real settings-DB key so a
+    reader knows where retention is actually configured."""
+    overlay_text = _OVERLAY.read_text(encoding="utf-8")
+    assert "ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX" in overlay_text
+    assert "ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD" in overlay_text
+    assert not re.search(r"ASK_DEV_RETENTION_\w*:", overlay_text), (
+        "no such env var exists in production -- retention is a settings-DB "
+        "org default (ask_dev_retention_days) plus a per-conversation "
+        "request field, not an environment variable"
+    )
+    # Document the real settings-DB key by name so a reader knows how to
+    # actually set retention for a corpus case (admin settings API, not env).
+    assert "ask_dev_retention_days" in overlay_text
+
+
+def test_acr_profile_is_off_by_default_and_wired_via_extends() -> None:
+    document = _load_acr_overlay()
+    services = document["services"]
+    for name in ("acr-db-init", "acr-migrate", "acr-api"):
+        service = services[name]
+        assert service["profiles"] == ["ask-dev-acceptance-acr"]
+        assert service["extends"]["service"] == name
+        # Reuses the parent repo's authoritative service definition instead
+        # of re-declaring it -- cannot silently drift from the source of
+        # truth. Default path is configurable, not hardcoded to one
+        # operator's checkout layout.
+        assert service["extends"]["file"].startswith(
+            "${ASK_DEV_ACCEPTANCE_PARENT_COMPOSE:-"
+        )
+        # The parent's `dev-health` network does not exist in this
+        # acceptance project; every extended service must force-replace it.
+        assert service["networks"] == ["default"]
+
+    # Never publish acr-api's port from the acceptance overlay -- it must
+    # only be reachable over the internal network, matching how
+    # ask-dev-scripted-openai and postgres/pgbouncer/clickhouse/valkey are
+    # already kept off the host.
+    assert services["acr-api"]["ports"] == []
+    assert services["acr-api"]["container_name"] == "ask-dev-acceptance-acr-api"
+
+    # The default `ask-dev-acceptance` profile (used by every other test in
+    # this module) must not implicitly pull in ACR.
+    base_document = _load_overlay()
+    assert "acr-api" not in base_document["services"]
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert 'acr_armed="${ASK_DEV_ACCEPTANCE_ACR:-0}"' in launcher
+    assert '"${acr_armed}" == "1"' in launcher
+    assert "ask-dev-acceptance-acr" in launcher
+    assert "compose.ask-dev-acr.yml" in launcher
+
+
+def test_launcher_hardens_compose_interpolation_env_for_every_var_it_boots() -> None:
+    """Closed-loop guard for the CHAOS-3219 Phase 0 env-hardening finding:
+    every `${VAR}` referenced anywhere in compose.yml or an acceptance
+    overlay must either be (a) explicitly unset before the first `docker
+    compose` invocation, (b) explicitly exported by the launcher itself
+    (a deliberate, launcher-owned value), or (c) namespaced under
+    ASK_DEV_ (this launcher's own acceptance-specific knobs, e.g.
+    ASK_DEV_ACCEPTANCE_API_PORT, which cannot collide with an unrelated
+    ambient dev .env by construction). A future `${NEW_VAR}` added to
+    either compose file that isn't triaged into one of these three buckets
+    fails this test -- it does not get to silently inherit whatever the
+    invoking shell happens to export, the way POSTGRES_DB did.
+    """
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+
+    interpolated: set[str] = set()
+    for path in (_BASE_COMPOSE, _OVERLAY, _ACR_OVERLAY):
+        interpolated |= set(
+            re.findall(r"\$\{([A-Z_][A-Z0-9_]*)", path.read_text(encoding="utf-8"))
+        )
+    assert "POSTGRES_DB" in interpolated, (
+        "sanity check: the compose files must still reference ${POSTGRES_DB} "
+        "somewhere, or this test would vacuously pass with an empty set"
+    )
+
+    unset_match = re.search(r"\nunset \\\n(.*?)\n\nweb_root=", launcher, re.S)
+    assert unset_match is not None, "launcher must have a single top-level unset block"
+    unset_vars = set(re.findall(r"[A-Z_][A-Z0-9_]*", unset_match.group(1)))
+    assert "POSTGRES_DB" in unset_vars
+
+    exported_vars = set(
+        re.findall(r"^[ \t]*export ([A-Z_][A-Z0-9_]*)=", launcher, re.M)
+    )
+    namespaced_vars = {v for v in interpolated if v.startswith("ASK_DEV_")}
+
+    accounted_for = unset_vars | exported_vars | namespaced_vars
+    missing = interpolated - accounted_for
+    assert not missing, (
+        "these ${VAR} references in compose.yml/acceptance overlays are not "
+        "unset, exported, or ASK_DEV_-namespaced by the launcher -- an "
+        "ambient shell value (e.g. from a direnv-loaded .env) can silently "
+        f"reach the acceptance stack's interpolation: {sorted(missing)}"
+    )
+
+    # The unset block must run before the first actual `docker compose`
+    # invocation ("${compose[@]}" config --quiet) -- otherwise a leaked var
+    # could already have been interpolated before the fix takes effect.
+    # (Prose in this launcher's own comments mentions the literal words
+    # "docker compose" earlier than that, so anchor on the real invocation.)
+    assert launcher.index("\nunset \\\n") < launcher.index(
+        '"${compose[@]}" config --quiet'
+    )
+
+
+def test_launcher_error_suppression_is_confined_to_failure_diagnostics() -> None:
+    """`|| true` anywhere in a REQUIRED boot/test step would let a failed
+    command exit success (the exact "required job that boots but processes
+    nothing" trap the plan's work-receipt principle exists to catch). The
+    only acceptable use is inside report_failure()'s best-effort diagnostic
+    dump, which already failed and is just trying to leave useful logs
+    behind."""
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    fn_start = launcher.index("report_failure() {")
+    fn_end = launcher.index("\n}\n", fn_start)
+    report_failure_body = launcher[fn_start:fn_end]
+
+    # Only count "|| true" as CODE if it appears on a non-comment line --
+    # this launcher also has a historical comment that quotes the phrase
+    # `|| true` in backticks while explaining its *removal*, which is not a
+    # live occurrence.
+    code_occurrences = [
+        m.start()
+        for m in re.finditer(re.escape("|| true"), launcher)
+        if not launcher[launcher.rfind("\n", 0, m.start()) + 1 : m.start()]
+        .lstrip()
+        .startswith("#")
+    ]
+    assert code_occurrences, (
+        "sanity check: report_failure's own || true must still be present"
+    )
+    for pos in code_occurrences:
+        assert fn_start <= pos < fn_end, (
+            f"'|| true' at offset {pos} falls outside report_failure() -- a "
+            "required step may be silently swallowing failure"
+        )
+    assert "|| true" in report_failure_body
+
+
+def test_launcher_boots_required_jobs_fleet_and_gates_acr_optionally() -> None:
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert (
+        "boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api worker beat)"
+        in launcher
+    )
+    assert '"${compose[@]}" up -d --build --wait "${boot_services[@]}"' in launcher
+    assert "acr-db-init acr-migrate acr-api" in launcher
+    # ACR services are appended to boot_services only inside the arming
+    # branch, never unconditionally.
+    arm_index = launcher.index('"${acr_armed}" == "1"')
+    acr_boot_index = launcher.index("acr-db-init acr-migrate acr-api")
+    fi_index = launcher.index("fi\n", arm_index)
+    assert arm_index < acr_boot_index < fi_index
+
+
+def test_launcher_provisions_second_org_and_writes_org_ids_artifact() -> None:
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert "org_ids_output=" in launcher
+    assert "ASK_DEV_ACCEPTANCE_ORG_IDS_OUTPUT" in launcher
+    # Threaded into the same prepare_ask_dev_acceptance.py invocation that
+    # already handles the primary org -- no separate second-org script/step
+    # to keep in sync with it. Anchor on the quoted invocation path, not the
+    # bare filename, since this launcher's own comments also mention the
+    # bare filename before the export line.
+    prepare_invocation_index = launcher.index(
+        '"${ops_root}/scripts/acceptance/prepare_ask_dev_acceptance.py"'
+    )
+    org_ids_export_index = launcher.index(
+        'ASK_DEV_ACCEPTANCE_ORG_IDS_OUTPUT="${org_ids_output}"'
+    )
+    assert org_ids_export_index < prepare_invocation_index
+
+    prepare_source = _PREPARE.read_text(encoding="utf-8")
+    assert "provision_multi_org(" in prepare_source
+    assert "def provision_multi_org" in prepare_source
+
+
+class _MultiOrgFakeAcceptanceApi(_FakeAcceptanceApi):
+    """Extends the base fake with org creation + org-scoped login/capability
+    responses, keyed by which org_id the caller is currently "logged in
+    as" (mirrors the real API: capabilities reflect the token's org)."""
+
+    def __init__(self, *, second_org_enabled: bool = True) -> None:
+        super().__init__()
+        self._next_org_suffix = 0
+        self._created_orgs: dict[str, str] = {}
+        self._enabled_orgs: set[str] = {"0a155cab-8833-42ac-a4ef-0d121725a7b0"}
+        self._second_org_enabled = second_org_enabled
+        self._current_org: str = "0a155cab-8833-42ac-a4ef-0d121725a7b0"
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> Any:
+        if path == "/api/v1/auth/login":
+            assert payload is not None
+            org_id = payload.get("org_id") or "0a155cab-8833-42ac-a4ef-0d121725a7b0"
+            self._current_org = org_id
+            self.calls.append((method, path, payload))
+            return {
+                "access_token": f"token-{org_id}",
+                "user": {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "is_superuser": True,
+                    "org_id": org_id,
+                },
+            }
+        if path == "/api/v1/admin/orgs" and method == "POST":
+            assert payload is not None
+            self.calls.append((method, path, payload))
+            self._next_org_suffix += 1
+            new_org_id = f"org-{self._next_org_suffix}"
+            self._created_orgs[new_org_id] = payload["name"]
+            return {"id": new_org_id, "name": payload["name"]}
+        if path == "/api/v1/dev/capabilities":
+            self.calls.append((method, path, payload))
+            enabled = self._current_org in self._enabled_orgs or (
+                self._current_org in self._created_orgs
+                and self._second_org_enabled
+                and self._current_org
+                == next(iter(self._created_orgs))  # first created == "second org"
+            )
+            return {
+                "ask_dev": enabled,
+                "readiness": "ready" if enabled else "disabled",
+            }
+        if path.endswith("/feature-overrides") and method == "POST":
+            self.calls.append((method, path, payload))
+            org_id = path.split("/")[-2]
+            self._enabled_orgs.add(org_id)
+            return {"is_enabled": True}
+        return super().request(method, path, payload)
+
+
+def test_provision_multi_org_enables_second_org_and_verifies_disabled_org() -> None:
+    api = _MultiOrgFakeAcceptanceApi()
+    second_org_id, disabled_org_id = provision_multi_org(
+        api,  # type: ignore[arg-type]
+        email="admin@devhealth.example",
+        password="devhealth123",
+    )
+    assert second_org_id == "org-1"
+    assert disabled_org_id == "org-2"
+    # The disabled org must never have received a feature-overrides POST.
+    disabled_overrides = [
+        (method, path)
+        for method, path, _ in api.calls
+        if method == "POST"
+        and path == f"/api/v1/admin/orgs/{disabled_org_id}/feature-overrides"
+    ]
+    assert disabled_overrides == []
+
+
+def test_provision_multi_org_fails_loud_if_disabled_org_leaks_entitlement() -> None:
+    """Negative-control regression guard: if capabilities ever reports the
+    never-enabled org as ask_dev-capable (e.g. a global-flag/cache-key
+    bug), provision_multi_org must raise -- not silently accept it."""
+    api = _MultiOrgFakeAcceptanceApi(second_org_enabled=True)
+    # Simulate the leak: enable ask_dev for BOTH created orgs behind the
+    # fake's back, same as a real entitlement-isolation bug would.
+    original_request = api.request
+
+    def leaking_request(
+        method: str, path: str, payload: dict[str, Any] | None = None
+    ) -> Any:
+        result = original_request(method, path, payload)
+        if path == "/api/v1/dev/capabilities" and isinstance(result, dict):
+            result = {**result, "ask_dev": True, "readiness": "ready"}
+        return result
+
+    api.request = leaking_request  # type: ignore[method-assign]
+    with pytest.raises(AcceptanceFailure, match="unexpectedly reports ask_dev"):
+        provision_multi_org(
+            api,  # type: ignore[arg-type]
+            email="admin@devhealth.example",
+            password="devhealth123",
+        )

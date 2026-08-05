@@ -1992,11 +1992,43 @@ _SCRIPTED_PROVIDER_AT_CHAOS_3219_LANE_1B = (
     "8efe7a5d1b26574fbd97c2df9c2aec961ebb3ce62a7419a667a0e4f28300b8a7"
 )
 
+#: CHAOS-3219 Wave 4 Phase 1 Lane 1c (compose env): the acceptance overlay,
+#: launcher, and seeder gained a required worker/beat jobs fleet with real
+#: healthchecks, an optional off-by-default ACR profile, quota env
+#: plumbing, second-org/disabled-entitlement-org provisioning, and a
+#: docker-compose interpolation env-hardening fix. None of it touches
+#: ``compose.yml`` (the existing datastore-reconciliation declaration above
+#: still covers that path unchanged) but all three DO touch these same
+#: fourteen rows' other covered dependencies. Same reasoning as the
+#: datastore reconciliation above: these fourteen rows are evidence about
+#: the PRE-Wave-4 acceptance environment (no required jobs fleet, no quota
+#: ceiling, single org, un-hardened interpolation env) -- a real runtime
+#: difference, not a formality -- and it is declarable rather than blocking
+#: because none of it touches the scenarios' own assertions (product code
+#: under src/ is the digested surface's boundary; these are
+#: launcher/compose/seeder-only changes). Bound to this lane's actual
+#: committed content, so any FURTHER edit to any of the three reds every
+#: one of these fourteen again -- same self-cleaning property as above.
+_RUN_ASK_DEV_COMPOSE_SH_AT_LANE_1C = (
+    "9cb95a2a12c2eeddfdb477e6d7ccd37aec8a1eedee7033ac32c76cc523180a90"
+)
+_COMPOSE_ASK_DEV_YML_AT_LANE_1C = (
+    "6da90fef2f0bd47068e74e03d88aea9bbc4c4483c98e3fc6f7fe4900595ba293"
+)
+_PREPARE_ASK_DEV_ACCEPTANCE_PY_AT_LANE_1C = (
+    "5daf40ef225bbe8e8c4ccdef103c42343fb033d36caab03807f5407417967ff7"
+)
+
 DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
     item_id: {
         "compose.yml": _COMPOSE_AT_DATASTORE_RECONCILIATION,
         "src/dev_health_ops/llm/agent/scripted_openai_service.py": (
             _SCRIPTED_PROVIDER_AT_CHAOS_3219_LANE_1B
+        ),
+        "scripts/acceptance/run_ask_dev_compose.sh": _RUN_ASK_DEV_COMPOSE_SH_AT_LANE_1C,
+        "tests/acceptance/compose.ask-dev.yml": _COMPOSE_ASK_DEV_YML_AT_LANE_1C,
+        "scripts/acceptance/prepare_ask_dev_acceptance.py": (
+            _PREPARE_ASK_DEV_ACCEPTANCE_PY_AT_LANE_1C
         ),
     }
     for item_id in (

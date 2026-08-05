@@ -154,7 +154,7 @@ Project status is one familiar place where connected context matters. A tracking
 
 <section class="fc-cf-section" markdown>
 
-## Project status is an example—not the boundary
+## Unbounded Insights
 
 The same fabric supports broader operating questions: project and portfolio health, team conditions and workload pressure, investment balance, operational deficiencies, ownership and dependency risk, changes in delivery or reliability, prior decisions that govern new work, and the quality or freshness of the available evidence.
 

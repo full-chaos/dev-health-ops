@@ -1062,6 +1062,7 @@ class DevOrchestrator:
                         safe_message="The validated answer could not be stored.",
                         retryable=True,
                     )
+            error_message_written = False
             if answer is None and error is not None:
                 # CHAOS-3423: a deliberate second check, not `elif` chained
                 # to the block above -- the answer-write-failure branch just
@@ -1077,6 +1078,19 @@ class DevOrchestrator:
                     await self._recorder.record_error_message(
                         error, scope_snapshot=request.scope.model_dump(mode="json")
                     )
+                    # CHAOS-3423 Codex adversarial review (HIGH, confirmed):
+                    # tracked so the frame-write-failure rollback below can
+                    # tell "nothing written in this flush yet" (the
+                    # pre-existing case its own `if answer is None: rollback()`
+                    # was written for) apart from "the no-answer transcript
+                    # row already flushed" -- a plain session.rollback() here
+                    # is NOT commit-scoped (this row isn't durable until the
+                    # caller's own session.commit() at the very end of the
+                    # request), so it would silently discard this row on a
+                    # frame-construction/write failure, reintroducing the
+                    # exact "no transcript row for a no-answer terminal" gap
+                    # this method exists to close.
+                    error_message_written = True
                 except Exception as error_message_write_fault:
                     # Best-effort, mirroring record_frame's own failure
                     # handling below: a transcript-row write failure must
@@ -1191,19 +1205,21 @@ class DevOrchestrator:
                     # never strand or crash an otherwise-successful run -- the
                     # v1 answer/error above is authoritative and safe to
                     # terminate on alone.
-                    if answer is None:
+                    if answer is None and not error_message_written:
                         # No prior write in this flush to protect, so it is
                         # safe to roll back a poisoned session -- otherwise
                         # the terminal() write below could raise
                         # PendingRollbackError (mirrors the preflight
                         # TERMINATE branch, CHAOS-3297 Codex review).
                         await self._recorder.rollback()
-                    # else: record_answer already succeeded in this flush.
-                    # Rolling back here would discard that write over an
-                    # unrelated frame failure -- a dropped frame is
-                    # recoverable, a dropped answer is not, so this path
-                    # deliberately leaves the session as-is and proceeds
-                    # frame-less.
+                    # else: record_answer (answer is not None) or
+                    # record_error_message (CHAOS-3423 Codex adversarial
+                    # review, HIGH: error_message_written) already succeeded
+                    # in this flush. Rolling back here would discard that
+                    # write over an unrelated frame failure -- a dropped
+                    # frame is recoverable, a dropped answer/transcript row
+                    # is not, so this path deliberately leaves the session
+                    # as-is and proceeds frame-less.
                 else:
                     # CHAOS-3297 stack #4: narrative synthesis only runs for
                     # a frame that actually persisted -- record_narrative's
@@ -1427,8 +1443,36 @@ class DevOrchestrator:
                     # ledger), so persisting the whole ledger there too
                     # would double-insert into the same
                     # (run_id, entry_ordinal) unique constraint.
-                    for resolution_entry in preflight_result.ledger.entries:
-                        await self._recorder.append_resolution(resolution_entry)
+                    try:
+                        for resolution_entry in preflight_result.ledger.entries:
+                            await self._recorder.append_resolution(resolution_entry)
+                    except Exception:
+                        # CHAOS-3424 Codex adversarial review (HIGH,
+                        # confirmed): a database-layer failure on ANY entry
+                        # here marks the session rollback-only -- every
+                        # later write in finish() (record_answer/
+                        # record_error_message/terminal) would then raise
+                        # PendingRollbackError on its own next flush,
+                        # degrading an ordinary PROCEED into an
+                        # unrecoverable run over what should be best-effort
+                        # forensic telemetry. Mirrors the TERMINATE branch's
+                        # own rollback + re-persist pattern immediately
+                        # below: a dropped ledger (whole, never partial --
+                        # rollback discards every entry this loop already
+                        # flushed, not just the one that failed) is
+                        # recoverable, a stranded run is not. Re-persists
+                        # the preflight diagnostics this same rollback also
+                        # discards, for the identical reason the TERMINATE
+                        # branch's own comment gives.
+                        await self._recorder.rollback()
+                        await self._recorder.record_preflight(
+                            preflight_outcome=preflight_result.diagnostic,
+                            legacy_guard_reason=None,
+                        )
+                        if preflight_result.subject_set is not None:
+                            await self._recorder.record_subject_set(
+                                preflight_result.subject_set
+                            )
                 if preflight_result.decision is PreflightDecision.TERMINATE:
                     assert preflight_result.answer is not None
                     assert preflight_result.outcome is not None

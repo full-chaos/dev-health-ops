@@ -58,6 +58,33 @@ logger = logging.getLogger(__name__)
 
 AnswerPayloadValidator: TypeAlias = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
+#: CHAOS-3423 Codex adversarial review (MEDIUM, confirmed): the closed set
+#: of ``DevMessage.answer_payload`` schema versions that are a genuine
+#: ``DevAnswer`` -- as opposed to a ``dev_error.v1`` no-answer transcript row
+#: (``append_assistant_error``), which also sets ``answer_id`` (to the run's
+#: own id) and therefore also satisfies every ``role == "assistant" AND
+#: answer_id IS NOT NULL`` query written before that method existed.
+#: ``get_answer_message`` and ``record_feedback`` both filter on this so an
+#: answer-only reader can never be handed error content it cannot parse as
+#: (or should never treat as) an answer.
+_REAL_ANSWER_SCHEMA_VERSIONS = frozenset({"dev_answer.v1", "dev_answer.v2"})
+
+
+def _is_real_answer_message(message: DevMessage) -> bool:
+    """Whether an assistant ``DevMessage`` carries a genuine ``DevAnswer``.
+
+    ``False`` for a no-answer terminal's transcript row -- role and a
+    non-null ``answer_id`` alone cannot tell the two apart (CHAOS-3423
+    Codex adversarial review, MEDIUM).
+    """
+
+    payload = message.answer_payload
+    return (
+        isinstance(payload, Mapping)
+        and payload.get("schema_version") in _REAL_ANSWER_SCHEMA_VERSIONS
+    )
+
+
 _TERMINAL_RUN_STATES = frozenset(
     {
         "completed",
@@ -1161,6 +1188,16 @@ class DevPersistenceService:
                 DevMessage.user_id == DevConversation.user_id,
                 DevMessage.role == "assistant",
                 DevMessage.answer_id.is_not(None),
+                # CHAOS-3423 Codex adversarial review (MEDIUM, confirmed):
+                # a no-answer terminal's transcript row also has
+                # role="assistant" and a non-null answer_id (the run's own
+                # id) -- excluded here so this client-visible field keeps
+                # meaning exactly what its name says, "the latest genuine
+                # answer", never a run a client would then dereference into
+                # a 503 or a misattached feedback row.
+                DevMessage.answer_payload["schema_version"]
+                .as_string()
+                .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
             )
             .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
             .limit(1)
@@ -1254,6 +1291,11 @@ class DevPersistenceService:
                 DevMessage.user_id == user_id,
                 DevMessage.role == "assistant",
                 DevMessage.answer_id.is_not(None),
+                # CHAOS-3423 Codex adversarial review (MEDIUM, confirmed):
+                # see the identical filter in list_conversation_records.
+                DevMessage.answer_payload["schema_version"]
+                .as_string()
+                .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
             )
             .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
             .limit(1)
@@ -1454,7 +1496,16 @@ class DevPersistenceService:
                 DevMessage.role == "assistant",
             )
         )
-        if answer is None:
+        if answer is None or not _is_real_answer_message(answer):
+            # CHAOS-3423 Codex adversarial review (MEDIUM, confirmed): a
+            # no-answer terminal's transcript row (append_assistant_error)
+            # also has role="assistant" and a non-null answer_id (the run's
+            # own id) -- indistinguishable from a real answer by the query
+            # above alone. Every caller of this method (evidence expansion,
+            # feedback) means "a genuine DevAnswer", so a dev_error.v1 row
+            # here is reported exactly like it does not exist, never handed
+            # to a caller that will crash trying to DevAnswer.model_validate
+            # it.
             raise DevPersistenceNotFound("answer not found")
         return answer
 
@@ -1652,7 +1703,7 @@ class DevPersistenceService:
             dict(validated),
             field="answer_payload",
         )
-        if payload.get("schema_version") not in {"dev_answer.v1", "dev_answer.v2"}:
+        if payload.get("schema_version") not in _REAL_ANSWER_SCHEMA_VERSIONS:
             raise DevPersistenceValidationError(
                 "validated answer payload must use dev_answer.v1 or dev_answer.v2"
             )
@@ -2849,7 +2900,10 @@ class DevPersistenceService:
                 DevMessage.role == "assistant",
             )
         )
-        if answer is None:
+        if answer is None or not _is_real_answer_message(answer):
+            # CHAOS-3423 Codex adversarial review (MEDIUM, confirmed): a
+            # no-answer terminal's transcript row must never accept
+            # helpful/not_helpful feedback -- there was no answer to rate.
             raise DevPersistenceNotFound("answer not found")
         feedback = await self.session.scalar(
             select(DevFeedback).where(

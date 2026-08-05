@@ -35,7 +35,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from dev_health_ops.api.dev import router as dev_router_module
 from dev_health_ops.api.dev.orchestrator_persistence import PersistenceRunRecorder
 from dev_health_ops.api.dev.orchestrator_states import RunState
-from dev_health_ops.api.dev.persistence import DevPersistenceService
+from dev_health_ops.api.dev.persistence import (
+    DevPersistenceNotFound,
+    DevPersistenceService,
+)
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.llm.agent.contracts import AgentFinalAnswer
 from dev_health_ops.llm.agent.scripted import ScriptedStep
@@ -535,3 +538,266 @@ async def test_chaos_3423_new_row_shape_is_readable_by_prompt_history_and_transc
         assert assistant_entry.answer is None
         assert assistant_entry.error is not None
         assert assistant_entry.error.safe_message == output.result.error.safe_message
+
+
+@pytest.mark.asyncio
+async def test_chaos_3423_frame_write_failure_does_not_discard_the_transcript_row(
+    seeded, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex adversarial review (HIGH, confirmed): the no-answer transcript
+    row is flushed on the SAME uncommitted session as the compatibility
+    frame built right after it. If ``record_frame`` then fails,
+    ``finish()``'s existing failure handler used to unconditionally decide
+    "no prior write to protect" from `answer is None` alone -- which
+    stopped being true the moment ``record_error_message`` started writing
+    into that exact branch, so a plain ``session.rollback()`` there would
+    silently discard the just-written transcript row along with the failed
+    frame. This drives that exact failure through a REAL
+    ``DevPersistenceService.record_frame`` failure (not a recorder fake) and
+    asserts the row survives.
+    """
+
+    maker, org_id, user_id = seeded
+    question = "How is Nightfall doing?"
+    conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
+
+    async def _failing_record_frame(self, *args, **kwargs):
+        raise RuntimeError("simulated frame storage failure")
+
+    monkeypatch.setattr(DevPersistenceService, "record_frame", _failing_record_frame)
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+
+        def recorder_factory() -> Recorder:
+            return cast(
+                Recorder,
+                PersistenceRunRecorder(
+                    service,
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    provider_source="platform",
+                ),
+            )
+
+        output = await run_preflight_orchestrator(
+            question=question,
+            entities=[(str(org_id), ASK_DEV_PROJECT)],
+            org_id=str(org_id),
+            user_id=str(user_id),
+            conversation_id=str(conversation_id),
+            run_id=str(run_id),
+            answer_id=str(uuid.uuid4()),
+            script=_leaking_but_not_narrating(str(org_id)),
+            script_id="chaos-3423-frame-write-failure",
+            recorder_factory=recorder_factory,
+        )
+        await session.commit()
+
+        # Setup control: the frame write really did fail (no dev_answer_frames
+        # row), the run still terminated on the same no-answer error, and this
+        # is the finish()-internal frame path (frame_already_recorded=False),
+        # not the preflight TERMINATE branch's own separate try/except.
+        assert output.result.state is RunState.INSUFFICIENT_EVIDENCE
+        assert output.result.error is not None
+        frame_rows = (
+            await session.scalars(
+                select(DevAnswerFrame).where(DevAnswerFrame.run_id == run_id)
+            )
+        ).all()
+        assert len(frame_rows) == 0
+
+        assistant_rows = (
+            await session.scalars(
+                select(DevMessage).where(
+                    DevMessage.conversation_id == conversation_id,
+                    DevMessage.role == "assistant",
+                )
+            )
+        ).all()
+        assert len(assistant_rows) == 1, (
+            "a frame-write failure must never discard the already-flushed "
+            f"no-answer transcript row -- got {len(assistant_rows)} rows."
+        )
+        assert assistant_rows[0].content == output.result.error.safe_message
+
+
+@pytest.mark.asyncio
+async def test_chaos_3424_ledger_write_failure_never_strands_the_run(
+    seeded, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex adversarial review (HIGH, confirmed): the new PROCEED ledger
+    loop originally called ``append_resolution`` with no failure boundary.
+    A database-layer failure on any entry marks the session rollback-only,
+    so every later write ``finish()`` makes (record_answer/
+    record_error_message/terminal) would raise ``PendingRollbackError`` on
+    its own next flush -- turning a routine PROCEED into a stranded,
+    non-terminal run over what should be best-effort forensic telemetry.
+    Drives a REAL ``DevPersistenceService.append_resolution`` failure and
+    asserts the run still reaches its normal graceful terminal with a
+    coherent (fully rolled back, never partial) ledger and an intact
+    transcript row -- not an unhandled exception, and not a generic
+    ``internal_error`` from the outer catch-all.
+    """
+
+    maker, org_id, user_id = seeded
+    question = "How is Nightfall doing?"
+    conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
+
+    async def _always_failing(self, *args, **kwargs):
+        raise RuntimeError("simulated resolution ledger storage failure")
+
+    monkeypatch.setattr(DevPersistenceService, "append_resolution", _always_failing)
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+
+        def recorder_factory() -> Recorder:
+            return cast(
+                Recorder,
+                PersistenceRunRecorder(
+                    service,
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    provider_source="platform",
+                ),
+            )
+
+        output = await run_preflight_orchestrator(
+            question=question,
+            entities=[(str(org_id), ASK_DEV_PROJECT)],
+            org_id=str(org_id),
+            user_id=str(user_id),
+            conversation_id=str(conversation_id),
+            run_id=str(run_id),
+            answer_id=str(uuid.uuid4()),
+            script=_leaking_but_not_narrating(str(org_id)),
+            script_id="chaos-3424-ledger-write-failure",
+            recorder_factory=recorder_factory,
+        )
+        await session.commit()
+
+        # The run must still reach its normal graceful no-answer terminal --
+        # never crash, and never degrade to a generic internal_error just
+        # because the ledger write failed.
+        assert output.result.state is RunState.INSUFFICIENT_EVIDENCE
+        assert output.result.error is not None
+        assert output.result.error.code == "scope_not_found"
+        assert output.result.error.code != "internal_error"
+
+        ledger_rows = (
+            await session.scalars(
+                select(DevRunResolution).where(DevRunResolution.run_id == run_id)
+            )
+        ).all()
+        assert len(ledger_rows) == 0, (
+            "a failed ledger write must roll back cleanly (never a partial "
+            f"ledger) -- got {len(ledger_rows)} rows."
+        )
+
+        # The run row itself must be a coherent terminal, not stranded
+        # non-terminal by a PendingRollbackError the recovery never fixed.
+        run_row = await session.get(DevRun, run_id)
+        assert run_row is not None
+        assert run_row.state == "insufficient_evidence"
+        assert run_row.preflight_outcome == "proceeded_unresolved_bare_name"
+
+        # The CHAOS-3423 transcript row still landed -- proof the session
+        # recovered cleanly enough for finish()'s own later writes to
+        # succeed on it.
+        assistant_rows = (
+            await session.scalars(
+                select(DevMessage).where(
+                    DevMessage.conversation_id == conversation_id,
+                    DevMessage.role == "assistant",
+                )
+            )
+        ).all()
+        assert len(assistant_rows) == 1
+        assert assistant_rows[0].content == output.result.error.safe_message
+
+
+@pytest.mark.asyncio
+async def test_chaos_3423_no_answer_row_is_never_treated_as_a_real_answer(
+    seeded,
+) -> None:
+    """Codex adversarial review (MEDIUM, confirmed): the no-answer
+    transcript row's ``answer_id`` (the run's own id) satisfies every
+    ``role == 'assistant' AND answer_id IS NOT NULL`` query written before
+    CHAOS-3423 -- ``DevConversation.latest_answer_id``, ``get_answer_message``
+    (evidence expansion), and ``record_feedback`` all have to keep treating
+    it as "no real answer here", or a client that dereferences
+    ``latest_answer_id`` crashes evidence expansion into a bogus persistence
+    error, or attaches helpful/not_helpful feedback to a turn that was never
+    answered.
+    """
+
+    maker, org_id, user_id = seeded
+    question = "What's the status of the Atlas project?"
+    conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+
+        def recorder_factory() -> Recorder:
+            return cast(
+                Recorder,
+                PersistenceRunRecorder(
+                    service,
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    provider_source="platform",
+                ),
+            )
+
+        output = await run_preflight_orchestrator(
+            question=question,
+            entities=[
+                (str(org_id), ATLAS_PROJECT_ONE),
+                (str(org_id), ATLAS_PROJECT_TWO),
+            ],
+            org_id=str(org_id),
+            user_id=str(user_id),
+            conversation_id=str(conversation_id),
+            run_id=str(run_id),
+            answer_id=str(uuid.uuid4()),
+            script_id="chaos-3423-not-a-real-answer",
+            recorder_factory=recorder_factory,
+        )
+        await session.commit()
+        assert output.result.error is not None
+
+        # The no-answer row's answer_id IS the run's own id (see
+        # PersistenceRunRecorder.record_error_message) -- confirm every
+        # answer-only reader refuses to treat it as a real answer.
+        with pytest.raises(DevPersistenceNotFound):
+            await service.get_answer_message(
+                org_id=org_id, user_id=user_id, answer_id=run_id
+            )
+        with pytest.raises(DevPersistenceNotFound):
+            await service.record_feedback(
+                org_id=org_id,
+                user_id=user_id,
+                answer_id=run_id,
+                rating="helpful",
+                reasons=[],
+            )
+
+        record = await service.get_conversation_record(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        assert record.latest_answer_id != run_id
+        assert record.latest_answer_id is None
+
+        records = await service.list_conversation_records(
+            org_id=org_id, user_id=user_id
+        )
+        assert len(records) == 1
+        assert records[0].latest_answer_id != run_id
+        assert records[0].latest_answer_id is None

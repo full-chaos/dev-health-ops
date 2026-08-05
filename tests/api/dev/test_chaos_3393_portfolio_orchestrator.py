@@ -14,6 +14,7 @@ per-project rollup.
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
@@ -22,15 +23,20 @@ import pytest
 
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevToolRequest, DevToolResult, ToolID
-from dev_health_ops.api.dev.contracts_v2.base import SourceRequirementState
+from dev_health_ops.api.dev.contracts_v2.base import (
+    QuestionIntentID,
+    SourceRequirementState,
+)
 from dev_health_ops.api.dev.contracts_v2.health_rules import RuleApplicability
 from dev_health_ops.api.dev.health_profile_synthesis import HealthProfileResult
 from dev_health_ops.api.dev.investigation_plans.executor import PlanExecutor
 from dev_health_ops.api.dev.investigation_plans.steps import StepRegistry
 from dev_health_ops.api.dev.investigation_plans.wave_3_1_plans import (
+    PORTFOLIO_PLAN_TIMEOUT_SECONDS,
     WAVE_3_1_PLANS_BY_INTENT,
     register_wave_3_1_steps,
 )
+from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.portfolio_status_service import (
     MAX_PORTFOLIO_PROJECTS,
     PortfolioProjectFailure,
@@ -153,6 +159,7 @@ class _FakePortfolioStatus:
         ambiguous_mention_ids=(),
         warnings=(),
         per_project_timeout_seconds=None,
+        batch_deadline_seconds=None,
     ):
         self.calls.append(
             {
@@ -160,6 +167,7 @@ class _FakePortfolioStatus:
                 "permission_fingerprint": permission_fingerprint,
                 "projects": tuple(projects),
                 "per_project_timeout_seconds": per_project_timeout_seconds,
+                "batch_deadline_seconds": batch_deadline_seconds,
             }
         )
         return self._result
@@ -182,6 +190,7 @@ class _DynamicPortfolioStatus:
         ambiguous_mention_ids=(),
         warnings=(),
         per_project_timeout_seconds=None,
+        batch_deadline_seconds=None,
     ):
         return PortfolioStatusResult(
             projects=tuple(
@@ -196,6 +205,24 @@ class _DynamicPortfolioStatus:
         )
 
 
+class _RaisingPortfolioStatus:
+    """The evaluator itself blows up (a bug, a connection failure) -- never
+    isolated as a per-project PortfolioProjectFailure, since it never
+    gets that far."""
+
+    async def evaluate_portfolio(self, **_kwargs: Any):
+        raise RuntimeError("portfolio evaluator exploded")
+
+
+class _HangingPortfolioStatus:
+    """Never returns within the plan's own per_step_timeout_seconds --
+    the executor's asyncio.wait_for cancels it from the outside."""
+
+    async def evaluate_portfolio(self, **_kwargs: Any):
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable -- the executor must cancel this first")
+
+
 def _health_profile_result(subject_id: str) -> HealthProfileResult:
     return HealthProfileResult(
         subject_kind=RuleApplicability.PROJECT,
@@ -208,9 +235,7 @@ def _health_profile_result(subject_id: str) -> HealthProfileResult:
     )
 
 
-def _plan_executor(
-    portfolio_status: _FakePortfolioStatus | _DynamicPortfolioStatus,
-) -> PlanExecutor:
+def _plan_executor(portfolio_status: Any) -> PlanExecutor:
     registry = StepRegistry()
     register_wave_3_1_steps(
         registry,
@@ -221,6 +246,20 @@ def _plan_executor(
         portfolio_status=portfolio_status,
     )
     return PlanExecutor(registry=registry, now=fixed_now)
+
+
+def _short_timeout_plan_registry(seconds: int) -> dict[QuestionIntentID, Any]:
+    """WAVE_3_1_PLANS_BY_INTENT with status.portfolio.v1's own
+    per_step_timeout_seconds shrunk, so a hanging evaluator test does not
+    need to actually wait out the real 120s plan ceiling."""
+
+    portfolio_plan = WAVE_3_1_PLANS_BY_INTENT[QuestionIntentID.PORTFOLIO_STATUS]
+    return {
+        **WAVE_3_1_PLANS_BY_INTENT,
+        QuestionIntentID.PORTFOLIO_STATUS: portfolio_plan.model_copy(
+            update={"per_step_timeout_seconds": seconds}
+        ),
+    }
 
 
 @pytest.mark.asyncio
@@ -255,7 +294,9 @@ async def test_named_project_cohort_batches_both_projects_through_the_portfolio_
     call = portfolio_status.calls[0]
     project_ids = {scope.project_id for scope in call["projects"]}
     assert project_ids == {ASK_DEV_PROJECT.canonical_id, NIGHTFALL_PROJECT.canonical_id}
-    # Budget: min(120/N, 15s) sliced across the batch.
+    # The per-project ceiling (CHAOS-3393 codex MED-4: a fixed constant,
+    # never a flat N-division -- the batch's own monotonic deadline, not
+    # this ceiling, is what actually bounds the whole batch's wall-clock).
     assert call["per_project_timeout_seconds"] == pytest.approx(15.0)
 
     recorder = output.recorder
@@ -287,6 +328,44 @@ async def test_named_project_cohort_batches_both_projects_through_the_portfolio_
     assert frame.subject_ref is None
     assert len(frame.portfolio_project_statuses) == 2
     assert frame.portfolio_project_statuses_truncated is False
+
+
+@pytest.mark.asyncio
+async def test_the_batch_deadline_reserves_overhead_below_the_step_timeout():
+    """CHAOS-3393 codex MED-4: the step must pass a real, positive
+    ``batch_deadline_seconds`` to the evaluator -- strictly LESS than the
+    step's own ``per_step_timeout_seconds`` ceiling (never equal to it,
+    which was the original zero-margin defect: any per-project latency at
+    all would race the outer executor timeout and lose)."""
+
+    portfolio_status = _FakePortfolioStatus(
+        PortfolioStatusResult(
+            projects=(
+                _health_profile_result(ASK_DEV_PROJECT.canonical_id),
+                _health_profile_result(NIGHTFALL_PROJECT.canonical_id),
+            ),
+            counts_by_worst_state={},
+            failures=(),
+            unresolved_mention_ids=(),
+            ambiguous_mention_ids=(),
+            warnings=(),
+            evaluated_at=_NOW,
+        )
+    )
+    await run_preflight_orchestrator(
+        question="What is the status of project Ask Dev and project Nightfall?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, NIGHTFALL_PROJECT)],
+        script_id="chaos3393-batch-deadline",
+        recorder_factory=InvestigationRecorder,
+        plan_registry=WAVE_3_1_PLANS_BY_INTENT,
+        plan_executor=_plan_executor(portfolio_status),
+        registry_factory=_valid_evidence_registry,
+    )
+
+    assert len(portfolio_status.calls) == 1
+    deadline = portfolio_status.calls[0]["batch_deadline_seconds"]
+    assert deadline is not None
+    assert 0 < deadline < PORTFOLIO_PLAN_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
@@ -376,3 +455,136 @@ async def test_organization_wide_truncation_is_disclosed_in_the_answer():
     frame = recorder.frames[-1]
     assert frame.subject_set_ref is not None
     assert "authorized projects" in frame.direct_answer
+
+
+@pytest.mark.asyncio
+async def test_evaluator_exception_never_lets_model_prose_reach_the_wire():
+    """CHAOS-3393 codex HIGH-2: PortfolioStatusService.evaluate_portfolio
+    itself raises (never isolated as a per-project PortfolioProjectFailure,
+    since it never gets that far) -- the executor marks the whole step
+    failed, investigation_result carries zero portfolio rows, and
+    render_portfolio_summary has nothing to render. The model's own
+    unconstrained final-answer prose about the portfolio must NEVER reach
+    the wire in this case: the frame must carry a deterministic,
+    zero-claim degraded result instead.
+    """
+
+    output = await run_preflight_orchestrator(
+        question="What is the status of project Ask Dev and project Nightfall?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, NIGHTFALL_PROJECT)],
+        script_id="chaos3393-evaluator-exception",
+        recorder_factory=InvestigationRecorder,
+        plan_registry=WAVE_3_1_PLANS_BY_INTENT,
+        plan_executor=_plan_executor(_RaisingPortfolioStatus()),
+        registry_factory=_valid_evidence_registry,
+    )
+
+    recorder = output.recorder
+    assert isinstance(recorder, InvestigationRecorder)
+    result = recorder.results[0]
+    assert result.failed_steps == ("portfolio_status_evaluation",)
+    assert result.observations[0].content is None
+
+    assert recorder.frames, "a frame must have been recorded"
+    frame = recorder.frames[-1]
+    # The deterministic override, never the scripted model's own answer
+    # text (see tests._chaos_3292_preflight.answer_payload / status_then_
+    # answer -- the model's canned final answer never mentions "did not
+    # complete").
+    assert "did not complete" in frame.direct_answer
+    assert frame.facts == ()
+    assert frame.health_findings == ()
+
+
+@pytest.mark.asyncio
+async def test_outer_step_timeout_never_lets_model_prose_reach_the_wire():
+    """CHAOS-3393 codex HIGH-2, the second prescribed path: the evaluator
+    never returns at all within the plan's own per_step_timeout_seconds --
+    the executor's asyncio.wait_for cancels it from the outside (never a
+    per-project PortfolioProjectFailure -- that isolation lives INSIDE
+    PortfolioStatusService.evaluate_portfolio, which this fake never
+    reaches the return of). Same requirement: no model prose on the wire.
+    """
+
+    output = await run_preflight_orchestrator(
+        question="What is the status of project Ask Dev and project Nightfall?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, NIGHTFALL_PROJECT)],
+        script_id="chaos3393-outer-timeout",
+        recorder_factory=InvestigationRecorder,
+        plan_registry=_short_timeout_plan_registry(1),
+        plan_executor=_plan_executor(_HangingPortfolioStatus()),
+        registry_factory=_valid_evidence_registry,
+    )
+
+    recorder = output.recorder
+    assert isinstance(recorder, InvestigationRecorder)
+    result = recorder.results[0]
+    assert result.failed_steps == ("portfolio_status_evaluation",)
+    assert result.observations[0].content is None
+
+    assert recorder.frames, "a frame must have been recorded"
+    frame = recorder.frames[-1]
+    assert "did not complete" in frame.direct_answer
+    assert frame.facts == ()
+    assert frame.health_findings == ()
+
+
+@pytest.mark.asyncio
+async def test_a_project_named_with_a_denylisted_token_does_not_fail_closed():
+    """CHAOS-3393 codex MED-2: a project's ``display_label`` is provider/
+    catalog-authored text, and ``orchestrator.finish()`` leak-scans every
+    user-visible field against ``INTERNAL_TOKEN_DENYLIST`` before a run may
+    complete. ``"not_ready"`` is a real, confirmed member of that denylist
+    (``StatusChangeReason.NOT_READY``) that is NOT in the narrower
+    ``NEVER_ATTESTABLE_TOKENS`` set -- so a project genuinely named
+    "not_ready" must still be attestable, never punished with a false-
+    positive fail-closed to ``internal_error`` just because its own real
+    name collides with Ask Dev's internal vocabulary.
+
+    Without ``orchestrator.portfolio_attested_labels`` wired into
+    ``finish(..., extra_attested=...)``, this run WOULD fail closed: the
+    label reaches the wire unattested via ``render_portfolio_summary``'s
+    ``failed_labels`` inside ``direct_answer``.
+
+    Driven through the ORGANIZATION_WIDE (unnamed, catalog-enumerated) path
+    rather than a named PLURAL_COHORT mention: ``orchestrator.
+    _ENTITY_NAME_PATTERN`` (the NL mention-extraction regex) requires a
+    leading-uppercase, underscore-free span, so a literal ``"not_ready"``
+    could never itself be typed as a resolvable mention in question text --
+    but the org-wide enumeration path reads every catalog-committed
+    project's real label directly, with no such constraint, exactly as
+    ``test_organization_wide_truncation_is_disclosed_in_the_answer`` does.
+    """
+
+    bad_label_project = AuthorizedEntity(EntityKind.PROJECT, "project-bad", "not_ready")
+    portfolio_status = _FakePortfolioStatus(
+        PortfolioStatusResult(
+            projects=(_health_profile_result(ASK_DEV_PROJECT.canonical_id),),
+            counts_by_worst_state={},
+            failures=(
+                PortfolioProjectFailure(
+                    project_id=bad_label_project.canonical_id, error="timeout"
+                ),
+            ),
+            unresolved_mention_ids=(),
+            ambiguous_mention_ids=(),
+            warnings=(),
+            evaluated_at=_NOW,
+        )
+    )
+    output = await run_preflight_orchestrator(
+        question="What is the portfolio status?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, bad_label_project)],
+        script_id="chaos3393-denylisted-label",
+        recorder_factory=InvestigationRecorder,
+        plan_registry=WAVE_3_1_PLANS_BY_INTENT,
+        plan_executor=_plan_executor(portfolio_status),
+        registry_factory=_valid_evidence_registry,
+    )
+
+    assert output.result.state is RunState.COMPLETED
+    recorder = output.recorder
+    assert isinstance(recorder, InvestigationRecorder)
+    assert recorder.frames, "a frame must have been recorded"
+    frame = recorder.frames[-1]
+    assert "not_ready" in frame.direct_answer

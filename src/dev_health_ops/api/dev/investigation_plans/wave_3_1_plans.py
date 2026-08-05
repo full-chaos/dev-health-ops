@@ -76,6 +76,8 @@ from .state_mapping import queried_semantics
 from .steps import PlanStepDefinition, StepContext, StepOutcome, StepRegistry
 
 __all__ = [
+    "PORTFOLIO_BATCH_DEADLINE_RESERVE_SECONDS",
+    "PORTFOLIO_BATCH_DEADLINE_SECONDS",
     "PORTFOLIO_PROJECT_TIMEOUT_CEILING_SECONDS",
     "PORTFOLIO_PLAN_TIMEOUT_SECONDS",
     "WAVE_3_1_PLANS_BY_INTENT",
@@ -84,7 +86,6 @@ __all__ = [
     "capped_deficiency_findings",
     "capped_health_findings",
     "capped_portfolio_project_statuses",
-    "portfolio_project_timeout_seconds",
     "register_wave_3_1_steps",
 ]
 
@@ -198,6 +199,7 @@ class _PortfolioStatusEvaluator(Protocol):
         ambiguous_mention_ids: Sequence[str] = (),
         warnings: Sequence[str] = (),
         per_project_timeout_seconds: float | None = None,
+        batch_deadline_seconds: float | None = None,
     ) -> PortfolioStatusResult: ...
 
 
@@ -384,23 +386,28 @@ PORTFOLIO_PLAN_TIMEOUT_SECONDS = 120
 #: still may not consume the whole 120s step budget on one slow project.
 PORTFOLIO_PROJECT_TIMEOUT_CEILING_SECONDS = 15.0
 
+#: CHAOS-3393 codex MED-4: margin reserved BELOW the step's own
+#: ``per_step_timeout_seconds`` ceiling for everything that happens between
+#: ``PortfolioStatusService.evaluate_portfolio`` returning and the
+#: executor's own outer ``asyncio.wait_for`` actually observing the step as
+#: complete (content assembly, StepOutcome construction, event-loop
+#: scheduling) -- never zero. The original ``min(120/N, 15)`` per-project
+#: division had NO such margin: at N=25 each slice was exactly 4.8s, so the
+#: 25 slices summed to exactly the step's own 120s ceiling, and any real
+#: per-project latency at all raced the outer timeout and lost (a total,
+#: undisclosed "did not complete" failure -- see HIGH-2 -- instead of a
+#: partial, disclosed one).
+PORTFOLIO_BATCH_DEADLINE_RESERVE_SECONDS = 10.0
 
-def portfolio_project_timeout_seconds(project_count: int) -> float:
-    """CHAOS-3393 budget: ``min(120 / N, 15s)`` -- the plan's own budget
-    ceiling divided evenly across the batch, capped per-project so no
-    single slow project can starve the rest of the batch's share of the
-    step's 120s contract ceiling. ``project_count <= 0`` (defensive; the
-    step never calls this with an empty batch -- see
-    ``portfolio_status_evaluation_run``) falls back to the per-project
-    ceiling itself.
-    """
-
-    if project_count <= 0:
-        return PORTFOLIO_PROJECT_TIMEOUT_CEILING_SECONDS
-    return min(
-        PORTFOLIO_PLAN_TIMEOUT_SECONDS / project_count,
-        PORTFOLIO_PROJECT_TIMEOUT_CEILING_SECONDS,
-    )
+#: The batch's own monotonic deadline (see ``portfolio_status_service.
+#: PortfolioStatusService.evaluate_portfolio``'s ``batch_deadline_seconds``)
+#: -- strictly less than ``PORTFOLIO_PLAN_TIMEOUT_SECONDS`` so the batch
+#: always finishes (real results plus bounded timeout rows for whatever did
+#: not fit) comfortably before the step's own outer ceiling would cancel
+#: the whole step wholesale.
+PORTFOLIO_BATCH_DEADLINE_SECONDS = (
+    PORTFOLIO_PLAN_TIMEOUT_SECONDS - PORTFOLIO_BATCH_DEADLINE_RESERVE_SECONDS
+)
 
 
 def capped_portfolio_project_statuses(
@@ -630,9 +637,8 @@ def register_wave_3_1_steps(
             permission_fingerprint=ctx.permission_fingerprint,
             projects=projects,
             now=ctx.now,
-            per_project_timeout_seconds=portfolio_project_timeout_seconds(
-                len(projects)
-            ),
+            per_project_timeout_seconds=PORTFOLIO_PROJECT_TIMEOUT_CEILING_SECONDS,
+            batch_deadline_seconds=PORTFOLIO_BATCH_DEADLINE_SECONDS,
         )
         return _portfolio_status_outcome(
             result, labels_by_project_id=labels_by_project_id

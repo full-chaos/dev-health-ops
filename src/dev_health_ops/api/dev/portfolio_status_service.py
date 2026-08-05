@@ -16,7 +16,8 @@ every project's own findings stay independent; only the *ordering* and
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -42,11 +43,13 @@ MAX_PORTFOLIO_PROJECTS = 25
 
 #: CHAOS-3393 fallback per-project evaluation timeout when a caller does not
 #: pass its own (every real caller does -- see
-#: ``investigation_plans.wave_3_1_plans.portfolio_project_timeout_seconds``,
-#: which slices the plan's own 120s step budget across the batch). Kept
-#: local and finite rather than unbounded so a caller that forgets to pass
-#: one still cannot let a single hung project stall the whole batch
-#: indefinitely.
+#: ``investigation_plans.wave_3_1_plans.PORTFOLIO_PROJECT_TIMEOUT_CEILING_
+#: SECONDS`` / ``PORTFOLIO_BATCH_DEADLINE_SECONDS``, which bound the plan's
+#: own 120s step budget across the batch via a monotonic deadline -- see
+#: ``evaluate_portfolio``'s own ``batch_deadline_seconds`` docstring, CHAOS-
+#: 3393 codex MED-4). Kept local and finite rather than unbounded so a
+#: caller that forgets to pass one still cannot let a single hung project
+#: stall the whole batch indefinitely.
 DEFAULT_PROJECT_TIMEOUT_SECONDS = 15.0
 
 #: Worst-to-best ordering for deterministic portfolio ranking. Lower sorts
@@ -158,6 +161,8 @@ class PortfolioStatusService:
         ambiguous_mention_ids: Sequence[str] = (),
         warnings: Sequence[str] = (),
         per_project_timeout_seconds: float | None = None,
+        batch_deadline_seconds: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> PortfolioStatusResult:
         if not projects:
             raise ValueError("evaluate_portfolio requires at least one project")
@@ -182,19 +187,55 @@ class PortfolioStatusService:
         # execution costs determinism nothing and removes the concurrency
         # hazard outright, rather than introducing a second, parallel
         # per-task-session lifecycle this service does not own.
-        # CHAOS-3393: per-project timeout slice, so one slow/hung project
+        # CHAOS-3393: per-project timeout ceiling, so one slow/hung project
         # cannot consume the whole batch's share of the step's own budget
         # ceiling (``per_step_timeout_seconds`` on ``status.portfolio.v1``)
         # -- isolated as a PortfolioProjectFailure("timeout"), exactly like
         # any other per-project failure, never a whole-batch failure.
-        slice_seconds = (
+        #
+        # CHAOS-3393 codex MED-4: a FIXED per-project slice (the original
+        # ``min(120/N, 15)`` division, computed once, up front) has ZERO
+        # margin against the step's own outer ``per_step_timeout_seconds``
+        # ceiling -- at N=25 each slice is exactly 4.8s, so any real
+        # per-project latency at all guarantees the whole batch is
+        # cancelled from OUTSIDE by the executor (a total, undisclosed
+        # "did not complete" failure -- see HIGH-2) rather than returning
+        # a partial, disclosed result. ``batch_deadline_seconds`` (when the
+        # caller passes one -- see ``investigation_plans.wave_3_1_plans``,
+        # which reserves overhead below the step's own ceiling) makes this
+        # a MONOTONIC budget instead: each project's own slice is derived
+        # from the time ACTUALLY REMAINING against that deadline, capped at
+        # the per-project ceiling, and the moment the deadline has already
+        # elapsed, every remaining unstarted project converts to a bounded
+        # timeout row immediately -- never even attempted -- so the batch
+        # as a whole always returns comfortably inside the outer ceiling.
+        # ``clock`` defaults to the real wall clock; tests inject a
+        # deterministic fake so this can be proven without ever sleeping.
+        ceiling_seconds = (
             per_project_timeout_seconds
             if per_project_timeout_seconds is not None
             else DEFAULT_PROJECT_TIMEOUT_SECONDS
         )
+        deadline = (
+            clock() + batch_deadline_seconds
+            if batch_deadline_seconds is not None
+            else None
+        )
         results: list[HealthProfileResult] = []
         failures: list[PortfolioProjectFailure] = []
         for item in projects:
+            if deadline is not None:
+                remaining = deadline - clock()
+                if remaining <= 0:
+                    failures.append(
+                        PortfolioProjectFailure(
+                            project_id=item.project_id, error="timeout"
+                        )
+                    )
+                    continue
+                slice_seconds = min(ceiling_seconds, remaining)
+            else:
+                slice_seconds = ceiling_seconds
             try:
                 result = await asyncio.wait_for(
                     self._project_health_service.evaluate_project(

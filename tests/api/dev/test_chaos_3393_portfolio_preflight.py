@@ -197,3 +197,89 @@ async def test_organization_wide_portfolio_discloses_truncation_past_the_cap() -
     assert any(
         "authorized projects" in warning for warning in result.subject_set.warnings
     )
+
+
+@pytest.mark.asyncio
+async def test_organization_wide_portfolio_fails_closed_on_catalog_outage() -> None:
+    """CHAOS-3393 codex MED-3: a catalog OUTAGE during ORGANIZATION_WIDE
+    project enumeration must never be conflated with an authoritative,
+    confirmed-zero organization -- the prior behavior fell back to the
+    ordinary organization-wide PROCEED (``allowed_tools=ALL_TOOLS``) on
+    BOTH, silently granting unrestricted model-tool access during a
+    transient catalog failure. This must instead fail closed: TERMINATE,
+    TEMPORARILY_UNAVAILABLE, zero tools.
+    """
+
+    result = await _run(
+        _preflight(
+            [(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, NIGHTFALL_PROJECT)],
+            fail_search=True,
+        ),
+        request_for("What is the portfolio status?"),
+    )
+
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.TEMPORARILY_UNAVAILABLE
+    assert result.allowed_tools == frozenset()
+    assert result.subject_set is None
+    assert result.committed_resolution is None
+    # Never the ordinary org-wide fallback diagnostic -- that would prove
+    # the outage was silently conflated with a confirmed-empty catalog.
+    assert result.diagnostic != "proceeded_organization_wide"
+
+
+@pytest.mark.asyncio
+async def test_an_unresolved_non_project_mention_terminates_a_portfolio_cohort() -> (
+    None
+):
+    """CHAOS-3393 codex MED-1: D2's partial-cohort relaxation (>=2 distinct
+    resolved entities lets an unresolved mention be OMITTED rather than
+    terminate) must NOT apply to a PORTFOLIO_STATUS question -- the
+    omitted mention here is a TEAM, a kind the portfolio plan can never
+    execute, and D2's own kind-blind >=2-count check would otherwise let
+    it silently vanish while the run proceeds on the two resolved
+    projects alone. Portfolio execution requires every typed mention to
+    resolve exactly; any unresolved/ambiguous mention terminates the run,
+    the same as a SINGULAR commit's own lowest-ordinal-unresolved rule.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT), (ORG_ID, NIGHTFALL_PROJECT)]),
+        request_for(
+            "What is the status of project Ask Dev, project Nightfall, and team Ghost?"
+        ),
+    )
+
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.NOT_FOUND
+    # Never proceeded on the two resolved projects alone.
+    assert result.subject_set is None
+    assert result.committed_resolution is None
+
+
+@pytest.mark.asyncio
+async def test_an_ambiguous_non_project_mention_terminates_a_portfolio_cohort() -> None:
+    """Same MED-1 gap, the AMBIGUOUS_CANDIDATES half: a same-name team
+    ambiguity must also terminate a portfolio cohort rather than being
+    omitted as D2 would otherwise allow."""
+
+    ambiguous_team_a = AuthorizedEntity(EntityKind.TEAM, "team-ghost-1", "Ghost")
+    ambiguous_team_b = AuthorizedEntity(EntityKind.TEAM, "team-ghost-2", "Ghost")
+    result = await _run(
+        _preflight(
+            [
+                (ORG_ID, ASK_DEV_PROJECT),
+                (ORG_ID, NIGHTFALL_PROJECT),
+                (ORG_ID, ambiguous_team_a),
+                (ORG_ID, ambiguous_team_b),
+            ]
+        ),
+        request_for(
+            "What is the status of project Ask Dev, project Nightfall, and team Ghost?"
+        ),
+    )
+
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.NEEDS_CLARIFICATION
+    assert result.subject_set is None
+    assert result.committed_resolution is None

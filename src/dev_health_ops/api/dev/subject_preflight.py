@@ -373,6 +373,9 @@ class SubjectPreflight:
                     org_id=org_id,
                     permission_fingerprint=permission_fingerprint,
                     generated_at=generated_at,
+                    run_id=run_id,
+                    answer_id=answer_id,
+                    conversation_id=conversation_id,
                 )
             # Organization-wide by derivation, not by fallback: the question
             # named nothing, so there is no subject to get wrong. This is the
@@ -488,6 +491,21 @@ class SubjectPreflight:
                 )
         cohort_may_proceed_partial = (
             intent.cardinality is Cardinality.PLURAL_COHORT
+            # CHAOS-3393 codex MED-1: D2's own kind-blind ">=2 distinct
+            # resolved entities" relaxation must never apply to
+            # PORTFOLIO_STATUS -- status.portfolio.v1 can only ever batch
+            # PROJECT subjects (see the homogeneous-cohort gate below), so
+            # an omitted mention here could be a TEAM (or any other kind)
+            # D2 has no way to notice, silently dropped while the run
+            # proceeds to REAL EXECUTION on the mentions that did resolve.
+            # Every other CHAOS-3301 cohort intent still terminates
+            # UNSUPPORTED regardless of this flag (D2 only ever changes
+            # whether an omission is disclosed-and-committed vs.
+            # terminal, never whether the v1 surface can render it), so
+            # this is safe to tighten for PORTFOLIO_STATUS alone: portfolio
+            # execution requires every typed mention to resolve exactly,
+            # full stop.
+            and intent.intent_id is not QuestionIntentID.PORTFOLIO_STATUS
             and len(blocking_committed_entities) >= 2
         )
         if not cohort_may_proceed_partial:
@@ -848,6 +866,9 @@ class SubjectPreflight:
         org_id: str,
         permission_fingerprint: str,
         generated_at: datetime,
+        run_id: str,
+        answer_id: str,
+        conversation_id: str,
     ) -> SubjectPreflightResult:
         """CHAOS-3393: an ORGANIZATION_WIDE ``status.portfolio.v1`` question
         named no subjects at all, so there is nothing for the usual mention-
@@ -871,11 +892,36 @@ class SubjectPreflight:
         omitted *mentions*, and an org-wide enumeration names none), so
         cap truncation rides the warnings channel instead, exactly like a
         partial cohort's own unresolved-mention disclosure does.
+
+        CHAOS-3393 codex MED-3: a catalog OUTAGE (``catalog_available``
+        False) is never treated as "zero authorized projects" -- that
+        conflation used to fall back to the SAME ordinary organization-wide
+        PROCEED as a confirmed-empty catalog, silently granting the
+        unrestricted ``ALL_TOOLS`` legacy loop during a transient failure
+        the caller had no way to detect. An outage instead terminates,
+        fails closed (zero tools), and discloses a bounded, honest
+        "temporarily unavailable" -- never a fabricated or substituted
+        organization-wide answer.
         """
 
-        entities, total = await self._scope_service.organization_committed_projects(
+        (
+            entities,
+            total,
+            catalog_available,
+        ) = await self._scope_service.organization_committed_projects(
             org_id, permission_fingerprint, limit=MAX_PORTFOLIO_PROJECTS
         )
+        if not catalog_available:
+            return self._terminate(
+                interpretation=interpretation,
+                ledger=None,
+                outcome=PublicOutcome.TEMPORARILY_UNAVAILABLE,
+                diagnostic="portfolio_catalog_unavailable",
+                run_id=run_id,
+                answer_id=answer_id,
+                conversation_id=conversation_id,
+                generated_at=generated_at,
+            )
         if not entities:
             return SubjectPreflightResult(
                 decision=PreflightDecision.PROCEED,

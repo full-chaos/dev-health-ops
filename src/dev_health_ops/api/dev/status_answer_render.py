@@ -723,6 +723,50 @@ _DIMENSION_STATE_COPY: Mapping[str, str] = {
 }
 
 
+#: CHAOS-3393 codex MED-2. A portfolio project's ``display_label`` is
+#: provider/catalog-authored text (a project name) -- unlike every OTHER
+#: string this module ever interpolates into user-visible copy (all fixed,
+#: closed-vocabulary translations), it carries no guarantee against
+#: embedded control characters/newlines that could inject fake structure
+#: into a single narrative sentence, or an unbounded length. Mirrors
+#: ``preflight_outcomes._MAX_CANDIDATE_LABEL_CHARS`` (120) -- a person
+#: reads this sentence, not a data dump.
+_MAX_NARRATIVE_LABEL_CHARS = 120
+_UNNAMED_PROJECT_LABEL = "(unnamed project)"
+
+
+def _safe_narrative_label(raw: str) -> str:
+    """A bounded, single-line, inert rendering of one project's own
+    ``display_label`` for narrative (``direct_summary``) interpolation.
+
+    Every ASCII control character (newlines included -- CHAOS-3393 codex
+    MED-2: a label must never be able to inject a fake line break into
+    this renderer's single narrative sentence) collapses to a single
+    space, the result is truncated to :data:`_MAX_NARRATIVE_LABEL_CHARS`,
+    and an empty result after stripping falls back to a fixed, safe
+    placeholder rather than an empty/invisible list entry. Deliberately
+    does NOT scrub markup (``<script>``, ``**bold**``, ...) -- this is a
+    plain-text API response with no server-side HTML/Markdown rendering
+    downstream, so there is no injection surface for it; the load-bearing
+    guarantee here is single-line-ness and boundedness.
+
+    A denylisted-token collision (a project genuinely named e.g.
+    ``"not_ready"``) is deliberately NOT handled here: this function
+    controls SHAPE, not vocabulary membership. That case is instead
+    covered by attesting portfolio labels at the ``orchestrator.finish()``
+    leak-scan seam (the same trust tier ``no_match_terminal.
+    attested_strings`` already grants evidence/candidate display labels),
+    so a legitimate catalog-confirmed name is never fail-closed over a
+    coincidental token match.
+    """
+
+    inert = "".join(" " if ord(ch) < 0x20 else ch for ch in raw)
+    inert = " ".join(inert.split())
+    if not inert:
+        return _UNNAMED_PROJECT_LABEL
+    return inert[:_MAX_NARRATIVE_LABEL_CHARS]
+
+
 def render_portfolio_summary(
     investigation_result: DevInvestigationResult | None,
     *,
@@ -789,8 +833,12 @@ def render_portfolio_summary(
     if failed:
         # Bounded to the same _MAX_NAMED_CANDIDATES-style discipline as
         # preflight_outcomes._name_candidates -- a person reads this
-        # sentence, not a data dump.
-        failed_labels = ", ".join(row.display_label for row in failed[:5])
+        # sentence, not a data dump. Each label is rendered through
+        # _safe_narrative_label (CHAOS-3393 codex MED-2) -- never the raw
+        # provider-authored display_label.
+        failed_labels = ", ".join(
+            _safe_narrative_label(row.display_label) for row in failed[:5]
+        )
         suffix = "" if len(failed) <= 5 else f" (+{len(failed) - 5} more)"
         parts.append(
             f"{len(failed)} project(s) could not be evaluated: {failed_labels}{suffix}."

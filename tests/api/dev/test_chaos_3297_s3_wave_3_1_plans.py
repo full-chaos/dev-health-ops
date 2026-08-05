@@ -350,6 +350,7 @@ class _FakePortfolioStatus:
         ambiguous_mention_ids=(),
         warnings=(),
         per_project_timeout_seconds=None,
+        batch_deadline_seconds=None,
     ):
         self.calls.append(
             {
@@ -358,6 +359,7 @@ class _FakePortfolioStatus:
                 "projects": tuple(projects),
                 "now": now,
                 "per_project_timeout_seconds": per_project_timeout_seconds,
+                "batch_deadline_seconds": batch_deadline_seconds,
             }
         )
         return self._result

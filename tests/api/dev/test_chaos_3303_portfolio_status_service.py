@@ -481,3 +481,153 @@ async def test_evaluate_portfolio_never_overlaps_single_session_runtime_calls() 
     )
     assert len(result.projects) == len(project_ids)
     assert not result.failures
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3393 codex MED-4: N=25 sequential per-project slices at a fixed
+# min(120/N, 15) division have ZERO margin against the step's own
+# per_step_timeout_seconds=120 outer ceiling -- any real per-project latency
+# at all guarantees the whole batch is cancelled from OUTSIDE (a total,
+# undisclosed "did not complete" failure) rather than returning a partial,
+# disclosed result. The fix: a monotonic batch deadline, each project's own
+# slice derived from the TIME ACTUALLY REMAINING (never a fixed division),
+# and every unstarted project converted to a bounded timeout row THE MOMENT
+# the deadline elapses -- so the batch always returns comfortably inside the
+# outer ceiling, with real data for the projects that had time and a clean,
+# disclosed timeout row for the ones that didn't.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _ClockAdvancingPortfolioRuntime:
+    """Every ``status_snapshot`` call both simulates one project's real
+    processing time (advancing the shared, test-controlled monotonic clock
+    by ``advance_seconds``) AND records that it actually ran -- so a test
+    can assert exactly which projects were evaluated versus converted to a
+    bounded timeout row without ever incurring a real ``asyncio.sleep``.
+    """
+
+    clock_state: list[float]
+    advance_seconds: float
+    evaluated_project_ids: list[str]
+
+    async def status_snapshot(self, *, org_id, permission_fingerprint, scope):
+        project_id = scope.entity_refs[0].entity_id
+        self.evaluated_project_ids.append(project_id)
+        self.clock_state[0] += self.advance_seconds
+        return _snapshot(incident_count=1)
+
+    async def change_summary(self, *, org_id, permission_fingerprint, scope):
+        raise NotImplementedError
+
+    def list_metrics(self, scope):
+        return ()
+
+    async def query_metric(self, *, org_id, permission_fingerprint, metric_id, scope):
+        return MetricQueryResult(
+            definition=get_metric(MetricID.CHANGE_FAILURE_RATE),
+            state=MetricDataState.ZERO,
+            freshness=FreshnessState.FRESH,
+            values=(
+                MetricQueryValue(
+                    dimensions=(), value=0.0, comparison_value=0.0, series=()
+                ),
+            ),
+            coverage=1.0,
+            current_window_start=_NOW,
+            current_window_end=_NOW,
+            comparison_window_start=_NOW,
+            comparison_window_end=_NOW,
+            watermark=_NOW,
+            source_refs=(),
+        )
+
+    async def work_graph_neighbors(self, *, org_id, permission_fingerprint, scope):
+        raise NotImplementedError
+
+    async def data_health(self, *, org_id, permission_fingerprint, scope):
+        return DataHealthResult(sources=(), complete_eligible=True)
+
+    def mint_evidence(
+        self,
+        *,
+        org_id,
+        source_system,
+        source_version,
+        entity_type,
+        entity_id,
+        display_label,
+        observed_at,
+        freshness,
+        confidence=1.0,
+        valid_entity_ids=(),
+        repository_ids=(),
+    ):
+        raise AssertionError("not exercised by this suite")
+
+
+@pytest.mark.asyncio
+async def test_evaluate_portfolio_n25_converts_unstarted_projects_before_the_deadline() -> (
+    None
+):
+    """N=25, a 1.0s clock advance per project, and a 20.0s batch deadline:
+    the 21st project's own pre-flight ``remaining`` check sees the deadline
+    already elapsed (20 prior projects * 1.0s == the deadline exactly) and
+    converts it -- and every project after it -- to a bounded timeout row
+    WITHOUT ever calling ``evaluate_project`` for them. Exactly 20 real
+    evaluations happen; the fake runtime's own call log proves it.
+    """
+
+    project_ids = [f"proj-{i:02}" for i in range(25)]
+    clock_state = [0.0]
+    runtime = _ClockAdvancingPortfolioRuntime(
+        clock_state=clock_state, advance_seconds=1.0, evaluated_project_ids=[]
+    )
+    service = PortfolioStatusService(ProjectHealthService(runtime))
+
+    result = await service.evaluate_portfolio(
+        org_id=_ORG_ID,
+        permission_fingerprint="fp",
+        projects=tuple(PortfolioProjectScope(_scope(pid)) for pid in project_ids),
+        now=_NOW,
+        per_project_timeout_seconds=15.0,
+        batch_deadline_seconds=20.0,
+        clock=lambda: clock_state[0],
+    )
+
+    # Exactly the first 20 projects were ever handed to the runtime -- the
+    # remaining 5 were converted to timeout rows pre-flight, never started.
+    assert runtime.evaluated_project_ids == project_ids[:20]
+    assert {p.subject_id for p in result.projects} == set(project_ids[:20])
+    assert {f.project_id for f in result.failures} == set(project_ids[20:])
+    assert all(f.error == "timeout" for f in result.failures)
+    # The batch as a whole still returns a full, disclosed 25-row result --
+    # never a total "did not complete" failure of the whole step.
+    assert len(result.projects) + len(result.failures) == 25
+
+
+@pytest.mark.asyncio
+async def test_evaluate_portfolio_with_no_batch_deadline_never_preempts() -> None:
+    """``batch_deadline_seconds=None`` (the default) must behave exactly as
+    before this fix -- no deadline tracking at all, every project attempted
+    regardless of a test-controlled clock that "elapses" instantly.
+    """
+
+    project_ids = [f"proj-{i:02}" for i in range(5)]
+    clock_state = [0.0]
+    runtime = _ClockAdvancingPortfolioRuntime(
+        clock_state=clock_state, advance_seconds=1000.0, evaluated_project_ids=[]
+    )
+    service = PortfolioStatusService(ProjectHealthService(runtime))
+
+    result = await service.evaluate_portfolio(
+        org_id=_ORG_ID,
+        permission_fingerprint="fp",
+        projects=tuple(PortfolioProjectScope(_scope(pid)) for pid in project_ids),
+        now=_NOW,
+        clock=lambda: clock_state[0],
+    )
+
+    assert runtime.evaluated_project_ids == project_ids
+    assert {p.subject_id for p in result.projects} == set(project_ids)
+    assert not result.failures

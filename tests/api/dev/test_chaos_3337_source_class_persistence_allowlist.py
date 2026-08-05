@@ -58,6 +58,10 @@ from dev_health_ops.api.dev.persistence import DevPersistenceService
 from dev_health_ops.api.dev.persistence.service import (
     _SOURCE_CLASSES as _PERSISTENCE_SOURCE_CLASSES,
 )
+from dev_health_ops.api.dev.scope_service import EntityKind
+from dev_health_ops.api.dev.scope_service import (
+    subject_set_fingerprint as _compute_subject_set_fingerprint,
+)
 from dev_health_ops.llm.agent.contracts import AgentUsage
 from dev_health_ops.models.dev_persistence import (
     DevAnswerFrame,
@@ -282,6 +286,7 @@ class _FakePortfolioStatus:
         ambiguous_mention_ids=(),
         warnings=(),
         per_project_timeout_seconds=None,
+        batch_deadline_seconds=None,
     ):
         from dev_health_ops.api.dev.portfolio_status_service import (
             PortfolioStatusResult,
@@ -317,11 +322,18 @@ async def _run_real_plan(
     scope: DevScope,
     *,
     subject_set_scopes: tuple[DevScope, ...] = (),
+    subject_set_fingerprint: str | None = None,
 ):
     """Run a REAL PlanExecutor over a REAL registered plan (production
     wiring end to end, fake CHAOS-3303/3304/3305/3393 services only),
     producing a genuine ``DevInvestigationResult`` -- never a hand-authored
     fixture.
+
+    CHAOS-3393 codex HIGH-1: a non-empty ``subject_set_scopes`` (the
+    portfolio batch) must be accompanied by the matching
+    ``subject_set_fingerprint`` -- the executor's own caller-authorization
+    receipt check (``executor.PlanExecutor.run``) fails the whole run
+    closed otherwise, exactly as it must for a real, unverified batch.
     """
 
     plan = WAVE_3_1_PLANS_BY_INTENT[intent_id]
@@ -332,6 +344,7 @@ async def _run_real_plan(
         context=_step_context(scope, subject_set_scopes=subject_set_scopes),
         run_id="run-1",
         subject_entity_id="proj-1" if not subject_set_scopes else None,
+        subject_set_fingerprint=subject_set_fingerprint,
     )
 
 
@@ -474,8 +487,19 @@ async def test_every_wave_3_1_intent_persists_through_the_real_write_path(
     subject_set_scopes = (
         (_project_scope(),) if intent_id is QuestionIntentID.PORTFOLIO_STATUS else ()
     )
+    # CHAOS-3393 codex HIGH-1: the batch's own caller-authorized receipt --
+    # recomputed from the SAME canonical formula the executor cross-checks
+    # against, never a hand-authored literal.
+    subject_set_fingerprint = (
+        _compute_subject_set_fingerprint(EntityKind.PROJECT, ["proj-1"])
+        if intent_id is QuestionIntentID.PORTFOLIO_STATUS
+        else None
+    )
     result = await _run_real_plan(
-        intent_id, scope_factory(), subject_set_scopes=subject_set_scopes
+        intent_id,
+        scope_factory(),
+        subject_set_scopes=subject_set_scopes,
+        subject_set_fingerprint=subject_set_fingerprint,
     )
 
     assert len(result.observations) >= 1

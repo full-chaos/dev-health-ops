@@ -1085,7 +1085,7 @@ async def test_organization_committed_projects_returns_labeled_bounded_page() ->
     catalog = FakeCatalog(entities)
     service = ScopeResolutionService(catalog)
 
-    projects, total = await service.organization_committed_projects(
+    projects, total, catalog_available = await service.organization_committed_projects(
         "org-a", "perm-a", limit=25
     )
 
@@ -1093,6 +1093,7 @@ async def test_organization_committed_projects_returns_labeled_bounded_page() ->
     # any non-PROJECT entity from the catalog.
     assert [entity.canonical_id for entity in projects] == ["project-a", "project-z"]
     assert total == 2
+    assert catalog_available is True
     assert catalog.organization_project_entities_calls == 1
 
 
@@ -1107,7 +1108,7 @@ async def test_organization_committed_projects_discloses_true_total_when_capped(
     catalog = FakeCatalog(entities)
     service = ScopeResolutionService(catalog)
 
-    projects, total = await service.organization_committed_projects(
+    projects, total, catalog_available = await service.organization_committed_projects(
         "org-a", "perm-a", limit=25
     )
 
@@ -1116,20 +1117,54 @@ async def test_organization_committed_projects_discloses_true_total_when_capped(
     # silently sampled "complete" page.
     assert len(projects) == 25
     assert total == 30
+    assert catalog_available is True
 
 
 @pytest.mark.asyncio
-async def test_organization_committed_projects_catalog_failure_is_empty() -> None:
+async def test_organization_committed_projects_catalog_failure_is_flagged_unavailable() -> (
+    None
+):
+    """CHAOS-3393 codex MED-3: a catalog OUTAGE must be distinguishable
+    from an authoritative, confirmed-zero enumeration -- ``([], 0)`` alone
+    is exactly the same shape either way, and the caller
+    (``subject_preflight._organization_wide_portfolio_result``) used to
+    treat both identically, silently widening a transient catalog failure
+    into an ordinary organization-wide PROCEED with unrestricted
+    ``ALL_TOOLS`` access. The third element makes the two cases
+    structurally distinct at the return-type level, not just in a comment.
+    """
+
     catalog = FakeCatalog([_entity(EntityKind.PROJECT, "project-a", "Alpha")])
     catalog.fail_organization_project_entities = True
     service = ScopeResolutionService(catalog)
 
-    projects, total = await service.organization_committed_projects(
+    projects, total, catalog_available = await service.organization_committed_projects(
         "org-a", "perm-a", limit=25
     )
 
     assert projects == []
     assert total == 0
+    assert catalog_available is False
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_projects_confirmed_zero_is_flagged_available() -> (
+    None
+):
+    """The other half of MED-3: an authoritative, confirmed-empty catalog
+    (the organization genuinely has zero authorized projects) is NOT
+    ``catalog_available=False`` -- only a real exception is."""
+
+    catalog = FakeCatalog([])
+    service = ScopeResolutionService(catalog)
+
+    projects, total, catalog_available = await service.organization_committed_projects(
+        "org-a", "perm-a", limit=25
+    )
+
+    assert projects == []
+    assert total == 0
+    assert catalog_available is True
 
 
 @pytest.mark.asyncio

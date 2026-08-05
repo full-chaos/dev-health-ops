@@ -804,6 +804,14 @@ class DevOrchestrator:
         #: summary's direct_summary below, since wrap_legacy_answer_as_
         #: frame's own `limitations` never reads DevSubjectSet.warnings.
         portfolio_subject_set_warnings: tuple[str, ...] = ()
+        #: CHAOS-3393 codex MED-2: the committed DevSubjectSet's own,
+        #: catalog-confirmed project display labels -- attested at the
+        #: finish() leak-scan seam (the same trust tier attested_strings
+        #: already grants evidence/candidate display labels) so a
+        #: legitimate project whose real name coincidentally matches an
+        #: internal denylisted token is never fail-closed over that
+        #: collision.
+        portfolio_attested_labels: tuple[str, ...] = ()
 
         async def transition(state: RunState, safe_code: str | None = None) -> None:
             event = OrchestratorEvent(state=state, safe_code=safe_code)
@@ -1568,6 +1576,10 @@ class DevOrchestrator:
                     if portfolio_subject_set is not None:
                         portfolio_subject_set_ref = portfolio_subject_set.set_id
                         portfolio_subject_set_warnings = portfolio_subject_set.warnings
+                        portfolio_attested_labels = tuple(
+                            ref.display_label
+                            for ref in portfolio_subject_set.committed_entity_refs
+                        )
 
             for round_index in range(self._limits.model_rounds):
                 del round_index
@@ -2196,6 +2208,37 @@ class DevOrchestrator:
                             validity_scope=resolution.resolved_scope,
                             subject_set_warnings=portfolio_subject_set_warnings,
                         )
+                    if (
+                        portfolio_subject_set_ref is not None
+                        and rendered_status is None
+                    ):
+                        # CHAOS-3393 codex HIGH-2: a committed portfolio
+                        # subject set ran the plan executor (subject_set_
+                        # scopes was passed in), but the resulting
+                        # investigation_result carries no usable rows at
+                        # all -- the evaluator raised, the whole step hit
+                        # the plan's own per_step_timeout_seconds ceiling,
+                        # or some other TOTAL failure the isolated
+                        # per-project PortfolioProjectFailure path never
+                        # reaches (that path always still produces rows).
+                        # render_portfolio_summary returning None here must
+                        # NEVER be read as "nothing to override" -- the
+                        # model's own unconstrained prose about a
+                        # portfolio it may never have actually seen must
+                        # not reach the wire. A deterministic, zero-claim
+                        # DEGRADED result always wins in this case,
+                        # regardless of what the model wrote, closing the
+                        # gap the validator's own PARTIAL-with-a-coverage-
+                        # gap allowance would otherwise leave open.
+                        rendered_status = (
+                            AnswerStatus.DEGRADED,
+                            (
+                                "Portfolio status could not be determined: "
+                                "the evaluation did not complete for any "
+                                "project in this batch."
+                            ),
+                            [],
+                        )
                     if rendered_status is not None:
                         det_status, det_direct_summary, det_claims = rendered_status
                         candidate["status"] = det_status.value
@@ -2475,7 +2518,11 @@ class DevOrchestrator:
                                     GUARD_DEMOTED_NAMED_ENTITY_STATUS
                                 ),
                             )
-                    return await finish(RunState.COMPLETED, answer=answer)
+                    return await finish(
+                        RunState.COMPLETED,
+                        answer=answer,
+                        extra_attested=portfolio_attested_labels,
+                    )
 
                 if isinstance(decision, AgentDisambiguation):
                     return await finish(

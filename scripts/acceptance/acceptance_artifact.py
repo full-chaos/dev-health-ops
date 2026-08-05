@@ -151,21 +151,17 @@ class AssertionResult:
 #: smoke scripts are excluded too: each is already bound by its own
 #: ``script_sha256``, and folding them in here would make editing one
 #: scenario invalidate the other thirteen.
-#: CHAOS-3219 Wave 4 Phase 1 Lane 1c / Codex round 2 (2026-08-05):
-#: tests/acceptance/compose.ask-dev-acr.yml (the optional, off-by-default
-#: ACR evidence-adapter overlay) is DELIBERATELY NOT added here yet, even
-#: though an ACR-relevant scenario's artifact should ideally be bound to it
-#: too. Adding a path here is not just a staleness/drift event
-#: DECLARED_STALE_ARTIFACTS can absorb -- every ALREADY-COMMITTED execution
-#: artifact would be missing that key from its `runtime_dependencies` map
-#: entirely, which `_recorded_dependency_errors` in wave31_manifest.py
-#: (correctly) treats as a structural error, unconditionally, before the
-#: drift-declaration logic ever runs (a missing key is not evidence of
-#: anything, staleness-declared or not). Landing this addition therefore
-#: requires re-minting all fourteen citing artifacts in the SAME change
-#: (team-lead ruling: that re-proof run happens once, on merged main, as
-#: the Phase 1 barrier -- not per-branch). Tracked as a Phase-1-barrier
-#: follow-up alongside this lane's commit, not implemented here.
+#: CHAOS-3219 Wave 4 Phase 1 Lane 1c deferred this addition (Codex round 2,
+#: 2026-08-05) to the Phase 1 barrier re-proof, because landing it requires
+#: re-minting every citing artifact in the SAME change -- a missing key in
+#: an already-committed artifact's `runtime_dependencies` map is a
+#: structural error in `_recorded_dependency_errors` (wave31_manifest.py),
+#: unconditionally, before drift-declaration logic ever runs (a missing key
+#: is not evidence of anything, staleness-declared or not). That barrier
+#: re-proof is THIS change: tests/acceptance/compose.ask-dev-acr.yml (the
+#: optional, off-by-default ACR evidence-adapter overlay) is now covered,
+#: and all fourteen citing artifacts were re-minted live against merged
+#: main in the same commit that added this path.
 RUNTIME_DEPENDENCY_PATHS: tuple[str, ...] = (
     "compose.yml",
     "docker/Dockerfile",
@@ -175,6 +171,7 @@ RUNTIME_DEPENDENCY_PATHS: tuple[str, ...] = (
     "scripts/acceptance/prepare_ask_dev_acceptance.py",
     "scripts/acceptance/run_ask_dev_compose.sh",
     "src/dev_health_ops/llm/agent/scripted_openai_service.py",
+    "tests/acceptance/compose.ask-dev-acr.yml",
     "tests/acceptance/compose.ask-dev-provider-profile.yml",
     "tests/acceptance/compose.ask-dev.yml",
 )

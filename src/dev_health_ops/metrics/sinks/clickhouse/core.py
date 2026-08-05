@@ -36,6 +36,7 @@ from dev_health_ops.metrics.sinks.clickhouse._insert import (
     _chunked,
     _dt_to_clickhouse_datetime,
 )
+from dev_health_ops.metrics.sinks.clickhouse.connection import clickhouse_client_kwargs
 from dev_health_ops.metrics.sinks.factory import detect_backend
 from dev_health_ops.models.work_items import Sprint
 
@@ -87,7 +88,9 @@ class ClickHouseCore(BaseMetricsSink):
             settings = {
                 "max_query_size": 1 * 1024 * 1024,  # 1MB
             }
-            self.client = clickhouse_connect.get_client(dsn=dsn, settings=settings)
+            self.client = clickhouse_connect.get_client(
+                **clickhouse_client_kwargs(dsn, settings=settings)
+            )
 
     def close(self) -> None:
         try:

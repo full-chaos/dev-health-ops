@@ -2509,3 +2509,68 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Deterministic seed (mixed with org_id) for repeatable runs.",
     )
     fix_pt.set_defaults(func=run_product_telemetry_fixtures)
+
+    fix_world = fix_sub.add_parser(
+        "world",
+        help=(
+            "Generate the versioned, deterministic ask-dev-world.v1 "
+            "multi-org fixture world (CHAOS-3219)."
+        ),
+    )
+    fix_world.add_argument(
+        "--manifest",
+        required=True,
+        help=(
+            "Path to world.json (subjects.json/sources.json are read from "
+            "the same directory, e.g. "
+            "tests/acceptance/world/ask-dev-world.v1/world.json)."
+        ),
+    )
+    fix_world.add_argument(
+        "--sink",
+        default=os.getenv("CLICKHOUSE_URI"),
+        help="Analytics sink URI (ClickHouse). Env: CLICKHOUSE_URI",
+    )
+    fix_world.add_argument(
+        "--postgres-uri",
+        default=None,
+        help="Semantic DB URI. Defaults to POSTGRES_URI/DATABASE_URI env.",
+    )
+    fix_world.add_argument(
+        "--digest-path",
+        default=None,
+        help=(
+            "Path to read/write WORLD_DIGEST. Defaults to a WORLD_DIGEST "
+            "file alongside --manifest."
+        ),
+    )
+    fix_world.add_argument(
+        "--verify-digest",
+        action="store_true",
+        dest="verify_digest",
+        default=False,
+        help=(
+            "Recompute the content digest of the live database and compare "
+            "against the pinned WORLD_DIGEST file, failing loudly on drift, "
+            "instead of generating."
+        ),
+    )
+    fix_world.add_argument(
+        "--allow-mixed-org",
+        action="store_true",
+        dest="allow_mixed_org",
+        default=False,
+        help=(
+            "Passed through to each per-repo generation call. Off by "
+            "default -- see `fixtures generate --allow-mixed-org`."
+        ),
+    )
+
+    # Deferred import (not a module-level import of runner.py): world.py
+    # itself imports several names FROM this module, so importing it at
+    # runner.py's own module-load time would be circular. By the time
+    # register_commands() runs (CLI setup, after runner.py has fully
+    # loaded), the cycle is safe to close here.
+    from dev_health_ops.fixtures.world import run_fixtures_world
+
+    fix_world.set_defaults(func=run_fixtures_world)

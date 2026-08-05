@@ -1,0 +1,129 @@
+{
+  "schema_version": "ask_dev_world.v1",
+  "$comment": "CHAOS-3219 Wave 4 Phase 1 Lane 1a. Subject registry: every named subject the world realizes, keyed by the 8 subjects.json classes from chaos-3219-plan.md Sec.3 / corpus-registry-v1.md. `repo_full_name` is the SyntheticDataGenerator repo_name -- repo_id is always uuid.uuid5(FIXTURE_NAMESPACE, repo_full_name) (FIXTURE_NAMESPACE = 6ba7b810-9dad-11d1-80b4-00c04fd430c8), the SAME derivation dev_health_ops.fixtures.generator.SyntheticDataGenerator.__init__ already uses -- never hardcoded here, so this file and the generated DB can never drift on id. `project_id` for a PROJECT-kind subject is the `projects` table row's `id` column, which Lane 1a's projects.py generator sets equal to `repo_full_name` (provider='synthetic'), matching arm 1 of _project_identity.project_identity_match (work_items.project_id == projects.id, same provider) -- see generators/projects.py docstring.",
+
+  "subjects": [
+    {
+      "id": "subject.exact.meridian-web-app",
+      "class": "exact",
+      "org_alias": "primary",
+      "entity_kind": "repository",
+      "repo_full_name": "meridian/web-app",
+      "mentions": ["meridian/web-app", "the web-app repo"],
+      "expected_terminal_resolution": "ScopeResolutionOutcome.EXACT",
+      "notes": "Wave 3.1 heritage positive control (ask-dev-oracle.v1.json) and CHAOS-3219 corpus family `status.single-project.*`."
+    },
+    {
+      "id": "subject.acronym-alias.mwa-project",
+      "class": "acronym-alias",
+      "org_alias": "primary",
+      "entity_kind": "project",
+      "project_id": "meridian/web-app",
+      "project_display_name": "Meridian Web Application (MWA)",
+      "mentions": ["MWA"],
+      "alias_form": "acronym",
+      "expected_terminal_resolution": "candidate_via_alias_matching.acronym_candidates (CHAOS-3388) -> commits only after disambiguation, per alias_matching.py: acronym/literal-alias hits are never auto-commit eligible",
+      "notes": "Same underlying repository as subject.exact.meridian-web-app, reached through its PROJECT catalog row's display name instead of the repository entity directly -- deliberately: it demonstrates the SAME real thing answering to both an exact repo mention and a derived acronym alias. `alias_matching.acronym_candidates('Meridian Web Application')` includes 'MWA'."
+    },
+    {
+      "id": "subject.acronym-alias.ground-control-team",
+      "class": "acronym-alias",
+      "org_alias": "primary",
+      "entity_kind": "team",
+      "team_id": "ground-control-team",
+      "team_display_name": "Platform Reliability (Ground Control)",
+      "mentions": ["Ground Control", "the Ground Control team"],
+      "alias_form": "literal_parenthetical",
+      "expected_terminal_resolution": "candidate_via_alias_matching.literal_aliases (CHAOS-3388)",
+      "notes": "The team-lead's explicit ask for 'a parenthetical-alias subject': alias_matching.strip_parentheticals('Platform Reliability (Ground Control)') -> literal alias 'Ground Control', distinct from the acronym form covered by subject.acronym-alias.mwa-project."
+    },
+    {
+      "id": "subject.ambiguous.atlas",
+      "class": "ambiguous",
+      "org_alias": "primary",
+      "entity_kind": "repository",
+      "candidates": ["meridian/atlas", "meridian-sandbox/atlas"],
+      "mentions": ["Atlas", "the atlas repo"],
+      "expected_terminal_resolution": "ScopeResolutionOutcome.candidate_set (needs_clarification) -- two repositories share the base name 'atlas' within the SAME org",
+      "notes": "corpus family scope.ambiguous."
+    },
+    {
+      "id": "subject.no-match.ask-dev-project",
+      "class": "no-match",
+      "org_alias": "primary",
+      "entity_kind": "n/a",
+      "candidates": [],
+      "mentions": ["the Ask Dev project"],
+      "expected_terminal_resolution": "ScopeResolutionOutcome.unresolved / PublicOutcome.NOT_FOUND",
+      "notes": "Deliberately never realized by any fixture row in this world -- absence IS the fixture. Matches smoke_ask_dev_not_found.py and corpus id scope.no-match verbatim."
+    },
+    {
+      "id": "subject.deleted.legacy-billing",
+      "class": "deleted",
+      "org_alias": "primary",
+      "entity_kind": "project",
+      "project_id": "legacy/billing",
+      "repo_full_name": "legacy/billing",
+      "mentions": ["the legacy-billing repo", "legacy-billing"],
+      "expected_terminal_resolution": "ScopeResolutionOutcome.unresolved (project retired) -- projects.is_active=0 on the most recent ReplacingMergeTree(updated_at) version, so the CHAOS-3380 identity catalog's `is_active = 1` filter excludes it",
+      "notes": "The underlying repo/commit history still exists (git_commits rows untouched) -- only the PROJECT catalog row is retired. This distinguishes 'the subject used to resolve and no longer does' from no-match (which never existed)."
+    },
+    {
+      "id": "subject.stale-context.rotated-service",
+      "class": "stale-context",
+      "org_alias": "primary",
+      "entity_kind": "repository",
+      "repo_full_name": "rotated/service",
+      "mentions": ["it", "that service (referring to a prior-turn subject)"],
+      "expected_terminal_resolution": "ScopeResolutionOutcome degraded to needs_clarification / answered_with_gaps -- the committed DevRunSubjectSet for the earlier turn is older than the conversation's own rotation window",
+      "notes": "Realized by dev_health_ops.fixtures.generators.retention_conversations: a DevConversation with an early DevRun whose DevRunSubjectSet commits repository 'rotated/service', timestamped pinned_now - 9 days, followed (same conversation) by a later DevRun timestamped pinned_now - 1 hour that asks a bare follow-up ('it') expecting the stale commit to no longer silently apply.",
+      "realizing_conversation_id_seed": "ask-dev-world.v1:conversation:primary:stale-context"
+    },
+    {
+      "id": "subject.partially-resolved.platform-mobile-squad",
+      "class": "partially-resolved",
+      "org_alias": "primary",
+      "entity_kind": "team",
+      "team_id": "platform",
+      "mentions": ["the platform team's mobile squad"],
+      "expected_terminal_resolution": "resolves to the parent 'platform' team only (ScopeResolutionOutcome.FILTERED-ish) -- 'mobile squad' has no addressable sub-team scope in the teams catalog, so the mention narrows to a scope broader than literally asked",
+      "notes": "The fixture world models teams as a flat catalog (models.teams.Team carries no parent/child edge in the ClickHouse teams table's own hierarchy field usage here), so a sub-team mention structurally cannot resolve narrower than its parent -- this IS the partially-resolved condition, not a gap in the fixture."
+    },
+    {
+      "id": "subject.bounded-set.web-app-and-api-gateway",
+      "class": "bounded-set",
+      "org_alias": "primary",
+      "entity_kind": "repository",
+      "members": ["meridian/web-app", "meridian/api-gateway"],
+      "mentions": ["meridian/web-app and meridian/api-gateway", "the web-app and api-gateway repos"],
+      "expected_terminal_resolution": "both members resolve EXACT within one committed DevScope -- a bounded, filtered set, not org-wide portfolio aggregation (that's the separate, CHAOS-3393-blocked portfolio.* family)",
+      "notes": "meridian/api-gateway is a plain current-state repo (same generation profile as the exact-subject repo) that exists ONLY to pair with meridian/web-app here."
+    },
+    {
+      "id": "subject.tenant.sibling-only-private-repo",
+      "class": "bounded-set",
+      "$comment_class": "Filed under corpus registry's `tenant` family rather than a 9th subjects.json class -- the registry's 8 classes cover subject-mention SHAPE; cross-tenant is an AUTHORIZATION dimension orthogonal to shape. Listed here (not only in sources.json) because it is itself a named subject with an expected resolution outcome.",
+      "org_alias": "sibling",
+      "asked_from_org_alias": "primary",
+      "entity_kind": "repository",
+      "repo_full_name": "sibling-only/private-repo",
+      "mentions": ["sibling-only/private-repo", "the private-repo project"],
+      "expected_terminal_resolution": "not_found / denied when asked from primary org's permission_fingerprint -- DataHealthService.inspect's non-{EXACT,FILTERED,INHERITED,ORGANIZATION_FALLBACK} guard returns DataHealthState.UNAUTHORIZED for every requested source; ScopeResolutionService must never resolve a sibling-tenant id",
+      "notes": "Same fixture row also realizes deg.source-state.unavailable (sources.json) from the SIBLING org's own vantage, since sibling's 'local' SyncConfiguration is seeded active_failure=True -- two distinct observation angles over one row, documented explicitly rather than duplicated."
+    }
+  ],
+
+  "class_coverage_check": {
+    "$comment": "Every subjects.json class from chaos-3219-plan.md Sec.3 must have >=1 entry above. The world_manifest_guard test cross-checks this list against the literal `class` values actually present.",
+    "required_classes": [
+      "exact",
+      "ambiguous",
+      "acronym-alias",
+      "no-match",
+      "deleted",
+      "stale-context",
+      "partially-resolved",
+      "bounded-set"
+    ]
+  }
+}

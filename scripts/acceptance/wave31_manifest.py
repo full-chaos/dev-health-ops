@@ -1977,8 +1977,28 @@ _COMPOSE_AT_DATASTORE_RECONCILIATION = (
     "0beb7626fb984d736b0e65feb72209779c6b258e22c13f57b3cda10b946a8ceb"
 )
 
+#: CHAOS-3219 Phase 1 Lane 1b: ``scripted_openai_service.py`` (a covered
+#: ``RUNTIME_DEPENDENCY_PATHS`` entry) was extended with role/fault-aware,
+#: question-fingerprint-routed scripted decision sequences -- the fixture
+#: provider these fourteen live scenarios all execute against, but never the
+#: system under test. Acknowledged for the same rows the compose datastore
+#: reconciliation above already covers; the same hash-binding rule applies:
+#: the next edit to this file reds every one of these rows again, so this
+#: entry cannot silently absorb a future, unrelated change to the scripted
+#: provider. Bound at the exact SHA emitted by
+#: ``acceptance_artifact.runtime_dependency_hashes()`` for this file at the
+#: tip of the CHAOS-3219 Phase 1 Lane 1b changeset.
+_SCRIPTED_PROVIDER_AT_CHAOS_3219_LANE_1B = (
+    "8efe7a5d1b26574fbd97c2df9c2aec961ebb3ce62a7419a667a0e4f28300b8a7"
+)
+
 DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
-    item_id: {"compose.yml": _COMPOSE_AT_DATASTORE_RECONCILIATION}
+    item_id: {
+        "compose.yml": _COMPOSE_AT_DATASTORE_RECONCILIATION,
+        "src/dev_health_ops/llm/agent/scripted_openai_service.py": (
+            _SCRIPTED_PROVIDER_AT_CHAOS_3219_LANE_1B
+        ),
+    }
     for item_id in (
         "attack.team-attribution.e2e-blocked-by-live-defect",
         "attack.unrelated-evidence.e2e-live-validated",

@@ -28,6 +28,18 @@ Invariants:
     ``initial_sync_depth`` after ``before``, the residual gap
     ``[before, now - depth]`` is an accepted, tracked limitation (CHAOS-2588)
     whose fix would require such a marker. See docs/architecture/data-pipeline.md.
+  * HEAVY incremental window ratchet (CHAOS-3412): unit cost is linear in window
+    span, so a HEAVY-cost-class dataset spanning a wide ``initial_sync_depth``
+    (or a long-stale watermark) can never fit the sync budget as ONE window — it
+    is deferred forever and, having never succeeded, never stamps a watermark.
+    INCREMENTAL windows for HEAVY datasets are therefore capped at
+    ``SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS`` (default 7): the window END moves
+    in to ``window_start + cap``; depth resolution and its tier ``backfill_days``
+    cap are untouched. A capped run is a healthy PARTIAL run — the success path
+    stamps the watermark at the unit's window END (``before_at``), so the next
+    scheduled tick resumes exactly there and coverage ratchets forward one capped
+    window per tick with no gap. Catch-up is paced by the scheduler cadence.
+    See docs/operate/run/ingestion-and-backfills.md.
   * total_units on the persisted SyncRun equals len(unit_ids).
 """
 
@@ -64,6 +76,7 @@ from dev_health_ops.sync.canonical_incident_gate import (
     sync_datasets_require_canonical_incident_feature,
 )
 from dev_health_ops.sync.datasets import (
+    CostClass,
     DatasetSpec,
     WatermarkBehavior,
     get_dataset_spec,
@@ -607,6 +620,46 @@ _DEFAULT_INITIAL_SYNC_DEPTH_DAYS: int = 30
 
 
 # ---------------------------------------------------------------------------
+# HEAVY incremental window ratchet (CHAOS-3412)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS: int = 7
+
+
+def _incremental_heavy_max_window_days() -> int:
+    """Max INCREMENTAL window span (days) for a HEAVY-cost-class dataset.
+
+    Reads ``SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS``; falls back to 7 days.
+
+    CHAOS-3412: unit cost is linear in window span (see
+    ``providers/github/budget._scaled_units``). A HEAVY dataset cold-starting on
+    a wide ``initial_sync_depth`` (or resuming from a long-stale watermark) used
+    to plan ONE window covering the whole span, which could not fit the sync
+    budget — the unit was deferred, no watermark was stamped, and the next tick
+    recomputed the identical unfittable span forever. Capping the span makes
+    each tick affordable; the success path stamps the watermark at the unit's
+    window END, so successive ticks ratchet forward until the dataset is caught
+    up. 7 days matches the proven ``_backfill_windows`` chunk size.
+    """
+    raw = os.getenv("SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS")
+    if raw is not None:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            # Non-integer env override: fall through to the default below.
+            pass
+    return _DEFAULT_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS
+
+
+def _is_heavy_dataset(provider: str, dataset_key: str) -> bool:
+    """True when the (provider, dataset) pair is registered CostClass.HEAVY."""
+    spec = get_dataset_spec(provider, dataset_key)
+    return spec is not None and spec.default_cost_class is CostClass.HEAVY
+
+
+# ---------------------------------------------------------------------------
 # Linear backfill chunk policy (CHAOS-2710, rebalanced in CHAOS-2717)
 # ---------------------------------------------------------------------------
 
@@ -914,7 +967,21 @@ def _resolve_windows(
                 depth = resolve_initial_sync_depth(session, integration, dataset)
                 window_start = now - timedelta(days=depth)
         # WatermarkBehavior.NONE datasets keep window_start=None (registered behavior).
-        return ((window_start, _request_before_or_now(request, now)),)
+        window_end = _request_before_or_now(request, now)
+        if window_start is not None and _is_heavy_dataset(source_provider, dataset_key):
+            # CHAOS-3412 ratchet: cap the span so a HEAVY unit can fit the sync
+            # budget. Applies to BOTH cold-start and behind-watermark cases — a
+            # long-idle org ratchets forward one capped window per tick. Depth
+            # resolution (and its tier backfill_days cap) is untouched; only the
+            # window END moves in.
+            # ``window_start`` may be naive when it came straight off a stored
+            # watermark row; normalize for the comparison only — the value
+            # persisted as ``since_at`` is left exactly as resolved.
+            capped_end = _as_utc(window_start) + timedelta(
+                days=_incremental_heavy_max_window_days()
+            )
+            window_end = min(window_end, capped_end)
+        return ((window_start, window_end),)
 
     if mode == SyncRunMode.BACKFILL.value:
         return _backfill_windows(

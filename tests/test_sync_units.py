@@ -5117,3 +5117,50 @@ def test_finalize_checkpoint_carries_family_dataset_audit_metadata(
         "work-items",
         "work-item-history",
     ]
+
+
+def test_run_sync_unit_stamps_watermark_at_window_end_not_now(db_session, monkeypatch):
+    """CHAOS-3412: the SUCCESS path stamps the watermark at the unit's
+    ``before_at`` (window END), never at wall-clock ``now``.
+
+    This is the load-bearing precondition for the HEAVY incremental window
+    ratchet (``sync/planner._resolve_windows``): a ratcheted unit deliberately
+    covers only a capped slice ending well before ``now``. If the stamp used
+    ``now``, every capped run would silently skip the data between its window
+    end and ``now`` — permanent, invisible data gaps.
+    """
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session, dataset_key="commit-stats")
+    # A ratcheted HEAVY window: 7 days ending far in the past.
+    capped_before = datetime.now(timezone.utc) - timedelta(days=23)
+    unit.since_at = capped_before - timedelta(days=7)
+    unit.before_at = capped_before
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    # The adapter returns no explicit watermark_at — the common case for every
+    # HEAVY dataset (only PagerDuty emits a data-derived watermark_at).
+    monkeypatch.setattr(
+        dataset_adapters, "run_dataset_unit", lambda ctx, runtime: {"ok": True}
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    watermark = db_session.query(SyncWatermark).one()
+    assert watermark.dataset_key == "commit-stats"
+    stamped = _aware(watermark.last_synced_at)
+    assert stamped == capped_before, (
+        f"watermark must be stamped at the unit's window end {capped_before}, "
+        f"got {stamped}"
+    )
+    assert stamped < datetime.now(timezone.utc) - timedelta(days=20), (
+        "watermark was stamped near wall-clock now — a ratcheted window would "
+        "silently skip everything between its window end and now"
+    )

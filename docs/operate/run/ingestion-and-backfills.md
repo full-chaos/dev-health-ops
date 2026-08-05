@@ -18,3 +18,45 @@ lifecycle: active
 7. Record any residual gap or replay requirement.
 
 Avoid repeatedly starting overlapping backfills for the same scope and period.
+
+## Incremental windows
+
+An incremental run plans one window per source and dataset. The window starts at
+that dataset's stored watermark, less the configured watermark overlap. A
+dataset with no watermark yet cold-starts at the configured initial sync depth,
+capped by the organization's plan backfill limit. The window ends at the
+requested upper bound, or at the current time when none was requested. A
+successful unit stamps the watermark at its own window end — never at the
+current time — so a partial window advances coverage only as far as it actually
+read.
+
+### Heavy-dataset window ratchet
+
+Unit cost grows with window span. For heavy record families — commit statistics,
+file records, blame, and test results — a single window covering a wide initial
+sync depth can cost more than the provider budget allows for one unit. Such a
+unit is deferred, stamps no watermark, and every later attempt recomputes the
+same unaffordable span, so the dataset never starts.
+
+Incremental windows for heavy record families are therefore capped in span. The
+window still starts at the watermark or cold-start depth, but ends no later than
+the start plus the cap. `SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS` sets the cap;
+the default is seven days, matching the proven backfill chunk size.
+
+Consequences to expect when reading run state:
+
+- A capped run is a healthy partial run, not a failure. Its window end is behind
+  the current time by design.
+- Each successful tick stamps the watermark at its window end, so the next
+  scheduled tick resumes exactly there. Coverage ratchets forward one capped
+  window per tick with no gap and no overlap beyond the configured watermark
+  overlap.
+- A ninety-day cold start at the default cap reaches the current time after
+  roughly thirteen ticks. On an hourly schedule that is about half a day of
+  catch-up. Communicate the visible waiting state rather than treating the
+  interim coverage as zero.
+- Catch-up is paced by the sync schedule. A heavy dataset that is far behind
+  does not accelerate; to close a wide historical span faster, run a bounded
+  backfill for that period instead.
+- Light and medium record families are unaffected and keep a single
+  full-depth incremental window.

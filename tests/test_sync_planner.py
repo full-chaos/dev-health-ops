@@ -1786,3 +1786,251 @@ def test_merge_family_windows_rejects_mismatched_window_counts():
     d = datetime(2026, 6, 4, 0, 0, tzinfo=timezone.utc)
     with pytest.raises(ValueError, match="mismatched window counts"):
         _merge_family_windows([((a, b),), ((a, b), (c, d))])
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412: HEAVY incremental window ratchet
+#
+# A HEAVY dataset cold-starting on a wide ``initial_sync_depth`` used to plan
+# ONE window spanning the whole depth. Unit cost is linear in span, so that
+# single unit could never fit the sync budget; it was deferred forever, no
+# watermark was ever stamped, and every subsequent tick recomputed the same
+# unfittable span. The ratchet caps the INCREMENTAL window span for HEAVY
+# datasets so each tick plans an affordable slice and advances the watermark.
+# ---------------------------------------------------------------------------
+
+
+def _window(unit: SyncRunUnit) -> tuple[datetime, datetime]:
+    """Return a unit's (since_at, before_at) as tz-aware UTC, asserting both are set."""
+    assert unit.since_at is not None
+    assert unit.before_at is not None
+    return (
+        unit.since_at.replace(tzinfo=timezone.utc),
+        unit.before_at.replace(tzinfo=timezone.utc),
+    )
+
+
+_HEAVY_DATASET = "commit-stats"  # CostClass.HEAVY (sync/datasets.py _HEAVY_DATASETS)
+_NON_HEAVY_DATASET = "commits"  # CostClass.MEDIUM
+
+
+def test_incremental_cold_start_heavy_dataset_is_capped(db_session):
+    """CHAOS-3412: HEAVY cold-start plans ``[now - depth, now - depth + cap]``.
+
+    The window must END at ``window_start + cap``, NOT at ``now``.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, _HEAVY_DATASET)
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    unit = units[0]
+    since, before = _window(unit)
+
+    assert abs((since - (now - timedelta(days=30))).total_seconds()) < 2
+    assert abs((before - (since + timedelta(days=7))).total_seconds()) < 2, (
+        "HEAVY cold-start window must be capped at 7 days from window_start"
+    )
+    # The decisive assertion: the window does NOT run to now.
+    assert before < now - timedelta(days=20), (
+        f"HEAVY cold-start window ended at {before} (now={now}); it must stop "
+        "at window_start + cap, not run to now"
+    )
+
+
+def test_incremental_cold_start_non_heavy_dataset_is_not_capped(db_session):
+    """Non-HEAVY datasets keep the full-depth single window (regression guard)."""
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    unit = units[0]
+    since, before = _window(unit)
+    assert abs((since - (now - timedelta(days=30))).total_seconds()) < 2
+    assert abs((before - now).total_seconds()) < 2, (
+        "MEDIUM dataset must keep the full-depth window ending at now"
+    )
+
+
+def test_incremental_behind_watermark_heavy_dataset_is_capped(db_session):
+    """A long-idle org whose HEAVY watermark is far behind ratchets too."""
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, _HEAVY_DATASET)
+    watermark = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+    set_watermark(db_session, ORG_ID, source.external_id, _HEAVY_DATASET, watermark)
+
+    requested_before = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=requested_before,
+        ),
+    )
+
+    unit = _planned_units(db_session, plan.sync_run_id)[0]
+    since, before = _window(unit)
+    assert since == watermark
+    assert before == watermark + timedelta(days=7)
+    assert before < requested_before
+
+
+def test_incremental_watermark_within_cap_heavy_window_unchanged(db_session):
+    """A caught-up HEAVY dataset keeps its natural window ending at ``before``."""
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, _HEAVY_DATASET)
+    requested_before = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
+    watermark = requested_before - timedelta(days=2)
+    set_watermark(db_session, ORG_ID, source.external_id, _HEAVY_DATASET, watermark)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=requested_before,
+        ),
+    )
+
+    unit = _planned_units(db_session, plan.sync_run_id)[0]
+    since, before = _window(unit)
+    assert since == watermark
+    assert before == requested_before, (
+        "a watermark inside the cap must not shorten the window"
+    )
+
+
+def test_heavy_max_window_days_env_override_is_respected(db_session, monkeypatch):
+    from datetime import timedelta
+
+    monkeypatch.setenv("SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS", "3")
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, _HEAVY_DATASET)
+    watermark = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+    set_watermark(db_session, ORG_ID, source.external_id, _HEAVY_DATASET, watermark)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+    unit = _planned_units(db_session, plan.sync_run_id)[0]
+    _, before = _window(unit)
+    assert before == watermark + timedelta(days=3)
+
+
+def test_heavy_ratchet_marches_watermark_forward_without_gaps(db_session, monkeypatch):
+    """Successive successful ticks walk the watermark to ``now``.
+
+    Each tick's window must start exactly where the previous one ended (minus
+    the configured overlap) — no gap, no overlap beyond the configured one —
+    and the sequence must terminate at ``now`` in a bounded number of ticks.
+    """
+    from datetime import timedelta
+
+    monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", "0")
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, _HEAVY_DATASET)
+
+    start = datetime.now(timezone.utc)
+    previous_before: datetime | None = None
+    windows: list[tuple[datetime, datetime]] = []
+    for _ in range(12):
+        plan = plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=ORG_ID,
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="scheduled",
+            ),
+        )
+        unit = _planned_units(db_session, plan.sync_run_id)[0]
+        since, before = _window(unit)
+        windows.append((since, before))
+        if previous_before is not None:
+            assert since == previous_before, (
+                f"window must resume exactly at the previous watermark "
+                f"(gap/overlap): since={since} previous_before={previous_before}"
+            )
+        assert before - since <= timedelta(days=7) + timedelta(seconds=2)
+        # Simulate the SUCCESS path: watermark stamped at the unit's window END.
+        set_watermark(db_session, ORG_ID, source.external_id, _HEAVY_DATASET, before)
+        previous_before = before
+        if before >= start:
+            break
+
+    assert previous_before is not None
+    assert previous_before >= start, (
+        f"ratchet did not reach now within 12 ticks; last before={previous_before}"
+    )
+    # 30 days of depth at a 7-day cap: 5 capped ticks + a final partial tick.
+    assert 4 <= len(windows) <= 7, f"unexpected tick count: {len(windows)}"
+    assert windows[0][0] <= start - timedelta(days=29)

@@ -161,6 +161,34 @@ class SyncRunResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class SyncRunDatasetFreshness(BaseModel):
+    """Watermark-vs-now lag for one (source, dataset) pair (CHAOS-3430).
+
+    Read from the existing ``sync_watermarks`` rows at response time — the
+    incremental window ratchet finalizes each capped HEAVY tick as an ordinary
+    successful run, so run status alone cannot say how far behind the dataset
+    still is.  ``catching_up`` is set only for a HEAVY dataset trailing by
+    strictly more than ``window_cap_days``; every other dataset still reports
+    an honest ``lag_seconds`` without the verdict.
+    """
+
+    #: IntegrationSource UUID, matching ``SyncRunUnitResponse.source_id`` so a
+    #: caller can reuse an already-resolved source label.
+    source_id: str
+    source_name: str | None = None
+    dataset_key: str
+    cost_class: str
+    #: Stored watermark in UTC; ``None`` when the dataset has never stamped one.
+    watermark_at: datetime | None = None
+    #: ``now - watermark_at`` in whole seconds; ``None`` without a watermark.
+    lag_seconds: int | None = None
+    catching_up: bool = False
+    #: Scheduled ticks still needed to reach ``now`` at one capped window per
+    #: tick; ``None`` unless ``catching_up``.
+    ticks_behind: int | None = None
+    window_cap_days: int
+
+
 class SyncRunUnitSummary(BaseModel):
     """Rollup of SyncRunUnit rows for the run-status UI (CHAOS-2519)."""
 
@@ -180,6 +208,17 @@ class SyncRunUnitSummary(BaseModel):
     # from failed_unit_count: these have not failed, they are BLOCKED --
     # the state that used to be invisible because nothing counted it.
     budget_blocked_unit_count: int = 0
+    # CHAOS-3430: watermark lag per (source, dataset), and how many of those
+    # pairs are a HEAVY dataset still ratcheting toward the current time.
+    dataset_freshness: list[SyncRunDatasetFreshness] = Field(default_factory=list)
+    catching_up_dataset_count: int = 0
+    # The scope those two describe. "run" means they cover ONLY the (source,
+    # dataset) pairs THIS run planned -- so a manually filtered or single-source
+    # run reporting zero datasets catching up is not a statement about the
+    # workspace, and must not be rendered as one. An org-wide freshness surface
+    # is tracked separately (CHAOS-3438); this field exists so a consumer can
+    # tell which question it is holding the answer to.
+    dataset_freshness_scope: str = "run"
     units: list[SyncRunUnitResponse]
 
 

@@ -625,6 +625,14 @@ async def get_sync_run_units(
         and unit.result.get("error_category") == "budget_deferred"
     )
 
+    # CHAOS-3430: watermark-vs-now lag per (source, dataset). A capped HEAVY
+    # tick finalizes as an ordinary SUCCESS, so run status alone cannot show
+    # that the dataset is still ratcheting toward the current time.
+    dataset_freshness = await svc.build_dataset_freshness(units)
+    catching_up_dataset_count = sum(
+        1 for entry in dataset_freshness if entry["catching_up"]
+    )
+
     return SyncRunUnitSummary(
         by_status=rollups["by_status"],
         by_source=rollups["by_source"],
@@ -638,6 +646,10 @@ async def get_sync_run_units(
         next_retry_at=min(retry_times) if retry_times else None,
         retry_exhausted_unit_count=retry_exhausted_unit_count,
         budget_blocked_unit_count=budget_blocked_unit_count,
+        dataset_freshness=dataset_freshness,
+        catching_up_dataset_count=catching_up_dataset_count,
+        # Declared, not implied: these describe only what THIS run planned.
+        dataset_freshness_scope="run",
         units=[
             _unit_to_response(u) for u in (units if limit is None else units[:limit])
         ],

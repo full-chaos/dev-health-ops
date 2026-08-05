@@ -32,6 +32,7 @@ from dev_health_ops.models.settings import (
     IntegrationCredential,
     ScheduledJob,
     SyncConfiguration,
+    SyncWatermark,
 )
 from dev_health_ops.models.users import Organization, User
 from dev_health_ops.sync.canonical_incident_gate import (
@@ -63,6 +64,8 @@ _TABLES = tables_of(
     SyncConfiguration,
     IntegrationCredential,
     ScheduledJob,
+    # The units endpoint reads watermark lag per (source, dataset) (CHAOS-3430).
+    SyncWatermark,
 )
 
 

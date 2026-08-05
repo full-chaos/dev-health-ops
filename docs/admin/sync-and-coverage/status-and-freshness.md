@@ -67,6 +67,53 @@ remedies are to synchronize a narrower window with a bounded backfill, or to
 raise that bucket's cap. Raising per-synchronization ingest caps is not a
 remedy — it changes what is fetched, not whether the unit is admitted.
 
+### Datasets still catching up
+
+A successful run does not mean a dataset has reached the current time. High-cost
+record families synchronize through capped incremental windows, one window per
+scheduled tick, and each capped tick finalizes as an ordinary successful run.
+Run status alone therefore reads "complete" for a dataset whose coverage may
+still be weeks behind.
+
+The run's unit rollup reports, for every (source, dataset) pair it planned that
+carries a watermark:
+
+- the stored watermark, and how far behind the current time it is;
+- whether that pair is **catching up** — a high-cost dataset trailing by
+  strictly more than the configured window cap; and
+- roughly how many further scheduled ticks the pair needs to reach the current
+  time, at one capped window per tick.
+
+Read these separately from run status:
+
+- **Catching up** is a healthy in-progress state, not a fault. The remedy, if
+  the pace is unacceptable, is a bounded backfill over the outstanding period —
+  catch-up itself does not accelerate.
+- A pair trailing by no more than one window is the steady state of a healthy
+  ratchet mid-flight and is not flagged.
+- Only high-cost families are capped, so only they are flagged. A lag is still
+  reported for every other dataset; interpret a large one there as a different
+  problem — a stalled schedule, a failing unit, or a provider gap — and diagnose
+  it through the run boundary above.
+- A dataset with no watermark at all has never recorded a successful read. It
+  reports no lag, because there is no coverage to measure from; that is a
+  cold-start or a never-succeeding dataset, not a dataset that is behind.
+- A collapsed record family reports one entry per child dataset, not one for the
+  family as a whole. Each child carries its own watermark, so a family that
+  looks current overall can still hold a badly stale child.
+- The estimate of remaining ticks accounts for the configured watermark overlap.
+  Each window re-reads that overlap, so one tick's forward progress is the
+  window span minus the overlap; a large overlap means many more ticks than the
+  window span alone would suggest.
+
+This report is scoped to the run you are reading, and declares that scope
+explicitly. It covers only the source-and-dataset pairs that run planned. A run
+restricted to one source, or to a subset of datasets, that reports nothing
+catching up is not telling you the workspace is current — it is telling you
+nothing was behind *among the pairs it touched*. To ask the workspace-wide
+question, read freshness per dataset across every configured source rather than
+inferring it from a single run.
+
 ## Check freshness against the product question
 
 Compare:

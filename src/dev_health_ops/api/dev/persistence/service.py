@@ -85,6 +85,28 @@ def _is_real_answer_message(message: DevMessage) -> bool:
     )
 
 
+def _wire_visible_message_condition():
+    """A user row, OR an assistant row carrying a genuine ``DevAnswer``.
+
+    Shared SQL-level predicate (CHAOS-3423/CHAOS-3440) for every read that
+    must agree with what the v1 wire transcript actually shows: excludes a
+    no-answer terminal's ``append_assistant_error`` row without disturbing
+    any user row. Used to keep ``message_count`` honest against the
+    transcript it describes (Codex adversarial review round 3, MEDIUM,
+    confirmed: a no-answer turn used to count 2 while the transcript
+    rendered 1), and by ``list_transcript_records``/
+    ``list_prompt_history_messages``'s own ``include_errors=False`` filter
+    -- one predicate, not four independently-maintained copies.
+    """
+
+    return or_(
+        DevMessage.role != "assistant",
+        DevMessage.answer_payload["schema_version"]
+        .as_string()
+        .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
+    )
+
+
 _TERMINAL_RUN_STATES = frozenset(
     {
         "completed",
@@ -1195,9 +1217,7 @@ class DevPersistenceService:
                 # meaning exactly what its name says, "the latest genuine
                 # answer", never a run a client would then dereference into
                 # a 503 or a misattached feedback row.
-                DevMessage.answer_payload["schema_version"]
-                .as_string()
-                .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
+                _wire_visible_message_condition(),
             )
             .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
             .limit(1)
@@ -1209,6 +1229,13 @@ class DevPersistenceService:
                 DevMessage.conversation_id == DevConversation.id,
                 DevMessage.org_id == DevConversation.org_id,
                 DevMessage.user_id == DevConversation.user_id,
+                # CHAOS-3423 Codex adversarial review round 3 (MEDIUM,
+                # confirmed): a no-answer terminal's transcript row is
+                # excluded from the wire transcript (CHAOS-3440) -- counting
+                # it here would report 2 messages for a conversation whose
+                # transcript renders 1, exactly the drift a client-visible
+                # count must never show.
+                _wire_visible_message_condition(),
             )
             .scalar_subquery()
         )
@@ -1281,6 +1308,10 @@ class DevPersistenceService:
                 DevMessage.conversation_id == conversation.id,
                 DevMessage.org_id == org_id,
                 DevMessage.user_id == user_id,
+                # CHAOS-3423 Codex adversarial review round 3 (MEDIUM,
+                # confirmed): see the identical filter/rationale in
+                # list_conversation_records.
+                _wire_visible_message_condition(),
             )
         )
         latest_answer_id = await self.session.scalar(
@@ -1293,9 +1324,7 @@ class DevPersistenceService:
                 DevMessage.answer_id.is_not(None),
                 # CHAOS-3423 Codex adversarial review (MEDIUM, confirmed):
                 # see the identical filter in list_conversation_records.
-                DevMessage.answer_payload["schema_version"]
-                .as_string()
-                .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
+                _wire_visible_message_condition(),
             )
             .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
             .limit(1)
@@ -1359,14 +1388,7 @@ class DevPersistenceService:
             DevMessage.user_id == user_id,
         ]
         if not include_errors:
-            conditions.append(
-                or_(
-                    DevMessage.role != "assistant",
-                    DevMessage.answer_payload["schema_version"]
-                    .as_string()
-                    .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
-                )
-            )
+            conditions.append(_wire_visible_message_condition())
         if after is not None and after_id is not None:
             conditions.append(
                 or_(
@@ -1575,14 +1597,7 @@ class DevPersistenceService:
             DevMessage.id != exclude_message_id,
         ]
         if not include_errors:
-            conditions.append(
-                or_(
-                    DevMessage.role != "assistant",
-                    DevMessage.answer_payload["schema_version"]
-                    .as_string()
-                    .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
-                )
-            )
+            conditions.append(_wire_visible_message_condition())
         messages = list(
             (
                 await self.session.scalars(
@@ -2748,10 +2763,22 @@ class DevPersistenceService:
             public_outcome=public_outcome,
             created_at=self._now(),
         )
-        self.session.add(record)
-        run.contract_generation = "v2"
-        run.public_outcome = public_outcome
-        await self.session.flush()
+        # CHAOS-3423 Codex adversarial review round 3 (HIGH, confirmed):
+        # isolated in a SAVEPOINT, matching append_assistant_answer/
+        # append_assistant_error's own pattern -- a real mid-flush database
+        # failure here (not just a pre-flush construction exception) used
+        # to be able to mark the WHOLE outer session rollback-only, which
+        # could silently discard an already-flushed answer or no-answer
+        # transcript row the moment finish()'s own failure handler chose
+        # not to roll back (to protect that exact row). Any exception here
+        # now unwinds only to this savepoint -- the outer session, and
+        # every write already flushed on it, stays healthy regardless of
+        # what kind of failure this was.
+        async with self.session.begin_nested():
+            self.session.add(record)
+            run.contract_generation = "v2"
+            run.public_outcome = public_outcome
+            await self.session.flush()
         return record
 
     async def record_narrative(

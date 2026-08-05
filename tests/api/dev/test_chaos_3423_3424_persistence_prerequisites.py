@@ -24,16 +24,21 @@ nothing about what actually lands in the tables the corpus runner reads.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.dev import router as dev_router_module
+from dev_health_ops.api.dev import terminal_frames as dev_terminal_frames
+from dev_health_ops.api.dev.contracts import DevError
 from dev_health_ops.api.dev.export_contracts import ARTIFACT_ROOT
 from dev_health_ops.api.dev.orchestrator_persistence import PersistenceRunRecorder
 from dev_health_ops.api.dev.orchestrator_states import RunState
@@ -44,6 +49,7 @@ from dev_health_ops.api.dev.persistence import (
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.llm.agent.contracts import AgentFinalAnswer
 from dev_health_ops.llm.agent.scripted import ScriptedStep
+from dev_health_ops.metrics.prometheus import ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL
 from dev_health_ops.models.dev_persistence import (
     DevAnswerFrame,
     DevConversation,
@@ -70,6 +76,7 @@ from tests._chaos_3292_preflight import (
     run_preflight_orchestrator,
     scope_dict,
     status_then_answer,
+    versions,
 )
 from tests._helpers import tables_of
 
@@ -97,6 +104,37 @@ _TABLES = tables_of(
 #: no-answer-terminal scenario is the same shape as the live diagnosis, not
 #: an invented one.
 _LEAKED_TOKEN = "forbidden_or_not_found"
+
+
+def _log_records(
+    caplog: pytest.LogCaptureFixture, message: str
+) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if record.message == message]
+
+
+def _log_extra(record: logging.LogRecord, field: str) -> Any:
+    """One structured ``extra=`` field off a log record (mirrors
+    ``test_chaos_3332_tool_executor_faults.py``'s identical helper)."""
+
+    return getattr(record, field)
+
+
+def _metric_counter(counter: Any, **labels: str) -> float:
+    """Read one labelled counter, tolerating the no-op build (mirrors
+    ``test_chaos_3332_tool_executor_faults.py``'s identical helper).
+
+    ``prometheus_client`` is an optional dependency; ``metrics.prometheus``
+    substitutes no-op counters without it, and a test that silently read
+    0.0 from a no-op would report coverage for a signal it never measured.
+    This returns ``float('nan')`` there instead, and the caller skips
+    rather than asserts.
+    """
+
+    labelled = counter.labels(**labels)
+    value = getattr(labelled, "_value", None)
+    if value is None:
+        return float("nan")
+    return float(value.get())
 
 
 def _leaking_but_not_narrating(org_id: str):
@@ -659,7 +697,7 @@ async def test_chaos_3423_frame_write_failure_does_not_discard_the_transcript_ro
 
 @pytest.mark.asyncio
 async def test_chaos_3424_ledger_write_failure_never_strands_the_run(
-    seeded, monkeypatch: pytest.MonkeyPatch
+    seeded, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Codex adversarial review (HIGH, confirmed): the new PROCEED ledger
     loop originally called ``append_resolution`` with no failure boundary.
@@ -673,16 +711,30 @@ async def test_chaos_3424_ledger_write_failure_never_strands_the_run(
     coherent (fully rolled back, never partial) ledger and an intact
     transcript row -- not an unhandled exception, and not a generic
     ``internal_error`` from the outer catch-all.
+
+    Codex adversarial review round 3 (HIGH, confirmed): the rollback used
+    to be silent -- unlike every sibling failure handler in this module,
+    it logged nothing and incremented no metric, so the exact incident
+    class CHAOS-3424 exists to make auditable could itself go unnoticed.
+    Also asserts the log line + counter now match the same pattern
+    ``ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL``'s other producers use.
     """
 
     maker, org_id, user_id = seeded
     question = "How is Nightfall doing?"
     conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
 
+    class LedgerBoom(Exception):
+        pass
+
     async def _always_failing(self, *args, **kwargs):
-        raise RuntimeError("simulated resolution ledger storage failure")
+        raise LedgerBoom("simulated resolution ledger storage failure")
 
     monkeypatch.setattr(DevPersistenceService, "append_resolution", _always_failing)
+
+    before = _metric_counter(
+        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL, exception_type="LedgerBoom"
+    )
 
     async with maker() as session:
         service = DevPersistenceService(session)
@@ -700,19 +752,36 @@ async def test_chaos_3424_ledger_write_failure_never_strands_the_run(
                 ),
             )
 
-        output = await run_preflight_orchestrator(
-            question=question,
-            entities=[(str(org_id), ASK_DEV_PROJECT)],
-            org_id=str(org_id),
-            user_id=str(user_id),
-            conversation_id=str(conversation_id),
-            run_id=str(run_id),
-            answer_id=str(uuid.uuid4()),
-            script=_leaking_but_not_narrating(str(org_id)),
-            script_id="chaos-3424-ledger-write-failure",
-            recorder_factory=recorder_factory,
-        )
+        with caplog.at_level(logging.ERROR):
+            output = await run_preflight_orchestrator(
+                question=question,
+                entities=[(str(org_id), ASK_DEV_PROJECT)],
+                org_id=str(org_id),
+                user_id=str(user_id),
+                conversation_id=str(conversation_id),
+                run_id=str(run_id),
+                answer_id=str(uuid.uuid4()),
+                script=_leaking_but_not_narrating(str(org_id)),
+                script_id="chaos-3424-ledger-write-failure",
+                recorder_factory=recorder_factory,
+            )
         await session.commit()
+
+        ledger_faults = _log_records(
+            caplog, "ask_dev.orchestrator.resolution_ledger_write_fault"
+        )
+        assert len(ledger_faults) == 1, (
+            "the ledger-write failure must be logged loudly, not silently "
+            "swallowed by the rollback -- got "
+            f"{len(ledger_faults)} matching log records."
+        )
+        assert _log_extra(ledger_faults[0], "run_id") == output.result.run_id
+        assert _log_extra(ledger_faults[0], "exception_type") == "LedgerBoom"
+        after = _metric_counter(
+            ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL, exception_type="LedgerBoom"
+        )
+        if after == after:  # False only for the no-op-counter build (NaN)
+            assert after == before + 1
 
         # The run must still reach its normal graceful no-answer terminal --
         # never crash, and never degrade to a generic internal_error just
@@ -1042,3 +1111,109 @@ async def test_chaos_3440_include_errors_flag_on_both_service_reads(seeded) -> N
             include_errors=False,
         )
         assert [m.role for m in opt_out_history] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session(
+    seeded,
+) -> None:
+    """Codex adversarial review round 3 (HIGH, confirmed): the round-2 fix
+    only proved a PRE-flush ``record_frame`` failure (a mocked method that
+    never touches the database) leaves the already-written no-answer
+    transcript row intact -- it said nothing about a REAL mid-flush
+    database failure, which could mark the whole outer session
+    rollback-only regardless of ``error_message_written``, silently
+    discarding that row (and poisoning ``terminal()``'s own later write)
+    exactly like an already-written real ``DevAnswer`` already could
+    (a pre-existing, documented tradeoff -- see
+    ``force_terminal_fallback``'s docstring). Closed properly this time:
+    ``DevPersistenceService.record_frame`` now isolates its own write in a
+    SAVEPOINT, matching ``append_assistant_answer``/``append_assistant_error``'s
+    established pattern. This drives a REAL ``IntegrityError`` (a genuine
+    duplicate ``dev_answer_frames.run_id`` insert, not a mock) and proves
+    the outer session survives it.
+    """
+
+    maker, org_id, user_id = seeded
+    question = "How is Nightfall doing?"
+    conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+
+        error = DevError(
+            schema_version="dev_error.v1",
+            request_id="request-chaos-3423-savepoint",
+            code="scope_not_found",
+            safe_message="The requested scope was not found.",
+            retryable=False,
+        )
+
+        def validate(payload):
+            return DevError.model_validate(payload).model_dump(mode="json")
+
+        await service.append_assistant_error(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            message_id=run_id,
+            error_payload=error.model_dump(mode="json"),
+            validator=validate,
+            scope_snapshot={},
+            rendered_content=error.safe_message,
+        )
+
+        frame = dev_terminal_frames.build_error_frame(
+            code="scope_not_found",
+            run_id=str(run_id),
+            generated_at=datetime.now(UTC),
+            versions=versions(),
+        )
+        await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(frame.frame_id),
+            public_outcome=frame.public_outcome.value,
+            payload=frame.model_dump(mode="json"),
+        )
+
+        # A second frame for the SAME run violates uq_dev_answer_frames_run
+        # on a REAL flush inside the new SAVEPOINT.
+        with pytest.raises(IntegrityError):
+            await service.record_frame(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                frame_id=uuid.UUID(frame.frame_id),
+                public_outcome=frame.public_outcome.value,
+                payload=frame.model_dump(mode="json"),
+            )
+
+        # The outer session must NOT be poisoned: a further write succeeds
+        # without a rollback() call and without PendingRollbackError --
+        # exactly what terminal()'s own update_run needs right after this
+        # in the real orchestrator.finish() sequence.
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="failed",
+            safe_error_code="scope_not_found",
+        )
+        run_row = await session.get(DevRun, run_id)
+        assert run_row is not None
+        assert run_row.state == "failed"
+
+        # And the no-answer transcript row written before any of this is
+        # still there -- never discarded by the failed frame's savepoint.
+        assistant_rows = (
+            await session.scalars(
+                select(DevMessage).where(
+                    DevMessage.conversation_id == conversation_id,
+                    DevMessage.role == "assistant",
+                )
+            )
+        ).all()
+        assert len(assistant_rows) == 1
+        assert assistant_rows[0].content == error.safe_message

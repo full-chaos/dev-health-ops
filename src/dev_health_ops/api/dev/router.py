@@ -1431,13 +1431,57 @@ async def create_message(
 
     runtime = runtime_resolution.runtime
     if runtime is None:
+        # CHAOS-3423 Codex adversarial review round 3 (MEDIUM, confirmed):
+        # this is a real, reachable no-answer terminal (a misconfigured or
+        # currently-unavailable provider) that never reaches
+        # orchestrator.finish() at all -- it short-circuits here, before an
+        # orchestrator run is even constructed. Persisted the same way
+        # every other no-answer terminal now is, through the same
+        # record_error_message helper, so the transcript-completeness
+        # invariant CHAOS-3423 exists to guarantee actually holds here too
+        # (and terminal_error_payload is set so a duplicate request replays
+        # this exact copy, not the generic fallback).
         error_code = runtime_resolution.error_code or "provider_not_configured"
+        error = DevError(
+            schema_version="dev_error.v1",
+            request_id=request_id or str(accepted.run.request_id),
+            code=error_code,
+            safe_message=(
+                runtime_resolution.safe_message
+                or "No certified Ask Dev model is ready."
+            ),
+            retryable=True,
+        )
+        recorder = PersistenceRunRecorder(
+            service,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            run_id=accepted.run.id,
+            # Never read by record_error_message (it only persists the
+            # transcript row) -- this run has no resolved provider at all,
+            # so there is no real "platform"/"byo" value to report.
+            provider_source="platform",
+        )
+        try:
+            await recorder.record_error_message(
+                error, scope_snapshot=body.scope.model_dump(mode="json")
+            )
+        except Exception:
+            # Best-effort, exactly like orchestrator.finish()'s own
+            # error_message_write_fault handling: never let a transcript-row
+            # write failure block marking the run terminal below.
+            logger.exception(
+                "ask_dev.router.provider_unavailable_error_message_write_fault",
+                extra={"run_id": run_id},
+            )
         await service.update_run(
             org_id=org_id,
             user_id=user_id,
             run_id=accepted.run.id,
             state=RunState.FAILED.value,
             safe_error_code=error_code,
+            terminal_error_payload=error.model_dump(mode="json"),
         )
         await service.session.commit()
         _raise(

@@ -1465,7 +1465,7 @@ class DevOrchestrator:
                     try:
                         for resolution_entry in preflight_result.ledger.entries:
                             await self._recorder.append_resolution(resolution_entry)
-                    except Exception:
+                    except Exception as ledger_write_fault:
                         # CHAOS-3424 Codex adversarial review (HIGH,
                         # confirmed): a database-layer failure on ANY entry
                         # here marks the session rollback-only -- every
@@ -1483,6 +1483,26 @@ class DevOrchestrator:
                         # the preflight diagnostics this same rollback also
                         # discards, for the identical reason the TERMINATE
                         # branch's own comment gives.
+                        #
+                        # Codex adversarial review round 3 (HIGH, confirmed):
+                        # the rollback above was previously silent -- unlike
+                        # every sibling failure handler in this module
+                        # (answer_write_fault, frame_construction_failed,
+                        # error_message_write_fault, ...), a lost ledger
+                        # left no log line and no metric, so the exact
+                        # forensic gap CHAOS-3424 exists to close could
+                        # itself go unnoticed. Logged and counted the same
+                        # way every other one of those does.
+                        logger.exception(
+                            "ask_dev.orchestrator.resolution_ledger_write_fault",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(ledger_write_fault).__name__,
+                            },
+                        )
+                        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                            exception_type=type(ledger_write_fault).__name__
+                        ).inc()
                         await self._recorder.rollback()
                         await self._recorder.record_preflight(
                             preflight_outcome=preflight_result.diagnostic,

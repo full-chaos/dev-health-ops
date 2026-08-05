@@ -1741,8 +1741,24 @@ async def test_dev_message_fails_closed_when_no_certified_runtime_is_ready(
     assert response.status_code == 503
     assert response.json()["code"] == "provider_not_configured"
     async with dev_api_context.maker() as session:
-        state = await session.scalar(select(DevRun.state))
-        assert state == "failed"
+        run = await session.scalar(select(DevRun))
+        assert run is not None
+        assert run.state == "failed"
+        # CHAOS-3423 Codex adversarial review round 3 (MEDIUM, confirmed):
+        # this short-circuit never reaches orchestrator.finish() at all, so
+        # it used to leave no dev_messages row and no terminal_error_payload
+        # -- the exact transcript-completeness gap CHAOS-3423 exists to
+        # close, for a real, reachable no-answer terminal.
+        assert run.terminal_error_payload is not None
+        assert run.terminal_error_payload["code"] == "provider_not_configured"
+        assistant_rows = (
+            await session.scalars(
+                select(DevMessage).where(DevMessage.role == "assistant")
+            )
+        ).all()
+        assert len(assistant_rows) == 1
+        assert assistant_rows[0].answer_payload["schema_version"] == "dev_error.v1"
+        assert assistant_rows[0].content == "No certified Ask Dev model is ready."
 
 
 @pytest.mark.asyncio

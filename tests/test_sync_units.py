@@ -5447,3 +5447,103 @@ def test_fully_caught_up_plan_finalizes_failed_not_silently_successful(
         "implies coverage was refreshed"
     )
     assert run.error == "No sync units planned"
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412 round 3: a PROVIDER-SUPPLIED future watermark_at must not be
+# persisted, and must not re-poison a repaired watermark.
+#
+# The worker prefers result_payload["watermark_at"] over the clamped window end
+# (run_sync_unit). PagerDuty derives that value from source record timestamps,
+# so a skewed record yields a FUTURE watermark_at. Clamping the window end in
+# the planner does nothing here — this path bypasses it entirely. The write
+# boundary is the only place that closes it for every caller.
+# ---------------------------------------------------------------------------
+
+
+def test_provider_supplied_future_watermark_is_not_persisted(db_session, monkeypatch):
+    """Composition path: provider returns a future watermark_at on success."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.sync.watermarks import get_watermark
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    unit.since_at = datetime.now(timezone.utc) - timedelta(days=2)
+    unit.before_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    skewed = datetime.now(timezone.utc) + timedelta(days=30)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {"ok": True, "watermark_at": skewed.isoformat()},
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+    assert result["status"] == "success"
+
+    stored = get_watermark(db_session, run.org_id, "full-chaos/dev-health", "commits")
+    assert stored is not None
+    stored_aware = _aware(stored)
+    now = datetime.now(timezone.utc)
+    assert stored_aware <= now + timedelta(seconds=60), (
+        f"a provider-supplied FUTURE watermark_at was persisted verbatim "
+        f"({stored_aware}). The planner's window-end clamp does not cover this "
+        "path — the worker prefers the provider value — so every later scheduled "
+        "tick plans a recovery slice and repeats it forever."
+    )
+
+
+def test_provider_future_watermark_cannot_repoison_a_repaired_one(
+    db_session, monkeypatch
+):
+    """The repair must not be undoable by the next provider stamp."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    now = datetime.now(timezone.utc)
+    # A previously REPAIRED, sane watermark.
+    set_watermark(
+        db_session,
+        run.org_id,
+        "full-chaos/dev-health",
+        "commits",
+        now - timedelta(hours=2),
+    )
+    unit.since_at = now - timedelta(days=2)
+    unit.before_at = now - timedelta(hours=1)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "watermark_at": (now + timedelta(days=30)).isoformat(),
+        },
+    )
+
+    assert getattr(run_sync_unit, "run")(str(unit.id))["status"] == "success"
+
+    stored_raw = get_watermark(
+        db_session, run.org_id, "full-chaos/dev-health", "commits"
+    )
+    assert stored_raw is not None
+    stored = _aware(stored_raw)
+    assert stored <= datetime.now(timezone.utc) + timedelta(seconds=60), (
+        f"a repaired watermark was re-poisoned to {stored} by the next "
+        "provider-supplied future value — the repair is not durable"
+    )

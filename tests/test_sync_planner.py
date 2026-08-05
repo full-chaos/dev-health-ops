@@ -2699,6 +2699,42 @@ def test_backfill_windows_are_not_routed_through_the_watermark_normalizer(db_ses
 # ---------------------------------------------------------------------------
 
 
+def _seed_corrupt_future_watermark(session, org_id, source_id, dataset_key, when):
+    """Write a FUTURE watermark directly, bypassing set_watermark's clamp.
+
+    CHAOS-3412 round 3 added a write-boundary invariant: ``set_watermark`` never
+    persists a future value, from any caller. That is correct, and it means the
+    corrupt state can no longer be created through the public API — so a test
+    that seeds via ``set_watermark`` silently STOPS exercising the repair path
+    while still passing. This writes the row directly, which is also how the
+    state genuinely arises: rows persisted by pre-fix code, sitting in a live
+    database.
+    """
+    row = (
+        session.query(SyncWatermark)
+        .filter(
+            SyncWatermark.org_id == org_id,
+            SyncWatermark.source_id == source_id,
+            SyncWatermark.dataset_key == dataset_key,
+        )
+        .one_or_none()
+    )
+    if row is None:
+        row = SyncWatermark(
+            repo_id=source_id,
+            target=dataset_key,
+            org_id=org_id,
+            source_id=source_id,
+            dataset_key=dataset_key,
+            last_synced_at=when,
+        )
+        session.add(row)
+    else:
+        row.last_synced_at = when
+    session.flush()
+    return row
+
+
 def test_future_watermark_still_plans_a_unit(db_session, caplog):
     """A corrupt future watermark must NOT stall the scheduled path."""
     import logging
@@ -2713,7 +2749,9 @@ def test_future_watermark_still_plans_a_unit(db_session, caplog):
     _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
     now = datetime.now(timezone.utc)
     corrupt = now + timedelta(days=30)
-    set_watermark(db_session, ORG_ID, source.external_id, _NON_HEAVY_DATASET, corrupt)
+    _seed_corrupt_future_watermark(
+        db_session, ORG_ID, source.external_id, _NON_HEAVY_DATASET, corrupt
+    )
 
     with caplog.at_level(logging.WARNING, logger="dev_health_ops.sync.planner"):
         plan = plan_sync_run(
@@ -2761,7 +2799,7 @@ def test_future_watermark_recovers_after_one_success(db_session):
     )
     _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
     now = datetime.now(timezone.utc)
-    set_watermark(
+    _seed_corrupt_future_watermark(
         db_session,
         ORG_ID,
         source.external_id,

@@ -63,6 +63,12 @@ from dev_health_ops.models.settings import SyncWatermark
 
 logger = logging.getLogger(__name__)
 
+# Tolerance for benign clock skew between this process and a provider/DB clock.
+# A write beyond `now` by more than this is treated as a real defect and warned
+# about; within it, the value is still clamped but silently (clamping a few
+# seconds of skew every run would be pure log noise). See set_watermark.
+_FUTURE_WRITE_SKEW_TOLERANCE_SECONDS = 60
+
 # ---------------------------------------------------------------------------
 # Reverse map: dataset_key → frozenset[legacy_target] (INCREMENTAL only)
 # ---------------------------------------------------------------------------
@@ -337,15 +343,33 @@ def set_watermark(
     dataset_key: str,
     timestamp: datetime,
 ) -> None:
-    """Upsert the watermark, enforcing monotonic advance (CHAOS-2578).
+    """Upsert the watermark. THE FULL RULE (CHAOS-2578 + CHAOS-3412):
 
-    ``last_synced_at`` is set to ``max(existing, new)`` so that a
-    late-arriving or out-of-order unit result can never roll the watermark
-    backwards.  Both incremental and full-resync runs call this on success.
+        Watermarks advance monotonically, NEVER into the future; a stored future
+        value is corrupt state and is repaired downward once.
 
-    AMENDMENT (CHAOS-3412) — ONE exception to the rule above.
-    Gate: the STORED value is in the future AND the incoming value is not.
-    In that case the incoming value WINS and the stored value is lowered.
+    Three parts, all enforced HERE at the write boundary rather than at call
+    sites, because the call sites are what leaked:
+
+    1. MONOTONIC ADVANCE (CHAOS-2578). ``last_synced_at`` becomes
+       ``max(existing, new)``, so a late-arriving or out-of-order unit result can
+       never roll a valid watermark backwards.
+
+    2. NEVER INTO THE FUTURE (CHAOS-3412, write boundary). The incoming value is
+       clamped to ``min(incoming, now)`` for EVERY caller, before anything else.
+       A watermark marks data already synchronized, so a future value is never
+       meaningful. This is not theoretical: the unit worker prefers a
+       provider-supplied ``watermark_at`` over the planner's clamped window end,
+       and PagerDuty derives that from source record timestamps, so one skewed
+       record wrote a future watermark straight past every planner-side clamp —
+       and could re-poison an already-repaired one. Clamping at the boundary also
+       covers the insert path, which previously wrote a first-ever row unclamped.
+       Clamps beyond ``_FUTURE_WRITE_SKEW_TOLERANCE_SECONDS`` are warned about;
+       smaller ones are silent, since clocks drift by seconds routinely.
+
+    3. REPAIR ONCE (CHAOS-3412, exception to part 1). Gate: the STORED value is
+       in the future AND the incoming value is not. Then the incoming value WINS
+       and the stored value is lowered.
 
     Why this does not weaken CHAOS-2578: a watermark marks data already
     synchronized, so a value ahead of ``now`` is not a late result — it is
@@ -359,7 +383,7 @@ def set_watermark(
     cannot roll a valid watermark backwards.
 
     Narrowness is pinned by ``test_legitimate_watermark_is_still_never_rolled_backwards``
-    and ``test_future_incoming_value_does_not_lower_a_future_stored_value``;
+    and ``test_future_incoming_value_is_clamped_and_repairs_the_stored_one``;
     the correction itself by ``test_future_watermark_is_corrected_downward``
     and, against live PostgreSQL, ``test_real_postgres_future_watermark_correction``.
     See ``_monotonic_update`` for the implementation of both dialect branches.
@@ -369,6 +393,40 @@ def set_watermark(
     constraint ``uq_sync_watermark_org_repo_target`` remains satisfied.
     """
     # Canonical lookup first.
+    # WRITE-BOUNDARY INVARIANT (CHAOS-3412): no future value is EVER persisted,
+    # by any caller. Clamping here rather than at each call site is deliberate —
+    # the callers are the leak. The worker prefers a provider-supplied
+    # ``watermark_at`` over the planner's clamped window end, and PagerDuty
+    # derives that from source record timestamps, so a skewed record writes a
+    # future watermark straight past every planner-side clamp. Enforcing it at
+    # the boundary covers provider stamps, worker stamps, the insert path (a
+    # first-ever row was previously written unclamped), and any future caller,
+    # and it makes the stored-future repair below durable: nothing can re-poison
+    # a watermark that has just been repaired.
+    now = datetime.now(timezone.utc)
+    incoming = _as_utc_ts(timestamp)
+    if incoming > now:
+        overshoot = (incoming - now).total_seconds()
+        if overshoot > _FUTURE_WRITE_SKEW_TOLERANCE_SECONDS:
+            logger.warning(
+                "sync.watermark.future_write_clamped",
+                extra={
+                    "org_id": org_id,
+                    "source_id": source_id,
+                    "dataset_key": dataset_key,
+                    "requested_last_synced_at": incoming.isoformat(),
+                    "clamped_to": now.isoformat(),
+                    "overshoot_seconds": overshoot,
+                    "reason": (
+                        "a watermark marks data already synchronized, so it can "
+                        "never sit in the future. Clamping to now. A large "
+                        "overshoot usually means a provider record carried a "
+                        "skewed timestamp."
+                    ),
+                },
+            )
+        timestamp = now
+
     row = (
         session.query(SyncWatermark)
         .filter(

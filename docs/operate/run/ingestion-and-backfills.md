@@ -82,6 +82,14 @@ Consequences to expect when reading run state:
   runs do not request an upper bound and so never reach this state; only a
   manually requested past upper bound can.
 
+A watermark is never recorded ahead of the current time. Whatever a run reports —
+including a synchronization timestamp taken from a provider record — the recorded
+value is capped at the current time before it is stored. A record carrying a
+clock-skewed timestamp therefore cannot push a dataset's watermark into the
+future, and a watermark that has been repaired cannot be pushed back into the
+future by the next run. A cap of more than a minute is recorded as a warning and
+usually means a provider record carried a skewed timestamp.
+
 A stored watermark ahead of the current time is treated as corrupt. It can be
 produced by a provider record carrying a skewed timestamp, or by a version of the
 planner that predates these rules. Because watermark writes otherwise only move

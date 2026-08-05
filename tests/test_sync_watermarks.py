@@ -912,6 +912,42 @@ class TestLegacyWriteMonotonicAtDBLevel:
 # ---------------------------------------------------------------------------
 
 
+def _seed_corrupt_future_watermark(session, org_id, source_id, dataset_key, when):
+    """Write a FUTURE watermark directly, bypassing set_watermark's clamp.
+
+    CHAOS-3412 round 3 added a write-boundary invariant: ``set_watermark`` never
+    persists a future value, from any caller. That is correct, and it means the
+    corrupt state can no longer be created through the public API — so a test
+    that seeds via ``set_watermark`` silently STOPS exercising the repair path
+    while still passing. This writes the row directly, which is also how the
+    state genuinely arises: rows persisted by pre-fix code, sitting in a live
+    database.
+    """
+    row = (
+        session.query(SyncWatermark)
+        .filter(
+            SyncWatermark.org_id == org_id,
+            SyncWatermark.source_id == source_id,
+            SyncWatermark.dataset_key == dataset_key,
+        )
+        .one_or_none()
+    )
+    if row is None:
+        row = SyncWatermark(
+            repo_id=source_id,
+            target=dataset_key,
+            org_id=org_id,
+            source_id=source_id,
+            dataset_key=dataset_key,
+            last_synced_at=when,
+        )
+        session.add(row)
+    else:
+        row.last_synced_at = when
+    session.flush()
+    return row
+
+
 def test_future_watermark_is_corrected_downward(db_session):
     """A stored value AHEAD of now is corrupt and must be correctable.
 
@@ -924,7 +960,9 @@ def test_future_watermark_is_corrected_downward(db_session):
 
     org, source, dataset = "wm-org", "full-chaos/dev-health", "commits"
     now = datetime.now(timezone.utc)
-    set_watermark(db_session, org, source, dataset, now + timedelta(days=30))
+    _seed_corrupt_future_watermark(
+        db_session, org, source, dataset, now + timedelta(days=30)
+    )
 
     sane = now - timedelta(hours=1)
     set_watermark(db_session, org, source, dataset, sane)
@@ -965,24 +1003,40 @@ def test_legitimate_watermark_is_still_never_rolled_backwards(db_session):
     )
 
 
-def test_future_incoming_value_does_not_lower_a_future_stored_value(db_session):
-    """Two future values: monotonic behavior still applies, no correction."""
+def test_future_incoming_value_is_clamped_and_repairs_the_stored_one(db_session):
+    """SUPERSEDED BEHAVIOR — recorded deliberately, not quietly rewritten.
+
+    This test previously asserted that an incoming FUTURE value does not lower a
+    stored future value. That pinned the leak CHAOS-3412 round 3 closed: it
+    accepted a future value being persisted at all, which is exactly how a
+    provider-supplied ``watermark_at`` re-poisoned a repaired watermark.
+
+    Under the write-boundary invariant the incoming value is clamped to ``now``
+    FIRST. The stored value is then in the future while the incoming one is sane,
+    so the repair applies and the corruption is fixed rather than preserved. The
+    new expectation is strictly stronger: a future write cannot persist, and it
+    now HEALS instead of entrenching.
+    """
     from datetime import datetime, timedelta, timezone
 
     from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
     org, source, dataset = "wm-org", "full-chaos/dev-health", "commit-stats"
     now = datetime.now(timezone.utc)
-    far_future = now + timedelta(days=30)
-    set_watermark(db_session, org, source, dataset, far_future)
+    _seed_corrupt_future_watermark(
+        db_session, org, source, dataset, now + timedelta(days=30)
+    )
+
     set_watermark(db_session, org, source, dataset, now + timedelta(days=10))
 
     stored = get_watermark(db_session, org, source, dataset)
     assert stored is not None
     stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
-    assert abs((stored - far_future).total_seconds()) < 2, (
-        "the correction is for restoring a SANE value; a still-future incoming "
-        "value must not be treated as a repair"
+    assert stored <= datetime.now(timezone.utc) + timedelta(seconds=61), (
+        f"a future write must be clamped, not persisted: {stored}"
+    )
+    assert stored < now + timedelta(days=1), (
+        "the stored future value must have been repaired, not preserved"
     )
 
 
@@ -1054,12 +1108,18 @@ def test_real_postgres_future_watermark_correction():
             now = datetime.now(timezone.utc)
 
             # --- the correction: stored future value must be lowered ---------
+            # Seed DIRECTLY: set_watermark now clamps future writes at the
+            # boundary (CHAOS-3412 round 3), so seeding through it would store
+            # `now` and this test would silently stop exercising the repair.
             corrupt = now + timedelta(days=30)
-            set_watermark(session, org, source, "commits", corrupt)
+            _seed_corrupt_future_watermark(session, org, source, "commits", corrupt)
             session.commit()
             stored = get_watermark(session, org, source, "commits")
             assert stored is not None
-            assert _aware(stored) > now, "precondition: a future value is stored"
+            assert _aware(stored) > now + timedelta(days=1), (
+                f"precondition: a MEANINGFULLY future value must be stored, got "
+                f"{_aware(stored)} — otherwise the repair below is not exercised"
+            )
 
             sane = now - timedelta(hours=1)
             set_watermark(session, org, source, "commits", sane)
@@ -1098,3 +1158,66 @@ def test_real_postgres_future_watermark_correction():
 
 def _aware(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+@pytest.mark.skipif(
+    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
+    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
+)
+def test_real_postgres_future_write_is_clamped_at_the_boundary():
+    """EXECUTE the write-boundary clamp against live PostgreSQL.
+
+    Covers both the INSERT path (first-ever row, previously written unclamped)
+    and the UPDATE path (re-poisoning a repaired value), on the dialect that
+    actually ships.
+    """
+    import os as _os
+    import uuid as _uuid
+    from datetime import timedelta
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+
+    engine = create_engine(_os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    Base.metadata.create_all(engine)
+    SyncWatermark.metadata.create_all(engine)
+
+    org = f"pg-wb-{_uuid.uuid4()}"
+    source = "full-chaos/dev-health"
+    try:
+        with Session(engine) as session:
+            now = datetime.now(timezone.utc)
+
+            # INSERT path: first-ever write carrying a future value.
+            set_watermark(session, org, source, "commits", now + timedelta(days=30))
+            session.commit()
+            session.expire_all()
+            inserted = get_watermark(session, org, source, "commits")
+            assert inserted is not None
+            assert _aware(inserted) <= datetime.now(timezone.utc) + timedelta(
+                seconds=61
+            ), (
+                f"live PostgreSQL persisted a future watermark on INSERT: "
+                f"{_aware(inserted)}"
+            )
+
+            # UPDATE path: a repaired value must not be re-poisoned.
+            set_watermark(session, org, source, "prs", now - timedelta(hours=2))
+            session.commit()
+            set_watermark(session, org, source, "prs", now + timedelta(days=30))
+            session.commit()
+            session.expire_all()
+            updated = get_watermark(session, org, source, "prs")
+            assert updated is not None
+            assert _aware(updated) <= datetime.now(timezone.utc) + timedelta(
+                seconds=61
+            ), (
+                f"live PostgreSQL re-poisoned a sane watermark on UPDATE: "
+                f"{_aware(updated)}"
+            )
+    finally:
+        with Session(engine) as cleanup:
+            cleanup.query(SyncWatermark).filter(SyncWatermark.org_id == org).delete(
+                synchronize_session=False
+            )
+            cleanup.commit()
+        engine.dispose()

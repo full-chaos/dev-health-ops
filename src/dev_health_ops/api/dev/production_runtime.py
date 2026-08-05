@@ -2035,6 +2035,13 @@ async def _assemble_production_runtime(
             conflicts=conflicts,
             evidence_ref_ids=aggregate_evidence_ids,
             blockers=blockers,
+            # CHAOS-3409: threads the domain object's own structural-vs-
+            # truncation signal onto the wire, so status_answer_render/
+            # status_completion_copy see the SAME distinction the real
+            # assessment computed, not a re-derived guess.
+            required_children_not_applicable=(
+                result.actual.required_children_not_applicable
+            ),
         )
         source_health = [
             DevSourceHealth(

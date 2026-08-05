@@ -963,6 +963,21 @@ class DevActualCompletion(ContractModel):
     # consumer applies its own openness predicate rather than trusting one
     # it cannot verify.
     blockers: list[DevRequiredChildFact] = Field(default_factory=list, max_length=100)
+    # CHAOS-3409 codex adversarial review (HIGH): a withheld
+    # (``required_child_total is None``) denominator has two structurally
+    # distinct causes -- a genuine source truncation (real required items
+    # exist, not all were fetched) and CHAOS-3408's structural non-
+    # applicability (ORGANIZATION/TEAM scope has no required-child concept
+    # at all) -- and reason_codes cannot safely carry that distinction: any
+    # new code added there becomes an "unknown reason" that forces
+    # ``state`` to INDETERMINATE (status_change_service._assess), which is
+    # correct for a real truncation but WRONG for a structural absence
+    # (the state/reason codes ARE fully real there; only the required-
+    # child count is inapplicable). This is therefore its own, inert
+    # field: never read by ``_assess``'s state computation, only by
+    # ``is_completion_assessment_untrustworthy``/``render_verdict_summary``
+    # to choose the correct copy without conflating the two.
+    required_children_not_applicable: bool = False
 
     @model_validator(mode="after")
     def validate_required_child_counts(self) -> Self:

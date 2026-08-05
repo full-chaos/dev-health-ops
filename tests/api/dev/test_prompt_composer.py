@@ -46,3 +46,70 @@ def test_prompt_manifest_contains_only_the_canonical_nine_tools() -> None:
     assert len(prompt.system_text.encode("utf-8")) < 64 * 1024
     assert "sql" in prompt.system_text.casefold()
     assert "private reasoning" in prompt.system_text.casefold()
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3421 codex adversarial review (MED-1): resolution_unavailable is a
+# THIRD, distinct prompt branch from subject_committed's True/False -- unit
+# coverage at the composer level, independent of the full orchestrator
+# E2E suite (test_chaos_3292_review_findings.py).
+# ---------------------------------------------------------------------------
+
+
+def test_resolution_unavailable_never_instructs_calling_the_withheld_tool() -> None:
+    prompt = PromptComposer(_registry()).compose(
+        question="How is Nightfall doing?",
+        scope=_scope(),
+        allowed_tools=frozenset(ToolID) - {ToolID.RESOLVE_SCOPE},
+        subject_committed=False,
+        resolution_unavailable=True,
+    )
+    system = json.loads(prompt.system_text)
+    tool_ids = {tool["tool_id"] for tool in system["tool_registry"]["tools"]}
+    assert "resolve_scope.v1" not in tool_ids
+
+    sections = {section["id"]: section["text"] for section in system["policy_sections"]}
+    assert "committed_subject" not in sections
+    assert "named_entity_resolution_unavailable" in sections
+    # The advertised tools (no resolve_scope.v1) and the prompt copy
+    # (explicitly says it is unavailable) agree -- the whole point.
+    assert (
+        "call resolve_scope.v1" not in sections["named_entity_resolution_unavailable"]
+    )
+    assert "unavailable" in sections["named_entity_resolution_unavailable"].casefold()
+
+
+def test_resolution_unavailable_false_is_the_ordinary_uncommitted_section() -> None:
+    """No regression: every OTHER uncommitted-subject run (the default,
+    resolution_unavailable=False) keeps the ordinary section that DOES
+    instruct the model to call resolve_scope.v1 -- that tool really is
+    available for those runs."""
+
+    prompt = PromptComposer(_registry()).compose(
+        question="What's the status of the Ask Dev project?",
+        scope=_scope(),
+        subject_committed=False,
+    )
+    system = json.loads(prompt.system_text)
+    sections = {section["id"]: section["text"] for section in system["policy_sections"]}
+    assert "named_entity_resolution_unavailable" not in sections
+    assert "call resolve_scope.v1" in sections["named_entity_resolution"]
+
+
+def test_subject_committed_wins_over_resolution_unavailable() -> None:
+    """Defensive: if a caller ever passed both flags True (should never
+    happen -- has_committed_subject and legacy_guard_required are mutually
+    exclusive by construction), the committed-subject section -- the one
+    that actually matches a real committed scope -- takes precedence."""
+
+    prompt = PromptComposer(_registry()).compose(
+        question="What's the status of the Ask Dev project?",
+        scope=_scope(),
+        subject_committed=True,
+        resolution_unavailable=True,
+    )
+    system = json.loads(prompt.system_text)
+    sections = {section["id"] for section in system["policy_sections"]}
+    assert "committed_subject" in sections
+    assert "named_entity_resolution_unavailable" not in sections
+    assert "named_entity_resolution" not in sections

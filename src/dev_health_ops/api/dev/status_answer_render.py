@@ -70,6 +70,7 @@ from .status_completion_copy import (
 
 __all__ = [
     "DISPLAY_TRUNCATED_DISCLOSURE",
+    "NO_REQUIRED_ITEMS_RECORDED_FOR_SCOPE",
     "build_deterministic_status_claims",
     "deterministic_answer_status",
     "open_blockers",
@@ -170,6 +171,20 @@ DISPLAY_TRUNCATED_DISCLOSURE = (
     "more than this answer's display limit"
 )
 
+#: CHAOS-3409: a withheld denominator (``required_child_total is None``) has
+#: two structurally distinct causes, and rendering them identically to a
+#: source truncation is actively misleading -- ``status_change_service``
+#: withholds ORGANIZATION/TEAM's denominator (CHAOS-3408) because the
+#: required-child concept has no single declared/children completion tree
+#: for those scopes AT ALL, never because real required items exist but
+#: were not all fetched. "No required items are recorded for this scope"
+#: says exactly that, and is deliberately never combined with the N-of-M
+#: numeric claim (there is no real denominator to cite) or with
+#: ``INCOMPLETE_DENOMINATOR_DISCLOSURE`` (that sentence claims a
+#: verification attempt was made and came up short, which is not true
+#: here).
+NO_REQUIRED_ITEMS_RECORDED_FOR_SCOPE = "No required items are recorded for this scope."
+
 
 def render_verdict_summary(
     actual: DevActualCompletion, *, denominator_withheld: bool = False
@@ -193,6 +208,21 @@ def render_verdict_summary(
     disclosure for a DIFFERENT truncation: not a withheld denominator, but a
     real denominator whose full required-item/blocker LIST does not fit in
     one display page (CHAOS-3377 hotfix).
+
+    CHAOS-3409 (codex adversarial review, HIGH: the ORIGINAL version of
+    this inferred the structural flavor from reason-code ABSENCE, which
+    missed that the production ``denominator_withheld`` wiring -- driven by
+    ``is_completion_assessment_untrustworthy``, which used to treat every
+    withheld total identically -- paired this copy with the truncation
+    disclosure below on the real orchestrator path): ``actual.
+    required_children_not_applicable`` is CHAOS-3408's own EXPLICIT signal
+    for the structural-non-applicability flavor (ORGANIZATION/TEAM scope)
+    -- this gets ``NO_REQUIRED_ITEMS_RECORDED_FOR_SCOPE`` instead of a
+    numeric N-of-M claim, computed purely from ``actual``'s own fields
+    (never requires the caller to also pass ``denominator_withheld``
+    correctly, and -- now that ``is_completion_assessment_untrustworthy``
+    also reads this same field -- never co-occurs with the truncation
+    disclosure below for this flavor).
     """
 
     parts = [translate_completion_state(actual.state)]
@@ -204,6 +234,10 @@ def render_verdict_summary(
             f"{actual.required_child_complete} of {actual.required_child_total} "
             "required items are complete."
         )
+    elif (
+        actual.required_child_total is None and actual.required_children_not_applicable
+    ):
+        parts.append(NO_REQUIRED_ITEMS_RECORDED_FOR_SCOPE)
     seen: set[str] = set()
     reasons: list[str] = []
     for code in actual.reason_codes:

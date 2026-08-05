@@ -54,10 +54,22 @@ _ASSESSMENT_SOURCE_LIMIT_REACHED = "assessment_source_limit_reached"
 
 
 def is_completion_assessment_untrustworthy(actual: DevActualCompletion) -> bool:
+    """Whether this specific completion assessment cannot ground a
+    completion claim -- a genuine source truncation, never CHAOS-3408's
+    structural non-applicability (CHAOS-3409 codex adversarial review,
+    HIGH: before this fix, EVERY withheld ``required_child_total`` was
+    "untrustworthy" regardless of why, so an ORGANIZATION/TEAM subject --
+    whose state/reason codes ARE fully real, only the required-child count
+    does not apply -- was forced through the same disclosure obligation as
+    a run that genuinely could not verify its total). See
+    ``DevActualCompletion.required_children_not_applicable``'s own
+    docstring for why that signal lives outside ``reason_codes``.
+    """
+
     return (
         actual.required_child_total is None
-        or _ASSESSMENT_SOURCE_LIMIT_REACHED in actual.reason_codes
-    )
+        and not actual.required_children_not_applicable
+    ) or _ASSESSMENT_SOURCE_LIMIT_REACHED in actual.reason_codes
 
 
 def any_tool_result_withheld_its_completion_denominator(

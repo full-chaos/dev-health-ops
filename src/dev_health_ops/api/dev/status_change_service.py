@@ -298,6 +298,18 @@ class ActualCompletion:
     # so the ~10 existing direct-construction call sites across the test
     # suite (predating this field) do not have to be touched.
     blockers: tuple[StatusFact, ...] = ()
+    # CHAOS-3409 codex adversarial review (HIGH): distinguishes CHAOS-3408's
+    # structural non-applicability (ORGANIZATION/TEAM scope) from a genuine
+    # required_child_total-withholding source truncation -- both null out
+    # required_child_total/complete identically, but only a real truncation
+    # is "untrustworthy" (is_completion_assessment_untrustworthy,
+    # status_completion_copy.py). Deliberately NOT a reason code: reasons
+    # feeds state computation (any code not in contradiction_codes forces
+    # CompletionState.INDETERMINATE), and a structural absence must never
+    # do that -- the state/reason codes computed from real PR/CI/deployment/
+    # incident evidence for an org/team subject are fully trustworthy on
+    # their own.
+    required_children_not_applicable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -601,6 +613,12 @@ class StatusChangeService:
                 DirectScope.WORK_UNIT,
                 DirectScope.PULL_REQUEST,
             },
+            # CHAOS-3408: ORGANIZATION/TEAM have no single declared/children
+            # completion tree (native_status_change.TEAM_NOT_APPLICABLE_
+            # SOURCES) -- withhold the denominator rather than report the
+            # structurally-empty ``raw.children`` as a real zero.
+            required_children_applicable=request.scope.direct_scope
+            not in {DirectScope.ORGANIZATION, DirectScope.TEAM},
         )
         actual = replace(
             actual,
@@ -861,6 +879,25 @@ class StatusChangeService:
         *,
         assessment_source_limit_reached: bool = False,
         children_source_truncated: bool = False,
+        # CHAOS-3408: an ORGANIZATION or TEAM subject has no single
+        # declared/children completion tree at all -- a deliberate,
+        # structural design (native_status_change.TEAM_NOT_APPLICABLE_
+        # SOURCES: "_WORK_ITEMS_SQL produces a single declared/children
+        # completion tree ... neither concept maps onto a team cohort of
+        # repositories"), never a data gap -- so ``raw.children`` is always
+        # empty for these two scopes. Left at the default ``True``
+        # (applicable), that structural absence and a genuinely-computed
+        # real zero were indistinguishable: both produced
+        # ``required_child_total = len(()) = 0``, a fabricated-looking
+        # "0 of 0 required items are complete" for every org-wide/team-wide
+        # readiness question (the live incident this closes). ``False``
+        # withholds the denominator exactly like ``children_source_
+        # truncated`` does -- but WITHOUT the ``assessment_source_limit_
+        # reached`` reason code that truncation carries, so a consumer
+        # (``status_answer_render.render_verdict_summary``) can render a
+        # distinct, honest "not applicable to this scope" copy instead of
+        # the truncation-specific disclosure (CHAOS-3409).
+        required_children_applicable: bool = True,
         declared_optional: bool = False,
         release_evidence_required: bool = False,
     ) -> ActualCompletion:
@@ -1007,10 +1044,14 @@ class StatusChangeService:
         # (``None``, never a fabricated count) when the required-child
         # source itself was truncated -- an honest "unknown" beats a
         # count that looks complete only because the omitted children
-        # were never fetched.
+        # were never fetched -- OR (CHAOS-3408) when the required-child
+        # concept is not applicable to this scope at all (ORGANIZATION/
+        # TEAM), which is structurally identical to truncation from this
+        # count's own point of view: either way, ``0`` would be a claim
+        # about data that was never real.
         required_child_total: int | None
         required_child_complete: int | None
-        if children_source_truncated:
+        if children_source_truncated or not required_children_applicable:
             required_child_total = None
             required_child_complete = None
         else:
@@ -1029,6 +1070,12 @@ class StatusChangeService:
             source_ref_ids=used_source_ids,
             evidence_ref_ids=self._fact_evidence(raw),
             blockers=blockers,
+            # CHAOS-3409: True ONLY for the structural flavor -- never set
+            # merely because the total is None, and never set for a real
+            # source truncation (children_source_truncated).
+            required_children_not_applicable=(
+                not required_children_applicable and not children_source_truncated
+            ),
         )
 
     @staticmethod

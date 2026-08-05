@@ -74,6 +74,33 @@ _COMMITTED_SUBJECT_SECTION = (
     "unavailable for this run.",
 )
 
+# CHAOS-3421 codex adversarial review (MED-1): a THIRD, distinct state from
+# the two above -- the server named a subject in the question but could NOT
+# confirm it against the authorized catalog (subject_preflight's
+# unresolved_untyped -> proceeded_unresolved_bare_name: a bare name with no
+# adjacent kind noun, or one the catalog does not confirm). That branch
+# withholds resolve_scope.v1 from allowed_tools -- the SAME leak-closing
+# reasoning the committed-subject branch already uses (its own resolve_scope
+# call could only ever repeat the identical failed lookup and surface the
+# raw forbidden_or_not_found outcome for the model to echo). The ordinary
+# _UNCOMMITTED_SUBJECT_SECTION instructing "call resolve_scope.v1" would
+# therefore be actively wrong here -- a compliant model's call is rejected
+# by the registry as unavailable, burning a tool turn on a request that can
+# never succeed. This section says so explicitly and names the permitted
+# fallback (answer organization-wide with the tools actually listed),
+# rather than leaving the model to discover the missing tool by trial and
+# error.
+_RESOLUTION_UNAVAILABLE_SECTION = (
+    "named_entity_resolution_unavailable",
+    "The server could not confirm a specific project, repository, issue, pull request, "
+    "or work unit named in this question against the authorized catalog. "
+    "resolve_scope.v1 is unavailable for this request -- do not request it. Answer "
+    "organization-wide instead, using only the tools this prompt lists, and never "
+    "present an answer that describes or attributes findings to the named entity as "
+    "though it were confirmed; say plainly that it could not be confirmed if the "
+    "question depends on it.",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PromptConversationTurn:
@@ -107,6 +134,7 @@ class PromptComposer:
         tool_results: tuple[DevToolResult, ...] = (),
         allowed_tools: Collection[ToolID] | None = None,
         subject_committed: bool = False,
+        resolution_unavailable: bool = False,
     ) -> ComposedPrompt:
         if not question.strip():
             raise ValueError("question is required")
@@ -129,11 +157,19 @@ class PromptComposer:
             raise ValueError("tool context exceeds prompt budget")
 
         version = PROMPT_VERSION if subject_committed else LEGACY_PROMPT_VERSION
-        subject_section = (
-            _COMMITTED_SUBJECT_SECTION
-            if subject_committed
-            else _UNCOMMITTED_SUBJECT_SECTION
-        )
+        # CHAOS-3421 codex adversarial review (MED-1): resolution_unavailable
+        # is checked before the ordinary uncommitted branch -- both leave
+        # subject_committed False (this flow never commits a subject), but
+        # the ordinary section's "call resolve_scope.v1" instruction would be
+        # actively wrong here, since that exact tool is withheld from
+        # allowed_tools for this flow (see _RESOLUTION_UNAVAILABLE_SECTION's
+        # own comment for why).
+        if subject_committed:
+            subject_section = _COMMITTED_SUBJECT_SECTION
+        elif resolution_unavailable:
+            subject_section = _RESOLUTION_UNAVAILABLE_SECTION
+        else:
+            subject_section = _UNCOMMITTED_SUBJECT_SECTION
         system_payload = {
             "prompt_version": version,
             "policy_sections": [

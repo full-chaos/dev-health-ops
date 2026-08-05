@@ -110,6 +110,36 @@ async def test_an_organization_wide_question_keeps_every_tool() -> None:
 
 
 @pytest.mark.asyncio
+async def test_an_unresolved_bare_name_withholds_resolve_scope() -> None:
+    """CHAOS-3421: unlike the names-nothing case above, this branch DID
+    name something -- a bare span the catalog could not confirm under any
+    kind. Model-called ``resolve_scope.v1`` on that exact name can only
+    ever repeat the preflight's own failed lookup, returning the raw
+    ``forbidden_or_not_found`` outcome for the model to (as the live
+    incident did) echo verbatim into its own answer text. Withholding the
+    tool here closes that leak channel at its source, mirroring the
+    committed-subject branch's own ``ALL_TOOLS - {RESOLVE_SCOPE}`` (a
+    subject already failed to resolve here just as surely as it succeeded
+    there -- in neither case is there anything left for the model to
+    productively resolve).
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("How is Nightfall doing?"),
+    )
+
+    assert result.decision is PreflightDecision.PROCEED
+    assert result.diagnostic == "proceeded_unresolved_bare_name"
+    assert result.legacy_guard_required is True
+    assert result.allowed_tools == frozenset(ToolID) - {ToolID.RESOLVE_SCOPE}
+    # Every OTHER subject-bearing tool stays available -- this withholds
+    # exactly the one tool that could re-derive and leak the same failed
+    # resolution, never the whole subject-bearing surface.
+    assert SUBJECT_BEARING_TOOLS <= result.allowed_tools
+
+
+@pytest.mark.asyncio
 async def test_a_resolved_cohort_is_unsupported_not_partially_committed() -> None:
     """Two real subjects: v1 ``DevScope`` names one, so neither is guessed.
 

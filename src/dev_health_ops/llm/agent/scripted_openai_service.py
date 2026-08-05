@@ -4,13 +4,20 @@ This module is not a product provider family. It is launched only by the
 Compose acceptance profile and exercises the production OpenAI-compatible
 adapter over real HTTP.
 
-CHAOS-3219 Phase 1 Lane 1b: a request whose question carries a
-``[[case:<case-id>]]`` tag (see ``provider_scripts.py``'s module docstring)
-is routed through the per-role, per-case scripted decision/fault engine in
-``provider_scripts``. A request with no tag is completely untouched -- every
-branch below this point that does not mention ``provider_scripts`` is the
-original, pre-CHAOS-3219 heuristic, preserved byte-for-byte so every existing
-smoke script and unit test against this server keeps passing unmodified.
+CHAOS-3219 Phase 1 Lane 1b: a request whose (normalized) question text
+matches one of the active role's scripted cases (see ``provider_scripts.py``'s
+module docstring -- routing is by a hash of the question text itself, never
+a marker embedded in it, so nothing acceptance-specific ever enters the
+persisted transcript) is routed through the per-role, per-case scripted
+decision/fault engine in ``provider_scripts``. A request whose question
+matches no scripted case is indistinguishable from an ordinary one and falls
+through to the pre-existing default heuristic unchanged -- every branch
+below this point that does not mention ``provider_scripts`` is the original,
+pre-CHAOS-3219 heuristic, preserved byte-for-byte so every existing smoke
+script and unit test against this server keeps passing unmodified. The one
+exception is the retired ``[[case:`` marker, reserved defensively: its mere
+presence anywhere in a question always fails loud, never falls through --
+see ``provider_scripts.LEGACY_CASE_TAG_MARKER``.
 """
 
 from __future__ import annotations
@@ -412,28 +419,42 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
         result_tool_ids = {str(result.get("tool_id") or "") for result in tool_results}
         question = _question_from_messages(payload)
 
-        # CHAOS-3219 Phase 1 Lane 1b: case-tag routing. A tag absent from the
-        # question (the overwhelming common case pre-CHAOS-3219, and every
-        # existing smoke/unit test) leaves `case_id` None and every branch
-        # below behaves exactly as it did before this module existed.
-        case_id = provider_scripts.extract_case_id(question)
-        if case_id is not None:
-            try:
-                role = provider_scripts.current_role()
-                engine = provider_scripts.ScriptEngine.load(role)
-                resolution = engine.resolve(case_id, round_index=len(tool_results))
-            except provider_scripts.UnmappedCaseError as exc:
-                self._write_unmapped_case_error(exc)
-                return
-            if not isinstance(resolution, str):
-                self._serve_scripted_turn(payload, resolution, tool_names)
-                return
-            # DELEGATE_DEFAULT: fall through to the untagged heuristic below,
-            # exactly as if this request had never carried a tag -- strip the
-            # tag first so every heuristic downstream (the LIST_METRICS_QUESTION
-            # literal match, _evidence_query_from_question's repository-identity
-            # search) sees the identical text an untagged request would have.
-            question = provider_scripts.strip_case_tag(question)
+        # CHAOS-3219 Phase 1 Lane 1b: the retired [[case: marker is reserved
+        # defensively -- ANY occurrence (well-formed, malformed, truncated,
+        # duplicated) always fails loud, never falls through. A pure string
+        # check: no file I/O, so it can never be skipped due to a missing
+        # scripts directory the way question-hash routing below can be.
+        if question is not None and provider_scripts.LEGACY_CASE_TAG_MARKER in question:
+            self._write_unmapped_case_error(
+                provider_scripts.UnmappedCaseError(
+                    "legacy_case_tag_marker_present",
+                    "questions may not contain the retired "
+                    f"{provider_scripts.LEGACY_CASE_TAG_MARKER!r} marker; route "
+                    "scripted cases by exact question text instead (see "
+                    "provider-scripts/README.md)",
+                )
+            )
+            return
+
+        # Question-hash routing: a question whose normalized text matches no
+        # scripted case (the routine outcome for every non-corpus question,
+        # incl. every pre-CHAOS-3219 smoke/oracle/probe question) is
+        # indistinguishable from an ordinary one and falls straight through
+        # to the untagged heuristic below, completely unchanged.
+        if question is not None:
+            engine = provider_scripts.try_load_engine(provider_scripts.current_role())
+            if engine is not None:
+                try:
+                    resolution = engine.resolve(question, round_index=len(tool_results))
+                except provider_scripts.UnmappedCaseError as exc:
+                    self._write_unmapped_case_error(exc)
+                    return
+                if resolution is not None and not isinstance(resolution, str):
+                    self._serve_scripted_turn(payload, resolution, tool_names)
+                    return
+                # `resolution` is DELEGATE_DEFAULT or None (no scripted case
+                # matched this question) -- fall through to the untagged
+                # heuristic below, question text unchanged either way.
 
         if question == LIST_METRICS_QUESTION:
             list_metrics_message, list_metrics_finish_reason = _list_metrics_script(

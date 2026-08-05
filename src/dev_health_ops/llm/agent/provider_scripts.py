@@ -4,74 +4,105 @@ Lane 1b) for :mod:`dev_health_ops.llm.agent.scripted_openai_service`.
 Not a product module. This is loaded only by the Ask Dev acceptance scripted
 OpenAI-compatible provider, exactly like the module it extends.
 
-Request-fingerprint routing
-----------------------------
+Request-fingerprint routing (question-hash, not a tag)
+--------------------------------------------------------
 CHAOS-3219's corpus runner (Phase 2, a separate lane) must be able to tell
 this scripted provider *which frozen registry case* (see
 ``tests/acceptance/world/ask-dev-world.v1/provider-scripts/registry-ids.v1.json``)
 it is driving, so a per-case decision sequence or fault script can be
-selected deterministically. The only channel that survives, byte-for-byte,
-from an HTTP call against the real ``/api/v1/dev/**`` surface all the way to
-this provider's wire request is ``DevMessageRequest.question`` --
-``PromptComposer.compose()`` embeds it verbatim as ``user_payload["question"]``
-(``api/dev/prompts/composer.py``), and this module's sibling helper
-``_question_from_messages`` already relies on that same channel for the
-pre-existing ``LIST_METRICS_QUESTION`` literal-match and
-``_evidence_query_from_question`` behaviors. No other client-controlled field
-reaches this far unmodified: ``conversation_id``/``client_message_id``/
-``request_id`` are ``OpaqueID`` values consumed for internal storage keys,
-never re-serialized into the provider request.
+selected deterministically.
 
-So the case id is embedded as a tag inside the question text itself:
+An earlier revision of this module did this by embedding a
+``[[case:<id>]]`` marker inside ``DevMessageRequest.question`` itself. Codex
+review of that revision (a735495a1) found it HIGH severity: ``question`` is
+the literal text persisted verbatim as the user's own conversation message
+(``DevPersistenceService.append_user_message_and_run``) -- provider-side
+stripping happens far too late to protect that persisted row, any transcript
+export, or a replay. Scanning the *provider's own answer* fields
+(``scan_public_text``) proved the answer was clean; it never proved the
+*user's own message* was.
 
-    "<real question text> [[case:<case-id>]]"
+This revision eliminates the marker entirely. Each frozen registry case
+already has fixed, known question text (the corpus runner always asks a
+case's *exact* question) -- so routing keys directly off a normalized hash
+of the question text itself, computed identically on both sides:
 
-``extract_case_id`` parses it back out. The corpus runner is responsible for
-appending this tag when it authors a case's question (documented here, not
-implemented here -- Phase 2 Lane 2a/2b owns the runner and case authoring).
+    fingerprint = sha256(casefold(collapse_whitespace(question.strip())))
 
-Why the tag cannot leak into a rendered answer
------------------------------------------------
-Two independent reasons, not one:
+``role-<role>.json`` stores each case's expected ``question`` string
+alongside its decisions/fault script; ``load_role_script`` builds a
+``fingerprint -> case`` index at load time and hard-fails (``ValueError``)
+if two different case ids ever produce the same fingerprint (a collision
+the corpus-authoring lane must resolve by rewording one of the two
+questions, never a routing ambiguity this module resolves silently).
 
-1. **By construction**: every scripted decision this module produces is
-   built from the script JSON's own field values (or the pre-existing
-   default heuristic's own fabricated copy) -- the raw ``question`` string
-   (tag included) is read only to resolve *which* script entry applies. It
-   is never copied into a ``direct_summary``, section, fact, or any other
-   answer field. ``extract_case_id`` returns the captured case id alone,
-   never the surrounding text.
-2. **Defense in depth, in case (1) is ever violated by a future edit**: the
-   tag's own shape cannot trip either backstop production already runs over
-   every public copy field (``contracts_v2/validators.scan_public_text`` via
-   ``validate_no_internal_leakage``, and ``no_match_terminal.INTERNAL_TOKEN_DENYLIST``):
-   - ``INTERNAL_TOKEN_DENYLIST`` / ``PUBLIC_TEXT_FORBIDDEN_TOKENS`` are built
-     from enum member ``.value``s and are, without exception, underscore-
-     joined snake_case tokens (``_underscore_members`` explicitly filters to
-     only members containing ``"_"``; the hand-written
-     ``PUBLIC_TEXT_FORBIDDEN_TOKENS`` set is the same shape:
-     ``"forbidden_or_not_found"``, ``"not_measured"``, ...). Every registry
-     case id and this module's own tag alphabet use ``-`` (kebab) inside
-     dot-separated segments, never ``_`` -- see ``_CASE_ID_PATTERN`` below,
-     which the frozen registry ids in ``registry-ids.v1.json`` were checked
-     against. A substring match against an underscore token can never fire
-     on a hyphenated one.
-   - ``_VERSIONED_ID_PATTERN`` in the same module flags a dotted token whose
-     *last* segment matches ``v\\d+`` (``status.entity.v2`` shaped). No
-     registry case id ends in a bare version segment (the one exception,
-     ``status.single-project.positive-control-v1``, ends in
-     ``...-v1`` fused onto the qualifier word, not a standalone
-     ``.v1`` segment) -- so the pattern does not match any tag this module
-     emits either.
+The result: nothing acceptance-specific ever enters the persisted
+transcript. The user message the corpus runner sends IS the natural
+question a real user would ask -- no wrapper, no suffix, no delimiter --
+so there is no leak surface to strip, sanitize, or backstop-scan for. A
+question that happens to match no scripted case's fingerprint is
+indistinguishable, on the wire, from an ordinary/organic question -- and
+is treated exactly that way: it falls through to the pre-existing default
+heuristic, unchanged, so every existing smoke script, the Wave 3.1 browser
+oracle, and the ``legacy_agent`` role-certification probe (none of which
+send any of this file's scripted literal questions) keep working exactly
+as they did before this module existed. Fail-loud is reserved for
+requests this module has affirmative reason to believe were addressed to
+a *specific* scripted case (its literal question text matched one
+byte-for-byte) but which the resolved script cannot actually serve --
+never for "no match found", which is the routine, majority-case outcome
+for all non-corpus traffic.
 
-The tag delimiters themselves (``[[case:`` / ``]]``) are also not
-plausible-looking natural-language prose a human reviewer of a leaked string
-would mistake for anything else, which is a second, independent reason a
-leak (were one to occur) would be caught immediately rather than blend in.
+Defensive marker reservation
+-----------------------------
+The old ``[[case:`` marker is retired, not merely unused: if that literal
+substring appears anywhere in a question -- well-formed, malformed,
+truncated, or duplicated -- this module fails loud
+(``legacy_case_tag_marker_present``) rather than letting it fall through to
+the default heuristic. This closes the MEDIUM finding from the same Codex
+round: a malformed/truncated tag under the old design silently produced a
+generic canned 200 via the untagged fallback, which is exactly the
+"unmapped case accidentally passes" failure mode CHAOS-3219 requirement 4
+prohibits. The check is a pure string comparison -- no file I/O, no script
+loading -- so it can never be skipped due to a missing/misconfigured
+scripts directory the way script-based routing itself can (see below).
+
+Why script/registry infrastructure failures do not fail loud
+---------------------------------------------------------------
+Unlike the marker check, a failure to *load* the scripts directory/role
+file (missing directory, malformed JSON, a role with no script at all) is
+treated as "no scripted match" -- falls through to the default heuristic --
+never a 422. This is deliberate: with the tag eliminated, there is no
+per-request syntactic signal left to distinguish "this corpus/script
+pipeline is broken" from "this was never meant to be a scripted case" (both
+look identical: an ordinary-shaped question, no match found). Given that
+distinction cannot be made honestly at the wire level, and given breaking
+every pre-existing non-corpus acceptance smoke/probe/oracle the moment the
+scripts directory is unavailable would be a severe, silent regression in a
+shared lane other work depends on, infra failures degrade to "act as if
+untagged" rather than fail the request. The infra-is-broken case is instead
+caught where it belongs: the static conformance suite
+(``tests/acceptance/test_ask_dev_provider_roles.py``) loads the registry and
+every enabled role's script unconditionally and asserts they parse
+correctly -- the same "static wiring guards run in the unit tier, before
+anyone trusts a green acceptance run" pattern already used elsewhere in this
+lane (``test_ask_dev_compose.py``, the wave31 manifest's own integrity
+checks).
+
+A *matched* case (question text equal, byte-for-byte after normalization,
+to one this role explicitly scripted) that then cannot actually be served
+-- its decision list is exhausted for this round, its fault's
+pre-fault-decisions ran out, or it asks for a tool the client never offered
+-- is a different, much stronger signal: an exact sentence match is not
+plausible by accident, so treating it as "this really was meant to invoke a
+specific scripted case, and something about that script is broken" and
+failing loud is correct, and is exactly what
+``UnmappedCaseError``/``ScriptEngine.resolve`` still raises for those paths.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -87,11 +118,10 @@ SCRIPT_SCHEMA_VERSION = "ask_dev_provider_script.v1"
 #: precedence -- set by whatever launches the scripted provider (a Compose
 #: service, a unit test) when the repo checkout is not reachable at its usual
 #: relative path (e.g. a container image that copied only the scripts
-#: directory in, not the full source tree). Resolution is lazy (only
-#: attempted once a request actually carries a case tag), so the untagged /
-#: pre-CHAOS-3219 default-heuristic path never depends on this directory
-#: existing at all -- see module docstring and
-#: ``scripted_openai_service``'s untagged fallback.
+#: directory in, not the full source tree). A missing/misconfigured
+#: directory degrades to "no scripted match" for ordinary requests -- see
+#: module docstring -- so this never needs to exist for untagged/default
+#: traffic to keep working.
 SCRIPTS_DIR_ENV = "ASK_DEV_SCRIPTED_PROVIDER_SCRIPTS_DIR"
 
 #: Env var selecting which role this provider process is scripted as. Only
@@ -109,62 +139,45 @@ _WORLD_RELATIVE_SCRIPTS_DIR = Path(
     "tests/acceptance/world/ask-dev-world.v1/provider-scripts"
 )
 
-#: Case-id tag embedded verbatim in ``DevMessageRequest.question`` by the
-#: corpus runner. Segment shape matches the frozen registry convention
-#: (``family.subfamily.qualifier``, lowercase, kebab-qualifiers,
-#: dot-separated, at least two segments) -- see module docstring for why
-#: this shape is denylist-safe.
-_CASE_ID_SEGMENT = r"[a-z][a-z0-9-]*"
-_CASE_TAG_PATTERN = re.compile(
-    rf"\[\[case:({_CASE_ID_SEGMENT}(?:\.{_CASE_ID_SEGMENT})+)\]\]"
-)
-#: Same tag, plus any adjacent whitespace, for ``strip_case_tag`` -- replacing
-#: with a single space (then stripping the ends) avoids leaving a
-#: double-space artifact wherever the tag was.
-_CASE_TAG_STRIP_PATTERN = re.compile(
-    rf"\s*\[\[case:{_CASE_ID_SEGMENT}(?:\.{_CASE_ID_SEGMENT})+\]\]\s*"
-)
+#: The retired routing marker. Reserved, never accepted, in ANY form -- see
+#: module docstring "Defensive marker reservation".
+LEGACY_CASE_TAG_MARKER = "[[case:"
+
+_WHITESPACE_RUN = re.compile(r"\s+")
 
 
-def extract_case_id(question: str | None) -> str | None:
-    """Return the tagged case id from ``question``, or ``None`` if untagged.
+def normalize_question_text(question: str) -> str:
+    """Pinned normalization for question-fingerprint matching: collapse
+    every run of whitespace to a single space, trim the ends, casefold.
 
-    ``None`` is the signal to fall all the way through to the pre-existing,
-    untagged default heuristic -- never treated as "case id resolved to
-    nothing" (that is ``UnmappedCaseError``, raised only once a tag was
-    actually present).
+    Pinned precisely, not "reasonable-effort" -- two questions that
+    normalize identically are treated as the exact same scripted case, and
+    changing this function silently reclassifies every existing script
+    entry's fingerprint. If this ever needs to change, every
+    ``role-*.json`` file's effective routing changes with it -- bump
+    ``SCRIPT_SCHEMA_VERSION`` and re-verify every checked-in script's
+    ``question`` still resolves as intended.
     """
 
-    if not question:
-        return None
-    match = _CASE_TAG_PATTERN.search(question)
-    if match is None:
-        return None
-    return match.group(1)
+    return _WHITESPACE_RUN.sub(" ", question.strip()).casefold()
 
 
-def strip_case_tag(question: str | None) -> str | None:
-    """Remove a ``[[case:...]]`` tag from ``question``, if present.
+def question_fingerprint(question: str) -> str:
+    """Full SHA-256 hex digest of the normalized question text. Used as a
+    dict key only -- not truncated, so there is no meaningful collision risk
+    beyond SHA-256 itself (a same-role *different-question* collision is
+    astronomically unlikely; a same-role *same-question* "collision" is not
+    a collision at all, it is two case ids trying to claim the same
+    question, which ``load_role_script`` rejects at load time instead)."""
 
-    ``delegate_default`` promises a case behaves *exactly* like an untagged
-    request; callers apply this before running any legacy heuristic so a
-    tagged question is indistinguishable, downstream, from the untagged one
-    the tag was appended to. A no-op on an already-untagged question, so
-    callers can apply it unconditionally.
-    """
-
-    if not question:
-        return question
-    return _CASE_TAG_STRIP_PATTERN.sub(" ", question).strip()
+    return hashlib.sha256(normalize_question_text(question).encode("utf-8")).hexdigest()
 
 
 class UnmappedCaseError(Exception):
-    """A case tag was present but could not be resolved to a runnable script.
-
-    Every branch that raises this must be reachable independently of every
-    other -- the conformance suite RED-verifies each ``code`` value
-    separately so an unmapped case can never silently fall back to a generic
-    canned 200 (CHAOS-3219 Phase 1 Lane 1b requirement 4).
+    """A question matched a scripted case but could not actually be served,
+    or a script/registry file itself is malformed. Never raised for "no
+    scripted case matched this question" -- that is the routine outcome for
+    non-corpus traffic and returns ``None`` instead (see module docstring).
     """
 
     def __init__(self, code: str, message: str):
@@ -201,11 +214,11 @@ ScriptedDecision = (
 )
 
 #: Sentinel decision meaning "this case is intentionally scripted to behave
-#: exactly like the untagged default heuristic" -- used so a corpus case can
-#: be case-tag-addressable (making it exercisable through per-case fixture
-#: routing) without duplicating the existing grounded tool-call sequence in
-#: JSON. See ``status.single-project.positive-control-v1`` in
-#: ``role-legacy_agent.json``.
+#: exactly like the default heuristic would for this exact question" -- used
+#: so a corpus case can be addressed by its exact question text (making it
+#: individually identifiable in the fault matrix / conformance suite)
+#: without duplicating the existing grounded tool-call sequence in JSON. See
+#: ``status.single-project.positive-control-v1`` in ``role-legacy_agent.json``.
 DELEGATE_DEFAULT = "delegate_default"
 
 
@@ -312,7 +325,8 @@ class _CaseScript:
     """One case id's parsed script entry."""
 
     case_id: str
-    kind: str  # "delegate_default" | "decisions" | "fault"
+    question: str
+    kind: str  # "decisions" | "fault"
     decisions: tuple[ScriptedDecision, ...] = ()
     fault_type: str | None = None
     fires_from_round: int = 0
@@ -373,6 +387,10 @@ def _parse_case_entry(case_id: str, payload: Mapping[str, Any]) -> _CaseScript |
     for that sentinel kind (kept out of ``_CaseScript`` itself so callers can
     special-case it without constructing a dataclass for a no-op)."""
 
+    question = payload.get("question")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError(f"case {case_id!r} requires a non-empty 'question'")
+
     kind = payload.get("kind")
     if kind == DELEGATE_DEFAULT:
         return DELEGATE_DEFAULT
@@ -382,6 +400,7 @@ def _parse_case_entry(case_id: str, payload: Mapping[str, Any]) -> _CaseScript |
             raise ValueError(f"case {case_id!r} 'decisions' must be a non-empty list")
         return _CaseScript(
             case_id=case_id,
+            question=question,
             kind="decisions",
             decisions=tuple(_decision_from_payload(item) for item in raw_decisions),
         )
@@ -448,6 +467,7 @@ def _parse_case_entry(case_id: str, payload: Mapping[str, Any]) -> _CaseScript |
         )
         return _CaseScript(
             case_id=case_id,
+            question=question,
             kind="fault",
             fault_type=fault_type,
             fires_from_round=fires_from_round,
@@ -463,7 +483,19 @@ def _parse_case_entry(case_id: str, payload: Mapping[str, Any]) -> _CaseScript |
 @dataclass(frozen=True, slots=True)
 class RoleScript:
     role: str
+    #: case id -> parsed entry, kept for referential-integrity / documentation
+    #: conformance checks (``registry-ids.v1.json`` cross-checks). NOT used
+    #: for request-time routing -- see ``by_fingerprint``.
     cases: Mapping[str, _CaseScript | str]
+    #: normalized-question-fingerprint -> (case id, parsed entry). This is
+    #: what ``ScriptEngine.resolve`` actually looks up.
+    by_fingerprint: Mapping[str, tuple[str, _CaseScript | str]]
+
+
+def _entry_question(entry: _CaseScript | str, raw: Mapping[str, Any]) -> str:
+    if isinstance(entry, _CaseScript):
+        return entry.question
+    return str(raw["question"])
 
 
 def _scripts_dir() -> Path:
@@ -473,8 +505,8 @@ def _scripts_dir() -> Path:
     # Walk up from this file looking for the repo-relative conventional
     # location. Works for a full source checkout (local dev, unit tests, a
     # container image that COPYs the whole tree) without requiring the
-    # directory to exist at import time -- callers only reach this function
-    # once a request actually carried a case tag (see module docstring).
+    # directory to exist at import time -- infra failures degrade to "no
+    # scripted match" for ordinary requests (see module docstring).
     here = Path(__file__).resolve()
     for parent in here.parents:
         candidate = parent / _WORLD_RELATIVE_SCRIPTS_DIR
@@ -527,11 +559,22 @@ def load_role_script(role: str, *, scripts_dir: Path | None = None) -> RoleScrip
         raise UnmappedCaseError(
             "role_script_schema_mismatch", f"role-{role}.json 'cases' must be an object"
         )
-    cases = {
-        case_id: _parse_case_entry(case_id, entry)
-        for case_id, entry in raw_cases.items()
-    }
-    return RoleScript(role=role, cases=cases)
+    cases: dict[str, _CaseScript | str] = {}
+    by_fingerprint: dict[str, tuple[str, _CaseScript | str]] = {}
+    for case_id, raw_entry in raw_cases.items():
+        entry = _parse_case_entry(case_id, raw_entry)
+        cases[case_id] = entry
+        question = _entry_question(entry, raw_entry)
+        fingerprint = question_fingerprint(question)
+        if fingerprint in by_fingerprint:
+            other_case_id, _ = by_fingerprint[fingerprint]
+            raise ValueError(
+                f"role-{role}.json: cases {other_case_id!r} and {case_id!r} "
+                "normalize to the identical question fingerprint -- two "
+                "different cases cannot share one question; reword one"
+            )
+        by_fingerprint[fingerprint] = (case_id, entry)
+    return RoleScript(role=role, cases=cases, by_fingerprint=by_fingerprint)
 
 
 @dataclass(frozen=True, slots=True)
@@ -554,28 +597,43 @@ class ScriptEngine:
             role_script=load_role_script(role, scripts_dir=directory),
         )
 
-    def resolve(self, case_id: str, *, round_index: int) -> ScriptTurn | str:
-        """Return a ``ScriptTurn`` to serve, or the ``DELEGATE_DEFAULT``
-        sentinel string. Raises ``UnmappedCaseError`` for every case the
-        script cannot resolve -- never returns ``None``/falls through
-        silently (CHAOS-3219 Phase 1 Lane 1b requirement 4)."""
+    def resolve(self, question: str, *, round_index: int) -> ScriptTurn | str | None:
+        """Return a ``ScriptTurn`` to serve, the ``DELEGATE_DEFAULT``
+        sentinel string, or ``None`` if no scripted case's question matches
+        ``question`` at all -- the routine, majority-case outcome for
+        non-corpus traffic, and NOT an error (see module docstring). Raises
+        ``UnmappedCaseError`` only once a case has affirmatively matched but
+        cannot actually be served for this round.
+        """
 
-        if case_id not in self.registry_ids:
-            raise UnmappedCaseError(
-                "unknown_case_id",
-                f"case id {case_id!r} is not in the frozen corpus registry",
-            )
-        entry = self.role_script.cases.get(case_id)
+        fingerprint = question_fingerprint(question)
+        entry = self.role_script.by_fingerprint.get(fingerprint)
         if entry is None:
-            raise UnmappedCaseError(
-                "case_not_scripted",
-                f"case id {case_id!r} is a valid registry id but has no "
-                f"script entry for role {self.role!r}",
-            )
-        if entry == DELEGATE_DEFAULT:
+            return None
+        _case_id, script_entry = entry
+        if script_entry == DELEGATE_DEFAULT:
             return DELEGATE_DEFAULT
-        assert isinstance(entry, _CaseScript)  # noqa: S101
-        return entry.resolve(round_index=round_index)
+        assert isinstance(script_entry, _CaseScript)  # noqa: S101
+        return script_entry.resolve(round_index=round_index)
+
+
+def try_load_engine(
+    role: str, *, scripts_dir: Path | None = None
+) -> ScriptEngine | None:
+    """``ScriptEngine.load`` wrapped so any infra failure (missing
+    directory, malformed JSON, a role/registry file that fails to parse or
+    collides) degrades to "no engine available" rather than propagating --
+    see module docstring "Why script/registry infrastructure failures do not
+    fail loud". Callers that want the raw failure (the conformance suite,
+    proving the checked-in files themselves are valid) should call
+    ``load_role_script``/``load_registry_ids``/``ScriptEngine.load`` directly
+    instead.
+    """
+
+    try:
+        return ScriptEngine.load(role, scripts_dir=scripts_dir)
+    except (UnmappedCaseError, ValueError, OSError, json.JSONDecodeError):
+        return None
 
 
 def current_role() -> str:
@@ -591,6 +649,7 @@ __all__ = [
     "DEFAULT_ROLE",
     "DELEGATE_DEFAULT",
     "FAULT_TYPES",
+    "LEGACY_CASE_TAG_MARKER",
     "MIN_OVERSIZED_BYTES",
     "ROLE_ENV",
     "SCRIPTS_DIR_ENV",
@@ -606,9 +665,10 @@ __all__ = [
     "ToolCallDecision",
     "UnmappedCaseError",
     "current_role",
-    "extract_case_id",
     "load_registry_ids",
     "load_role_script",
+    "normalize_question_text",
+    "question_fingerprint",
     "sleep_for_fault",
-    "strip_case_tag",
+    "try_load_engine",
 ]

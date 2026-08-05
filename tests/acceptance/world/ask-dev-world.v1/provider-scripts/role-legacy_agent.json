@@ -1,17 +1,20 @@
 {
   "schema_version": "ask_dev_provider_script.v1",
   "role": "legacy_agent",
-  "note": "CHAOS-3219 Phase 1 Lane 1b. legacy_agent is the only Ask Dev provider role with a working, production-representative certification probe today (llm.agent.role_readiness.RoleReadinessService.certify_role raises NotImplementedError for every other AgentRole member; see llm/agent/roles.py + llm/agent/probes/legacy_agent.py). This file is a representative, explicitly incomplete slice of the 134-case frozen registry (registry-ids.v1.json) -- it proves the per-case decision-sequence mechanism, the delegate-to-default mechanism, and all 6 fault types named in the CHAOS-3219 issue. Phase 2 Lane 2b case authors add more entries here as they author tests/acceptance/world/ask-dev-world.v1/corpus/case-*.json; an id present in registry-ids.v1.json but absent from this file's 'cases' fails loud (case_not_scripted) rather than silently passing, so under-coverage is always visible, never masked.",
+  "note": "CHAOS-3219 Phase 1 Lane 1b. legacy_agent is the only Ask Dev provider role with a working, production-representative certification probe today (llm.agent.role_readiness.RoleReadinessService.certify_role raises NotImplementedError for every other AgentRole member; see llm/agent/roles.py + llm/agent/probes/legacy_agent.py). This file is a representative, explicitly incomplete slice of the 134-case frozen registry (registry-ids.v1.json) -- it proves the per-case decision-sequence mechanism, the delegate-to-default mechanism, and all 6 fault types named in the CHAOS-3219 issue. Every case's 'question' is the EXACT literal text a corpus runner must send to address it -- routing is by a normalized hash of this text (provider_scripts.question_fingerprint), never a marker embedded in the question (see provider_scripts.py's module docstring for why). Phase 2 Lane 2b case authors add more entries here as they author tests/acceptance/world/ask-dev-world.v1/corpus/case-*.json, pinning each case's own real question text; an id present in registry-ids.v1.json but absent from this file's 'cases' is simply not addressable yet -- a question that doesn't match any entry here falls through to the untagged default heuristic exactly like any other ordinary question, so under-coverage never masks as false success (see registry-ids.v1.json cross-check conformance tests).",
   "cases": {
     "status.single-project.positive-control-v1": {
+      "question": "How did completed work change in this scope during the selected time range, and what evidence supports it?",
       "kind": "delegate_default",
-      "comment": "Preserves the Wave 3.1 inherited oracle's exact grounded flow (query_metric.v1 -> search_evidence.v1 -> data_health.v1 -> final answer) byte-for-byte -- this case is tagged, not re-scripted, so a corpus runner can address it by id without behavior drift from the pre-CHAOS-3219 default heuristic."
+      "comment": "Preserves the Wave 3.1 inherited oracle's exact grounded flow (query_metric.v1 -> search_evidence.v1 -> data_health.v1 -> final answer) byte-for-byte -- this case is addressable by its exact question, not re-scripted, so it can be exercised in the fault/conformance matrix without behavior drift from the pre-CHAOS-3219 default heuristic. Question text matches tests/acceptance/ask-dev-oracle.v1.json verbatim."
     },
     "unrelated-evidence.named-subject": {
+      "question": "What's the status of meridian/web-app?",
       "kind": "delegate_default",
       "comment": "Reuses the existing named-subject search_evidence.v1 query derivation (_evidence_query_from_question) -- the named-repository literal in the question is what must reach the tool call verbatim, which the default heuristic already proves."
     },
     "scope.ambiguous": {
+      "question": "What's the status of Atlas?",
       "kind": "decisions",
       "decisions": [
         {
@@ -22,6 +25,7 @@
       ]
     },
     "scope.unsupported-request": {
+      "question": "Refactor this function for me",
       "kind": "decisions",
       "decisions": [
         {
@@ -32,6 +36,7 @@
       ]
     },
     "scope.prohibited-write": {
+      "question": "Update the ticket status to Done",
       "kind": "decisions",
       "decisions": [
         {
@@ -42,6 +47,7 @@
       ]
     },
     "provider-fail.before-frame": {
+      "question": "Has anything changed in meridian/web-app during the selected period?",
       "kind": "fault",
       "fault": {
         "type": "fail-before-frame",
@@ -54,6 +60,7 @@
       }
     },
     "provider-fail.after-frame": {
+      "question": "What changed in meridian/web-app during the selected period, and is the in-flight work complete?",
       "kind": "fault",
       "fault": {
         "type": "fail-after-frame",
@@ -77,6 +84,7 @@
       }
     },
     "adv.unsafe-error-text.provider": {
+      "question": "How trustworthy is the data behind meridian/web-app's status?",
       "kind": "fault",
       "fault": {
         "type": "unsafe-error-text",
@@ -89,6 +97,7 @@
       }
     },
     "adv.oversized.result": {
+      "question": "Give me a comprehensive breakdown of meridian/web-app's status.",
       "kind": "fault",
       "fault": {
         "type": "oversized-output",
@@ -97,6 +106,7 @@
       }
     },
     "deg.timeout.status": {
+      "question": "Is the status snapshot for meridian/web-app ready yet?",
       "kind": "fault",
       "fault": {
         "type": "slow-response",
@@ -112,6 +122,7 @@
       }
     },
     "adv.abuse.retry-storm": {
+      "question": "What's the status of meridian/web-app, checked repeatedly?",
       "kind": "fault",
       "fault": {
         "type": "retry-storm-trigger",

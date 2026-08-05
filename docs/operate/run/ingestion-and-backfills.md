@@ -43,6 +43,15 @@ window still starts at the watermark or cold-start depth, but ends no later than
 the start plus the cap. `SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS` sets the cap;
 the default is seven days, matching the proven backfill chunk size.
 
+The cap must exceed the configured watermark overlap. The window starts at the
+watermark less the overlap, so a cap at or below the overlap would end the window
+at or before the watermark it started from; because watermark writes only ever
+move forward, that write is discarded and the family re-reads the same slice on
+every run. When `SYNC_WATERMARK_OVERLAP` is greater than or equal to the cap, the
+planner widens the cap to exceed the overlap and records a warning naming both
+values. Treat that warning as a configuration defect to correct, not as a healthy
+steady state — the widened window is more expensive than the one requested.
+
 Consequences to expect when reading run state:
 
 - A capped run is a healthy partial run, not a failure. Its window end is behind
@@ -53,10 +62,22 @@ Consequences to expect when reading run state:
   overlap.
 - A ninety-day cold start at the default cap reaches the current time after
   roughly thirteen ticks. On an hourly schedule that is about half a day of
-  catch-up. Communicate the visible waiting state rather than treating the
-  interim coverage as zero.
+  catch-up.
+- A capped run finalizes as an ordinary successful run. Today there is no
+  distinct run state, badge, or freshness signal that says "caught up to here
+  only", so success alone does not mean the family has reached the current time.
+  The advancing watermark is the observable evidence of progress: read the
+  dataset's latest successful source timestamp across consecutive runs rather
+  than inferring coverage from run status. Surfacing this lag directly is
+  tracked separately as a CHAOS-3412 follow-up.
 - Catch-up is paced by the sync schedule. A heavy dataset that is far behind
   does not accelerate; to close a wide historical span faster, run a bounded
   backfill for that period instead.
 - Light and medium record families are unaffected and keep a single
   full-depth incremental window.
+- A run requested with an upper bound already covered by the dataset's watermark
+  plans no unit for that dataset. If that leaves the whole run with no units, the
+  run finalizes as failed with "No sync units planned". Read that as "the
+  requested window was already covered", not as an ingestion fault. Scheduled
+  runs do not request an upper bound and so never reach this state; only a
+  manually requested past upper bound can.

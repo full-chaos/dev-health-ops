@@ -5164,3 +5164,286 @@ def test_run_sync_unit_stamps_watermark_at_window_end_not_now(db_session, monkey
         "watermark was stamped near wall-clock now — a ratcheted window would "
         "silently skip everything between its window end and now"
     )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412 F1: the HEAVY ratchet must make progress even when the configured
+# watermark overlap is >= the configured cap.
+#
+# The incremental read subtracts SYNC_WATERMARK_OVERLAP from the stored
+# watermark, so a capped window spans [W - overlap, W - overlap + cap]. With
+# overlap >= cap the end lands at or before W, and set_watermark is monotonic
+# (max(existing, new)) so the write is DISCARDED. Every tick then re-plans and
+# re-fetches the identical slice and finalizes SUCCESS while the watermark never
+# moves — the same permanent stall CHAOS-3412 exists to kill.
+#
+# These are worker-backed: they run the real run_sync_unit success path so the
+# watermark is stamped by production code, not by the test.
+# ---------------------------------------------------------------------------
+
+
+def _seed_planned_heavy_unit(session, org_id, *, dataset_key="commit-stats"):
+    """Create integration/source/dataset for a HEAVY dataset and plan one run."""
+    from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+
+    integration = session.query(Integration).filter_by(org_id=org_id).one_or_none()
+    if integration is None:
+        integration = Integration(
+            org_id=org_id,
+            provider="github",
+            name="demo",
+            config={"initial_sync_depth": 30},
+            is_active=True,
+        )
+        session.add(integration)
+        session.flush()
+        session.add(
+            IntegrationSource(
+                org_id=org_id,
+                integration_id=integration.id,
+                provider="github",
+                source_type="repo",
+                external_id="full-chaos/dev-health",
+                name="dev-health",
+                full_name="full-chaos/dev-health",
+                metadata_={},
+                is_enabled=True,
+            )
+        )
+        session.add(
+            IntegrationDataset(
+                org_id=org_id,
+                integration_id=integration.id,
+                dataset_key=dataset_key,
+                is_enabled=True,
+                options={},
+            )
+        )
+        session.flush()
+
+    plan = plan_sync_run(
+        session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=org_id,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="scheduled",
+        ),
+    )
+    units = session.query(SyncRunUnit).filter_by(sync_run_id=plan.sync_run_id).all()
+    assert len(units) == 1, f"expected exactly one planned unit, got {len(units)}"
+    return units[0]
+
+
+@pytest.mark.parametrize(
+    "overlap_days,case",
+    [(7, "overlap-equals-cap"), (14, "overlap-exceeds-cap")],
+    ids=["overlap-equals-cap", "overlap-exceeds-cap"],
+)
+def test_heavy_ratchet_advances_watermark_when_overlap_ge_cap(
+    db_session, monkeypatch, overlap_days, case
+):
+    """Two successive worker-backed ticks must STRICTLY advance the watermark."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    monkeypatch.setenv("SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS", "7")
+    monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", str(overlap_days * 86_400))
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters, "run_dataset_unit", lambda ctx, runtime: {"ok": True}
+    )
+
+    org_id = str(uuid.uuid4())
+    source_key = "full-chaos/dev-health"
+    seeded = datetime.now(timezone.utc) - timedelta(days=60)
+    set_watermark(db_session, org_id, source_key, "commit-stats", seeded)
+
+    def _current() -> datetime:
+        value = get_watermark(db_session, org_id, source_key, "commit-stats")
+        assert value is not None, "watermark row disappeared"
+        return _aware(value)
+
+    observed = [_current()]
+    for tick in range(2):
+        unit = _seed_planned_heavy_unit(db_session, org_id)
+        _mark_dispatching(db_session, unit)
+        result = getattr(run_sync_unit, "run")(str(unit.id))
+        assert result["status"] == "success", f"{case} tick {tick}: {result}"
+        current = _current()
+        assert current > observed[-1], (
+            f"{case}: tick {tick} did not advance the watermark "
+            f"({observed[-1]} -> {current}). With overlap({overlap_days}d) >= "
+            "cap(7d) the capped window ends at or before its own watermark and "
+            "the monotonic write is discarded, so the ratchet stalls forever "
+            "while every run reports success."
+        )
+        observed.append(current)
+
+    assert observed[-1] > observed[0]
+
+
+def test_heavy_cap_clamp_is_logged_when_overlap_ge_cap(caplog):
+    """The clamp must be VISIBLE — a silent widen hides the misconfiguration."""
+    import os
+
+    from dev_health_ops.sync.planner import (
+        _effective_heavy_max_window_days,
+        reset_heavy_cap_clamp_warnings,
+    )
+
+    previous = {
+        key: os.environ.get(key)
+        for key in ("SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS", "SYNC_WATERMARK_OVERLAP")
+    }
+    os.environ["SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS"] = "7"
+    os.environ["SYNC_WATERMARK_OVERLAP"] = str(9 * 86_400)
+    # The warning is emitted once per (cap, overlap) per process; clear the
+    # cache so this test does not depend on whether another test warmed it.
+    reset_heavy_cap_clamp_warnings()
+    try:
+        with caplog.at_level(logging.WARNING, logger="dev_health_ops.sync.planner"):
+            effective = _effective_heavy_max_window_days()
+            repeats = [_effective_heavy_max_window_days() for _ in range(5)]
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    # floor(9 days) + 1 == 10, strictly greater than the 9-day overlap.
+    assert effective == 10
+    clamped = [
+        record
+        for record in caplog.records
+        if "heavy_window_cap_clamped_below_watermark_overlap" in record.getMessage()
+    ]
+    assert clamped, "clamping the cap must emit a warning naming both values"
+    record = clamped[0]
+    assert record.configured_cap_days == 7
+    assert record.watermark_overlap_seconds == 9 * 86_400
+    assert record.effective_cap_days == 10
+    # Deduped: the helper runs once per (source x heavy dataset), so repeating it
+    # must NOT re-warn — hundreds of identical lines per plan would bury the
+    # signal on a large org. The clamp itself still applies every time.
+    assert repeats == [10] * 5
+    assert len(clamped) == 1, (
+        f"expected exactly one clamp warning for 6 calls, got {len(clamped)}"
+    )
+
+
+def test_heavy_cap_is_not_clamped_when_overlap_is_below_cap():
+    """No clamp, and no widening, in the normal configuration."""
+    import os
+
+    from dev_health_ops.sync.planner import _effective_heavy_max_window_days
+
+    previous = {
+        key: os.environ.get(key)
+        for key in ("SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS", "SYNC_WATERMARK_OVERLAP")
+    }
+    os.environ["SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS"] = "7"
+    os.environ["SYNC_WATERMARK_OVERLAP"] = "3600"
+    try:
+        assert _effective_heavy_max_window_days() == 7
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def test_fully_caught_up_plan_finalizes_failed_not_silently_successful(
+    db_session, monkeypatch
+):
+    """Pin the end-to-end outcome of CHAOS-3412's empty-window suppression.
+
+    Suppressing empty/inverted windows means a request whose upper bound is
+    ALREADY covered for every enabled dataset plans zero units, and a zero-unit
+    run finalizes as FAILED with "No sync units planned" (pre-existing behavior,
+    see test_finalize_zero_unit_run_does_not_report_success).
+
+    That is a deliberate trade, not an oversight: the alternative is the old
+    behavior, where an inverted window produced a unit that fetched nothing and
+    finalized SUCCESS — a false coverage claim. A loud, honest failure beats a
+    quiet, wrong success. Asserted here so the outcome is known rather than
+    discovered in production. Scheduled runs pass no explicit ``before`` and so
+    can never reach this path.
+    """
+    from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+    from dev_health_ops.sync.watermarks import set_watermark
+    from dev_health_ops.workers import sync_units
+
+    _patch_db_session(monkeypatch, db_session)
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="github",
+        name="demo",
+        config={"initial_sync_depth": 30},
+        is_active=True,
+    )
+    db_session.add(integration)
+    db_session.flush()
+    db_session.add(
+        IntegrationSource(
+            org_id=org_id,
+            integration_id=integration.id,
+            provider="github",
+            source_type="repo",
+            external_id="full-chaos/dev-health",
+            name="dev-health",
+            full_name="full-chaos/dev-health",
+            metadata_={},
+            is_enabled=True,
+        )
+    )
+    db_session.add(
+        IntegrationDataset(
+            org_id=org_id,
+            integration_id=integration.id,
+            dataset_key="commits",
+            is_enabled=True,
+            options={},
+        )
+    )
+    db_session.flush()
+
+    anchor = datetime.now(timezone.utc)
+    set_watermark(
+        db_session,
+        org_id,
+        "full-chaos/dev-health",
+        "commits",
+        anchor - timedelta(days=2),
+    )
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=org_id,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=anchor - timedelta(days=10),  # already covered
+        ),
+    )
+    assert plan.total_units == 0
+
+    sync_units.finalize_sync_run(plan.sync_run_id)
+
+    run = db_session.get(SyncRun, plan.sync_run_id)
+    assert run is not None
+    assert run.status == SyncRunStatus.FAILED.value, (
+        "an already-covered request must NOT finalize as a success that "
+        "implies coverage was refreshed"
+    )
+    assert run.error == "No sync units planned"

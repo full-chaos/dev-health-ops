@@ -123,6 +123,10 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     _create_dataset(db_session, integration, "commits")
     _create_dataset(db_session, integration, "prs")
 
+    # NOTE: do NOT pass a hardcoded ``before`` here. These datasets cold-start at
+    # ``now - initial_sync_depth``; a fixed calendar date drifts into the past and
+    # eventually describes an INVERTED window (start > end), which now correctly
+    # plans zero units (CHAOS-3412). This test is about fan-out, not windows.
     plan = plan_sync_run(
         db_session,
         SyncPlanRequest(
@@ -130,7 +134,6 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
             org_id=ORG_ID,
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="manual",
-            before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
         ),
     )
 
@@ -181,6 +184,9 @@ def test_plan_sync_run_rejects_plan_over_unit_cap(db_session, monkeypatch):
     _create_dataset(db_session, integration, "commits")
     _create_dataset(db_session, integration, "prs")
 
+    # No hardcoded ``before`` — see the note in the fan-out test above: a fixed
+    # past date makes these cold-start windows inverted, which now plans zero
+    # units and would make this cap assertion vacuous.
     with pytest.raises(SyncPlanUnitCapExceededError) as excinfo:
         plan_sync_run(
             db_session,
@@ -189,7 +195,6 @@ def test_plan_sync_run_rejects_plan_over_unit_cap(db_session, monkeypatch):
                 org_id=ORG_ID,
                 mode=SyncRunMode.INCREMENTAL.value,
                 triggered_by="manual",
-                before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
             ),
         )
 
@@ -2319,3 +2324,226 @@ def test_heavy_ratchet_marches_watermark_forward_without_gaps(db_session, monkey
     # 30 days of depth at a 7-day cap: 5 capped ticks + a final partial tick.
     assert 4 <= len(windows) <= 7, f"unexpected tick count: {len(windows)}"
     assert windows[0][0] <= start - timedelta(days=29)
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412 F2: incremental windows must never end in the future, and an
+# empty/inverted window must plan NO unit.
+#
+# The success path stamps the watermark at the window END. So a future
+# ``before`` persists a FUTURE watermark, and the next run starts in the future
+# and silently skips everything up to it. An inverted window (end <= start) is
+# worse than useless: the admission estimate floors a negative span to 1 day, so
+# it reads as a cheap unit, sails through the budget guard, fetches nothing, and
+# still finalizes as SUCCESS.
+# ---------------------------------------------------------------------------
+
+
+def test_incremental_window_end_is_clamped_to_now(db_session):
+    """A future ``before`` must not persist a future window end."""
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
+    set_watermark(
+        db_session,
+        ORG_ID,
+        source.external_id,
+        _NON_HEAVY_DATASET,
+        datetime.now(timezone.utc) - timedelta(days=3),
+    )
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=now + timedelta(days=45),  # far-future upper bound
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    _, before = _window(units[0])
+    assert before <= now + timedelta(seconds=2), (
+        f"window end {before} is in the future; the success path would stamp it "
+        "as the watermark and the next run would start in the future"
+    )
+
+
+def test_incremental_window_end_is_clamped_to_now_for_heavy(db_session):
+    """The future clamp applies to HEAVY datasets too, alongside the cap."""
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, _HEAVY_DATASET)
+    watermark = datetime.now(timezone.utc) - timedelta(days=2)
+    set_watermark(db_session, ORG_ID, source.external_id, _HEAVY_DATASET, watermark)
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=now + timedelta(days=45),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    _, before = _window(units[0])
+    assert before <= now + timedelta(seconds=2)
+
+
+@pytest.mark.parametrize(
+    "case_id,watermark_offset_days,before_offset_days",
+    [
+        # `before` strictly older than the watermark start -> inverted window.
+        ("before-older-than-watermark", 3, 10),
+        # `before` exactly at the watermark start -> zero-width window.
+        ("before-equals-watermark", 3, 3),
+    ],
+    ids=["before-older-than-start", "before-equals-start"],
+)
+def test_empty_or_inverted_incremental_window_plans_no_unit(
+    db_session, case_id, watermark_offset_days, before_offset_days
+):
+    """end <= start must plan ZERO units, not an inverted/zero-width one."""
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
+    anchor = datetime.now(timezone.utc)
+    set_watermark(
+        db_session,
+        ORG_ID,
+        source.external_id,
+        _NON_HEAVY_DATASET,
+        anchor - timedelta(days=watermark_offset_days),
+    )
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=anchor - timedelta(days=before_offset_days),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert units == [], (
+        f"{case_id}: an empty/inverted window must plan no unit; planned "
+        f"{[(u.since_at, u.before_at) for u in units]}"
+    )
+    assert plan.total_units == 0
+
+
+def test_cold_start_with_before_older_than_depth_plans_no_unit(db_session):
+    """The drift case that was already live in this suite.
+
+    Two pre-existing tests passed a hardcoded ``before`` of 2026-06-17 that was
+    in the future when written. Once wall-clock time passed it, their cold-start
+    windows became inverted (start = now - 30d, end = 2026-06-17) and they kept
+    passing because nothing asserted window sanity. Assert it deliberately.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, _NON_HEAVY_DATASET)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=datetime.now(timezone.utc) - timedelta(days=90),
+        ),
+    )
+
+    assert _planned_units(db_session, plan.sync_run_id) == []
+
+
+def test_family_dataset_with_empty_window_does_not_break_the_merge(db_session):
+    """A partially-caught-up work-item family must still plan its composite.
+
+    ``_merge_family_windows`` raises on mismatched window counts. Once an
+    already-caught-up dataset resolves to ZERO windows, that guard would fire on
+    an ordinary partially-synced family and take the whole plan down, so empty
+    datasets are dropped before the merge.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session, provider="github")
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, "work-items")
+    _create_dataset(db_session, integration, "work-item-labels")
+
+    anchor = datetime.now(timezone.utc)
+    requested_before = anchor - timedelta(days=5)
+    # work-items is behind the requested end (contributes a window); labels is
+    # already synced past it (resolves empty).
+    set_watermark(
+        db_session, ORG_ID, source.external_id, "work-items", anchor - timedelta(days=9)
+    )
+    set_watermark(
+        db_session,
+        ORG_ID,
+        source.external_id,
+        "work-item-labels",
+        anchor - timedelta(days=2),
+    )
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=requested_before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    composite = units[0]
+    assert composite.dataset_key == "work-items"
+    flags = composite.processor_flags or {}
+    assert flags.get("family_dataset_work_items") is True
+    assert flags.get("family_dataset_work_item_labels") is not True, (
+        "a dataset that resolved to no window must not be marked as covered by "
+        "the composite crawl"
+    )

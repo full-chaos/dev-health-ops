@@ -138,6 +138,12 @@ async def create_organization(
         tier=payload.tier,
         owner_user_id=payload.owner_user_id,
     )
+    # Commit before responding (CHAOS-3411 sibling): svc.create only
+    # flushes, so without an explicit commit here this org (and its owner
+    # membership, if any) isn't durable until get_postgres_session()'s
+    # post-response commit runs -- which happens after the response has
+    # already been sent to the client. See create_user's identical fix.
+    await session.commit()
     return _organization_response(org)
 
 
@@ -211,6 +217,11 @@ async def add_member(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # Commit before responding (CHAOS-3411): see create_user's identical
+    # fix -- svc.add_member only flushes, and the deferred post-response
+    # commit in get_postgres_session() runs after the client already has
+    # this response.
+    await session.commit()
     return _membership_response(membership)
 
 

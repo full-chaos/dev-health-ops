@@ -297,6 +297,13 @@ SyncCoverageStatus = Literal[
     "paused",
     "not_scheduled",
     "running",
+    # A dataset the provider supports but that has no enabled
+    # ``IntegrationDataset`` row for this integration -- i.e. never selected
+    # by an operator (or explicitly disabled). Distinct from
+    # "insufficient_data", which means the dataset IS enabled but a sync
+    # hasn't produced any rows yet (CHAOS-3398/3399: both used to render as
+    # an indistinguishable blank page).
+    "not_enabled",
 ]
 
 

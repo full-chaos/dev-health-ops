@@ -1066,6 +1066,98 @@ async def test_update_sync_config_re_enables_previously_disabled_tests_dataset(
 
 
 @pytest.mark.asyncio
+async def test_update_sync_config_removing_tests_target_disables_dataset_row(
+    client, session_maker
+):
+    """Codex adversarial-review finding (round 1): the enable-only version of
+    this reconciliation left a broken promise -- the web edit form's own copy
+    (formDiff.ts::getDatasetWarnings) tells the operator that unchecking a
+    dataset "will stop syncing" it, but the row stayed enabled and the
+    planner kept running it. Selecting "tests" then deselecting it via
+    sync_targets must disable the row, not just leave the checkbox unchecked
+    while the backend keeps planning it.
+    """
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="repair-path-disable-on-removal")
+    config_id = uuid.UUID(create_resp.json()["id"])
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        integration_id = config.integration_id
+
+    # Given: tests was selected and the row is enabled.
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git", "tests"]},
+    )
+    assert resp.status_code == 200, resp.text
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None and dataset.is_enabled is True
+
+    # When: the operator unchecks tests (removes it from sync_targets).
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Then: the row is disabled -- the planner will not plan it, matching
+    # what the UI told the operator would happen.
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None
+    assert dataset.is_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_removing_git_symmetrically_disables_blame(
+    client, session_maker
+):
+    """The git-implies-blame expansion in _planner_dataset_keys must apply
+    symmetrically on removal too -- blame was auto-added alongside git at
+    create time (sync.py's own _planner_dataset_keys rule), so removing git
+    must drop blame the same way, with no special-casing in the reconcile
+    logic (it reuses _planner_dataset_keys for both the old and new sets).
+    """
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="repair-path-blame-symmetry")
+    config_id = uuid.UUID(create_resp.json()["id"])
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        integration_id = config.integration_id
+
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git"]},
+    )
+    assert resp.status_code == 200, resp.text
+    async with session_maker() as session:
+        blame = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == integration_id,
+                    IntegrationDataset.dataset_key == "blame",
+                )
+            )
+        ).scalar_one_or_none()
+        assert blame is not None and blame.is_enabled is True
+
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["prs"]},
+    )
+    assert resp.status_code == 200, resp.text
+    async with session_maker() as session:
+        blame = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == integration_id,
+                    IntegrationDataset.dataset_key == "blame",
+                )
+            )
+        ).scalar_one_or_none()
+        assert blame is not None and blame.is_enabled is False
+
+
+@pytest.mark.asyncio
 async def test_update_pagerduty_service_mappings_propagates_to_services_dataset(
     client, session_maker
 ):

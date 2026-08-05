@@ -965,8 +965,10 @@ async def _reconcile_dataset_rows_for_sync_targets(
     integration_id: uuid.UUID,
     provider: str,
     sync_targets: list[str],
+    previous_sync_targets: list[str],
 ) -> None:
-    """Retro-create/re-enable ``IntegrationDataset`` rows for newly selected targets.
+    """Make an edited ``sync_targets`` list authoritative over ``IntegrationDataset``
+    rows, in BOTH directions.
 
     ``IntegrationDataset`` rows are only seeded once, at integration-create
     time, from the config's ``sync_targets`` (see ``_planner_dataset_keys``
@@ -980,16 +982,39 @@ async def _reconcile_dataset_rows_for_sync_targets(
     existing integration is a genuine, working enable path -- not just a
     create-time-only one.
 
-    Purely additive: only creates missing rows or re-enables disabled ones
-    for datasets present in the new ``sync_targets``. Never disables a
-    dataset that isn't present anymore -- same non-destructive contract as
-    ``planner.py::_reconcile_explicit_requested_datasets``.
+    Symmetric with removal (Codex adversarial-review finding, round 1): the
+    web edit form's own copy (``formDiff.ts::getDatasetWarnings``) tells the
+    operator that unchecking a dataset "will stop syncing" it. An enable-only
+    reconciliation would leave that a broken promise -- the row stays
+    enabled and the planner keeps running it even though the UI/API now
+    reports it deselected, a real operator-visible control-plane
+    inconsistency, not just a cosmetic one. So: datasets present in
+    ``previous_sync_targets`` but absent from the new ``sync_targets`` are
+    disabled (only if currently enabled; never deleted).
+
+    Both directions run through the SAME ``_planner_dataset_keys`` used at
+    create time, so provider-specific rules (e.g. github/gitlab's
+    git-implies-blame expansion) apply identically to both the old and new
+    computed sets -- removing "git" symmetrically drops "blame" from
+    ``desired_keys`` too, with no special-casing needed. Datasets never
+    exposed as a sync_targets checkbox (e.g. "security", which the platform
+    manages via ``_ensure_security_dataset_for_scheduled_code_host_sync``)
+    have legacy_targets that never appear in an operator-supplied
+    sync_targets list, so they never appear in either the old or new
+    computed set and are untouched by this function either way.
     """
     try:
-        desired_keys = _planner_dataset_keys(provider, sync_targets)
+        desired_keys = set(_planner_dataset_keys(provider, sync_targets))
     except ValueError:
         return
-    if not desired_keys:
+    try:
+        previously_desired_keys = set(
+            _planner_dataset_keys(provider, previous_sync_targets)
+        )
+    except ValueError:
+        previously_desired_keys = set()
+
+    if not desired_keys and not previously_desired_keys:
         return
 
     svc = IntegrationDatasetService(session, org_id)
@@ -999,6 +1024,11 @@ async def _reconcile_dataset_rows_for_sync_targets(
             await svc.create(integration_id, dataset_key, True)
         elif not dataset.is_enabled:
             await svc.set_enabled(dataset, True)
+
+    for dataset_key in previously_desired_keys - desired_keys:
+        dataset = await svc.get_by_key(str(integration_id), dataset_key)
+        if dataset is not None and dataset.is_enabled:
+            await svc.set_enabled(dataset, False)
 
 
 def _planner_source_rows(
@@ -2167,6 +2197,7 @@ async def update_sync_config(
 
     mutable_config = cast(_MutableSyncConfiguration, config)
     if payload.sync_targets is not None:
+        previous_sync_targets = list(getattr(config, "sync_targets") or [])
         mutable_config.sync_targets = payload.sync_targets
         config_integration_id = getattr(config, "integration_id", None)
         if config_integration_id is not None:
@@ -2176,6 +2207,7 @@ async def update_sync_config(
                 config_integration_id,
                 str(getattr(config, "provider", "")),
                 payload.sync_targets,
+                previous_sync_targets,
             )
     if sync_options_provided:
         merged_options = {

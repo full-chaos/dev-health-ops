@@ -49,11 +49,13 @@ jobs:
               - 'compose.yml'
               - 'deploy/**'
 
-  # Fast, pytest-xdist-parallelized unit suite across the supported Python
-  # versions. This is the per-PR signal that the required `test` gate (below)
+  # Fast, pytest-xdist-parallelized unit suite on the supported Python
+  # version. This is the per-PR signal that the required `test` gate (below)
   # aggregates. Coverage is intentionally NOT gated here so the iterative PR
   # loop stays fast — the coverage-gated full suite runs in the `coverage` job
-  # at merge time and on main (CHAOS-2586).
+  # at merge time and on main (CHAOS-2586). Single-version matrix (CHAOS-3419):
+  # containers ship 3.14 only (docker/Dockerfile), so that is the only
+  # interpreter tested.
   test-matrix:
     needs: [changes]
     # On merge_group, dorny/paths-filter has no PR base/head diff to compute and
@@ -68,7 +70,7 @@ jobs:
       packages: read
     strategy:
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
+        python-version: ["3.14"]
 
     services:
       postgres:
@@ -181,7 +183,8 @@ jobs:
   # threshold + integration/e2e). Kept OFF the per-PR iterative path: it runs in
   # the merge queue (before code reaches main) and on push to main (post-merge
   # verification + Codecov upload), never on pull_request. Reassigned from the
-  # retired 3.11 leg to 3.12 and parallelized with xdist (CHAOS-2586).
+  # retired 3.11 leg to 3.12 and parallelized with xdist (CHAOS-2586); moved to
+  # 3.14 to match the shipped interpreter (CHAOS-3419).
   coverage:
     needs: [changes]
     if: >-
@@ -218,10 +221,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.14
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: "pip"
 
       - name: Install dependencies
@@ -250,7 +253,7 @@ jobs:
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs
           set -o pipefail
-          ./ci/run_tests.sh ci 2>&1 | tee test-results/logs/ci-3.12.log
+          ./ci/run_tests.sh ci 2>&1 | tee test-results/logs/ci-3.14.log
 
       - name: Upload junit test reports
         if: always()
@@ -258,7 +261,7 @@ jobs:
         with:
           # Named for what it actually is: JUnit output from the
           # coverage-gated `ci` tier, not a coverage report. (See
-          # coverage-py312 below for the actual coverage artifact.)
+          # coverage-py314 below for the actual coverage artifact.)
           name: junit-ci-gated
           path: test-results/junit/*.xml
           if-no-files-found: ignore
@@ -279,7 +282,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: coverage-py312
+          name: coverage-py314
           path: coverage.xml
           if-no-files-found: ignore
           retention-days: 90
@@ -291,8 +294,8 @@ jobs:
         continue-on-error: true
 
   # Required-status-check gate. Branch protection requires a check named
-  # exactly "test"; the matrix above produces "test-matrix (3.12)".."(3.14)"
-  # and the coverage job produces "coverage", none of which match. This
+  # exactly "test"; the matrix above produces "test-matrix (3.14)"
+  # and the coverage job produces "coverage", neither of which match. This
   # aggregator always runs, treating skipped (path filter, or coverage skipped
   # on pull_request) as pass and failure/cancelled as fail. It is the single
   # required check for both PRs and the merge queue. Do not remove.

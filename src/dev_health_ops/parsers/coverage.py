@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -52,7 +53,19 @@ def _read_text(source: str | bytes | Path) -> str:
     if isinstance(source, bytes):
         return source.decode("utf-8")
     path = Path(source)
-    if path.exists():
+    # ``source`` may be either a filesystem path OR the full report content
+    # inline (e.g. an in-memory coverage.xml body). A realistically-sized
+    # inline report exceeds PATH_MAX/NAME_MAX, so ``path.exists()`` raises
+    # OSError(ENAMETOOLONG) rather than returning False -- treat that the
+    # same as "not a path" instead of letting it propagate (CHAOS-3406,
+    # mirrors the guard in parsers/junit.py CHAOS-2412).
+    try:
+        path_exists = path.exists()
+    except OSError as exc:
+        if exc.errno != errno.ENAMETOOLONG:
+            raise
+        path_exists = False
+    if path_exists:
         return path.read_text(encoding="utf-8")
     return source
 

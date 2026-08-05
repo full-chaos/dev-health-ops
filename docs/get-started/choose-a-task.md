@@ -24,6 +24,6 @@ Start with the outcome, not your job title or the repository where the implement
 
 ## Example
 
-To understand where effort appears to be going, use the product task guide—not an API page or an internal implementation plan:
+To understand where effort appears to be going, use the product task guide not an API page or an internal implementation plan:
 
 [Investigate where effort appears to be going](../use/investment/investigate-effort.md)

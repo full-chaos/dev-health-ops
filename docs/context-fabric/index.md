@@ -241,7 +241,7 @@ What it can explain depends on the sources, permissions, freshness, relationship
 
 <section class="fc-cf-final" aria-labelledby="fc-cf-final-title" markdown>
 
-## Give every decision—and every agent—the context behind the work. { #fc-cf-final-title }
+## Give every decision and every agent the context behind the work. { #fc-cf-final-title }
 
 Use Ask Dev when people need shared, evidence-backed understanding. Use ACR and MCP when agents need the relevant scope, relationships, history, constraints, and evidence before they act.
 

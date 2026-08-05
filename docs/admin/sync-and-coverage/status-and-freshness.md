@@ -102,4 +102,4 @@ Do not interpret a generic Jira issue sync as JSM incident coverage. The JSM inc
 - If source identity, permission, discovery, mapping, run completion, and freshness are healthy, return to the product workflow and reproduce with the same context.
 - If the run is active or deferred, communicate the visible waiting state and expected ownership rather than representing it as zero.
 - If the provider connection or mapping is incomplete, correct the administrator boundary and run one bounded verification.
-- If workers, queues, migrations, or storage are failing, escalate to [Recover from ingestion failure](../../operate/runbooks/ingestion-failure.md) with run, source, dataset, and timestamps—but no credentials.
+- If workers, queues, migrations, or storage are failing, escalate to [Recover from ingestion failure](../../operate/runbooks/ingestion-failure.md) with run, source, dataset, and timestamps but no credentials.

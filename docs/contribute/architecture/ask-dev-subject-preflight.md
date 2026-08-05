@@ -173,7 +173,7 @@ did before: no interpretation, no preflight, every tool advertised, and the
 previous named-entity backstop still terminating.
 
 With it on, that backstop is kept as defense in depth but is **telemetry
-only** once a subject is committed — it records a content-free reason code on
+only** once a subject is committed, it records a content-free reason code on
 the run row and does not change the outcome. A firing there means the new path
 missed something and is worth investigating, not worth acting on mid-run. The
 one exception is a run that saw a bare name it could not resolve: there the

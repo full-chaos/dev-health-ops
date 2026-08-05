@@ -33,7 +33,7 @@ Jira Service Management incident code is not a supported public capability until
 
 - Public REST, GraphQL, CLI, webhook, and Customer Push schemas are generated or verified from code.
 - Incompatible public changes require an explicit version, compatibility bridge, or deprecation path.
-- Nullability, pagination, rate limits, errors, and authorization are part of the contract—not implementation details.
+- Nullability, pagination, rate limits, errors, and authorization are part of the contract, not implementation details.
 - A frontend label is not a backend enum unless the public mapping says so.
 
 Ask Dev v1 follows a cross-repository generated-contract chain: canonical

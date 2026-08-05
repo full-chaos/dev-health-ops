@@ -479,6 +479,142 @@ def test_insert_dataset_if_missing_preserves_concurrent_disabled_row(db_session)
     assert datasets[0].is_enabled is False
 
 
+# ---------------------------------------------------------------------------
+# CHAOS-3400: security is opt-in, matching every other dataset. No scheduled
+# code-host sync may silently enable it; existing auto-enabled rows are left
+# exactly as they were (reversible via the dataset PATCH endpoint), never
+# rewritten by the planner.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+def test_scheduled_code_host_sync_does_not_auto_enable_security(
+    db_session, provider: str
+):
+    # Given: a code-host integration configured the way CHAOS-3400 found in
+    # production -- several datasets explicitly selected, security never
+    # selected by the operator.
+    integration = _create_integration(db_session, provider)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    for dataset_key in ("commits", "prs", "cicd", "deployments"):
+        _create_dataset(db_session, integration, dataset_key)
+
+    # When: a normal scheduled sync runs. dataset_keys=None is exactly how a
+    # planner-managed parent config's scheduled trigger calls in (see
+    # trigger_routing.plan_request_for_config): "all enabled" datasets.
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="schedule",
+        ),
+    )
+
+    # Then: security was never selected, so scheduling must not silently
+    # enable it or plan units for it. THIS IS THE LOAD-BEARING ASSERTION --
+    # it must fail against pre-fix `main`, where the scheduled trigger
+    # unconditionally inserted an enabled `security` IntegrationDataset row.
+    assert (
+        db_session.query(IntegrationDataset)
+        .filter_by(integration_id=integration.id, dataset_key="security")
+        .one_or_none()
+        is None
+    )
+    planned_keys = {
+        unit.dataset_key for unit in _planned_units(db_session, plan.sync_run_id)
+    }
+    assert "security" not in planned_keys
+    assert planned_keys == {"commits", "prs", "cicd", "deployments"}
+
+
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+@pytest.mark.parametrize("triggered_by", ["schedule", "manual"])
+def test_security_plans_when_explicitly_selected(
+    db_session, provider: str, triggered_by: str
+):
+    # Given: a code-host integration with no dataset rows yet.
+    integration = _create_integration(db_session, provider)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+
+    # When: the caller explicitly asks for security, regardless of trigger --
+    # the positive-path counterpart to the negative control above. Explicit
+    # selection must keep working the same way every other dataset does.
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by=triggered_by,
+            dataset_keys=("security",),
+        ),
+    )
+
+    # Then: the dataset row is created enabled, with no special marker (it
+    # was operator-requested, not auto-enabled), and its unit plans/succeeds.
+    dataset = (
+        db_session.query(IntegrationDataset)
+        .filter_by(integration_id=integration.id, dataset_key="security")
+        .one()
+    )
+    assert dataset.is_enabled is True
+    assert dataset.options == {}
+    assert plan.total_units == 1
+    assert {
+        unit.dataset_key for unit in _planned_units(db_session, plan.sync_run_id)
+    } == {"security"}
+
+
+@pytest.mark.parametrize(
+    ("is_enabled", "expect_security_unit"),
+    [(True, True), (False, False)],
+    ids=["preexisting-auto-enabled-row-keeps-running", "disabled-row-stays-disabled"],
+)
+def test_preexisting_auto_enabled_security_row_is_left_alone(
+    db_session, is_enabled: bool, expect_security_unit: bool
+):
+    # Given: a `security` row carrying the historical marker stamped by the
+    # now-removed scheduled auto-enable path (CHAOS-3400 migration decision:
+    # leave existing rows exactly as they are -- no migration disables them).
+    integration = _create_integration(db_session, "github")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    existing = IntegrationDataset(
+        org_id=ORG_ID,
+        integration_id=integration.id,
+        dataset_key="security",
+        is_enabled=is_enabled,
+        options={"auto_enabled_by": "scheduled_code_host_sync"},
+    )
+    db_session.add(existing)
+    db_session.flush()
+
+    # When: a normal scheduled sync runs with no explicit dataset selection.
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="schedule",
+        ),
+    )
+
+    # Then: the planner never rewrites this row -- its enabled state and its
+    # `auto_enabled_by` marker (the UI's signal to render the one-click
+    # disable affordance) are untouched either way, and its enabled state
+    # alone controls whether a unit plans.
+    dataset = db_session.get(IntegrationDataset, existing.id)
+    assert dataset is not None
+    assert dataset.is_enabled is is_enabled
+    assert dataset.options == {"auto_enabled_by": "scheduled_code_host_sync"}
+    planned_keys = {
+        unit.dataset_key for unit in _planned_units(db_session, plan.sync_run_id)
+    }
+    assert ("security" in planned_keys) is expect_security_unit
+
+
 def test_incremental_window_starts_at_dataset_watermark(db_session):
     integration = _create_integration(db_session)
     source = _create_source(

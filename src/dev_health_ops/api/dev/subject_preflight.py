@@ -59,6 +59,7 @@ from .contracts_v2 import (
     DevSubjectMention,
     DevSubjectSet,
     PublicOutcome,
+    QuestionIntentID,
     ResolutionOutcome,
     validate_ledger_extends,
 )
@@ -67,6 +68,7 @@ from .contracts_v2 import (
 )
 from .contracts_v2.subject import UNRESOLVED_OUTCOMES
 from .orchestrator_states import RunState
+from .portfolio_status_service import MAX_PORTFOLIO_PROJECTS
 from .preflight_outcomes import (
     NOT_FOUND_CLOSE_MATCHES_KEY,
     PREFLIGHT_OUTCOME_BY_RESOLUTION,
@@ -143,6 +145,10 @@ PREFLIGHT_DIAGNOSTICS: tuple[str, ...] = (
     "committed_cohort_v1_only",
     "proceeded_committed_subject",
     "unresolved_close_matches",
+    # CHAOS-3393: status.portfolio.v1's PLURAL_COHORT/ORGANIZATION_WIDE
+    # PROCEED diagnostics -- see the two call sites' own comments.
+    "committed_cohort_portfolio_v1",
+    "committed_portfolio_org_wide",
 )
 
 #: CHAOS-3366: how many closest matches one not-found fallback may offer.
@@ -352,6 +358,22 @@ class SubjectPreflight:
             )
 
         if not mentions:
+            # CHAOS-3393: an ORGANIZATION_WIDE status.portfolio.v1 question
+            # (no named subjects -- "what's the portfolio status?") gets a
+            # bounded, deterministic project enumeration committed as its
+            # subject set, so the plan executor has something to batch
+            # over. Every other organization-wide question is unaffected --
+            # see the branch below.
+            if (
+                intent.intent_id is QuestionIntentID.PORTFOLIO_STATUS
+                and intent.cardinality is Cardinality.ORGANIZATION_WIDE
+            ):
+                return await self._organization_wide_portfolio_result(
+                    interpretation=interpretation,
+                    org_id=org_id,
+                    permission_fingerprint=permission_fingerprint,
+                    generated_at=generated_at,
+                )
             # Organization-wide by derivation, not by fallback: the question
             # named nothing, so there is no subject to get wrong. This is the
             # branch that keeps org-wide questions working exactly as today.
@@ -700,6 +722,33 @@ class SubjectPreflight:
                 ambiguous_mention_ids=ambiguous_ids,
                 warnings=warnings,
             )
+            # CHAOS-3393: a homogeneous PROJECT cohort named under the
+            # PORTFOLIO_STATUS intent PROCEEDs -- status.portfolio.v1 can
+            # render it. Gated on BOTH intent and kind: every other
+            # homogeneous cohort (a different intent's plural mention, or a
+            # PORTFOLIO_STATUS-recognized question naming only teams) still
+            # terminates UNSUPPORTED below, unchanged. `unique_kinds` is a
+            # single-member set by construction here (the `len(unique_kinds)
+            # > 1` heterogeneous branch above already returned otherwise).
+            if (
+                intent.intent_id is QuestionIntentID.PORTFOLIO_STATUS
+                and next(iter(unique_kinds)) is EntityKind.PROJECT
+            ):
+                return SubjectPreflightResult(
+                    decision=PreflightDecision.PROCEED,
+                    interpretation=interpretation,
+                    ledger=ledger,
+                    committed_resolution=None,
+                    committed_subjects=CommittedSubjects(
+                        resolution=None, subject_set=subject_set
+                    ),
+                    subject_set=subject_set,
+                    answer=None,
+                    outcome=None,
+                    allowed_tools=ALL_TOOLS,
+                    blocking_mention_ids=blocking_ids,
+                    diagnostic="committed_cohort_portfolio_v1",
+                )
             return self._terminate(
                 interpretation=interpretation,
                 ledger=ledger,
@@ -790,6 +839,83 @@ class SubjectPreflight:
             fallbacks=["organization"],
             warnings=[],
             resolved_at=resolved_at,
+        )
+
+    async def _organization_wide_portfolio_result(
+        self,
+        *,
+        interpretation: InterpretedQuestion,
+        org_id: str,
+        permission_fingerprint: str,
+        generated_at: datetime,
+    ) -> SubjectPreflightResult:
+        """CHAOS-3393: an ORGANIZATION_WIDE ``status.portfolio.v1`` question
+        named no subjects at all, so there is nothing for the usual mention-
+        resolution machinery to resolve. A bounded, deterministic project
+        enumeration (label then id, capped at
+        ``portfolio_status_service.MAX_PORTFOLIO_PROJECTS``) stands in for
+        it instead, committed as a real ``dev_subject_set.v1`` -- the same
+        contract a named cohort commits -- so the plan executor has
+        something to batch over.
+
+        Zero authorized projects falls back to the ordinary organization-
+        wide PROCEED (no committed subject at all) rather than failing: a
+        ``DevSubjectSet`` requires at least one committed entity, so there
+        is nothing valid to commit, and "no projects to report on" is not
+        a preflight failure.
+
+        A truncated enumeration (more authorized projects than the cap)
+        is disclosed via the subject set's own ``warnings`` -- never a
+        silent sample: ``DevSubjectSet.cohort_complete`` cannot itself
+        express "capped, not omitted" (that field's own invariant is about
+        omitted *mentions*, and an org-wide enumeration names none), so
+        cap truncation rides the warnings channel instead, exactly like a
+        partial cohort's own unresolved-mention disclosure does.
+        """
+
+        entities, total = await self._scope_service.organization_committed_projects(
+            org_id, permission_fingerprint, limit=MAX_PORTFOLIO_PROJECTS
+        )
+        if not entities:
+            return SubjectPreflightResult(
+                decision=PreflightDecision.PROCEED,
+                interpretation=interpretation,
+                ledger=None,
+                committed_resolution=None,
+                answer=None,
+                outcome=None,
+                allowed_tools=ALL_TOOLS,
+                diagnostic="proceeded_organization_wide",
+            )
+        truncated = total > len(entities)
+        warnings = (
+            (
+                f"the organization has {total} authorized projects; only the "
+                f"first {len(entities)} (by name, then id) are included in "
+                "this portfolio",
+            )
+            if truncated
+            else ()
+        )
+        subject_set = self._scope_service.committed_subject_set_for(
+            entities,
+            set_id=self._mint_id(),
+            original_mention_count=len(entities),
+            warnings=warnings,
+        )
+        return SubjectPreflightResult(
+            decision=PreflightDecision.PROCEED,
+            interpretation=interpretation,
+            ledger=None,
+            committed_resolution=None,
+            committed_subjects=CommittedSubjects(
+                resolution=None, subject_set=subject_set
+            ),
+            subject_set=subject_set,
+            answer=None,
+            outcome=None,
+            allowed_tools=ALL_TOOLS,
+            diagnostic="committed_portfolio_org_wide",
         )
 
     @staticmethod

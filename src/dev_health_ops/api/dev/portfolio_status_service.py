@@ -15,6 +15,7 @@ every project's own findings stay independent; only the *ordering* and
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,9 +27,11 @@ from .project_health_service import ProjectHealthService
 
 __all__ = [
     "MAX_PORTFOLIO_PROJECTS",
+    "PortfolioProjectFailure",
     "PortfolioProjectScope",
     "PortfolioStatusResult",
     "PortfolioStatusService",
+    "worst_project_state",
 ]
 
 #: Mirrors ``DevSubjectSet``'s own bound (``contracts_v2.subject``:
@@ -36,6 +39,15 @@ __all__ = [
 #: a portfolio batch is exactly a subject set's worth of projects, never
 #: unbounded.
 MAX_PORTFOLIO_PROJECTS = 25
+
+#: CHAOS-3393 fallback per-project evaluation timeout when a caller does not
+#: pass its own (every real caller does -- see
+#: ``investigation_plans.wave_3_1_plans.portfolio_project_timeout_seconds``,
+#: which slices the plan's own 120s step budget across the batch). Kept
+#: local and finite rather than unbounded so a caller that forgets to pass
+#: one still cannot let a single hung project stall the whole batch
+#: indefinitely.
+DEFAULT_PROJECT_TIMEOUT_SECONDS = 15.0
 
 #: Worst-to-best ordering for deterministic portfolio ranking. Lower sorts
 #: first (worst-first), matching "prioritized findings"/"ordered by
@@ -114,7 +126,7 @@ class PortfolioStatusResult:
     evaluated_at: datetime
 
 
-def _worst_state(result: HealthProfileResult) -> DimensionState:
+def worst_project_state(result: HealthProfileResult) -> DimensionState:
     """Launch-eligible findings only -- see ``PortfolioStatusResult``'s docstring."""
 
     if not result.launch_findings:
@@ -126,7 +138,7 @@ def _worst_state(result: HealthProfileResult) -> DimensionState:
 
 
 def _sort_key(result: HealthProfileResult) -> tuple[int, str]:
-    return (_DIMENSION_STATE_SEVERITY[_worst_state(result)], result.subject_id)
+    return (_DIMENSION_STATE_SEVERITY[worst_project_state(result)], result.subject_id)
 
 
 class PortfolioStatusService:
@@ -145,6 +157,7 @@ class PortfolioStatusService:
         unresolved_mention_ids: Sequence[str] = (),
         ambiguous_mention_ids: Sequence[str] = (),
         warnings: Sequence[str] = (),
+        per_project_timeout_seconds: float | None = None,
     ) -> PortfolioStatusResult:
         if not projects:
             raise ValueError("evaluate_portfolio requires at least one project")
@@ -169,16 +182,38 @@ class PortfolioStatusService:
         # execution costs determinism nothing and removes the concurrency
         # hazard outright, rather than introducing a second, parallel
         # per-task-session lifecycle this service does not own.
+        # CHAOS-3393: per-project timeout slice, so one slow/hung project
+        # cannot consume the whole batch's share of the step's own budget
+        # ceiling (``per_step_timeout_seconds`` on ``status.portfolio.v1``)
+        # -- isolated as a PortfolioProjectFailure("timeout"), exactly like
+        # any other per-project failure, never a whole-batch failure.
+        slice_seconds = (
+            per_project_timeout_seconds
+            if per_project_timeout_seconds is not None
+            else DEFAULT_PROJECT_TIMEOUT_SECONDS
+        )
         results: list[HealthProfileResult] = []
         failures: list[PortfolioProjectFailure] = []
         for item in projects:
             try:
-                result = await self._project_health_service.evaluate_project(
-                    org_id=org_id,
-                    permission_fingerprint=permission_fingerprint,
-                    scope=item.scope,
-                    now=now,
+                result = await asyncio.wait_for(
+                    self._project_health_service.evaluate_project(
+                        org_id=org_id,
+                        permission_fingerprint=permission_fingerprint,
+                        scope=item.scope,
+                        now=now,
+                    ),
+                    timeout=slice_seconds,
                 )
+            except (TimeoutError, asyncio.TimeoutError):
+                # A bare, fixed literal -- never str(exc) -- so a caller
+                # putting this on the wire (wave_3_1_plans._bounded_
+                # portfolio_failure_reason) never has to guess whether a
+                # timeout's own repr happens to carry disclosable detail.
+                failures.append(
+                    PortfolioProjectFailure(project_id=item.project_id, error="timeout")
+                )
+                continue
             except Exception as exc:  # noqa: BLE001 - isolate, never crash the batch
                 failures.append(
                     PortfolioProjectFailure(project_id=item.project_id, error=repr(exc))
@@ -189,7 +224,7 @@ class PortfolioStatusService:
         ordered = tuple(sorted(results, key=_sort_key))
         counts: dict[DimensionState, int] = {state: 0 for state in DimensionState}
         for result in ordered:
-            counts[_worst_state(result)] += 1
+            counts[worst_project_state(result)] += 1
 
         return PortfolioStatusResult(
             projects=ordered,

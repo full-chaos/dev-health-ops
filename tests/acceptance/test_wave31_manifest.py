@@ -266,16 +266,19 @@ def test_health_workload_deficiency_portfolio_flip_after_stack3_wiring() -> None
 
 
 def test_health_workload_deficiency_portfolio_items_still_honestly_blocked() -> None:
-    """The three rows the 2026-08-03 map found no adequate citation for --
-    or that are deliberately, permanently out of scope this wave -- must
-    stay ``blocked`` rather than force-fit to a weak analogue. A future
-    change that flips one of these without a genuinely matching test (or,
-    for the portfolio row, an actual StepContext-widening fix) would be a
+    """The rows the 2026-08-03 map found no adequate citation for must stay
+    ``blocked`` rather than force-fit to a weak analogue. A future change
+    that flips one of these without a genuinely matching test would be a
     false-green regression this test exists to catch.
+
+    CHAOS-3393: ``matrix.organization-portfolio-status`` is no longer one
+    of these -- it flipped to ``proven_unit`` (a real StepContext-widening
+    fix landed, with matching orchestrator-level tests); see
+    ``test_plan_registry_gap_gates_are_proven_at_unit_and_e2e_level``'s
+    neighbors for its own coverage.
     """
 
     blocked_ids = {
-        "matrix.organization-portfolio-status",
         "matrix.project-health-unknown-not-applicable",
         "matrix.light-on-feature-work",
     }
@@ -519,8 +522,11 @@ def test_blocked_reason_mutation_is_actually_caught(monkeypatch) -> None:
     """
 
     monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
+    # CHAOS-3393: matrix.organization-portfolio-status flipped to
+    # proven_unit (status.portfolio.v1 is wired now), so this RED-then-
+    # GREEN proof uses a different item that is still genuinely blocked.
     fabricated = ManifestItem(
-        id="matrix.organization-portfolio-status",
+        id="matrix.project-health-unknown-not-applicable",
         category="blocking_matrix",
         description="mutated",
         status="blocked",

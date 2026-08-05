@@ -40,6 +40,7 @@ from pydantic import AwareDatetime, Field, FiniteFloat, model_validator
 
 from .base import (
     ContractModelV2,
+    Label,
     OpaqueID,
     PlatformVersionToken,
     ServerHandle,
@@ -51,6 +52,7 @@ from .base import (
 __all__ = [
     "CalibrationRecord",
     "CalibrationState",
+    "DevPortfolioProjectStatusV2",
     "DimensionObservation",
     "DimensionState",
     "HealthDimension",
@@ -492,4 +494,36 @@ class CalibrationRecord(ContractModelV2):
             and self.evidence_ref is None
         ):
             raise ValueError("a reviewed calibration record requires an evidence_ref")
+        return self
+
+
+class DevPortfolioProjectStatusV2(ContractModelV2):
+    """One project row of a ``status.portfolio.v1`` batch (CHAOS-3393).
+
+    ``worst_state`` mirrors ``portfolio_status_service._worst_state`` --
+    the worst ``DimensionState`` across the project's own launch-eligible
+    ``HealthRuleFinding`` set, ``UNKNOWN`` when it has none.
+    ``evaluated=False`` marks a project ``PortfolioStatusService`` could not
+    evaluate at all (a ``PortfolioProjectFailure``, isolated per-project) --
+    disclosed here rather than silently dropped from the batch, mirroring
+    ``DeficiencyCategoryStatus``'s evaluated/unevaluated split one level up
+    at the per-project granularity.
+    """
+
+    schema_version: Literal["dev_portfolio_project_status.v1"]
+    project_id: OpaqueID
+    display_label: Label
+    worst_state: DimensionState
+    finding_count: int = Field(ge=0, le=200)
+    evaluated: bool
+    failure_reason: ShortText | None = None
+
+    @model_validator(mode="after")
+    def validate_status_consistency(self) -> Self:
+        if not self.evaluated and self.finding_count != 0:
+            raise ValueError("an unevaluated project cannot report findings")
+        if not self.evaluated and self.failure_reason is None:
+            raise ValueError("an unevaluated project requires a failure reason")
+        if self.evaluated and self.failure_reason is not None:
+            raise ValueError("an evaluated project cannot carry a failure reason")
         return self

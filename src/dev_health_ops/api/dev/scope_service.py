@@ -342,6 +342,17 @@ class AuthorizedEntityCatalog(Protocol):
         """
         ...
 
+    async def organization_project_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """CHAOS-3393: up to ``limit`` authorized projects (labeled,
+        deterministically ordered by display label then id), and the true
+        total authorized for ``org_id`` -- so a caller enumerating an
+        ORGANIZATION_WIDE portfolio can disclose truncation rather than
+        silently sampling.
+        """
+        ...
+
 
 class ScopeRequestCache:
     """Small request-local LRU; never share this object across requests."""
@@ -1216,6 +1227,51 @@ class ScopeResolutionService:
                 ],
             )
         return sorted(repo_ids), outcome, resolved, warnings
+
+    async def organization_committed_projects(
+        self,
+        org_id: str,
+        permission_fingerprint: str,
+        *,
+        limit: int,
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """CHAOS-3393: bounded, deterministic project enumeration for an
+        ORGANIZATION_WIDE ``status.portfolio.v1`` run (no named subjects).
+
+        Unlike :meth:`_organization_scope_repositories`, which DROPS the
+        whole set once ``total`` exceeds its cap (an authorized-repository
+        list is either complete or entirely re-derived native-side, never
+        partial), a portfolio batch is legitimate as a bounded, DISCLOSED
+        subset of a larger organization -- ``PortfolioStatusService`` itself
+        already caps at ``MAX_PORTFOLIO_PROJECTS`` and expects the caller
+        to say so, not omit the whole answer. ``limit`` is therefore always
+        honored as a page bound, never a completeness gate; the true
+        ``total`` is returned alongside so the caller can disclose
+        truncation. Watermark-cached exactly like the repository path
+        above. Catalog failure returns ``([], 0)`` rather than raising --
+        a bounded catalog-unavailable read, same posture as every other
+        best-effort read in this service.
+        """
+
+        try:
+            watermark = await self._catalog.watermark(org_id, (EntityKind.PROJECT,))
+            cache_key = self._cache_key(
+                "organization_portfolio_projects",
+                org_id,
+                permission_fingerprint,
+                {"limit": limit},
+                watermark,
+            )
+            cached = self._cache.get(cache_key)
+            if isinstance(cached, tuple) and len(cached) == 2:
+                return cached
+            entities, total = await self._catalog.organization_project_entities(
+                org_id, limit=limit
+            )
+            self._cache.put(cache_key, (entities, total))
+            return entities, total
+        except Exception:
+            return [], 0
 
     def _requested_scope(
         self,

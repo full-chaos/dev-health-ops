@@ -68,9 +68,11 @@ class FakeCatalog:
         self.search_calls = 0
         self.watermark_calls = 0
         self.organization_repository_ids_calls = 0
+        self.organization_project_entities_calls = 0
         self.fail_exact = False
         self.fail_watermark = False
         self.fail_organization_repository_ids = False
+        self.fail_organization_project_entities = False
 
     async def watermark(self, org_id: str, kinds: tuple[EntityKind, ...]) -> str:
         self.watermark_calls += 1
@@ -118,6 +120,18 @@ class FakeCatalog:
             raise RuntimeError("organization repository catalog unavailable")
         ids = sorted(self.organization_repositories)
         return ids[:limit], len(ids)
+
+    async def organization_project_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        self.organization_project_entities_calls += 1
+        if self.fail_organization_project_entities:
+            raise RuntimeError("organization project catalog unavailable")
+        projects = sorted(
+            (entity for entity in self.entities if entity.kind is EntityKind.PROJECT),
+            key=lambda entity: (entity.label.casefold(), entity.canonical_id),
+        )
+        return projects[:limit], len(projects)
 
 
 def _entity(
@@ -1056,6 +1070,78 @@ async def test_team_filtered_organization_scope_skips_repository_enumeration() -
     assert result.authorized_repository_ids == []
     assert catalog.organization_repository_ids_calls == 0
     assert not any("organization-natively" in warning for warning in result.warnings)
+
+
+# --- CHAOS-3393: bounded org-wide project enumeration for status.portfolio.v1 ---
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_projects_returns_labeled_bounded_page() -> None:
+    entities = [
+        _entity(EntityKind.PROJECT, "project-z", "Zeta"),
+        _entity(EntityKind.PROJECT, "project-a", "Alpha"),
+        _entity(EntityKind.TEAM, "team-a", "Platform"),
+    ]
+    catalog = FakeCatalog(entities)
+    service = ScopeResolutionService(catalog)
+
+    projects, total = await service.organization_committed_projects(
+        "org-a", "perm-a", limit=25
+    )
+
+    # Deterministic label-then-id order, never insertion order, and never
+    # any non-PROJECT entity from the catalog.
+    assert [entity.canonical_id for entity in projects] == ["project-a", "project-z"]
+    assert total == 2
+    assert catalog.organization_project_entities_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_projects_discloses_true_total_when_capped() -> (
+    None
+):
+    entities = [
+        _entity(EntityKind.PROJECT, f"project-{index:02}", f"Project {index:02}")
+        for index in range(30)
+    ]
+    catalog = FakeCatalog(entities)
+    service = ScopeResolutionService(catalog)
+
+    projects, total = await service.organization_committed_projects(
+        "org-a", "perm-a", limit=25
+    )
+
+    # The page is bounded at the caller's cap, but the TRUE total is
+    # returned alongside so the caller can disclose truncation -- never a
+    # silently sampled "complete" page.
+    assert len(projects) == 25
+    assert total == 30
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_projects_catalog_failure_is_empty() -> None:
+    catalog = FakeCatalog([_entity(EntityKind.PROJECT, "project-a", "Alpha")])
+    catalog.fail_organization_project_entities = True
+    service = ScopeResolutionService(catalog)
+
+    projects, total = await service.organization_committed_projects(
+        "org-a", "perm-a", limit=25
+    )
+
+    assert projects == []
+    assert total == 0
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_projects_is_request_cached() -> None:
+    catalog = FakeCatalog([_entity(EntityKind.PROJECT, "project-a", "Alpha")])
+    service = ScopeResolutionService(catalog)
+
+    first = await service.organization_committed_projects("org-a", "perm-a", limit=25)
+    second = await service.organization_committed_projects("org-a", "perm-a", limit=25)
+
+    assert first == second
+    assert catalog.organization_project_entities_calls == 1
 
 
 # --- CHAOS-3256: resolve named entities before executing status tools ---

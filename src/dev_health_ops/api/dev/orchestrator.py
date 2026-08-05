@@ -64,6 +64,7 @@ from .contracts import (
     DevClaim,
     DevContractVersions,
     DevCoverage,
+    DevEntityRef,
     DevError,
     DevEvidenceRef,
     DevMessageRequest,
@@ -74,6 +75,7 @@ from .contracts import (
     DevToolRequest,
     DevToolResult,
     DirectScope,
+    EntityType,
     FreshnessState,
     MetricID,
     QuestionClass,
@@ -93,6 +95,7 @@ from .contracts_v2.base import SourceRequirementState
 from .contracts_v2.frame import DevAnswerFrame
 from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
+from .contracts_v2.subject import DevEntityRefV2
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .no_match_terminal import (
@@ -115,6 +118,7 @@ from .status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
     render_declared_project_summary,
+    render_portfolio_summary,
     render_verdict_summary,
     status_snapshot_result,
 )
@@ -188,6 +192,40 @@ _NAMED_ENTITY_NOUN_STATUS = re.compile(
 _ENTITY_NOUN_LEADING = re.compile(
     rf"\b(?:{_ENTITY_NOUN_PATTERN})\s+({_ENTITY_NAME_PATTERN})\b"
 )
+
+
+def _project_scope_from_ref(
+    ref: DevEntityRefV2, *, org_id: str, base_scope: DevScope
+) -> DevScope:
+    """CHAOS-3393: one committed cohort/org-wide subject-set entry -> a
+    real, single-project ``DevScope`` -- the same ``DirectScope.PROJECT``
+    shape ``ScopeResolutionService.committed_resolution_for`` builds for a
+    SINGULAR commit, adapted for a v2 ``DevEntityRefV2`` input (a subject
+    set entry has no ``AuthorizedEntity`` to reuse that constructor with).
+    Inherits the run's own ``time_range``/``comparison_range`` from
+    ``base_scope`` -- exactly like every other committed scope construction
+    in this module. Callers restrict ``ref.entity_kind`` to PROJECT before
+    reaching here (the only kind ``status.portfolio.v1`` supports today).
+    """
+
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id=org_id,
+        direct_scope=DirectScope.PROJECT,
+        repositories=[],
+        entity_refs=[
+            DevEntityRef(
+                entity_type=EntityType.PROJECT,
+                entity_id=ref.entity_id,
+                display_label=ref.display_label,
+                repository_id=ref.repository_id,
+            )
+        ],
+        team_ids=[],
+        time_range=base_scope.time_range,
+        comparison_range=base_scope.comparison_range,
+        surface_context=None,
+    )
 
 
 def _named_entity_phrases(text: str) -> frozenset[str]:
@@ -753,6 +791,19 @@ class DevOrchestrator:
         # it, without threading a new parameter through every one of
         # `finish()`'s ~35 call sites.
         investigation_result: DevInvestigationResult | None = None
+        # CHAOS-3393: mirrors investigation_result's own free-variable
+        # posture -- set below when a PLURAL_COHORT/ORGANIZATION_WIDE
+        # status.portfolio.v1 run actually executes against a committed
+        # DevSubjectSet, read by `finish()`'s closure so the frame it builds
+        # can carry `subject_set_ref` (never alongside `subject_ref`, which
+        # `wrap_legacy_answer_as_frame` never sets today).
+        portfolio_subject_set_ref: str | None = None
+        #: CHAOS-3393: the committed DevSubjectSet's own disclosure strings
+        #: (an omitted named mention, or an ORGANIZATION_WIDE enumeration
+        #: truncated at the batch cap) -- folded into render_portfolio_
+        #: summary's direct_summary below, since wrap_legacy_answer_as_
+        #: frame's own `limitations` never reads DevSubjectSet.warnings.
+        portfolio_subject_set_warnings: tuple[str, ...] = ()
 
         async def transition(state: RunState, safe_code: str | None = None) -> None:
             event = OrchestratorEvent(state=state, safe_code=safe_code)
@@ -979,6 +1030,7 @@ class DevOrchestrator:
                             answer,
                             run_id=run_id,
                             investigation_result=investigation_result,
+                            subject_set_ref=portfolio_subject_set_ref,
                         )
                         if answer is not None
                         else terminal_frames.build_error_frame(
@@ -1446,6 +1498,19 @@ class DevOrchestrator:
                     plan_eligible = (
                         plan_eligible and preflight_result.has_committed_subject
                     )
+                elif cardinality in (
+                    Cardinality.PLURAL_COHORT,
+                    Cardinality.ORGANIZATION_WIDE,
+                ):
+                    # CHAOS-3393: a cohort/org-wide plan step (status.
+                    # portfolio.v1) needs the several committed per-subject
+                    # scopes StepContext.subject_set_scopes carries -- there
+                    # is nothing to batch over without a committed
+                    # DevSubjectSet, mirroring the SINGULAR branch's
+                    # has_committed_subject gate one line up.
+                    plan_eligible = (
+                        plan_eligible and preflight_result.subject_set is not None
+                    )
                 if plan_eligible:
                     assert plan is not None
                     await transition(RunState.TOOL_EXECUTION)
@@ -1454,6 +1519,29 @@ class DevOrchestrator:
                         if cardinality is Cardinality.SINGULAR
                         and authorized_scope.entity_refs
                         else None
+                    )
+                    # CHAOS-3393: a subject_set only drives batched execution
+                    # for a cohort/org-wide run -- a SINGULAR commit can
+                    # still carry an AUDIT-ONLY subject_set (duplicate
+                    # aliases of the one committed entity; see
+                    # CommittedSubjects's own docstring), which must never
+                    # also populate subject_set_scopes/subject_set_fingerprint
+                    # alongside subject_entity_id (DevInvestigationResult.
+                    # validate_result_invariants forbids both being set).
+                    portfolio_subject_set = (
+                        preflight_result.subject_set
+                        if cardinality is not Cardinality.SINGULAR
+                        else None
+                    )
+                    subject_set_scopes = (
+                        tuple(
+                            _project_scope_from_ref(
+                                ref, org_id=org_id, base_scope=authorized_scope
+                            )
+                            for ref in portfolio_subject_set.committed_entity_refs
+                        )
+                        if portfolio_subject_set is not None
+                        else ()
                     )
                     investigation_result = await self._plan_executor.run(
                         plan=plan,
@@ -1464,13 +1552,22 @@ class DevOrchestrator:
                             run_id=run_id,
                             now=datetime.now(UTC),
                             requested_metric_ids=tuple(intent.requested_metric_ids),
+                            subject_set_scopes=subject_set_scopes,
                         ),
                         run_id=run_id,
                         subject_entity_id=subject_entity_id,
+                        subject_set_fingerprint=(
+                            portfolio_subject_set.fingerprint
+                            if portfolio_subject_set is not None
+                            else None
+                        ),
                     )
                     await self._recorder.record_investigation_result(
                         investigation_result
                     )
+                    if portfolio_subject_set is not None:
+                        portfolio_subject_set_ref = portfolio_subject_set.set_id
+                        portfolio_subject_set_warnings = portfolio_subject_set.warnings
 
             for round_index in range(self._limits.model_rounds):
                 del round_index
@@ -2084,6 +2181,21 @@ class DevOrchestrator:
                         server_coverage=server_coverage,
                         canonical_evidence=canonical_evidence,
                     )
+                    if (
+                        rendered_status is None
+                        and resolution.resolved_scope is not None
+                    ):
+                        # CHAOS-3393: a status.portfolio.v1 batch has no
+                        # status_snapshot.v1 tool call to bind to (the plan
+                        # executor evaluated it directly), so it rides this
+                        # same §10 seam via investigation_result instead --
+                        # the model's own narrative for the batch is
+                        # likewise never what reaches the wire.
+                        rendered_status = render_portfolio_summary(
+                            investigation_result,
+                            validity_scope=resolution.resolved_scope,
+                            subject_set_warnings=portfolio_subject_set_warnings,
+                        )
                     if rendered_status is not None:
                         det_status, det_direct_summary, det_claims = rendered_status
                         candidate["status"] = det_status.value

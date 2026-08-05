@@ -192,6 +192,10 @@ NO_ANSWER_FRAME_FIELD_POLICY: Mapping[str, NoAnswerFieldPolicy] = {
     # posture as deficiency_findings above -- a no-answer outcome carries
     # no category coverage block either.
     "deficiency_category_statuses": NoAnswerFieldPolicy.ABSENT,
+    # CHAOS-3393: same posture as health_findings/deficiency_findings above
+    # -- a no-answer outcome carries no portfolio batch content.
+    "portfolio_project_statuses": NoAnswerFieldPolicy.ABSENT,
+    "portfolio_project_statuses_truncated": NoAnswerFieldPolicy.NON_TEXT,
     "conflicts": NoAnswerFieldPolicy.ABSENT,
     "limitations": NoAnswerFieldPolicy.ABSENT,
     "source_observations": NoAnswerFieldPolicy.ABSENT,

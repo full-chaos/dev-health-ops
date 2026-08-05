@@ -43,7 +43,7 @@ from .embedded import (
     DevRequiredChildFactV2,
     DevStatusFactV2,
 )
-from .health_rules import DimensionState, HealthRuleFinding
+from .health_rules import DevPortfolioProjectStatusV2, DimensionState, HealthRuleFinding
 from .plan import PlanRegistryID
 
 __all__ = [
@@ -176,6 +176,36 @@ class DevSourceContent(ContractModelV2):
     metric_refs: tuple[DevMetricRefV2, ...] = Field(
         default_factory=tuple, max_length=25
     )
+    #: CHAOS-3393: ``status.portfolio.v1``'s per-project batch rows -- the
+    #: ONLY slot ``SourceClass.HEALTH_PROFILE``'s portfolio adapter is
+    #: approved to populate alongside ``health_findings`` (see
+    #: ``relationship_matrix.APPROVED_CONTENT_SLOTS``). Worst-state-first,
+    #: then ``project_id`` -- the exact order
+    #: ``portfolio_status_service._sort_key`` already produces (see
+    #: ``validate_portfolio_order`` below) -- capped at
+    #: ``portfolio_status_service.MAX_PORTFOLIO_PROJECTS`` (25).
+    portfolio_project_statuses: tuple[DevPortfolioProjectStatusV2, ...] = Field(
+        default_factory=tuple, max_length=25
+    )
+    #: True when a bounded, deterministic ORGANIZATION_WIDE project
+    #: enumeration (no named subjects) found more authorized projects than
+    #: the batch cap and had to truncate -- never a silent sample. Never set
+    #: for a PLURAL_COHORT batch, which is already bounded by
+    #: ``DevSubjectSet``'s own 25-entry cap at commit time.
+    portfolio_project_statuses_truncated: bool = False
+
+    @model_validator(mode="after")
+    def validate_portfolio_order(self) -> Self:
+        portfolio_keys = [
+            (HEALTH_FINDING_SEVERITY_RANK[status.worst_state], status.project_id)
+            for status in self.portfolio_project_statuses
+        ]
+        if portfolio_keys != sorted(portfolio_keys):
+            raise ValueError(
+                "portfolio_project_statuses must be ordered worst-state-first, "
+                "then project_id"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_deficiency_category_coverage(self) -> Self:

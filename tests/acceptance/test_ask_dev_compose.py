@@ -676,6 +676,80 @@ services:
 """
 
 
+#: The subset of this repo resolve_acr_parent_compose.sh + a `docker compose
+#: config` check actually need. Copied (not the real files read in place)
+#: into a fresh, INDEPENDENT git repo per test -- deliberately NOT a
+#: `git worktree add` of this real repo: a real worktree's
+#: `git rev-parse --git-common-dir` always resolves back to THIS machine's
+#: actual dev-health checkout regardless of where the worktree itself is
+#: created (correct, desired behavior for the launcher -- proven separately
+#: by the direct, no-copy checks below), which makes a worktree of this
+#: repo useless for testing against a CONTROLLED fake parent, and
+#: unusable in CI (which has no sibling dev-health checkout at all).
+_COPIED_OPS_FILES = (
+    "compose.yml",
+    "tests/acceptance/compose.ask-dev.yml",
+    "tests/acceptance/compose.ask-dev-acr.yml",
+    "scripts/acceptance/resolve_acr_parent_compose.sh",
+)
+
+
+def _standalone_ops_checkout(root: Path, *, ops_subpath: str) -> Path:
+    """A plain (non-worktree) throwaway git repo containing the copied
+    files above -- exercises the "canonical layout" case, where
+    ``--git-common-dir`` is just the repo's own ``.git``."""
+
+    ops_checkout = root / ops_subpath
+    ops_checkout.mkdir(parents=True)
+    for relative in _COPIED_OPS_FILES:
+        destination = ops_checkout / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_ROOT / relative, destination)
+    subprocess.run(["git", "init", "-q"], cwd=ops_checkout, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=ops_checkout,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=ops_checkout, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=ops_checkout, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "snapshot"], cwd=ops_checkout, check=True
+    )
+    return ops_checkout
+
+
+def _standalone_ops_worktree(root: Path, *, worktree_subpath: str) -> tuple[Path, Path]:
+    """A GENUINE `git worktree` of a throwaway "canonical" repo, checked out
+    at ``worktree_subpath`` under a SEPARATE temp root -- exercises the
+    actual worktree case: `--git-common-dir` from the worktree must resolve
+    back to the base repo's location (which owns the sibling compose.yml),
+    not to anything derived from the worktree's own path. Using
+    `_standalone_ops_checkout` as the base makes this fully self-contained
+    (no dependency on this machine's real dev-health checkout), unlike a
+    `git worktree add` of the real repo under test, which always resolves
+    to that real checkout regardless of the new worktree's location.
+
+    Returns ``(worktree_path, parent_compose_path)``.
+    """
+
+    base_root = root / "_base_root"
+    base_root.mkdir()
+    base_checkout = _standalone_ops_checkout(base_root, ops_subpath="ops")
+    parent_compose = base_root / "compose.yml"
+    parent_compose.write_text(_STUB_PARENT_COMPOSE)
+
+    worktree_root = root / "_worktree_root"
+    worktree_path = worktree_root / worktree_subpath
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", "-q", str(worktree_path), "HEAD"],
+        cwd=base_checkout,
+        check=True,
+    )
+    return worktree_path, parent_compose
+
+
 def _assert_acr_config_resolves(ops_checkout: Path, parent_compose: Path) -> None:
     """Run resolve_acr_parent_compose.sh from ``ops_checkout`` and assert the
     ACR-armed `docker compose config --quiet` it enables actually succeeds --
@@ -783,20 +857,8 @@ def test_resolve_acr_parent_compose_succeeds_from_the_canonical_layout(
     parent_dir = tmp_path / "dev-health-canonical"
     parent_dir.mkdir()
     (parent_dir / "compose.yml").write_text(_STUB_PARENT_COMPOSE)
-    ops_checkout = parent_dir / "ops"
-    subprocess.run(
-        ["git", "worktree", "add", "--detach", "-q", str(ops_checkout), "HEAD"],
-        cwd=_ROOT,
-        check=True,
-    )
-    try:
-        _assert_acr_config_resolves(ops_checkout, parent_dir / "compose.yml")
-    finally:
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(ops_checkout)],
-            cwd=_ROOT,
-            check=True,
-        )
+    ops_checkout = _standalone_ops_checkout(parent_dir, ops_subpath="ops")
+    _assert_acr_config_resolves(ops_checkout, parent_dir / "compose.yml")
 
 
 @_requires_docker
@@ -804,70 +866,59 @@ def test_resolve_acr_parent_compose_succeeds_from_a_worktree_layout(
     tmp_path: Path,
 ) -> None:
     """The literal Codex repro: `<checkout>/ops-worktrees/<branch>`, one
-    level deeper than the canonical layout -- `../compose.yml` relative to
-    this ops checkout resolves to `ops-worktrees/compose.yml` (missing),
-    not the real parent. This is exactly the layout this session's own
-    Lane 1c worktree runs from."""
+    level deeper than the canonical layout, AND (the actual failure mode)
+    physically located somewhere else entirely on disk -- the un-fixed
+    relative default (`../compose.yml` off --project-directory) resolved
+    to a nonexistent path regardless of directory depth; the fix instead
+    follows `git --git-common-dir` back to wherever the real base checkout
+    lives, so it must resolve correctly even when the worktree's own
+    parent directory has no compose.yml of its own at all (proven here:
+    `worktree_path`'s own directory tree never gets a compose.yml -- only
+    the unrelated base checkout's sibling does)."""
 
-    parent_dir = tmp_path / "dev-health-worktree"
-    parent_dir.mkdir()
-    (parent_dir / "compose.yml").write_text(_STUB_PARENT_COMPOSE)
-    ops_checkout = parent_dir / "ops-worktrees" / "some-branch"
-    ops_checkout.parent.mkdir(parents=True)
-    subprocess.run(
-        ["git", "worktree", "add", "--detach", "-q", str(ops_checkout), "HEAD"],
-        cwd=_ROOT,
-        check=True,
+    worktree_path, parent_compose = _standalone_ops_worktree(
+        tmp_path, worktree_subpath="ops-worktrees/some-branch"
     )
-    try:
-        _assert_acr_config_resolves(ops_checkout, parent_dir / "compose.yml")
-    finally:
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(ops_checkout)],
-            cwd=_ROOT,
-            check=True,
-        )
+    _assert_acr_config_resolves(worktree_path, parent_compose)
 
 
 def test_resolve_acr_parent_compose_fails_loud_with_no_sibling_checkout(
     tmp_path: Path,
 ) -> None:
-    """No docker needed: a worktree with no sibling dev-health/compose.yml
-    at all must fail loud (exit 64-equivalent) rather than silently
-    resolving to a nonexistent path that only breaks later at `docker
-    compose config`."""
+    """No docker needed: an ops checkout with no sibling dev-health/compose.yml
+    at all must fail loud (exit 64) rather than silently resolving to a
+    nonexistent path that only breaks later at `docker compose config`."""
 
     orphan_root = tmp_path / "some-orphan-dir"
     ops_checkout = orphan_root / "ops"
-    ops_checkout.parent.mkdir(parents=True)
+    ops_checkout.mkdir(parents=True)
+    shutil.copy2(
+        _ROOT / "scripts" / "acceptance" / "resolve_acr_parent_compose.sh",
+        ops_checkout / "resolve_acr_parent_compose.sh",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=ops_checkout, check=True)
     subprocess.run(
-        ["git", "worktree", "add", "--detach", "-q", str(ops_checkout), "HEAD"],
-        cwd=_ROOT,
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=ops_checkout,
         check=True,
     )
-    try:
-        result = subprocess.run(
-            [
-                "bash",
-                str(
-                    ops_checkout
-                    / "scripts"
-                    / "acceptance"
-                    / "resolve_acr_parent_compose.sh"
-                ),
-                str(ops_checkout),
-            ],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 64
-        assert "requires a sibling dev-health checkout" in result.stderr
-    finally:
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(ops_checkout)],
-            cwd=_ROOT,
-            check=True,
-        )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=ops_checkout, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=ops_checkout, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "snapshot"], cwd=ops_checkout, check=True
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ops_checkout / "resolve_acr_parent_compose.sh"),
+            str(ops_checkout),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 64
+    assert "requires a sibling dev-health checkout" in result.stderr
 
 
 def test_resolve_acr_parent_compose_honors_an_explicit_override(tmp_path: Path) -> None:

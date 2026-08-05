@@ -2,6 +2,24 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "migrations": {
+      "type": "object",
+      "properties": {
+        "hook": {
+          "type": "object",
+          "properties": {
+            "events": {
+              "type": "array",
+              "oneOf": [
+                { "const": ["pre-install", "pre-upgrade"] },
+                { "const": ["post-install", "pre-upgrade"] }
+              ]
+            },
+            "localBundledPostgres": { "type": "boolean" }
+          }
+        }
+      }
+    },
     "secrets": {
       "type": "object",
       "properties": {
@@ -21,5 +39,46 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "migrations": {
+            "properties": {
+              "hook": {
+                "properties": {
+                  "events": { "const": ["post-install", "pre-upgrade"] }
+                },
+                "required": ["events"]
+              }
+            },
+            "required": ["hook"]
+          }
+        },
+        "required": ["migrations"]
+      },
+      "then": {
+        "properties": {
+          "migrations": {
+            "properties": {
+              "hook": {
+                "properties": {
+                  "localBundledPostgres": { "const": true }
+                },
+                "required": ["localBundledPostgres"]
+              }
+            }
+          },
+          "postgresql": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
+          }
+        },
+        "required": ["postgresql"]
+      }
+    }
+  ]
 }

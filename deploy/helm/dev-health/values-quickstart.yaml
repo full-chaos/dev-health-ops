@@ -12,6 +12,13 @@ postgresql:
     password: devhealth
     database: devhealth
 
+migrations:
+  hook:
+    localBundledPostgres: true
+    events:
+      - post-install
+      - pre-upgrade
+
 clickhouse:
   enabled: true
   credentials:

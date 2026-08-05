@@ -1951,7 +1951,51 @@ PROVEN_E2E_CLAIM_LIMITS = (
 #:
 #: Whether a stale row is ACCEPTABLE is a wave-close decision, not a CI
 #: one. CI's only job here is that nobody can be surprised by one.
-DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {}
+#:
+#: ``compose.yml`` at the datastore reconciliation (CHAOS-3312). The bundled
+#: datastore versions were converged onto the ones the Helm chart and the
+#: production compose stack already ran, so every scenario below recorded its
+#: evidence against the PREVIOUS pair:
+#:
+#:     valkey/valkey:8-alpine            -> valkey/valkey:9-alpine@sha256:ee91f7a1...
+#:     clickhouse/clickhouse-server:latest -> ...:latest@sha256:d7556a38...
+#:
+#: The Valkey change is a major version, not a repin, so this is a real
+#: runtime difference and not a formality: these rows are evidence about
+#: Valkey 8. The ClickHouse change binds a previously floating ``latest``,
+#: which is why the digest could not have been what any earlier run resolved
+#: it to either. Ask Dev's read path uses Valkey only as a cache in front of
+#: the ClickHouse/Postgres reads these scenarios assert on, which is the
+#: reason this is declarable rather than blocking -- but it is an
+#: acknowledgement, not a claim that the runs were re-verified.
+#:
+#: All fourteen bind the SAME hash because they drifted on the same file for
+#: the same reason. That does not weaken the gate: the hash is still bound,
+#: so the next edit to ``compose.yml`` produces a different digest and reds
+#: every one of these again.
+_COMPOSE_AT_DATASTORE_RECONCILIATION = (
+    "0beb7626fb984d736b0e65feb72209779c6b258e22c13f57b3cda10b946a8ceb"
+)
+
+DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
+    item_id: {"compose.yml": _COMPOSE_AT_DATASTORE_RECONCILIATION}
+    for item_id in (
+        "attack.team-attribution.e2e-blocked-by-live-defect",
+        "attack.unrelated-evidence.e2e-live-validated",
+        "defect.ask-dev-exact-commit.e2e-live-validated",
+        "defect.ask-dev-not-found.e2e-live-validated",
+        "gate.plan-registry-gap-is-loud.e2e-live-validated",
+        "matrix.data-trust-organization-wide",
+        "matrix.exact-project-complete",
+        "matrix.multi-metric-comparison-organization-wide",
+        "matrix.operational-deficiency.e2e-live-validated",
+        "matrix.registered-metric-catalog",
+        "matrix.remaining-work-exact-project",
+        "matrix.team-health.e2e-live-validated",
+        "matrix.team-workload-balance.e2e-live-validated",
+        "positive-control.real-project-status",
+    )
+}
 
 #: A sha256 hex digest, the only shape a recorded dependency hash may take.
 _SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")

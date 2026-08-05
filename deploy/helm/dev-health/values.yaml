@@ -331,11 +331,13 @@ web:
 # =============================================================================
 # Database migrations (CHAOS-2304)
 # =============================================================================
-# When enabled, a pre-install/pre-upgrade Helm hook Job applies PostgreSQL
-# (Alembic) + ClickHouse migrations before the release's workloads are
-# (re)deployed, and the shared ConfigMap sets AUTO_RUN_MIGRATIONS=false so
-# api/worker/beat never ambient-migrate. Set config.AUTO_RUN_MIGRATIONS
-# explicitly to override the computed value.
+# When enabled, the default pre-install/pre-upgrade Helm hook Job applies
+# PostgreSQL (Alembic) + ClickHouse migrations before the release's workloads
+# are (re)deployed. For local evaluation with bundled PostgreSQL only, opt into
+# localBundledPostgres and replace pre-install with post-install; the Job waits
+# for PostgreSQL before migrating. The shared ConfigMap sets
+# AUTO_RUN_MIGRATIONS=false so api/worker/beat never ambient-migrate. Set
+# config.AUTO_RUN_MIGRATIONS explicitly to override the computed value.
 #
 # The preferred MIGRATION_DATABASE_URI used for Alembic plus River must point
 # DIRECTLY at Postgres. Legacy POSTGRES_URI / DATABASE_URI values remain
@@ -345,6 +347,14 @@ web:
 migrations:
   hook:
     enabled: true
+    # -- Hook lifecycle events. Production keeps pre-install/pre-upgrade. The
+    #    post-install option is fail-closed unless localBundledPostgres=true.
+    events:
+      - pre-install
+      - pre-upgrade
+    # -- Explicit local/evaluation-only acknowledgement for post-install with
+    #    the chart's bundled PostgreSQL. Requires postgresql.enabled=true.
+    localBundledPostgres: false
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:
@@ -568,11 +578,16 @@ secrets:
 # =============================================================================
 # In-cluster Valkey (optional — disable for managed Valkey/Redis)
 # =============================================================================
+# Bundled datastore tags carry their digest so a Helm deploy and a compose
+# deploy cannot silently diverge: a bare tag is exactly how this chart sat on
+# postgres:16 while every compose file and the test suite ran 18. The digests
+# below are the same ones compose.yml, deploy/docker-compose/compose.production.yml
+# and the ACR pin allowlist use; refresh all of them together.
 valkey:
   enabled: true
   image:
     repository: valkey/valkey
-    tag: "8-alpine"
+    tag: "9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328"
   resources:
     requests:
       memory: "64Mi"
@@ -593,7 +608,7 @@ clickhouse:
   enabled: true
   image:
     repository: clickhouse/clickhouse-server
-    tag: "latest"
+    tag: "latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"
   resources:
     requests:
       memory: "512Mi"
@@ -617,7 +632,14 @@ postgresql:
   enabled: false
   image:
     repository: postgres
-    tag: "16-alpine"
+    tag: "18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+    # -- Pull policy for the PostgreSQL image specifically. This is a registry
+    #    image, so it must NOT inherit image.pullPolicy, which local profiles
+    #    set to Never for the commit-tagged application image they side-load
+    #    into the cluster. Applying Never here fails a fresh cluster with
+    #    ErrImageNeverPull on the migration hook's wait-for-postgresql init
+    #    container, which has no way to obtain the image.
+    pullPolicy: IfNotPresent
   resources:
     requests:
       memory: "256Mi"

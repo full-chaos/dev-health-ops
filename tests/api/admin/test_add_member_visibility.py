@@ -51,16 +51,35 @@ from dev_health_ops.api.admin.routers.orgs import add_member
 from dev_health_ops.api.admin.routers.users import create_user
 from dev_health_ops.api.admin.schemas_flat import MembershipCreate, UserCreate
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.users import MembershipService
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Membership, Organization, User
 from tests._helpers import tables_of
 
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 
-pytestmark = pytest.mark.skipif(
-    not os.getenv(_POSTGRES_URI_ENV),
-    reason=f"requires {_POSTGRES_URI_ENV}",
-)
+
+def _require_postgres_test_uri() -> None:
+    """Same contract as ``tests/test_0066_celery_river_cutover_postgres.py``'s
+    ``_require_postgres_test_uri``: skip locally when the URI isn't
+    configured, but hard-``pytest.fail`` under CI. A plain ``skipif`` would
+    let this module go quietly uncollected-in-substance on every PR (CHAOS-
+    3411 Codex round 1: the PR-gated unit step never sets this URI, so the
+    module always took the skip branch there and a stripped commit would
+    still pass the required gate). Missing coverage under CI must be a loud
+    failure, not a silent pass.
+    """
+    if os.getenv(_POSTGRES_URI_ENV):
+        return
+    if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+        pytest.fail(f"{_POSTGRES_URI_ENV} must be configured for CHAOS-3411 tests")
+    pytest.skip(f"requires {_POSTGRES_URI_ENV}")
+
+
+@pytest.fixture(autouse=True, scope="module")
+def require_postgres_test_uri() -> None:
+    _require_postgres_test_uri()
+
 
 _SUPERUSER = AuthenticatedUser(
     user_id="00000000-0000-0000-0000-000000000099",
@@ -125,6 +144,21 @@ async def org_schema() -> AsyncIterator[
         await admin_engine.dispose()
 
 
+async def _seed_committed_user(
+    maker: async_sessionmaker[AsyncSession], *, email: str
+) -> str:
+    """Insert and COMMIT a user directly (bypassing create_user's own
+    endpoint code entirely), so tests that aren't exercising create_user's
+    commit don't depend on it -- keeps each test's mutation-kill isolated to
+    the one endpoint it's actually about.
+    """
+    user_id = uuid.uuid4()
+    async with maker() as session:
+        session.add(User(id=user_id, email=email, is_active=True))
+        await session.commit()
+    return str(user_id)
+
+
 @pytest.mark.asyncio
 async def test_add_member_sees_a_user_created_one_http_call_earlier(
     org_schema: tuple[async_sessionmaker[AsyncSession], uuid.UUID],
@@ -132,7 +166,9 @@ async def test_add_member_sees_a_user_created_one_http_call_earlier(
     """Two separate sessions, driving the real endpoints directly -- exactly
     what two sequential HTTP requests get from ``get_postgres_session_dep``.
     ``add_member`` must be able to see the user ``create_user`` just
-    reported as created, with no explicit commit from the test itself.
+    reported as created, with no explicit commit from the test itself, AND
+    the membership it reports creating must itself be durable -- not just
+    flushed into a session this test happens to still be holding open.
     """
     maker, org_id = org_schema
 
@@ -152,19 +188,32 @@ async def test_add_member_sees_a_user_created_one_http_call_earlier(
             session=add_member_session,
             current_user=_SUPERUSER,
         )
+    # Same discipline for add_member_session: no commit from this test.
 
     assert membership_response.user_id == user_response.id
     assert membership_response.org_id == str(org_id)
 
-    # Durability double-check, from a brand-new third session: the user and
+    # Durability double-check, from a brand-new fourth session: the user AND
     # the membership must both actually be on disk, not just visible within
-    # a session that happens to still hold the write.
+    # a session that happens to still hold the write. Checking only the user
+    # here would pass even if add_member's own commit (orgs.py) were deleted
+    # -- add_member_session.close() rolls back its flush-only insert, but
+    # nothing upstream of this assertion would notice, since the *response*
+    # object was already built from the pre-rollback, in-memory ORM row.
     async with maker() as verify_session:
         seen_user = await verify_session.get(User, uuid.UUID(user_response.id))
         assert seen_user is not None, (
             "user_response reported ok, but the user row was never durably "
             "committed -- CHAOS-3411 (create_user returns before commit)"
         )
+        seen_membership = await MembershipService(verify_session).get_membership(
+            str(org_id), user_response.id
+        )
+        assert seen_membership is not None, (
+            "add_member reported ok, but the membership row was never "
+            "durably committed -- CHAOS-3411 (add_member returns before commit)"
+        )
+        assert str(seen_membership.user_id) == user_response.id
 
 
 @pytest.mark.asyncio
@@ -172,21 +221,29 @@ async def test_create_organization_with_owner_is_durable_before_returning(
     org_schema: tuple[async_sessionmaker[AsyncSession], uuid.UUID],
 ) -> None:
     """Sibling of the confirmed bug: ``create_organization`` has the exact
-    same create-and-flush-only shape as ``add_member``. A subsequent,
-    separate-session request against the org it just reported creating
-    must see it.
+    same create-and-flush-only shape as ``add_member``, and when given an
+    ``owner_user_id`` it also inserts the owner membership in the same
+    session (OrganizationService.create -> MembershipService.add_member).
+    A subsequent, separate-session request must see both the org AND the
+    owner membership row it just reported creating.
     """
     from dev_health_ops.api.admin.routers.orgs import create_organization
     from dev_health_ops.api.admin.schemas_flat import OrganizationCreate
 
     maker, _existing_org_id = org_schema
+    owner_user_id = await _seed_committed_user(
+        maker, email="chaos-3411-owner@example.com"
+    )
 
     async with maker() as create_org_session:
         org_response = await create_organization(
-            payload=OrganizationCreate(name="CHAOS-3411 sibling org"),
+            payload=OrganizationCreate(
+                name="CHAOS-3411 sibling org", owner_user_id=owner_user_id
+            ),
             session=create_org_session,
             current_user=_SUPERUSER,
         )
+    # No commit from this test -- same discipline as the add_member test.
 
     async with maker() as verify_session:
         seen_org = await verify_session.get(Organization, uuid.UUID(org_response.id))
@@ -194,3 +251,11 @@ async def test_create_organization_with_owner_is_durable_before_returning(
             "create_organization reported ok, but the org row was never "
             "durably committed -- same emit-before-commit class as CHAOS-3411"
         )
+        seen_owner_membership = await MembershipService(verify_session).get_membership(
+            org_response.id, owner_user_id
+        )
+        assert seen_owner_membership is not None, (
+            "create_organization reported ok with an owner_user_id, but the "
+            "owner membership row was never durably committed"
+        )
+        assert str(seen_owner_membership.role) == "owner"

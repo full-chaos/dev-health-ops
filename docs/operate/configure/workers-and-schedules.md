@@ -40,7 +40,7 @@ The canonical profile manifest is `deploy/go-workers/profiles.json`. Current pro
 - retain `celery` as route owner;
 - remain readiness-closed without complete compiled handler coverage and compatible schemas;
 - define maximum replicas and connection budgets even while disabled;
-- are used for contract, health, parity, and deployment-shape validation—not production job ownership.
+- are used for contract, health, parity, and deployment-shape validation, not production job ownership.
 
 Do not enable a Go profile merely because its container is healthy. A route change must identify the job kind and contract version, move through shadow and canary states, preserve Celery rollback, and prove that no duplicate or missing domain effect occurs.
 

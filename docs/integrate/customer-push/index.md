@@ -13,7 +13,7 @@ lifecycle: active
 
 Customer Push is for customer-controlled CI, ETL, or internal integrations that submit normalized records to `/api/v1/external-ingest/*`.
 
-Use it when native managed synchronization is unsuitable—for example, the source is inaccessible to Full Chaos, unsupported by a native connector, or already exported through a customer-owned pipeline.
+Use it when native managed synchronization is unsuitable, for example, the source is inaccessible to Full Chaos, unsupported by a native connector, or already exported through a customer-owned pipeline.
 
 - [Understand the boundary](overview.md)
 - [Register a source and credential](register-source.md)

@@ -22,7 +22,7 @@ Dev Health configuration is process-specific. An API, Celery worker, dormant Go 
 
 Ordinary configuration includes feature switches, concurrency, queue names, timeouts, limits, hosts without credentials, and telemetry settings. Secrets include database passwords, provider tokens, OAuth client secrets, signing keys, encryption keys, webhook secrets, billing keys, and service-operator tokens.
 
-Store secret values in the approved secret manager and inject them at runtime. Where a setting supports a `_FILE` form, use either the inline value or the file form—not both. Never place production values in repository files, container images, screenshots, support tickets, or documentation examples.
+Store secret values in the approved secret manager and inject them at runtime. Where a setting supports a `_FILE` form, use either the inline value or the file form, not both. Never place production values in repository files, container images, screenshots, support tickets, or documentation examples.
 
 ## Assign settings to the correct process
 

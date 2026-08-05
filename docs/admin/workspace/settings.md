@@ -52,7 +52,7 @@ An organization administrator tests their own BYO LLM credentials with
 saved BYO configuration only; it never certifies or exposes information about
 the platform-owned (operator-configured) provider. Certifying the
 platform-owned provider is a platform-administrator action, not an
-organization-administrator one — see
+organization-administrator one, see
 [Configure the platform](../../operate/configure/index.md).
 
 Context Fabric Validation is a platform-administrator diagnostic surface. It is

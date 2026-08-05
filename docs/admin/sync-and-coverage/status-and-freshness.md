@@ -41,6 +41,32 @@ Read the administrative activity and execution records together:
 
 Manual, scheduled, and backfill synchronization share the same canonical run model. The timing trigger differs; the execution truth should still identify the planned units and final outcome.
 
+### Budget-deferred and budget-exhausted units
+
+A unit whose estimated provider cost does not fit its budget bucket is
+*deferred*, not failed: it returns to `retrying` with a later availability
+time and the reason `budget_deferred`. This is normal when a bucket is
+temporarily full. It is **not** normal for the same unit to stay there.
+
+Read the two states separately:
+
+- **Blocked.** The run's unit rollup reports a budget-blocked count, and each
+  unit reports how many times it has been deferred. A dataset that is enabled,
+  shows as enabled, and produces nothing is visible here rather than looking
+  idle.
+- **Exhausted.** A unit that cannot ever fit its bucket — typically the first
+  incremental synchronization of a high-cost dataset over a wide initial
+  depth — stops being deferred once its deferral count or its elapsed
+  deferral time passes the configured caps. It then fails with the reason
+  `budget_deferral_exhausted`, and the failure text names the bucket, the
+  estimate, the cap it could not fit, and the window span that produced the
+  estimate.
+
+An exhausted unit is a configuration outcome, not a provider fault. The two
+remedies are to synchronize a narrower window with a bounded backfill, or to
+raise that bucket's cap. Raising per-synchronization ingest caps is not a
+remedy — it changes what is fetched, not whether the unit is admitted.
+
 ## Check freshness against the product question
 
 Compare:

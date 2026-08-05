@@ -175,6 +175,11 @@ class SyncRunUnitSummary(BaseModel):
     partial_failure_summary: dict[str, Any] | None = None
     next_retry_at: datetime | None = None
     retry_exhausted_unit_count: int = 0
+    # CHAOS-3412: units the sync budget guard is currently holding back
+    # (status 'retrying' AND error_category 'budget_deferred'). Distinct
+    # from failed_unit_count: these have not failed, they are BLOCKED --
+    # the state that used to be invisible because nothing counted it.
+    budget_blocked_unit_count: int = 0
     units: list[SyncRunUnitResponse]
 
 
@@ -196,6 +201,7 @@ class SyncRunUnitResponse(BaseModel):
     attempts: int
     available_at: datetime | None
     rate_limit_deferrals: int
+    budget_deferrals: int = 0
     duration_seconds: int | None
     error: str | None
     error_category: str | None

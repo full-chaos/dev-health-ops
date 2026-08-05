@@ -237,6 +237,12 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                         # an ongoing one.
                         rate_limit_deferrals=0,
                         rate_limit_first_seen_at=None,
+                        # CHAOS-3412 episode symmetry: an expired-lease
+                        # retry is not a budget episode either -- clear the
+                        # budget pair so BudgetGuard's budget-exhaustion
+                        # check never mistakes it for an ongoing one.
+                        budget_deferrals=0,
+                        budget_first_deferred_at=None,
                         updated_at=now,
                         lease_owner=None,
                         lease_expires_at=None,

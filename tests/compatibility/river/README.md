@@ -19,31 +19,41 @@ touch the repository's development PostgreSQL or ClickHouse data.
 - a Go installation with automatic toolchain selection enabled; the runner
   builds both CLIs with and asserts the exact candidate runtime Go 1.25.9;
 - `jq`;
-- the repository virtual environment synchronized with the locked dev
-  dependencies on Python 3.13.14, including `riverqueue`, SQLAlchemy, and
-  `asyncpg`.
+- a standalone Python 3.13.14 environment with `riverqueue`, SQLAlchemy, and
+  `asyncpg` installed at the exact versions below. This is intentionally
+  independent of the repository's own virtual environment: the main project
+  now requires Python >=3.14 (CHAOS-3419), so `.venv` at the repo root is a
+  3.14 interpreter and `uv sync` against the repository lock can no longer
+  produce a 3.13.14 one. river-compatibility is a Phase 0 probe for a
+  *rejected* production option, pinned to the last interpreter it was proven
+  against; it is not expected to track the project's floor.
 
-Prepare that exact interpreter and frozen environment with:
+Prepare that exact interpreter and environment with:
 
 ```bash
 uv python install 3.13.14
-uv sync --python 3.13.14 --frozen --all-extras --dev
+uv venv --python 3.13.14 .venv-river-compat
+uv pip install --python .venv-river-compat/bin/python \
+  asyncpg==0.31.0 riverqueue==0.7.0 SQLAlchemy==2.0.49
 ```
 
-The runner fails closed if the Python patch version or the pinned
-`riverqueue`, SQLAlchemy, or `asyncpg` versions drift.
+(matches the pinned dependency install in `.github/workflows/go.yml`'s
+`river-compatibility` job). The runner fails closed if the Python patch
+version or the pinned `riverqueue`, SQLAlchemy, or `asyncpg` versions drift.
 
-The default Python executable is `.venv/bin/python`. Set
-`RIVER_COMPAT_PYTHON` to another fully prepared Python executable when the
-virtual environment lives elsewhere. The runner does not install or download
-Python dependencies.
+The default Python executable is `.venv/bin/python` at the repo root, which
+is now a 3.14 interpreter and will fail the runner's version check. Set
+`RIVER_COMPAT_PYTHON` to the standalone environment prepared above, e.g.
+`RIVER_COMPAT_PYTHON=$(pwd)/.venv-river-compat/bin/python`. The runner does
+not install or download Python dependencies.
 
 ## Run
 
 From the `dev-health-ops` repository root:
 
 ```bash
-tests/compatibility/river/run.sh > "${TMPDIR:-/tmp}/river-compat-result.json"
+RIVER_COMPAT_PYTHON=$(pwd)/.venv-river-compat/bin/python \
+  tests/compatibility/river/run.sh > "${TMPDIR:-/tmp}/river-compat-result.json"
 ```
 
 Stdout contains exactly one combined, sanitized JSON document after every

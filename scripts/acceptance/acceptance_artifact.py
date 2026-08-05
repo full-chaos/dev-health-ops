@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -150,6 +151,21 @@ class AssertionResult:
 #: smoke scripts are excluded too: each is already bound by its own
 #: ``script_sha256``, and folding them in here would make editing one
 #: scenario invalidate the other thirteen.
+#: CHAOS-3219 Wave 4 Phase 1 Lane 1c / Codex round 2 (2026-08-05):
+#: tests/acceptance/compose.ask-dev-acr.yml (the optional, off-by-default
+#: ACR evidence-adapter overlay) is DELIBERATELY NOT added here yet, even
+#: though an ACR-relevant scenario's artifact should ideally be bound to it
+#: too. Adding a path here is not just a staleness/drift event
+#: DECLARED_STALE_ARTIFACTS can absorb -- every ALREADY-COMMITTED execution
+#: artifact would be missing that key from its `runtime_dependencies` map
+#: entirely, which `_recorded_dependency_errors` in wave31_manifest.py
+#: (correctly) treats as a structural error, unconditionally, before the
+#: drift-declaration logic ever runs (a missing key is not evidence of
+#: anything, staleness-declared or not). Landing this addition therefore
+#: requires re-minting all fourteen citing artifacts in the SAME change
+#: (team-lead ruling: that re-proof run happens once, on merged main, as
+#: the Phase 1 barrier -- not per-branch). Tracked as a Phase-1-barrier
+#: follow-up alongside this lane's commit, not implemented here.
 RUNTIME_DEPENDENCY_PATHS: tuple[str, ...] = (
     "compose.yml",
     "docker/Dockerfile",
@@ -374,9 +390,18 @@ class ScenarioRecorder:
         all_passed = bool(self.assertions) and all(a.passed for a in self.assertions)
         status = "passed" if (error is None and all_passed) else "failed"
         redacted_error = redact_secrets(error) if error is not None else None
+        # Codex finding (MEDIUM, 2026-08-05): a case whose evidence is
+        # claimed to be ACR-backed must be provably from a run where ACR was
+        # actually armed, not just a run that happened to pass while ACR was
+        # off. run_ask_dev_compose.sh exports ASK_DEV_ACCEPTANCE_ACR (always,
+        # "0" or "1") into every smoke script's environment before invoking
+        # it -- read here, at write time, rather than threaded through the
+        # constructor, so no caller can forget to pass it.
+        acr_armed = os.getenv("ASK_DEV_ACCEPTANCE_ACR") == "1"
         artifact: dict[str, Any] = {
             "schema_version": ARTIFACT_SCHEMA_VERSION,
             "scenario_id": self.scenario_id,
+            "acr_armed": acr_armed,
             "tree_clean": tree_clean,
             "tree_digest": tree_digest,
             "script": str(self.script_path.resolve().relative_to(root)),

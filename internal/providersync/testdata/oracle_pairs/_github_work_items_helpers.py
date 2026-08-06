@@ -142,7 +142,22 @@ def install_minimal_oracle_imports(*, real_client: bool = False) -> None:
         # attribute, not just an importable module.
         setattr(requests_stub, "Response", type("Response", (), {}))
         sys.modules["requests"] = requests_stub
-    _install_bare_leaf_stub("jwt")
+    if "jwt" not in sys.modules:
+        jwt_stub = types.ModuleType("jwt")
+        jwt_exceptions_stub = types.ModuleType("jwt.exceptions")
+        # dev_health_ops.api.services.auth does
+        # `from jwt.exceptions import InvalidTokenError` at module level,
+        # so -- like urllib3.util.retry.Retry above -- `jwt` needs to behave
+        # as a real package with a real (if inert) exceptions submodule,
+        # not just an importable name.
+        setattr(
+            jwt_exceptions_stub,
+            "InvalidTokenError",
+            type("InvalidTokenError", (Exception,), {}),
+        )
+        setattr(jwt_stub, "exceptions", jwt_exceptions_stub)
+        sys.modules["jwt"] = jwt_stub
+        sys.modules["jwt.exceptions"] = jwt_exceptions_stub
     _install_bare_leaf_stub("clickhouse_connect")
     if "urllib3" not in sys.modules:
         urllib3_stub = types.ModuleType("urllib3")

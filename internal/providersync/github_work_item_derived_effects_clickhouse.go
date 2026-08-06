@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -111,6 +112,95 @@ func inspectGitHubWorkItemDerivedRows[T any](
 	return verdict, nil
 }
 
+// Stored-precision truncation. A version column can only hold what its type
+// can represent, so the comparator MUST compare the expected value as it would
+// be STORED, not as it was stamped. Otherwise a computed_at carrying
+// sub-precision digits is written, quantized by the server, read back
+// different, and the version verdict is Absent forever -- replay can never
+// answer Exact and the committer rewrites on every recovery. #1537 shipped 13
+// green integration tests over this exact defect because every fixture used a
+// zero-nanosecond instant.
+//
+// The three tables do NOT share a precision: estimate coverage and team
+// attributions are DateTime64(3) (milliseconds), while state durations is a
+// plain DateTime (SECONDS). Truncating everything to milliseconds would leave
+// the state-durations verdict permanently Absent for any computed_at with a
+// sub-second component.
+func githubWorkItemDerivedMillis(value time.Time) time.Time {
+	return value.UTC().Truncate(time.Millisecond)
+}
+
+func githubWorkItemDerivedSeconds(value time.Time) time.Time {
+	return value.UTC().Truncate(time.Second)
+}
+
+// githubWorkItemDerivedSortingKeyDedupe collapses rows that share a full
+// ClickHouse sorting key, keeping the LAST occurrence.
+//
+// This is a PERSISTENCE-layer decision, not a compute-layer one, so it does
+// not touch the D16 mirroring of the builders: Python writes every row and
+// lets ReplacingMergeTree pick a winner among equal versions, which is not
+// deterministic. Deduplicating before the write makes the stored outcome
+// deterministic AND lets the expectation name the same winner, instead of the
+// readback comparing against a row the storage silently discarded.
+//
+// Without this, two attribution candidates that differ only in team_name --
+// which the resolver genuinely produces when two ownership facts name one team
+// differently -- collapse to one stored row, `found` is 1, the team_name
+// mismatch reads as Conflict, and recovery is wedged permanently.
+func githubWorkItemDerivedSortingKeyDedupe[T any](
+	rows []T, key func(T) string,
+) []T {
+	lastIndex := make(map[string]int, len(rows))
+	for index, row := range rows {
+		lastIndex[key(row)] = index
+	}
+	result := make([]T, 0, len(rows))
+	for index, row := range rows {
+		if lastIndex[key(row)] == index {
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+// githubWorkItemDerivedUniqueSortingKeys reports whether every row already
+// occupies a distinct sorting key. The two map-derived destinations are unique
+// BY CONSTRUCTION; asserting it here makes that impossibility measured rather
+// than assumed, so it fails loudly the day a builder starts emitting a
+// collision instead of wedging a readback in production.
+func githubWorkItemDerivedUniqueSortingKeys[T any](rows []T, key func(T) string) bool {
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		identifier := key(row)
+		if _, duplicate := seen[identifier]; duplicate {
+			return false
+		}
+		seen[identifier] = struct{}{}
+	}
+	return true
+}
+
+func githubEstimateCoverageSortingKey(row githubEstimateCoverageMetricsDailyRow) string {
+	return strings.Join([]string{
+		string(row.Day), row.Provider, row.WorkScopeID,
+		githubWorkItemDerivedNullableString(row.TeamID),
+	}, "\x00")
+}
+
+func githubStateDurationSortingKey(row githubWorkItemStateDurationDailyRow) string {
+	return strings.Join([]string{
+		string(row.Day), row.Provider, row.WorkScopeID, row.TeamID, row.Status,
+	}, "\x00")
+}
+
+func githubTeamAttributionSortingKey(row githubWorkItemTeamAttributionRow) string {
+	return strings.Join([]string{
+		githubWorkItemDerivedRepoID(row.RepoID).String(), row.WorkItemID,
+		githubWorkItemDerivedNullableString(row.TeamID), row.Source,
+	}, "\x00")
+}
+
 func (sink GitHubEstimateCoverageClickHouseEffects) WriteGitHubWorkItemEffect(
 	ctx context.Context, identity GitHubWorkItemEffectIdentity, effect EffectBatch,
 ) error {
@@ -126,6 +216,11 @@ func (sink GitHubEstimateCoverageClickHouseEffects) WriteGitHubWorkItemEffect(
 	if len(rows) == 0 {
 		return nil
 	}
+	// Map-derived, so one row per sorting key by construction. Measured, not
+	// assumed: a collision would collapse under RMT and wedge the readback.
+	if !githubWorkItemDerivedUniqueSortingKeys(rows, githubEstimateCoverageSortingKey) {
+		return ErrInvalidConfiguration
+	}
 	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO estimate_coverage_metrics_daily
 (day, provider, work_scope_id, team_id, team_name, estimated_count,
 unestimated_count, backlog_size, ratio, computed_at, org_id)`)
@@ -140,7 +235,8 @@ unestimated_count, backlog_size, ratio, computed_at, org_id)`)
 		if err := batch.Append(
 			day, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName,
 			uint32(row.EstimatedCount), uint32(row.UnestimatedCount),
-			uint32(row.BacklogSize), row.Ratio, row.ComputedAt, identity.OrgID,
+			uint32(row.BacklogSize), row.Ratio,
+			githubWorkItemDerivedMillis(row.ComputedAt), identity.OrgID,
 		); err != nil {
 			return err
 		}
@@ -241,6 +337,11 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) WriteGitHubWorkItemE
 	if len(rows) == 0 {
 		return nil
 	}
+	// Collisions are GENUINELY REACHABLE here, unlike the two map-derived
+	// destinations: the resolver emits one candidate per ownership fact, so two
+	// facts naming the same team differently produce two rows with an identical
+	// sorting key that differ only in team_name.
+	rows = githubWorkItemDerivedSortingKeyDedupe(rows, githubTeamAttributionSortingKey)
 	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO work_item_team_attributions
 (org_id, repo_id, work_item_id, provider, team_id, team_name, source,
 is_primary, confidence, evidence, computed_at)`)
@@ -251,7 +352,8 @@ is_primary, confidence, evidence, computed_at)`)
 		if err := batch.Append(
 			identity.OrgID, githubWorkItemDerivedRepoID(row.RepoID), row.WorkItemID,
 			row.Provider, row.TeamID, row.TeamName, row.Source,
-			uint8(row.IsPrimary), row.Confidence, row.Evidence, row.ComputedAt,
+			uint8(row.IsPrimary), row.Confidence, row.Evidence,
+			githubWorkItemDerivedMillis(row.ComputedAt),
 		); err != nil {
 			return err
 		}
@@ -280,6 +382,9 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) InspectGitHubWorkIte
 	if sink.Conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
+	// The expectation must name the row the WRITE will actually leave behind,
+	// or the readback compares against a row storage discarded.
+	rows = githubWorkItemDerivedSortingKeyDedupe(rows, githubTeamAttributionSortingKey)
 	return inspectGitHubWorkItemDerivedRows(rows, func(row githubWorkItemTeamAttributionRow) (EffectInspection, error) {
 		return sink.inspect(ctx, identity, row)
 	})
@@ -342,6 +447,9 @@ func (sink GitHubWorkItemStateDurationsClickHouseEffects) WriteGitHubWorkItemEff
 	if len(rows) == 0 {
 		return nil
 	}
+	if !githubWorkItemDerivedUniqueSortingKeys(rows, githubStateDurationSortingKey) {
+		return ErrInvalidConfiguration
+	}
 	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO work_item_state_durations_daily
 (day, provider, work_scope_id, team_id, team_name, status, duration_hours,
 items_touched, computed_at, avg_wip, org_id)`)
@@ -356,7 +464,7 @@ items_touched, computed_at, avg_wip, org_id)`)
 		if err := batch.Append(
 			day, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName,
 			row.Status, row.DurationHours, uint32(row.ItemsTouched),
-			row.ComputedAt, row.AvgWIP, identity.OrgID,
+			githubWorkItemDerivedSeconds(row.ComputedAt), row.AvgWIP, identity.OrgID,
 		); err != nil {
 			return err
 		}
@@ -469,7 +577,7 @@ func compareGitHubEstimateCoverageVersion(
 		!githubWorkItemDerivedFloatPointerEqual(actual.Ratio, expected.Ratio) {
 		return EffectConflict
 	}
-	if !actual.ComputedAt.Equal(expected.ComputedAt) {
+	if !actual.ComputedAt.Equal(githubWorkItemDerivedMillis(expected.ComputedAt)) {
 		return EffectAbsent
 	}
 	return EffectExact
@@ -493,7 +601,7 @@ func compareGitHubWorkItemTeamAttributionVersion(
 		actual.Confidence != expected.Confidence || actual.Evidence != expected.Evidence {
 		return EffectConflict
 	}
-	if !actual.ComputedAt.Equal(expected.ComputedAt) {
+	if !actual.ComputedAt.Equal(githubWorkItemDerivedMillis(expected.ComputedAt)) {
 		return EffectAbsent
 	}
 	return EffectExact
@@ -517,7 +625,7 @@ func compareGitHubWorkItemStateDurationVersion(
 		actual.AvgWIP != expected.AvgWIP {
 		return EffectConflict
 	}
-	if !actual.ComputedAt.Equal(expected.ComputedAt) {
+	if !actual.ComputedAt.Equal(githubWorkItemDerivedSeconds(expected.ComputedAt)) {
 		return EffectAbsent
 	}
 	return EffectExact

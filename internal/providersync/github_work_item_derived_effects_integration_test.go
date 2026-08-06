@@ -213,12 +213,12 @@ func TestGitHubEstimateCoverageReadbackAgainstRealClickHouse(t *testing.T) {
 		Day: "2026-07-31", Provider: "github", WorkScopeID: "acme/api",
 		TeamID: &teamID, TeamName: &teamName, EstimatedCount: 1, UnestimatedCount: 1,
 		BacklogSize: 2, Ratio: &ratio,
-		ComputedAt: time.Date(2026, 8, 1, 0, 30, 0, 0, time.UTC),
+		ComputedAt: time.Date(2026, 8, 1, 0, 30, 0, 123456789, time.UTC),
 		OrgID:      githubDerivedIntegrationOrg,
 	}
 	august := july
 	august.Day = "2026-08-01"
-	august.ComputedAt = time.Date(2026, 8, 2, 0, 30, 0, 0, time.UTC)
+	august.ComputedAt = time.Date(2026, 8, 2, 0, 30, 0, 987654321, time.UTC)
 
 	both := []githubEstimateCoverageMetricsDailyRow{july, august}
 	effect := githubDerivedIntegrationEffect(t, githubEstimateCoverageDestination, both)
@@ -312,14 +312,14 @@ func TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse(t *testing.T)
 		Day: "2026-08-04", Provider: "github", WorkScopeID: "acme/api",
 		TeamID: "unassigned", TeamName: "Unassigned", Status: "in_progress",
 		DurationHours: 6, ItemsTouched: 1,
-		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 0, time.UTC),
+		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 123456789, time.UTC),
 		AvgWIP:     0.25, OrgID: githubDerivedIntegrationOrg,
 	}
 	newer := older
 	newer.DurationHours = 18
 	newer.ItemsTouched = 2
 	newer.AvgWIP = 0.75
-	newer.ComputedAt = time.Date(2026, 8, 6, 0, 30, 0, 0, time.UTC)
+	newer.ComputedAt = time.Date(2026, 8, 6, 0, 30, 0, 987654321, time.UTC)
 
 	olderEffect := githubDerivedIntegrationEffect(t, githubStateDurationsDestination,
 		[]githubWorkItemStateDurationDailyRow{older})
@@ -413,7 +413,7 @@ func TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse(t *testing.
 	withRepo := githubWorkItemTeamAttributionRow{
 		WorkItemID: "acme/api#1", Provider: "github", Source: "repo_ownership",
 		IsPrimary: 1, Confidence: "high", Evidence: "repo:acme/api",
-		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 0, time.UTC),
+		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 123456789, time.UTC),
 		RepoID:     &repoID, TeamID: &teamID, TeamName: &teamName,
 		OrgID: githubDerivedIntegrationOrg,
 	}
@@ -421,7 +421,7 @@ func TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse(t *testing.
 	unassigned := githubWorkItemTeamAttributionRow{
 		WorkItemID: "acme/api#2", Provider: "github", Source: "unassigned",
 		IsPrimary: 1, Confidence: "low", Evidence: "no_candidate",
-		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 0, time.UTC),
+		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 123456789, time.UTC),
 		RepoID:     nil, TeamID: nil, TeamName: nil,
 		OrgID: githubDerivedIntegrationOrg,
 	}
@@ -457,6 +457,49 @@ func TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse(t *testing.
 	otherIdentity := githubDerivedIntegrationIdentity(githubTeamAttributionsDestination, 1)
 	if inspection, err := sink.InspectGitHubWorkItemEffect(ctx, otherIdentity, otherEffect); err != nil || inspection != EffectAbsent {
 		t.Fatalf("different source: inspection = %v, err = %v, want EffectAbsent", inspection, err)
+	}
+
+	// SAME-SORTING-KEY COLLAPSE. Two candidates for one item that differ ONLY
+	// in team_name -- the exact shape the resolver produces when two ownership
+	// facts name one team differently -- share a full sorting key, so
+	// ReplacingMergeTree stores ONE row. Without deterministic dedup on both
+	// the write and the expectation, found==1, the team_name mismatch reads as
+	// Conflict, and recovery is wedged permanently rather than transiently.
+	collidingA := withRepo
+	collidingA.WorkItemID = "acme/api#3"
+	collidingA.TeamName = stringPointer("Team One")
+	collidingB := collidingA
+	collidingB.TeamName = stringPointer("Team Uno")
+	colliding := []githubWorkItemTeamAttributionRow{collidingA, collidingB}
+	if githubTeamAttributionSortingKey(collidingA) != githubTeamAttributionSortingKey(collidingB) {
+		t.Fatal("collision precondition: the two rows must share a sorting key, " +
+			"otherwise this case proves nothing about RMT collapse")
+	}
+	collidingEffect := githubDerivedIntegrationEffect(t, githubTeamAttributionsDestination, colliding)
+	collidingIdentity := githubDerivedIntegrationIdentity(githubTeamAttributionsDestination, len(colliding))
+	if err := sink.WriteGitHubWorkItemEffect(ctx, collidingIdentity, collidingEffect); err != nil {
+		t.Fatal(err)
+	}
+	if inspection, err := sink.InspectGitHubWorkItemEffect(ctx, collidingIdentity, collidingEffect); err != nil || inspection != EffectExact {
+		t.Fatalf("colliding sorting keys: inspection = %v, err = %v, want EffectExact "+
+			"(a permanent Conflict here is the wedged-recovery defect)", inspection, err)
+	}
+	// Replay must stay Exact, which is what proves the dedup is deterministic
+	// rather than accidentally agreeing once.
+	if err := sink.WriteGitHubWorkItemEffect(ctx, collidingIdentity, collidingEffect); err != nil {
+		t.Fatal(err)
+	}
+	if inspection, err := sink.InspectGitHubWorkItemEffect(ctx, collidingIdentity, collidingEffect); err != nil || inspection != EffectExact {
+		t.Fatalf("colliding sorting keys on replay: inspection = %v, err = %v, want EffectExact", inspection, err)
+	}
+	var stored uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_team_attributions FINAL
+WHERE org_id = ? AND work_item_id = ?`, githubDerivedIntegrationOrg, "acme/api#3").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Fatalf("colliding sorting keys: stored row count = %d, want 1 -- the two "+
+			"rows must genuinely collapse or this case is not exercising the defect", stored)
 	}
 
 	foreign := githubDerivedIntegrationIdentity(githubTeamAttributionsDestination, len(rows))

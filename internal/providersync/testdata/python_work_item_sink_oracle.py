@@ -19,6 +19,15 @@ write method. The captured column list and value matrix are therefore produced
 by the real writer -- not by re-reading its source, and not by a hand-authored
 fixture that could agree with a stale reading of it.
 
+The sink is reached through python_oracle_loader, not through a plain
+``import dev_health_ops.metrics.sinks.clickhouse``. Both are the same
+production module; the plain import additionally runs three package __init__
+files on the way in, and one of them (``models/__init__`` ->
+``licensing/__init__`` -> ``licensing/gating``) imports fastapi, which the
+go-quality interpreter deliberately does not have. The loader executes the
+same sources with those unrelated initializers skipped -- see
+_target_clickhouse_metrics_sink. Nothing about the writer is stubbed.
+
 Values are type-tagged on the way out (the same wire format
 python_generic_row_oracle.py uses) so the Go comparison cannot collapse an int
 to a float or a UUID to a string.
@@ -29,21 +38,42 @@ Usage: python_work_item_sink_oracle.py <cases.json>
 from __future__ import annotations
 
 import json
+import pathlib
 import sys
 from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.models.ai_attribution import AIAttributionRecord
-from dev_health_ops.models.work_items import (
-    Sprint,
-    WorkItem,
-    WorkItemDependency,
-    WorkItemInteractionEvent,
-    WorkItemReopenEvent,
-    WorkItemStatusTransition,
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT))
+
+from internal.providersync.testdata.python_oracle_loader import (  # noqa: E402
+    ROOT as _LOADER_ROOT,
 )
+from internal.providersync.testdata.python_oracle_loader import (  # noqa: E402
+    load_live_module,
+)
+
+_SINK_MODULE = load_live_module(
+    _LOADER_ROOT
+    / "src"
+    / "dev_health_ops"
+    / "metrics"
+    / "sinks"
+    / "clickhouse"
+    / "__init__.py"
+)
+ClickHouseMetricsSink = _SINK_MODULE.ClickHouseMetricsSink
+AIAttributionRecord = sys.modules[
+    "dev_health_ops.models.ai_attribution"
+].AIAttributionRecord
+_WORK_ITEM_MODELS = sys.modules["dev_health_ops.models.work_items"]
+Sprint = _WORK_ITEM_MODELS.Sprint
+WorkItem = _WORK_ITEM_MODELS.WorkItem
+WorkItemDependency = _WORK_ITEM_MODELS.WorkItemDependency
+WorkItemInteractionEvent = _WORK_ITEM_MODELS.WorkItemInteractionEvent
+WorkItemReopenEvent = _WORK_ITEM_MODELS.WorkItemReopenEvent
+WorkItemStatusTransition = _WORK_ITEM_MODELS.WorkItemStatusTransition
 
 
 class _RecordingClient:

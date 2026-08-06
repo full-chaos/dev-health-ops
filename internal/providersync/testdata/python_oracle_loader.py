@@ -94,6 +94,49 @@ _LICENSE_TYPES_SOURCE = _source("dev_health_ops/licensing/types.py")
 _LICENSE_REGISTRY_SOURCE = _source("dev_health_ops/licensing/registry.py")
 _FEATURE_POLICY_SOURCE = _source("dev_health_ops/licensing/feature_policy.py")
 
+# The ClickHouse metrics sink package, for the direct work-item destination
+# projection oracle. Every one of these is a real production source; the list
+# is long because the target is a package __init__ that composes fourteen
+# mixins, and each one has to be in sys.modules before that __init__ runs
+# (see _target_clickhouse_metrics_sink).
+_CLICKHOUSE_DEDUP_SOURCE = _source("dev_health_ops/clickhouse_dedup.py")
+_METRICS_SCHEMAS_SOURCE = _source("dev_health_ops/metrics/schemas.py")
+_WORK_ITEM_MODELS_SOURCE = _source("dev_health_ops/models/work_items.py")
+_AI_ATTRIBUTION_MODELS_SOURCE = _source("dev_health_ops/models/ai_attribution.py")
+_AI_WORKFLOW_MODELS_SOURCE = _source("dev_health_ops/models/ai_workflow.py")
+_AI_GOVERNANCE_MODELS_SOURCE = _source("dev_health_ops/audit/ai_governance/models.py")
+_RECOMMENDATION_SNAPSHOT_SOURCE = _source("dev_health_ops/recommendations/snapshot.py")
+_CLICKHOUSE_MIGRATIONS_SOURCE = _source(
+    "dev_health_ops/migrations/clickhouse/__init__.py"
+)
+_METRICS_SINK_BASE_SOURCE = _source("dev_health_ops/metrics/sinks/base.py")
+_METRICS_SINK_FACTORY_SOURCE = _source("dev_health_ops/metrics/sinks/factory.py")
+_CLICKHOUSE_SINK_PACKAGE = "dev_health_ops/metrics/sinks/clickhouse"
+_CLICKHOUSE_INSERT_SOURCE = _source(f"{_CLICKHOUSE_SINK_PACKAGE}/_insert.py")
+_CLICKHOUSE_CONNECTION_SOURCE = _source(f"{_CLICKHOUSE_SINK_PACKAGE}/connection.py")
+_CLICKHOUSE_CORE_SOURCE = _source(f"{_CLICKHOUSE_SINK_PACKAGE}/core.py")
+_CLICKHOUSE_MIXIN_SOURCES: tuple[tuple[str, Path], ...] = tuple(
+    (
+        f"dev_health_ops.metrics.sinks.clickhouse.{module}",
+        _source(f"{_CLICKHOUSE_SINK_PACKAGE}/{module}.py"),
+    )
+    for module in (
+        "ai_attribution",
+        "ai_governance",
+        "ai_impact",
+        "ai_workflow",
+        "ci",
+        "compounding_risk",
+        "dora",
+        "investment",
+        "llm_tokens",
+        "recommendations",
+        "wellbeing",
+        "work_graph",
+    )
+)
+_CLICKHOUSE_SINK_SOURCE = _source(f"{_CLICKHOUSE_SINK_PACKAGE}/__init__.py")
+
 _SAFE_SOURCE_MODULES: dict[str, Path] = {
     "dev_health_ops.sync.budget_types": _BUDGET_TYPES_SOURCE,
     "dev_health_ops.sync.datasets": _DATASETS_SOURCE,
@@ -769,6 +812,75 @@ def _target_fetch_utils() -> None:
     _install_module("dev_health_ops.utils", {"BATCH_SIZE": 1000})
 
 
+def _target_clickhouse_metrics_sink() -> None:
+    """Compose the real ClickHouseMetricsSink without the application stack.
+
+    The target here is the sink package's own __init__, so the oracle built on
+    it constructs the SAME class production constructs -- not a local
+    re-composition of two mixins that a future mixin override could silently
+    diverge from.
+
+    Two things make a plain ``import dev_health_ops.metrics.sinks.clickhouse``
+    impossible under the go-quality interpreter, and both are package
+    __init__ side effects rather than anything the sink itself needs:
+
+      * ``metrics/sinks/__init__.py`` imports ``sinks.base``, which imports
+        ``models.work_items``, which runs ``models/__init__.py``, which
+        imports ``licensing/__init__.py``, which imports ``licensing/gating.py``,
+        which imports **fastapi** -- the whole HTTP API stack, pulled in to
+        write a row to ClickHouse. That is the CI failure this target closes
+        (ModuleNotFoundError: No module named 'fastapi').
+      * ``clickhouse/core.py`` imports **clickhouse_connect** at module level
+        for its connect path. The sink under test never connects: the oracle
+        injects a recording client. Only that name is stubbed, and it is
+        stubbed to fail loudly rather than silently return a mock, so an
+        oracle that ever reached the real connect path would say so.
+
+    Everything else below is loaded from its real source, in dependency order,
+    because ``__init__`` needs each submodule already resolved (its parent
+    package stub has an empty __path__, so the import system finds submodules
+    only through sys.modules). No projection logic is stubbed: the column
+    lists, the coercions, ClickHouseCore._insert_rows' asdict/org_id/datetime
+    handling and each mixin's writer are the shipped code.
+    """
+    _install_module("clickhouse_connect", {"get_client": _unsupported_dependency})
+    _load_source_module("dev_health_ops.clickhouse_dedup", _CLICKHOUSE_DEDUP_SOURCE)
+    _load_source_module("dev_health_ops.metrics.schemas", _METRICS_SCHEMAS_SOURCE)
+    _load_source_module(
+        "dev_health_ops.metrics.testops_schemas", _TESTOPS_SCHEMAS_SOURCE
+    )
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEM_MODELS_SOURCE)
+    _load_source_module(
+        "dev_health_ops.models.ai_attribution", _AI_ATTRIBUTION_MODELS_SOURCE
+    )
+    _load_source_module("dev_health_ops.models.ai_workflow", _AI_WORKFLOW_MODELS_SOURCE)
+    _load_source_module(
+        "dev_health_ops.audit.ai_governance.models", _AI_GOVERNANCE_MODELS_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.recommendations.snapshot", _RECOMMENDATION_SNAPSHOT_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.migrations.clickhouse", _CLICKHOUSE_MIGRATIONS_SOURCE
+    )
+    _load_source_module("dev_health_ops.metrics.sinks.base", _METRICS_SINK_BASE_SOURCE)
+    _load_source_module(
+        "dev_health_ops.metrics.sinks.factory", _METRICS_SINK_FACTORY_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.metrics.sinks.clickhouse._insert", _CLICKHOUSE_INSERT_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.metrics.sinks.clickhouse.connection",
+        _CLICKHOUSE_CONNECTION_SOURCE,
+    )
+    _load_source_module(
+        "dev_health_ops.metrics.sinks.clickhouse.core", _CLICKHOUSE_CORE_SOURCE
+    )
+    for module_name, module_source in _CLICKHOUSE_MIXIN_SOURCES:
+        _load_source_module(module_name, module_source)
+
+
 ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
     _FETCH_UTILS_SOURCE: (
         "dev_health_ops.processors.fetch_utils",
@@ -890,6 +1002,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         _FEATURE_POLICY_SOURCE,
         _target_feature_policy,
     ),
+    _CLICKHOUSE_SINK_SOURCE: (
+        "dev_health_ops.metrics.sinks.clickhouse",
+        _CLICKHOUSE_SINK_SOURCE,
+        _target_clickhouse_metrics_sink,
+    ),
 }
 
 
@@ -920,12 +1037,17 @@ def _install_namespace() -> None:
     for name in (
         "dev_health_ops",
         "dev_health_ops.analytics",
+        "dev_health_ops.audit",
+        "dev_health_ops.audit.ai_governance",
         "dev_health_ops.connectors",
         "dev_health_ops.credentials",
         "dev_health_ops.licensing",
+        "dev_health_ops.migrations",
         "dev_health_ops.models",
         "dev_health_ops.metrics",
         "dev_health_ops.metrics.sinks",
+        "dev_health_ops.metrics.sinks.clickhouse",
+        "dev_health_ops.recommendations",
         "dev_health_ops.parsers",
         "dev_health_ops.processors",
         "dev_health_ops.providers",

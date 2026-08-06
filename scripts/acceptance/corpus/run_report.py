@@ -14,6 +14,16 @@ this file specifically" that ``test_wave4_corpus_runner_live.py``'s module
 docstring names as Phase 5c's wiring; CHAOS-3462 pulls it forward because
 the Phase 2 exit run needs it now.
 
+WHAT "EXECUTED" DOES AND DOES NOT MEAN, precisely: a case that ERRORS IN
+SETUP counts as executed here, because it has no ``<skipped>`` element. That
+is deliberate and pinned by a test against real pytest output, but it means
+this check answers "was anything other than a silent skip reported for a
+corpus case", NOT "did a case reach the product". The distinction cannot
+produce a false green -- a setup-errored run is non-zero from pytest and the
+launcher propagates that status -- but do not read a passing
+``assert_armed_run_executed`` as evidence the stack was exercised. The
+receipts are that evidence.
+
 RULE 4 THROUGHOUT ("a measurement that did not happen must FAIL, loudly"):
 every function here raises :class:`UnmeasurableRunError` rather than
 returning a zeroed summary when the report is absent, empty, or

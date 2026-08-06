@@ -56,11 +56,21 @@ _PROFILES_DIR = _WORLD_DIR / "resolution-profiles"
 
 
 def _resolution_path_domain() -> frozenset[str]:
-    from typing import get_args
+    """The paths ``derive_resolution_path`` can actually EMIT.
 
-    from scripts.acceptance.corpus.resolution_path import ResolutionPath
+    Deliberately narrower than the full ``ResolutionPath`` Literal: that type
+    also carries ``qua-shadow`` and ``qua-committed``, which
+    ``resolution_path.py``'s own docstring reserves for the future CHAOS-3389
+    shadow-replay mode and states are "never emitted here". Validating
+    against the full Literal would wave through
+    ``allowed: ["qua-shadow"]`` -- an invariant exactly as unpassable as
+    ``[None]``. Asserted against the Literal below so this cannot silently
+    drift if the reserved set changes.
+    """
 
-    return frozenset(get_args(ResolutionPath))
+    return frozenset(
+        {"deterministic-exact", "deterministic-alias", "miss-clarification"}
+    )
 
 
 def _public_outcome_domain() -> frozenset[str]:
@@ -191,6 +201,48 @@ class TestEveryActiveCaseCanPass:
             f"the unsatisfiable-invariant guard still covers all of them "
             f"(registered={sorted(registered_value_in)}, "
             f"guarded={sorted(_VALUE_IN_CHECKS)})"
+        )
+
+    def test_the_emitted_resolution_path_domain_is_a_real_subset(self) -> None:
+        """Pin the narrowing rather than restating it in a comment: the
+        emitted set must be a strict subset of the declared Literal, and the
+        excluded values must be exactly the reserved QUA ones. If someone
+        wires the QUA mode up, this fails and forces the guard to be
+        revisited instead of quietly under- or over-accepting."""
+
+        from typing import get_args
+
+        from scripts.acceptance.corpus.resolution_path import ResolutionPath
+
+        declared = frozenset(get_args(ResolutionPath))
+        emitted = _resolution_path_domain()
+        assert emitted < declared
+        assert declared - emitted == {"qua-shadow", "qua-committed"}
+
+    def test_a_reserved_never_emitted_path_is_flagged_unsatisfiable(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "case-qua.json").write_text(
+            json.dumps(
+                {
+                    "id": "planted.qua",
+                    "question": "q",
+                    "subject_class": "n/a",
+                    "invariants": [
+                        {
+                            "category": "resolution-path-matches-profile",
+                            "check": "resolution_path_in",
+                            "args": {"allowed": ["qua-shadow", "qua-committed"]},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        case = load_corpus_cases(tmp_path)[0]
+        assert _unsatisfiable(case, {}), (
+            "an invariant allowing only reserved, never-emitted paths was not "
+            "flagged -- it is as unpassable as allowed=[None]"
         )
 
     def test_every_guarded_domain_is_non_empty(self) -> None:

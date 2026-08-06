@@ -222,6 +222,17 @@ class PrincipalSessions:
     would add ~274 pointless calls and, worse, put the admin
     set-password rate limit (``ADMIN_PASSWORD_LIMIT``) in the path of a
     normal run.
+
+    KNOWN LIMIT, stated rather than discovered later: the access token has a
+    60-minute TTL (``api/services/auth.py``) and these sessions are cached
+    for the whole run with no refresh and no 401 retry. A corpus run that
+    takes longer than an hour will therefore start failing with 401s near
+    the end -- loudly, not silently, but with an error that looks nothing
+    like its cause. If a real armed run approaches that duration, the fix is
+    a re-login on 401 keyed by alias; it is not built here because no
+    end-to-end run has yet been observed (the Phase 2 exit run was blocked),
+    so its real duration is unknown and building against a guess would be
+    speculative.
     """
 
     def __init__(
@@ -264,7 +275,15 @@ class PrincipalSessions:
         # and is re-raised verbatim, so the run fails on the REAL cause.
         previous = self._failures.get(principal.user_alias)
         if previous is not None:
-            raise previous
+            # A NEW exception chained to the original, rather than re-raising
+            # the same object: re-raising one instance ~90 times accumulates a
+            # frame on its traceback each time, and the report for the last
+            # case buries the first (real) failure under them.
+            raise PrincipalError(
+                f"principal {principal.user_alias!r} already failed to "
+                f"authenticate earlier in this run and is not retried -- see "
+                f"the original error: {previous!r}"
+            ) from previous
         try:
             session = self._authenticate(principal)
         except BaseException as exc:

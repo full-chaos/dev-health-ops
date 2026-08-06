@@ -23,6 +23,18 @@ from tests._env_isolation import (
 #: never deletes its own record.
 SCRUB_RECORD_ENV = "DEV_HEALTH_TEST_SCRUBBED_ENV_NAMES"
 
+#: Pre-scrub values that mean "the operator deliberately turned this OFF".
+#: A name scrubbed while holding one of these is NOT recorded, because the
+#: record's only consumer asks "did someone intend to switch this on".
+#:
+#: Without this, ``ASK_DEV_LIVE_ACCEPTANCE=0`` -- an explicit REFUSAL to arm
+#: -- was recorded identically to ``=1`` and the corpus runner concluded the
+#: run had been armed and scrubbed, turning a deliberately disarmed run RED
+#: (reproduced). The record can only ever carry names, never values: it is
+#: exported to child processes, and several scrubbed names hold real
+#: credentials.
+_DISABLING_VALUES = frozenset({"", "0", "false", "no", "off"})
+
 _SCRUBBED_ENV_NAMES: list[str] = []
 #: The union of this process's scrub and any inherited from a parent (an
 #: xdist controller). See :func:`scrubbed_env_names`.
@@ -146,6 +158,12 @@ def pytest_configure(config):
     kept = exempted_names() | lane_conditional_keeps()
     _KEPT_ENV_NAMES[:] = sorted(kept)
     inherited = _inherited_scrub_record()
+    # Snapshot values BEFORE the scrub so the record can distinguish "was set
+    # to something meaningful" from "was explicitly set to off". Kept process
+    # local and never exported -- see _DISABLING_VALUES.
+    prescrub = {
+        name: os.environ[name] for name in SCRUB_ENV_NAMES if name in os.environ
+    }
     _SCRUBBED_ENV_NAMES[:] = scrub_ambient_env(os.environ, exempt=kept)
     # CHAOS-3462: carry the record ACROSS the process boundary. The list
     # above is process-local, but an xdist controller scrubs and then spawns
@@ -157,7 +175,12 @@ def pytest_configure(config):
     # the evidence survive the fork, which is exactly what the corpus
     # runner's armed-but-scrubbed guard needs. Unioned, never overwritten,
     # so a worker cannot erase what the controller recorded.
-    _SCRUB_RECORD[:] = sorted(inherited | set(_SCRUBBED_ENV_NAMES))
+    enabling = {
+        name
+        for name in _SCRUBBED_ENV_NAMES
+        if prescrub.get(name, "").strip().casefold() not in _DISABLING_VALUES
+    }
+    _SCRUB_RECORD[:] = sorted(inherited | enabling)
     if _SCRUB_RECORD:
         os.environ[SCRUB_RECORD_ENV] = ",".join(_SCRUB_RECORD)
     _POST_SCRUB_RESIDUE[:] = sorted(

@@ -52,14 +52,22 @@ print(env_allow_value(os.environ.get("DEV_HEALTH_TEST_ENV_ALLOW")))' \
 )" || exit 70
 export DEV_HEALTH_TEST_ENV_ALLOW
 
-# Refuse parallel execution outright. QuotaBudget is per-process and
+# Refuse parallel execution outright, and belt-and-braces it by disabling the
+# xdist plugin entirely below (`-p no:xdist`), because the scan alone is
+# bypassable: pytest honors PYTEST_ADDOPTS regardless of argv, so
+# `PYTEST_ADDOPTS="-n 4" run_wave4_corpus.sh` ran four workers past an
+# argv-only check. The scan now covers that variable too AND the plugin is
+# off, so a parallel flag from any source is an error rather than a silently
+# honored one.
+#
+# QuotaBudget is per-process and
 # per-session (its own docstring: "one instance per corpus-runner pytest
 # session"), so N xdist workers would each start from the FULL monthly
 # ceiling and the run could spend N times the budget while every worker
 # believed it was within limits. The arming evidence also only survives the
 # controller->worker boundary via the scrub record, which is a recovery
 # path, not a reason to run this way on purpose.
-for arg in "$@"; do
+for arg in "$@" ${PYTEST_ADDOPTS:-}; do
   case "${arg}" in
     -n|--numprocesses|-n*|--numprocesses=*|--dist|--dist=*|--forked)
       echo "refusing to run the armed corpus in parallel (${arg}): QuotaBudget is" >&2
@@ -81,6 +89,7 @@ PYTHONPATH="${ops_root}/src:${ops_root}" "${venv_python}" -m pytest \
   tests/acceptance/test_wave4_corpus_runner_live.py \
   --junitxml="${report}" \
   -p no:cacheprovider \
+  -p no:xdist \
   -rs \
   -v \
   "$@"

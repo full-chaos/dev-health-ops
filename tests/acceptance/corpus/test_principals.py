@@ -492,9 +492,15 @@ class TestPrincipalSessions:
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
         )
-        for _ in range(5):
-            with pytest.raises(RuntimeError, match="login 503"):
+        with pytest.raises(RuntimeError, match="login 503"):
+            sessions.session_for_alias("primary.ordinary")
+        for _ in range(4):
+            # Subsequent cases get a NEW error chained to the original, not
+            # the same object re-raised (which would grow a traceback frame
+            # per case and bury the real failure).
+            with pytest.raises(PrincipalError, match="already failed") as caught:
                 sessions.session_for_alias("primary.ordinary")
+            assert isinstance(caught.value.__cause__, RuntimeError)
         assert len(admin.calls) == 1, (
             "the admin password endpoint was called again after the first "
             f"failure ({len(admin.calls)} times) -- shared state keeps being "

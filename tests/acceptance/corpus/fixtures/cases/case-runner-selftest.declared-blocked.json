@@ -1,0 +1,8 @@
+{
+  "id": "runner-selftest.declared-blocked",
+  "question": "How are the meridian and atlas projects doing together?",
+  "subject_class": "bounded-set",
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3393",
+  "invariants": []
+}

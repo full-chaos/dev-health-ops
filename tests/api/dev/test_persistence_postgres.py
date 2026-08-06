@@ -39,23 +39,46 @@ from dev_health_ops.api.dev.persistence import service as dev_persistence_servic
 from dev_health_ops.models.dev_persistence import (
     DevAnswerFrame,
     DevConversation,
+    DevConversationTombstone,
+    DevFeedback,
     DevMessage,
     DevRun,
+    DevRunIntent,
     DevRunNarrative,
+    DevRunResolution,
+    DevRunSourceObservation,
+    DevRunStageDiagnostic,
+    DevRunSubjectSet,
+    DevToolCall,
 )
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
+# Must stay in step with test_persistence_v2.py's `_TABLES`: the service
+# under test writes and reads the whole Ask Dev persistence family, so a
+# table missing here is not a narrower fixture, it is an UndefinedTableError
+# the moment a test reaches that code path. This list had drifted 8 models
+# behind its SQLite sibling, which went unnoticed only because every test
+# past the first one in this module was unreachable (the fixture-teardown
+# deadlock fixed alongside this).
 _TABLES = tables_of(
     Organization,
     User,
     DevConversation,
     DevMessage,
     DevRun,
+    DevToolCall,
+    DevFeedback,
+    DevConversationTombstone,
+    DevRunIntent,
+    DevRunResolution,
+    DevRunSubjectSet,
+    DevRunSourceObservation,
     DevAnswerFrame,
     DevRunNarrative,
+    DevRunStageDiagnostic,
 )
 
 _ERROR_CODE_BY_OUTCOME: dict[str, str] = {
@@ -201,6 +224,18 @@ async def postgres_persistence() -> AsyncIterator[
             await engine.dispose()
         if schema_created:
             async with admin_engine.begin() as connection:
+                # DROP SCHEMA ... CASCADE needs ACCESS EXCLUSIVE on every table
+                # in the schema, so a session this test leaked still-open (a
+                # query issued outside its `async with`, leaving the backend
+                # `idle in transaction` holding ACCESS SHARE) makes this
+                # statement wait forever. There is no server-side timeout by
+                # default, so that hang is unbounded: under pytest-xdist it
+                # silently wedges one worker inside fixture teardown, the
+                # controller then blocks forever waiting for a report that
+                # never comes, and the whole CI job burns its 6-hour limit
+                # with no failure ever attributed to this file. Bound the wait
+                # so the leak fails loudly and points here instead.
+                await connection.execute(text("SET LOCAL lock_timeout = '30s'"))
                 await connection.execute(
                     text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
                 )
@@ -379,7 +414,13 @@ async def test_postgres_serializes_concurrent_user_admission_and_replay_is_free(
 
     async with maker() as verify_session:
         assert await verify_session.scalar(select(func.count(DevRun.id))) == 2
-    assert await verify_session.scalar(select(func.count(DevMessage.id))) == 2
+        # Both counts must stay INSIDE the `async with`. Querying
+        # verify_session after the block exits silently opens a brand-new
+        # transaction on a session nothing will ever close or roll back,
+        # leaving the Postgres backend `idle in transaction` with an ACCESS
+        # SHARE lock on dev_messages -- which then blocks this fixture's
+        # teardown DROP SCHEMA ... CASCADE indefinitely.
+        assert await verify_session.scalar(select(func.count(DevMessage.id))) == 2
 
 
 @pytest.mark.asyncio

@@ -91,6 +91,12 @@ from .plan import (
     DevSourceRequirement,
     PlanRegistryID,
 )
+from .question_understanding import (
+    QUESTION_UNDERSTANDING_SCHEMA_VERSION,
+    DevQuestionUnderstanding,
+    DevQuestionUnderstandingMention,
+    QUAOutcome,
+)
 from .result import (
     DevInvestigationResult,
     DevObservedChangeV2,
@@ -157,6 +163,14 @@ from .validators import (
 #: -- the frame only ever carries them as opaque ``OpaqueID`` pointers
 #: (``finding_refs``/``deficiency_refs``, ``frame.py``), so they do not
 #: belong in this dict.
+#:
+#: ``dev_question_understanding.v1`` (CHAOS-3389, ``question_understanding``
+#: module) is excluded for the same reason, one layer stronger: it never
+#: reaches the frame or any API surface at all, only a Postgres shadow-audit
+#: row (``qua_shadow.QUAShadowRecord``), and its models subclass plain
+#: ``BaseModel`` rather than ``ContractModelV2`` specifically so the
+#: ``ContractModelV2.__subclasses__()`` reflection sweep this dict backs
+#: (``test_round4_every_v2_identifier_is_classified``) never sees it either.
 #:
 #: They ARE imported directly above (mirroring the ``health_rules`` import
 #: a few lines up), which is the load-bearing half of "registered": the
@@ -257,6 +271,8 @@ __all__ = [
     "NO_ANSWER_ANSWER_FIELD_POLICY",
     "NO_ANSWER_FRAME_FIELD_POLICY",
     "NO_ANSWER_OUTCOMES",
+    "QUESTION_UNDERSTANDING_SCHEMA_VERSION",
+    "QUAOutcome",
     "NarrativeFailureCode",
     "NoAnswerFieldPolicy",
     "OperationalDeficiencyInventory",
@@ -264,6 +280,8 @@ __all__ = [
     "ProgressStateV2",
     "PublicOutcome",
     "QuestionIntentID",
+    "DevQuestionUnderstanding",
+    "DevQuestionUnderstandingMention",
     "ResolutionOutcome",
     "RuleApplicability",
     "RuleDirection",

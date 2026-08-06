@@ -60,6 +60,10 @@ class Recorder:
         self.narratives: list[Any] = []
         self.terminal_calls: list[dict[str, Any]] = []
         self.resolutions: list[Any] = []
+        #: CHAOS-3423: every no-answer terminal's persisted transcript-row
+        #: write, captured the same way ``self.answers`` captures the
+        #: answer-path's equivalent.
+        self.error_messages: list[Any] = []
         self.rollbacks = 0
         self.fail_answer_write = fail_answer_write
         self.fail_frame_write = fail_frame_write
@@ -76,6 +80,9 @@ class Recorder:
         if self.fail_answer_write:
             raise RuntimeError("storage unavailable")
         self.answers.append(answer)
+
+    async def record_error_message(self, error: Any, **_values: Any) -> None:
+        self.error_messages.append(error)
 
     async def record_preflight(
         self, *, preflight_outcome: str | None, legacy_guard_reason: str | None
@@ -98,6 +105,9 @@ class Recorder:
 
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
+
+    async def record_qua_shadow(self, record: Any) -> None:
+        del record
 
     async def record_narrative(self, narrative: Any) -> None:
         if self.fail_narrative_write:

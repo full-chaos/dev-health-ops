@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
@@ -840,6 +840,15 @@ def _bounded_prompt_history(
     for message in messages:
         if message.role == "user":
             content = message.content
+        elif (
+            isinstance(message.answer_payload, Mapping)
+            and message.answer_payload.get("schema_version") == "dev_error.v1"
+        ):
+            # CHAOS-3423: a no-answer terminal's assistant row carries a
+            # dev_error.v1 payload, not a DevAnswer -- validate and project
+            # its safe_message the same defense-in-depth way the DevAnswer
+            # branch below does, rather than trusting message.content alone.
+            content = DevError.model_validate(message.answer_payload).safe_message
         else:
             content = DevAnswer.model_validate(message.answer_payload).direct_summary
         if content is None:
@@ -1125,6 +1134,19 @@ async def get_conversation_transcript(
                     )
                 )
             else:
+                # CHAOS-3423/CHAOS-3440: a no-answer terminal's assistant row
+                # (record_error_message) is never returned here --
+                # list_transcript_records defaults include_errors=False for
+                # exactly this wire-facing read, because the checked-in
+                # dev-health-web client runtime-validates every response
+                # against the pinned v1 schema (closed-world: unknown keys
+                # rejected) and its own hand-written invariant requires
+                # every assistant entry to carry a real `answer`
+                # (jsonSchemaValidation.ts, contractValidation.ts). Every
+                # `message` reaching this branch is therefore still a real
+                # DevAnswer, exactly as before CHAOS-3423 -- surfacing a
+                # no-answer turn on this wire is CHAOS-3440, gated on a
+                # coordinated client update.
                 entries.append(
                     DevTranscriptEntry(
                         **common,
@@ -1409,19 +1431,71 @@ async def create_message(
 
     runtime = runtime_resolution.runtime
     if runtime is None:
+        # CHAOS-3423 Codex adversarial review round 3 (MEDIUM, confirmed):
+        # this is a real, reachable no-answer terminal (a misconfigured or
+        # currently-unavailable provider) that never reaches
+        # orchestrator.finish() at all -- it short-circuits here, before an
+        # orchestrator run is even constructed. Persisted the same way
+        # every other no-answer terminal now is, through the same
+        # record_error_message helper, so the transcript-completeness
+        # invariant CHAOS-3423 exists to guarantee actually holds here too
+        # (and terminal_error_payload is set so a duplicate request replays
+        # this exact copy, not the generic fallback).
         error_code = runtime_resolution.error_code or "provider_not_configured"
+        safe_message = (
+            runtime_resolution.safe_message or "No certified Ask Dev model is ready."
+        )
+        # CHAOS-3423 Codex adversarial review round 4 (MEDIUM, confirmed): a
+        # SINGLE DevError, reused for the persisted transcript row AND the
+        # immediate HTTP response below -- the two used to disagree on
+        # `retryable` (this call site's own pre-CHAOS-3423 `_raise(...)`
+        # never passed one, i.e. `False`; the newly-added persisted row
+        # hard-coded `True`), which would make a duplicate-request replay
+        # tell the client something different from what the live response
+        # already told it.
+        error = DevError(
+            schema_version="dev_error.v1",
+            request_id=request_id or str(accepted.run.request_id),
+            code=error_code,
+            safe_message=safe_message,
+            retryable=False,
+        )
+        recorder = PersistenceRunRecorder(
+            service,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            run_id=accepted.run.id,
+            # Never read by record_error_message (it only persists the
+            # transcript row) -- this run has no resolved provider at all,
+            # so there is no real "platform"/"byo" value to report.
+            provider_source="platform",
+        )
+        try:
+            await recorder.record_error_message(
+                error, scope_snapshot=body.scope.model_dump(mode="json")
+            )
+        except Exception:
+            # Best-effort, exactly like orchestrator.finish()'s own
+            # error_message_write_fault handling: never let a transcript-row
+            # write failure block marking the run terminal below.
+            logger.exception(
+                "ask_dev.router.provider_unavailable_error_message_write_fault",
+                extra={"run_id": run_id},
+            )
         await service.update_run(
             org_id=org_id,
             user_id=user_id,
             run_id=accepted.run.id,
             state=RunState.FAILED.value,
             safe_error_code=error_code,
+            terminal_error_payload=error.model_dump(mode="json"),
         )
         await service.session.commit()
         _raise(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             error_code,
-            runtime_resolution.safe_message or "No certified Ask Dev model is ready.",
+            safe_message,
             request_id=request_id,
         )
         raise AssertionError("unreachable")

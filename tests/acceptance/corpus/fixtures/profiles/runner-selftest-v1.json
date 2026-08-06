@@ -1,0 +1,10 @@
+{
+  "schema_version": "resolution-profile.v1",
+  "profile_id": "runner-selftest-v1",
+  "cases": {
+    "runner-selftest.needs-profile": {
+      "expected_resolution_path": "deterministic-alias",
+      "expected_public_outcome": "answered"
+    }
+  }
+}

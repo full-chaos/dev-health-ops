@@ -297,6 +297,111 @@ def test_0074_downgrade_refuses_with_folded_column_only_data() -> None:
         engine.dispose()
 
 
+def test_0086_downgrade_refuses_with_populated_shadow_data() -> None:
+    """CHAOS-3389 Codex adversarial review round 1 (HIGH, confirmed): the
+    original 0086 downgrade unconditionally dropped ``dev_run_qua_shadow``,
+    unlike every other Wave 3.1 audit table's downgrade guard (0074's own
+    pattern, proven above) -- a routine pre-release downgrade rehearsal
+    would have silently erased real QUA shadow evidence. Fail-before/
+    pass-after, mirroring ``test_0074_downgrade_refuses_with_folded_column_only_data``:
+    the guard must raise while a row exists, and the same downgrade must
+    then succeed once the table is empty.
+
+    Only ``m68``/``m74`` (for ``dev_runs``) and ``m86`` itself are loaded --
+    ``dev_run_qua_shadow`` FKs to ``dev_runs`` alone, so every migration
+    between them is irrelevant to this table's own creation, exactly as the
+    0074 tests above already establish for 0069/0074.
+    """
+
+    m68 = _load("0068_add_ask_dev_persistence")
+    m74 = _load("0074_add_ask_dev_v2_persistence")
+    m86 = _load("0086_add_dev_run_qua_shadow")
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.connect() as connection:
+            _parent_and_v1_tables(connection)
+            context = MigrationContext.configure(connection)
+            with Operations.context(context):
+                m68.upgrade()
+                m74.upgrade()
+                m86.upgrade()
+
+            tables = set(sa.inspect(connection).get_table_names())
+            assert "dev_run_qua_shadow" in tables
+
+            org_id, user_id, conv_id, run_id = (str(uuid.uuid4()) for _ in range(4))
+            connection.execute(
+                sa.text("INSERT INTO organizations (id, name) VALUES (:id, 'o')"),
+                {"id": org_id},
+            )
+            connection.execute(
+                sa.text("INSERT INTO users (id, email) VALUES (:id, 'u@example.com')"),
+                {"id": user_id},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO dev_conversations "
+                    "(id, org_id, user_id, current_scope, retention_days, "
+                    "created_at, updated_at) VALUES "
+                    "(:id, :org_id, :user_id, '{}', 30, CURRENT_TIMESTAMP, "
+                    "CURRENT_TIMESTAMP)"
+                ),
+                {"id": conv_id, "org_id": org_id, "user_id": user_id},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO dev_runs "
+                    "(id, request_id, conversation_id, org_id, user_id, state, "
+                    "started_at, created_at) VALUES "
+                    "(:id, :req, :conv, :org_id, :user_id, 'accepted', "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {
+                    "id": run_id,
+                    "req": str(uuid.uuid4()),
+                    "conv": conv_id,
+                    "org_id": org_id,
+                    "user_id": user_id,
+                },
+            )
+            connection.commit()
+
+            shadow_row_id = str(uuid.uuid4())
+            connection.execute(
+                sa.text(
+                    "INSERT INTO dev_run_qua_shadow "
+                    "(id, run_id, org_id, user_id, status, "
+                    "deterministic_decision, payload, created_at) VALUES "
+                    "(:id, :run_id, :org_id, :user_id, 'skipped_no_provider', "
+                    "'proceed', '{}', CURRENT_TIMESTAMP)"
+                ),
+                {
+                    "id": shadow_row_id,
+                    "run_id": run_id,
+                    "org_id": org_id,
+                    "user_id": user_id,
+                },
+            )
+            connection.commit()
+
+            with Operations.context(context):
+                with pytest.raises(RuntimeError, match="dev_run_qua_shadow"):
+                    m86.downgrade()
+
+            connection.execute(
+                sa.text("DELETE FROM dev_run_qua_shadow WHERE id = :id"),
+                {"id": shadow_row_id},
+            )
+            connection.commit()
+            with Operations.context(context):
+                m86.downgrade()  # now succeeds
+            tables = set(sa.inspect(connection).get_table_names())
+            assert "dev_run_qua_shadow" not in tables
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.skipif(
     not os.getenv(_POSTGRES_URI_ENV), reason=f"requires {_POSTGRES_URI_ENV}"
 )

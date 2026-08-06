@@ -18,7 +18,51 @@ from .contracts_v2.subject import DevResolutionEntry, DevSubjectSet
 from .orchestrator import RunState
 from .persistence.service import DevPersistenceService
 from .prompts import PROMPT_VERSION
+from .qua_shadow import QUAShadowMentionAssessment, QUAShadowRecord
+from .scope_service import AuthorizedEntity
 from .tool_registry import TOOL_CONTRACT_VERSION, ToolExecution
+
+
+def _entity_json(entity: AuthorizedEntity) -> dict[str, Any]:
+    return {
+        "kind": entity.kind.value,
+        "canonical_id": entity.canonical_id,
+        "label": entity.label,
+        "repository_id": entity.repository_id,
+    }
+
+
+def _mention_assessment_json(assessment: QUAShadowMentionAssessment) -> dict[str, Any]:
+    return {
+        "mention_id": assessment.mention_id,
+        "text_span": assessment.text_span,
+        "outcome": assessment.outcome.value,
+        "selected_entity": (
+            _entity_json(assessment.selected_entity)
+            if assessment.selected_entity is not None
+            else None
+        ),
+        "candidate_entities": [
+            _entity_json(entity) for entity in assessment.candidate_entities
+        ],
+        "confidence": assessment.confidence,
+        "rejected_reason": assessment.rejected_reason,
+    }
+
+
+def _qua_shadow_payload(record: QUAShadowRecord) -> dict[str, Any]:
+    return {
+        "schema_version": record.schema_version,
+        "intent_id": record.intent_id.value if record.intent_id is not None else None,
+        "cardinality": (
+            record.cardinality.value if record.cardinality is not None else None
+        ),
+        "requires_clarification": record.requires_clarification,
+        "mentions": [
+            _mention_assessment_json(assessment) for assessment in record.mentions
+        ],
+        "error_class": record.error_class,
+    }
 
 
 def _digest(value: str) -> str:
@@ -221,6 +265,36 @@ class PersistenceRunRecorder:
             payload=frame.model_dump(mode="json"),
         )
 
+    async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
+        """Persist one CHAOS-3389 QUA shadow evaluation.
+
+        Best-effort by design: the orchestrator's own call site wraps this
+        in a defensive ``try/except`` (mirroring CHAOS-3424's ledger-write
+        handling) precisely because a shadow-record write must never strand
+        the live run it shadows.
+        """
+
+        if record.deterministic_decision is None:
+            # Every real evaluate() call sets this unconditionally (it is
+            # the FIRST thing threaded through every branch); a caller that
+            # somehow reaches persistence without it is a programming error,
+            # not a state this table's CHECK constraint should quietly
+            # coerce into a fabricated "proceed".
+            raise ValueError(
+                "qua_shadow record has no deterministic_decision to persist"
+            )
+        await self._service.record_qua_shadow(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            status=record.status.value,
+            deterministic_decision=record.deterministic_decision.value,
+            cardinality_corroborated=record.cardinality_corroborated,
+            latency_ms=record.latency_ms,
+            model_fingerprint=record.model_fingerprint,
+            payload=_qua_shadow_payload(record),
+        )
+
     async def rollback(self) -> None:
         """Discard pending writes on this request's session (CHAOS-3297).
 
@@ -287,6 +361,47 @@ class PersistenceRunRecorder:
             validator=validate,
             scope_snapshot=scope.model_dump(mode="json"),
             rendered_content=answer.direct_summary,
+        )
+
+    async def record_error_message(
+        self, error: DevError, *, scope_snapshot: Mapping[str, Any]
+    ) -> None:
+        """Persist one assistant ``dev_messages`` row for a no-answer terminal (CHAOS-3423).
+
+        Called from ``orchestrator.finish()`` for every terminal that carries
+        an ``error`` and no ``answer`` -- a clarification (``scope_ambiguous``)
+        or any other orchestrator/preflight error code. Until this existed,
+        the conversation's own ``dev_messages`` table got no row at all for
+        these turns (only ``record_frame``'s ``dev_answer_frames`` row did),
+        so a transcript read rendered the question with no answer.
+
+        The row's ``DevMessage.answer_id`` is this run's OWN ``run_id`` --
+        deterministic (not ``uuid.uuid4()``) and already guaranteed unique
+        (it is ``dev_runs.id``'s own primary key), so no new minting scheme
+        is needed and a retried flush is naturally idempotent. Deliberately
+        NEVER written back onto ``dev_runs.answer_id`` itself (that column
+        stays ``None`` for a no-answer terminal, exactly as before this
+        method existed): a caller reading ``run.answer_id is not None`` as
+        "this run completed with a real ``DevAnswer``"
+        (``router._replayed_result``'s replay branch) must keep seeing
+        exactly that, unchanged -- only ``DevPersistenceService.
+        list_transcript_records``'s run lookup was taught the second,
+        symmetric join (``DevRun.id`` for a no-answer row, alongside
+        ``DevRun.answer_id`` for a real one).
+        """
+
+        def validate(payload):
+            return DevError.model_validate(payload).model_dump(mode="json")
+
+        await self._service.append_assistant_error(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            conversation_id=self._conversation_id,
+            message_id=self._run_id,
+            error_payload=error.model_dump(mode="json"),
+            validator=validate,
+            scope_snapshot=dict(scope_snapshot),
+            rendered_content=error.safe_message,
         )
 
     async def terminal(

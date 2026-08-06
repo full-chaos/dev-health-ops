@@ -22,6 +22,7 @@ from .orchestrator import (
     ScopeResolver,
 )
 from .prompts import PromptConversationTurn
+from .qua_shadow import QuestionUnderstandingShadow
 from .subject_preflight import SubjectPreflight
 from .tool_registry import AskDevToolRegistry
 
@@ -60,6 +61,11 @@ class BoundedDevRuntime:
     #: same seam to drive the live C3/C4 provider-failure-matrix controls
     #: through the real endpoint.
     narrative_provider: narrative_fallback.NarrativeProvider | None = None
+    #: CHAOS-3389 shadow phase. ``None`` is the flag-off path -- identical to
+    #: today whether or not ``preflight`` is set. Production only sets this
+    #: once ``preflight`` is also set (the shadow seam runs alongside the
+    #: deterministic resolver, so it is meaningless without it).
+    qua_shadow: QuestionUnderstandingShadow | None = None
 
     async def run(
         self,
@@ -88,6 +94,7 @@ class BoundedDevRuntime:
             plan_registry=self.plan_registry,
             plan_executor=self.plan_executor,
             narrative_provider=self.narrative_provider,
+            qua_shadow=self.qua_shadow,
         )
         return await orchestrator.run(
             request=request,

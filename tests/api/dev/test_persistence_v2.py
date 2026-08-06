@@ -52,9 +52,12 @@ from dev_health_ops.api.dev.contracts_v2.narrative import (
     DevNarrative as DevNarrativeContract,
 )
 from dev_health_ops.api.dev.persistence import (
+    DevAdmissionLimits,
+    DevMonthlyRequestLimitExceeded,
     DevPersistenceNotFound,
     DevPersistenceService,
     DevPersistenceValidationError,
+    DevPlatformAllowance,
 )
 from dev_health_ops.api.dev.persistence import service as dev_persistence_service
 from dev_health_ops.api.dev.persistence.service import (
@@ -302,6 +305,95 @@ async def _accepted_run(
         scope_snapshot={},
     )
     return conversation.id, accepted.run.id
+
+
+# -- dev_runs.provider_source durability --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_run_without_provider_source_leaves_the_column_intact(
+    persistence,
+) -> None:
+    """``update_run`` assigned ``run.provider_source = provider_source``
+    unconditionally from a parameter defaulting to ``None``, so every
+    caller that did not re-pass it silently nulled the column.
+
+    That is not cosmetic. ``_enforce_platform_allowance`` filters on
+    ``provider_source == "platform"``, so a nulled column does not merely
+    lose a label -- it makes the run invisible to the allowance query, and
+    the monthly request and cost limits stop applying altogether. Two real
+    call sites send a bare state update: ``OrchestratorPersistence
+    .mark_state`` (state only, on every non-terminal transition) and
+    router.py's provider-unavailable 503 path (state + error fields only,
+    and that one is terminal, so the loss is permanent).
+
+    This is exercised on SQLite deliberately: the defect is a plain ORM
+    attribute assignment with no backend-specific behaviour, and the
+    Postgres-gated module that also covers it does not run in the PR
+    gate.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    allowance = DevPlatformAllowance(
+        monthly_request_limit=1,
+        monthly_cost_limit_microusd=6_000_000,
+    )
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        conversation_id = conversation.id
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            client_message_id=uuid.uuid4(),
+            question="First platform request",
+            scope_snapshot={},
+            admission_limits=DevAdmissionLimits(),
+            provider_source="platform",
+            platform_allowance=allowance,
+        )
+        run_id = accepted.run.id
+        # Exactly the shape router.py sends on the provider-unavailable
+        # path: a terminal state plus the error fields, and nothing else.
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="completed",
+            estimated_cost_microusd=1_000_000,
+        )
+        await session.commit()
+
+    # Read back on a fresh session: the claim is about what is DURABLE, not
+    # about an identity-mapped in-memory object that never round-tripped.
+    async with maker() as session:
+        persisted = await session.get(DevRun, run_id)
+        assert persisted is not None
+        assert persisted.provider_source == "platform"
+
+    # ...and the state the column exists to reach. One platform run is
+    # already on record against a monthly limit of one, so the next
+    # admission must be refused. With the column nulled the allowance query
+    # matches zero rows and this admission is wrongly accepted -- which is
+    # what makes the bug a silently unenforced billing limit rather than a
+    # cosmetic data loss.
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        with pytest.raises(DevMonthlyRequestLimitExceeded):
+            await service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                client_message_id=uuid.uuid4(),
+                question="Second platform request",
+                scope_snapshot={},
+                admission_limits=DevAdmissionLimits(),
+                provider_source="platform",
+                platform_allowance=allowance,
+            )
 
 
 # -- dev_run_intents ----------------------------------------------------
@@ -2842,18 +2934,22 @@ async def test_zero_day_immediate_purge_covers_every_new_artifact_and_orphan_wri
 #: against that contract (``record_intent`` -> ``dev_question_intent.v1``,
 #: ``append_resolution`` -> a ``dev_resolution_ledger.v1`` entry,
 #: ``record_subject_set`` -> ``dev_subject_set.v1``,
-#: ``append_source_observation`` -> ``dev_source_observation.v1``) -- the
-#: same open-boundary shape ``record_frame``/``record_narrative`` had.
-#: Enumerated here deliberately, not silently ignored: closing these is out
-#: of this round's scope, but touching any of these four names is now a
-#: conscious edit to this set, not a silent pass through the totality
-#: assertion below.
+#: ``append_source_observation`` -> ``dev_source_observation.v1``,
+#: ``record_qua_shadow`` (CHAOS-3389) -> a ``qua_shadow.QUAShadowRecord``
+#: projection, which is not a frontend-facing wire contract at all -- see
+#: ``qua_shadow.py``'s own module docstring) -- the same open-boundary
+#: shape ``record_frame``/``record_narrative`` had. Enumerated here
+#: deliberately, not silently ignored: closing these is out of this
+#: round's scope, but touching any of these five names is now a conscious
+#: edit to this set, not a silent pass through the totality assertion
+#: below.
 _KNOWN_UNVALIDATED_PAYLOAD_SINKS = frozenset(
     {
         "record_intent",
         "append_resolution",
         "record_subject_set",
         "append_source_observation",
+        "record_qua_shadow",
     }
 )
 
@@ -2953,6 +3049,7 @@ def test_payload_bearing_orm_model_names_matches_the_live_schema() -> None:
         "DevRunSourceObservation",
         "DevAnswerFrame",
         "DevRunNarrative",
+        "DevRunQuaShadow",
     }
 
 

@@ -43,6 +43,9 @@ from dev_health_ops.llm.budget import budget_idempotency_scope
 from dev_health_ops.metrics.prometheus import (
     ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL,
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
+    ASK_DEV_QUA_SHADOW_FAULT_TOTAL,
+    ASK_DEV_QUA_SHADOW_LATENCY_SECONDS,
+    ASK_DEV_QUA_SHADOW_TOTAL,
     ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL,
     ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL,
     ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL,
@@ -114,6 +117,7 @@ from .preflight_outcomes import (
     project_preflight_error,
 )
 from .prompts import PromptComposer, PromptConversationTurn
+from .qua_shadow import QUAShadowRecord, QuestionUnderstandingShadow
 from .status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
@@ -414,6 +418,19 @@ class RunRecorder(Protocol):
 
     async def record_answer(self, answer: DevAnswer) -> None: ...
 
+    async def record_error_message(
+        self, error: DevError, *, scope_snapshot: Mapping[str, Any]
+    ) -> None:
+        """Persist one assistant ``dev_messages`` row for a no-answer terminal (CHAOS-3423).
+
+        Called from ``finish()`` for every terminal that carries an ``error``
+        and no ``answer`` -- a clarification or any other orchestrator/
+        preflight error code -- so the conversation transcript always has a
+        row for the turn, mirroring what ``record_answer`` already does for
+        a genuine answer.
+        """
+        ...
+
     async def record_preflight(
         self,
         *,
@@ -491,6 +508,18 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
+        """Persist one CHAOS-3389 QUA shadow evaluation.
+
+        Called at most once per run, only when a ``QuestionUnderstandingShadow``
+        is configured -- never affects any live decision; see this module's
+        own call site for the full non-influence argument. Best-effort:
+        callers must tolerate this raising (mirrors ``record_frame``'s own
+        failure-recovery posture) since a shadow-record write is strictly
+        secondary to the run it shadows.
+        """
+        ...
+
     async def record_narrative(self, narrative: DevNarrative) -> None:
         """Persist one ``dev_narrative.v1`` (CHAOS-3297 stack #4).
 
@@ -538,6 +567,11 @@ class NullRunRecorder:
     async def record_answer(self, answer: DevAnswer) -> None:
         del answer
 
+    async def record_error_message(
+        self, error: DevError, *, scope_snapshot: Mapping[str, Any]
+    ) -> None:
+        del error, scope_snapshot
+
     async def record_preflight(
         self,
         *,
@@ -560,6 +594,9 @@ class NullRunRecorder:
 
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
+
+    async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
+        del record
 
     async def record_narrative(self, narrative: DevNarrative) -> None:
         del narrative
@@ -707,6 +744,7 @@ class DevOrchestrator:
         plan_registry: Mapping[QuestionIntentID, DevInvestigationPlan] | None = None,
         plan_executor: PlanExecutor | None = None,
         narrative_provider: narrative_fallback.NarrativeProvider | None = None,
+        qua_shadow: QuestionUnderstandingShadow | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -736,6 +774,12 @@ class DevOrchestrator:
         # the seam C3/C4 live-endpoint controls inject a scripted provider
         # through.
         self._narrative_provider = narrative_provider
+        # CHAOS-3389 shadow phase: ``None`` is the flag-off path -- no
+        # shadow call, no shadow record, byte-identical to this seam not
+        # existing. See the ``qua_shadow`` call site in ``run()`` for the
+        # structural argument that even when set, this can never affect any
+        # live decision.
+        self._qua_shadow = qua_shadow
         self._composer = PromptComposer(registry)
 
     async def run(
@@ -1044,6 +1088,54 @@ class DevOrchestrator:
                         safe_message="The validated answer could not be stored.",
                         retryable=True,
                     )
+            error_message_written = False
+            if answer is None and error is not None:
+                # CHAOS-3423: a deliberate second check, not `elif` chained
+                # to the block above -- the answer-write-failure branch just
+                # above can itself rewrite `answer` to None and mint a fresh
+                # `error`, and that terminal needs a transcript row exactly
+                # as much as one that started life as an error. Every
+                # no-answer terminal in this module reaches here with a
+                # non-None `error` (every `finish()` call site either passes
+                # one or the outer catch-all builds one), so this is
+                # effectively unconditional for that whole class of run --
+                # never only the clarification/preflight shape.
+                try:
+                    await self._recorder.record_error_message(
+                        error, scope_snapshot=request.scope.model_dump(mode="json")
+                    )
+                    # CHAOS-3423 Codex adversarial review (HIGH, confirmed):
+                    # tracked so the frame-write-failure rollback below can
+                    # tell "nothing written in this flush yet" (the
+                    # pre-existing case its own `if answer is None: rollback()`
+                    # was written for) apart from "the no-answer transcript
+                    # row already flushed" -- a plain session.rollback() here
+                    # is NOT commit-scoped (this row isn't durable until the
+                    # caller's own session.commit() at the very end of the
+                    # request), so it would silently discard this row on a
+                    # frame-construction/write failure, reintroducing the
+                    # exact "no transcript row for a no-answer terminal" gap
+                    # this method exists to close.
+                    error_message_written = True
+                except Exception as error_message_write_fault:
+                    # Best-effort, mirroring record_frame's own failure
+                    # handling below: a transcript-row write failure must
+                    # never crash or further degrade an otherwise-terminal
+                    # run. `error` is already authoritative for replay via
+                    # `terminal_error_payload` (persisted by `terminal()`
+                    # below, which reads that column directly, never this
+                    # row) -- only this turn's transcript/prompt-history
+                    # rendering is degraded.
+                    logger.exception(
+                        "ask_dev.orchestrator.error_message_write_fault",
+                        extra={
+                            "run_id": run_id,
+                            "exception_type": type(error_message_write_fault).__name__,
+                        },
+                    )
+                    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                        exception_type=type(error_message_write_fault).__name__
+                    ).inc()
             # CHAOS-3297 stack #4: populated only inside the frame-construction
             # branch below (frame_already_recorded=True has no local `frame`
             # to synthesize a narrative from -- the preflight TERMINATE branch
@@ -1139,19 +1231,40 @@ class DevOrchestrator:
                     # never strand or crash an otherwise-successful run -- the
                     # v1 answer/error above is authoritative and safe to
                     # terminate on alone.
-                    if answer is None:
+                    if answer is None and not error_message_written:
                         # No prior write in this flush to protect, so it is
                         # safe to roll back a poisoned session -- otherwise
                         # the terminal() write below could raise
                         # PendingRollbackError (mirrors the preflight
                         # TERMINATE branch, CHAOS-3297 Codex review).
                         await self._recorder.rollback()
-                    # else: record_answer already succeeded in this flush.
-                    # Rolling back here would discard that write over an
-                    # unrelated frame failure -- a dropped frame is
-                    # recoverable, a dropped answer is not, so this path
-                    # deliberately leaves the session as-is and proceeds
-                    # frame-less.
+                    # else: record_answer (answer is not None) or
+                    # record_error_message (CHAOS-3423 Codex adversarial
+                    # review, HIGH: error_message_written) already succeeded
+                    # in this flush. Rolling back here would discard that
+                    # write over an unrelated frame failure -- a dropped
+                    # frame is recoverable, a dropped answer/transcript row
+                    # is not, so this path deliberately leaves the session
+                    # as-is and proceeds frame-less.
+                    #
+                    # Codex adversarial review round 2 (honest residual, not
+                    # closed here): if `record_frame`'s failure was a real
+                    # mid-flush database error (not a pre-flush/construction
+                    # exception), the session may already be rollback-only,
+                    # and the `terminal()` write further below could still
+                    # raise `PendingRollbackError` regardless of this
+                    # branch -- a pre-existing risk this codebase already
+                    # accepts for a real `DevAnswer` (see
+                    # `DevPersistenceService.force_terminal_fallback`'s own
+                    # docstring, CHAOS-3297 round 3 Finding 2: the system
+                    # still reaches a coherent terminal state via that
+                    # fresh-session fallback, but the just-flushed row can
+                    # rarely be lost in that narrow correlated-failure
+                    # window). This makes the no-answer path symmetric with
+                    # that existing tradeoff, not worse than it -- closing
+                    # it for both would mean SAVEPOINT-wrapping
+                    # `record_frame`/`record_narrative` generally, out of
+                    # this ticket's scope.
                 else:
                     # CHAOS-3297 stack #4: narrative synthesis only runs for
                     # a frame that actually persisted -- record_narrative's
@@ -1350,6 +1463,217 @@ class DevOrchestrator:
                     await self._recorder.record_subject_set(
                         preflight_result.subject_set
                     )
+                if (
+                    preflight_result.decision is PreflightDecision.PROCEED
+                    and preflight_result.ledger is not None
+                ):
+                    # CHAOS-3424: until this, dev_run_resolutions was only
+                    # ever appended from the TERMINATE branch below (one
+                    # entry, the ambiguous mention that produced the
+                    # frame's own clarification_candidates) -- every PROCEED
+                    # decision left the ledger this preflight already built
+                    # entirely unpersisted, including the organization-wide
+                    # widening fallback for an unresolved bare name
+                    # (`proceeded_unresolved_bare_name`). That is exactly
+                    # the run shape a widening/wrong-subject incident needs
+                    # to be auditable from data instead of a container log
+                    # line (live 2026-08-05 diagnosis, CHAOS-3421). Every
+                    # entry, in the ledger's own ordinal order -- not just
+                    # the mention(s) that ended up unresolved -- so a
+                    # cohort question's exact_match entries stay alongside
+                    # the ones that widened, exactly as the ledger recorded
+                    # them. Scoped to PROCEED only: TERMINATE's own single
+                    # terminating-entry write below already covers that
+                    # branch (and shares its `entry_ordinal` with this same
+                    # ledger), so persisting the whole ledger there too
+                    # would double-insert into the same
+                    # (run_id, entry_ordinal) unique constraint.
+                    try:
+                        for resolution_entry in preflight_result.ledger.entries:
+                            await self._recorder.append_resolution(resolution_entry)
+                    except Exception as ledger_write_fault:
+                        # CHAOS-3424 Codex adversarial review (HIGH,
+                        # confirmed): a database-layer failure on ANY entry
+                        # here marks the session rollback-only -- every
+                        # later write in finish() (record_answer/
+                        # record_error_message/terminal) would then raise
+                        # PendingRollbackError on its own next flush,
+                        # degrading an ordinary PROCEED into an
+                        # unrecoverable run over what should be best-effort
+                        # forensic telemetry. Mirrors the TERMINATE branch's
+                        # own rollback + re-persist pattern immediately
+                        # below: a dropped ledger (whole, never partial --
+                        # rollback discards every entry this loop already
+                        # flushed, not just the one that failed) is
+                        # recoverable, a stranded run is not. Re-persists
+                        # the preflight diagnostics this same rollback also
+                        # discards, for the identical reason the TERMINATE
+                        # branch's own comment gives.
+                        #
+                        # Codex adversarial review round 3 (HIGH, confirmed):
+                        # the rollback above was previously silent -- unlike
+                        # every sibling failure handler in this module
+                        # (answer_write_fault, frame_construction_failed,
+                        # error_message_write_fault, ...), a lost ledger
+                        # left no log line and no metric, so the exact
+                        # forensic gap CHAOS-3424 exists to close could
+                        # itself go unnoticed. Logged and counted the same
+                        # way every other one of those does.
+                        logger.exception(
+                            "ask_dev.orchestrator.resolution_ledger_write_fault",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(ledger_write_fault).__name__,
+                            },
+                        )
+                        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                            exception_type=type(ledger_write_fault).__name__
+                        ).inc()
+                        await self._recorder.rollback()
+                        await self._recorder.record_preflight(
+                            preflight_outcome=preflight_result.diagnostic,
+                            legacy_guard_reason=None,
+                        )
+                        if preflight_result.subject_set is not None:
+                            await self._recorder.record_subject_set(
+                                preflight_result.subject_set
+                            )
+
+                if self._qua_shadow is not None:
+                    # CHAOS-3389 shadow phase: runs strictly AFTER the
+                    # deterministic decision above is fully computed and
+                    # persisted, and its result (`shadow_record`) is a local
+                    # variable nothing below this block ever reads -- that is
+                    # the structural half of "flipping the flag changes zero
+                    # live-path behavior" (the RED test in
+                    # test_chaos_3389_qua_shadow.py proves the other half:
+                    # OrchestratorResult is byte-identical with the shadow on
+                    # vs off, even against a provider that always raises).
+                    # Every exception from either the evaluation or the
+                    # persistence write is caught here -- a shadow-mode bug
+                    # must never fail or roll back the run it shadows.
+                    try:
+                        shadow_record = await self._qua_shadow.evaluate(
+                            question=request.question,
+                            interpretation=preflight_result.interpretation,
+                            org_id=org_id,
+                            permission_fingerprint=permission_fingerprint,
+                            deterministic_decision=preflight_result.decision,
+                            remaining_seconds=remaining(),
+                        )
+                    except Exception as shadow_fault:
+                        logger.exception(
+                            "ask_dev.orchestrator.qua_shadow_evaluation_fault",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(shadow_fault).__name__,
+                            },
+                        )
+                        ASK_DEV_QUA_SHADOW_FAULT_TOTAL.labels(
+                            exception_type=type(shadow_fault).__name__
+                        ).inc()
+                        shadow_record = None
+                    if shadow_record is not None:
+                        ASK_DEV_QUA_SHADOW_TOTAL.labels(
+                            status=shadow_record.status.value,
+                            deterministic_decision=preflight_result.decision.value,
+                        ).inc()
+                        if shadow_record.latency_ms > 0:
+                            ASK_DEV_QUA_SHADOW_LATENCY_SECONDS.labels(
+                                status=shadow_record.status.value
+                            ).observe(shadow_record.latency_ms / 1000.0)
+                        try:
+                            await self._recorder.record_qua_shadow(shadow_record)
+                        except Exception as shadow_write_fault:
+                            logger.exception(
+                                "ask_dev.orchestrator.qua_shadow_write_fault",
+                                extra={
+                                    "run_id": run_id,
+                                    "exception_type": type(shadow_write_fault).__name__,
+                                },
+                            )
+                            ASK_DEV_QUA_SHADOW_FAULT_TOTAL.labels(
+                                exception_type=type(shadow_write_fault).__name__
+                            ).inc()
+                            # Mirrors CHAOS-3424's own ledger-write-fault
+                            # recovery immediately above: a failed write can
+                            # mark the session rollback-only, so every later
+                            # write in finish() (record_answer/terminal/etc.)
+                            # must not inherit that state.
+                            #
+                            # Codex adversarial review round 1 (HIGH,
+                            # confirmed): unlike the CHAOS-3424 handler above
+                            # -- where the failure IS the ledger write, so
+                            # there is nothing valid to replay -- THIS
+                            # rollback fires strictly after a PROCEED
+                            # decision's resolution ledger already flushed
+                            # successfully earlier in this same transaction.
+                            # Re-persisting only preflight diagnostics/
+                            # subject set (as originally written) would
+                            # silently discard those already-good ledger
+                            # rows on the rollback below -- the exact
+                            # forensic data CHAOS-3424 exists to make
+                            # durable, lost by an unrelated OPTIONAL
+                            # shadow-record write failing. Replayed here
+                            # alongside the other two, in the ledger's own
+                            # ordinal order, exactly as the PROCEED block
+                            # above first wrote them.
+                            # Codex adversarial review round 2 (HIGH,
+                            # confirmed): the replay sequence itself used to
+                            # be unguarded -- if the underlying fault is a
+                            # genuinely dead connection (not just a
+                            # constraint violation on the shadow row alone),
+                            # `rollback()` or any one of the three replay
+                            # calls below can ALSO raise, and that second
+                            # exception was not caught here at all. It would
+                            # propagate out of this whole block to the
+                            # orchestrator's own top-level catch-all
+                            # (`unhandled_run_fault`, this module's last
+                            # resort), degrading what must stay a routine,
+                            # graceful terminal into a generic internal_error
+                            # -- turning an OPTIONAL telemetry failure into a
+                            # live-outcome change, exactly what this seam
+                            # must never do. Wrapped so a second, worse
+                            # failure here is recorded distinctly and
+                            # swallowed rather than escalated: if recovery
+                            # itself cannot succeed, this run's diagnostics
+                            # may be incomplete, but its OUTCOME is still
+                            # never sacrificed for optional shadow telemetry.
+                            try:
+                                await self._recorder.rollback()
+                                await self._recorder.record_preflight(
+                                    preflight_outcome=preflight_result.diagnostic,
+                                    legacy_guard_reason=None,
+                                )
+                                if (
+                                    preflight_result.decision
+                                    is PreflightDecision.PROCEED
+                                    and preflight_result.ledger is not None
+                                ):
+                                    for (
+                                        resolution_entry
+                                    ) in preflight_result.ledger.entries:
+                                        await self._recorder.append_resolution(
+                                            resolution_entry
+                                        )
+                                if preflight_result.subject_set is not None:
+                                    await self._recorder.record_subject_set(
+                                        preflight_result.subject_set
+                                    )
+                            except Exception as shadow_recovery_fault:
+                                logger.exception(
+                                    "ask_dev.orchestrator.qua_shadow_recovery_fault",
+                                    extra={
+                                        "run_id": run_id,
+                                        "exception_type": type(
+                                            shadow_recovery_fault
+                                        ).__name__,
+                                    },
+                                )
+                                ASK_DEV_QUA_SHADOW_FAULT_TOTAL.labels(
+                                    exception_type=type(shadow_recovery_fault).__name__
+                                ).inc()
+
                 if preflight_result.decision is PreflightDecision.TERMINATE:
                     assert preflight_result.answer is not None
                     assert preflight_result.outcome is not None

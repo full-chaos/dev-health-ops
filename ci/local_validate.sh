@@ -200,6 +200,29 @@ DEVHOPS="${ROOT}/.venv/bin/dev-hops"
 #     conditional-keep shape used elsewhere for the live-e2e lane (scrub by
 #     default, retain when LIVE_E2E_BASE_URL is also set) instead of staying
 #     unconditional.
+#
+#     A SEPARATE Codex-review concern on this same var was investigated and
+#     REFUTED (recorded here, not silently dropped, so it isn't re-raised):
+#     that unsetting REDIS_URL might remove distributed/Redis-backed rate-limit
+#     coverage, leaving the suite green while a real Redis-backed code path is
+#     broken. It does not. .github/workflows/test.yml's unit-tier `env:` block
+#     (CLICKHOUSE_URI/POSTGRES_URI/DATABASE_URI/SECONDARY_DATABASE_URI/
+#     OTEL_ENABLED/PYTEST_XDIST_WORKERS/PYTEST_ADDOPTS) sets no REDIS_URL —
+#     CI's unit tier has ALWAYS run the rate limiter on memory://, never on a
+#     live Redis backend. The tests that actually assert the Redis-backend
+#     contract (tests/api/test_rate_limit_config.py's `_reload_rate_limit()`
+#     helper, tests/test_distributed_rate_limit.py) build their OWN
+#     REDIS_URL via monkeypatch/patch.dict and importlib.reload the module
+#     under it, independent of whatever the ambient shell provides — so they
+#     assert real Redis-backend behavior with or without this unset, and pass
+#     55/55 under `env -i` with no REDIS_URL anywhere in the process
+#     (confirmed independently, including a mutation kill: forcing
+#     rate_limit.py's backend selection to unconditional memory:// makes two
+#     of those assertions fail). Unsetting REDIS_URL here does not remove
+#     coverage; it removes a DIVERGENCE — a developer's local run silently
+#     exercising a real shared Redis that CI's unit tier never did, which is
+#     exactly what made test_429_backoff_grows_exponentially fail locally and
+#     pass in CI in the first place.
 PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL)
 
 # --- Single-flight lock (CHAOS-3403). -----------------------------------------------

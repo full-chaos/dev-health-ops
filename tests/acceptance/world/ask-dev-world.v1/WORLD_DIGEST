@@ -313,13 +313,13 @@
       },
       "users": {
         "world": {
-          "content_hash": "846125f834f072f1014599aaad059d66745674d7bf2ffeefc3e3244efafb7fb5",
+          "content_hash": "a2890779896ffe2d5b96b1aa94272e8f242eb02a94762d03de3d403b3f6aa347",
           "row_count": 10
         }
       }
     }
   },
-  "digest": "690c52260cb7f2350dbfe3404f8447cdc765818edcb519bfb7f042a0eac7642d",
+  "digest": "dbc7f13e7a3167ea8a3a7ae52175d3c903a537217d301ea150e79253ba0625a1",
   "master_seed": 3219000,
   "schema_version": "ask_dev_world.v1"
 }

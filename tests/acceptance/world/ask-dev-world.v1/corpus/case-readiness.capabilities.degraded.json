@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "readiness.capabilities.degraded",
+  "family": "readiness",
+  "group": 1,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "P0-B MISSING item 14"
+  ],
+  "question": "Could you check the status of the repo \"meridian/web-app\"?",
+  "org_alias": "primary",
+  "user_alias": "primary.degraded-readiness-user",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "no-silent-degraded-readiness",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "A degraded provider/model readiness state (transient -- timeout, rate limit, temporary provider unavailability -- per llm.agent.readiness.readiness_failure_state, as distinct from the structural unsupported_model state) is always disclosed to the caller as a terminal answered_with_gaps outcome (or a graceful error terminal); it must never be silently presented as a full-confidence `answered` outcome, and must never crash to internal_error.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Companion to readiness.capabilities.unsupported-model, same question shape, different user_alias -- primary.degraded-readiness-user carries provider_profile_override: degraded-profile (world.json: readiness: degraded, intent: readiness_probe), realizing the transient/retryable half of DevCapabilitiesReadiness (llm.agent.readiness.readiness_failure_state buckets timeout/rate_limited/provider_unavailable/unknown-default as 'degraded', structurally distinct from 'unsupported_model'). Subject is n/a for the same reason as the sibling case: the readiness gate is evaluated ahead of subject preflight/scope resolution. Ad-hoc invariant id (not one of the four fixed taxonomy entries) because none of the fixed four are about provider/model readiness disclosure specifically -- CASE-SCHEMA.v1.md's precedent (subject-label.unauthorized-candidate-excluded's sibling case, and this corpus's own unrelated-evidence.* cases per REGISTRY-AMENDMENT.v1.md-style ad-hoc entries) explicitly allows minting a case-specific invariant object when the scenario's real contract isn't one of the four. Honesty caveat: `provider_profile_override` has zero references in src/ at authoring time (grepped) -- this is a fixture-only field Phase 2 Lane 2b introduces for the corpus runner to wire up; the exact code path that turns a 'degraded' readiness_probe result into a live answered_with_gaps DevAnswer (as opposed to a DevRuntimeUnavailable short-circuit, which is what an unsupported_model / model_not_supported code produces per production_runtime.py's _resolve_provider_selection) is not yet traceable against a concrete implementation, so expected_public_outcome=answered_with_gaps is asserted on the strength of the registry's own naming (a 'degraded' capability, unlike an 'unsupported' one, implies reduced-but-real service) rather than a fully walked code path -- flagged here rather than silently claimed as verified. [Reworded during Lane 2b codex round-1 remediation, 2026-08-06, from \"What's the status of meridian/web-app?\": production's provider_scripts.py requires GLOBALLY-UNIQUE question text per role script (test_a_question_fingerprint_collision_fails_to_load), and every corpus case now needs its own role-legacy_agent.json entry (script_inventory.py's full-coverage requirement) -- two cases sharing literal question text could never both get a script entry. Subject mention substring kept character-identical to subjects.json's declared 'mentions' so the deterministic extractor still recognizes it; only the surrounding phrasing changed.] [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from 'Could you check the status of meridian/web-app?': question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]"
+}

@@ -1,0 +1,20 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.cross-tenant.user-id",
+  "family": "adv",
+  "group": 8,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3459",
+  "proves": [
+    "group 8 (Security and adversarial) corpus (registry-ids.v1.json groups['8']); adv.cross-tenant family; inv.no-unauthorized-candidate-surfaces (user-kind/impersonation-adjacent identifier, intended scenario)"
+  ],
+  "question": "What is a sibling-org user's current workload?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "world.json has no sibling-org user alias pre-built for this scenario -- its `users[]` list documents sibling.ordinary and sibling.org-admin only as ACTORS asking questions FROM the sibling org, never as a user-kind SUBJECT a primary-org requester could name or reference (unlike primary.impersonation-target, which exists specifically as an impersonatable subject, but within the SAME org, not cross-tenant). This id's real scenario -- an impersonation-adjacent probe naming a specific sibling-org person by id -- also has no 'user' kind noun in question_interpreter.py's closed _KIND_NOUNS list and no user-kind entity in the 8 subjects.json classes, so even a well-grounded question would degrade to an untyped bare-name search across repos/projects/teams, never actually probing a USER-scoped authorization boundary the way the scenario intends. Per the assignment's explicit instruction: reference 'a sibling-org user' conceptually here rather than inventing a fake user id string that maps to nothing real. `question`/`subject_class`/`subject_ref` document the intended (currently-blocked) scenario only. [blocked_by WIRED to CHAOS-3459 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no sibling-org user-id request-shape support'.]"
+}

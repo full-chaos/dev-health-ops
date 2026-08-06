@@ -1,0 +1,20 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.oversized.evidence",
+  "family": "adv",
+  "group": 8,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3455",
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "Please pull in every possible piece of supporting evidence you can find for the repo \"meridian/web-app\", as much of it as exists, and show me all of it.",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "BLOCKED: an oversized EVIDENCE payload (search_evidence.v1/get_evidence.v1 returning more than contracts.py's own DevAnswer evidence bound -- contract_fixtures.py's own 'oversized_evidence'/`answer_oversized` fixture, read directly, mutates `evidence` to 26 entries specifically to exercise that contract-schema bound) needs either a real tool result genuinely containing that much fixture evidence, or a scripted decision sequence that hand-constructs an oversized evidence array server-side. Unlike adv.oversized.result (which reuses the already-existing, real 'oversized-output' fault type targeting the answer's own `direct_summary` field), provider_scripts.py's fault taxonomy (read directly) has no equivalent scripted fault type targeting the `evidence` array specifically, and hand-authoring a full, contract-valid dev_answer.v1-shaped `final_answer` decision with 26+ well-formed evidence entries (correct claims/versions/evidence_ref_id wiring, matching contracts.py's real DevAnswer shape) is cross-lane schema-construction work this Lane 2b case-authoring pass cannot safely hand-build without risking a differently-shaped validation failure standing in for the one this id is actually supposed to test. The `question` field above is flavor-text documentation of the intended scenario only. [blocked_by WIRED to CHAOS-3455 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: \"runner: no scripted fault type for oversized evidence-tool output (only oversized-output/result has a scripted fault; no equivalent for search_evidence.v1/get_evidence.v1 responses without hand-constructing a full contract-valid oversized DevAnswer payload, which is cross-lane schema-construction work out of this pass's safe reach)\".]"
+}

@@ -48,11 +48,23 @@ class AgentRole(str, Enum):
     members and store slots only -- their probes are CHAOS-3285 PR4, gated
     on CHAOS-3294's ``dev_question_intent.v1`` / ``dev_narrative.v1``
     schemas landing on main.
+
+    ``QUESTION_UNDERSTANDING`` (CHAOS-3389 shadow phase) is the same kind of
+    reserved, probe-less member: the Question Understanding Agent shadow
+    seam (``dev_health_ops.api.dev.qua_shadow``) calls the SAME
+    already-certified ``LEGACY_AGENT`` provider today rather than gating on
+    a certification this role has never earned -- a separate
+    ``question_understanding`` probe/certification key is explicitly
+    follow-on work (platform spec comment 6fa38d88, follow-on issue #2), not
+    part of shadow mode. The member exists now so the role identity is
+    stable from the start and admin/readiness surfaces can adopt it without
+    a wire-vocabulary change later.
     """
 
     LEGACY_AGENT = "legacy_agent"
     INTENT_CLASSIFICATION = "intent_classification"
     ANSWER_FRAME_NARRATIVE = "answer_frame_narrative"
+    QUESTION_UNDERSTANDING = "question_understanding"
 
 
 class RoleCertificationState(str, Enum):

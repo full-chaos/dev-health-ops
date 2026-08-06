@@ -588,6 +588,60 @@ class DevRunSubjectSet(Base):
     )
 
 
+class DevRunQuaShadow(Base):
+    """CHAOS-3389 shadow phase: one Question Understanding Agent shadow
+    evaluation per run (``qua_shadow.QUAShadowRecord``).
+
+    Audit-only, exactly like ``DevRunResolution``'s posture but for the
+    shadow path -- persisted so shadow-vs-deterministic comparisons are
+    possible from data, never read back to influence any live decision (no
+    code anywhere in ``api/dev`` queries this table to affect a run;
+    querying it is a future analytics/replay concern only). ``status`` and
+    ``deterministic_decision`` are closed, server-owned vocabularies
+    (``qua_shadow.QUAShadowStatus`` / ``subject_preflight.PreflightDecision``)
+    -- distinct from, and never merged with, ``dev_run_resolutions.outcome``.
+    """
+
+    __tablename__ = "dev_run_qua_shadow"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    deterministic_decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    cardinality_corroborated: Mapped[bool | None] = mapped_column(nullable=True)
+    latency_ms: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    model_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('evaluated', 'skipped_disabled', 'skipped_no_provider', "
+            "'skipped_no_mentions', 'skipped_budget_exhausted', "
+            "'skipped_catalog_unavailable', 'skipped_timeout', "
+            "'skipped_provider_error', 'skipped_unexpected_decision', "
+            "'skipped_invalid_output')",
+            name="ck_dev_run_qua_shadow_status",
+        ),
+        CheckConstraint(
+            "deterministic_decision IN ('proceed', 'terminate')",
+            name="ck_dev_run_qua_shadow_deterministic_decision",
+        ),
+        UniqueConstraint("run_id", name="uq_dev_run_qua_shadow_run"),
+        ForeignKeyConstraint(
+            ["run_id", "org_id", "user_id"],
+            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
+            name="fk_dev_run_qua_shadow_run_owner",
+            ondelete="CASCADE",
+        ),
+        Index("ix_dev_run_qua_shadow_owner_run", "org_id", "user_id", "run_id"),
+    )
+
+
 class DevRunSourceObservation(Base):
     """Wave 3.1: one ``dev_source_observation.v1`` deterministic-plan-step row.
 

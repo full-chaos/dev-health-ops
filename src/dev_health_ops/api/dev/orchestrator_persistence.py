@@ -18,7 +18,51 @@ from .contracts_v2.subject import DevResolutionEntry, DevSubjectSet
 from .orchestrator import RunState
 from .persistence.service import DevPersistenceService
 from .prompts import PROMPT_VERSION
+from .qua_shadow import QUAShadowMentionAssessment, QUAShadowRecord
+from .scope_service import AuthorizedEntity
 from .tool_registry import TOOL_CONTRACT_VERSION, ToolExecution
+
+
+def _entity_json(entity: AuthorizedEntity) -> dict[str, Any]:
+    return {
+        "kind": entity.kind.value,
+        "canonical_id": entity.canonical_id,
+        "label": entity.label,
+        "repository_id": entity.repository_id,
+    }
+
+
+def _mention_assessment_json(assessment: QUAShadowMentionAssessment) -> dict[str, Any]:
+    return {
+        "mention_id": assessment.mention_id,
+        "text_span": assessment.text_span,
+        "outcome": assessment.outcome.value,
+        "selected_entity": (
+            _entity_json(assessment.selected_entity)
+            if assessment.selected_entity is not None
+            else None
+        ),
+        "candidate_entities": [
+            _entity_json(entity) for entity in assessment.candidate_entities
+        ],
+        "confidence": assessment.confidence,
+        "rejected_reason": assessment.rejected_reason,
+    }
+
+
+def _qua_shadow_payload(record: QUAShadowRecord) -> dict[str, Any]:
+    return {
+        "schema_version": record.schema_version,
+        "intent_id": record.intent_id.value if record.intent_id is not None else None,
+        "cardinality": (
+            record.cardinality.value if record.cardinality is not None else None
+        ),
+        "requires_clarification": record.requires_clarification,
+        "mentions": [
+            _mention_assessment_json(assessment) for assessment in record.mentions
+        ],
+        "error_class": record.error_class,
+    }
 
 
 def _digest(value: str) -> str:
@@ -219,6 +263,36 @@ class PersistenceRunRecorder:
             frame_id=uuid.UUID(frame.frame_id),
             public_outcome=frame.public_outcome.value,
             payload=frame.model_dump(mode="json"),
+        )
+
+    async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
+        """Persist one CHAOS-3389 QUA shadow evaluation.
+
+        Best-effort by design: the orchestrator's own call site wraps this
+        in a defensive ``try/except`` (mirroring CHAOS-3424's ledger-write
+        handling) precisely because a shadow-record write must never strand
+        the live run it shadows.
+        """
+
+        if record.deterministic_decision is None:
+            # Every real evaluate() call sets this unconditionally (it is
+            # the FIRST thing threaded through every branch); a caller that
+            # somehow reaches persistence without it is a programming error,
+            # not a state this table's CHECK constraint should quietly
+            # coerce into a fabricated "proceed".
+            raise ValueError(
+                "qua_shadow record has no deterministic_decision to persist"
+            )
+        await self._service.record_qua_shadow(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            run_id=self._run_id,
+            status=record.status.value,
+            deterministic_decision=record.deterministic_decision.value,
+            cardinality_corroborated=record.cardinality_corroborated,
+            latency_ms=record.latency_ms,
+            model_fingerprint=record.model_fingerprint,
+            payload=_qua_shadow_payload(record),
         )
 
     async def rollback(self) -> None:

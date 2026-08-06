@@ -378,6 +378,10 @@ class Recorder:
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
         self.frames: list[Any] = []
         self.resolutions: list[Any] = []
+        #: CHAOS-3389: every QUA shadow record this recorder was asked to
+        #: persist. Empty whenever the shadow seam is unwired/disabled --
+        #: exactly the RED test's own assertion surface.
+        self.qua_shadow_records: list[Any] = []
         #: CHAOS-3325: the recorder-method call sequence, by name -- proves
         #: append_resolution lands before record_frame, not just that both
         #: were called (two same-length lists alone prove nothing about
@@ -425,6 +429,9 @@ class Recorder:
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         """No-op here; CHAOS-3295's InvestigationRecorder subclass captures this."""
         del result
+
+    async def record_qua_shadow(self, record: Any) -> None:
+        self.qua_shadow_records.append(record)
 
     async def record_narrative(self, narrative: Any) -> None:
         """No-op here; CHAOS-3297 stack #4's narrative synthesis is not
@@ -558,6 +565,7 @@ async def run_preflight_orchestrator(
     registry_factory: Callable[[list[DevToolRequest]], AskDevToolRegistry] = (
         recording_registry
     ),
+    qua_shadow: Any = None,
 ) -> RunOutput:
     """One full orchestrator run with the preflight wired the way production wires it.
 
@@ -623,6 +631,7 @@ async def run_preflight_orchestrator(
         preflight=preflight,
         plan_registry=plan_registry,
         plan_executor=plan_executor,
+        qua_shadow=qua_shadow,
     )
     result = await orchestrator.run(
         request=request,

@@ -8,10 +8,10 @@ import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session
 
-from dev_health_ops.db import normalize_sync_postgres_uri
 from dev_health_ops.models import (
     Base,
     Integration,
+    IntegrationCredential,
     IntegrationDataset,
     IntegrationSource,
     SyncDispatchOutbox,
@@ -24,7 +24,6 @@ from dev_health_ops.models import (
     SyncWatermark,
 )
 from dev_health_ops.models.licensing import OrgLicense
-from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.models.users import Organization
 from dev_health_ops.sync import planner
 from dev_health_ops.sync.dispatch_outbox import (
@@ -1056,11 +1055,10 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
     TierLimitService fallback does not prevent later SyncRun/SyncRunUnit/outbox
     flushes in the same transaction.
     """
-    from tests._helpers import tables_of
+    from tests._helpers import sync_postgres_test_url, tables_of
 
-    uri = normalize_sync_postgres_uri(os.environ[_POSTGRES_TEST_URI_ENV])
     schema = f"chaos_2580_{uuid.uuid4().hex}"
-    engine = create_engine(uri)
+    engine = create_engine(sync_postgres_test_url())
     connection = engine.connect()
     try:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -1071,6 +1069,13 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
             tables=tables_of(
                 Organization,
                 OrgLicense,
+                # `integrations.credential_id` carries a FOREIGN KEY to
+                # `integration_credentials`; an explicit `tables=` list does not
+                # pull dependencies in, so omitting it makes CREATE TABLE
+                # integrations fail with UndefinedTable. This was invisible
+                # until CHAOS-3450 revived the coverage job, because the
+                # MissingGreenlet from the async-driver URL aborted the test
+                # before create_all ever reached the database.
                 IntegrationCredential,
                 Integration,
                 IntegrationSource,

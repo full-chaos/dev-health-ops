@@ -11,7 +11,6 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from dev_health_ops.db import normalize_sync_postgres_uri
 from dev_health_ops.models import (
     BackfillJob,
     Base,
@@ -40,6 +39,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_STATUS_PENDING,
     upsert_outbox_wakeup,
 )
+from tests._helpers import sync_postgres_test_url
 
 _POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 
@@ -259,9 +259,7 @@ def test_parity_capture_recovery_clears_real_postgres_statement_failure():
         _recover_sync_dispatch_parity_capture_transaction,
     )
 
-    engine = create_engine(
-        normalize_sync_postgres_uri(os.environ[_POSTGRES_TEST_URI_ENV])
-    )
+    engine = create_engine(sync_postgres_test_url())
     try:
         with Session(engine) as session:
             with pytest.raises(DBAPIError):

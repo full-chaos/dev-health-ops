@@ -15,7 +15,7 @@ from dev_health_ops.api.dev.platform_auto_certification import (
     PlatformAutoCertifier,
 )
 from dev_health_ops.api.dev.production_runtime import ProductionProviderResolution
-from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
+from dev_health_ops.api.dev.runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from dev_health_ops.api.dev.tool_registry import (
     TOOL_CONTRACT_VERSION,
     ToolExecutionContext,
@@ -1169,6 +1169,128 @@ async def test_byo_provider_resolution_attaches_shared_budget_guard(
             "base_url": "https://api.openai.com/v1",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_qua_shadow_provider_is_a_separate_instance_gated_on_its_own_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3452: ``resolve_production_provider`` populates
+    ``qua_shadow_provider`` with a SEPARATE constructed instance (never the
+    same object as ``.provider``), guarded by the isolated shadow quota
+    (never ``attach_agent_budget_guard``) -- and ONLY when
+    ``ASK_DEV_QUA_SHADOW_ENABLED=1``. An unset flag must not even construct
+    it, preserving CHAOS-3389's "unset env var is byte-identical to the
+    seam not existing" invariant.
+    """
+
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    constructed: list[FakeProvider] = []
+
+    def fake_provider_factory(_candidate):
+        instance = FakeProvider()
+        constructed.append(instance)
+        return instance
+
+    monkeypatch.setattr(production_runtime, "_provider", fake_provider_factory)
+    live_attached: list[dict[str, Any]] = []
+    shadow_attached: list[dict[str, Any]] = []
+
+    def fake_attach_live(value, **kwargs):
+        live_attached.append(kwargs)
+        return value
+
+    def fake_attach_shadow(value, **kwargs):
+        shadow_attached.append(kwargs)
+        return value
+
+    monkeypatch.setattr(
+        production_runtime, "attach_agent_budget_guard", fake_attach_live
+    )
+    monkeypatch.setattr(
+        production_runtime, "attach_qua_shadow_budget_guard", fake_attach_shadow
+    )
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    FakeSettingsService.values = {
+        "provider": "openai",
+        "model": "gpt-5-mini",
+        "api_key": "sk-org",
+        "base_url": "https://api.openai.com/v1",
+    }
+    session = cast(Any, object())
+
+    async def _resolve() -> ProductionProviderResolution:
+        settings = production_runtime.SettingsService(session, "org_01")
+        byo, platform, policy = await production_runtime._provider_candidates(
+            settings, byo_readiness=None, platform_readiness=None, certification=True
+        )
+        return production_runtime._resolve_provider_selection(
+            byo=byo,
+            platform=platform,
+            policy=policy,
+            session=session,
+            org_id="org_01",
+            include_qua_shadow=True,
+        )
+
+    monkeypatch.delenv("ASK_DEV_QUA_SHADOW_ENABLED", raising=False)
+    resolved_off = await _resolve()
+    assert resolved_off.qua_shadow_provider is None
+    assert len(constructed) == 1  # ONLY the live provider was constructed
+    assert shadow_attached == []
+
+    monkeypatch.setenv("ASK_DEV_QUA_SHADOW_ENABLED", "1")
+    resolved_on = await _resolve()
+    assert resolved_on.qua_shadow_provider is not None
+    assert resolved_on.qua_shadow_provider is not resolved_on.provider
+    assert len(constructed) == 3  # +1 live, +1 shadow this second resolution
+    assert len(shadow_attached) == 1
+    assert shadow_attached[0]["org_id"] == "org_01"
+    assert shadow_attached[0]["provider"] == "openai"
+    assert shadow_attached[0]["model"] == "gpt-5-mini"
+    # Never the live guard -- the whole point of CHAOS-3452's isolation.
+    assert len(live_attached) == 2  # one per resolution call, live path only
+
+
+@pytest.mark.asyncio
+async def test_bounded_dev_runtime_still_closes_the_shadow_provider_when_the_live_close_fails() -> (
+    None
+):
+    """Codex round 1 (MEDIUM, confirmed): ``BoundedDevRuntime.aclose()``
+    used to await the live provider's ``aclose()`` and the shadow
+    provider's ``aclose()`` as two independent statements -- if the FIRST
+    raised, the second was never reached. Every caller of ``aclose()``
+    (router.py) wraps the WHOLE call in a swallowing ``try/except``, so
+    that raised exception was silently discarded along with the fact that
+    the shadow provider's own connection was never closed. Fixed with a
+    ``finally``; this proves the shadow close now happens regardless."""
+
+    class _RaisingCloseProvider:
+        async def aclose(self) -> None:
+            raise RuntimeError("live close boom")
+
+    class _RecordingCloseProvider:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    shadow = _RecordingCloseProvider()
+    runtime = BoundedDevRuntime(
+        provider=cast(Any, _RaisingCloseProvider()),
+        provider_source="byo",
+        provider_family="openai",
+        registry=cast(Any, object()),
+        scope_resolver=cast(Any, object()),
+        versions=cast(Any, object()),
+        qua_shadow_provider=cast(Any, shadow),
+    )
+    with pytest.raises(RuntimeError, match="live close boom"):
+        await runtime.aclose()
+    assert shadow.closed is True
 
 
 @pytest.mark.asyncio

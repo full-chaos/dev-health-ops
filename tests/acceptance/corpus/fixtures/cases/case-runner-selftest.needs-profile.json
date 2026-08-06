@@ -1,0 +1,12 @@
+{
+  "id": "runner-selftest.needs-profile",
+  "question": "What's the status of MWA?",
+  "subject_class": "acronym-alias",
+  "resolution_profile_ref": "runner-selftest-v1",
+  "invariants": [
+    {
+      "category": "public-outcome",
+      "check": "no_internal_error"
+    }
+  ]
+}

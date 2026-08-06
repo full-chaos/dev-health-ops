@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.oversized.question",
+  "family": "adv",
+  "group": 8,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "I need an exhaustive, leave-nothing-out status update, so please walk through every one of the following in full detail, one at a time, covering current status, recent commit and pull-request activity, outstanding risk, release readiness, and overall health for each and every one of them without skipping a single one: the repo \"meridian/service-01\", the repo \"meridian/service-02\", the repo \"meridian/service-03\", the repo \"meridian/service-04\", the repo \"meridian/service-05\", the repo \"meridian/service-06\", the repo \"meridian/service-07\", the repo \"meridian/service-08\", the repo \"meridian/service-09\", the repo \"meridian/service-10\", the repo \"meridian/service-11\", the repo \"meridian/service-12\", the repo \"meridian/service-13\", the repo \"meridian/service-14\", the repo \"meridian/service-15\", the repo \"meridian/service-16\", the repo \"meridian/service-17\", the repo \"meridian/service-18\", the repo \"meridian/service-19\", the repo \"meridian/service-20\", the repo \"meridian/service-21\", the repo \"meridian/service-22\", the repo \"meridian/service-23\", the repo \"meridian/service-24\", the repo \"meridian/service-25\", the repo \"meridian/service-26\", the repo \"meridian/service-27\", the repo \"meridian/service-28\", the repo \"meridian/service-29\", the repo \"meridian/service-30\". For each of those repositories individually, please also tell me what changed recently, whether anything is blocked, whether the data behind it is trustworthy, and whether the team behind it is overburdened, and then, once you have gone through every single one of them above without exception, tie all thirty of those together into one combined summary at the very end, repeating back to me anything you found unusual along the way so that nothing whatsoever gets missed, and please be as exhaustive and comprehensive as possible about every repository named above, covering each of them in full, not skipping over any of the ones already listed.",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "terminal_persists_assistant_row",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
+      "executable_today": true,
+      "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Targets question_interpreter.py's real oversized-rejection guard (module docstring / count_mention_candidates / MAX_MENTIONS=25, read directly): subject_preflight.py's SubjectPreflight.run checks `interpretation.total_named_mention_count > MAX_MENTIONS` BEFORE any catalog round trip and, if so, terminates with outcome=PublicOutcome.UNSUPPORTED, diagnostic='oversized_mention_set_in_v1', ledger=None (subject_preflight.py lines ~394-410, read directly) -- 'Bounds are rejections, never truncations (CHAOS-3301)'. Because the run never reaches RESOLVING_SUBJECTS (no resolve_mention call is ever made, ledger stays None), no dev_run_resolutions entries are ever written -- resolution_path is null, and expected_scope_resolution_outcome is null too (no entity ever gets a chance to commit), mirroring scope.unsupported-request/prohibited-write's own null/null pattern for a pre-resolution short-circuit, just reached via a different guard. 30 distinct quoted/noun-adjacent repo mentions (well past MAX_MENTIONS=25) spread across a genuinely long, repetitive-theme question, authored per the task instruction to target the real oversized-rejection guard with prose length/repetition pressure rather than a bare enumerated list (that shape is adv.oversized.subject-set's own, deliberately distinct, job)."
+}

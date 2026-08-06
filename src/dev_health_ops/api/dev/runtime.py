@@ -22,6 +22,7 @@ from .orchestrator import (
     ScopeResolver,
 )
 from .prompts import PromptConversationTurn
+from .qua_shadow import QuestionUnderstandingShadow
 from .subject_preflight import SubjectPreflight
 from .tool_registry import AskDevToolRegistry
 
@@ -60,6 +61,18 @@ class BoundedDevRuntime:
     #: same seam to drive the live C3/C4 provider-failure-matrix controls
     #: through the real endpoint.
     narrative_provider: narrative_fallback.NarrativeProvider | None = None
+    #: CHAOS-3389 shadow phase. ``None`` is the flag-off path -- identical to
+    #: today whether or not ``preflight`` is set. Production only sets this
+    #: once ``preflight`` is also set (the shadow seam runs alongside the
+    #: deterministic resolver, so it is meaningless without it).
+    qua_shadow: QuestionUnderstandingShadow | None = None
+    #: CHAOS-3452. The SAME provider instance passed into ``qua_shadow``'s
+    #: constructor when the isolated shadow quota is wired -- carried here
+    #: separately so ``aclose()`` below can close it too. A genuinely
+    #: separate provider instance/HTTP client from ``self.provider``;
+    #: without this it would leak a connection on every request once the
+    #: shadow flag is enabled.
+    qua_shadow_provider: AgentLLMProvider | None = None
 
     async def run(
         self,
@@ -88,6 +101,7 @@ class BoundedDevRuntime:
             plan_registry=self.plan_registry,
             plan_executor=self.plan_executor,
             narrative_provider=self.narrative_provider,
+            qua_shadow=self.qua_shadow,
         )
         return await orchestrator.run(
             request=request,
@@ -103,7 +117,17 @@ class BoundedDevRuntime:
         )
 
     async def aclose(self) -> None:
-        await self.provider.aclose()
+        # Codex round 1 (MEDIUM, confirmed): a ``finally`` -- not a second
+        # statement -- so the shadow provider's own client/connection is
+        # still closed even when ``self.provider.aclose()`` itself raises;
+        # every caller of ``aclose()`` (router.py) wraps the WHOLE call in a
+        # swallowing try/except, so a live-provider close failure used to
+        # silently skip shadow cleanup too, leaking its connection.
+        try:
+            await self.provider.aclose()
+        finally:
+            if self.qua_shadow_provider is not None:
+                await self.qua_shadow_provider.aclose()
 
 
 __all__ = ["BoundedDevRuntime", "DevRuntimeUnavailable"]

@@ -17,7 +17,6 @@ from sqlalchemy import create_engine, event, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from dev_health_ops.db import normalize_sync_postgres_uri
 from dev_health_ops.models import (
     Base,
     Integration,
@@ -45,6 +44,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     observe_due_outbox_rows,
     upsert_outbox_wakeup,
 )
+from tests._helpers import sync_postgres_test_url
 
 _POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 
@@ -63,9 +63,12 @@ def require_postgres_test_uri() -> None:
 
 
 def _postgres_engine():
-    return create_engine(
-        normalize_sync_postgres_uri(os.environ[_POSTGRES_TEST_URI_ENV])
-    )
+    # CHAOS-3450 centralized the async->blocking driver coercion in
+    # tests._helpers. Every Postgres-gated test in this file goes through this
+    # one helper so the mismatch cannot be re-introduced by copying a
+    # neighbour, and so this file follows the same helper as the rest of the
+    # suite rather than open-coding its own normalization.
+    return create_engine(sync_postgres_test_url())
 
 
 @contextmanager

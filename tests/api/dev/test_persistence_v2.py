@@ -2934,18 +2934,22 @@ async def test_zero_day_immediate_purge_covers_every_new_artifact_and_orphan_wri
 #: against that contract (``record_intent`` -> ``dev_question_intent.v1``,
 #: ``append_resolution`` -> a ``dev_resolution_ledger.v1`` entry,
 #: ``record_subject_set`` -> ``dev_subject_set.v1``,
-#: ``append_source_observation`` -> ``dev_source_observation.v1``) -- the
-#: same open-boundary shape ``record_frame``/``record_narrative`` had.
-#: Enumerated here deliberately, not silently ignored: closing these is out
-#: of this round's scope, but touching any of these four names is now a
-#: conscious edit to this set, not a silent pass through the totality
-#: assertion below.
+#: ``append_source_observation`` -> ``dev_source_observation.v1``,
+#: ``record_qua_shadow`` (CHAOS-3389) -> a ``qua_shadow.QUAShadowRecord``
+#: projection, which is not a frontend-facing wire contract at all -- see
+#: ``qua_shadow.py``'s own module docstring) -- the same open-boundary
+#: shape ``record_frame``/``record_narrative`` had. Enumerated here
+#: deliberately, not silently ignored: closing these is out of this
+#: round's scope, but touching any of these five names is now a conscious
+#: edit to this set, not a silent pass through the totality assertion
+#: below.
 _KNOWN_UNVALIDATED_PAYLOAD_SINKS = frozenset(
     {
         "record_intent",
         "append_resolution",
         "record_subject_set",
         "append_source_observation",
+        "record_qua_shadow",
     }
 )
 
@@ -3045,6 +3049,7 @@ def test_payload_bearing_orm_model_names_matches_the_live_schema() -> None:
         "DevRunSourceObservation",
         "DevAnswerFrame",
         "DevRunNarrative",
+        "DevRunQuaShadow",
     }
 
 

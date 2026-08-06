@@ -8,11 +8,41 @@ quirks.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable
 from typing import Any, cast
 
 from sqlalchemy import Table
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session
+
+
+def sync_postgres_test_url() -> URL:
+    """Return ``DEV_HEALTH_POSTGRES_TEST_URI`` coerced to the blocking driver.
+
+    ``DEV_HEALTH_POSTGRES_TEST_URI`` names the ASYNC driver (``+asyncpg``),
+    which a blocking ``create_engine``/``Session`` cannot drive -- it raises
+    ``MissingGreenlet`` the moment it touches IO. Every Postgres-gated test
+    that builds a synchronous engine must coerce the driver first, the same
+    way ``test_ask_dev_v2_persistence_startup_gate.py`` and
+    ``test_canonical_incident_feature_flag_postgres_migration.py`` already do.
+
+    This is centralized because the mismatch was invisible for a long time:
+    the variable is set only in CI steps that did not collect these files, so
+    the tests always skipped and nobody noticed that each one had open-coded
+    ``create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])``. Reviving the
+    coverage job (CHAOS-3450) ran them for the first time and all of them
+    failed identically. One helper means the next such test cannot re-introduce
+    the bug by copying a neighbour.
+
+    Returns the URL OBJECT, never ``str(url)``: SQLAlchemy's ``__str__`` masks
+    the password as ``***``, so stringifying here swaps a ``MissingGreenlet``
+    for a "password authentication failed" that reads like broken CI
+    credentials rather than a broken test helper.
+    """
+    return make_url(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"]).set(
+        drivername="postgresql+psycopg2"
+    )
 
 
 def tables_of(*models: Any) -> list[Table]:

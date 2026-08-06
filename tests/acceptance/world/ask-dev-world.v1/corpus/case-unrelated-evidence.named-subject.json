@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "unrelated-evidence.named-subject",
+  "family": "unrelated-evidence",
+  "group": 1,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "launch threshold \"zero unrelated evidence surfaces in a named-subject answer\""
+  ],
+  "question": "What's the status of meridian/web-app?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "zero-unrelated-evidence-named-subject",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "When a question names a specific subject (a single repository/project/team), every fact, metric, evidence ref, and change item in the answer must be scoped to that named subject -- evidence belonging to any other repository/project the org happens to also have (meridian/atlas, meridian/api-gateway, meridian/context-fabric, legacy/billing, etc.) must never leak into a named-subject answer, ranked or unranked, cited or uncited. This is a launch-blocking threshold, not a nice-to-have: a named-subject answer that quietly blends in unrelated org evidence is indistinguishable, from the caller's perspective, from a correct answer, which makes the failure mode invisible without this explicit check.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Question text matches provider-scripts/role-legacy_agent.json's `cases[\"unrelated-evidence.named-subject\"].question` verbatim (kind: delegate_default -- falls through to the pre-existing default heuristic, `_evidence_query_from_question`'s named-repository literal derivation, unchanged; this case exists to make that question individually addressable in the fault/conformance matrix, per the file's own doc comment). The 'unrelated evidence' being guarded against is real in this fixture world: subjects.json/world.json realize several OTHER primary-org repositories/projects alongside meridian/web-app (meridian/atlas, meridian-sandbox/atlas, meridian/api-gateway, meridian/context-fabric, legacy/billing) -- a close-match or evidence-aggregation bug that fails to scope tool results to the resolved subject would have real unrelated rows available to leak, not a hypothetical. Distinct from `subject-label.wrong-kind-collision` (CHAOS-3422: a project mention losing to unrelated work-item/PR-title substring hits within its OWN correct evidence set) -- this case is about evidence from a DIFFERENT repository/project entirely."
+}

@@ -19,6 +19,13 @@ Decision shapes
   a delayed redispatch; it MUST NOT mark the run FAILED.
 * **Full allow** — ``GuardDecision(allowed=True, concurrency_capped=False)``.
 
+Every allowed decision also carries ``slot_headroom`` (CHAOS-3465): the slots
+still free per bucket once this pass's candidates are counted as dispatched.
+It is the only sanctioned way for another admission path to add work this
+guard did not see, and is computed for buckets holding not-yet-due RETRYING
+units too — those have no candidate this pass, so omitting them would report
+"no slots" for exactly the units surplus retry exists to unblock.
+
 Concurrency model
 -----------------
 Two disjoint sets per (org_id, provider, cost_class) bucket:
@@ -72,12 +79,12 @@ import hashlib
 import os
 import uuid
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, text
-from sqlalchemy.exc import SQLAlchemyError
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -97,12 +104,23 @@ class GuardDecision:
       them.  The caller must leave those units PLANNED and schedule a delayed
       redispatch — it must NOT mark the run FAILED.
     * **Full allow**: ``allowed=True, concurrency_capped=False``.
+
+    ``slot_headroom`` is the concurrency slots left in each
+    ``(org_id, provider, cost_class)`` bucket AFTER this pass's own candidates
+    are assumed to dispatch (CHAOS-3465). It exists so that a caller admitting
+    work the candidate set did NOT contain -- the budget guard's surplus retry
+    of not-yet-due deferred units -- can still be held to the same concurrency
+    cap this guard enforces, instead of stepping around it. Deliberately
+    conservative: every candidate is counted as if it will dispatch, even
+    though some are about to be budget-deferred, so the headroom can only ever
+    under-admit.
     """
 
     allowed: bool
     reason: str | None = None
     capped_unit_ids: tuple[str, ...] = field(default_factory=tuple)
     concurrency_capped: bool = False
+    slot_headroom: Mapping[tuple[str, str, str], int] = field(default_factory=dict)
 
 
 class DispatchGuard:
@@ -158,6 +176,14 @@ class DispatchGuard:
         candidates_by_bucket: dict[tuple[str, str, str], list[SyncRunUnit]] = (
             defaultdict(list)
         )
+        # Buckets holding only NOT-YET-DUE retrying units (CHAOS-3465). They
+        # have no candidate this pass, so the loop below would never visit
+        # them and ``slot_headroom`` would report nothing -- which the budget
+        # guard's surplus retry reads as "no slots", silently making a
+        # deferred unit alone in its bucket the one case surplus can never
+        # help. Tracked separately so those buckets get an active_count read
+        # (and an advisory lock) without becoming candidates.
+        deferred_buckets: set[tuple[str, str, str]] = set()
         for unit in units:
             bucket = (str(unit.org_id), unit.provider, unit.cost_class)
             if unit.status == SyncRunUnitStatus.PLANNED.value:
@@ -169,9 +195,11 @@ class DispatchGuard:
             elif (
                 unit.status == SyncRunUnitStatus.RETRYING.value
                 and unit.available_at is not None
-                and _as_aware_guard(unit.available_at) <= now
             ):
-                candidates_by_bucket[bucket].append(unit)
+                if _as_aware_guard(unit.available_at) <= now:
+                    candidates_by_bucket[bucket].append(unit)
+                else:
+                    deferred_buckets.add(bucket)
             # RUNNING (any age) → capacity consumer only; never a candidate (F2).
             # Fresh DISPATCHING → consumer only (counted in active_count below).
             # Future RETRYING → deferred, no capacity consumption.
@@ -187,11 +215,13 @@ class DispatchGuard:
         #
         # Key derivation reuses the same deterministic 63-bit integer pattern
         # as _bucket_advisory_lock_key() below (mirrors sync.py:224-239).
-        all_buckets = sorted(candidates_by_bucket.keys())
+        all_buckets = sorted(set(candidates_by_bucket) | deferred_buckets)
         _acquire_bucket_advisory_locks(session, all_buckets)
 
         capped_unit_ids: list[str] = []
-        for bucket, bucket_candidates in candidates_by_bucket.items():
+        slot_headroom: dict[tuple[str, str, str], int] = {}
+        for bucket in all_buckets:
+            bucket_candidates = candidates_by_bucket.get(bucket, [])
             org_id, provider, cost_class = bucket
 
             # Count the CAPACITY-CONSUMER set across ALL runs (including this
@@ -231,6 +261,7 @@ class DispatchGuard:
                 capped_unit_ids.extend(
                     str(unit.id) for unit in bucket_candidates[allowed_slots:]
                 )
+            slot_headroom[bucket] = max(0, allowed_slots - len(bucket_candidates))
 
         if capped_unit_ids:
             return GuardDecision(
@@ -238,9 +269,10 @@ class DispatchGuard:
                 f"sync unit concurrency cap exceeded: {len(capped_unit_ids)} capped",
                 tuple(capped_unit_ids),
                 concurrency_capped=True,
+                slot_headroom=slot_headroom,
             )
 
-        return GuardDecision(True)
+        return GuardDecision(True, slot_headroom=slot_headroom)
 
 
 def _bucket_advisory_lock_key(org_id: str, provider: str, cost_class: str) -> int:
@@ -278,19 +310,63 @@ def _acquire_bucket_advisory_locks(
 
 
 def _resolve_total_unit_cap(session: Session, org_id: str) -> int:
+    """Resolve the per-org unit cap, falling back to the env default.
+
+    CHAOS-2580 established that a pre-migration ``tier_limits`` miss must not
+    poison the surrounding planning transaction: ``TierLimitService`` swallows
+    the missing-table ``OperationalError``, but PostgreSQL still marks the whole
+    transaction failed, so every later flush dies with
+    ``InFailedSqlTransaction``. Catching the exception here is therefore NOT
+    enough -- the failed statement has to be confined to a savepoint, exactly as
+    :func:`dev_health_ops.sync.planner._get_tier_backfill_days_cap` already does.
+
+    This second, unprotected caller was missed by CHAOS-2580 and stayed
+    invisible because the test that covers it
+    (``test_postgres_missing_tier_limits_stays_inside_planner_savepoint``) is
+    PostgreSQL-gated and had never once executed -- it aborted on an unrelated
+    ``MissingGreenlet`` long before reaching this code. SQLite has no such
+    transaction-poisoning semantics, so the whole SQLite tier passed regardless.
+
+    The savepoint is rolled back on BOTH paths, matching the planner. Releasing
+    it on success is not an option: ``TierLimitService`` swallows the
+    missing-table error internally and returns normally, so no exception ever
+    reaches this frame while the transaction is already poisoned, and the
+    ``RELEASE SAVEPOINT`` itself then fails with ``InFailedSqlTransaction``.
+    Rolling back unconditionally is safe because the probe is read-only.
+
+    ``session.begin_nested()`` already flushes the planner's pending
+    SyncRun/SyncRunUnit rows into the savepoint before it returns -- that is
+    unavoidable and exactly what makes rolling the savepoint back later safe
+    for those rows (they were never released outside it). ``no_autoflush``
+    around the probe query below is a second, narrower guard: it stops that
+    query from triggering a *further* autoflush of anything that became
+    pending between the savepoint opening and the query running, which would
+    otherwise also get silently discarded by the unconditional rollback.
+
+    A malformed ``tier_cap`` (e.g. a non-numeric value from a corrupted row)
+    must fall back to ``default_cap`` the same as a missing table or a lookup
+    error -- so the ``int()`` coercion stays inside the ``try`` block below,
+    not after it.
+    """
     default_cap = _env_int("SYNC_RUN_MAX_UNITS", 1000)
     try:
         from dev_health_ops.api.services.licensing import TierLimitService
 
-        with session.begin_nested():
-            tier_cap = TierLimitService(session).get_limit(
-                uuid.UUID(org_id), "max_sync_units"
-            )
-    except (SQLAlchemyError, ValueError):
+        org_uuid = uuid.UUID(org_id)
+    except Exception:
         return default_cap
-    if tier_cap is None:
+
+    nested = session.begin_nested()
+    try:
+        with session.no_autoflush:
+            tier_cap = TierLimitService(session).get_limit(org_uuid, "max_sync_units")
+        if tier_cap is None:
+            return default_cap
+        return int(tier_cap)
+    except Exception:
         return default_cap
-    return int(tier_cap)
+    finally:
+        nested.rollback()
 
 
 def _env_int(name: str, default: int) -> int:

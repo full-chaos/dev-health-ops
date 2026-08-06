@@ -1,0 +1,20 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deg.provider.misconfigured",
+  "family": "deg",
+  "group": 9,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3461",
+  "proves": [
+    "group 9 family deg.provider (provider readiness layer -- missing_credentials/misconfigured bucket has no wired fixture)"
+  ],
+  "question": "Is the Ask Dev assistant currently misconfigured for this workspace?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "Checked src/dev_health_ops/llm/agent/readiness.py directly: ReadinessState is a 6-member Literal {ready, unsupported_model, missing_credentials, disabled, degraded, stale_readiness}. readiness_failure_state('provider_not_configured') maps to 'missing_credentials' -- the real, distinct readiness state 'misconfigured provider' would realize -- but world.json's provider_profiles has no entry whose readiness is missing_credentials, and no user_alias carries a provider_profile_override pointing at one (only unsupported-model-profile and degraded-profile are wired, via primary.unsupported-model-user and primary.degraded-readiness-user respectively). world.json's lmstudio-local/ollama entries carry a fixture-only 'not_configured' label (a world.json-generator-side term, not one of readiness.py's own ReadinessState literal values) and, more importantly, no user_alias overrides to either of them exist at all, so no case can currently select that profile. Per this batch's instructions ('use judgment... mark declared-blocked if truly no real fixture exists'): rather than fabricate a new world.json user/profile entry (out of this batch's file-authoring scope -- only corpus/ case files and one resolution-profiles/ fragment file), this id is declared-blocked. blocked_by is a runner/fixture-capability gap, not a ticketed defect (no CHAOS ticket to cite for 'this fixture doesn't exist yet'), following CASE-SCHEMA.v1.md's documented convention for that distinction. question/org_alias/user_alias/subject_class kept as documentation of the intended (currently-blocked) scenario; user_alias is primary.ordinary as a stand-in since no dedicated misconfigured-provider user_alias exists to reference. [blocked_by WIRED to CHAOS-3461 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no world.json provider_profile/user_alias realizes ReadinessState.missing_credentials'.]"
+}

@@ -194,6 +194,110 @@ async def test_retention_contract_is_exact_and_ephemeral_content_is_removed(
 
 
 @pytest.mark.asyncio
+async def test_update_run_survives_a_failing_immediate_purge(
+    persistence, monkeypatch: pytest.MonkeyPatch
+):
+    """Team-lead binding constraint, fault-injected directly against the
+    ONE place CHAOS-3404 attempts an immediate synchronous purge at all
+    (update_run -- the live/success path, safe because nothing reads this
+    run's content back from the DB afterward; the orchestrator already has
+    it in memory for the live SSE stream). Forces ``_purge_conversation``
+    to raise and proves BOTH halves of the durability contract:
+
+    1. The terminal-state write is NOT gated on the purge succeeding --
+       ``update_run`` returns normally (the caller's own commit persists
+       state + the expires_at stamp), never raising the purge's exception.
+       This is what ``_try_purge_ephemeral_conversation``'s SAVEPOINT
+       (``begin_nested``) buys: a failed purge rolls back only itself, not
+       update_run's shared, caller-owned outer transaction.
+    2. Nothing "retries the purge" itself -- the stamped expires_at makes
+       the row visible to cleanup_expired, and a real, unmocked sweep call
+       collects it later, exactly like a 30-day row: "purged within one
+       sweep interval," never "leaked forever."
+    """
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        ephemeral = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=0
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=ephemeral.id,
+            client_message_id=uuid.uuid4(),
+            question="Does the purge itself fail on an otherwise-successful run?",
+            scope_snapshot={},
+        )
+        answer_id = uuid.uuid4()
+        await service.append_assistant_answer(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=ephemeral.id,
+            answer_payload=_validated_answer(ephemeral.id, answer_id),
+            validator=_identity_validator,
+            scope_snapshot={},
+        )
+
+        async def _boom(self, *, conversation, reason, actor_user_id):
+            raise RuntimeError("simulated purge failure: connection dropped again")
+
+        monkeypatch.setattr(DevPersistenceService, "_purge_conversation", _boom)
+
+        # Must not raise: the terminal write is the durability guarantee,
+        # independent of the purge outcome.
+        result = await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=accepted.run.id,
+            state="completed",
+            answer_id=answer_id,
+            provider_source="platform",
+            provider_fingerprint=_DIGEST,
+            model_fingerprint=_DIGEST,
+            prompt_version="dev-system.v1",
+            tool_contract_version="dev-tools.v1",
+            metric_version="metric-registry.v1",
+            query_version="dev-query.v1",
+        )
+        # Purge failed -- update_run returns the run (not None, unlike the
+        # successful-purge case), since nothing was actually deleted.
+        assert result is not None
+        assert result.state == "completed"
+        await session.commit()
+
+    async with maker() as session2:
+        conversation = await session2.get(DevConversation, ephemeral.id)
+        assert conversation is not None  # purge failed -- row still exists...
+        assert conversation.expires_at is not None
+        # SQLite (test harness only) round-trips a naive datetime even
+        # though it was written aware; normalize before comparing.
+        expires_at = conversation.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        assert expires_at <= datetime.now(UTC)  # ...but is now due
+
+    # Undo the fault injection explicitly -- monkeypatch only auto-reverts
+    # at test teardown, and this step must prove a REAL, unmocked sweep
+    # (not one still silently patched to fail) collects the row.
+    monkeypatch.undo()
+    async with maker() as session3:
+        sweep_service = DevPersistenceService(session3)
+        sweep_result = await sweep_service.cleanup_expired(limit=10)
+        await session3.commit()
+    assert sweep_result.purged == 1
+    async with maker() as session4:
+        assert await session4.get(DevConversation, ephemeral.id) is None
+        tombstone = await session4.scalar(
+            select(DevConversationTombstone).where(
+                DevConversationTombstone.conversation_id == ephemeral.id
+            )
+        )
+        assert tombstone is not None
+        assert tombstone.reason == "ephemeral_completed"
+
+
+@pytest.mark.asyncio
 async def test_client_message_id_is_idempotent_for_message_and_run(persistence):
     maker, org_id, _other_org_id, user_id, _other_user_id = persistence
     async with maker() as session:
@@ -746,6 +850,264 @@ async def test_deletion_expiry_and_cleanup_are_bounded_idempotent_and_content_fr
             ]
         )
         assert "Sensitive question content" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_force_terminal_fallback_stamps_expiry_for_the_sweep_to_collect(
+    persistence,
+):
+    """CHAOS-3404: force_terminal_fallback is the documented last-resort
+    recovery path for a dropped-connection/DB failure mid-finish() (CHAOS-3297
+    round 3) -- it used to set a run terminal without ever checking
+    retention_days == 0, leaving that conversation permanently unpurgeable
+    (expires_at is never set for 0-day rows, so cleanup_expired's async
+    sweep couldn't catch it either -- nothing could).
+
+    Fixed: stamps ``expires_at = now()`` on the conversation as part of the
+    SAME commit as the terminal-state write, and deliberately does NOT
+    attempt an immediate synchronous purge. Two independent races rule that
+    out (Codex adversarial-review, both confirmed):
+
+    * round 2 -- a same-request reader: recover_stale_non_terminal_run's
+      RETURN VALUE is read back immediately by its own caller to build a
+      replay response (see that method's own test).
+    * round 3 -- a CONCURRENT reader: a duplicate in-flight request can
+      already be blocked in recover_stale_non_terminal_run's
+      ``SELECT ... FOR UPDATE`` on this exact run, waiting on force_
+      terminal_fallback's commit to release the lock, then reading this
+      run's answer/frame content back the instant it does. An immediate
+      purge here would delete that content out from under that concurrent
+      reader too -- so this method never attempts one at all, matching
+      recover_stale_non_terminal_run exactly, even though (unlike that
+      method) IT has no same-request reader of its own.
+
+    This proves both halves: the conversation is intact immediately after
+    (so any reader, same-request or concurrent, still sees real content)
+    but is now immediately due, and a real cleanup_expired sweep call
+    collects it.
+    """
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        ephemeral = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=0
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=ephemeral.id,
+            client_message_id=uuid.uuid4(),
+            question="Did the connection drop mid-answer?",
+            scope_snapshot={},
+        )
+        await service.force_terminal_fallback(
+            org_id=org_id, user_id=user_id, run_id=accepted.run.id
+        )
+        # Intact immediately after -- never raced by an inline purge.
+        conversation = await session.get(DevConversation, ephemeral.id)
+        assert conversation is not None
+        assert conversation.expires_at is not None
+        assert conversation.expires_at <= datetime.now(UTC)
+        run = await session.get(DevRun, accepted.run.id)
+        assert run is not None
+        assert run.state == "failed"
+
+    # The real safety-net sweep collects it.
+    async with maker() as session2:
+        sweep_service = DevPersistenceService(session2)
+        result = await sweep_service.cleanup_expired(limit=10)
+        await session2.commit()
+    assert result.purged == 1
+    async with maker() as session3:
+        assert await session3.get(DevConversation, ephemeral.id) is None
+        tombstone = await session3.scalar(
+            select(DevConversationTombstone).where(
+                DevConversationTombstone.conversation_id == ephemeral.id
+            )
+        )
+        assert tombstone is not None
+        assert tombstone.reason == "ephemeral_completed"
+
+
+@pytest.mark.asyncio
+async def test_force_terminal_fallback_leaves_a_30_day_conversation_alone(persistence):
+    """Regression guard: the new purge check must not touch non-ephemeral
+    conversations -- force_terminal_fallback's forced-failed run stays
+    exactly as it was before CHAOS-3404 for the 30-day case."""
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=30
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Regression guard for the 30-day path.",
+            scope_snapshot={},
+        )
+        await service.force_terminal_fallback(
+            org_id=org_id, user_id=user_id, run_id=accepted.run.id
+        )
+        assert await session.get(DevConversation, conversation.id) is not None
+        run = await session.get(DevRun, accepted.run.id)
+        assert run is not None
+        assert run.state == "failed"
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_non_terminal_run_stamps_expiry_for_the_sweep_to_collect(
+    persistence,
+):
+    """Same gap, the other documented recovery path (CHAOS-3297 rounds 5/7):
+    a stuck non-terminal run recovered on replay must also honor 0-day
+    retention when it forces the run terminal -- and, same as
+    force_terminal_fallback, via a stamp-then-sweep contract rather than an
+    inline purge, because THIS method's return value is immediately read
+    back by its caller (router.py's replay path) to build a response from
+    the run's answer/frame -- an inline purge would delete that content out
+    from under the very read that needs it (Codex adversarial-review
+    round 2, MEDIUM, confirmed).
+    """
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    clock = Clock(datetime(2026, 7, 28, 12, 0, tzinfo=UTC))
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        ephemeral = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=0
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=ephemeral.id,
+            client_message_id=uuid.uuid4(),
+            question="Stuck non-terminal, recovered on replay.",
+            scope_snapshot={},
+        )
+        clock.value += timedelta(hours=1)
+        recovered = await service.recover_stale_non_terminal_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=accepted.run.id,
+            stale_after=timedelta(minutes=1),
+        )
+        assert recovered is not None
+        assert recovered.state == "failed"
+        # Intact immediately after -- the router's own subsequent
+        # get_answer_message/get_answer_frame read (keyed off `recovered`)
+        # still sees a real, undeleted conversation/run.
+        conversation = await session.get(DevConversation, ephemeral.id)
+        assert conversation is not None
+        assert conversation.expires_at is not None
+        assert conversation.expires_at <= clock.value
+
+    # The real safety-net sweep collects it.
+    async with maker() as session2:
+        sweep_service = DevPersistenceService(session2, now=clock)
+        result = await sweep_service.cleanup_expired(limit=10)
+        await session2.commit()
+    assert result.purged == 1
+    async with maker() as session3:
+        assert await session3.get(DevConversation, ephemeral.id) is None
+        tombstone = await session3.scalar(
+            select(DevConversationTombstone).where(
+                DevConversationTombstone.conversation_id == ephemeral.id
+            )
+        )
+        assert tombstone is not None
+        assert tombstone.reason == "ephemeral_completed"
+
+
+@pytest.mark.asyncio
+async def test_backfill_stranded_ephemeral_expiry_repairs_pre_fix_rows(persistence):
+    """Codex adversarial-review round 3 (CHAOS-3404, HIGH, confirmed): the
+    synchronous-stamp fix only stops NEW 0-day rows from being stranded --
+    it does nothing for rows already left with every run terminal and
+    expires_at=NULL by the pre-fix force_terminal_fallback/
+    recover_stale_non_terminal_run in production before this deploys.
+    Simulates exactly that pre-fix state directly (a raw state mutation,
+    bypassing update_run/force_terminal_fallback entirely -- those all
+    stamp now, so this is the only way to construct the stranded shape a
+    backfill needs to repair), then proves backfill_stranded_ephemeral_expiry
+    stamps it and the ordinary sweep collects it -- while leaving a
+    still-in-flight (non-terminal run) or run-less (freshly created,
+    nothing to retire) 0-day conversation untouched.
+    """
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+
+        stranded = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=0
+        )
+        stranded_accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=stranded.id,
+            client_message_id=uuid.uuid4(),
+            question="Stranded by the pre-fix fallback path.",
+            scope_snapshot={},
+        )
+        # Raw mutation -- simulates the pre-fix force_terminal_fallback
+        # shape directly: terminal run, expires_at never stamped.
+        stranded_accepted.run.state = "failed"
+        await session.flush()
+
+        still_in_flight = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=0
+        )
+        await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=still_in_flight.id,
+            client_message_id=uuid.uuid4(),
+            question="Genuinely still running -- must not be touched.",
+            scope_snapshot={},
+        )
+
+        run_less = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=0
+        )
+        await session.commit()
+
+    async with maker() as session2:
+        service2 = DevPersistenceService(session2)
+        stamped = await service2.backfill_stranded_ephemeral_expiry(limit=10)
+        await session2.commit()
+    assert stamped == 1
+
+    async with maker() as session3:
+        stranded_row = await session3.get(DevConversation, stranded.id)
+        assert stranded_row is not None
+        assert stranded_row.expires_at is not None
+        expires_at = stranded_row.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        assert expires_at <= datetime.now(UTC)
+
+        # Untouched: still in flight, and never had a run at all.
+        assert (
+            await session3.get(DevConversation, still_in_flight.id)
+        ).expires_at is None
+        assert (await session3.get(DevConversation, run_less.id)).expires_at is None
+
+    # Idempotent: a second call finds nothing left to stamp.
+    async with maker() as session4:
+        service4 = DevPersistenceService(session4)
+        assert await service4.backfill_stranded_ephemeral_expiry(limit=10) == 0
+
+    # The ordinary sweep now collects the repaired row.
+    async with maker() as session5:
+        sweep_service = DevPersistenceService(session5)
+        result = await sweep_service.cleanup_expired(limit=10)
+        await session5.commit()
+    assert result.purged == 1
+    async with maker() as session6:
+        assert await session6.get(DevConversation, stranded.id) is None
+        assert await session6.get(DevConversation, still_in_flight.id) is not None
+        assert await session6.get(DevConversation, run_less.id) is not None
 
 
 @pytest.mark.asyncio

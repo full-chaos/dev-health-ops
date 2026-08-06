@@ -103,6 +103,25 @@
       "notes": "meridian/api-gateway is a plain current-state repo (same generation profile as the exact-subject repo) that exists ONLY to pair with meridian/web-app here."
     },
     {
+      "id": "subject.exact.context-fabric",
+      "class": "exact",
+      "$comment_class": "CHAOS-3219 Phase 2 Lane 2b amendment (registry-ids.v1.json amendments.subject-label, corpus/REGISTRY-AMENDMENT.v1.md). Shape-wise this is an ordinary named-project mention (class=exact), same as subject.exact.meridian-web-app -- what makes it interesting is its DISPLAY NAME's shape (a >=5-word capitalized label with a parenthetical qualifier), which is what the CHAOS-3407/CHAOS-3389 live-evidence regex bugs actually stress, not the subject's resolution class.",
+      "org_alias": "primary",
+      "entity_kind": "project",
+      "project_id": "meridian/context-fabric",
+      "repo_full_name": "meridian/context-fabric",
+      "project_display_name": "Dev Health Agent Context Runtime (Context Fabric)",
+      "$comment_display_name": "Deliberately the exact literal string already canonical across test_alias_matching.py / test_subject_preflight.py / test_chaos_3421_leak_graceful_terminal.py's unit fixtures for this scenario -- reusing it (rather than inventing a differently-worded 5-word label) keeps the acceptance corpus and those unit tests pointed at the same real shape instead of two independently-drifting approximations of the same bug class.",
+      "mentions": [
+        "the Dev Health Agent Context Runtime (Context Fabric) project",
+        "\"Dev Health Agent Context Runtime (Context Fabric)\"",
+        "the Dev Health Agent Context Runtime project",
+        "ACR"
+      ],
+      "expected_terminal_resolution": "mixed by mention -- see corpus/REGISTRY-AMENDMENT.v1.md subject-label family: the quoted-control mention resolves EXACT today; the unquoted-parenthetical and no-parenthetical-5-word mentions are graceful-terminal-only (CHAOS-3407 not yet fixed, so exact resolution is NOT asserted for them); the bare acronym mention has no registered alias backing it (deliberately, to isolate the bug from CHAOS-3388's already-covered MWA case) and is also graceful-terminal-only.",
+      "notes": "Realizes 4 of the 9 subject-label amendment cases against ONE real project row via 4 distinct mention strings, exactly mirroring how the live CHAOS-3407 evidence was gathered (one subject, four question phrasings). No generator code change -- entity_kind=project is handled generically by fixtures/world.py's _run_clickhouse_postprocess (confirmed by reading it directly), same mechanism subject.acronym-alias.mwa-project already uses."
+    },
+    {
       "id": "subject.tenant.sibling-only-private-repo",
       "class": "exact",
       "$comment_class": "Filed under corpus registry's `tenant` family rather than a 9th subjects.json class -- the registry's 8 classes cover subject-mention SHAPE; cross-tenant is an AUTHORIZATION dimension orthogonal to shape. Shape-wise this is a single, specific repo reference (class=exact), same as any other named-repo mention -- what makes it interesting is being asked from a DIFFERENT org (asked_from_org_alias), not a bounded/ambiguous SET of subjects. Corrected from an earlier 'bounded-set' mislabel (Codex HIGH-2 typed-schema review, 2026-08-05: the schema for bounded-set requires >=2 'members', which this single-repo entry never had -- 'exact' is the shape this entry actually has). Listed here (not only in sources.json) because it is itself a named subject with an expected resolution outcome.",

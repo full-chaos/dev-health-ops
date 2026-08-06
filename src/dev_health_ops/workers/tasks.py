@@ -1,4 +1,5 @@
 import dev_health_ops.workers.external_ingest_recompute  # noqa: F401
+from dev_health_ops.workers.ask_dev_retention import run_ask_dev_retention_cleanup
 from dev_health_ops.workers.external_ingest_reconciler import (
     prune_external_ingest_batches,
 )
@@ -91,6 +92,7 @@ __all__ = [
     "prune_external_ingest_batches",
     "prune_rate_limit_observations",
     "reconcile_sync_dispatch",
+    "run_ask_dev_retention_cleanup",
     "refresh_sync_coverage_projections",
     "dispatch_membership_backfill",
     "run_capacity_forecast_job",

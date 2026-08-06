@@ -929,8 +929,16 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             )
 
         BudgetGuard.observe_run(session, sync_run_id, capped_unit_ids=capped_ids)
+        # CHAOS-3465: slot_headroom is what lets the budget guard spend a
+        # leftover budget on units an EARLIER deferral is still holding back
+        # without stepping around this pass's concurrency cap. Surplus retry
+        # is disabled outright if it is absent, so this is the wiring that
+        # makes the feature exist -- not a hint it can do without.
         budget_result = BudgetGuard.enforce_run(
-            session, sync_run_id, capped_unit_ids=capped_ids
+            session,
+            sync_run_id,
+            capped_unit_ids=capped_ids,
+            slot_headroom=decision.slot_headroom,
         )
         capped_ids = frozenset((*capped_ids, *budget_result.deferred_unit_ids))
 
@@ -954,6 +962,13 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             estimates_by_unit=budget_result.estimates_by_unit,
             already_excluded_ids=capped_ids,
             jitter_seconds=budget_result.jitter_seconds,
+            # CHAOS-3465 review (CRITICAL): candidate_units now includes units
+            # the surplus phase pulled forward. Without their pre-promotion
+            # available_at, a cooldown landing in this window would deferral-
+            # stamp them and wipe the budget episode that was the whole reason
+            # they were deferred -- the guard's own offer, withdrawn, costing
+            # the unit its CHAOS-3412 exhaustion evidence.
+            surplus_prior_available_at=budget_result.surplus_prior_available_at,
         )
         capped_ids = frozenset((*capped_ids, *reconfirm_result.excluded_unit_ids))
         next_deferred_at = budget_result.next_deferred_at

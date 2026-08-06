@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "attention.team.invalid-qualification-unknown",
+  "family": "attention",
+  "group": 1,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "CHAOS-3394 open defect evidence: investment_allocation_shift_observation reports attribution_present=False unconditionally today (real production code, not a fixture gap); group 1 Product-question corpus, attention family"
+  ],
+  "question": "Which teams are light on feature work?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "no-silent-widening",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "subject_class 'n/a' (deviating from the family header's 'subject: ground-control-team or platform team' framing): this question does not name one specific team subject -- it asks the system to identify which team(s), across the org's whole team catalog, qualify as light on feature work, so there is no single subject_ref for ScopeResolutionService to resolve. Expected answered_with_gaps is a REAL today-behavior, not a hedge: investments.py's investment_allocation_shift_observation reports attribution_present=False unconditionally (CHAOS-3394, confirmed still open/Backlog) -- so any answer this question produces is honestly gapped (the allocation-shift attribution backing 'light on feature work' is not actually present), which is exactly what inv.no-silent-widening's 'disclosed degradation, never silent substitution' contract requires the system to surface rather than hide. Contrast with the sibling id attention.team.valid-qualification-light-on-feature-work: that id is declared-blocked because a validly-qualified (single-team) variant of this same question cannot yet be realized against real production code at all -- this id is the org-wide/unqualified variant, which CAN run today and legitimately produces a gapped answer."
+}

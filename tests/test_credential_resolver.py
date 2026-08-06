@@ -27,6 +27,31 @@ from dev_health_ops.credentials import (
     resolve_credentials_sync,
 )
 
+_GITHUB_APP_ENV_VARS = (
+    "GITHUB_APP_ID",
+    "GITHUB_APP_INSTALLATION_ID",
+    "GITHUB_APP_PRIVATE_KEY",
+    "GITHUB_APP_PRIVATE_KEY_PATH",
+)
+
+
+def _clear_github_app_env() -> None:
+    """State "no GitHub App is configured" instead of trusting the shell.
+
+    The env-credential path switches to App auth whenever ``GITHUB_APP_*`` is
+    present and then opens the key file directly, so a stray
+    ``GITHUB_APP_PRIVATE_KEY_PATH`` -- ``ops/.env`` carries one, as a RELATIVE
+    path that resolves against the CWD -- turns "no credentials" and "PAT only"
+    into a different code path entirely (CHAOS-3402). The suite scrubs those
+    variables process-wide; this makes the precondition local and legible.
+
+    Call inside a ``patch.dict(os.environ, ...)`` block: the pops are reverted
+    when the block exits.
+    """
+    for name in _GITHUB_APP_ENV_VARS:
+        os.environ.pop(name, None)
+
+
 # ---------------------------------------------------------------------------
 # Credential Type Validation Tests
 # ---------------------------------------------------------------------------
@@ -348,6 +373,7 @@ class TestCredentialResolver:
             mock_svc_class.return_value = mock_svc
 
             with patch.dict(os.environ, {"GITHUB_TOKEN": "ghp_env_token"}, clear=False):
+                _clear_github_app_env()
                 result = await resolver.resolve("github")
 
                 assert isinstance(result, GitHubCredentials)
@@ -393,6 +419,7 @@ class TestCredentialResolver:
             with patch.dict(os.environ, env_patch, clear=False):
                 os.environ.pop("GITHUB_TOKEN", None)
                 os.environ.pop("GITHUB_URL", None)
+                _clear_github_app_env()
 
                 with pytest.raises(CredentialResolutionError) as exc_info:
                     await resolver.resolve("github")
@@ -445,6 +472,7 @@ class TestCredentialResolver:
             with patch.dict(
                 os.environ, {"GITHUB_TOKEN": "ghp_fallback_token"}, clear=False
             ):
+                _clear_github_app_env()
                 result = await resolver.resolve("github")
 
                 assert isinstance(result, GitHubCredentials)
@@ -537,6 +565,7 @@ class TestResolveCredentialsSync:
         with patch.dict(os.environ, env_patch, clear=False):
             os.environ.pop("DATABASE_URI", None)
             os.environ.pop("DATABASE_URL", None)
+            _clear_github_app_env()
 
             result = resolve_credentials_sync("github")
 
@@ -556,6 +585,7 @@ class TestResolveCredentialsSync:
             os.environ.pop("DATABASE_URI", None)
             os.environ.pop("DATABASE_URL", None)
             os.environ.pop("GITHUB_TOKEN", None)
+            _clear_github_app_env()
 
             with pytest.raises(CredentialResolutionError) as exc_info:
                 resolve_credentials_sync("github")

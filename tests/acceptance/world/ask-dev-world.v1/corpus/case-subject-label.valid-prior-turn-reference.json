@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "subject-label.valid-prior-turn-reference",
+  "family": "subject-label",
+  "group": 1,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "CHAOS-3389 eval set (\"prior-turn references\")"
+  ],
+  "question": "Did anything change since then?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "no-internal-error-on-fuzzy-label",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "No shape of subject label (parenthetical, >=5 words, typo, acronym, wrong word order) can crash the run to internal_error; worst case is a graceful terminal.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Positive counterpart to scope.stale-context-subject: turn 1 names meridian/web-app, turn 2 (<1h later, well within the rotation window) asks a bare follow-up and MUST correctly resolve to the turn-1 subject, distinguishing this from the >9-day stale case. Same mechanism as scope.outcome.inherited -- cross-referenced (P0-B outcome-value vs CHAOS-3389 eval-fixture angle), not duplicated. [Reworded during Lane 2b codex round-1 remediation, 2026-08-06, from 'Has anything changed since then?': production's provider_scripts.py requires GLOBALLY-UNIQUE question text per role script (test_a_question_fingerprint_collision_fails_to_load), and every corpus case now needs its own role-legacy_agent.json entry (script_inventory.py's full-coverage requirement) -- two cases sharing literal question text could never both get a script entry. Subject mention substring kept character-identical to subjects.json's declared 'mentions' so the deterministic extractor still recognizes it; only the surrounding phrasing changed.]"
+}

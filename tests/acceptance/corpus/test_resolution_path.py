@@ -302,11 +302,9 @@ class TestAttachMentionTexts:
         assert ("m1", "alpha") in by_id
         assert ("m2", "beta") in by_id
 
-    def test_a_count_mismatch_raises_rather_than_mispairing(self) -> None:
-        """Zipping a drifted declaration would attach the WRONG span to a
-        real mention, and classify_match_kind would then either raise for a
-        bogus reason or classify against text that never reached the
-        resolver. Both are worse than a loud refusal."""
+    def test_more_observed_mentions_than_declared_raises(self) -> None:
+        """A short declaration would leave a real mention with no span, and
+        positional mapping past the end is meaningless."""
 
         entries = [
             ResolutionLedgerEntry(outcome="exact_match", mention_id="m1"),
@@ -314,8 +312,40 @@ class TestAttachMentionTexts:
         ]
         with pytest.raises(ResolutionPathError, match="drifted"):
             attach_mention_texts(entries, ["only-one"])
-        with pytest.raises(ResolutionPathError, match="drifted"):
-            attach_mention_texts(entries, ["a", "b", "c"])
+
+    def test_a_partial_terminating_ledger_does_not_raise(self) -> None:
+        """The asymmetry, found by attacking this function directly.
+
+        A two-mention case that TERMINATES ambiguous persists only the
+        terminating entry, so the ledger carries one mention while the case
+        declares two. That is legitimate -- a PROCEED always ledgers every
+        mention, so a short ledger can only come from the TERMINATE path,
+        which persists only an ambiguous_candidates entry. Raising would
+        turn a correct, classifiable run RED and blame the case author for
+        drift that did not happen.
+        """
+
+        partial = [
+            ResolutionLedgerEntry(outcome="ambiguous_candidates", mention_id="m2")
+        ]
+        attached = attach_mention_texts(partial, ["span-one", "span-two"])
+        # Nothing attached -- and nothing needed attaching, because a
+        # non-exact_match final entry short-circuits before mention_text is
+        # ever consulted.
+        assert attached[0].mention_text is None
+        assert derive_resolution_path(attached) == "miss-clarification"
+
+    def test_the_partial_case_is_not_mispaired(self) -> None:
+        """Attaching positionally in the short case would be worse than
+        attaching nothing: the surviving entry is not necessarily the FIRST
+        mention, so span-one could be pinned to mention two."""
+
+        partial = [
+            ResolutionLedgerEntry(outcome="ambiguous_candidates", mention_id="m2")
+        ]
+        assert attach_mention_texts(partial, ["span-one", "span-two"])[
+            0
+        ].mention_text != ("span-one")
 
     def test_an_already_populated_mention_text_is_not_overwritten(self) -> None:
         entries = [

@@ -258,27 +258,50 @@ def attach_mention_texts(
     ``expected_mention_texts`` is declared in, asserted against the real
     interpreter by the corpus guard test.
 
-    A count mismatch RAISES rather than truncating or padding. Silently
-    zipping a 3-mention declaration against 2 observed mentions would attach
-    the wrong span to a real mention, and ``classify_match_kind`` would then
-    either raise for a spurious reason or -- worse -- classify against the
-    wrong text. A mismatch means the declaration has drifted from the
-    question, which is a corpus defect to fix, not to absorb.
+    THE TWO COUNT MISMATCHES ARE NOT SYMMETRIC, and treating them as if they
+    were is a defect this function had until it was attacked directly:
+
+    * MORE observed mentions than declared -> RAISE. The declaration is
+      genuinely short, so at least one real mention would get no span, and
+      positional mapping past the end is meaningless. That is a corpus
+      defect to fix, not to absorb.
+    * FEWER observed than declared -> attach NOTHING, and let
+      ``derive_resolution_path`` proceed on the raw entries. This is a
+      LEGITIMATE shape, not drift: a PROCEED always ledgers every mention
+      (``_build_ledger`` zips with ``strict=True``), so a short ledger can
+      only come from the TERMINATE path -- which persists ONLY a
+      ``terminating_resolution_entry``, and ``_terminate`` sets that solely
+      for ``ambiguous_candidates``. Such an entry never needs a span: its
+      mention's final outcome is not ``exact_match``, so
+      ``derive_resolution_path`` short-circuits to ``miss-clarification``
+      without ever consulting ``mention_text``. Raising here would turn a
+      correct, classifiable run RED with a message blaming the case author
+      for drift that did not happen -- reproduced with a two-mention case
+      that terminates ambiguous on one of them.
+
+    Attaching positionally in that short case would be worse than attaching
+    nothing: the surviving entry is not necessarily the FIRST mention, so
+    the mapping could silently pair a real mention with another mention's
+    span.
     """
 
     order: list[str] = []
     for entry in entries:
         if entry.mention_id not in order:
             order.append(entry.mention_id)
-    if len(order) != len(mention_texts):
+    if len(order) > len(mention_texts):
         raise ResolutionPathError(
             f"the ledger carries {len(order)} distinct mention(s) "
-            f"({order!r}) but the case declares {len(mention_texts)} "
-            f"expected_mention_texts ({list(mention_texts)!r}) -- refusing "
-            "to guess which span belongs to which mention. The case's "
-            "declaration has drifted from what the interpreter actually "
-            "produced for its question."
+            f"({order!r}) but the case declares only {len(mention_texts)} "
+            f"expected_mention_texts ({list(mention_texts)!r}) -- at least "
+            "one real mention would get no span. The case's declaration has "
+            "drifted from what the interpreter produces for its question; "
+            "regenerate it from the interpreter."
         )
+    if len(order) < len(mention_texts):
+        # Partial (terminating) ledger -- see the docstring. Nothing to
+        # attach, and nothing that needs attaching.
+        return list(entries)
     text_by_mention = dict(zip(order, mention_texts, strict=True))
     return [
         ResolutionLedgerEntry(

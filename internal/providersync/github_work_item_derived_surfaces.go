@@ -108,6 +108,40 @@ const (
 	githubWorkItemUnassignedTeamName = "Unassigned"
 )
 
+// Stored-precision quantization for computed_at, applied HERE at the builder
+// rather than only at the adapter boundary. The production feed is time.Now()
+// (complete_route.go:118), which carries nanoseconds; no destination column can
+// hold them. A stamp emitted at a precision the column cannot store is written,
+// quantized by the server, read back different, and the replay verdict is
+// Absent forever, so the committer rewrites on every recovery.
+//
+// The three destinations do NOT share a precision, so this cannot be one
+// constant: estimate coverage and team attributions are DateTime64(3), while
+// state durations is a plain DateTime (SECONDS). Each builder quantizes at its
+// own stamping site, next to the destination whose column decides the rule.
+//
+// DIVERGENCE FROM PYTHON (deliberate, D16 does not apply -- this is a
+// persistence contract, not a computed value): Python passes computed_at
+// through raw and lets the ClickHouse sink quantize on insert, because nothing
+// in Python ever compares a stamped value against a stored one. The Go
+// committer does exactly that on replay, so it must stamp what will be stored.
+// Every oracle case uses a whole-second ComputedAt, where the two are
+// identical; the divergence is only reachable with sub-precision digits.
+const (
+	githubEstimateCoverageStampPrecision = time.Millisecond
+	githubTeamAttributionStampPrecision  = time.Millisecond
+	githubStateDurationStampPrecision    = time.Second
+)
+
+// githubWorkItemDerivedStamp quantizes a stamp to what its column can store.
+// It is applied ONLY where computed_at is written into a row -- never to the
+// value the compute reads. An open item's final state segment ends at
+// computed_at, so truncating the arithmetic input would shorten duration_hours
+// against Python by up to a second.
+func githubWorkItemDerivedStamp(value time.Time, precision time.Duration) time.Time {
+	return value.UTC().Truncate(precision)
+}
+
 // buildGitHubWorkItemDerivedSurfaces is deliberately pure: the caller loads
 // the shared derivation context once and reuses it across backfill days. It
 // registers and activates nothing.
@@ -242,8 +276,10 @@ func buildGitHubEstimateCoverageMetricsDaily(
 			UnestimatedCount: bucket.unestimatedCount,
 			BacklogSize:      backlogSize,
 			Ratio:            ratio,
-			ComputedAt:       computedAt,
-			OrgID:            claim.OrgID,
+			ComputedAt: githubWorkItemDerivedStamp(
+				computedAt, githubEstimateCoverageStampPrecision,
+			),
+			OrgID: claim.OrgID,
 		})
 	}
 	return result, nil
@@ -293,11 +329,13 @@ func buildGitHubWorkItemTeamAttributions(
 				IsPrimary:  candidate.IsPrimary,
 				Confidence: candidate.Confidence,
 				Evidence:   candidate.Evidence,
-				ComputedAt: computedAt,
-				RepoID:     item.RepoID,
-				TeamID:     candidate.TeamID,
-				TeamName:   candidate.TeamName,
-				OrgID:      item.OrgID,
+				ComputedAt: githubWorkItemDerivedStamp(
+					computedAt, githubTeamAttributionStampPrecision,
+				),
+				RepoID:   item.RepoID,
+				TeamID:   candidate.TeamID,
+				TeamName: candidate.TeamName,
+				OrgID:    item.OrgID,
 			})
 		}
 	}
@@ -406,7 +444,11 @@ func buildGitHubWorkItemStateDurationsDaily(
 			Status:        key.status,
 			DurationHours: totalHours,
 			ItemsTouched:  len(itemsSeen[key]),
-			ComputedAt:    computedAt,
+			// The RAW computedAt above is what githubWorkItemStatusSegments
+			// used as the open segment's end; only the stamp is quantized.
+			ComputedAt: githubWorkItemDerivedStamp(
+				computedAt, githubStateDurationStampPrecision,
+			),
 			// Python divides the whole-day total by a fixed 24, not by the
 			// number of hours the window actually covers, so a partial-day
 			// window understates avg_wip. Mirrored.

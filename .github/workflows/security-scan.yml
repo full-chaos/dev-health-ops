@@ -17,7 +17,7 @@ permissions:
 jobs:
   pip-audit:
     name: Dependency Vulnerability Scan (pip-audit)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -64,7 +64,7 @@ jobs:
 
   semgrep:
     name: Semgrep SAST
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-latest' }}
     continue-on-error: true
     permissions:
       contents: read
@@ -124,7 +124,7 @@ jobs:
 
   gitleaks:
     name: Gitleaks Secret Scan
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-latest' }}
     continue-on-error: true
     # Gitleaks needs:
     #   - security-events: write — upload SARIF findings to code-scanning

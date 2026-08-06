@@ -16,8 +16,12 @@ permissions:
   contents: read
 
 jobs:
+  # Set the repository variable SELF_HOSTED_RUNNERS=enabled to route trusted
+  # repository events to ARC. Unset/disabled values use GitHub-hosted runners.
+  # Fork pull requests always remain on GitHub-hosted runners. This expression
+  # is evaluated by GitHub before scheduling, so it does not require a gate job.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-latest' }}
     permissions:
       contents: read
     outputs:
@@ -63,7 +67,7 @@ jobs:
     # aggregator then treats the skip as a pass and an untested change reaches
     # main. Always run in the merge queue regardless of the path filter.
     if: github.event_name == 'merge_group' || needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-26.04-arm
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-26.04-arm' }}
     # Test matrix needs package read access for dependency installs.
     permissions:
       contents: read
@@ -191,7 +195,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' &&
       (github.event_name == 'merge_group' || needs.changes.outputs.code == 'true')
-    runs-on: ubuntu-26.04-arm
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-26.04-arm' }}
     # CHAOS-3413: this job has hung indefinitely (1h45m-6h, then auto-cancelled
     # by the next push's `cancel-in-progress` group) instead of failing, for
     # days -- `cancelled` isn't a red check, so it merged silently as routine
@@ -316,14 +320,14 @@ jobs:
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test"; the matrix above produces "test-matrix (3.14)"
   # and the coverage job produces "coverage", neither of which match. This
-  # aggregator always runs, treating skipped (path filter, or coverage skipped
-  # on pull_request) as pass and failure/cancelled as fail. It is the single
-  # required check for both PRs and the merge queue. Do not remove.
+  # aggregator runs after failures/skips but exits cleanly when the workflow is
+  # cancelled, preventing a superseded run from holding the concurrency group.
+  # It is the single required check for both PRs and the merge queue. Do not remove.
   test:
     name: test
-    if: always()
+    if: ${{ always() && !cancelled() }}
     needs: [test-matrix, coverage]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-latest' }}
     steps:
       - name: Aggregate test results
         env:

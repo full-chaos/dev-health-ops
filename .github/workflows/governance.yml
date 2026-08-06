@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   governance:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'local-arc-runners' || 'ubuntu-latest' }}
     permissions:
       contents: read
       pull-requests: read

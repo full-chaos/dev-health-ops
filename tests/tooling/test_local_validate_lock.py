@@ -45,6 +45,26 @@ def _spawn_probe(lock_dir: Path, hold_secs: float, wait_secs: int = 20):
     )
 
 
+def _spawn_probe_with_env(hold_secs: float, wait_secs: int, extra_env: dict):
+    """Like _spawn_probe, but does NOT set LOCK_DIR -- lets the script compute
+    its own default, with whatever extra env (e.g. a distinct TMPDIR) the
+    caller supplies layered on top of a minimal base."""
+    env = {
+        "LOCK_WAIT_SECS": str(wait_secs),
+        "LOCK_POLL_SECS": "1",
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+    }
+    env.update(extra_env)
+    return subprocess.Popen(
+        ["bash", str(SCRIPT), "--lock-probe", str(hold_secs)],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
 def test_two_concurrent_invocations_serialize_not_both_run(tmp_path):
     """The actual race: launch two invocations near-simultaneously.
 
@@ -130,3 +150,65 @@ def test_stale_lock_from_kill_9_is_reclaimed_not_wedged(tmp_path):
     assert not lock_dir.exists(), (
         "lock directory leaked after the reclaiming probe exited"
     )
+
+
+def test_default_lock_dir_ignores_tmpdir_and_still_serializes(tmp_path):
+    """The default LOCK_DIR must NOT be derived from $TMPDIR.
+
+    This whole epic is "the gate inherits the shell environment and that
+    produces wrong results" -- keying host-wide mutual exclusion on an
+    inherited env var would repeat exactly that class of bug: two agents with
+    different ambient TMPDIR (a sandbox, a session-scoped scratch dir) would
+    silently acquire two DIFFERENT lock directories and both proceed, with no
+    error and no diagnostic.
+
+    This does NOT override LOCK_DIR -- that would only prove the override
+    works, not that the default is TMPDIR-independent. It exercises the
+    script's real default-resolution logic with two DELIBERATELY DIFFERENT
+    TMPDIR values and asserts they still serialize (i.e. resolve to the same
+    path). CH_CONTAINER is pinned to a unique per-test value (not the real
+    'dev-health-clickhouse-1') so this can never collide with a real gate
+    running elsewhere on the host, even though it uses the real default path
+    template under /tmp.
+    """
+    container = f"test-lockdir-tmpdir-{tmp_path.name}"
+    hold_secs = 3
+    tmpdir_a = tmp_path / "tmpdir_a"
+    tmpdir_b = tmp_path / "tmpdir_b"
+    tmpdir_a.mkdir()
+    tmpdir_b.mkdir()
+    expected_lock_dir = Path(f"/tmp/dev-health-ops-local-validate.{container}.lock")
+
+    try:
+        proc_a = _spawn_probe_with_env(
+            hold_secs,
+            wait_secs=20,
+            extra_env={"TMPDIR": str(tmpdir_a), "CH_CONTAINER": container},
+        )
+        proc_b = _spawn_probe_with_env(
+            hold_secs,
+            wait_secs=20,
+            extra_env={"TMPDIR": str(tmpdir_b), "CH_CONTAINER": container},
+        )
+
+        started_at = time.monotonic()
+        out_a = proc_a.communicate(timeout=30)[0]
+        out_b = proc_b.communicate(timeout=30)[0]
+        elapsed = time.monotonic() - started_at
+
+        assert proc_a.returncode == 0, out_a
+        assert proc_b.returncode == 0, out_b
+
+        # Same proof as the main race test: if the two different TMPDIRs had
+        # produced two different lock paths, both would run concurrently and
+        # finish in ~hold_secs instead of serializing to ~2x hold_secs.
+        assert elapsed >= 2 * hold_secs - 0.5, (
+            f"expected serialized execution (>= {2 * hold_secs}s) despite "
+            f"different TMPDIR values, got {elapsed:.1f}s -- the default "
+            f"LOCK_DIR may have picked up $TMPDIR after all.\nA:\n{out_a}\nB:\n{out_b}"
+        )
+        assert str(expected_lock_dir) in out_a + out_b, (
+            f"expected the fixed /tmp default path in the logs.\nA:\n{out_a}\nB:\n{out_b}"
+        )
+    finally:
+        subprocess.run(["rm", "-rf", str(expected_lock_dir)], check=False)

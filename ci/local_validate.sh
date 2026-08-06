@@ -186,7 +186,17 @@ PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_p
 # genuinely wedged lock, and offers no circuit breaker if the diagnosed resource
 # contention above turns out to itself hang. LOCK_WAIT_SECS=0 gives the fail-fast
 # behavior outright for a human who wants it immediately.
-LOCK_DIR="${LOCK_DIR:-${TMPDIR:-/tmp}/dev-health-ops-local-validate.${CH_CONTAINER}.lock}"
+#
+# The default path is deliberately NOT derived from $TMPDIR. This entire epic is
+# "the gate inherits the shell environment and that produces wrong results" —
+# keying host-wide mutual exclusion on an inherited env var repeats exactly that
+# class of bug: two agents with different ambient TMPDIR (a sandbox, a
+# session-scoped scratch dir, anyone who exports it) would silently acquire two
+# DIFFERENT lock directories and both proceed, with no error and no diagnostic —
+# the worst possible failure shape for a mutex. /tmp is fixed and shared by every
+# process on the host regardless of its shell's TMPDIR. LOCK_DIR itself is still
+# explicitly overridable (tests need this to avoid colliding with a real gate).
+LOCK_DIR="${LOCK_DIR:-/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock}"
 LOCK_WAIT_SECS="${LOCK_WAIT_SECS:-1800}"
 LOCK_POLL_SECS="${LOCK_POLL_SECS:-2}"
 LOCK_HELD=0

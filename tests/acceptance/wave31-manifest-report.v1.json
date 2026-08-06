@@ -16,66 +16,7 @@
     "readiness_and_resolution_safety_defect_reproduction": 3,
     "real_project_positive_control": 1
   },
-  "proven_e2e_claim_limits": "A proven_e2e row means: a live scenario was run by an operator, its per-assertion results were recorded by the scenario itself, and the script and shared fixture surface it ran against still match this tree. It does NOT mean the validator has established that the run happened. Execution artifacts are unsigned JSON and the validator recomputes exactly the values a forger would compute, so a fabricated artifact validates clean; occurrence rests on operator-recorded evidence and on re-running scenarios, not on this check. commit_sha is metadata only -- shape-checked, never resolved, so a well-formed id naming no commit is accepted. Product code under src/ is outside the digested surface, so for product changes these rows are historical records of a past run rather than statements about the current tree.",
-  "stale_row_count": 14,
-  "stale_rows": {
-    "attack.team-attribution.e2e-blocked-by-live-defect": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "attack.unrelated-evidence.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "defect.ask-dev-exact-commit.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "defect.ask-dev-not-found.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "gate.plan-registry-gap-is-loud.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "matrix.data-trust-organization-wide": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "matrix.exact-project-complete": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "matrix.multi-metric-comparison-organization-wide": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "matrix.operational-deficiency.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "matrix.registered-metric-catalog": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "matrix.remaining-work-exact-project": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "matrix.team-health.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "matrix.team-workload-balance.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ],
-    "positive-control.real-project-status": [
-      "scripts/acceptance/acceptance_artifact.py",
-      "scripts/acceptance/run_ask_dev_compose.sh"
-    ]
-  },
+  "proven_e2e_claim_limits": "A proven_e2e row means: a live scenario was run by an operator, its per-assertion results were recorded by the scenario itself, and the script it cites still matches this tree. It does NOT mean the validator has established that the run happened. Execution artifacts are unsigned JSON and the validator recomputes exactly the values a forger would compute, so a fabricated artifact validates clean; occurrence rests on operator-recorded evidence and on re-running scenarios, not on this check. commit_sha is metadata only -- shape-checked, never resolved, so a well-formed id naming no commit is accepted. Product code under src/ is outside the digested surface, so for product changes these rows are historical records of a past run rather than statements about the current tree. As of CHAOS-3479 the recorded shared-fixture surface (runtime_dependencies) is provenance only: it is checked for internal consistency and tamper-evidence, but is NO LONGER compared against the current tree, so a row does not assert that its shared fixture surface is unchanged since the run.",
   "items": [
     {
       "id": "attack.missing-data",
@@ -93,8 +34,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "attack.runtime-divergence",
@@ -106,8 +46,7 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "attack.team-attribution",
@@ -123,8 +62,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "attack.team-attribution.e2e-blocked-by-live-defect",
@@ -147,10 +85,6 @@
         "answer_status_is_degraded",
         "metrics_empty_for_team_scope",
         "limitation_names_unavailable_metric_source"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -170,8 +104,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "attack.unrelated-evidence.e2e-live-validated",
@@ -189,10 +122,6 @@
       "required_assertion_names": [
         "named_repository_committed",
         "unrelated_repo_excluded_from_named_answer"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -209,8 +138,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.ambiguous-candidate-selection",
@@ -226,8 +154,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.cross-tenant-identifier-change",
@@ -243,8 +170,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.data-trust-organization-wide",
@@ -263,10 +189,6 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "answer_summary_not_empty"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -286,10 +208,6 @@
         "named_repository_committed",
         "evidence_is_linked_to_the_committed_subject",
         "answer_status_not_error"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -306,8 +224,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.light-on-feature-work",
@@ -319,8 +236,7 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.light-on-feature-work-unclassified",
@@ -336,8 +252,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.multi-metric-comparison-organization-wide",
@@ -357,10 +272,6 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "stream_terminated_as_answer"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -373,8 +284,7 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.no-authorized-match",
@@ -390,8 +300,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.observed-change-comparison-windows",
@@ -407,8 +316,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.operational-deficiencies-mixed",
@@ -425,8 +333,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.operational-deficiency.e2e-live-validated",
@@ -449,10 +356,6 @@
         "preflight_proceeded_committed_subject",
         "claimed_plan_step_completed",
         "stream_terminated_as_answer"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -474,8 +377,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.overburdened-teams-with-denominators",
@@ -491,8 +393,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.pressure-without-denominator",
@@ -508,8 +409,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.prohibited-write-request",
@@ -525,8 +425,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.project-health-mixed-dimensions",
@@ -542,8 +441,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.project-health-unknown-not-applicable",
@@ -555,8 +453,7 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.project-incomplete-required-children",
@@ -572,8 +469,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.project-source-unavailable-qualified",
@@ -589,8 +485,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.project-stale-required-source",
@@ -606,8 +501,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.provider-narrative-failure-after-frame",
@@ -624,8 +518,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.registered-metric-catalog",
@@ -645,10 +538,6 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "answer_summary_not_empty"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -668,10 +557,6 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "answer_summary_not_empty"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -688,8 +573,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.struggling-teams-positive",
@@ -705,8 +589,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.team-health-complete-attribution",
@@ -722,8 +605,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.team-health-unattributable-signals",
@@ -739,8 +621,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "matrix.team-health.e2e-live-validated",
@@ -763,10 +644,6 @@
         "preflight_proceeded_committed_subject",
         "claimed_plan_step_completed",
         "stream_terminated_as_answer"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -790,10 +667,6 @@
         "preflight_proceeded_committed_subject",
         "claimed_plan_step_completed",
         "stream_terminated_as_answer"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -811,8 +684,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "gate.content-security-audit",
@@ -824,8 +696,7 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "gate.deterministic",
@@ -841,8 +712,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "gate.migration-coexistence",
@@ -854,8 +724,7 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "gate.plan-registry-gap-is-loud",
@@ -872,8 +741,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "gate.plan-registry-gap-is-loud.e2e-live-validated",
@@ -894,10 +762,6 @@
         "answer_status_is_exactly_partial",
         "stream_terminated_as_answer",
         "warnings_present_but_not_a_plan_registry_gap_signal"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -910,8 +774,7 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "gate.web-default-ci",
@@ -923,8 +786,7 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.burden-without-denominator",
@@ -941,8 +803,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.bypass-subject-preflight",
@@ -959,8 +820,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.completion-without-denominator",
@@ -976,8 +836,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.disable-deterministic-fallback",
@@ -994,8 +853,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.duplicate-run-on-reconnect",
@@ -1007,8 +865,7 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.expose-forbidden-or-not-found",
@@ -1024,8 +881,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.mutate-fixture-differently-go-python",
@@ -1037,8 +893,7 @@
       "test_nodeids": [],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.no-data-to-zero",
@@ -1054,8 +909,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.remove-mention-from-set",
@@ -1071,8 +925,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.remove-relationship-filtering",
@@ -1088,8 +941,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.restore-org-fallback",
@@ -1105,8 +957,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "mutation.single-signal-struggling-team",
@@ -1122,8 +973,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "defect.ask-dev-exact-commit",
@@ -1139,8 +989,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "defect.ask-dev-exact-commit.e2e-live-validated",
@@ -1162,10 +1011,6 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "stream_terminated_as_answer"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -1183,8 +1028,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "defect.ask-dev-not-found.e2e-live-validated",
@@ -1205,10 +1049,6 @@
         "error_code_is_scope_not_found",
         "no_answer_produced",
         "safe_message_does_not_name_subject"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -1227,8 +1067,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "defect.bare-name-leak-graceful-terminal",
@@ -1249,8 +1088,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "defect.bare-name-prompt-allowlist-consistency",
@@ -1276,8 +1114,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "defect.organization-readiness-honest-denominator",
@@ -1306,8 +1143,7 @@
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
-      "required_assertion_names": [],
-      "stale_dependencies": []
+      "required_assertion_names": []
     },
     {
       "id": "positive-control.real-project-status",
@@ -1327,10 +1163,6 @@
         "answer_completed_event_present",
         "answer_status_not_error",
         "answer_summary_not_empty"
-      ],
-      "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py",
-        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     }
   ]

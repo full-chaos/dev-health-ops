@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 
-from scripts.acceptance import wave31_manifest
 from scripts.acceptance.acceptance_artifact import (
     RUNTIME_DEPENDENCY_PATHS,
     AcceptanceFailure,
@@ -512,21 +511,13 @@ def test_every_blocked_item_reason_matches_independent_snapshot() -> None:
         assert by_id[item_id].blocked_reason == blocked_snapshot[item_id], item_id
 
 
-def test_blocked_reason_mutation_is_actually_caught(monkeypatch) -> None:
+def test_blocked_reason_mutation_is_actually_caught() -> None:
     """RED-then-GREEN proof for the fix above: plant codex's exact
     demonstrated bypass (a reason that is 'fabricated but nonempty') on a
     real blocked item and confirm the independent-snapshot check -- not
     validate_manifest's non-empty check -- is what catches it.
-
-    The declaration set is emptied because this validates a SYNTHETIC
-    one-item manifest: every real ``DECLARED_STALE_ARTIFACTS`` entry names a
-    row that manifest does not contain, and the cross-check would rightly
-    report each as acknowledging nothing. That is a different assertion than
-    the one this test makes, and letting it fire here would turn a targeted
-    RED-then-GREEN proof into a test that fails for an unrelated reason.
     """
 
-    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
     # CHAOS-3393: matrix.organization-portfolio-status flipped to
     # proven_unit (status.portfolio.v1 is wired now), so this RED-then-
     # GREEN proof uses a different item that is still genuinely blocked.
@@ -649,13 +640,7 @@ def test_validate_manifest_catches_unknown_status() -> None:
 
 def test_validate_manifest_is_clean_over_a_single_well_formed_item(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    # Synthetic one-item manifest: see the note on the same monkeypatch in
-    # test_blocked_reason_mutation_is_actually_caught. "Clean" here means
-    # this item is well formed, not that the repository's real declaration
-    # set happens to be empty.
-    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
     commit_sha = _init_throwaway_git_repo(tmp_path)
     artifact_path = _write_valid_artifact(
         tmp_path,
@@ -803,39 +788,6 @@ def test_validate_execution_artifact_rejects_a_non_immutable_commit_ish(
         or "no commit_sha" in error
         for error in errors
     )
-
-
-def test_validate_execution_artifact_rejects_a_drifted_runtime_dependency(
-    tmp_path: Path,
-) -> None:
-    """codex finding (HIGH, 2026-08-03): script_sha256 covered the smoke
-    script and nothing else, so changing the scripted provider left every
-    artifact validating clean while the recorded run was no longer
-    reproducible. Editing ONE covered dependency must now fail the row."""
-
-    commit_sha = _init_throwaway_git_repo(tmp_path)
-    for relative in RUNTIME_DEPENDENCY_PATHS:
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("original\n")
-    artifact_path = _write_valid_artifact(
-        tmp_path,
-        scenario_id="drifted",
-        script_relative="smoke_drifted.py",
-        commit_sha=commit_sha,
-        runtime_hashes=runtime_dependency_hashes(tmp_path),
-    )
-    item = _proven_e2e_item(
-        execution_artifact=str(artifact_path.relative_to(tmp_path)),
-        evidence="smoke_drifted.py",
-    )
-    # Control: the artifact validates while the fixture surface is intact.
-    assert validate_execution_artifact(tmp_path, item) == []
-
-    provider = tmp_path / "src/dev_health_ops/llm/agent/scripted_openai_service.py"
-    provider.write_text("# the fixture provider changed after the run\n")
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("is STALE" in error for error in errors)
 
 
 def test_validate_execution_artifact_rejects_an_artifact_with_no_runtime_digest(
@@ -1565,13 +1517,12 @@ def test_build_report_shape_over_the_real_manifest() -> None:
             "requires_live_infra",
             "execution_artifact",
             "required_assertion_names",
-            "stale_dependencies",
         }
-    # Staleness is reported at the top level too, so a reader scanning the
-    # tally cannot miss it -- see DECLARED_STALE_ARTIFACTS.
-    assert isinstance(report["stale_row_count"], int)
-    assert isinstance(report["stale_rows"], dict)
-    assert report["stale_row_count"] == len(report["stale_rows"])
+    # CHAOS-3479: the stale_dependencies / stale_row_count / stale_rows
+    # fields are GONE with the dependency-drift mechanism. Asserting the
+    # item key set is exact (== not <=) is what keeps this honest: if a
+    # future change re-adds a staleness field, this fails rather than
+    # silently tolerating it.
     # JSON-round-trippable -- a report a downstream tool cannot parse is not
     # a machine-readable deliverable.
     json.dumps(report)
@@ -1612,144 +1563,6 @@ def test_every_test_nodeid_file_half_is_one_of_its_item_evidence() -> None:
             assert file_part in item.evidence, (
                 f"{item.id}: {node_id} is not under its own evidence {item.evidence}"
             )
-
-
-# --- staleness semantics: a digest mismatch makes a row STALE, not invalid.
-# Silent staleness fails; declared staleness passes and is reported. See
-# wave31_manifest.DECLARED_STALE_ARTIFACTS for why. ---
-
-
-def _current_hash(root: Path, relative: str) -> str:
-    return hashlib.sha256((root / relative).read_bytes()).hexdigest()
-
-
-def _stale_fixture(tmp_path: Path) -> tuple[ManifestItem, str]:
-    """A valid proven_e2e row whose fixture surface has since drifted on
-    exactly one covered path. Returns the item and that path."""
-
-    commit_sha = _init_throwaway_git_repo(tmp_path)
-    artifact_path = _write_valid_artifact(
-        tmp_path,
-        scenario_id="stale",
-        script_relative="smoke_stale.py",
-        commit_sha=commit_sha,
-        runtime_hashes=runtime_dependency_hashes(tmp_path),
-    )
-    drifted = "pyproject.toml"
-    (tmp_path / drifted).write_text("# a routine dependency bump\n")
-    return (
-        _proven_e2e_item(
-            execution_artifact=str(artifact_path.relative_to(tmp_path)),
-            evidence="smoke_stale.py",
-        ),
-        drifted,
-    )
-
-
-def test_undeclared_staleness_fails(tmp_path: Path, monkeypatch) -> None:
-    item, drifted = _stale_fixture(tmp_path)
-    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("is STALE" in error and drifted in error for error in errors)
-
-
-def test_declared_staleness_passes_and_is_reported(tmp_path: Path, monkeypatch) -> None:
-    item, drifted = _stale_fixture(tmp_path)
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {item.id: {drifted: _current_hash(tmp_path, drifted)}},
-    )
-    assert validate_execution_artifact(tmp_path, item) == []
-    # ...but it is never silent: the row is still reported as stale.
-    assert wave31_manifest.stale_rows(tmp_path, (item,)) == {item.id: [drifted]}
-
-
-def test_a_declaration_cannot_hide_extra_drift(tmp_path: Path, monkeypatch) -> None:
-    """Declaring one drifted path while a second also drifted must fail --
-    a partial declaration is exactly how real drift would get buried."""
-
-    item, drifted = _stale_fixture(tmp_path)
-    (tmp_path / "requirements.txt").write_text("# also bumped\n")
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {item.id: {drifted: _current_hash(tmp_path, drifted)}},
-    )
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("does not match reality" in error for error in errors)
-    assert any("requirements.txt" in error for error in errors)
-
-
-def test_a_declaration_cannot_pre_declare_undrifted_paths(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Naming a path that has NOT drifted must fail, or an author could
-    pre-declare every covered path once and buy permanent silence."""
-
-    item, drifted = _stale_fixture(tmp_path)
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {
-            item.id: {
-                drifted: _current_hash(tmp_path, drifted),
-                "docker/Dockerfile": _current_hash(tmp_path, "docker/Dockerfile"),
-            }
-        },
-    )
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("does not match reality" in error for error in errors)
-
-
-def test_a_stale_declaration_must_be_removed_after_a_re_mint(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The self-cleaning property: once the scenario is re-run there is no
-    drift, and a leftover declaration then FAILS. A stale flag must never
-    outlive the staleness it describes."""
-
-    commit_sha = _init_throwaway_git_repo(tmp_path)
-    artifact_path = _write_valid_artifact(
-        tmp_path,
-        scenario_id="fresh",
-        script_relative="smoke_fresh.py",
-        commit_sha=commit_sha,
-        runtime_hashes=runtime_dependency_hashes(tmp_path),
-    )
-    item = _proven_e2e_item(
-        execution_artifact=str(artifact_path.relative_to(tmp_path)),
-        evidence="smoke_fresh.py",
-    )
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {item.id: {"pyproject.toml": _current_hash(tmp_path, "pyproject.toml")}},
-    )
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("nothing has drifted" in error for error in errors)
-
-
-def test_a_declaration_does_not_exempt_a_path_forever(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """codex finding (MED, 2026-08-03), the repro that forced hashes into
-    the declaration: a path-only declaration absorbed EVERY later change to
-    that same file, so one entry silenced that dependency permanently. The
-    declaration acknowledges one specific hash, so the next edit fails."""
-
-    item, drifted = _stale_fixture(tmp_path)
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {item.id: {drifted: _current_hash(tmp_path, drifted)}},
-    )
-    assert validate_execution_artifact(tmp_path, item) == []
-
-    # The same covered path changes AGAIN, to different bytes.
-    (tmp_path / drifted).write_text("# a second, unacknowledged bump\n")
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("changed AGAIN since the drift was acknowledged" in e for e in errors)
 
 
 def test_an_artifact_with_extra_dependency_keys_is_rejected(tmp_path: Path) -> None:
@@ -1822,26 +1635,6 @@ def test_an_artifact_whose_aggregate_disagrees_with_its_parts_is_rejected(
     )
     errors = validate_execution_artifact(tmp_path, item)
     assert any("does not agree with its own per-path digests" in e for e in errors)
-
-
-def test_a_declaration_for_an_unknown_row_or_path_is_rejected(monkeypatch) -> None:
-    """The declaration table is checked too: a typo'd id or an
-    out-of-coverage path would otherwise be a silent no-op that reads like
-    an acknowledged risk."""
-
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {"no.such.row": {"pyproject.toml": "0" * 64}},
-    )
-    assert any("no manifest item has that id" in e for e in validate_manifest(_ROOT))
-
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {"gate.migration-coexistence": {"src/not/covered.py": "0" * 64}},
-    )
-    assert any("not covered dependencies" in e for e in validate_manifest(_ROOT))
 
 
 def test_the_report_states_what_proven_e2e_does_not_assert() -> None:

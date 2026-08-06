@@ -17,7 +17,16 @@ from tests._env_isolation import (
     scrub_ambient_env,
 )
 
+#: Env var carrying the scrub record across a process boundary (CHAOS-3462).
+#: Deliberately NOT a name any ``src/`` module reads and not in
+#: ``.env.example``, so it is absent from ``SCRUB_ENV_NAMES`` and the scrub
+#: never deletes its own record.
+SCRUB_RECORD_ENV = "DEV_HEALTH_TEST_SCRUBBED_ENV_NAMES"
+
 _SCRUBBED_ENV_NAMES: list[str] = []
+#: The union of this process's scrub and any inherited from a parent (an
+#: xdist controller). See :func:`scrubbed_env_names`.
+_SCRUB_RECORD: list[str] = []
 _KEPT_ENV_NAMES: list[str] = []
 #: Scrub-list names still present in ``os.environ`` immediately AFTER the scrub.
 #: Must stay empty. Snapshotted at configure time rather than read live at
@@ -136,29 +145,54 @@ def pytest_configure(config):
 
     kept = exempted_names() | lane_conditional_keeps()
     _KEPT_ENV_NAMES[:] = sorted(kept)
+    inherited = _inherited_scrub_record()
     _SCRUBBED_ENV_NAMES[:] = scrub_ambient_env(os.environ, exempt=kept)
+    # CHAOS-3462: carry the record ACROSS the process boundary. The list
+    # above is process-local, but an xdist controller scrubs and then spawns
+    # workers whose environment no longer has the variables -- so a worker's
+    # own scrub removes nothing and records nothing, and it cannot tell
+    # "never set" from "the controller ate it". Writing the union into an
+    # env var the scrub itself does not touch (it is read by no src/ module
+    # and absent from .env.example, so it is not in SCRUB_ENV_NAMES) makes
+    # the evidence survive the fork, which is exactly what the corpus
+    # runner's armed-but-scrubbed guard needs. Unioned, never overwritten,
+    # so a worker cannot erase what the controller recorded.
+    _SCRUB_RECORD[:] = sorted(inherited | set(_SCRUBBED_ENV_NAMES))
+    if _SCRUB_RECORD:
+        os.environ[SCRUB_RECORD_ENV] = ",".join(_SCRUB_RECORD)
     _POST_SCRUB_RESIDUE[:] = sorted(
         name for name in SCRUB_ENV_NAMES if name not in kept and name in os.environ
     )
     _SCRUB_RAN = True
 
 
+def _inherited_scrub_record() -> set[str]:
+    raw = os.environ.get(SCRUB_RECORD_ENV, "")
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
 def scrubbed_env_names() -> tuple[str, ...]:
-    """Names the CHAOS-3402 scrub actually REMOVED this session.
+    """Names the CHAOS-3402 scrub removed, in THIS process or an ancestor.
 
-    A name appears here only if it was PRESENT in the environment and then
-    deleted, which makes this list positive evidence about what the shell
-    was carrying -- evidence that survives the deletion of the variables
-    themselves. CHAOS-3462 B1 needs exactly that: the live corpus runner's
-    arming flag is in ``SCRUB_ENV_NAMES``, so a correctly-armed run has no
-    way to know it was armed except by asking what the scrub took.
+    A name appears here only if it was PRESENT in some process's environment
+    and then deleted, which makes this list positive evidence about what the
+    invoking shell was carrying -- evidence that survives the deletion of
+    the variables themselves. CHAOS-3462 B1 needs exactly that: the live
+    corpus runner's arming flag is in ``SCRUB_ENV_NAMES``, so a
+    correctly-armed run has no other way to know it was armed.
 
-    Public (unlike the ``_SCRUBBED_ENV_NAMES`` list it copies) because it is
-    a supported read for test modules, and returns a tuple so a caller
-    cannot mutate the record.
+    Includes the record inherited from a parent process (see
+    :data:`SCRUB_RECORD_ENV`), because under xdist the process that does the
+    scrubbing is the controller and the process that runs the tests is a
+    worker. Reporting only this process's own scrub would make every worker
+    look like a clean, never-armed run.
+
+    Public (unlike the private lists it reads) because it is a supported
+    read for test modules, and returns a tuple so a caller cannot mutate the
+    record.
     """
 
-    return tuple(_SCRUBBED_ENV_NAMES)
+    return tuple(_SCRUB_RECORD)
 
 
 @pytest.fixture(scope="session")

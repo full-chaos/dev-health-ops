@@ -237,6 +237,7 @@ class PrincipalSessions:
         self._api_factory = api_factory
         self._directory = directory
         self._sessions: dict[str, PrincipalSession] = {}
+        self._failures: dict[str, BaseException] = {}
 
     def session_for(self, case: Any) -> PrincipalSession:
         principal = self._directory.principal_for(case)
@@ -252,7 +253,23 @@ class PrincipalSessions:
         cached = self._sessions.get(principal.user_alias)
         if cached is not None:
             return cached
-        session = self._authenticate(principal)
+        # NEGATIVE caching, deliberately (Codex adversarial round-1, MEDIUM):
+        # only successes were cached before, so a set-password that succeeded
+        # followed by a transient login failure left nothing cached -- and
+        # every later case using that alias re-ran the admin password
+        # mutation. With 137 cases on `primary.ordinary` and the endpoint
+        # rate-limited to a handful per hour, one login blip turned into a
+        # storm of 429s that both buried the original error and kept mutating
+        # shared world state. The first failure is now final for that alias
+        # and is re-raised verbatim, so the run fails on the REAL cause.
+        previous = self._failures.get(principal.user_alias)
+        if previous is not None:
+            raise previous
+        try:
+            session = self._authenticate(principal)
+        except BaseException as exc:
+            self._failures[principal.user_alias] = exc
+            raise
         self._sessions[principal.user_alias] = session
         return session
 
@@ -302,10 +319,23 @@ class PrincipalSessions:
                 "evaluated against the wrong tenant and could pass while "
                 "proving nothing."
             )
+        # REQUIRED, not best-effort (Codex adversarial round-1, HIGH): an
+        # earlier version skipped this check when `id` was absent. Because
+        # the dev routers trust the JWT's own claims, a response carrying a
+        # superuser token and only the expected org_id would have been
+        # accepted and installed -- the case would then run as the WRONG
+        # identity in the RIGHT org and report success. Absence of the field
+        # is unverifiable, which is exactly the state that must fail.
         returned_user_id = user.get("id")
-        if returned_user_id is not None and str(returned_user_id) != str(
-            principal.user_id
-        ):
+        if returned_user_id is None:
+            raise PrincipalError(
+                f"login as {principal.email!r} returned a user object with no "
+                f"'id' -- cannot confirm the token belongs to alias "
+                f"{principal.user_alias!r} rather than some other account in "
+                "the same org, and an unverifiable identity must never be "
+                "accepted"
+            )
+        if str(returned_user_id) != str(principal.user_id):
             raise PrincipalError(
                 f"login as {principal.email!r} returned user id "
                 f"{returned_user_id!r}, but world.json derives "

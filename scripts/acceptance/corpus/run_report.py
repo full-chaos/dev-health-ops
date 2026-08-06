@@ -61,12 +61,25 @@ class ArmedRunNotExecutedError(Exception):
     """An armed run finished without executing any case."""
 
 
+#: The parametrized test that drives ONE real corpus case. Counting any
+#: non-skipped testcase is not good enough (Codex adversarial round-1, HIGH,
+#: reproduced): with ``-k test_at_least_one_corpus_case_is_collected`` the
+#: run executes only the collection guard -- tests=1, skipped=0 -- and a
+#: bare executed-count assertion passes while ZERO product cases ran.
+#: ``test_declared_blocked_case`` has the same shape: it executes, touches
+#: nothing, and would satisfy a naive count.
+CORPUS_CASE_TEST_NAME = "test_corpus_case"
+
+
 @dataclass(frozen=True, slots=True)
 class RunSummary:
     tests: int
     failures: int
     errors: int
     skipped: int
+    #: Names of the ``<testcase>`` elements that actually RAN (no
+    #: ``<skipped>`` child), e.g. ``test_corpus_case[scope.ambiguous]``.
+    executed_names: tuple[str, ...] = ()
 
     @property
     def executed(self) -> int:
@@ -78,6 +91,16 @@ class RunSummary:
         """
 
         return self.tests - self.skipped
+
+    @property
+    def executed_corpus_cases(self) -> tuple[str, ...]:
+        """The executed testcases that are real corpus cases."""
+
+        return tuple(
+            name
+            for name in self.executed_names
+            if name.startswith(CORPUS_CASE_TEST_NAME)
+        )
 
 
 def _int_attr(element: ElementTree.Element, name: str) -> int:
@@ -128,10 +151,19 @@ def parse_junit_xml(text: str) -> RunSummary:
         )
 
     totals = {name: 0 for name in _COUNTER_ATTRS}
+    executed_names: list[str] = []
     for suite in suites:
         for name in _COUNTER_ATTRS:
             totals[name] += _int_attr(suite, name)
-    return RunSummary(**totals)
+        for case in suite.iter("testcase"):
+            # A skipped testcase carries a <skipped> child; anything else
+            # (pass, failure, error) actually ran.
+            if case.find("skipped") is not None:
+                continue
+            case_name = case.get("name")
+            if case_name:
+                executed_names.append(case_name)
+    return RunSummary(**totals, executed_names=tuple(executed_names))
 
 
 def read_junit_report(path: Path) -> RunSummary:
@@ -151,7 +183,14 @@ def read_junit_report(path: Path) -> RunSummary:
 
 
 def assert_armed_run_executed(summary: RunSummary, *, min_executed: int = 1) -> None:
-    """Raise unless an ARMED run executed at least ``min_executed`` cases.
+    """Raise unless an ARMED run executed at least ``min_executed`` real
+    corpus cases.
+
+    Counts ``test_corpus_case[...]`` specifically, not "any non-skipped
+    testcase" (Codex adversarial round-1, HIGH, reproduced): the module's
+    other tests -- the collection guard and the declared-blocked receipts --
+    execute without touching the stack, so a run filtered down to them alone
+    would satisfy a naive count while proving nothing about the product.
 
     Deliberately says nothing about whether those cases PASSED. A red run is
     already loud on its own; re-flagging it here would blur two distinct
@@ -159,19 +198,24 @@ def assert_armed_run_executed(summary: RunSummary, *, min_executed: int = 1) -> 
     one no other check in this stack can see.
     """
 
-    if summary.executed >= min_executed and summary.tests > 0:
+    executed_cases = summary.executed_corpus_cases
+    if len(executed_cases) >= min_executed:
         return
     raise ArmedRunNotExecutedError(
-        f"ARMED corpus run executed {summary.executed} case(s) "
-        f"(collected {summary.tests}, skipped {summary.skipped}, "
-        f"failed {summary.failures}, errored {summary.errors}) -- at least "
-        f"{min_executed} must execute. An armed run that executes nothing "
-        "reports exit 0 and reads as a pass; that is the CHAOS-3462 B1 "
-        "false green. Most likely cause: the CHAOS-3402 env scrub removed "
-        f"the arming variables -- check that {'DEV_HEALTH_TEST_ENV_ALLOW'} "
-        "was exported (scripts/acceptance/run_wave4_corpus.sh does this), "
-        "and read the pytest header, which echoes every scrubbed and "
-        "exempted name."
+        f"ARMED corpus run executed {len(executed_cases)} real corpus "
+        f"case(s) -- at least {min_executed} must execute. The run reported "
+        f"{summary.tests} collected / {summary.executed} executed / "
+        f"{summary.skipped} skipped / {summary.failures} failed / "
+        f"{summary.errors} errored, but only testcases named "
+        f"{CORPUS_CASE_TEST_NAME}[...] count: the collection guard and the "
+        "declared-blocked receipts execute without touching the stack. An "
+        "armed run that executes no product case reports exit 0 and reads "
+        "as a pass; that is the CHAOS-3462 B1 false green. Likely causes: "
+        "the CHAOS-3402 env scrub removed the arming variables (check that "
+        "DEV_HEALTH_TEST_ENV_ALLOW was exported -- "
+        "scripts/acceptance/run_wave4_corpus.sh does this, and the pytest "
+        "header echoes every scrubbed and exempted name), or a -k/--deselect "
+        "filter narrowed the run away from the corpus."
     )
 
 

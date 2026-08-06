@@ -435,6 +435,72 @@ class TestPrincipalSessions:
             "attempted a login despite provisioning failing"
         )
 
+    def test_a_login_with_no_user_id_fails_loud(self) -> None:
+        """Codex adversarial round-1, HIGH: the id check used to be skipped
+        when the field was absent, so a response carrying a SUPERUSER token
+        and only the expected org_id was accepted and installed. Because the
+        dev routers trust the JWT's claims, the case would then have run as
+        the wrong identity in the right org and reported success."""
+
+        principal = self._principal()
+        admin = _FakeApi(
+            {
+                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
+                    "ok": True
+                }
+            }
+        )
+        principal_api = _FakeApi(
+            {
+                ("POST", "/api/v1/auth/login"): {
+                    "access_token": "a-superuser-token",
+                    "user": {"org_id": str(principal.org_id)},
+                }
+            }
+        )
+        sessions = PrincipalSessions(
+            admin_api=admin,
+            admin_password="pw",
+            api_factory=lambda: principal_api,
+            directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+        )
+        with pytest.raises(PrincipalError, match="no.*'id'"):
+            sessions.session_for_alias("primary.ordinary")
+        assert principal_api.token is None, "an unverified token was installed"
+
+    def test_a_failed_alias_is_not_retried_for_every_later_case(self) -> None:
+        """Codex adversarial round-1, MEDIUM: only successes were cached, so
+        a set-password that succeeded followed by a failing login made every
+        subsequent case using that alias re-run the admin password mutation.
+        With 137 cases on one alias and a per-hour rate limit, one blip
+        became a storm of 429s that buried the real error."""
+
+        principal = self._principal()
+        admin = _FakeApi(
+            {
+                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
+                    "ok": True
+                }
+            }
+        )
+        principal_api = _FakeApi(
+            {("POST", "/api/v1/auth/login"): RuntimeError("login 503")}
+        )
+        sessions = PrincipalSessions(
+            admin_api=admin,
+            admin_password="pw",
+            api_factory=lambda: principal_api,
+            directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+        )
+        for _ in range(5):
+            with pytest.raises(RuntimeError, match="login 503"):
+                sessions.session_for_alias("primary.ordinary")
+        assert len(admin.calls) == 1, (
+            "the admin password endpoint was called again after the first "
+            f"failure ({len(admin.calls)} times) -- shared state keeps being "
+            "mutated and the rate limit will bury the original error"
+        )
+
     def test_an_unknown_alias_never_reaches_the_network(self) -> None:
         admin = _FakeApi({})
         sessions = PrincipalSessions(

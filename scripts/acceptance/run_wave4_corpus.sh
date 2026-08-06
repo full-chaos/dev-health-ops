@@ -52,6 +52,23 @@ print(env_allow_value(os.environ.get("DEV_HEALTH_TEST_ENV_ALLOW")))' \
 )" || exit 70
 export DEV_HEALTH_TEST_ENV_ALLOW
 
+# Refuse parallel execution outright. QuotaBudget is per-process and
+# per-session (its own docstring: "one instance per corpus-runner pytest
+# session"), so N xdist workers would each start from the FULL monthly
+# ceiling and the run could spend N times the budget while every worker
+# believed it was within limits. The arming evidence also only survives the
+# controller->worker boundary via the scrub record, which is a recovery
+# path, not a reason to run this way on purpose.
+for arg in "$@"; do
+  case "${arg}" in
+    -n|--numprocesses|-n*|--numprocesses=*|--dist|--dist=*|--forked)
+      echo "refusing to run the armed corpus in parallel (${arg}): QuotaBudget is" >&2
+      echo "per-process, so each worker would start from the full monthly ceiling." >&2
+      exit 64
+      ;;
+  esac
+done
+
 report_dir="${ops_root}/tests/acceptance/artifacts/wave4"
 report="${report_dir}/junit-corpus.xml"
 mkdir -p "${report_dir}"

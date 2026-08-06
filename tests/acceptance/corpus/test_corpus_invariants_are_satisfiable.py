@@ -54,15 +54,43 @@ _WORLD_DIR = (
 _CORPUS_DIR = _WORLD_DIR / "corpus"
 _PROFILES_DIR = _WORLD_DIR / "resolution-profiles"
 
+
+def _resolution_path_domain() -> frozenset[str]:
+    from typing import get_args
+
+    from scripts.acceptance.corpus.resolution_path import ResolutionPath
+
+    return frozenset(get_args(ResolutionPath))
+
+
+def _public_outcome_domain() -> frozenset[str]:
+    from dev_health_ops.api.dev.contracts_v2.base import PublicOutcome
+
+    return frozenset(member.value for member in PublicOutcome)
+
+
+def _scope_resolution_outcome_domain() -> frozenset[str]:
+    from dev_health_ops.api.dev.contracts import ScopeResolutionOutcome
+
+    return frozenset(member.value for member in ScopeResolutionOutcome)
+
+
 #: Checkers whose ``allowed`` list is resolved through ``_resolve_allowed``
-#: and which unconditionally fail on an unobserved (``None``) value. Keep in
-#: step with ``invariants.py``; ``test_every_value_in_checker_is_covered``
-#: below fails if a new one is registered and not listed here.
-_VALUE_IN_CHECKS = (
-    "resolution_path_in",
-    "public_outcome_in",
-    "scope_resolution_outcome_in",
-)
+#: and which unconditionally fail on an unobserved (``None``) value, mapped
+#: to the PRODUCTION vocabulary each one compares against.
+#:
+#: The domains matter (Codex adversarial round-1, MEDIUM, confirmed): an
+#: earlier version of this guard treated ANY non-null literal as proof of
+#: satisfiability, so ``allowed: ["impossible-path"]`` sailed through while
+#: being every bit as unpassable as ``allowed=[None]`` -- production can
+#: never emit that string. Pulling each domain from the real enum/Literal
+#: rather than restating it here means a vocabulary change cannot leave this
+#: guard quietly checking against a stale list.
+_VALUE_IN_CHECKS: dict[str, Any] = {
+    "resolution_path_in": _resolution_path_domain,
+    "public_outcome_in": _public_outcome_domain,
+    "scope_resolution_outcome_in": _scope_resolution_outcome_domain,
+}
 
 
 def _active_cases() -> list[CorpusCase]:
@@ -88,20 +116,40 @@ def _unsatisfiable(case: CorpusCase, profiles: dict[str, Any]) -> list[str]:
         check = entry.get("check")
         if check not in _VALUE_IN_CHECKS:
             continue
+        domain = _VALUE_IN_CHECKS[check]()
         args = entry.get("args", {}) or {}
-        literal_allowed = [v for v in args.get("allowed", []) if v is not None]
-        if literal_allowed:
-            # A literal non-None allowed value keeps the check satisfiable
-            # regardless of what the profile says.
-            continue
         profile_key = args.get("from_profile")
-        if profile_key is None:
+
+        # Every value this check could ever accept, exactly as
+        # `_resolve_allowed` would assemble it (literals and the profile
+        # value are ADDITIVE, not alternatives).
+        allowed: list[Any] = list(args.get("allowed", []))
+        if profile_key is not None:
+            allowed.append(expectations.get(profile_key))
+
+        if not allowed:
+            problems.append(
+                f"{case.id}: {check} declares neither 'allowed' nor "
+                "'from_profile' -- _resolve_allowed raises "
+                "InvariantCheckError for this at evaluation time, so the "
+                "case can never report a real result"
+            )
             continue
-        if expectations.get(profile_key) is None:
+
+        satisfiable = [v for v in allowed if v is not None and v in domain]
+        if satisfiable:
+            continue
+
+        if all(v is None for v in allowed):
             problems.append(
                 f"{case.id}: {check} resolves allowed=[None] via "
                 f"from_profile={profile_key!r} (profile "
                 f"{case.resolution_profile_ref!r} has null/absent for it)"
+            )
+        else:
+            problems.append(
+                f"{case.id}: {check} allows only {allowed!r}, none of which "
+                f"production can ever emit (domain: {sorted(domain)!r})"
             )
     return problems
 
@@ -144,6 +192,16 @@ class TestEveryActiveCaseCanPass:
             f"(registered={sorted(registered_value_in)}, "
             f"guarded={sorted(_VALUE_IN_CHECKS)})"
         )
+
+    def test_every_guarded_domain_is_non_empty(self) -> None:
+        """Rule 4 again: a domain that resolved to the empty set would make
+        EVERY literal look unsatisfiable, or -- if the emptiness came from a
+        failed import silently caught somewhere -- make the value check
+        vacuous. Assert the oracles actually loaded."""
+
+        for check, domain_fn in _VALUE_IN_CHECKS.items():
+            domain = domain_fn()
+            assert domain, f"{check}'s production value domain resolved empty"
 
 
 class TestGuardActuallyDetectsTheDefect:
@@ -229,6 +287,64 @@ class TestGuardActuallyDetectsTheDefect:
         case = load_corpus_cases(tmp_path)[0]
         profiles = {"planted-v1": load_resolution_profile(profile_path)}
         assert _unsatisfiable(case, profiles) == []
+
+    def test_a_literal_outside_the_production_domain_is_detected(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex adversarial round-1, MEDIUM: a non-null literal production
+        can never emit is exactly as unpassable as ``[None]``, and the
+        earlier guard waved it through."""
+
+        (tmp_path / "case-bogus.json").write_text(
+            json.dumps(
+                {
+                    "id": "planted.bogus-literal",
+                    "question": "q",
+                    "subject_class": "n/a",
+                    "invariants": [
+                        {
+                            "category": "resolution-path-matches-profile",
+                            "check": "resolution_path_in",
+                            "args": {"allowed": ["impossible-path"]},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        case = load_corpus_cases(tmp_path)[0]
+        problems = _unsatisfiable(case, {})
+        assert problems, "a literal outside the production domain was not flagged"
+        assert "production can ever emit" in problems[0]
+
+    def test_an_invariant_with_no_allowed_and_no_from_profile_is_detected(
+        self, tmp_path: Path
+    ) -> None:
+        """``_resolve_allowed`` raises InvariantCheckError for this at
+        evaluation time, so the case can never report a real result -- it
+        should be caught by the unit gate, not by a live run."""
+
+        (tmp_path / "case-empty-args.json").write_text(
+            json.dumps(
+                {
+                    "id": "planted.empty-args",
+                    "question": "q",
+                    "subject_class": "n/a",
+                    "invariants": [
+                        {
+                            "category": "resolution-path-matches-profile",
+                            "check": "resolution_path_in",
+                            "args": {},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        case = load_corpus_cases(tmp_path)[0]
+        problems = _unsatisfiable(case, {})
+        assert problems
+        assert "neither 'allowed' nor 'from_profile'" in problems[0]
 
     def test_a_literal_allowed_value_rescues_a_null_profile_entry(
         self, tmp_path: Path

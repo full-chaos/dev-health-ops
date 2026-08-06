@@ -29,7 +29,7 @@ func TestGitHubPullRequestWorkItemMatchesLivePythonProductionRow(t *testing.T) {
 			}, []any{}),
 		}},
 		buildGitHubPullRequestWorkItemOracleRow,
-		nil,
+		githubWorkItemWriteStampGoOnly,
 	)
 }
 
@@ -68,7 +68,7 @@ func TestGitHubWorkItemStatusTransitionMatchesLivePythonProductionRow(t *testing
 			{ID: "issue_labeled_in_progress", Input: issueInput},
 		},
 		buildGitHubStatusTransitionOracleRow,
-		nil,
+		githubWorkItemWriteStampGoOnly,
 	)
 }
 

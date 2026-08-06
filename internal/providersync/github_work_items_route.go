@@ -201,6 +201,15 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		client.Lease == nil || normalizedAt.IsZero() {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
+	// Every destination column that receives normalizedAt is DateTime64(3), so
+	// the nanoseconds a wall-clock now() carries cannot survive a round trip.
+	// Truncating here rather than only inside REST.Collect (which truncates its
+	// own by-value copy, leaving the PR-bundle and projects-v2 paths below
+	// untouched) keeps the effect payload equal to what ClickHouse stores --
+	// otherwise the readback compares .123456789 against a stored .123, answers
+	// Absent for a row that landed, and the committer rewrites it on every
+	// recovery pass forever. Same fix, same reason, as github_blame_route.go.
+	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	if handler.Deriver == nil {
 		return CompleteRouteBatch{}, ErrGitHubWorkItemsDerivationsUnavailable
 	}

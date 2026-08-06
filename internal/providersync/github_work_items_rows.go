@@ -50,6 +50,24 @@ type githubWorkItemRow struct {
 	ServiceClass  *string    `json:"service_class"`
 	DueAt         *time.Time `json:"due_at"`
 	OrgID         string     `json:"org_id"`
+	// PRECONDITION -- SINGLE WRITER PER TABLE PER ORG. Carrying a deterministic
+	// normalizedAt as the version is only sound while Python's writers are
+	// stopped before Go's start. Under coexistence dual-writing the two would
+	// interleave versions on one key, and Python's wall-clock stamp would
+	// out-version any normalizedAt Go had written. Dual writing is out of scope
+	// BY DESIGN: activation is an atomic alias flip, and a rollback that
+	// re-enables Python correctly out-versions Go's rows for the same reason.
+	// The ACTIVATION LAYER must enforce single-writer; this row cannot. The
+	// same precondition covers the record_id divergence (Python assigns uuid4,
+	// Go derives a stable retry identifier).
+	//
+	// LastSynced is the ReplacingMergeTree version column for `work_items`.
+	// Python stamps it from wall-clock inside the sink writer, which cannot be
+	// reproduced by a retry; carrying the unit's normalizedAt in the effect row
+	// instead keeps the payload — and therefore a recovery-snapshot replay of
+	// it — byte-identical across attempts. Mirrors the four sibling direct rows
+	// that already carry LastSynced.
+	LastSynced time.Time `json:"last_synced"`
 }
 
 type githubWorkItemTransitionRow struct {
@@ -62,6 +80,8 @@ type githubWorkItemTransitionRow struct {
 	ToStatus      string    `json:"to_status"`
 	Actor         *string   `json:"actor"`
 	OrgID         string    `json:"org_id"`
+	// LastSynced: see githubWorkItemRow.LastSynced.
+	LastSynced time.Time `json:"last_synced"`
 }
 
 type githubWorkItemDependencyRow struct {
@@ -271,7 +291,7 @@ func normalizeGitHubIssueWorkItem(
 		ProjectID: &projectID, Assignees: assignees, Reporter: reporter,
 		CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(), ClosedAt: closedAt,
 		Labels: labels, URL: url, PriorityRaw: priority, ServiceClass: serviceClass,
-		OrgID: claim.OrgID,
+		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
 	}
 	if closedAt != nil {
 		copy := closedAt.UTC()
@@ -492,6 +512,7 @@ func normalizeGitHubPullRequestBundle(
 		CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(), StartedAt: &startedAt,
 		ClosedAt: closedAt, Labels: labels, URL: urlValue,
 		PriorityRaw: priority, ServiceClass: serviceClass, OrgID: claim.OrgID,
+		LastSynced: normalizedAt.UTC(),
 	}
 	if mergedAt != nil {
 		completed := mergedAt.UTC()
@@ -622,6 +643,7 @@ func normalizeGitHubWorkItemEvents(
 				WorkItemID: workItemID, Provider: "github", OccurredAt: transitionAt,
 				ToStatusRaw: nullableString(toRaw), FromStatus: previous,
 				ToStatus: toStatus, OrgID: claim.OrgID,
+				LastSynced: normalizedAt.UTC(),
 			}
 			if err := transition.validate(claim); err != nil {
 				return nil, nil, err
@@ -1206,7 +1228,8 @@ func (row githubWorkItemRow) validate(claim Claim) error {
 	if row.Provider != "github" || row.OrgID == "" || row.OrgID != claim.OrgID ||
 		row.WorkItemID == "" || row.RepoID == nil || *row.RepoID == uuid.Nil ||
 		row.Title == "" || row.Type == "" || row.Status == "" ||
-		row.CreatedAt.IsZero() || row.UpdatedAt.IsZero() || row.Assignees == nil || row.Labels == nil {
+		row.CreatedAt.IsZero() || row.UpdatedAt.IsZero() || row.Assignees == nil ||
+		row.Labels == nil || row.LastSynced.IsZero() {
 		return providerfoundation.ErrInvalidScope
 	}
 	return nil
@@ -1223,7 +1246,8 @@ func (row githubSprintRow) validate(claim Claim) error {
 
 func (row githubWorkItemTransitionRow) validate(claim Claim) error {
 	if row.WorkItemID == "" || row.Provider != "github" || row.OccurredAt.IsZero() ||
-		row.FromStatus == "" || row.ToStatus == "" || row.OrgID == "" || row.OrgID != claim.OrgID {
+		row.FromStatus == "" || row.ToStatus == "" || row.OrgID == "" ||
+		row.OrgID != claim.OrgID || row.LastSynced.IsZero() {
 		return providerfoundation.ErrInvalidScope
 	}
 	return nil

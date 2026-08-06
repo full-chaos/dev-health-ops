@@ -67,16 +67,151 @@ func TestNormalizeWatermarkWriteClampsToBothCeilings(t *testing.T) {
 
 func ptrTime(value time.Time) *time.Time { return &value }
 
+// TestNormalizeWatermarkWriteReturnsUTC pins the REPRESENTATION half of the
+// boundary, which the table above cannot see: time.Time comparisons are
+// instant-based, so dropping the `.UTC()` normalization changes no verdict and
+// no stored timestamptz, and every case there would still pass.
+//
+// What it does change is what the value PRINTS as. The clamp warning formats
+// both the requested and the clamped value with RFC3339Nano, and the
+// normalizer is the one place a provider-supplied timestamp -- which arrives
+// in whatever zone the provider's API used -- crosses into this repository's
+// watermark path. A boundary that emitted mixed offsets would make the one
+// diagnostic that explains a silent coverage gap unreadable, and it would
+// diverge from Python's `_normalize_watermark_write`, which returns UTC.
+func TestNormalizeWatermarkWriteReturnsUTC(t *testing.T) {
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	elsewhere := time.FixedZone("UTC+5:30", 5*3600+1800)
+	windowEnd := now.Add(-6 * time.Hour).In(elsewhere)
+	for _, test := range []struct {
+		name     string
+		incoming time.Time
+		bound    *time.Time
+	}{
+		{
+			name:     "an unclamped value is returned in UTC",
+			incoming: now.Add(-time.Hour).In(elsewhere),
+			bound:    nil,
+		},
+		{
+			name:     "a value clamped to now is returned in UTC",
+			incoming: now.Add(72 * time.Hour).In(elsewhere),
+			bound:    nil,
+		},
+		{
+			name:     "a value clamped to a non-UTC window end is returned in UTC",
+			incoming: now.Add(-time.Hour).In(elsewhere),
+			bound:    &windowEnd,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := normalizeWatermarkWrite(test.incoming, test.bound, now, "org", "src", "commits")
+			if got.Location() != time.UTC {
+				t.Fatalf("normalizeWatermarkWrite returned %s (location %s), want UTC",
+					got.Format(time.RFC3339Nano), got.Location())
+			}
+		})
+	}
+}
+
+const (
+	watermarkSQLName        = "upsertWatermarkSQL"
+	watermarkNormalizerName = "normalizeWatermarkWrite"
+)
+
+// callsTheNormalizer reports whether an expression's subtree contains a direct
+// call to normalizeWatermarkWrite.
+func callsTheNormalizer(node ast.Node) bool {
+	found := false
+	ast.Inspect(node, func(inner ast.Node) bool {
+		call, ok := inner.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if identifier, ok := call.Fun.(*ast.Ident); ok &&
+			identifier.Name == watermarkNormalizerName {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// normalizerDerivedNames returns the local identifiers in one function body
+// whose value came out of normalizeWatermarkWrite. This is the dataflow half:
+// the production writer passes `normalized`, not the call itself, so a
+// call-site check that only looked for a literal call expression would report
+// the compliant writer as a bypass.
+func normalizerDerivedNames(body *ast.BlockStmt) map[string]bool {
+	derived := map[string]bool{}
+	ast.Inspect(body, func(node ast.Node) bool {
+		switch statement := node.(type) {
+		case *ast.AssignStmt:
+			for index, target := range statement.Lhs {
+				identifier, ok := target.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				var value ast.Expr
+				switch {
+				case len(statement.Rhs) == len(statement.Lhs):
+					value = statement.Rhs[index]
+				case len(statement.Rhs) == 1:
+					// `a, err := f(...)` -- any result of a normalizer call is
+					// treated as derived, which is the conservative direction.
+					value = statement.Rhs[0]
+				default:
+					continue
+				}
+				if callsTheNormalizer(value) {
+					derived[identifier.Name] = true
+				}
+			}
+		case *ast.ValueSpec:
+			for index, name := range statement.Names {
+				if index < len(statement.Values) && callsTheNormalizer(statement.Values[index]) {
+					derived[name.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return derived
+}
+
+// carriesANormalizedValue reports whether an argument expression is, or is
+// built from, a normalizeWatermarkWrite result.
+func carriesANormalizedValue(argument ast.Expr, derived map[string]bool) bool {
+	if callsTheNormalizer(argument) {
+		return true
+	}
+	found := false
+	ast.Inspect(argument, func(node ast.Node) bool {
+		if identifier, ok := node.(*ast.Ident); ok && derived[identifier.Name] {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
 // TestEveryWatermarkWriteRoutesThroughTheNormalizer is clause C10(c)'s
 // coverage obligation, and it is DERIVED rather than hand-listed on purpose.
 //
 // Python's lane closed this class twice and got it wrong the first time
 // exactly by hand-enumerating writers: a second writer sat outside the
 // boundary while the class was reported closed. So this test parses this
-// package's own source, finds every call that executes upsertWatermarkSQL,
-// and requires each one to be preceded by a normalizeWatermarkWrite call in
-// the same function -- with a vacuity guard, because a derivation that finds
-// nothing must FAIL rather than read as "all writers are compliant".
+// package's own source, finds every CALL SITE that executes
+// upsertWatermarkSQL, and requires THAT SITE to be passed a value produced by
+// normalizeWatermarkWrite -- with a vacuity guard, because a derivation that
+// finds nothing must FAIL rather than read as "all writers are compliant".
+//
+// PER CALL SITE is the whole point, and it is what this guard originally got
+// wrong. Its first form asked only whether both names appeared SOMEWHERE in
+// the same function, so a function containing one compliant writer and one
+// bypassing writer -- the exact shape Python shipped -- passed it. That
+// weakened form was observed passing a planted second writer before this
+// version was written.
 //
 // The AST walk is scoped to non-test files: a test may legitimately write a
 // deliberately-corrupt row directly to seed the state the boundary exists to
@@ -88,7 +223,7 @@ func TestEveryWatermarkWriteRoutesThroughTheNormalizer(t *testing.T) {
 		t.Fatal(err)
 	}
 	fileSet := token.NewFileSet()
-	writers := 0
+	callSites := 0
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -103,38 +238,62 @@ func TestEveryWatermarkWriteRoutesThroughTheNormalizer(t *testing.T) {
 			if !ok || function.Body == nil {
 				continue
 			}
-			executes, normalizes := false, false
+			derived := normalizerDerivedNames(function.Body)
+			measured := map[*ast.Ident]bool{}
 			ast.Inspect(function.Body, func(node ast.Node) bool {
-				identifier, ok := node.(*ast.Ident)
+				call, ok := node.(*ast.CallExpr)
 				if !ok {
 					return true
 				}
-				switch identifier.Name {
-				case "upsertWatermarkSQL":
-					executes = true
-				case "normalizeWatermarkWrite":
-					normalizes = true
+				statement := -1
+				for index, argument := range call.Args {
+					identifier, ok := argument.(*ast.Ident)
+					if ok && identifier.Name == watermarkSQLName {
+						statement, measured[identifier] = index, true
+						break
+					}
 				}
+				if statement < 0 {
+					return true
+				}
+				callSites++
+				for index, argument := range call.Args {
+					if index != statement && carriesANormalizedValue(argument, derived) {
+						return true
+					}
+				}
+				t.Errorf("%s:%d: %s executes %s with no argument produced by %s. "+
+					"A bypassing writer poisons every dataset that reads through "+
+					"a shared or fallback watermark row -- and a sibling compliant "+
+					"writer in the same function does not cover it.",
+					name, fileSet.Position(call.Pos()).Line, function.Name.Name,
+					watermarkSQLName, watermarkNormalizerName)
 				return true
 			})
-			if !executes {
-				continue
-			}
-			writers++
-			if !normalizes {
-				t.Errorf("%s: %s executes upsertWatermarkSQL without routing the "+
-					"value through normalizeWatermarkWrite. A bypassing writer "+
-					"poisons every dataset that reads through a shared or "+
-					"fallback watermark row.", name, function.Name.Name)
-			}
+			// MEASUREMENT GUARD: a reference to the SQL constant that is not an
+			// argument of a call is a shape this derivation cannot judge (it is
+			// stored in a variable, wrapped by a helper, or interpolated). That
+			// is an unmeasured writer, and it must fail rather than be skipped.
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				identifier, ok := node.(*ast.Ident)
+				if !ok || identifier.Name != watermarkSQLName || measured[identifier] {
+					return true
+				}
+				t.Errorf("%s:%d: %s references %s outside a call's argument list; "+
+					"this derivation cannot tell what value that writer passes, so "+
+					"the write boundary is UNMEASURED here rather than clean.",
+					name, fileSet.Position(identifier.Pos()).Line,
+					function.Name.Name, watermarkSQLName)
+				return true
+			})
 		}
 	}
 	// VACUITY GUARD: the derivation above is only evidence if it found the
-	// writer it was supposed to find. Zero writers means the SQL constant was
-	// renamed, or this walk stopped matching -- either way the test proves
+	// writer it was supposed to find. Zero call sites means the SQL constant
+	// was renamed, or this walk stopped matching -- either way the test proves
 	// nothing and must say so.
-	if writers == 0 {
-		t.Fatal("derivation found no watermark writers at all; this guard is " +
-			"vacuous and cannot have measured the write boundary")
+	if callSites == 0 {
+		t.Fatal("derivation found no watermark write call sites at all; this " +
+			"guard is vacuous and cannot have measured the write boundary")
 	}
 }

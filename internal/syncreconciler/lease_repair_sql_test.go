@@ -1,9 +1,10 @@
 package syncreconciler
 
 import (
-	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/sqlshape"
 )
 
 // TestExpiredLeaseRetryStampClearsEveryEpisodeColumn pins the lease-repair
@@ -48,17 +49,15 @@ func TestExpiredLeaseRetryStampLeavesTheAggregateClockAlone(t *testing.T) {
 	}
 }
 
-// preservingErrorCategory mirrors the detector in
-// internal/providersync/repository_postgres_sql_test.go; see its comment for
-// why the two forbidden shapes are what they are. It is duplicated rather than
-// exported because both copies are test-only and a shared production helper
-// for a test-only rule would be worse.
+// preservingErrorCategory is the SAME detector internal/providersync uses --
+// sqlshape.PreservesPriorResultCategory -- not a second copy of it. The two
+// hand-copied regexps this replaced shared one false negative: they spanned
+// jsonb_build_object's argument list with `[^)]*`, which stops at the first
+// nested `)`, and BOTH stamps in this file nest `to_jsonb(...)` calls. A
+// preserving merge written on these statements therefore read as clean, and
+// fixing one copy would have left the other silently wrong.
 func preservingErrorCategory(sql string) bool {
-	if regexp.MustCompile(`result\s*->>?\s*'error_category'`).MatchString(sql) {
-		return true
-	}
-	return regexp.MustCompile(`jsonb_build_object\([^)]*\)\s*\|\|\s*COALESCE\(\s*\w+\.result`).
-		MatchString(sql)
+	return sqlshape.PreservesPriorResultCategory(sql)
 }
 
 // TestNoLeaseRepairStampPreservesAPriorErrorCategory is the FORBIDDEN PATTERN
@@ -92,15 +91,50 @@ func TestNoLeaseRepairStampPreservesAPriorErrorCategory(t *testing.T) {
 // control -- without it the guard above would pass identically with a detector
 // that always returned false.
 func TestPreservingErrorCategoryDetectorIsNotVacuous(t *testing.T) {
-	preserving := `
-		SET result = jsonb_build_object(
-			'error_category',
-			COALESCE(unit.result->>'error_category', 'worker_lost')
-		)`
-	if !preservingErrorCategory(preserving) {
-		t.Fatalf("detector missed a preserving stamp:\n%s", preserving)
+	for name, preserving := range map[string]string{
+		"reads the prior value back": `
+			SET result = jsonb_build_object(
+				'error_category',
+				COALESCE(unit.result->>'error_category', 'worker_lost')
+			)`,
+		// THIS package's stamp shape, merged in the preserving direction. The
+		// nested to_jsonb() calls are the point: the regexp detector this
+		// replaced scanned the build_object's arguments with `[^)]*`, stopped
+		// at `to_jsonb(`'s closing paren, never reached the `||`, and passed
+		// this construct as clean.
+		"existing document wins a merge whose build_object nests calls": `
+			SET result = (
+				jsonb_build_object(
+					'error_category', 'worker_lost',
+					'retry_count', unit.expired_lease_retry_count + 1,
+					'next_retry_at', to_jsonb($4::timestamptz),
+					'last_lease_expired_at', to_jsonb($3::timestamptz)
+				) || COALESCE(unit.result::jsonb, '{}'::jsonb)
+			)`,
+		"bare prior document on the right of the merge": `
+			SET result = jsonb_build_object('error_category', 'worker_lost') || unit.result`,
+	} {
+		if !preservingErrorCategory(preserving) {
+			t.Errorf("detector missed a preserving stamp (%s):\n%s", name, preserving)
+		}
 	}
-	if preservingErrorCategory(markExpiredLeaseRetryingSQL) {
-		t.Fatalf("detector false-positives on the production retry stamp")
+	for name, clean := range map[string]string{
+		"production retry stamp": markExpiredLeaseRetryingSQL,
+		"production fail stamp":  markExpiredLeaseFailedSQL,
+		// The SAFE merge direction, nested, so a detector "fixed" into
+		// flagging any statement carrying both a merge and a COALESCE over
+		// the prior document fails here rather than reading as stricter.
+		"safe direction with a nested build_object": `
+			SET result = (
+				COALESCE(unit.result::jsonb, '{}'::jsonb) ||
+				jsonb_build_object(
+					'error_category', 'worker_lost',
+					'next_retry_at', to_jsonb($4::timestamptz)
+				)
+			)`,
+	} {
+		if preservingErrorCategory(clean) {
+			t.Errorf("detector false-positives on %s:\n%s", name, clean)
+		}
 	}
 }

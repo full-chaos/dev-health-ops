@@ -37,6 +37,18 @@ TWO CLAUSES IT PINS, BOTH LOAD-BEARING FOR THE GO SIDE:
      produces through this predicate, so the two halves are measured
      together rather than asserted separately and hoped about.
 
+WHAT THIS PAIR IS NOT. It is a PREDICATE-parity check, not a state-machine
+oracle. The Go side of the comparison is a hand-written mirror of this
+predicate (``budgetDeferralExhausted`` in
+internal/providersync/syncunit_budget_exhaustion_oracle_test.go), because Go
+owns no budget-admission decision to drive -- its only budget references in
+non-test source are the two SQL clears. Nothing here executes a Go producer
+or reaches a database. The Go stamps' effect on the columns this predicate
+reads is covered by the SQL-string guards and, against real PostgreSQL, by
+internal/providersync/budget_episode_integration_test.go and
+internal/syncreconciler/lease_repair_integration_test.go; the Go test's
+doc comment enumerates that split.
+
 REQUIREMENT, not a caveat: any Go test exercising this pair MUST run with
 ``go test -count=1`` (i.e. through ``ci/check_go.sh live-python-oracles``).
 budget_guard.py lives outside internal/providersync/testdata/, so
@@ -46,6 +58,7 @@ cached PASS for a real regression in the live function.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import pathlib
 import sys
@@ -65,11 +78,105 @@ from internal.providersync.testdata.oracle_pairs._github_work_items_helpers impo
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _BUDGET_GUARD_SOURCE = REPO_ROOT / "src/dev_health_ops/sync/budget_guard.py"
+_MODELS_PACKAGE_INIT = REPO_ROOT / "src/dev_health_ops/models/__init__.py"
 _THIS_FILE = pathlib.Path(__file__)
+
+#: The names budget_guard.py imports off ``dev_health_ops.models`` itself and
+#: that _install_budget_guard_imports substitutes placeholders for. Every one
+#: is checked against the real package before any placeholder is installed --
+#: see _assert_models_still_export.
+_PLACEHOLDER_MODEL_EXPORTS = (
+    "ProviderRateLimitObservation",
+    "SyncRunUnit",
+    "SyncRunUnitStatus",
+)
 
 #: The instant every case is evaluated at. Fixed so the wall-clock cap is a
 #: function of the case's own offset and nothing else.
 _NOW = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+
+
+def _module_level_bindings(source: str) -> frozenset[str]:
+    """Every name ``source`` binds at module level, by AST rather than import.
+
+    Reading the source is the point: importing ``dev_health_ops.models`` for
+    real would drag in SQLAlchemy's declarative machinery, which is exactly
+    what the placeholders exist to avoid. ``ast`` answers "does this name
+    still exist" under the same stock interpreter everything else in this
+    directory runs under.
+
+    Descends into ``if``/``try`` bodies (a conditional or optional-dependency
+    import still binds the name) but NOT into functions or classes, whose
+    locals are not module attributes.
+    """
+
+    def collect(body: list[ast.stmt], bound: set[str]) -> None:
+        for node in body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    if alias.name == "*":
+                        continue
+                    bound.add(alias.asname or alias.name.split(".")[0])
+            elif isinstance(
+                node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                bound.add(node.name)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        bound.add(target.id)
+            elif isinstance(node, ast.AnnAssign):
+                if isinstance(node.target, ast.Name):
+                    bound.add(node.target.id)
+            elif isinstance(node, ast.If):
+                collect(node.body, bound)
+                collect(node.orelse, bound)
+            elif isinstance(node, ast.Try):
+                collect(node.body, bound)
+                for handler in node.handlers:
+                    collect(handler.body, bound)
+                collect(node.orelse, bound)
+                collect(node.finalbody, bound)
+
+    bound: set[str] = set()
+    collect(ast.parse(source).body, bound)
+    return frozenset(bound)
+
+
+def _assert_models_still_export(names: tuple[str, ...]) -> None:
+    """Fail loudly if ``dev_health_ops.models`` no longer exports ``names``.
+
+    WHY THIS PROBE EXISTS. ``install_minimal_oracle_imports`` registers
+    ``dev_health_ops.models`` as a namespace package whose ``__path__`` points
+    at the real directory -- which means the package's ``__init__.py`` is
+    never executed, and the placeholder attributes installed below satisfy
+    budget_guard.py's ``from dev_health_ops.models import (...)`` whatever the
+    real package does or does not export. A rename or removal of any of these
+    three would break production import and leave this oracle green: the
+    placeholder IS the drift mask.
+
+    So the export set is verified against the real source before any
+    placeholder is installed. A probe that cannot read that source is itself
+    a failure -- an unmeasured check must not read as a passing one.
+    """
+    if not _MODELS_PACKAGE_INIT.is_file():
+        raise RuntimeError(
+            f"cannot verify model exports: {_MODELS_PACKAGE_INIT} does not "
+            "exist. The placeholders installed below would silently satisfy "
+            "budget_guard.py's imports against a package that has moved."
+        )
+    exported = _module_level_bindings(_MODELS_PACKAGE_INIT.read_text())
+    missing = [name for name in names if name not in exported]
+    if missing:
+        raise RuntimeError(
+            "dev_health_ops.models no longer exports "
+            f"{', '.join(missing)} ({_MODELS_PACKAGE_INIT}). budget_guard.py "
+            "imports these off the package itself, so production import is "
+            "broken -- but this oracle installs placeholders for exactly "
+            "these names and would otherwise stay green. Update "
+            "_PLACEHOLDER_MODEL_EXPORTS together with budget_guard.py's "
+            "import list; do NOT delete this probe to make the oracle pass."
+        )
 
 
 def _stub(name: str, **values: object) -> None:
@@ -108,8 +215,12 @@ def _install_budget_guard_imports() -> None:
     # itself. They are ORM/enum types used only for annotations and for code
     # paths the predicate never enters, so placeholders keep the import
     # satisfiable without pulling in SQLAlchemy's declarative machinery.
+    #
+    # The placeholders are also a DRIFT MASK, so the real package's export
+    # set is probed first and a rename or removal fails the oracle loudly.
+    _assert_models_still_export(_PLACEHOLDER_MODEL_EXPORTS)
     models = sys.modules["dev_health_ops.models"]
-    for name in ("ProviderRateLimitObservation", "SyncRunUnit", "SyncRunUnitStatus"):
+    for name in _PLACEHOLDER_MODEL_EXPORTS:
         if not hasattr(models, name):
             setattr(models, name, type(name, (), {}))
 

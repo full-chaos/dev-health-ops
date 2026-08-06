@@ -33,8 +33,9 @@ type budgetEpisodeSnapshot struct {
 	ErrorCategory   string
 }
 
-// budgetDeferralExhausted mirrors sync/budget_guard.py's
-// _budget_deferral_exhausted, clause for clause and in the same order:
+// budgetDeferralExhausted is a HAND-WRITTEN Go mirror of
+// sync/budget_guard.py's _budget_deferral_exhausted, clause for clause and in
+// the same order:
 //
 //  1. no budget history at all -> never exhausted;
 //  2. defence in depth -- the unit's MOST RECENTLY recorded error_category
@@ -42,13 +43,18 @@ type budgetEpisodeSnapshot struct {
 //  3. the count cap;
 //  4. the wall-clock cap, measured from the first deferral of THIS episode.
 //
-// It lives in the test file deliberately. Go does not own budget admission
-// today -- Python does -- so a production copy would be unwired code
-// pretending to be a second implementation. What this mirror is FOR is the
-// differential: the live Python predicate is the authority, and the pair
-// below fails the moment the two readings of a shared sync_run_units row
-// disagree. When the Go runtime takes over unit admission it inherits an
-// executable specification instead of a prose one.
+// It is NOT a production function driven under test, and calling it one would
+// be the inaccurate coverage claim. Go owns no budget-admission decision
+// today: the only budget references in this repository's non-test Go source
+// are the two SQL clears (repository_postgres.go's completeUnitSQL and
+// syncreconciler's markExpiredLeaseRetryingSQL), so there is no production Go
+// producer to drive here instead of this mirror. Adding one would be unwired
+// code pretending to be a second implementation.
+//
+// What the mirror IS for is the differential against the live Python
+// authority: the pair below fails the moment the two readings of a shared
+// sync_run_units row disagree, so when the Go runtime does take over unit
+// admission it inherits an executable specification instead of a prose one.
 func budgetDeferralExhausted(state budgetEpisodeSnapshot, now time.Time) bool {
 	if state.Deferrals <= 0 && state.FirstDeferredAt == nil {
 		return false
@@ -174,7 +180,37 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 	return cases
 }
 
-func TestGenericOracleMatchesLivePythonForBudgetExhaustion(t *testing.T) {
+// TestBudgetExhaustionPredicateMatchesLivePython is a PREDICATE-PARITY check,
+// and the name says so because the earlier one ("generic oracle ... for budget
+// exhaustion") read like a state-machine oracle and was reported as one.
+//
+// WHAT IT MEASURES. One side is the live, unmodified
+// sync/budget_guard.py::_budget_deferral_exhausted; the other is the
+// hand-written Go mirror above. Given the same unit-state snapshot, the two
+// must return the same verdict. Two of the case inputs are DERIVED from the
+// production Go SQL constants (the go_stamp_* cases read the stamped
+// error_category straight out of releaseForRetrySQL), so those cases do bind
+// real Go statements to the live predicate -- but the rest compare two
+// predicates, not two producers.
+//
+// WHAT IT DOES NOT MEASURE, and what covers that instead:
+//
+//   - That the Go stamps write the episode columns this predicate reads. The
+//     SQL-string guards own that: TestCompleteUnitSQLClearsEveryEpisodeColumn
+//     and TestReleaseForRetrySQLDoesNotClearEpisodeState here,
+//     TestExpiredLeaseRetryStampClearsEveryEpisodeColumn and
+//     TestExpiredLeaseRetryStampLeavesTheAggregateClockAlone in
+//     internal/syncreconciler.
+//   - That those statements actually REACH that state in a database. The two
+//     integration suites own that, against real PostgreSQL:
+//     internal/providersync/budget_episode_integration_test.go and
+//     internal/syncreconciler/lease_repair_integration_test.go (both
+//     integration-tagged, both run by `ci/check_go.sh integration`).
+//   - Real state-machine TRANSITIONS (deferral -> retry -> success). Nothing
+//     here drives those; the integration suites above are the closest thing,
+//     and Python's own tests/test_budget_guard_cooldown.py owns the admission
+//     loop itself.
+func TestBudgetExhaustionPredicateMatchesLivePython(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "syncunit/budget/exhaustion", budgetExhaustionOracleCases(t),
 		buildBudgetExhaustionDecisionForOracle, nil,

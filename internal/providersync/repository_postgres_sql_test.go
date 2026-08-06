@@ -1,9 +1,10 @@
 package providersync
 
 import (
-	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/sqlshape"
 )
 
 // episodeClearColumns is the per-episode + aggregate deferral bookkeeping a
@@ -69,21 +70,18 @@ func TestReleaseForRetrySQLDoesNotClearEpisodeState(t *testing.T) {
 }
 
 // preservingErrorCategory reports whether a jsonb result stamp could leave a
-// PRIOR result document's 'error_category' in place. Two shapes do that:
+// PRIOR result document's 'error_category' in place. See
+// sqlshape.PreservesPriorResultCategory for the two forbidden shapes and why
+// the merge-direction half is a parenthesis-aware scan rather than a regexp:
+// the regexp it replaced spanned jsonb_build_object's arguments with `[^)]*`
+// and therefore missed every preserving merge whose build_object nests a call
+// -- which is the shape both lease-repair stamps have today.
 //
-//  1. reading the old value back out (`unit.result->>'error_category'`), or
-//  2. concatenating with the existing document on the RIGHT
-//     (`jsonb_build_object(...) || COALESCE(unit.result...)`), since jsonb `||`
-//     resolves duplicate keys in favour of its right operand.
-//
-// The check is shape-based rather than a fixed blocklist so a new stamp
-// written in either shape is caught without this test being edited.
+// The detector is shared with internal/syncreconciler rather than duplicated,
+// because the two hand-copied regexps carried the SAME false negative and a
+// single fix to one copy would have left the other silently wrong.
 func preservingErrorCategory(sql string) bool {
-	if regexp.MustCompile(`result\s*->>?\s*'error_category'`).MatchString(sql) {
-		return true
-	}
-	return regexp.MustCompile(`jsonb_build_object\([^)]*\)\s*\|\|\s*COALESCE\(\s*\w+\.result`).
-		MatchString(sql)
+	return sqlshape.PreservesPriorResultCategory(sql)
 }
 
 // TestNoUnitStampPreservesAPriorErrorCategory is the FORBIDDEN PATTERN guard
@@ -154,6 +152,27 @@ func TestPreservingErrorCategoryDetectorCatchesBothShapes(t *testing.T) {
 				jsonb_build_object('error_category', 'worker_lost') ||
 				COALESCE(unit.result::jsonb, '{}'::jsonb)
 			)`,
+		// The shape the LEASE-REPAIR stamps actually have: a
+		// jsonb_build_object carrying NESTED calls. Any detector that scans
+		// the build_object's argument list with a non-nesting `[^)]*` stops
+		// at the first inner `)` and never reaches the `||`, so this
+		// preserving merge reads as clean. That is a false NEGATIVE on the
+		// exact statement shape this repository writes today.
+		"existing document wins a merge whose build_object nests calls": `
+			UPDATE public.sync_run_units AS unit
+			SET result = (
+				jsonb_build_object(
+					'error_category', 'worker_lost',
+					'retry_count', unit.expired_lease_retry_count + 1,
+					'next_retry_at', to_jsonb($4::timestamptz),
+					'retry_surfaces', to_jsonb($5::text[])
+				) || COALESCE(unit.result::jsonb, '{}'::jsonb)
+			)`,
+		// No COALESCE at all -- the bare prior document on the right of the
+		// merge preserves every key it carries, error_category included.
+		"bare prior document on the right of the merge": `
+			UPDATE public.sync_run_units AS unit
+			SET result = jsonb_build_object('error_category', 'worker_lost') || unit.result`,
 	} {
 		if !preservingErrorCategory(sql) {
 			t.Errorf("detector missed a preserving stamp (%s):\n%s", name, sql)
@@ -162,6 +181,18 @@ func TestPreservingErrorCategoryDetectorCatchesBothShapes(t *testing.T) {
 	for name, sql := range map[string]string{
 		"production release-for-retry": releaseForRetrySQL,
 		"production complete":          completeUnitSQL,
+		// The SAFE direction, nested, so a detector "fixed" into flagging any
+		// statement that merely contains both a merge and a COALESCE over the
+		// prior document fails here instead of reading as a stricter guard.
+		"safe direction with a nested build_object": `
+			UPDATE public.sync_run_units AS unit
+			SET result = (
+				COALESCE(unit.result::jsonb, '{}'::jsonb) ||
+				jsonb_build_object(
+					'error_category', 'worker_lost',
+					'next_retry_at', to_jsonb($4::timestamptz)
+				)
+			)`,
 	} {
 		if preservingErrorCategory(sql) {
 			t.Errorf("detector false-positives on %s:\n%s", name, sql)

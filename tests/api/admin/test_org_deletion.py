@@ -488,8 +488,13 @@ async def test_org_deletion_dry_run_returns_contract_without_deleting(session_ma
 
 @pytest.mark.asyncio
 async def test_org_deletion_deletes_only_target_org_and_sanitizes_logs(
-    session_maker, caplog
+    session_maker, caplog, quiet_aiosqlite_logger
 ):
+    # The sanitization assertions below sweep the whole captured log, so they
+    # are only meaningful when the harness's own SQL driver is not echoing the
+    # seeded secrets back as bind parameters. quiet_aiosqlite_logger states that
+    # precondition rather than inheriting it from the shell's LOG_LEVEL
+    # (CHAOS-3402); application loggers keep capturing at DEBUG.
     async with session_maker() as session:
         org1_id, org2_id = await _seed_org_pair(session)
 

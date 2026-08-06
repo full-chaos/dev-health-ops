@@ -15,12 +15,22 @@ import sys
 import pytest
 
 # Env vars that satisfy preflight requirements; cleared for "missing" cases.
+# The child inherits os.environ, so anything the parent shell carries and this
+# list omits reaches the CLI as real configuration. `admin licenses create` is
+# asserted to report LICENSE_PRIVATE_KEY as the missing input, which only holds
+# when no signing key is configured -- a developer shell carries a real one from
+# ops/.env, and a 64-byte key where a 32-byte seed is required made the command
+# fail with "Invalid private key" instead (CHAOS-3402).
 _CONFIG_ENV = (
     "CLICKHOUSE_URI",
     "POSTGRES_URI",
     "DATABASE_URI",
     "DATABASE_URL",
     "ORG_ID",
+    "LICENSE_KEY",
+    "LICENSE_PRIVATE_KEY",
+    "LICENSE_PUBLIC_KEY",
+    "LICENSE_SECRET_KEY",
 )
 
 

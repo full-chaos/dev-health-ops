@@ -44,6 +44,21 @@ admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 
 VALID_PASSWORD = "SecurePass123!"
 
+
+@pytest.fixture(autouse=True)
+def _default_auto_create_org_flag(monkeypatch):
+    """Pin ``AUTH_AUTO_CREATE_ORG_ON_REGISTER`` to its unset default (on).
+
+    Every journey here starts at ``/auth/register`` and then uses the returned
+    ``org_id``. With the flag falsy that field is correctly ``null`` and the
+    user is routed into guided onboarding instead -- designed behaviour, not a
+    bug. ``ops/.env`` carries ``AUTH_AUTO_CREATE_ORG_ON_REGISTER=false``, which
+    is what turned four of these tests red on a developer machine while CI
+    stayed green (CHAOS-3402).
+    """
+    monkeypatch.delenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER", raising=False)
+
+
 _TABLES = tables_of(
     User,
     Organization,

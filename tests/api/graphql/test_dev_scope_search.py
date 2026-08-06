@@ -42,6 +42,7 @@ class FakeCatalog:
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         type(self).calls += 1
         assert org_id == ORG_ID

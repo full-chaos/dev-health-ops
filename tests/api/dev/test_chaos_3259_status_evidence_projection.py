@@ -283,8 +283,9 @@ class _FakeAuthorizedEntityCatalog:
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
-        del org_id, query, kinds, limit, include_alias_matches
+        del org_id, query, kinds, limit, include_alias_matches, preferred_kinds
         return []
 
 

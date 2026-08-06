@@ -97,6 +97,7 @@ class LimitRecordingCatalog(SeededCatalog):
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         self.search_limits.append((len(kinds), limit))
         return await super().search(
@@ -105,6 +106,7 @@ class LimitRecordingCatalog(SeededCatalog):
             kinds,
             limit=limit,
             include_alias_matches=include_alias_matches,
+            preferred_kinds=preferred_kinds,
         )
 
 
@@ -123,6 +125,7 @@ class CrossTenantLeakingCatalog(SeededCatalog):
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         if len(kinds) == 1:
             return await super().search(
@@ -131,6 +134,7 @@ class CrossTenantLeakingCatalog(SeededCatalog):
                 kinds,
                 limit=limit,
                 include_alias_matches=include_alias_matches,
+                preferred_kinds=preferred_kinds,
             )
         needle = query.casefold()
         matched = [
@@ -157,6 +161,7 @@ class MultiKindFailingCatalog(SeededCatalog):
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         if len(kinds) > 1:
             raise RuntimeError("catalog unavailable for the fallback search")
@@ -166,6 +171,7 @@ class MultiKindFailingCatalog(SeededCatalog):
             kinds,
             limit=limit,
             include_alias_matches=include_alias_matches,
+            preferred_kinds=preferred_kinds,
         )
 
 

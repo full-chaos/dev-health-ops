@@ -41,6 +41,7 @@ from dev_health_ops.api.dev.contracts_v2 import DevInvestigationResult, DevSubje
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator, OrchestratorResult
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
+from dev_health_ops.api.dev.scope_catalog import merge_search_candidates
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
     EntityKind,
@@ -131,6 +132,7 @@ class SeededCatalog:
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         self.search_calls.append((org_id, query))
         if self.fail_search:
@@ -166,14 +168,16 @@ class SeededCatalog:
                         matched_ids.add((entity.kind, entity.canonical_id))
         # ORDER BY lowerUTF8(label), canonical_id ... LIMIT n — the ordering and
         # the truncation both happen in SQL, so an exact label sorted past the
-        # page boundary never reaches the caller at all. Alias/acronym hits
-        # are ordered AHEAD of plain substring hits, before the truncation --
-        # mirrors ClickHouseAuthorizedEntityCatalog.search's own priority
-        # fix (CHAOS-3388): incidental substring noise must never crowd the
-        # real acronym match for a named project out of the returned page.
-        alias_matches.sort(key=_label_sort_key)
-        matched.sort(key=_label_sort_key)
-        return (alias_matches + matched)[:limit]
+        # page boundary never reaches the caller at all. The rank-then-truncate
+        # step is the production function itself, imported rather than
+        # re-implemented: a hand-mirrored copy is exactly how a fake drifts
+        # from its producer and starts passing tests the live path fails.
+        return merge_search_candidates(
+            alias_hits=alias_matches,
+            substring_hits=matched,
+            preferred_kinds=preferred_kinds,
+            limit=limit,
+        )
 
     async def organization_repository_ids(
         self, org_id: str, *, limit: int

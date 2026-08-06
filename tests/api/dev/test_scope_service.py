@@ -104,6 +104,7 @@ class FakeCatalog:
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         self.search_calls += 1
         return [

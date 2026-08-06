@@ -69,6 +69,44 @@ class TestAlembicDirResolution:
         assert script.get_revision("application_schema@head").revision == "0091"
         assert revisions
 
+    def test_no_two_migrations_declare_the_same_revision_id(self):
+        """Two files claiming one revision id is a MERGE hazard, not a typo.
+
+        Two lanes have now independently collided on this. Alembic only warns
+        (`Revision X is present more than once`), and the graph-level
+        assertions above catch it only for some topologies -- their behavior
+        depends on whether the duplicate happens to be a head, which is a
+        property of whatever else merged that week, not of the defect.
+
+        So this reads the declarations straight out of the files. It cannot be
+        confused by head structure, and unlike walk_revisions() it still
+        produces a readable assertion instead of a RevisionError when the graph
+        is unresolvable.
+        """
+        versions = _ALEMBIC_DIR / "versions"
+        declared: dict[str, list[str]] = {}
+        for path in sorted(versions.glob("[0-9]*.py")):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("revision: str = ") or stripped.startswith(
+                    "revision = "
+                ):
+                    value = stripped.split("=", 1)[1].strip().strip("\"'")
+                    declared.setdefault(value, []).append(path.name)
+                    break
+
+        # A source-reading check that finds nothing must fail, not pass: an
+        # empty result here would mean the parser drifted, and silence would
+        # read exactly like "no duplicates".
+        assert len(declared) >= 80, (
+            f"parsed only {len(declared)} revision ids from {versions}; "
+            f"the declaration parser has drifted"
+        )
+        duplicates = {
+            revision: files for revision, files in declared.items() if len(files) > 1
+        }
+        assert not duplicates, f"duplicate alembic revision ids: {duplicates}"
+
 
 # ── _make_alembic_config ───────────────────────────────────────────
 

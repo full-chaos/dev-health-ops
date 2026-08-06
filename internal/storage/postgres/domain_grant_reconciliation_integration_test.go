@@ -204,6 +204,44 @@ func reconciliationTables() []domainTable {
 				"DELETE FROM public.provider_rate_limit_observations WHERE id = gen_random_uuid()",
 			},
 		},
+		{
+			// Added after a FOR UPDATE on this table shipped to production and
+			// failed with "permission denied" on every re-prepare. The static
+			// analyzer could not see it: both the INSERT and the locking read
+			// live inside a closure passed to mutateGenerationJournalTx, so
+			// they came through as UNRESOLVED evidence -- and the analyzer then
+			// emitted an over-grant ADVISORY on INSERT, which was the
+			// fingerprint of an unanalyzed path rather than a real over-grant.
+			//
+			// Executing the statements under the restricted role is the check
+			// that does not care whether a call site is reachable by static
+			// analysis. All four shapes below are the real ones, including the
+			// read-back SELECT that must NOT carry a row-locking clause: the
+			// domain role has no UPDATE here, and PostgreSQL treats FOR UPDATE
+			// and FOR SHARE as UPDATE-class privileges.
+			name: "sync_run_unit_effect_snapshots",
+			ddl: `CREATE TABLE public.sync_run_unit_effect_snapshots (
+				org_id text NOT NULL, sync_run_unit_id uuid NOT NULL,
+				generation text NOT NULL, provider text NOT NULL,
+				dataset_key text NOT NULL, schema_version text NOT NULL,
+				content_digest varchar(64) NOT NULL, payload_bytes integer NOT NULL,
+				payload bytea NOT NULL, created_at timestamptz NOT NULL,
+				PRIMARY KEY (org_id, sync_run_unit_id, generation))`,
+			exercise: []string{
+				"INSERT INTO public.sync_run_unit_effect_snapshots (" +
+					"org_id, sync_run_unit_id, generation, provider, dataset_key, " +
+					"schema_version, content_digest, payload_bytes, payload, created_at) " +
+					"VALUES ('org-acme', gen_random_uuid(), 'g', 'github', 'work-items', " +
+					"'v1', repeat('a', 64), 2, '\\x7b7d'::bytea, now())",
+				"SELECT schema_version, content_digest, payload_bytes, payload " +
+					"FROM public.sync_run_unit_effect_snapshots " +
+					"WHERE org_id = 'org-acme' AND generation = 'g'",
+				"SELECT snapshot.payload FROM public.sync_run_unit_effect_snapshots AS snapshot " +
+					"WHERE snapshot.org_id = 'org-acme' AND snapshot.dataset_key = 'work-items'",
+				"DELETE FROM public.sync_run_unit_effect_snapshots " +
+					"WHERE org_id = 'org-acme' AND generation = 'g'",
+			},
+		},
 	}
 }
 

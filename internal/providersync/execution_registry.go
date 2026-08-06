@@ -92,8 +92,12 @@ type CompleteRouteDescriptor struct {
 	// against the Python-owned sink for parity evidence. Shadow eligibility
 	// never implies routing.
 	NativeShadow bool
-	RouteReady   bool
-	RouteEnabled bool
+	// PreparedManifestRecovery requires an exact Postgres sidecar snapshot
+	// before the first sink effect. It is currently reserved for GitHub's
+	// mutable, multi-source work-items composition and does not imply routing.
+	PreparedManifestRecovery bool
+	RouteReady               bool
+	RouteEnabled             bool
 }
 
 // ShadowDescriptor is a fixture/parity-only projection of the canonical
@@ -200,6 +204,12 @@ func (switches CompleteRouteSwitches) Descriptor(
 	}
 	workItemAlias := slices.Contains(linearBackfillWorkItemDatasets, dataset)
 	switch {
+	case provider == "github" && dataset == "work-items":
+		// The composite handler and all 16 sink effects exist, but this pair
+		// remains unregistered until its final parity and activation layers land.
+		// Carry the recovery requirement now so activation cannot accidentally
+		// use mutable-provider recollection after a crash.
+		descriptor.PreparedManifestRecovery = true
 	case (provider == "linear" || provider == "jira") && workItemAlias:
 		descriptor.RouteDataset = "work-items"
 		descriptor.Destinations = workItemRouteDestinations()

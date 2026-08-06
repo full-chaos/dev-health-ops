@@ -124,7 +124,13 @@ def _transition(raw: dict[str, Any]) -> WorkItemStatusTransition:
         occurred_at=_required_time(raw["occurred_at"]),
         from_status_raw=raw.get("from_status_raw"),
         to_status_raw=raw.get("to_status_raw"),
-        from_status=raw.get("from_status") or "todo",
+        # `or "todo"` would coerce an explicit "" to "todo" and MASK the
+        # from_status fallback production Python actually has
+        # (compute_work_item_state_durations.py:86 uses
+        # `first.from_status if first.from_status else item.status`). Absent
+        # key still defaults to "todo"; an explicit "" is passed through so the
+        # fallback can be exercised on both sides.
+        from_status=("todo" if "from_status" not in raw else raw["from_status"]),
         to_status=raw["to_status"],
         actor=raw.get("actor"),
         org_id=str(raw.get("org_id") or ""),

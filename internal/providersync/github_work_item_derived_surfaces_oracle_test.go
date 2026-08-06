@@ -240,6 +240,53 @@ func githubDerivedOracleCases() []oracleCase {
 			},
 		},
 		{
+			// POPULATED-FACT class, and the only case that reaches the team
+			// and membership fact tables at all. One item resolves through
+			// assignee_membership (a Members fact matching its assignee), the
+			// other through issue_project (a Teams fact matching its
+			// project_key) -- two different sources, two different team ids,
+			// both at "high" confidence, sharing one work_scope_id. The
+			// repo-ownership case above covers a third source; project
+			// ownership, manual fallback and linked-issue inheritance remain
+			// the resolver pair's business, not these three destinations'.
+			//
+			// The Python pair asserts the production loader actually issued
+			// all four fact queries, so a case that silently stopped feeding
+			// facts fails rather than quietly narrowing to the empty class.
+			ID: "populated_facts_membership_and_project",
+			Input: map[string]any{
+				"OrgID": githubDerivedOracleOrg, "Day": "2026-08-04",
+				"ComputedAt": "2026-08-05T00:30:00Z", "AsOf": "2026-08-05T00:30:00Z",
+				"Facts": map[string]any{
+					"Projects": []any{}, "Repos": []any{}, "ManualFallbacks": []any{},
+					"Teams": []any{map[string]any{
+						"TeamID": "platform", "TeamName": "Platform",
+						"ProjectKeys": []any{"PLAT"},
+					}},
+					"Members": []any{map[string]any{
+						"Provider": "github", "TeamID": "payments",
+						"TeamName": "Payments", "MemberID": "m1",
+						"RawProviderUserID": "octocat", "RawEmail": "octo@example.com",
+						"IdentityFacets": []any{"octocat"},
+						"IsPrimary":      1, "Specificity": 50, "Priority": 20,
+						"UpdatedAt": "2026-07-01T00:00:00Z",
+					}},
+				},
+				"WorkItems": []any{
+					githubDerivedOracleItem("acme/api#20", map[string]any{
+						"assignees": []any{"octocat"}, "story_points": 8,
+					}),
+					githubDerivedOracleItem("acme/api#21", map[string]any{
+						"project_key": "PLAT",
+					}),
+				},
+				"Transitions": []any{
+					githubDerivedOracleTransition("acme/api#20", "2026-08-04T03:00:00Z", "todo", "in_progress"),
+					githubDerivedOracleTransition("acme/api#21", "2026-08-04T09:00:00Z", "todo", "review"),
+				},
+			},
+		},
+		{
 			// TIMEZONE: the window is UTC, and this case is chosen so the
 			// local and UTC calendar dates DISAGREE. 2026-08-04T23:30:00Z is
 			// still 2026-08-04 in UTC but already 2026-08-05 at +02:00, and
@@ -521,6 +568,14 @@ func githubDerivedOracleGoItem(t *testing.T, raw map[string]any) githubWorkItemR
 	if value, ok := raw["story_points"].(int); ok {
 		points := float64(value)
 		row.StoryPoints = &points
+	}
+	if value, ok := raw["project_key"].(string); ok {
+		row.ProjectKey = stringPointer(value)
+	}
+	if values, ok := raw["assignees"].([]any); ok {
+		for _, value := range values {
+			row.Assignees = append(row.Assignees, value.(string))
+		}
 	}
 	if value, ok := raw["repo_id"].(string); ok {
 		parsed, err := uuid.Parse(value)

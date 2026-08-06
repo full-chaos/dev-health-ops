@@ -1,0 +1,12 @@
+{
+  "id": "runner-selftest.basic-exact",
+  "question": "What's the status of the Ask Dev project?",
+  "subject_class": "exact",
+  "invariants": [
+    {
+      "category": "subject-resolution",
+      "check": "resolution_path_in",
+      "args": {"allowed": ["deterministic-exact"]}
+    }
+  ]
+}

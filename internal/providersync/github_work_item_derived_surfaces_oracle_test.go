@@ -287,6 +287,48 @@ func githubDerivedOracleCases() []oracleCase {
 			},
 		},
 		{
+			// LINKED-ISSUE DONOR class. The donor appears ONLY in `Donors`, never
+			// in `WorkItems`, so it can reach the resolver by exactly one route:
+			// the donor list both sides decode from this key. If either side
+			// stopped reading it -- or read a different key -- the donor would
+			// vanish for that side alone, #31 would fall back to "unassigned"
+			// there, and every column would diverge at once.
+			//
+			// #31 carries no repo, assignee, project_key or native_team_key, so
+			// its own cascade resolves to nothing and `baseNative` is false,
+			// which is what lets the inherited candidate through. The donor
+			// resolves through repo_ownership, an allowed donor source.
+			ID: "linked_issue_donor_inheritance",
+			Input: map[string]any{
+				"OrgID": githubDerivedOracleOrg, "Day": "2026-08-04",
+				"ComputedAt": "2026-08-05T00:30:00Z", "AsOf": "2026-08-05T00:30:00Z",
+				"Facts": map[string]any{
+					"Teams": []any{}, "Projects": []any{}, "Members": []any{},
+					"ManualFallbacks": []any{},
+					"Repos": []any{
+						githubDerivedOracleRepoFact(
+							"33333333-3333-4333-8333-333333333333", "acme/donor-repo",
+							"t9", "Team Nine",
+						),
+					},
+				},
+				"Donors": []any{
+					githubDerivedOracleItem("acme/api#30", map[string]any{
+						"repo_id": "33333333-3333-4333-8333-333333333333",
+					}),
+				},
+				"WorkItems": []any{
+					githubDerivedOracleItem("acme/api#31", nil),
+				},
+				"Dependencies": []any{
+					githubDerivedOracleDependency("acme/api#31", "acme/api#30", "relates_to"),
+				},
+				"Transitions": []any{
+					githubDerivedOracleTransition("acme/api#31", "2026-08-04T07:00:00Z", "todo", "in_progress"),
+				},
+			},
+		},
+		{
 			// TIMEZONE: the window is UTC, and this case is chosen so the
 			// local and UTC calendar dates DISAGREE. 2026-08-04T23:30:00Z is
 			// still 2026-08-04 in UTC but already 2026-08-05 at +02:00, and
@@ -496,6 +538,11 @@ func buildGitHubDerivedOracleSurfaces(
 			rows.StatusTransitions, githubDerivedOracleGoTransition(t, raw.(map[string]any)),
 		)
 	}
+	for _, raw := range githubDerivedOracleList(input, "Dependencies") {
+		rows.Dependencies = append(
+			rows.Dependencies, githubDerivedOracleGoDependency(t, raw.(map[string]any)),
+		)
+	}
 	// Facts decode from the SAME case JSON the Python pair reads, so neither
 	// side can be handed a fact set the other never saw. An empty fact set
 	// still goes through the real context constructor: the resolver's
@@ -510,11 +557,50 @@ func buildGitHubDerivedOracleSurfaces(
 		t.Fatal(err)
 	}
 	derived := newGitHubWorkItemDerivationContext(facts)
+	// The linked-issue index is built here, not left nil, because production
+	// builds it too (loadGitHubWorkItemDerivationContext). Leaving it nil made
+	// the donor arm dead on the Go side while the Python pair wired a live
+	// resolver from the same case -- the two agreed only because no case
+	// supplied a donor, so the whole class sat unproven on both sides.
+	//
+	// The merge order mirrors production exactly: donors first, then the fresh
+	// rows, so a work item present in both lists resolves from its FRESH
+	// version. Donors decode with the SAME work-item decoder as WorkItems,
+	// which is why `Donors` carries the work-item shape rather than the
+	// PascalCase fact shape -- Python's `_work_item` reads this key too, and it
+	// requires `created_at`, a field the Go facts-side subject type does not
+	// even carry.
+	subjects := make(
+		map[string]githubWorkItemDerivationSubject,
+		len(rows.WorkItems)+len(githubDerivedOracleList(input, "Donors")),
+	)
+	for _, raw := range githubDerivedOracleList(input, "Donors") {
+		donor := githubWorkItemDerivationSubjectFromRow(
+			githubDerivedOracleGoItem(t, raw.(map[string]any)),
+		)
+		subjects[donor.WorkItemID] = donor
+	}
+	for _, row := range rows.WorkItems {
+		subject := githubWorkItemDerivationSubjectFromRow(row)
+		subjects[subject.WorkItemID] = subject
+	}
+	derived.linkedIssue = derived.buildLinkedIssueIndex(subjects, rows.Dependencies)
 	surfaces, err := buildGitHubWorkItemDerivedSurfaces(claim, rows, day, computedAt, derived)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return surfaces
+}
+
+// githubDerivedOracleList reads an OPTIONAL top-level case list. Most cases
+// carry no donors or dependencies, and a missing key must decode as empty
+// rather than panicking on a nil type assertion.
+func githubDerivedOracleList(input map[string]any, key string) []any {
+	values, ok := input[key].([]any)
+	if !ok {
+		return nil
+	}
+	return values
 }
 
 func githubDerivedOracleEmptyFacts() map[string]any {
@@ -541,6 +627,34 @@ func githubDerivedOracleTransition(id, occurredAt, from, to string) map[string]a
 	return map[string]any{
 		"work_item_id": id, "provider": "github", "occurred_at": occurredAt,
 		"from_status": from, "to_status": to, "org_id": githubDerivedOracleOrg,
+	}
+}
+
+// Dependencies are top-level beside WorkItems and Transitions because they are
+// ROWS -- the sync's own output -- not attribution facts. Python's `_dependency`
+// reads this exact shape.
+func githubDerivedOracleDependency(source, target, relationship string) map[string]any {
+	return map[string]any{
+		"source_work_item_id": source, "target_work_item_id": target,
+		"relationship_type": relationship, "relationship_type_raw": relationship,
+		"relationship_semantics_version": "canonical-blocks.v2",
+		"last_synced":                    "2026-08-04T00:00:00Z",
+		"org_id":                         githubDerivedOracleOrg,
+	}
+}
+
+func githubDerivedOracleGoDependency(
+	t *testing.T, raw map[string]any,
+) githubWorkItemDependencyRow {
+	t.Helper()
+	return githubWorkItemDependencyRow{
+		SourceWorkItemID:             raw["source_work_item_id"].(string),
+		TargetWorkItemID:             raw["target_work_item_id"].(string),
+		RelationshipType:             raw["relationship_type"].(string),
+		RelationshipTypeRaw:          githubDerivedOracleString(raw, "relationship_type_raw", ""),
+		RelationshipSemanticsVersion: githubDerivedOracleString(raw, "relationship_semantics_version", "canonical-blocks.v2"),
+		LastSynced:                   githubDerivedOracleTime(t, raw["last_synced"].(string)),
+		OrgID:                        raw["org_id"].(string),
 	}
 }
 

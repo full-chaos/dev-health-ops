@@ -383,6 +383,23 @@ func (repository *PostgresRepository) mutateGenerationJournal(
 	now time.Time,
 	mutate func(map[string]json.RawMessage) error,
 ) error {
+	if mutate == nil {
+		return ErrInvalidConfiguration
+	}
+	return repository.mutateGenerationJournalTx(
+		ctx, claim, now,
+		func(_ pgx.Tx, document map[string]json.RawMessage) error {
+			return mutate(document)
+		},
+	)
+}
+
+func (repository *PostgresRepository) mutateGenerationJournalTx(
+	ctx context.Context,
+	claim Claim,
+	now time.Time,
+	mutate func(pgx.Tx, map[string]json.RawMessage) error,
+) error {
 	if repository == nil || repository.Pool == nil || ctx == nil ||
 		claim.Validate() != nil || now.IsZero() || mutate == nil {
 		return ErrInvalidConfiguration
@@ -403,7 +420,7 @@ func (repository *PostgresRepository) mutateGenerationJournal(
 	if len(raw) != 0 && json.Unmarshal(raw, &document) != nil {
 		return ErrGenerationJournalConflict
 	}
-	if err := mutate(document); err != nil {
+	if err := mutate(tx, document); err != nil {
 		return err
 	}
 	encoded, err := json.Marshal(document)

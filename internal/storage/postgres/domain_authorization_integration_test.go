@@ -54,6 +54,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.worker_job_routes (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id bigint PRIMARY KEY, state text)",
+		"CREATE TABLE public.sync_run_unit_effect_snapshots (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_watermarks (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_dispatch_outbox (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.worker_job_outbox (id bigint PRIMARY KEY, state text)",
@@ -96,6 +97,10 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + authorizedDomainRole,
 		"GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + authorizedDomainRole,
+		// The domain role needs DELETE but explicitly NOT UPDATE here:
+		// PostgreSQL treats FOR UPDATE/FOR SHARE as UPDATE-class, and the
+		// snapshot read-back must never be able to take a row lock.
+		"GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.dev_conversation_tombstones TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.dev_conversations, public.external_ingest_batches, public.provider_rate_limit_observations TO " + authorizedDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + authorizedDomainRole,

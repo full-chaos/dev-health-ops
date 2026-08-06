@@ -277,18 +277,63 @@ def _acquire_bucket_advisory_locks(
 
 
 def _resolve_total_unit_cap(session: Session, org_id: str) -> int:
+    """Resolve the per-org unit cap, falling back to the env default.
+
+    CHAOS-2580 established that a pre-migration ``tier_limits`` miss must not
+    poison the surrounding planning transaction: ``TierLimitService`` swallows
+    the missing-table ``OperationalError``, but PostgreSQL still marks the whole
+    transaction failed, so every later flush dies with
+    ``InFailedSqlTransaction``. Catching the exception here is therefore NOT
+    enough -- the failed statement has to be confined to a savepoint, exactly as
+    :func:`dev_health_ops.sync.planner._get_tier_backfill_days_cap` already does.
+
+    This second, unprotected caller was missed by CHAOS-2580 and stayed
+    invisible because the test that covers it
+    (``test_postgres_missing_tier_limits_stays_inside_planner_savepoint``) is
+    PostgreSQL-gated and had never once executed -- it aborted on an unrelated
+    ``MissingGreenlet`` long before reaching this code. SQLite has no such
+    transaction-poisoning semantics, so the whole SQLite tier passed regardless.
+
+    The savepoint is rolled back on BOTH paths, matching the planner. Releasing
+    it on success is not an option: ``TierLimitService`` swallows the
+    missing-table error internally and returns normally, so no exception ever
+    reaches this frame while the transaction is already poisoned, and the
+    ``RELEASE SAVEPOINT`` itself then fails with ``InFailedSqlTransaction``.
+    Rolling back unconditionally is safe because the probe is read-only.
+
+    ``session.begin_nested()`` already flushes the planner's pending
+    SyncRun/SyncRunUnit rows into the savepoint before it returns -- that is
+    unavoidable and exactly what makes rolling the savepoint back later safe
+    for those rows (they were never released outside it). ``no_autoflush``
+    around the probe query below is a second, narrower guard: it stops that
+    query from triggering a *further* autoflush of anything that became
+    pending between the savepoint opening and the query running, which would
+    otherwise also get silently discarded by the unconditional rollback.
+
+    A malformed ``tier_cap`` (e.g. a non-numeric value from a corrupted row)
+    must fall back to ``default_cap`` the same as a missing table or a lookup
+    error -- so the ``int()`` coercion stays inside the ``try`` block below,
+    not after it.
+    """
     default_cap = _env_int("SYNC_RUN_MAX_UNITS", 1000)
     try:
         from dev_health_ops.api.services.licensing import TierLimitService
 
-        tier_cap = TierLimitService(session).get_limit(
-            uuid.UUID(org_id), "max_sync_units"
-        )
+        org_uuid = uuid.UUID(org_id)
     except Exception:
         return default_cap
-    if tier_cap is None:
+
+    nested = session.begin_nested()
+    try:
+        with session.no_autoflush:
+            tier_cap = TierLimitService(session).get_limit(org_uuid, "max_sync_units")
+        if tier_cap is None:
+            return default_cap
+        return int(tier_cap)
+    except Exception:
         return default_cap
-    return int(tier_cap)
+    finally:
+        nested.rollback()
 
 
 def _env_int(name: str, default: int) -> int:

@@ -18,6 +18,7 @@ from dev_health_ops.sync.watermarks import (  # noqa: E402
     get_watermark_with_overlap,
     set_watermark,
 )
+from tests._helpers import sync_postgres_test_url
 
 ORG_ID = "default"
 REPO_ID = "my-org/my-repo"
@@ -1091,13 +1092,12 @@ def test_real_postgres_future_watermark_correction():
     the same branch — that a legitimate lower value is still discarded, so the
     narrowness of the exception is verified where it actually runs.
     """
-    import os as _os
     import uuid as _uuid
     from datetime import timedelta
 
     from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
-    engine = create_engine(_os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(sync_postgres_test_url())
     Base.metadata.create_all(engine)
     SyncWatermark.metadata.create_all(engine)
 
@@ -1171,13 +1171,12 @@ def test_real_postgres_future_write_is_clamped_at_the_boundary():
     and the UPDATE path (re-poisoning a repaired value), on the dialect that
     actually ships.
     """
-    import os as _os
     import uuid as _uuid
     from datetime import timedelta
 
     from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
-    engine = create_engine(_os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(sync_postgres_test_url())
     Base.metadata.create_all(engine)
     SyncWatermark.metadata.create_all(engine)
 

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from dev_health_ops.models import (
     Base,
     Integration,
+    IntegrationCredential,
     IntegrationDataset,
     IntegrationSource,
     SyncDispatchOutbox,
@@ -981,11 +982,10 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
     TierLimitService fallback does not prevent later SyncRun/SyncRunUnit/outbox
     flushes in the same transaction.
     """
-    from tests._helpers import tables_of
+    from tests._helpers import sync_postgres_test_url, tables_of
 
-    uri = os.environ["DEV_HEALTH_POSTGRES_TEST_URI"]
     schema = f"chaos_2580_{uuid.uuid4().hex}"
-    engine = create_engine(uri)
+    engine = create_engine(sync_postgres_test_url())
     connection = engine.connect()
     try:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -996,6 +996,14 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
             tables=tables_of(
                 Organization,
                 OrgLicense,
+                # `integrations.credential_id` carries a FOREIGN KEY to
+                # `integration_credentials`; an explicit `tables=` list does not
+                # pull dependencies in, so omitting it makes CREATE TABLE
+                # integrations fail with UndefinedTable. This was invisible
+                # until CHAOS-3450 revived the coverage job, because the
+                # MissingGreenlet from the async-driver URL aborted the test
+                # before create_all ever reached the database.
+                IntegrationCredential,
                 Integration,
                 IntegrationSource,
                 IntegrationDataset,

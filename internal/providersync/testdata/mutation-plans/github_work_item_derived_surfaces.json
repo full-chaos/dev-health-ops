@@ -1,0 +1,184 @@
+{
+ "schema_version": 1,
+ "name": "github work-item derived surfaces (coverage, team attributions, state durations)",
+ "build": [
+  "go",
+  "test",
+  "-run",
+  "^$",
+  "./internal/providersync/"
+ ],
+ "mutations": [
+  {
+   "id": "R1-coverage-bucket-created-before-terminal-skip",
+   "file": "internal/providersync/github_work_item_derived_surfaces.go",
+   "find": "\t\tbucket := buckets[key]\n\t\tif bucket == nil {",
+   "replace": "\t\tif terminalAt != nil && terminalAt.Before(end) {\n\t\t\tcontinue\n\t\t}\n\t\tbucket := buckets[key]\n\t\tif bucket == nil {",
+   "rationale": "Python creates the coverage bucket BEFORE skipping terminal items, so an item that reached a terminal state before the window end still materialises an all-zero group with a NULL ratio. Hoisting the skip is the 'obvious fix' a porter would make and it silently drops rows.",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageMatchesLivePythonProduction$|^TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction$|^TestGitHubWorkItemStateDurationsMatchLivePythonProduction$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "R2-coverage-team-name-first-writer-wins",
+   "file": "internal/providersync/github_work_item_derived_surfaces.go",
+   "find": "\t\t\tbuckets[key] = bucket\n\t\t\torder = append(order, key)\n\t\t}",
+   "replace": "\t\t\tbuckets[key] = bucket\n\t\t\torder = append(order, key)\n\t\t}\n\t\tbucket.teamName = normalizeGitHubWorkItemDerivedTeamName(teamName)",
+   "rationale": "coverage keeps the FIRST contributing item's team name for a group; state durations keep the LAST. The two Python rules are opposite and must not be shared or swapped.",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageMatchesLivePythonProduction$|^TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction$|^TestGitHubWorkItemStateDurationsMatchLivePythonProduction$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "R3-avg-wip-divides-by-fixed-24",
+   "file": "internal/providersync/github_work_item_derived_surfaces.go",
+   "find": "AvgWIP: totalHours / 24.0,",
+   "replace": "AvgWIP: totalHours / 12.0,",
+   "rationale": "Python divides the day total by a fixed 24 regardless of how much of the day the window covers.",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageMatchesLivePythonProduction$|^TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction$|^TestGitHubWorkItemStateDurationsMatchLivePythonProduction$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "R4-transition-sort-is-stable",
+   "file": "internal/providersync/github_work_item_derived_surfaces.go",
+   "find": "\tsort.SliceStable(ordered, func(left, right int) bool {\n\t\treturn ordered[left].OccurredAt.UTC().Before(ordered[right].OccurredAt.UTC())\n\t})",
+   "replace": "\tsort.Slice(ordered, func(left, right int) bool {\n\t\treturn !ordered[left].OccurredAt.UTC().Before(ordered[right].OccurredAt.UTC())\n\t})",
+   "rationale": "Python's sorted() is stable, so transitions sharing an occurred_at keep input order. sort.Slice is not stable and would reorder them.",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageMatchesLivePythonProduction$|^TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction$|^TestGitHubWorkItemStateDurationsMatchLivePythonProduction$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "R5-transition-at-segment-start-rewrites",
+   "file": "internal/providersync/github_work_item_derived_surfaces.go",
+   "find": "\t\tif !occurredAt.After(currentStart) {",
+   "replace": "\t\tif occurredAt.Before(currentStart) {",
+   "rationale": "mirrors Python's `tr_at <= current_start` rewrite arm rather than a strict `<`",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageMatchesLivePythonProduction$|^TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction$|^TestGitHubWorkItemStateDurationsMatchLivePythonProduction$",
+     "./internal/providersync/"
+    ]
+   ],
+   "expected_survivor_reason": "Provably equivalent, not merely unobserved. The two forms differ ONLY at exact equality, and at equality the close arm emits a segment whose end equals its start, which githubWorkItemStatusSegments' own `segment.end.After(segment.start)` filter removes before returning. Both arms therefore leave identical state (current_status = to_status, current_start = occurredAt) and identical output. The transition_exactly_at_creation case forces the boundary so this is measured on the exact input class that distinguishes them, not assumed from cases that never reach it."
+  },
+  {
+   "id": "R6-attribution-team-id-unnormalised",
+   "file": "internal/providersync/github_work_item_derived_surfaces.go",
+   "find": "\t\t\t\tTeamID:     candidate.TeamID,",
+   "replace": "\t\t\t\tTeamID:     stringPointer(normalizeGitHubWorkItemDerivedTeamID(candidate.TeamID)),",
+   "rationale": "attribution rows persist the RAW candidate team id, so a null stays NULL here while the same resolution becomes 'unassigned' in the coverage rollup",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageMatchesLivePythonProduction$|^TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction$|^TestGitHubWorkItemStateDurationsMatchLivePythonProduction$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "R7-nil-story-points-is-unestimated",
+   "file": "internal/providersync/github_work_item_derived_surfaces.go",
+   "find": "\t\tif item.StoryPoints == nil {",
+   "replace": "\t\tif item.StoryPoints != nil {",
+   "rationale": "a null story_points counts as UNestimated; inverting the test swaps both counters and the ratio",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageMatchesLivePythonProduction$|^TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction$|^TestGitHubWorkItemStateDurationsMatchLivePythonProduction$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "R8-item-created-after-window-skipped",
+   "file": "internal/providersync/github_work_item_derived_surfaces.go",
+   "find": "\t\tif !createdAt.Before(end) {",
+   "replace": "\t\tif createdAt.Before(end) && false {",
+   "rationale": "an item created at or after the window end contributes nothing, not even a group",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageMatchesLivePythonProduction$|^TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction$|^TestGitHubWorkItemStateDurationsMatchLivePythonProduction$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "R9b-items-touched-map-records-the-item-id",
+   "file": "internal/providersync/github_work_item_derived_surfaces.go",
+   "find": "\t\t\titemsSeen[key][item.WorkItemID] = struct{}{}",
+   "replace": "\t\t\titemsSeen[key][\"\"] = struct{}{}",
+   "rationale": "items_touched is a DISTINCT count of work-item ids for the key, not a count of contributing segments; one item can contribute several segments to one key",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageMatchesLivePythonProduction$|^TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction$|^TestGitHubWorkItemStateDurationsMatchLivePythonProduction$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "R10-state-duration-team-name-last-writer-wins",
+   "file": "internal/providersync/github_work_item_derived_surfaces.go",
+   "find": "\t\tteamNames[githubStateDurationTeamKey{item.Provider, workScopeID, teamID}] = teamName",
+   "replace": "\t\tif _, seen := teamNames[githubStateDurationTeamKey{item.Provider, workScopeID, teamID}]; !seen {\n\t\t\tteamNames[githubStateDurationTeamKey{item.Provider, workScopeID, teamID}] = teamName\n\t\t}",
+   "rationale": "state durations keep the LAST contributing item's team name, the opposite of the coverage rollup's first-wins rule",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageMatchesLivePythonProduction$|^TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction$|^TestGitHubWorkItemStateDurationsMatchLivePythonProduction$",
+     "./internal/providersync/"
+    ]
+   ]
+  }
+ ]
+}

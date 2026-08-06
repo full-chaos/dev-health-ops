@@ -144,7 +144,34 @@ DEVHOPS="${ROOT}/.venv/bin/dev-hops"
 #     a partial credential instead of falling through to GITHUB_TOKEN, which is
 #     what those tests actually exercise — unsetting only the path was an
 #     incomplete fix on this checkout's ambient .env.
-PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID)
+#
+# The three below were found by an actual end-to-end gate run (CHAOS-3403), not
+# inferred — 10 unit-suite failures on an unmodified checkout, all traced to
+# ops/.env's ambient values and confirmed with a red/green pair each:
+#   - AUTH_AUTO_CREATE_ORG_ON_REGISTER: dev/.env sets this "false" (a real
+#     product feature flag — auth/config.py's auth_auto_create_org_on_register()
+#     — for local guided-onboarding testing). The default is True, and
+#     tests/api/auth/test_register.py + tests/api/test_new_user_journey.py
+#     assert the True (auto-create) behavior. With "false" live, registration
+#     silently skips org/membership creation ("registered without organization
+#     for first-run onboarding") and every org_id-shaped assertion in those
+#     tests fails — 8 of the 10 observed failures.
+#   - LICENSE_PRIVATE_KEY: dev/.env sets this to a real dev signing key.
+#     tests/test_cli_preflight.py::test_admin_license_create_is_not_a_postgres_preflight_false_positive
+#     expects the CLI to fail with "LICENSE_PRIVATE_KEY" in stdout (i.e. the var
+#     absent); the test's own _run_cli() already scrubs CLICKHOUSE_URI/
+#     POSTGRES_URI/DATABASE_URI/DATABASE_URL/ORG_ID for exactly this reason but
+#     LICENSE_PRIVATE_KEY was missing from that list, so the live key reaches
+#     the subprocess and the CLI fails on "seed must be exactly 32 bytes" instead.
+#   - REDIS_URL: dev/.env points this at the real shared valkey container. Unlike
+#     the other two, this is a cross-TEST pollution mechanism, not a single
+#     wrong-branch call: tests/test_linear_provider.py::test_429_backoff_grows_exponentially
+#     passes in total isolation but fails when run with its sibling tests in the
+#     same file/worker, because a live Redis carries rate-limit state between
+#     tests that an isolated/fake backend would not. Confirmed red running the
+#     whole file with REDIS_URL live, green with it unset — matches the same
+#     class already fixed for web/ci/run_tests.sh's rate-limit.test.ts.
+PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL)
 
 # --- Single-flight lock (CHAOS-3403). -----------------------------------------------
 # ops/AGENTS.md documents this gate as single-flight, but nothing enforced it:

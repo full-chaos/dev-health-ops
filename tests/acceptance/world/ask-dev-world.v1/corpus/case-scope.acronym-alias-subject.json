@@ -3,8 +3,8 @@
   "id": "scope.acronym-alias-subject",
   "family": "scope",
   "group": 1,
-  "status": "active",
-  "blocked_by": null,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3475 deterministic-alias is unproducible by a single-turn runner",
   "proves": [
     "plan §3 subjects.json class (CHAOS-3388); recent fix 2eaa59158"
   ],
@@ -13,47 +13,9 @@
   "user_alias": "primary.ordinary",
   "subject_class": "acronym-alias",
   "subject_ref": "subject.acronym-alias.mwa-project",
-  "expected_mention_texts": [
-    "mwa"
-  ],
-  "invariants": [
-    {
-      "category": "no-silent-widening",
-      "check": "scope_resolution_outcome_in",
-      "args": {
-        "from_profile": "expected_scope_resolution_outcome"
-      },
-      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
-      "executable_today": true,
-      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "no-internal-error-on-fuzzy-label",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "No shape of subject label (parenthetical, >=5 words, typo, acronym, wrong word order) can crash the run to internal_error; worst case is a graceful terminal.",
-      "executable_today": true,
-      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
-      "executable_today": true
-    },
-    {
-      "category": "terminal-persists-assistant-row",
-      "check": "terminal_persists_assistant_row",
-      "args": {},
-      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
-      "executable_today": true,
-      "$comment": "ADDED (codex round-5, confirmed): this case's expected_public_outcome is needs_clarification (deterministic-v1.json's own entry), which CASE-SCHEMA.v1.md's taxonomy rule 4 explicitly requires this invariant for -- it was missing from the original authoring pass despite the case fitting the rule. Wired directly to the real graduated checker terminal_persists_assistant_row (no placeholder stage needed, unlike the batch of cases fixed earlier in this rebase pass)."
-    }
-  ],
-  "resolution_profile_ref": "deterministic-v1",
+  "invariants": [],
+  "resolution_profile_ref": null,
   "fault_ref": null,
-  "notes": "subjects.json is authoritative over the higher-level registry sketch here: acronym/literal-alias hits are NEVER auto-commit eligible (alias_matching.py), so the deterministic-v1 expectation is needs_clarification (single-candidate confirm), not a direct answered -- documented discrepancy vs corpus-registry-v1.md's original 'answered' sketch, not silently changed."
+  "notes": "subjects.json is authoritative over the higher-level registry sketch here: acronym/literal-alias hits are NEVER auto-commit eligible (alias_matching.py), so the deterministic-v1 expectation is needs_clarification (single-candidate confirm), not a direct answered -- documented discrepancy vs corpus-registry-v1.md's original 'answered' sketch, not silently changed.",
+  "$comment_resolution_path_invariant": "DECLARED-BLOCKED (CHAOS-3462 B6, team-lead ruling 2026-08-06). This case exists to prove CHAOS-3388 alias/acronym resolution and cannot, as authored: production never auto-commits an alias form (it must be offered as a candidate first), and the only in-run route from ambiguous_candidates to exact_match needs scope.entity_refs / surface_context, which this runner never sends -- and it sends one message per case, so the two-turn ask/offer/select/commit shape never occurs. The single-turn ledger is one ambiguous_candidates row and derive_resolution_path short-circuits to miss-clarification. Recording miss-clarification would make the case PASS while proving nothing about alias resolution -- manufactured green. Blocked loudly and countably instead, per the world.json/sources.json declared-blocked precedent. Unblocked by CHAOS-3475."
 }

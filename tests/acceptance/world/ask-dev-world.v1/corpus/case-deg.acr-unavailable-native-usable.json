@@ -13,10 +13,6 @@
   "user_alias": "primary.ordinary",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
-  "expected_mention_texts": [
-    "meridian/web-app",
-    "without acr"
-  ],
   "invariants": [
     {
       "category": "no-silent-widening",
@@ -27,18 +23,10 @@
       "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
       "executable_today": true,
       "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
-      "executable_today": true
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Companion to deg.source-state.not-applicable, same underlying mechanism (NativeDataHealthReader hardcodes acr as optional/not-required for every org: `SourceHealthObservation(source, False, False, warning='acr_optional')`, so DataHealthService.inspect's complete_eligible check never gates on it) but a DIFFERENT angle and DIFFERENT question: that case asks specifically WHETHER ACR evidence is available (surfacing the not-applicable disclosure); this case asks a general status question with ACR evidence explicitly excluded/unavailable, asserting that the canonical NATIVE data sources (commits/pull_requests/reviews/work_items/deployments, all DataHealthState.COMPLETE for meridian/web-app per sources.json's 'current' row) remain fully usable and the answer is NOT degraded by ACR's absence -- required=False means acr's unavailability alone can never push complete_eligible to False. Expected outcome answered (not answered_with_gaps), distinguishing this from deg.source-state.not-applicable's answered_with_gaps: ACR itself being not-applicable is not, on its own, a disclosed gap in the NATIVE answer this case asks for."
+  "notes": "Companion to deg.source-state.not-applicable, same underlying mechanism (NativeDataHealthReader hardcodes acr as optional/not-required for every org: `SourceHealthObservation(source, False, False, warning='acr_optional')`, so DataHealthService.inspect's complete_eligible check never gates on it) but a DIFFERENT angle and DIFFERENT question: that case asks specifically WHETHER ACR evidence is available (surfacing the not-applicable disclosure); this case asks a general status question with ACR evidence explicitly excluded/unavailable, asserting that the canonical NATIVE data sources (commits/pull_requests/reviews/work_items/deployments, all DataHealthState.COMPLETE for meridian/web-app per sources.json's 'current' row) remain fully usable and the answer is NOT degraded by ACR's absence -- required=False means acr's unavailability alone can never push complete_eligible to False. Expected outcome answered (not answered_with_gaps), distinguishing this from deg.source-state.not-applicable's answered_with_gaps: ACR itself being not-applicable is not, on its own, a disclosed gap in the NATIVE answer this case asks for.",
+  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462 B6, adversarial round 3). The primary subject commits exact_match, but resolution_path is a WHOLE-RUN scalar and this question also names an incidental untyped bare-name mention that never resolves -- derive_resolution_path returns miss-clarification if ANY mention fails to commit, so the run answers normally and would still be stamped miss-clarification. Rather than falsify the profile to match a derivation that cannot express this case's claim, the profile keeps the true expectation (deterministic-exact) and this invariant is removed -- the same disposition B4 used throughout. Every other invariant is untouched."
 }

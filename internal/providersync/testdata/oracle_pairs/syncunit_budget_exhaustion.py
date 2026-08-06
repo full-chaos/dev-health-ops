@@ -113,8 +113,18 @@ def _install_budget_guard_imports() -> None:
         if not hasattr(models, name):
             setattr(models, name, type(name, (), {}))
 
-    _stub("sqlalchemy", func=_unreachable, or_=_unreachable, text=_unreachable, update=_unreachable)
-    _stub("dev_health_ops.sync.budget", BudgetEstimate=object, estimate_provider_budget=_unreachable)
+    _stub(
+        "sqlalchemy",
+        func=_unreachable,
+        or_=_unreachable,
+        text=_unreachable,
+        update=_unreachable,
+    )
+    _stub(
+        "dev_health_ops.sync.budget",
+        BudgetEstimate=object,
+        estimate_provider_budget=_unreachable,
+    )
     _stub(
         "dev_health_ops.workers.rate_limit_defer",
         RATE_LIMIT_DEFAULT_COUNTDOWN_SECONDS=60,

@@ -1210,12 +1210,30 @@ class SubjectPreflight:
         searched — and that path can legitimately return a *same-kind*
         candidate, which is why the offered reason below says nothing about
         kinds.
+
+        **The named kind ranks the page, it never filters it** (CHAOS-3422).
+        Searching every kind is right; presenting the result kind-blind is
+        not. The live repro: "the ACR project" found the one real project by
+        acronym and listed it *5th of 5*, behind four issues whose titles
+        merely contain "acr", because both truncation points ordered the page
+        by label alone. ``preferred_kinds`` moves same-kind candidates to the
+        front before either bound applies, so a same-kind entity can no longer
+        be crowded off the page — while every other kind stays on it, which is
+        what keeps "the Go workers project" answerable.
+
+        ``mention`` here is always a *typed* mention: ``blocking_ids`` excludes
+        every untyped id, so an untyped bare name can never be the terminating
+        mention and never reaches this method. That matters because an untyped
+        mention's ``requested_entity_kind`` is a declared default of
+        ``PROJECT`` (``question_interpreter._add_untyped_mentions``), and
+        ranking on a kind the user never typed would be inventing intent.
         """
 
         resolution = await self._close_matches(
             org_id=org_id,
             permission_fingerprint=permission_fingerprint,
             lookup_text=mention.normalized_lookup_text,
+            preferred_kind=EntityKind(mention.requested_entity_kind.value),
         )
         if resolution is None:
             return ledger, False
@@ -1245,6 +1263,7 @@ class SubjectPreflight:
         org_id: str,
         permission_fingerprint: str,
         lookup_text: str,
+        preferred_kind: EntityKind,
     ) -> MentionResolution | None:
         """One bounded tenant-scoped search, or ``None`` for "nothing to offer".
 
@@ -1280,6 +1299,13 @@ class SubjectPreflight:
             # commit-eligible primary resolution (see ScopeSearchRequest.
             # include_alias_matches).
             include_alias_matches=True,
+            # CHAOS-3422: the search still covers every searchable kind -- the
+            # kind the user typed only *ranks* it. Filtering to that kind
+            # instead would return nothing for this method's own founding case
+            # ("the Go workers project", where the catalog holds only issues)
+            # and put the mention straight back to the bare not-found this
+            # fallback exists to replace.
+            preferred_kinds=frozenset({preferred_kind}),
         )
         try:
             result = await self._scope_service.search(

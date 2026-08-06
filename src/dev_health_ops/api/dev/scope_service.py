@@ -283,6 +283,17 @@ class ScopeSearchRequest:
     #: something close" -- that is exactly the outcome and copy the
     #: closest-matches fallback already owns.
     include_alias_matches: bool = False
+    #: CHAOS-3422. The kind a *typed* mention actually named. Purely a ranking
+    #: key -- candidates of this kind sort ahead of every other kind, before
+    #: each of the two truncations on this path (the catalog's page bound and
+    #: this service's own), and nothing is ever excluded for being another
+    #: kind. Excluding would regress CHAOS-3366, whose whole premise is that
+    #: the thing the user meant may sit one kind over. Empty for every caller
+    #: that has no user-stated kind to honour, which is today's behaviour
+    #: exactly; an untyped bare name is one of those, because its
+    #: ``requested_entity_kind`` is a declared default, not something the user
+    #: typed (``question_interpreter._add_untyped_mentions``).
+    preferred_kinds: frozenset[EntityKind] = frozenset()
 
     def __post_init__(self) -> None:
         query = self.query.strip()
@@ -294,6 +305,8 @@ class ScopeSearchRequest:
             raise ValueError("Caller allowlist exceeds the searchable entity ceiling")
         if any(kind not in self.allowed_kinds for kind in self.kinds):
             raise ValueError("Only approved searchable V1 direct scopes are allowed")
+        if not self.preferred_kinds <= set(self.kinds):
+            raise ValueError("A preferred kind must be one of the searched kinds")
         if self.limit < 1 or self.limit > MAX_CANDIDATES:
             raise ValueError(f"Search limit must be between 1 and {MAX_CANDIDATES}")
         object.__setattr__(self, "query", query)
@@ -353,6 +366,7 @@ class AuthorizedEntityCatalog(Protocol):
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]: ...
 
     async def organization_repository_ids(
@@ -421,6 +435,70 @@ def _dedupe_entities(
 ) -> tuple[AuthorizedEntity, ...]:
     unique = {(entity.kind, entity.canonical_id): entity for entity in entities}
     return tuple(sorted(unique.values(), key=_entity_order))
+
+
+def _dedupe_preserving_rank(
+    entities: Sequence[AuthorizedEntity],
+) -> tuple[AuthorizedEntity, ...]:
+    """Deduplicate a search page **without** re-ordering it.
+
+    Search results arrive already ranked by ``merge_search_candidates`` — the
+    named kind, then alias-equality over incidental substring containment,
+    then label. Passing them through ``_dedupe_entities`` re-sorted the whole
+    page by label and destroyed both of the first two keys, because an
+    ``AuthorizedEntity`` carries no match provenance for a later layer to
+    recover. That is what listed the one real project last in the CHAOS-3422
+    repro even though the catalog had ranked it first, and it silently
+    undid CHAOS-3388's alias precedence for every same-kind pair
+    (codex review round 3, confirmed: alias ``Zeta Runtime (ACR)`` lost its
+    lead to substring-only ``Aardvark ACR Notes``).
+
+    Not a behaviour change for the alias-unaware callers: with
+    ``include_alias_matches=False`` the catalog's own order *is* label order,
+    the identical sequence ``_dedupe_entities`` produced.
+
+    Exactly **two** callers enable alias matching and therefore see a
+    different page — counted, because an earlier draft of this docstring
+    claimed there was only one and a reviewer had to find the other:
+
+    * ``subject_preflight._close_matches`` — the closest-matches fallback,
+      whose ranking is what this ticket restores.
+    * ``qua_shadow.QUAShadowEvaluator._shortlist`` — the CHAOS-3389 shadow
+      seam. Its shortlist is reordered the same way, which is safe because
+      the model is shown the very list its returned indices are resolved
+      against, so there is no index/list skew, and because nothing downstream
+      reads the record it produces. It needs no ``preferred_kinds`` of its
+      own: it already searches a single kind for a typed mention, so a
+      preference would be vacuous, and for an untyped one the kind is a
+      declared default that must not be preferred at all.
+
+    ``resolve()``'s exact path still uses ``_dedupe_entities``: those entities
+    come from ``exact()``, which has no rank of its own to preserve.
+    """
+
+    unique: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
+    for entity in entities:
+        unique.setdefault((entity.kind, entity.canonical_id), entity)
+    return tuple(unique.values())
+
+
+def _rank_preferred_kinds(
+    entities: Sequence[AuthorizedEntity], preferred_kinds: frozenset[EntityKind]
+) -> tuple[AuthorizedEntity, ...]:
+    """CHAOS-3422: the kind the user named leads, everything else follows.
+
+    A **stable** partition, so with no preference the result is the identical
+    tuple and with one the catalog's rank still decides the order inside each
+    side. Applied here as well as in the catalog because the two truncate
+    separately: the catalog bounds its page, this bounds what a caller asked
+    for, and a rank applied at only one of them is a rank applied after a cut.
+    """
+
+    if not preferred_kinds:
+        return tuple(entities)
+    preferred = [entity for entity in entities if entity.kind in preferred_kinds]
+    rest = [entity for entity in entities if entity.kind not in preferred_kinds]
+    return tuple(preferred + rest)
 
 
 def _request_payload(request: ScopeResolveRequest) -> dict[str, object]:
@@ -712,6 +790,11 @@ class ScopeResolutionService:
             # candidate sets, so sharing a cache key would let whichever
             # request happened to run first silently answer the other's call.
             "include_alias_matches": request.include_alias_matches,
+            # CHAOS-3422, for the same reason: a preference changes both which
+            # candidates survive the catalog's page bound and the order they
+            # arrive in, so a preferred and an unpreferred search of the same
+            # query/kinds/limit must never share a cache entry.
+            "preferred_kinds": sorted(kind.value for kind in request.preferred_kinds),
         }
         cache_key = self._cache_key(
             "search", org_id, permission_fingerprint, payload, watermark
@@ -725,9 +808,12 @@ class ScopeResolutionService:
             kinds,
             limit=request.limit,
             include_alias_matches=request.include_alias_matches,
+            preferred_kinds=request.preferred_kinds,
         )
         result = ScopeSearchResult(
-            candidates=_dedupe_entities(entities)[: request.limit],
+            candidates=_rank_preferred_kinds(
+                _dedupe_preserving_rank(entities), request.preferred_kinds
+            )[: request.limit],
             query_version=QUERY_VERSION,
             catalog_watermark=watermark,
         )

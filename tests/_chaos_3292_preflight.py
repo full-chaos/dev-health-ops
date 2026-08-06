@@ -41,6 +41,7 @@ from dev_health_ops.api.dev.contracts_v2 import DevInvestigationResult, DevSubje
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator, OrchestratorResult
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
+from dev_health_ops.api.dev.scope_catalog import merge_search_candidates
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
     EntityKind,
@@ -131,6 +132,7 @@ class SeededCatalog:
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         self.search_calls.append((org_id, query))
         if self.fail_search:
@@ -152,28 +154,41 @@ class SeededCatalog:
             # scan over the *same* seeded org-scoped entities, so a test can
             # exercise acronym/parenthetical-alias matching through this fake
             # without a live ClickHouse.
-            matched_ids = {(entity.kind, entity.canonical_id) for entity in matched}
+            #
+            # CHAOS-3422 codex review, medium: this pass ran *independently*
+            # of the substring pass in production and did not here -- it used
+            # to skip any entity the substring pass had already matched. An
+            # entity that matches both ways ("ACR Platform" for the query
+            # "acr") is therefore an alias hit in production and was a
+            # substring hit in the fake, so the fake ranked it one tier lower
+            # than the live path would. Deduplication belongs to
+            # ``merge_search_candidates``, which resolves the overlap in
+            # alias's favour; the two passes must stay independent here for
+            # it to see the overlap at all.
+            seen_alias: set[tuple[EntityKind, str]] = set()
             for owner, entity in self.entities:
                 if (
                     owner == org_id
                     and entity.kind in kinds
                     and entity.kind in {EntityKind.PROJECT, EntityKind.TEAM}
-                    and (entity.kind, entity.canonical_id) not in matched_ids
+                    and (entity.kind, entity.canonical_id) not in seen_alias
                 ):
                     forms = alias_forms(entity.label)
                     if needle in forms.literal_aliases or needle in forms.acronyms:
                         alias_matches.append(entity)
-                        matched_ids.add((entity.kind, entity.canonical_id))
+                        seen_alias.add((entity.kind, entity.canonical_id))
         # ORDER BY lowerUTF8(label), canonical_id ... LIMIT n — the ordering and
         # the truncation both happen in SQL, so an exact label sorted past the
-        # page boundary never reaches the caller at all. Alias/acronym hits
-        # are ordered AHEAD of plain substring hits, before the truncation --
-        # mirrors ClickHouseAuthorizedEntityCatalog.search's own priority
-        # fix (CHAOS-3388): incidental substring noise must never crowd the
-        # real acronym match for a named project out of the returned page.
-        alias_matches.sort(key=_label_sort_key)
-        matched.sort(key=_label_sort_key)
-        return (alias_matches + matched)[:limit]
+        # page boundary never reaches the caller at all. The rank-then-truncate
+        # step is the production function itself, imported rather than
+        # re-implemented: a hand-mirrored copy is exactly how a fake drifts
+        # from its producer and starts passing tests the live path fails.
+        return merge_search_candidates(
+            alias_hits=alias_matches,
+            substring_hits=matched,
+            preferred_kinds=preferred_kinds,
+            limit=limit,
+        )
 
     async def organization_repository_ids(
         self, org_id: str, *, limit: int

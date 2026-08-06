@@ -99,6 +99,205 @@ async def test_search_queries_only_requested_approved_tables(
     assert all("org_id = {org_id:String}" in sql for sql in sqls)
 
 
+#: The live shape CHAOS-3422 reports, reduced to what the ranking can see: a
+#: page bound of five, five work items whose titles hold the query as an
+#: incidental substring and casefold ahead of the one real project, and that
+#: project. Kind-blind, the project sorts sixth and is truncated off the page
+#: entirely — the user asked for a project and is offered five things that are
+#: not one.
+_PREFERRED_KIND_PROJECT_ROW = {
+    "canonical_id": "60997592-f9f4-462b-87c3-ef82671df270",
+    "label": "Zulu Agent Context Runtime",
+}
+_PREFERRED_KIND_ISSUE_ROWS = [
+    {"canonical_id": f"linear:CHAOS-{2911 + index}", "label": f"{index} runtime task"}
+    for index in range(5)
+]
+
+
+def _runtime_rows() -> Any:
+    async def fake_query_dicts(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        assert params["org_id"] == "org-a"
+        if "FROM work_items FINAL" in sql:
+            return list(_PREFERRED_KIND_ISSUE_ROWS)
+        if "FROM projects FINAL" in sql:
+            return [dict(_PREFERRED_KIND_PROJECT_ROW)]
+        return []
+
+    return fake_query_dicts
+
+
+@pytest.mark.asyncio
+async def test_the_production_search_ranks_the_preferred_kind_before_its_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3422 at the real catalog, not at a stand-in for it.
+
+    Codex review, confirmed by mutation: every other CHAOS-3422 test drives
+    ``SeededCatalog``, which calls ``merge_search_candidates`` itself — so
+    dropping ``preferred_kinds`` at *this* call site left the whole suite
+    green while the live clarification regressed. The first shape written for
+    this test could not fail either: with the project arriving as an *alias*
+    hit, CHAOS-3388's own alias-first key already put it first, so removing
+    the kind key changed nothing. The project matches by plain substring here,
+    which is the only shape where the kind key is the deciding one.
+    """
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", _runtime_rows()
+    )
+    catalog = ClickHouseAuthorizedEntityCatalog(object())
+
+    result = await catalog.search(
+        "org-a",
+        "runtime",
+        (EntityKind.PROJECT, EntityKind.ISSUE),
+        limit=5,
+        preferred_kinds=frozenset({EntityKind.PROJECT}),
+    )
+
+    assert len(result) == 5, "the page bound is unchanged"
+    assert result[0].kind is EntityKind.PROJECT
+    assert result[0].canonical_id == _PREFERRED_KIND_PROJECT_ROW["canonical_id"]
+    assert [entity.kind for entity in result[1:]] == [EntityKind.ISSUE] * 4, (
+        "ranking must not filter the other kinds off the page"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_production_search_without_a_preference_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same rows, no preference: today's label-ordered page, verbatim.
+
+    Also the before/after witness for the ticket — with no kind key the real
+    project is not merely ranked last, it is off the page.
+    """
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", _runtime_rows()
+    )
+    catalog = ClickHouseAuthorizedEntityCatalog(object())
+
+    result = await catalog.search(
+        "org-a",
+        "runtime",
+        (EntityKind.PROJECT, EntityKind.ISSUE),
+        limit=5,
+    )
+
+    assert [entity.kind for entity in result] == [EntityKind.ISSUE] * 5
+    assert [entity.label for entity in result] == [
+        row["label"] for row in _PREFERRED_KIND_ISSUE_ROWS
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_entity_matching_both_ways_is_ranked_as_the_alias_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The alias and substring passes are independent, and alias wins.
+
+    CHAOS-3422 codex review, medium: the seeded test double used to skip any
+    entity the substring pass had already matched, so an entity that matches
+    *both* ways ranked one tier lower in the fake than in production. This
+    pins production's own semantics — the behaviour the fake now has to
+    mirror — so the divergence cannot re-open silently on this side either.
+    """
+
+    # "Zeta Runtime (ACR)" matches BOTH ways: its parenthetical is the literal
+    # alias "acr", and its label also contains "acr" outright. The substring-
+    # only entity sorts ahead of it by label, so the alias tier is the only
+    # thing that can put the both-ways entity first.
+    both_ways = {"canonical_id": "project-zeta", "label": "Zeta Runtime (ACR)"}
+    substring_only = {"canonical_id": "project-aardvark", "label": "Aardvark ACR Notes"}
+
+    async def fake_query_dicts(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM projects FINAL" not in sql:
+            return []
+        return [dict(both_ways), dict(substring_only)]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts
+    )
+    catalog = ClickHouseAuthorizedEntityCatalog(object())
+
+    result = await catalog.search(
+        "org-a",
+        "acr",
+        (EntityKind.PROJECT,),
+        limit=5,
+        include_alias_matches=True,
+    )
+
+    assert [entity.canonical_id for entity in result] == [
+        both_ways["canonical_id"],
+        substring_only["canonical_id"],
+    ]
+    assert len(result) == 2, "one entity, matched twice, is offered once"
+
+
+@pytest.mark.asyncio
+async def test_the_per_kind_sql_cap_can_only_drop_an_already_full_same_kind_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3422 codex review, refuted-with-evidence — pinned, not fixed.
+
+    Each kind's SQL applies ``LIMIT`` before ``merge_search_candidates`` ranks
+    anything, so a same-kind entity *can* be dropped before the kind key is
+    ever read. That cannot bury the user's kind behind another one, which is
+    what this ticket is about: the per-kind cap equals the page bound, so a
+    same-kind entity is only lost once ``limit`` same-kind entities already
+    matched — and then every slot on the page is already that kind. Six
+    projects and five issues below; the page is five projects.
+
+    That the sixth project is unreachable is the ``NOT_FOUND_FALLBACK_LIMIT``
+    cap doing its documented job, unchanged by this ticket. Asserted so the
+    semantics are a decision on the record rather than an accident.
+    """
+
+    projects = [
+        {"canonical_id": f"project-{index}", "label": f"{index} Runtime Program"}
+        for index in range(6)
+    ]
+    issues = [
+        {"canonical_id": f"linear:CHAOS-{index}", "label": f"{index} runtime task"}
+        for index in range(5)
+    ]
+
+    async def fake_query_dicts(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        limit = params["limit"]
+        if "FROM projects FINAL" in sql:
+            return [dict(row) for row in projects[:limit]]
+        if "FROM work_items FINAL" in sql:
+            return [dict(row) for row in issues[:limit]]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts
+    )
+    catalog = ClickHouseAuthorizedEntityCatalog(object())
+
+    result = await catalog.search(
+        "org-a",
+        "runtime",
+        (EntityKind.PROJECT, EntityKind.ISSUE),
+        limit=5,
+        preferred_kinds=frozenset({EntityKind.PROJECT}),
+    )
+
+    assert [entity.kind for entity in result] == [EntityKind.PROJECT] * 5
+    assert [entity.canonical_id for entity in result] == [
+        row["canonical_id"] for row in projects[:5]
+    ]
+
+
 def test_catalog_rejects_supporting_evidence_kind() -> None:
     with pytest.raises(ValueError, match="not catalog-searchable"):
         ClickHouseAuthorizedEntityCatalog._query_for(

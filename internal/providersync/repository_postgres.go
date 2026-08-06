@@ -128,9 +128,18 @@ func (repository *PostgresRepository) Complete(
 	}
 	if watermark != nil {
 		for _, datasetKey := range datasetKeys {
+			// THE write boundary (CHAOS-3412 C10(c), CHAOS-3427). Every Go
+			// watermark write routes through normalizeWatermarkWrite: routes
+			// that prefer a provider-supplied watermark over claim.BeforeAt
+			// bypass every planner-side clamp otherwise, and the INSERT half
+			// of the upsert has no monotonic gate at all to fall back on.
+			normalized := normalizeWatermarkWrite(
+				*watermark, claim.BeforeAt, completedAt,
+				claim.OrgID, claim.SourceExternalID, datasetKey,
+			)
 			if _, err := tx.Exec(ctx, upsertWatermarkSQL,
 				uuid.New(), claim.OrgID, claim.SourceExternalID, datasetKey,
-				watermark.UTC(), completedAt.UTC(),
+				normalized, completedAt.UTC(),
 			); err != nil {
 				return ErrInvalidConfiguration
 			}
@@ -354,6 +363,27 @@ WHERE unit.id = $1::uuid
       AND run.status NOT IN ('success', 'partial_failed', 'failed')
   )`
 
+// completeUnitSQL mirrors the Python SUCCESS stamp
+// (src/dev_health_ops/workers/sync_units.py, the `status=SUCCESS` UPDATE) in
+// its episode bookkeeping, not only in its status transition. Python clears
+// THREE things there and every one of them is load-bearing:
+//
+//   - the rate-limit episode pair (CHAOS-2760),
+//   - the budget episode pair (CHAOS-3412) -- SUCCESS proves the unit is not
+//     permanently oversized, so its next budget deferral must start a fresh
+//     count and a fresh wall clock instead of inheriting a resolved episode's,
+//   - the AGGREGATE blocked clock `first_blocked_at` -- the unit got through,
+//     so it is not "going nowhere" any more.
+//
+// Leaving any of them set here hands `sync/budget_guard.py`'s exhaustion
+// predicates a resolved episode's counters on the unit's NEXT deferral, and
+// terminalizes a healthy unit early. Python cannot see this SQL, so its own
+// derivation guard (test_deferral_lifecycle_columns_are_classified_and_stamped_correctly)
+// cannot catch a half-wired Go stamp -- repository_postgres_sql_test.go asserts
+// it on this side.
+//
+// releaseForRetrySQL below deliberately does NOT clear any of them; see its
+// own comment.
 const completeUnitSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'success',
@@ -362,6 +392,9 @@ SET status = 'success',
     error = NULL,
     rate_limit_deferrals = 0,
     rate_limit_first_seen_at = NULL,
+    budget_deferrals = 0,
+    budget_first_deferred_at = NULL,
+    first_blocked_at = NULL,
     lease_owner = NULL,
     lease_expires_at = NULL,
     last_heartbeat_at = $3,
@@ -392,6 +425,20 @@ WHERE unit.id = $1::uuid
 // EffectReadbackRequired pair. A single UPDATE's SET expression reads the
 // current row atomically -- no separate lock is needed the way
 // mutateGenerationJournal's two-round-trip read-modify-write requires.
+//
+// CHAOS-3427: this stamp deliberately clears NEITHER episode pair nor the
+// aggregate blocked clock. That asymmetry with completeUnitSQL is the same one
+// Python has, and it is load-bearing: `_RATE_LIMIT_EPISODE_ERROR_CATEGORIES`
+// (budget_guard.py) does not contain 'provider_unit_retryable', so a release
+// for retry is not a rate-limit or budget episode boundary and must not reset
+// an episode that is still genuinely in progress. Do not "fix" it into
+// symmetry with the SUCCESS stamp.
+//
+// The jsonb merge here keeps OTHER result keys (go_effect_ledger_v1) but the
+// concatenation puts jsonb_build_object on the RIGHT, so 'error_category' is
+// OVERWRITTEN, never preserved. That direction is a hard rule, not an
+// accident -- see repository_postgres_sql_test.go's
+// TestNoUnitStampPreservesAPriorErrorCategory.
 const releaseForRetrySQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'dispatching',
@@ -427,16 +474,44 @@ WHERE unit.id = $1::uuid
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
 
+// upsertWatermarkSQL is monotonic (CHAOS-2578) with ONE narrow exception
+// (CHAOS-3412 clause C10(b), mirrored from Python's `_monotonic_update`):
+// when the STORED value is in the future and the incoming one is not, the
+// incoming value wins.
+//
+// The exception is gated on provably-invalid state only. A watermark marks
+// data ALREADY synced, so it can never legitimately sit ahead of now; such a
+// value can only come from a skewed provider record or from pre-fix planner
+// code that persisted a future window end. Because the write is otherwise
+// monotonic, nothing could ever lower it again: the planner's window would
+// start in the future, plan no unit, and the run would finalize FAILED
+// forever with nothing left to repair it. C10(a) (the planner-side recovery
+// clamp) and this clause only work together -- without this, the healing
+// re-stamp is silently discarded by GREATEST and every tick re-syncs a
+// recovery window forever.
+//
+// Widening this to "any lower value wins" would be a defect, not a
+// simplification: it destroys the CHAOS-2578 guarantee that a late or
+// out-of-order result cannot roll a LEGITIMATE watermark backwards. Python
+// pinned that by mutation; repository_postgres_sql_test.go pins it here.
+//
+// $6 is the write instant, used as `now` for the future test in-database so
+// the decision stays atomic against concurrent writers.
 const upsertWatermarkSQL = `
 INSERT INTO public.sync_watermarks (
     id, org_id, repo_id, source_id, target, dataset_key,
     last_synced_at, updated_at
 ) VALUES ($1, $2, $3, $3, $4, $4, $5, $6)
 ON CONFLICT (org_id, source_id, dataset_key) DO UPDATE
-SET last_synced_at = GREATEST(
-        public.sync_watermarks.last_synced_at,
-        EXCLUDED.last_synced_at
-    ),
+SET last_synced_at = CASE
+        WHEN public.sync_watermarks.last_synced_at > $6::timestamptz
+         AND EXCLUDED.last_synced_at <= $6::timestamptz
+        THEN EXCLUDED.last_synced_at
+        ELSE GREATEST(
+            public.sync_watermarks.last_synced_at,
+            EXCLUDED.last_synced_at
+        )
+    END,
     updated_at = EXCLUDED.updated_at`
 
 const upsertFinalizeSQL = `

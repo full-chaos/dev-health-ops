@@ -121,6 +121,7 @@ from .org_policy import load_ask_dev_org_policy
 from .portfolio_status_service import PortfolioStatusService
 from .project_health_service import ProjectHealthService
 from .prompts import LEGACY_PROMPT_VERSION, PROMPT_VERSION
+from .qua_shadow import QUAShadowConfig, QuestionUnderstandingShadow
 from .question_interpreter import QuestionInterpreter
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .scope_catalog import ClickHouseAuthorizedEntityCatalog
@@ -2391,6 +2392,41 @@ async def _assemble_production_runtime(
         if wave_3_1_enabled
         else None
     )
+    # CHAOS-3389 shadow phase: a single env flag flip, gated on wave_3_1
+    # (the shadow seam runs alongside the deterministic preflight and is
+    # meaningless without it). Off by default -- ``QUAShadowConfig.enabled``
+    # defaults to ``False``, so an unset env var is byte-identical to this
+    # whole seam not existing (see qua_shadow.py's own module docstring and
+    # the RED test proving it).
+    #
+    # ``provider=None`` deliberately, even when the flag is on (Codex
+    # adversarial review round 1, HIGH, confirmed): ``provider.provider``
+    # here is the SAME instance ``attach_agent_budget_guard``
+    # (llm/budget.py) already wrapped for the live investigation call --
+    # `decide()` is monkeypatched in place, not copied, so a shadow call
+    # against it would consume the SAME org BYO budget/quota the live call
+    # needs, and could make the live call fail with budget_exhausted. That
+    # is a genuine live-outcome effect, exactly what shadow mode must never
+    # have. No isolated shadow quota exists yet, and no separate
+    # ``question_understanding`` role certification exists yet either (both
+    # explicitly follow-on work per the platform spec, comment 6fa38d88) --
+    # until one of those lands, `evaluate()` always resolves to
+    # SKIPPED_NO_PROVIDER in production, which is the correct, safe
+    # "unavailable" outcome this seam is built to degrade to. The QUA logic
+    # itself is fully implemented and exercised end-to-end by
+    # tests/api/dev/test_chaos_3389_qua_shadow.py's scripted (never
+    # budget-shared) providers.
+    qua_shadow = (
+        QuestionUnderstandingShadow(
+            provider=None,
+            scope_service=scope_service,
+            config=QUAShadowConfig(
+                enabled=os.getenv("ASK_DEV_QUA_SHADOW_ENABLED") == "1"
+            ),
+        )
+        if wave_3_1_enabled
+        else None
+    )
     # CHAOS-3295: the plan-governed investigation seam rides the same
     # organization gate as preflight -- a plan can only run once a subject
     # is committed, and only the preflight commits one.
@@ -2456,6 +2492,7 @@ async def _assemble_production_runtime(
         versions=versions,
         platform_certification_stale=provider.platform_certification_stale,
         preflight=preflight,
+        qua_shadow=qua_shadow,
         # CHAOS-3297 stack #3: the combined ten-plan lookup -- orchestrator.py's
         # own plan_registry.get(intent.intent_id) is intent-generic and needs
         # no change to reach the four new plans.

@@ -46,6 +46,7 @@ from dev_health_ops.models.dev_persistence import (
     DevRun,
     DevRunIntent,
     DevRunNarrative,
+    DevRunQuaShadow,
     DevRunResolution,
     DevRunSourceObservation,
     DevRunStageDiagnostic,
@@ -272,6 +273,25 @@ _STAGE_IDS = frozenset(
     }
 )
 _STAGE_STATUSES = frozenset({"started", "completed", "failed", "skipped"})
+# CHAOS-3389: mirrors qua_shadow.QUAShadowStatus / subject_preflight.
+# PreflightDecision -- hand-maintained the same way every other closed
+# vocabulary above is (this table has no Python-side reflection over those
+# enums), reconciled by ``migrations/0086``'s identical CHECK constraint.
+_QUA_SHADOW_STATUSES = frozenset(
+    {
+        "evaluated",
+        "skipped_disabled",
+        "skipped_no_provider",
+        "skipped_no_mentions",
+        "skipped_budget_exhausted",
+        "skipped_catalog_unavailable",
+        "skipped_timeout",
+        "skipped_provider_error",
+        "skipped_unexpected_decision",
+        "skipped_invalid_output",
+    }
+)
+_PREFLIGHT_DECISIONS = frozenset({"proceed", "terminate"})
 
 # Bounds on the opaque JSONB payload each Wave 3.1 artifact carries. These are
 # defense-in-depth (SQLite test targets have no DB-level byte-length CHECK);
@@ -279,6 +299,9 @@ _STAGE_STATUSES = frozenset({"started", "completed", "failed", "skipped"})
 _INTENT_PAYLOAD_MAX_BYTES = 16 * 1024
 _RESOLUTION_PAYLOAD_MAX_BYTES = 8 * 1024
 _SUBJECT_SET_PAYLOAD_MAX_BYTES = 16 * 1024
+#: CHAOS-3389: up to 25 mentions x 25 candidate indices each, plus
+#: intent/cardinality/error bookkeeping -- generously bounded, still small.
+_QUA_SHADOW_PAYLOAD_MAX_BYTES = 32 * 1024
 # Codex finding (HIGH, 2026-08-01): a dense-but-valid `status.entity.v2`
 # observation (status_facts + up to 100 required_children + pull_requests +
 # ci_checks + deployments + incidents, each fact carrying its own
@@ -753,6 +776,11 @@ _PAYLOAD_MODEL_VALIDATORS: dict[type, Any] = {
     DevRunResolution: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
     DevRunSubjectSet: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
     DevRunSourceObservation: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
+    # CHAOS-3389: same posture as the three Wave 3.1 rows above -- audit-only,
+    # server-internal, never a frontend-facing wire contract (qua_shadow.py's
+    # own module docstring), so it is not a candidate for full ORM-boundary
+    # contract validation the way dev_answer_frames/dev_run_narratives are.
+    DevRunQuaShadow: _KNOWN_UNVALIDATED_PAYLOAD_GAP,
 }
 
 
@@ -2510,6 +2538,57 @@ class DevPersistenceService:
                 payload,
                 field="subject_set_payload",
                 max_bytes=_SUBJECT_SET_PAYLOAD_MAX_BYTES,
+            ),
+            created_at=self._now(),
+        )
+        self.session.add(record)
+        await self.session.flush()
+        return record
+
+    async def record_qua_shadow(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        status: str,
+        deterministic_decision: str,
+        cardinality_corroborated: bool | None,
+        latency_ms: float,
+        model_fingerprint: str | None,
+        payload: Mapping[str, Any],
+    ) -> DevRunQuaShadow:
+        """Persist one CHAOS-3389 QUA shadow evaluation.
+
+        Audit-only, exactly like ``append_resolution``'s posture: at most
+        one row per run (``uq_dev_run_qua_shadow_run``), never read back by
+        any live-path code to affect a run.
+        """
+
+        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run is None:
+            raise DevPersistenceNotFound("run not found")
+        if status not in _QUA_SHADOW_STATUSES:
+            raise DevPersistenceValidationError("invalid qua_shadow status")
+        if deterministic_decision not in _PREFLIGHT_DECISIONS:
+            raise DevPersistenceValidationError(
+                "invalid qua_shadow deterministic_decision"
+            )
+        record = DevRunQuaShadow(
+            run_id=run.id,
+            org_id=org_id,
+            user_id=user_id,
+            status=status,
+            deterministic_decision=deterministic_decision,
+            cardinality_corroborated=cardinality_corroborated,
+            latency_ms=latency_ms,
+            model_fingerprint=_safe_token(
+                model_fingerprint, field="model_fingerprint", max_bytes=64
+            ),
+            payload=_bounded_json(
+                payload,
+                field="qua_shadow_payload",
+                max_bytes=_QUA_SHADOW_PAYLOAD_MAX_BYTES,
             ),
             created_at=self._now(),
         )

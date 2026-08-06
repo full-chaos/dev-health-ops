@@ -106,6 +106,9 @@ class Recorder:
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
 
+    async def record_qua_shadow(self, record: Any) -> None:
+        del record
+
     async def record_narrative(self, narrative: Any) -> None:
         if self.fail_narrative_write:
             raise RuntimeError("narrative storage unavailable")

@@ -43,6 +43,9 @@ from dev_health_ops.llm.budget import budget_idempotency_scope
 from dev_health_ops.metrics.prometheus import (
     ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL,
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
+    ASK_DEV_QUA_SHADOW_FAULT_TOTAL,
+    ASK_DEV_QUA_SHADOW_LATENCY_SECONDS,
+    ASK_DEV_QUA_SHADOW_TOTAL,
     ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL,
     ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL,
     ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL,
@@ -114,6 +117,7 @@ from .preflight_outcomes import (
     project_preflight_error,
 )
 from .prompts import PromptComposer, PromptConversationTurn
+from .qua_shadow import QUAShadowRecord, QuestionUnderstandingShadow
 from .status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
@@ -504,6 +508,18 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
+        """Persist one CHAOS-3389 QUA shadow evaluation.
+
+        Called at most once per run, only when a ``QuestionUnderstandingShadow``
+        is configured -- never affects any live decision; see this module's
+        own call site for the full non-influence argument. Best-effort:
+        callers must tolerate this raising (mirrors ``record_frame``'s own
+        failure-recovery posture) since a shadow-record write is strictly
+        secondary to the run it shadows.
+        """
+        ...
+
     async def record_narrative(self, narrative: DevNarrative) -> None:
         """Persist one ``dev_narrative.v1`` (CHAOS-3297 stack #4).
 
@@ -578,6 +594,9 @@ class NullRunRecorder:
 
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
+
+    async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
+        del record
 
     async def record_narrative(self, narrative: DevNarrative) -> None:
         del narrative
@@ -725,6 +744,7 @@ class DevOrchestrator:
         plan_registry: Mapping[QuestionIntentID, DevInvestigationPlan] | None = None,
         plan_executor: PlanExecutor | None = None,
         narrative_provider: narrative_fallback.NarrativeProvider | None = None,
+        qua_shadow: QuestionUnderstandingShadow | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -754,6 +774,12 @@ class DevOrchestrator:
         # the seam C3/C4 live-endpoint controls inject a scripted provider
         # through.
         self._narrative_provider = narrative_provider
+        # CHAOS-3389 shadow phase: ``None`` is the flag-off path -- no
+        # shadow call, no shadow record, byte-identical to this seam not
+        # existing. See the ``qua_shadow`` call site in ``run()`` for the
+        # structural argument that even when set, this can never affect any
+        # live decision.
+        self._qua_shadow = qua_shadow
         self._composer = PromptComposer(registry)
 
     async def run(
@@ -1512,6 +1538,142 @@ class DevOrchestrator:
                             await self._recorder.record_subject_set(
                                 preflight_result.subject_set
                             )
+
+                if self._qua_shadow is not None:
+                    # CHAOS-3389 shadow phase: runs strictly AFTER the
+                    # deterministic decision above is fully computed and
+                    # persisted, and its result (`shadow_record`) is a local
+                    # variable nothing below this block ever reads -- that is
+                    # the structural half of "flipping the flag changes zero
+                    # live-path behavior" (the RED test in
+                    # test_chaos_3389_qua_shadow.py proves the other half:
+                    # OrchestratorResult is byte-identical with the shadow on
+                    # vs off, even against a provider that always raises).
+                    # Every exception from either the evaluation or the
+                    # persistence write is caught here -- a shadow-mode bug
+                    # must never fail or roll back the run it shadows.
+                    try:
+                        shadow_record = await self._qua_shadow.evaluate(
+                            question=request.question,
+                            interpretation=preflight_result.interpretation,
+                            org_id=org_id,
+                            permission_fingerprint=permission_fingerprint,
+                            deterministic_decision=preflight_result.decision,
+                            remaining_seconds=remaining(),
+                        )
+                    except Exception as shadow_fault:
+                        logger.exception(
+                            "ask_dev.orchestrator.qua_shadow_evaluation_fault",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(shadow_fault).__name__,
+                            },
+                        )
+                        ASK_DEV_QUA_SHADOW_FAULT_TOTAL.labels(
+                            exception_type=type(shadow_fault).__name__
+                        ).inc()
+                        shadow_record = None
+                    if shadow_record is not None:
+                        ASK_DEV_QUA_SHADOW_TOTAL.labels(
+                            status=shadow_record.status.value,
+                            deterministic_decision=preflight_result.decision.value,
+                        ).inc()
+                        if shadow_record.latency_ms > 0:
+                            ASK_DEV_QUA_SHADOW_LATENCY_SECONDS.labels(
+                                status=shadow_record.status.value
+                            ).observe(shadow_record.latency_ms / 1000.0)
+                        try:
+                            await self._recorder.record_qua_shadow(shadow_record)
+                        except Exception as shadow_write_fault:
+                            logger.exception(
+                                "ask_dev.orchestrator.qua_shadow_write_fault",
+                                extra={
+                                    "run_id": run_id,
+                                    "exception_type": type(shadow_write_fault).__name__,
+                                },
+                            )
+                            ASK_DEV_QUA_SHADOW_FAULT_TOTAL.labels(
+                                exception_type=type(shadow_write_fault).__name__
+                            ).inc()
+                            # Mirrors CHAOS-3424's own ledger-write-fault
+                            # recovery immediately above: a failed write can
+                            # mark the session rollback-only, so every later
+                            # write in finish() (record_answer/terminal/etc.)
+                            # must not inherit that state.
+                            #
+                            # Codex adversarial review round 1 (HIGH,
+                            # confirmed): unlike the CHAOS-3424 handler above
+                            # -- where the failure IS the ledger write, so
+                            # there is nothing valid to replay -- THIS
+                            # rollback fires strictly after a PROCEED
+                            # decision's resolution ledger already flushed
+                            # successfully earlier in this same transaction.
+                            # Re-persisting only preflight diagnostics/
+                            # subject set (as originally written) would
+                            # silently discard those already-good ledger
+                            # rows on the rollback below -- the exact
+                            # forensic data CHAOS-3424 exists to make
+                            # durable, lost by an unrelated OPTIONAL
+                            # shadow-record write failing. Replayed here
+                            # alongside the other two, in the ledger's own
+                            # ordinal order, exactly as the PROCEED block
+                            # above first wrote them.
+                            # Codex adversarial review round 2 (HIGH,
+                            # confirmed): the replay sequence itself used to
+                            # be unguarded -- if the underlying fault is a
+                            # genuinely dead connection (not just a
+                            # constraint violation on the shadow row alone),
+                            # `rollback()` or any one of the three replay
+                            # calls below can ALSO raise, and that second
+                            # exception was not caught here at all. It would
+                            # propagate out of this whole block to the
+                            # orchestrator's own top-level catch-all
+                            # (`unhandled_run_fault`, this module's last
+                            # resort), degrading what must stay a routine,
+                            # graceful terminal into a generic internal_error
+                            # -- turning an OPTIONAL telemetry failure into a
+                            # live-outcome change, exactly what this seam
+                            # must never do. Wrapped so a second, worse
+                            # failure here is recorded distinctly and
+                            # swallowed rather than escalated: if recovery
+                            # itself cannot succeed, this run's diagnostics
+                            # may be incomplete, but its OUTCOME is still
+                            # never sacrificed for optional shadow telemetry.
+                            try:
+                                await self._recorder.rollback()
+                                await self._recorder.record_preflight(
+                                    preflight_outcome=preflight_result.diagnostic,
+                                    legacy_guard_reason=None,
+                                )
+                                if (
+                                    preflight_result.decision
+                                    is PreflightDecision.PROCEED
+                                    and preflight_result.ledger is not None
+                                ):
+                                    for (
+                                        resolution_entry
+                                    ) in preflight_result.ledger.entries:
+                                        await self._recorder.append_resolution(
+                                            resolution_entry
+                                        )
+                                if preflight_result.subject_set is not None:
+                                    await self._recorder.record_subject_set(
+                                        preflight_result.subject_set
+                                    )
+                            except Exception as shadow_recovery_fault:
+                                logger.exception(
+                                    "ask_dev.orchestrator.qua_shadow_recovery_fault",
+                                    extra={
+                                        "run_id": run_id,
+                                        "exception_type": type(
+                                            shadow_recovery_fault
+                                        ).__name__,
+                                    },
+                                )
+                                ASK_DEV_QUA_SHADOW_FAULT_TOTAL.labels(
+                                    exception_type=type(shadow_recovery_fault).__name__
+                                ).inc()
+
                 if preflight_result.decision is PreflightDecision.TERMINATE:
                     assert preflight_result.answer is not None
                     assert preflight_result.outcome is not None

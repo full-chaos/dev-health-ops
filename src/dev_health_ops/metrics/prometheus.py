@@ -224,6 +224,50 @@ if _PROMETHEUS_AVAILABLE:
         ["failure_code"],
     )
 
+    # ---------------------------------------------------------------------------
+    # Ask Dev Question Understanding Agent shadow mode (CHAOS-3389)
+    # ---------------------------------------------------------------------------
+    ASK_DEV_QUA_SHADOW_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_qua_shadow_total",
+        "Ask Dev QUA shadow evaluations by outcome status (qua_shadow."
+        "QUAShadowStatus, content-free) and the deterministic preflight "
+        "decision (proceed/terminate) it ran alongside. Every increment is "
+        "shadow-only telemetry -- it never affects any live run.",
+        ["status", "deterministic_decision"],
+    )
+
+    ASK_DEV_QUA_SHADOW_LATENCY_SECONDS = _prometheus_client_module.Histogram(
+        "devhealth_ask_dev_qua_shadow_latency_seconds",
+        "Ask Dev QUA shadow provider-call latency, by outcome status. Feeds "
+        "the future probe-certification's latency budget evidence -- "
+        "recorded, never gated on.",
+        ["status"],
+        buckets=(0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 5.0),
+    )
+
+    ASK_DEV_QUA_SHADOW_FAULT_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_qua_shadow_fault_total",
+        "Ask Dev QUA shadow evaluations or shadow-record writes that raised "
+        "outside qua_shadow.py's own defensive handling, caught at the "
+        "orchestrator call site so a shadow-mode bug can never fail or roll "
+        "back the live run it shadows. Every increment is a shadow-path "
+        "defect, not a live-path one.",
+        ["exception_type"],
+    )
+
+    ASK_DEV_QUA_SHADOW_CARDINALITY_UNCORROBORATED_TOTAL = (
+        _prometheus_client_module.Counter(
+            "devhealth_ask_dev_qua_shadow_cardinality_uncorroborated_total",
+            "Ask Dev QUA shadow proposals with cardinality=organization_wide "
+            "that the deterministic interpreter did NOT independently reach "
+            "the same cardinality for (CHAOS-3389 adversarial critique "
+            "hardening condition: an org-wide proposal is a model-proposed "
+            "widening channel and must never be trusted without deterministic "
+            "corroboration -- shadow mode records this but never acts on it).",
+            ["intent"],
+        )
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -245,6 +289,10 @@ else:
     ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL = _noop_counter()
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _noop_counter()
     ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _noop_counter()
+    ASK_DEV_QUA_SHADOW_TOTAL = _noop_counter()
+    ASK_DEV_QUA_SHADOW_LATENCY_SECONDS = _noop_histogram()
+    ASK_DEV_QUA_SHADOW_FAULT_TOTAL = _noop_counter()
+    ASK_DEV_QUA_SHADOW_CARDINALITY_UNCORROBORATED_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

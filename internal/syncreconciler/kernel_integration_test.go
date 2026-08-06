@@ -675,6 +675,16 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		// eda2d6b91) — created but never granted to the domain role here.
 		"CREATE TABLE public.worker_job_routes (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		// Migration 0088 (#1529) added this table to domainPosture's manifest,
+		// so the CheckDomainAuthorization readiness call each test in this
+		// package makes fails closed on its absence — the
+		// table has to exist here even though this fixture never writes to it,
+		// exactly as it has to exist in a deployment before domain workers
+		// start. ApplyPinnedMigrations' domain GRANT for it is guarded by
+		// `IF to_regclass(...) IS NOT NULL`, so without this CREATE the role
+		// silently receives no grant and readiness reports the opaque
+		// "PostgreSQL readiness check failed".
+		"CREATE TABLE public.sync_run_unit_effect_snapshots (sync_run_unit_id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",

@@ -355,6 +355,16 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		// Migration 0088 (#1529) added this table to domainPosture's manifest,
+		// so the CheckDomainAuthorization readiness call each test in this
+		// package makes fails closed on its absence — the
+		// table has to exist here even though this fixture never writes to it,
+		// exactly as it has to exist in a deployment before domain workers
+		// start. ApplyPinnedMigrations' domain GRANT for it is guarded by
+		// `IF to_regclass(...) IS NOT NULL`, so without this CREATE the role
+		// silently receives no grant and readiness reports the opaque
+		// "PostgreSQL readiness check failed".
+		"CREATE TABLE public.sync_run_unit_effect_snapshots (sync_run_unit_id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",

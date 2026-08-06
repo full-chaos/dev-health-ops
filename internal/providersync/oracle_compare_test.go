@@ -409,6 +409,15 @@ func typedEncode(t *testing.T, v reflect.Value) any {
 	if identifier, ok := v.Interface().(uuid.UUID); ok {
 		return map[string]any{"t": "uuid", "v": strings.ToLower(identifier.String())}
 	}
+	// A calendar day is not a string and not an instant. Python's _encode tags
+	// datetime.date as "date", so a Go day type whose underlying kind is string
+	// would otherwise be tagged "str" and compare unequal to EVERY Python date
+	// -- or, worse, compare equal to a genuinely-string field that happens to
+	// hold the same text. Types that persist as a ClickHouse Date declare
+	// oracleDate() to opt into the matching tag.
+	if dated, ok := v.Interface().(interface{ oracleDate() string }); ok {
+		return map[string]any{"t": "date", "v": dated.oracleDate()}
+	}
 	switch v.Kind() {
 	case reflect.String:
 		return map[string]any{"t": "str", "v": v.String()}
@@ -565,6 +574,15 @@ func diffRows(
 // it. Values are parsed back and compared numerically/temporally instead
 // of as text; everything else still falls through to reflect.DeepEqual
 // unchanged.
+// A pair whose row is COLUMN-ORIENTED (one key per production field, holding
+// the ordered list of that field's values across every record the case
+// produced) puts its leaves one level down, inside a []any. A top-level-only
+// canonicalization would then compare those lists with reflect.DeepEqual on
+// their raw text and report `[5.0]` vs `[5]` as a divergence -- reintroducing
+// the exact false positive the scalar path exists to remove, for every pair
+// that compares a list of records rather than a single row. So recurse:
+// containers are compared element-wise with this same function, and only
+// genuine leaves reach the text/DeepEqual comparison.
 func typedValuesEqual(pythonValue, goValue any) bool {
 	pythonTagged, pythonOK := asTaggedValue(pythonValue)
 	goTagged, goOK := asTaggedValue(goValue)
@@ -583,6 +601,32 @@ func typedValuesEqual(pythonValue, goValue any) bool {
 				return pythonTime.Equal(goTime)
 			}
 		}
+		return reflect.DeepEqual(pythonValue, goValue)
+	}
+	switch python := pythonValue.(type) {
+	case []any:
+		other, ok := goValue.([]any)
+		if !ok || len(other) != len(python) {
+			return false
+		}
+		for index := range python {
+			if !typedValuesEqual(python[index], other[index]) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		other, ok := goValue.(map[string]any)
+		if !ok || len(other) != len(python) {
+			return false
+		}
+		for key, value := range python {
+			otherValue, exists := other[key]
+			if !exists || !typedValuesEqual(value, otherValue) {
+				return false
+			}
+		}
+		return true
 	}
 	return reflect.DeepEqual(pythonValue, goValue)
 }
@@ -902,6 +946,48 @@ func TestTypedValuesEqualCanonicalizesFloatAndDatetimeText(t *testing.T) {
 			name:      "int tag: exact text comparison, untouched by the float/datetime path",
 			a:         tagged("int", "5"),
 			b:         tagged("int", "5.0"), // an int side must never accept float-shaped text
+			wantEqual: false,
+		},
+		{
+			name:      "column list of equal floats with different text",
+			a:         []any{tagged("float", "5.0"), tagged("float", "0.0")},
+			b:         []any{tagged("float", "5"), tagged("float", "0")},
+			wantEqual: true,
+		},
+		{
+			name:      "column list where one element genuinely differs",
+			a:         []any{tagged("float", "5.0"), tagged("float", "1.0")},
+			b:         []any{tagged("float", "5"), tagged("float", "2")},
+			wantEqual: false,
+		},
+		{
+			name:      "column lists of different length are never equal",
+			a:         []any{tagged("float", "5.0")},
+			b:         []any{tagged("float", "5"), tagged("float", "5")},
+			wantEqual: false,
+		},
+		{
+			name:      "column list holding nulls stays position-sensitive",
+			a:         []any{nil, tagged("float", "5.0")},
+			b:         []any{tagged("float", "5"), nil},
+			wantEqual: false,
+		},
+		{
+			name:      "nested object canonicalizes its float leaves",
+			a:         map[string]any{"hours": tagged("float", "5.0"), "name": tagged("str", "a")},
+			b:         map[string]any{"hours": tagged("float", "5"), "name": tagged("str", "a")},
+			wantEqual: true,
+		},
+		{
+			name:      "nested object missing a key is not equal",
+			a:         map[string]any{"hours": tagged("float", "5.0"), "name": tagged("str", "a")},
+			b:         map[string]any{"hours": tagged("float", "5")},
+			wantEqual: false,
+		},
+		{
+			name:      "differing tags on the same text are never equal",
+			a:         tagged("date", "2026-08-04"),
+			b:         tagged("str", "2026-08-04"),
 			wantEqual: false,
 		},
 	}

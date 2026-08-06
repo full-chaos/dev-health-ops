@@ -95,6 +95,12 @@ It mirrors the PR-time CI gates of the ops repo and MUST be green before `git pu
    unescaped-`%` mistake. (The broader seeded `pytest -m clickhouse` suite —
    flow-matrix-live, recommendations, resolver EXPLAIN — needs `dev-hops fixtures
    generate` and is a separate opt-in run, not part of this gate; CI does not run it either.)
+5. A **host-wide single-flight lock** (CHAOS-3403): the gate serializes across every
+   worktree on the host, since all worktrees share one ClickHouse container and one
+   host's CPU/RAM. A run that finds the lock already held blocks, waiting up to
+   `LOCK_WAIT_SECS` (default 1800s = 30 minutes), then fails with an actionable
+   message naming the holder's PID and cwd. `LOCK_WAIT_SECS=0` fails fast instead
+   of waiting.
 
 ### Safety rule (NON-NEGOTIABLE)
 

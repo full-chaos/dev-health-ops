@@ -54,6 +54,12 @@
 #   already pass one (e.g. to force a shared name, or to inspect a completed run's
 #   database before it's reclaimed).
 #
+#   That per-worktree scratch db fixed ClickHouse-state collisions across
+#   worktrees, but every worktree still shares ONE ClickHouse container and ONE
+#   host's CPU/RAM (gate_unit_suite alone forks 4 pytest-xdist workers per run).
+#   See the SINGLE-FLIGHT LOCK section below (CHAOS-3403) for the mutex this
+#   script now takes on that shared resource before doing any work.
+#
 # USAGE:
 #   Run from the worktree ROOT (the dir containing ci/run_tests.sh) using its .venv:
 #     bash ci/local_validate.sh
@@ -62,6 +68,10 @@
 #   Force a specific scratch db name (rarely needed — the default is already
 #   unique per worktree):
 #     SCRATCH_DB=my_custom_scratch bash ci/local_validate.sh
+#   By default a blocked run waits up to LOCK_WAIT_SECS=1800 (30 minutes) for a
+#   concurrent gate to release the lock, then fails with an actionable message.
+#   Fail fast instead of waiting if another gate already holds the lock:
+#     LOCK_WAIT_SECS=0 bash ci/local_validate.sh
 #
 set -uo pipefail
 
@@ -214,6 +224,314 @@ DEVHOPS="${ROOT}/.venv/bin/dev-hops"
 #     exactly what made test_429_backoff_grows_exponentially fail locally and
 #     pass in CI in the first place.
 PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL)
+
+# --- Single-flight lock (CHAOS-3403). -----------------------------------------------
+# The ops-local-validate skill (.claude/skills/ops-local-validate/SKILL.md) documented
+# this gate as single-flight, machine-wide — but that was an operator convention, not
+# anything enforced: every operator/agent had to `ps aux | grep local_validate` before
+# launching — a time-of-check-to-time-of-use race. One collision had to be killed by
+# hand and two near-misses were caught only by a human watching `ps` in real time, in
+# both cases AFTER a correct check had already gone stale in the seconds before
+# launch. ops/AGENTS.md's "Pre-push validation gate" section now states the contract
+# too; this lock is what makes it actually true instead of merely documented.
+#
+# RESIDUAL MECHANISM (investigated for CHAOS-3403 — not assumed): the CONCURRENCY
+# CONTRACT above already gives every worktree its own scratch ClickHouse database
+# (hashed from ROOT), and this codebase uses plain MergeTree tables with no
+# ReplicatedMergeTree/ZooKeeper coordination — so two gates from DIFFERENT
+# worktrees no longer corrupt each other's ClickHouse schema; that collision is
+# fixed. What is NOT fixed: every worktree still shares the ONE ClickHouse
+# container (${CH_CONTAINER}) and ONE host's CPU/RAM/disk. gate_unit_suite() alone
+# forks 4 pytest-xdist workers; N concurrent gates fork 4N, plus N concurrent mypy
+# and ruff invocations. The actual collision mechanism is host resource
+# exhaustion severe enough that a test's real completion signal never fires within
+# its timeout (see AGENTS.md's "Timeout-fallback masquerade") — not ClickHouse
+# corruption. A run from the SAME worktree path launched twice (e.g. an agent
+# fanning out sub-agents without giving each its own worktree, contrary to
+# AGENTS.md) is additionally exposed to the pre-fix scratch-db collision directly,
+# since SCRATCH_DB is derived from ROOT and would be identical for both runs.
+# The lock below is a mutex on that shared resource, scoped to CH_CONTAINER (the
+# thing actually contended) rather than to this worktree — matching the team's
+# current manual "ps aux" convention, which is host-wide, not per-worktree.
+#
+# THROUGHPUT TRADE-OFF: this re-serializes gates across worktrees that a prior fix
+# (commit 3d3ca881b2, the per-worktree scratch db above) deliberately let run
+# concurrently. That trade is not free. Observed, not benchmarked: a full gate run
+# end-to-end is on the order of 15 minutes; the unit-suite tier alone is on the
+# order of 180s. With N worktrees contending for the same CH_CONTAINER, the
+# worst-case wait for the last one is on the order of (N-1) x that full-run time —
+# an order-of-magnitude figure, not a guarantee.
+#
+# --- Lock primitive: a symlink, not a directory (CHAOS-3403 adversarial-review fix) --
+# Uses `ln -s`, not `mkdir` + separate metadata files, and not `flock(1)` — flock(1)
+# does not exist on stock macOS, the target dev platform (verified: `command -v
+# flock` fails here).
+#
+# The earlier mkdir-based design had a real, reviewer-confirmed atomicity gap:
+# `mkdir "${LOCK_DIR}"` published the lock's EXISTENCE before `pid`/`cwd` were
+# written into it as separate files. A contender arriving in that window saw a
+# directory with no pid file yet, concluded "stale" (lock_holder_alive() checked
+# `-f "${LOCK_DIR}/pid"` first), and `rm -rf`'d the just-acquired lock out from
+# under its rightful owner — two gates then run concurrently, exactly the failure
+# this whole ticket exists to prevent. `ln -s <metadata> "${LOCK_DIR}"` closes this
+# structurally rather than by narrowing the window: `symlink(2)` is a single
+# syscall that atomically creates the name AND its content together — the target
+# string IS the metadata (`pid|start-time|cwd`), computed before the syscall runs.
+# There is no instant at which the lock exists but is unpopulated: readers only
+# ever observe "does not exist" or "exists with complete valid metadata already in
+# place". `ln -s` on a name that already exists fails immediately, unmodified,
+# with no partial state — the same all-or-nothing guarantee `mkdir` gave for
+# existence alone, now extended to existence-plus-content in one step.
+#
+# This also structurally closes a second reviewer-confirmed gap: reclaiming a
+# stale lock previously ran `rm -rf` on a directory whose name (LOCK_DIR) is
+# environment-overridable — a typo'd or mistaken override pointing at, say, a
+# worktree root would have its entire contents recursively deleted the moment
+# this script judged the (unrelated) directory "stale". A symlink has no
+# contents to recurse into: reclaiming/releasing is always `rm -f` on a single
+# name, and reclaim_stale_lock() below refuses to touch LOCK_DIR at all if it
+# exists as anything other than a symlink (a real file or directory there means
+# LOCK_DIR is pointed somewhere it should not be — this dies loudly instead of
+# guessing).
+#
+# PID-reuse hardening: `kill -0 <pid>` only proves *something* holds that PID
+# right now, not that it is the same process that created the lock. After
+# `kill -9`, the OS can and eventually will reuse that PID for an unrelated
+# process, which would make a stale lock look healthy indefinitely (the next
+# gate would then wait out the full LOCK_WAIT_SECS against a false owner every
+# time). The metadata records `ps -o lstart=` (the owning process's start time)
+# alongside its PID; lock_holder_alive() requires BOTH kill -0 AND a re-queried
+# lstart for that PID to match what was recorded at acquire time. A reused PID
+# almost never has an identical start time (second-granularity), so this is
+# treated as dead and reclaimed rather than trusted.
+#
+# Semantics: bounded blocking wait, not pure block-forever or pure fail-fast.
+# Blocking suits agents — they can fire-and-wait rather than hand-writing a
+# retry loop — but a pure block-forever wait is unfriendly to a human debugging a
+# genuinely wedged lock, and offers no circuit breaker if the diagnosed resource
+# contention above turns out to itself hang. LOCK_WAIT_SECS=0 gives the fail-fast
+# behavior outright for a human who wants it immediately.
+#
+# The default path is deliberately NOT derived from $TMPDIR. This entire epic is
+# "the gate inherits the shell environment and that produces wrong results" —
+# keying host-wide mutual exclusion on an inherited env var repeats exactly that
+# class of bug: two agents with different ambient TMPDIR (a sandbox, a
+# session-scoped scratch dir, anyone who exports it) would silently acquire two
+# DIFFERENT lock names and both proceed, with no error and no diagnostic — the
+# worst possible failure shape for a mutex. /tmp is fixed and shared by every
+# process on the host regardless of its shell's TMPDIR. LOCK_DIR itself is still
+# explicitly overridable (tests need this to avoid colliding with a real gate) —
+# guarded below against the most catastrophic accidental values.
+LOCK_DIR="${LOCK_DIR:-/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock}"
+LOCK_WAIT_SECS="${LOCK_WAIT_SECS:-1800}"
+# Whole seconds only: acquire_lock's retry loop does `waited=$((waited +
+# LOCK_POLL_SECS))`, bash integer arithmetic — a fractional override (e.g.
+# "0.5") is a syntax error there ("invalid arithmetic operator"), not a
+# silently-truncated value. Found while tuning a regression test; every real
+# caller only ever needs whole-second polling, so this is documented rather
+# than made fractional-safe.
+LOCK_POLL_SECS="${LOCK_POLL_SECS:-2}"
+LOCK_HELD=0
+
+case "${LOCK_DIR}" in
+"" | "/" | "${ROOT}" | "${HOME:-__unset__}")
+  # die() is defined further down (with the other output helpers) and this
+  # guard must run before any of that is available, so it does not call die()
+  # — it prints the same shape of fatal message directly and exits the same way.
+  printf '\nFATAL: refusing to use LOCK_DIR=%s — looks like an accidental override (empty, root, the worktree, or $HOME). Set LOCK_DIR to a dedicated path.\n' "${LOCK_DIR}" >&2
+  exit 2
+  ;;
+esac
+
+# ps -o lstart= renders under the caller's LC_TIME/LC_ALL ("Wed Aug  5
+# 20:46:09 2026" in C, "Mi.  5 Aug. 20:46:09 2026" in de_DE.UTF-8) and neither
+# writer nor reader pinned a locale — so a holder that recorded its own start
+# time under one locale could be judged dead by a checker (or by itself, on
+# release) running under another, deterministically, no timing luck involved.
+# Every lock-metadata callsite goes through this one function so there is
+# exactly one place the locale is pinned.
+ps_lstart() {
+  LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//'
+}
+
+# Packs this process's identity into the exact string that becomes the lock
+# symlink's target — the ONLY thing written by acquire, and the whole reason
+# publication is atomic (see header comment above). '|'-delimited; a worktree
+# path containing a literal '|' is not supported (pathological, not defended).
+lock_owner_metadata() {
+  printf '%s|%s|%s' "$$" "$(ps_lstart "$$")" "${ROOT}"
+}
+
+# Parses the CURRENT lock symlink's target into LOCK_OWNER_{PID,LSTART,CWD}
+# (plus LOCK_OWNER_RAW_TARGET, the exact string read, for compare-and-delete).
+# Always re-reads from disk — never caches across calls — so every check reflects
+# whatever is actually there right now, not what used to be there.
+parse_lock_owner() {
+  local target
+  target="$(readlink "${LOCK_DIR}" 2>/dev/null)" || return 1
+  [ -n "${target}" ] || return 1
+  LOCK_OWNER_RAW_TARGET="${target}"
+  IFS='|' read -r LOCK_OWNER_PID LOCK_OWNER_LSTART LOCK_OWNER_CWD <<<"${target}"
+  [ -n "${LOCK_OWNER_PID}" ]
+}
+
+lock_holder_alive() {
+  parse_lock_owner || return 1
+  kill -0 "${LOCK_OWNER_PID}" 2>/dev/null || return 1
+  local current_lstart
+  current_lstart="$(ps_lstart "${LOCK_OWNER_PID}")"
+  [ -n "${current_lstart}" ] && [ "${current_lstart}" = "${LOCK_OWNER_LSTART}" ]
+}
+
+# Removes LOCK_DIR ONLY if its current on-disk target still matches
+# expected_target — closes the TOCTOU window between deciding "this lock is
+# stale / this lock is mine" and actually deleting it. Several syscalls
+# (readlink, kill -0, ps) separate a "stale"/"mine" decision from the `rm -f`
+# that acts on it; without this, the delete acts on "whatever is currently at
+# the path", not on what was actually read/decided against, and a reclaimer or
+# releaser can delete a DIFFERENT process's lock that was created in that gap.
+# Re-reads from disk right now rather than trusting any cached state, and
+# compares against the exact string the caller read/computed — not merely
+# "a symlink exists".
+lock_compare_and_delete() {
+  local expected_target="$1" current_target
+  current_target="$(readlink "${LOCK_DIR}" 2>/dev/null)" || return 0
+  [ "${current_target}" = "${expected_target}" ] && rm -f "${LOCK_DIR}"
+  return 0
+}
+
+# Reclaim only on PROOF the recorded owner is dead — never on age/heuristics, and
+# NEVER on anything but a symlink of our own format (a stray real file or
+# directory at LOCK_DIR means the path is wrong, not that a lock is stale — this
+# dies loudly rather than deleting something it does not understand).
+# `ln -s` (in acquire_lock) is still the sole arbiter of who actually wins: if two
+# runs both judge the lock stale and both race to reclaim + recreate, at most one
+# `ln -s` succeeds and the loser loops back and observes the winner's fresh
+# metadata via a fresh parse_lock_owner() call, not stale in-memory state. The
+# delete itself is compare-and-delete against LOCK_OWNER_RAW_TARGET — the exact
+# target this call just read stale — so a reclaimer that loses a race against a
+# fresh acquire (widened window: readlink/kill-0/ps all happen before the
+# delete) never removes the new owner's live lock.
+reclaim_stale_lock() {
+  if [ -L "${LOCK_DIR}" ]; then
+    if ! lock_holder_alive; then
+      printf '   %s stale lock at %s (PID %s not running) — reclaiming.\n' \
+        "$(c_yellow 'NOTE:')" "${LOCK_DIR}" "${LOCK_OWNER_PID:-?}"
+      lock_compare_and_delete "${LOCK_OWNER_RAW_TARGET}"
+    fi
+  elif [ -e "${LOCK_DIR}" ]; then
+    die "LOCK_DIR ${LOCK_DIR} exists and is not a lock symlink — refusing to touch it. Check for a mistaken LOCK_DIR override before removing it by hand."
+  fi
+}
+
+# Attempts to create the lock symlink exactly once. Returns 0 on success, 1 on
+# genuine contention (LOCK_DIR is already a symlink — someone else's lock, or a
+# racing reclaimer's fresh one), and `die`s immediately for anything else. A
+# bare `ln -s` failure is ALSO what you get from a missing parent directory,
+# read-only filesystem, or a permissions error — none of which is "someone
+# else holds the lock", and none of which will ever resolve by polling, so
+# treating every nonzero exit as contention silently turns a structurally-bad
+# LOCK_DIR into a full LOCK_WAIT_SECS hang with a diagnosis ("remove it by
+# hand") that is actively wrong (there is no PID, nothing to remove).
+try_acquire_once() {
+  local ln_err
+  if ln_err="$(ln -s "$(lock_owner_metadata)" "${LOCK_DIR}" 2>&1)"; then
+    return 0
+  fi
+  if [ -L "${LOCK_DIR}" ]; then
+    return 1
+  fi
+  die "cannot create lock symlink at ${LOCK_DIR}: ${ln_err}. This is NOT lock contention (no symlink exists there) -- check that LOCK_DIR's parent directory exists and is writable."
+}
+
+acquire_lock() {
+  banner "single-flight lock (${LOCK_DIR})"
+  reclaim_stale_lock
+  if ! try_acquire_once; then
+    local waited=0
+    parse_lock_owner || true
+    printf '   gate already running in %s, PID %s — waiting (LOCK_WAIT_SECS=%s; set 0 to fail fast)...\n' \
+      "${LOCK_OWNER_CWD:-?}" "${LOCK_OWNER_PID:-?}" "${LOCK_WAIT_SECS}"
+    while ! try_acquire_once; do
+      if [ "${waited}" -ge "${LOCK_WAIT_SECS}" ]; then
+        parse_lock_owner || true
+        die "gate already running in ${LOCK_OWNER_CWD:-?}, PID ${LOCK_OWNER_PID:-?} — timed out after ${LOCK_WAIT_SECS}s waiting for ${LOCK_DIR}. If that PID is not actually running local_validate.sh, remove ${LOCK_DIR} by hand."
+      fi
+      sleep "${LOCK_POLL_SECS}"
+      waited=$((waited + LOCK_POLL_SECS))
+      reclaim_stale_lock
+    done
+  fi
+  LOCK_HELD=1
+  printf '   %s %s (PID %s)\n' "$(c_green 'lock acquired:')" "${LOCK_DIR}" "$$"
+}
+
+# Compare-and-delete against this process's OWN metadata, never a bare `rm -f`
+# gated only on the local LOCK_HELD flag: LOCK_HELD only proves this process
+# once acquired the lock, not that the symlink currently at LOCK_DIR is still
+# the one it wrote. A holder wrongly judged stale elsewhere (see the locale
+# mismatch this guards against, and the widened reclaim-race window) releases
+# here too — without this check it would delete whatever new owner reclaimed
+# and re-acquired in the meantime, freeing the mutex while that new owner
+# still believes it holds it.
+release_lock() {
+  if [ "${LOCK_HELD}" = "1" ]; then
+    lock_compare_and_delete "$(lock_owner_metadata)"
+  fi
+}
+
+# Single EXIT trap for the whole script (trap does not stack — a second `trap ...
+# EXIT` would silently replace this one, which is why ch_create_scratch() below
+# does NOT set its own trap and instead relies on this handler calling
+# cleanup_scratch() unconditionally; cleanup_scratch() itself no-ops when
+# SCRATCH_CREATED was never set). release_lock() runs BEFORE cleanup_scratch(),
+# not after: cleanup_scratch() shells out to an unbounded `docker exec` — if
+# Docker or ClickHouse is hung during SIGINT/SIGTERM, that call can block
+# indefinitely, and if release_lock() ran second it would never run at all,
+# wedging the host mutex for every other gate over a stuck ClickHouse cleanup
+# that has nothing to do with the lock. Releasing first means the worst case of
+# a hung docker exec is a lingering scratch database (already handled — the next
+# run from this same worktree reclaims it, see the CONCURRENCY CONTRACT header)
+# rather than a wedged mutex for the whole host.
+on_exit() {
+  release_lock
+  cleanup_scratch
+}
+trap on_exit EXIT
+# Explicit INT trap (CHAOS-3403 adversarial-review fix), added and verified --
+# NOT assumed -- rather than blindly adding "trap on_exit INT TERM EXIT" as a
+# single line. `exit 130` (not `on_exit` directly), so the already-registered
+# EXIT trap is what actually runs on_exit -- trapping INT straight to on_exit
+# would return from the trap without exiting and let the script silently keep
+# running past the signal.
+#
+# Deliberately NOT trapping TERM: measured directly against this script, an
+# untrapped SIGTERM sent to only the bash PID already interrupts a blocked
+# foreground external command (run_stage, ch_migrate, docker exec) immediately
+# -- its default disposition terminates the process outright, which unwinds
+# straight through the existing EXIT trap. Adding an explicit `trap ... TERM`
+# made this WORSE, not better: installing ANY trap for a signal makes bash
+# defer running that trap's action until control returns to it (the same
+# deferral rule that already applies to SIGINT below) -- so a caught TERM
+# handler sat blocked behind the foreground command exactly like INT does,
+# regressing a case that worked. Left untrapped, TERM keeps its immediate
+# default behavior.
+#
+# SIGINT has no such immediate default: bash defers it while any foreground
+# job is running whether or not a trap is registered (this is job-control
+# behavor, not a trap-specific deferral) -- confirmed identical with and
+# without this trap. So this line fixes the case an orchestrator signals the
+# whole process group (a real terminal Ctrl-C) or SIGINT arrives between
+# commands (no foreground child running), and gives a defined exit code
+# (130) instead of relying on the default. It does NOT fix -- and cannot, by
+# any trap -- the specific case this was reviewed against: SIGINT sent to
+# ONLY the bash PID (e.g. Python's `Popen.send_signal(SIGINT)`, standard for
+# non-terminal automation) while bash is blocked waiting on a foreground
+# external command. That signal still has no effect until the command
+# finishes on its own, with or without this trap. SIGTERM, or a
+# process-group-wide signal, are the reliable ways to hard-stop a hung gate --
+# not SIGINT to the tracked PID alone.
+trap 'exit 130' INT
 
 # --- Result tracking. --------------------------------------------------------------
 declare -a RESULTS=()
@@ -404,7 +722,11 @@ ch_create_scratch() {
   ch_query "DROP DATABASE IF EXISTS ${SCRATCH_DB}" || true
   ch_query "CREATE DATABASE ${SCRATCH_DB}" || return 1
   SCRATCH_CREATED=1
-  trap cleanup_scratch EXIT
+  # NOTE: no `trap cleanup_scratch EXIT` here — trap does not stack, and a second
+  # `trap ... EXIT` set here would silently replace the single on_exit handler
+  # (registered near the top of this script) that also releases the CHAOS-3403
+  # single-flight lock. on_exit() calls cleanup_scratch() unconditionally; it
+  # no-ops until SCRATCH_CREATED=1, which is set on the line above.
   return 0
 }
 
@@ -524,6 +846,7 @@ print_summary() {
 
 # ===================================================================================
 main() {
+  acquire_lock # CHAOS-3403 single-flight mutex — before any work is done
   preflight
 
   run_stage "lint: ruff format --check" gate_lint_format
@@ -543,5 +866,116 @@ main() {
   printf '\n%s safe to push.\n' "$(c_green 'GATE PASSED.')"
   exit 0
 }
+
+# High-resolution timestamp for --lock-probe, in order of preference: bash's
+# own EPOCHREALTIME builtin (no fork); `date +%s.%N` where it is actually
+# interpreted (GNU date, and modern BSD date); python3 -- available under this
+# harness's PATH and virtually every CI image, and unlike EPOCHREALTIME/date it
+# cannot silently degrade to whole seconds; perl's Time::HiRes as a last resort.
+#
+# This exists because whole-second resolution doesn't just make the probe
+# coarser -- it makes the tests that consume it UNFALSIFIABLE. Those tests
+# assert non-overlapping [acquired, released) intervals specifically so a
+# reintroduced microsecond-scale double-acquisition bug can be caught; at
+# whole-second resolution two racing acquisitions round to IDENTICAL integer
+# timestamps, and `a_end <= b_start` treats equal integers as "no overlap" --
+# i.e. PASS. That failure mode is silent (a test that cannot fail reads as
+# coverage), so a source that can't actually produce sub-second resolution
+# must FAIL LOUDLY here rather than quietly handing back whole seconds.
+
+# Accepts only a string that is purely digits-and-a-single-dot (e.g.
+# "1785988080.123456") -- rejects empty output, a literal "N" (old BSD date's
+# unsubstituted %N), and anything else a fallback might emit on failure.
+# `command -v` / a zero exit status from a fallback proves the TOOL exists,
+# not that its OUTPUT this time was actually a valid high-res timestamp --
+# every fallback below is validated the same way rather than trusted blind.
+_looks_like_subsecond_time() {
+  case "$1" in
+  '' | *[!0-9.]*) return 1 ;;
+  *.*) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+lock_probe_time() {
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    printf '%s' "${EPOCHREALTIME}"
+    return 0
+  fi
+  local t
+  t="$(date +%s.%N 2>/dev/null)"
+  if _looks_like_subsecond_time "${t}"; then
+    printf '%s' "${t}"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    t="$(python3 -c 'import time; print(f"{time.time():.6f}")' 2>/dev/null)"
+    if _looks_like_subsecond_time "${t}"; then
+      printf '%s' "${t}"
+      return 0
+    fi
+  fi
+  if command -v perl >/dev/null 2>&1; then
+    t="$(perl -MTime::HiRes=time -e 'printf "%.6f", time()' 2>/dev/null)"
+    if _looks_like_subsecond_time "${t}"; then
+      printf '%s' "${t}"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Test-only harness hook (CHAOS-3403), same idea as ci/check_go.sh's narrow
+# "integration-coverage" verb (see tests/tooling/test_check_go_integration_coverage.py):
+# exercises the REAL acquire_lock/release_lock/reclaim_stale_lock functions above —
+# not a reimplementation — without paying for preflight, lint, mypy, ClickHouse, or
+# the unit suite, so a regression test can race the actual lock acquisition path
+# cheaply and repeatably. Never invoked by main(); only by
+# tests/tooling/test_local_validate_lock.py.
+if [ "${1:-}" = "--lock-probe" ]; then
+  shift
+  hold_secs="${1:-0}"
+  acquire_lock
+  acquired_at="$(lock_probe_time)" || {
+    printf 'lock-probe: FATAL -- no sub-second time source available (EPOCHREALTIME unset, date +%%N not interpreted, no python3/perl on PATH); refusing to silently degrade to whole-second resolution.\n' >&2
+    exit 1
+  }
+  printf 'lock-probe: acquired (pid %s) at %s\n' "$$" "${acquired_at}"
+  sleep "${hold_secs}"
+  released_at="$(lock_probe_time)" || {
+    printf 'lock-probe: FATAL -- lost sub-second time source between acquire and release.\n' >&2
+    exit 1
+  }
+  printf 'lock-probe: releasing (pid %s) at %s\n' "$$" "${released_at}"
+  exit 0
+fi
+
+# Test-only harness hook (CHAOS-3403 adversarial-review fix): proves
+# release_lock() runs BEFORE cleanup_scratch() inside the consolidated on_exit()
+# trap, by swapping cleanup_scratch() for a stand-in that sleeps and then writes
+# a marker file. A test can then observe the real lock symlink disappear (via
+# the real release_lock()) strictly before the marker appears — i.e. the mutex
+# is free before the slow step even finishes, not after. Never invoked by
+# main(); only by tests/tooling/test_local_validate_lock.py.
+if [ "${1:-}" = "--lock-probe-exit-order" ]; then
+  shift
+  hold_secs="${1:?hold_secs required}"
+  cleanup_delay="${2:?cleanup_delay required}"
+  marker="${3:?marker path required}"
+  cleanup_scratch() {
+    sleep "${cleanup_delay}"
+    : >"${marker}"
+  }
+  acquire_lock
+  printf 'lock-probe-exit-order: acquired (pid %s)\n' "$$"
+  # Without an explicit hold, acquire-then-immediately-exit leaves the lock
+  # symlink existing for a near-zero window (a handful of shell statements,
+  # no I/O wait) before on_exit() removes it — too short for an external
+  # poll loop to reliably observe "it existed" at all, which produced
+  # exactly that flaky non-observation during this hook's own development.
+  # hold_secs makes the window a real, controllable duration to poll for.
+  sleep "${hold_secs}"
+  exit 0
+fi
 
 main "$@"

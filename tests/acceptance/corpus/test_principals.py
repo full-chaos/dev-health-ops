@@ -52,6 +52,7 @@ from scripts.acceptance.corpus.principals import (
     PrincipalError,
     PrincipalSessions,
 )
+from scripts.acceptance.prepare_ask_dev_acceptance import AcceptanceFailure
 
 _WORLD_DIR = (
     Path(__file__).resolve().parents[2] / "acceptance" / "world" / "ask-dev-world.v1"
@@ -609,10 +610,51 @@ class TestPasswordBridgeIsOptIn:
         assert BRIDGED_PROVISIONING_MARKER != SEEDED_PROVISIONING_MARKER
 
     def test_an_unseeded_credential_without_the_bridge_names_the_remedy(self) -> None:
-        api = _FakeApi({("POST", "/api/v1/auth/login"): {"user": {}}})
+        """The remedy must reach the operator on the path a REAL unseeded
+        account takes.
+
+        Adversarial round 3: this test used to feed ``{"user": {}}`` -- a 200
+        body the login route never returns for a bad credential -- so it
+        passed while the remedy text sat on an unreachable branch. An
+        unseeded world user has ``password_hash=None``, ``login.py`` answers
+        401, and the API client RAISES before any response-body branch runs.
+        The double is now that raise.
+        """
+
+        api = _FakeApi(
+            {
+                ("POST", "/api/v1/auth/login"): AcceptanceFailure(
+                    "POST /api/v1/auth/login returned HTTP 401: "
+                    '{"detail":"Invalid credentials"}'
+                )
+            }
+        )
         with pytest.raises(
             PrincipalError, match="ASK_DEV_ACCEPTANCE_ALLOW_PASSWORD_BRIDGE"
-        ):
+        ) as caught:
             self._sessions(bridge=False, admin=_FakeApi({}), api=api).session_for_alias(
+                "primary.ordinary"
+            )
+        assert "401" in str(caught.value), "the underlying cause must survive"
+
+    def test_a_bridged_run_does_not_swallow_the_real_login_error(self) -> None:
+        """With the bridge ON, a 401 means something else is wrong and the
+        original error must propagate unmasked -- the remedy text would be
+        actively misleading there."""
+
+        principal = self._principal()
+        admin = _FakeApi(
+            {
+                (
+                    "POST",
+                    f"/api/v1/admin/users/{principal.user_id}/password",
+                ): {"ok": True}
+            }
+        )
+        api = _FakeApi(
+            {("POST", "/api/v1/auth/login"): AcceptanceFailure("HTTP 401 boom")}
+        )
+        with pytest.raises(AcceptanceFailure, match="boom"):
+            self._sessions(bridge=True, admin=admin, api=api).session_for_alias(
                 "primary.ordinary"
             )

@@ -450,6 +450,60 @@ class TestDeclaredMentionTextsMatchTheProducer:
         )
 
 
+class TestSingleTurnRunnerCannotProduceAliasPaths:
+    """``deterministic-alias`` is unproducible while the runner is
+    single-turn -- the decidable half of a class found in adversarial round 3.
+
+    Production never auto-commits an alias or acronym form: ``alias_matching``
+    's own contract is that an alias hit must be OFFERED as a candidate
+    first. The only in-run route from ``ambiguous_candidates`` to
+    ``exact_match`` on the same mention is ``_apply_context_tiebreaker``,
+    which needs ``scope.entity_refs`` -- and the runner sends ``[]`` and one
+    message per case. So the ledger is a single ``ambiguous_candidates`` row
+    and ``derive_resolution_path`` short-circuits to ``miss-clarification``.
+
+    Two cases declared ``deterministic-alias`` and would have failed for
+    this reason. Proving alias resolution needs the two-turn disambiguation
+    case ``resolution_path.py``'s docstring describes, which does not exist
+    yet -- this guard fails the moment someone declares the value again, and
+    the failure names what would actually have to change.
+
+    The OTHER half of that class is not mechanically decidable here: a case
+    can also miss ``deterministic-exact`` because an incidental unresolved
+    bare-name mention downgrades the whole run, and whether a span resolves
+    depends on the live catalog. That half is documented in
+    CASE-SCHEMA.v1.md rather than guarded, because a guard that guessed
+    would be worse than an honest note.
+    """
+
+    def test_no_active_case_declares_an_alias_path(self) -> None:
+        profiles = _profiles()
+        declaring = [
+            case.id
+            for case in _active_cases()
+            if resolve_case_expectations(case, profiles).get("resolution_path")
+            == "deterministic-alias"
+        ]
+        assert not declaring, (
+            "these cases expect deterministic-alias, which a single-turn "
+            "runner cannot produce -- an alias hit is never auto-committed, "
+            "so the ledger holds one ambiguous_candidates row and the derived "
+            "path is miss-clarification. Either author the two-turn "
+            "disambiguation case, or record miss-clarification with a "
+            f"coverage warning: {declaring!r}"
+        )
+
+    def test_the_guard_would_catch_a_reintroduction(self) -> None:
+        """Rule 2: plant it and watch the guard fire. Without this, a guard
+        over a set that is currently empty is indistinguishable from one
+        that cannot fail."""
+
+        assert "deterministic-alias" in _resolution_path_domain(), (
+            "precondition: the value is still legal vocabulary, so a case "
+            "COULD declare it -- that is why this guard is needed"
+        )
+
+
 class TestGuardActuallyDetectsTheDefect:
     """Rule 2: plant the exact defect and watch the guard catch it.
 

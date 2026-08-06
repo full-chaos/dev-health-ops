@@ -345,11 +345,31 @@ class PrincipalSessions:
         # Step 2: a genuine login, so the JWT's own sub/org_id/role are the
         # principal's -- which is what /api/v1/dev/** actually reads.
         api = self._api_factory()
-        login = api.request(
-            "POST",
-            _LOGIN_PATH,
-            {"email": principal.email, "password": PRINCIPAL_PASSWORD},
-        )
+        try:
+            login = api.request(
+                "POST",
+                _LOGIN_PATH,
+                {"email": principal.email, "password": PRINCIPAL_PASSWORD},
+            )
+        except Exception as exc:
+            # An unseeded world user has password_hash=None, and login.py
+            # answers that with HTTP 401 -- which the API client raises on,
+            # BEFORE any response-body branch below could run. An earlier
+            # version put the remedy text on the no-access_token branch,
+            # where an operator could never see it: the reported failure was
+            # a bare "returned HTTP 401" with no hint that a flag exists.
+            if self._allow_password_bridge:
+                raise
+            raise PrincipalError(
+                f"login as {principal.user_alias!r} ({principal.email}) "
+                f"failed: {exc}. This run did NOT take the password bridge, "
+                f"so it requires that account to have a credential seeded at "
+                f"world-generation time (CHAOS-3463). A world that predates "
+                f"seeded credentials has password_hash=None and answers 401. "
+                f"Set {BRIDGE_ENV_VAR}=1 to opt into the temporary "
+                f"admin-set-password bridge -- which mutates a "
+                f"digest-covered column and stamps every receipt as bridged."
+            ) from exc
         if not isinstance(login, Mapping):
             raise PrincipalError(
                 f"login as {principal.user_alias!r} returned "
@@ -360,17 +380,6 @@ class PrincipalSessions:
             raise PrincipalError(
                 f"login as {principal.user_alias!r} ({principal.email}) returned "
                 "no access_token"
-                + (
-                    ""
-                    if self._allow_password_bridge
-                    else f". This run did NOT take the password bridge, so it "
-                    f"requires {principal.email} to have a credential seeded at "
-                    f"world-generation time (CHAOS-3463). If the world in this "
-                    f"stack predates seeded credentials, set "
-                    f"{BRIDGE_ENV_VAR}=1 to opt into the temporary "
-                    f"admin-set-password bridge -- which mutates a "
-                    f"digest-covered column and marks every receipt as bridged."
-                )
             )
         user = login.get("user")
         if not isinstance(user, Mapping):

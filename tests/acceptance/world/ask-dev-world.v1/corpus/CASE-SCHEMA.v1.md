@@ -312,10 +312,22 @@ because `subject_preflight._build_ledger` builds entries via
 by `entry_ordinal`. Ten active cases produce more than one mention; a
 single declared span would leave the others unclassifiable.
 
-A count mismatch between declared spans and observed mentions **raises**. It
-is never truncated or padded: mis-pairing would attach the wrong span to a
-real mention, and `classify_match_kind` would then either raise for a bogus
-reason or — worse — classify against text that never reached the resolver.
+The two count mismatches are **not symmetric**:
+
+* **more observed mentions than declared → raises.** The declaration is
+  short, so a real mention would get no span, and positional mapping past
+  the end is meaningless.
+* **fewer observed than declared → attaches nothing and proceeds.** This is
+  legitimate, not drift: a PROCEED ledgers every mention, so a short ledger
+  means the run TERMINATED, and a terminating entry is only ever
+  `ambiguous_candidates` — whose mention never needs a span, because a
+  non-`exact_match` final entry short-circuits to `miss-clarification`.
+  Raising here would red a correct run and blame the case author.
+
+Neither direction ever truncates or pads: mis-pairing would attach the wrong
+span to a real mention, and `classify_match_kind` would then either raise for
+a bogus reason or — worse — classify against text that never reached the
+resolver.
 
 ### Drift guard
 

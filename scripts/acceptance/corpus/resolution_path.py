@@ -267,9 +267,12 @@ def attach_mention_texts(
       defect to fix, not to absorb.
     * FEWER observed than declared -> attach NOTHING, and let
       ``derive_resolution_path`` proceed on the raw entries. This is a
-      LEGITIMATE shape, not drift: a PROCEED always ledgers every mention
-      (``_build_ledger`` zips with ``strict=True``), so a short ledger can
-      only come from the TERMINATE path -- which persists ONLY a
+      LEGITIMATE shape, not drift. A PROCEED ledgers every mention
+      (``_build_ledger`` zips with ``strict=True``) and ``append_resolution``
+      only flushes, so a partial PROCEED write is not possible -- a failure
+      there rolls back to ZERO rows, which lands in the empty-ledger branch
+      of :func:`derive_resolution_path`, not here. A NON-EMPTY short ledger
+      therefore comes from the TERMINATE path, which persists ONLY a
       ``terminating_resolution_entry``, and ``_terminate`` sets that solely
       for ``ambiguous_candidates``. Such an entry never needs a span: its
       mention's final outcome is not ``exact_match``, so
@@ -278,6 +281,12 @@ def attach_mention_texts(
       correct, classifiable run RED with a message blaming the case author
       for drift that did not happen -- reproduced with a two-mention case
       that terminates ambiguous on one of them.
+
+      Residual, stated rather than assumed away: if a short ledger ever DID
+      carry an ``exact_match``, this returns it unattached and
+      :func:`derive_resolution_path` raises its "no mention_text was
+      supplied" error -- a true failure, but one whose message points at the
+      wrong cause. No known code path produces that shape today.
 
     Attaching positionally in that short case would be worse than attaching
     nothing: the surviving entry is not necessarily the FIRST mention, so

@@ -84,8 +84,10 @@ order. The declared spans are DERIVED FROM THE PRODUCER (production's
 ``QuestionInterpreter``, whose ``normalized_lookup_text`` is exactly what
 reached the resolver) and pinned against it by a corpus guard test, so a
 question edited by one word fails the unit gate rather than the live run.
-A count mismatch between declared spans and observed mentions raises rather
-than mis-pairing them.
+The two count mismatches are asymmetric: more observed mentions than
+declared raises (a real mention would get no span), while fewer attaches
+nothing and proceeds (a short ledger can only be a terminating
+``ambiguous_candidates`` entry, which never needs a span).
 
 Merge-order note: this repo's Lane 2a merges before Lane 2b, so
 ``tests/acceptance/world/ask-dev-world.v1/corpus/`` may not exist, or may be
@@ -140,6 +142,7 @@ from scripts.acceptance.corpus.db_verify import (
 from scripts.acceptance.corpus.invariants import InvariantContext, evaluate_invariant
 from scripts.acceptance.corpus.principals import (
     BRIDGE_ENV_VAR,
+    SEEDED_PROVISIONING_MARKER,
     PrincipalDirectory,
     PrincipalSession,
     PrincipalSessions,
@@ -635,7 +638,8 @@ def test_corpus_case(
             # and pinned against it by the corpus guard test. Without this,
             # every single-shot exact_match was unclassifiable and
             # `deterministic-exact` was dead vocabulary for the whole
-            # corpus. A count mismatch raises rather than mis-pairing spans.
+            # corpus. More observed mentions than declared raises; fewer
+            # attaches nothing (a terminating ambiguous entry needs no span).
             resolution_path = derive_resolution_path(
                 attach_mention_texts(ledger_entries, case.expected_mention_texts)
                 if case.expected_mention_texts
@@ -693,8 +697,24 @@ def test_corpus_case(
         detail=(
             f"org_alias={session.principal.org_alias!r} "
             f"user_alias={session.principal.user_alias!r} "
-            f"email={session.principal.email!r} org_id={org_id!r} "
-            f"provisioning={principal_sessions.provisioning_mode}"
+            f"email={session.principal.email!r} org_id={org_id!r}"
+        ),
+    )
+    # Adversarial round 3: the provisioning mode used to live only inside the
+    # free text above, where deleting the fragment left every test green. It
+    # is now its own NAMED, always-recorded check, so the receipt says which
+    # credential path produced it in a field a reader can key on -- and a
+    # test asserts the name is present for an executed case.
+    recorder.check(
+        category="provisioning-mode",
+        name=f"provisioned_via_{principal_sessions.provisioning_mode}",
+        condition=True,
+        detail=(
+            "credentials came from the world seed"
+            if principal_sessions.provisioning_mode == SEEDED_PROVISIONING_MARKER
+            else "TEMPORARY admin-set-password bridge: this run mutated a "
+            "digest-covered column and is NOT equivalent to a run against "
+            "seeded credentials"
         ),
     )
     if ledger_classification_error is not None:

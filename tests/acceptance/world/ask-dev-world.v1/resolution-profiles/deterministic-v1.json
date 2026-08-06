@@ -138,8 +138,8 @@
     "deg.acr-unavailable-native-usable": {
       "expected_public_outcome": "answered_with_gaps",
       "expected_scope_resolution_outcome": "exact",
-      "resolution_path": "deterministic-exact",
-      "notes": "Same not-applicable/acr_optional mechanism as deg.source-state.not-applicable, but asserting the OPPOSITE-emphasis outcome: because acr's required flag is False, its unavailability alone can never push DataHealthService.inspect's complete_eligible to False, so a general status question over meridian/web-app (DataHealthState.COMPLETE on every native source per sources.json's 'current' row) is fully answered, not degraded, by ACR's absence. [expected_public_outcome CORRECTED to answered_with_gaps during Lane 2b cross-lane sweep, 2026-08-06 (2a codex round-2 finding, independently verified by reading terminal_frames.wrap_legacy_answer_as_frame directly): on todays deterministic stack a real DevAnswer terminal ALWAYS maps to PublicOutcome.ANSWERED_WITH_GAPS, never plain ANSWERED -- settled by the code (that functions own docstring), not a judgment call.]"
+      "resolution_path": "miss-clarification",
+      "notes": "Same not-applicable/acr_optional mechanism as deg.source-state.not-applicable, but asserting the OPPOSITE-emphasis outcome: because acr's required flag is False, its unavailability alone can never push DataHealthService.inspect's complete_eligible to False, so a general status question over meridian/web-app (DataHealthState.COMPLETE on every native source per sources.json's 'current' row) is fully answered, not degraded, by ACR's absence. [expected_public_outcome CORRECTED to answered_with_gaps during Lane 2b cross-lane sweep, 2026-08-06 (2a codex round-2 finding, independently verified by reading terminal_frames.wrap_legacy_answer_as_frame directly): on todays deterministic stack a real DevAnswer terminal ALWAYS maps to PublicOutcome.ANSWERED_WITH_GAPS, never plain ANSWERED -- settled by the code (that functions own docstring), not a judgment call.] [CORRECTED to miss-clarification 2026-08-06 (CHAOS-3462 B6, adversarial round 3). COVERAGE WARNING -- the primary subject really does commit exact_match; the value is miss-clarification because resolution_path is a WHOLE-RUN scalar and this question also names an incidental untyped bare-name mention that never resolves. derive_resolution_path returns miss-clarification if ANY mention fails to commit, and the unresolved_untyped PROCEED branch persists that row alongside the committed one. So the run answers normally and is still stamped miss-clarification. This is a limitation of the derivation, not of the product -- see the class note in CASE-SCHEMA.v1.md. Recorded accurately rather than left to surface as a live-run mystery.]"
     },
     "deg.optional-integration-not-mislabeled": {
       "expected_public_outcome": "answered_with_gaps",
@@ -180,8 +180,8 @@
     "deg.source-state.not-applicable": {
       "expected_public_outcome": "answered_with_gaps",
       "expected_scope_resolution_outcome": "exact",
-      "resolution_path": "deterministic-exact",
-      "notes": "Pinned to sources.json's dedicated not-applicable row (acr source, org-wide-hardcoded via NativeDataHealthReader.read's unconditional `warning='acr_optional'` branch, realized_by null/no fixture rows) -- meridian/web-app is the named, resolvable subject the question is asked about; the ACR not-applicable disclosure itself applies org-wide regardless of repo. A question specifically about ACR evidence must disclose the not-applicable/optional status rather than silently omitting it."
+      "resolution_path": "miss-clarification",
+      "notes": "Pinned to sources.json's dedicated not-applicable row (acr source, org-wide-hardcoded via NativeDataHealthReader.read's unconditional `warning='acr_optional'` branch, realized_by null/no fixture rows) -- meridian/web-app is the named, resolvable subject the question is asked about; the ACR not-applicable disclosure itself applies org-wide regardless of repo. A question specifically about ACR evidence must disclose the not-applicable/optional status rather than silently omitting it. [CORRECTED to miss-clarification 2026-08-06 (CHAOS-3462 B6, adversarial round 3). COVERAGE WARNING -- the primary subject really does commit exact_match; the value is miss-clarification because resolution_path is a WHOLE-RUN scalar and this question also names an incidental untyped bare-name mention that never resolves. derive_resolution_path returns miss-clarification if ANY mention fails to commit, and the unresolved_untyped PROCEED branch persists that row alongside the committed one. So the run answers normally and is still stamped miss-clarification. This is a limitation of the derivation, not of the product -- see the class note in CASE-SCHEMA.v1.md. Recorded accurately rather than left to surface as a live-run mystery.]"
     },
     "deg.source-state.stale": {
       "expected_public_outcome": "answered_with_gaps",
@@ -264,8 +264,8 @@
     "health.team.exact-subject": {
       "expected_public_outcome": "needs_clarification",
       "expected_scope_resolution_outcome": "ambiguous",
-      "resolution_path": "deterministic-alias",
-      "notes": "Registry sketch says subject_class 'exact' / outcome 'answered', but the only real team subject fixture for 'Ground Control' is subject.acronym-alias.ground-control-team (literal_parenthetical alias). Per alias_matching.py, acronym/literal-alias hits are never auto-commit eligible (same rule already documented by scope.acronym-alias-subject for MWA) -- deterministic-v1 surfaces a single-candidate confirmation, not a direct answered. Documented discrepancy vs the registry sketch, not silently changed."
+      "resolution_path": "miss-clarification",
+      "notes": "Registry sketch says subject_class 'exact' / outcome 'answered', but the only real team subject fixture for 'Ground Control' is subject.acronym-alias.ground-control-team (literal_parenthetical alias). Per alias_matching.py, acronym/literal-alias hits are never auto-commit eligible (same rule already documented by scope.acronym-alias-subject for MWA) -- deterministic-v1 surfaces a single-candidate confirmation, not a direct answered. Documented discrepancy vs the registry sketch, not silently changed. [CORRECTED to miss-clarification 2026-08-06 (CHAOS-3462 B6, adversarial round 3). COVERAGE WARNING -- this case does NOT prove alias resolution. deterministic-alias is unproducible by a SINGLE-TURN runner: production never auto-commits an alias or acronym form (alias_matching.py's own contract -- an alias hit must be offered as a candidate first), and the only in-run route from ambiguous_candidates to exact_match for the same mention is _apply_context_tiebreaker, which needs scope.entity_refs -- the runner sends []. So the single-turn ledger is one ambiguous_candidates row and derive_resolution_path short-circuits to miss-clarification. miss-clarification is therefore the ACCURATE value, and the alias claim this case is named for needs the two-turn disambiguation case resolution_path.py's docstring describes and Lane 2b has not authored. Tracked, not silently claimed as covered.]"
     },
     "investment.mix.adequate": {
       "expected_public_outcome": "answered_with_gaps",
@@ -348,8 +348,8 @@
     "scope.acronym-alias-subject": {
       "expected_public_outcome": "needs_clarification",
       "expected_scope_resolution_outcome": "ambiguous",
-      "resolution_path": "deterministic-alias",
-      "notes": "Single-candidate alias hit surfaces for confirmation rather than auto-committing, per alias_matching.py."
+      "resolution_path": "miss-clarification",
+      "notes": "Single-candidate alias hit surfaces for confirmation rather than auto-committing, per alias_matching.py. [CORRECTED to miss-clarification 2026-08-06 (CHAOS-3462 B6, adversarial round 3). COVERAGE WARNING -- this case does NOT prove alias resolution. deterministic-alias is unproducible by a SINGLE-TURN runner: production never auto-commits an alias or acronym form (alias_matching.py's own contract -- an alias hit must be offered as a candidate first), and the only in-run route from ambiguous_candidates to exact_match for the same mention is _apply_context_tiebreaker, which needs scope.entity_refs -- the runner sends []. So the single-turn ledger is one ambiguous_candidates row and derive_resolution_path short-circuits to miss-clarification. miss-clarification is therefore the ACCURATE value, and the alias claim this case is named for needs the two-turn disambiguation case resolution_path.py's docstring describes and Lane 2b has not authored. Tracked, not silently claimed as covered.]"
     },
     "scope.ambiguous": {
       "expected_public_outcome": "needs_clarification",
@@ -414,8 +414,8 @@
     "scope.refused-with-grounding": {
       "expected_public_outcome": "answered_with_gaps",
       "expected_scope_resolution_outcome": "exact",
-      "resolution_path": "deterministic-exact",
-      "notes": "Flagged/withheld ('Inconsistent result'), not a clean answered."
+      "resolution_path": "miss-clarification",
+      "notes": "Flagged/withheld ('Inconsistent result'), not a clean answered. [CORRECTED to miss-clarification 2026-08-06 (CHAOS-3462 B6, adversarial round 3). COVERAGE WARNING -- the primary subject really does commit exact_match; the value is miss-clarification because resolution_path is a WHOLE-RUN scalar and this question also names an incidental untyped bare-name mention that never resolves. derive_resolution_path returns miss-clarification if ANY mention fails to commit, and the unresolved_untyped PROCEED branch persists that row alongside the committed one. So the run answers normally and is still stamped miss-clarification. This is a limitation of the derivation, not of the product -- see the class note in CASE-SCHEMA.v1.md. Recorded accurately rather than left to surface as a live-run mystery.]"
     },
     "scope.stale-context-subject": {
       "expected_public_outcome": "needs_clarification",
@@ -512,8 +512,8 @@
     "trust.conflicting-evidence": {
       "expected_public_outcome": "answered_with_gaps",
       "expected_scope_resolution_outcome": "exact",
-      "resolution_path": "deterministic-exact",
-      "notes": "Grounded against sources.json's dedicated conflicting row (probe/source-conflicting-ci: two contemporaneous ci_pipeline_runs for the same repo_id, opposite conclusions) -- same fixture row case-scope.refused-with-grounding.json also reuses, but at a lower severity: a single contemporaneous pair surfaces as a disclosed conflict within an answered_with_gaps terminal rather than the over-threshold withheld 'Inconsistent result' refusal that case tests. Per P0-B item 10, this trust section had zero real fixture coverage before probe/source-conflicting-ci existed."
+      "resolution_path": "miss-clarification",
+      "notes": "Grounded against sources.json's dedicated conflicting row (probe/source-conflicting-ci: two contemporaneous ci_pipeline_runs for the same repo_id, opposite conclusions) -- same fixture row case-scope.refused-with-grounding.json also reuses, but at a lower severity: a single contemporaneous pair surfaces as a disclosed conflict within an answered_with_gaps terminal rather than the over-threshold withheld 'Inconsistent result' refusal that case tests. Per P0-B item 10, this trust section had zero real fixture coverage before probe/source-conflicting-ci existed. [CORRECTED to miss-clarification 2026-08-06 (CHAOS-3462 B6, adversarial round 3). COVERAGE WARNING -- the primary subject really does commit exact_match; the value is miss-clarification because resolution_path is a WHOLE-RUN scalar and this question also names an incidental untyped bare-name mention that never resolves. derive_resolution_path returns miss-clarification if ANY mention fails to commit, and the unresolved_untyped PROCEED branch persists that row alongside the committed one. So the run answers normally and is still stamped miss-clarification. This is a limitation of the derivation, not of the product -- see the class note in CASE-SCHEMA.v1.md. Recorded accurately rather than left to surface as a live-run mystery.]"
     },
     "trust.source-health.current": {
       "expected_public_outcome": "answered_with_gaps",

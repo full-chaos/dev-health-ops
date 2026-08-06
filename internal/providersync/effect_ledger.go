@@ -98,13 +98,14 @@ type EffectLedgerEntry struct {
 }
 
 type EffectLedgerState struct {
-	SchemaVersion string              `json:"schema_version"`
-	Generation    string              `json:"generation"`
-	Provider      string              `json:"provider"`
-	Dataset       string              `json:"dataset"`
-	Effects       []EffectLedgerEntry `json:"effects"`
-	CreatedAt     time.Time           `json:"created_at"`
-	UpdatedAt     time.Time           `json:"updated_at"`
+	SchemaVersion    string                          `json:"schema_version"`
+	Generation       string                          `json:"generation"`
+	Provider         string                          `json:"provider"`
+	Dataset          string                          `json:"dataset"`
+	Effects          []EffectLedgerEntry             `json:"effects"`
+	PreparedSnapshot *PreparedRouteSnapshotReference `json:"prepared_snapshot,omitempty"`
+	CreatedAt        time.Time                       `json:"created_at"`
+	UpdatedAt        time.Time                       `json:"updated_at"`
 }
 
 func NewEffectLedgerState(
@@ -143,10 +144,17 @@ func NewEffectLedgerState(
 }
 
 func (state EffectLedgerState) validate() error {
-	if state.SchemaVersion != "v1" || state.Generation == "" ||
+	if (state.SchemaVersion != "v1" && state.SchemaVersion != "v2") || state.Generation == "" ||
 		strings.TrimSpace(state.Provider) == "" || strings.TrimSpace(state.Dataset) == "" ||
 		len(state.Effects) < 1 || len(state.Effects) > maxEffectDestinations ||
 		state.CreatedAt.IsZero() || state.UpdatedAt.IsZero() {
+		return ErrEffectLedgerConflict
+	}
+	if state.SchemaVersion == "v1" && state.PreparedSnapshot != nil {
+		return ErrEffectLedgerConflict
+	}
+	if state.SchemaVersion == "v2" &&
+		(state.PreparedSnapshot == nil || state.PreparedSnapshot.validate() != nil) {
 		return ErrEffectLedgerConflict
 	}
 	seen := map[string]bool{}
@@ -217,6 +225,15 @@ func decodeEffectLedgerState(raw []byte) (EffectLedgerState, error) {
 func sameEffectManifest(left, right EffectLedgerState) bool {
 	if left.SchemaVersion != right.SchemaVersion ||
 		left.Generation != right.Generation || left.Provider != right.Provider ||
+		left.Dataset != right.Dataset || len(left.Effects) != len(right.Effects) ||
+		!samePreparedRouteSnapshotReference(left.PreparedSnapshot, right.PreparedSnapshot) {
+		return false
+	}
+	return sameEffectEntries(left, right)
+}
+
+func sameEffectEntries(left, right EffectLedgerState) bool {
+	if left.Generation != right.Generation || left.Provider != right.Provider ||
 		left.Dataset != right.Dataset || len(left.Effects) != len(right.Effects) {
 		return false
 	}
@@ -244,6 +261,27 @@ type EffectLedger interface {
 		GenerationBlockResolution,
 		time.Time,
 	) error
+}
+
+// PreparedEffectLedger is the opt-in durable payload sidecar for complete
+// routes whose manifest cannot be deterministically rebuilt from mutable
+// provider state. The same object owns both contracts so a binary cannot wire
+// the effect ledger and its exact recovery payload to different stores.
+type PreparedEffectLedger interface {
+	EffectLedger
+	PrepareRouteSnapshot(
+		context.Context,
+		Claim,
+		CompleteRouteBatch,
+		ShadowComparison,
+		time.Time,
+	) (EffectLedgerState, error)
+	LoadRouteSnapshot(
+		context.Context,
+		Claim,
+		EffectLedgerState,
+		time.Time,
+	) (PreparedRouteManifest, error)
 }
 
 // EffectLedgerReplanner is intentionally separate from EffectLedger. Only a

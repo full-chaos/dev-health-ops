@@ -126,6 +126,15 @@ func (repository *PostgresRepository) Complete(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	// The prepared effect payload is recovery state, not a product record.
+	// Delete it in the same transaction that terminalizes the unit so any
+	// later watermark/outbox failure rolls both operations back together.
+	if _, err := tx.Exec(
+		ctx, deletePreparedRouteSnapshotSQL,
+		claim.OrgID, claim.ID, claim.GenerationKey(),
+	); err != nil {
+		return ErrInvalidConfiguration
+	}
 	if watermark != nil {
 		for _, datasetKey := range datasetKeys {
 			// THE write boundary (CHAOS-3412 C10(c), CHAOS-3427). Every Go
@@ -155,6 +164,10 @@ func (repository *PostgresRepository) Complete(
 	}
 	return nil
 }
+
+const deletePreparedRouteSnapshotSQL = `
+DELETE FROM public.sync_run_unit_effect_snapshots
+WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`
 
 // ReleaseForRetry returns a live claim to dispatching for the same River job's
 // bounded retry. A process death cannot call this method; expired-lease

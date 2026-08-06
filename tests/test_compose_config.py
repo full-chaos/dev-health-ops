@@ -428,12 +428,13 @@ def _assert_least_privilege_domain_grants(domain_script: str) -> None:
         "GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks",
         "GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox",
         "GRANT SELECT, INSERT ON TABLE public.worker_job_outbox",
+        "GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots",
     ):
         assert grant in domain_script
     for forbidden in (
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES",
         "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES",
-        "DELETE ON TABLE",
+        "DELETE ON ALL TABLES",
     ):
         assert forbidden not in domain_script
 

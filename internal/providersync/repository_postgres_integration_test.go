@@ -470,6 +470,16 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
 			last_retry_reason text, updated_at timestamptz NOT NULL
 		)`,
+		`CREATE TABLE public.sync_run_unit_effect_snapshots (
+			org_id text NOT NULL, sync_run_unit_id uuid NOT NULL,
+			generation text NOT NULL, provider text NOT NULL,
+			dataset_key text NOT NULL, schema_version text NOT NULL,
+			content_digest text NOT NULL, payload_bytes integer NOT NULL,
+			payload bytea NOT NULL, created_at timestamptz NOT NULL,
+			PRIMARY KEY (org_id, sync_run_unit_id, generation),
+			FOREIGN KEY (sync_run_unit_id) REFERENCES public.sync_run_units(id)
+				ON DELETE CASCADE
+		)`,
 		`CREATE TABLE public.sync_watermarks (
 			id uuid PRIMARY KEY, org_id text NOT NULL, repo_id text NOT NULL,
 			source_id text NOT NULL, target text NOT NULL, dataset_key text NOT NULL,

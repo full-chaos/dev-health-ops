@@ -74,6 +74,40 @@ func (committer EffectCommitter) Commit(
 	if err != nil {
 		return EffectCommitResult{}, err
 	}
+	return committer.commitPrepared(ctx, claim, ordered, persisted)
+}
+
+// CommitPrepared continues an effect commit after the ledger and an optional
+// exact recovery snapshot were durably prepared together. It deliberately
+// does not call PrepareEffects again: doing so would split the atomic prepare
+// boundary that the snapshot sidecar exists to provide.
+func (committer EffectCommitter) CommitPrepared(
+	ctx context.Context,
+	claim Claim,
+	batches []EffectBatch,
+	persisted EffectLedgerState,
+) (EffectCommitResult, error) {
+	if ctx == nil || claim.Validate() != nil || committer.Ledger == nil ||
+		committer.Sink == nil || persisted.validate() != nil {
+		return EffectCommitResult{}, ErrInvalidConfiguration
+	}
+	ordered := append([]EffectBatch(nil), batches...)
+	sort.Slice(ordered, func(left, right int) bool {
+		return ordered[left].Destination < ordered[right].Destination
+	})
+	desired, err := NewEffectLedgerState(claim, ordered, persisted.CreatedAt)
+	if err != nil || !sameEffectEntries(persisted, desired) {
+		return EffectCommitResult{}, ErrEffectLedgerConflict
+	}
+	return committer.commitPrepared(ctx, claim, ordered, persisted)
+}
+
+func (committer EffectCommitter) commitPrepared(
+	ctx context.Context,
+	claim Claim,
+	ordered []EffectBatch,
+	persisted EffectLedgerState,
+) (EffectCommitResult, error) {
 	var result EffectCommitResult
 	for index, batch := range ordered {
 		effect := &persisted.Effects[index]

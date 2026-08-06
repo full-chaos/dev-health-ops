@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "name": "github/work-items prepared-manifest recovery",
+  "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
+  "$limitation": "The raw sidecar is intentionally not compressed, so decompression-bomb behavior has no production branch to mutate. The 64 MiB encoded cap is mutated directly. Postgres transaction, tenant, cleanup, and rollback mutations use the integration-tagged proof.",
+  "mutations": [
+    {
+      "id": "R1-descriptor-requires-prepared-recovery",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "descriptor.PreparedManifestRecovery = true",
+      "replace": "descriptor.PreparedManifestRecovery = false",
+      "rationale": "github/work-items must carry its exact prepared-manifest requirement before any future route activation while remaining unregistered",
+      "proof": [["go", "test", "-count=1", "-run", "^TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R2-recovery-skips-live-recollection",
+      "file": "internal/providersync/complete_route.go",
+      "find": "if recoveredEffects != nil && descriptor.PreparedManifestRecovery {",
+      "replace": "if false {",
+      "rationale": "a prepared github/work-items retry must load the exact snapshot before credentials and must never call the mutable provider handler or derivation path",
+      "proof": [["go", "test", "-count=1", "-run", "^TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R3-snapshot-digest-detects-benign-json-tamper",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "if hex.EncodeToString(digest[:]) != state.PreparedSnapshot.ContentDigest {",
+      "replace": "if false {",
+      "rationale": "changing a syntactically valid non-identity result field must still be rejected by the ledger-bound snapshot digest",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPreparedRouteSnapshotRejectsTamperTenantGenerationAndSensitiveResult$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R4-route-total-encoded-cap",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "if err != nil || len(encoded) < 1 || len(encoded) > maxPreparedRouteSnapshotBytes {",
+      "replace": "if err != nil || len(encoded) < 1 {",
+      "rationale": "the exact snapshot must reject a route whose uncompressed encoded payload exceeds 64 MiB before any Postgres or ClickHouse write",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPreparedRouteSnapshotEnforcesTotalEncodedCapAndLegacyV1StillDecodes$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R5-ledger-and-sidecar-prepare-share-one-transaction",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "if _, err := tx.Exec(\n\t\t\t\tctx, insertPreparedRouteSnapshotSQL,",
+      "replace": "if _, err := repository.Pool.Exec(\n\t\t\t\tctx, insertPreparedRouteSnapshotSQL,",
+      "rationale": "a failure updating the leased unit ledger must roll back the newly inserted snapshot instead of leaving an orphaned prepared payload",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPostgresPreparedRouteSnapshotLifecycleAndFences$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R6-load-is-tenant-bound",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "WHERE snapshot.org_id = $1",
+      "replace": "WHERE snapshot.org_id != $1",
+      "rationale": "snapshot lookup must use the claiming tenant as a SQL predicate rather than finding a colliding unit and relying on later decode rejection",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPostgresPreparedRouteSnapshotLifecycleAndFences$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R7-complete-cleanup-shares-terminal-transaction",
+      "file": "internal/providersync/repository_postgres.go",
+      "find": "if _, err := tx.Exec(\n\t\tctx, deletePreparedRouteSnapshotSQL,",
+      "replace": "if _, err := repository.Pool.Exec(\n\t\tctx, deletePreparedRouteSnapshotSQL,",
+      "rationale": "a completion failure after cleanup must roll the snapshot deletion back with the unit terminal transition",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPostgresPreparedRouteSnapshotLifecycleAndFences$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R8-complete-cleanup-is-generation-bound",
+      "file": "internal/providersync/repository_postgres.go",
+      "find": "WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`",
+      "replace": "WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation != $3`",
+      "rationale": "successful Complete must delete exactly the current unit generation snapshot and no other recovery payload",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPostgresPreparedRouteSnapshotLifecycleAndFences$", "./internal/providersync/"]]
+    }
+  ]
+}

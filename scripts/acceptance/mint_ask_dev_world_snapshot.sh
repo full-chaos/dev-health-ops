@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# CHAOS-3463: mint (or re-mint) the ask-dev-world.v1 snapshot + WORLD_DIGEST.
+#
+# This is the ONE-OFF operator flow. Ordinary acceptance boots never run it --
+# they run `dev-hops fixtures world-restore` (wired into
+# run_ask_dev_compose.sh), which restores the artifact this script produced
+# and VERIFIES the pin rather than minting it.
+#
+# Why a mint step exists at all
+# -----------------------------
+# Cross-generation WORLD_DIGEST reproducibility is declared-blocked
+# (world.json's `cross_generation_digest_status`, CHAOS-3432): two
+# independent `fixtures world` runs do NOT produce the same digest, so
+# regenerating the world on every boot can never match a pinned digest.
+# SINGLE-generation pinning IS proven. So the world is generated exactly
+# once, snapshotted, and every boot restores those same bytes -- which puts
+# every boot inside the regime that is proven.
+#
+# What it does
+# ------------
+#   1. creates + migrates a pair of scratch databases inside the ALREADY
+#      RUNNING acceptance stack;
+#   2. runs `fixtures world` against them (the scratch guard is satisfied
+#      honestly -- the database really is named *_scratch and really is
+#      disposable);
+#   3. `fixtures world-snapshot` -- derives the written-table set by diffing
+#      the generated scratch databases against the stack's own
+#      freshly-migrated serving databases, and writes the artifact;
+#   4. `fixtures world-restore --mint-digest` -- restores into the serving
+#      databases, runs the round-trip row-count oracle, and re-pins
+#      WORLD_DIGEST from the RESTORED state (the state every boot verifies);
+#   5. asserts the scratch generation's digest and the restored digest are
+#      identical -- a differential proof that the snapshot round trip is
+#      lossless, rather than a claim that it is.
+#
+# Preconditions (checked, not assumed): the acceptance Compose project must
+# already be up with FRESH volumes (`down --volumes` then `up`), and its
+# serving databases must be untouched -- `world-restore`'s own emptiness
+# precondition enforces the second half of that and fails closed.
+#
+#   docker compose --project-name dev-health-ask-dev-acceptance \
+#     --project-directory <ops> -f <ops>/compose.yml \
+#     -f <ops>/tests/acceptance/compose.ask-dev.yml \
+#     --profile ask-dev-acceptance up -d --build --wait \
+#     postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api
+#
+# The artifact is written into the repo (tests/acceptance/world/
+# ask-dev-world.v1/snapshot/) and is meant to be committed alongside the
+# re-minted WORLD_DIGEST -- the two are only ever valid as a pair.
+set -euo pipefail
+
+# Same compose-interpolation hardening run_ask_dev_compose.sh performs, and for
+# the same reason: `docker compose` interpolates every `${VAR}` in compose.yml
+# and the acceptance overlay against THIS process's environment, so a
+# direnv-loaded ops/.env silently redirects this flow at a different database.
+# test_mint_script_hardens_the_same_env_as_the_launcher (see
+# tests/acceptance/test_ask_dev_compose.py) asserts this list is identical to
+# the launcher's, so the two cannot drift apart.
+unset \
+  POSTGRES_DB CLICKHOUSE_DB LOG_LEVEL \
+  MIGRATION_DATABASE_URI MIGRATION_DATABASE_URI_FILE \
+  RIVER_DATABASE_SCHEMA \
+  RIVER_DOMAIN_DATABASE_ROLE RIVER_DOMAIN_DATABASE_PASSWORD \
+  RIVER_QUEUE_DATABASE_ROLE RIVER_QUEUE_DATABASE_PASSWORD \
+  RIVER_COORDINATOR_DATABASE_ROLE RIVER_COORDINATOR_DATABASE_PASSWORD \
+  SETTINGS_ENCRYPTION_KEY \
+  STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_ID_TEAM STRIPE_PRICE_ID_ENTERPRISE \
+  LICENSE_PRIVATE_KEY \
+  EMAIL_PROVIDER EMAIL_API_KEY EMAIL_FROM_ADDRESS \
+  OTEL_ENABLED OTEL_EXPORTER_OTLP_ENDPOINT OTEL_SERVICE_NAME OTEL_METRIC_EXPORT_INTERVAL \
+  SENTRY_DSN SENTRY_ENVIRONMENT SENTRY_TRACES_RATE SENTRY_SEND_PII \
+  WORKER_CONCURRENCY WORKER_HEAVY_CONCURRENCY \
+  WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED WORKER_GITHUB_REPO_METADATA_ENABLED \
+  DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER \
+  BUGSINK_BASE_URL BUGSINK_CREATE_SUPERUSER
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ops_root="$(cd -- "${script_dir}/../.." && pwd)"
+project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}"
+world_dir="${ops_root}/tests/acceptance/world/ask-dev-world.v1"
+container_world_dir="/app/tests/acceptance/world/ask-dev-world.v1"
+manifest="${container_world_dir}/world.json"
+
+ch_scratch="clickhouse://ch:ch@clickhouse:8123/ask_dev_world_scratch"
+pg_scratch="postgresql+asyncpg://postgres:postgres@postgres:5432/ask_dev_world_scratch"
+# The databases the acceptance API actually serves. `fixtures world` refuses
+# these by name and MUST keep refusing them -- only `world-restore`, which is
+# insert-only and gated on ENVIRONMENT=acceptance plus an empty target, ever
+# writes here.
+ch_serving="clickhouse://ch:ch@clickhouse:8123/default"
+pg_serving="postgresql+asyncpg://postgres:postgres@postgres:5432/postgres"
+
+# Compose interpolates EVERY `${VAR}` in both files before it will run any
+# command, including ones belonging to services this flow never builds or
+# starts. `web` declares `${ASK_DEV_WEB_CONTEXT:?}` and `bugsink` declares
+# `${BUGSINK_SECRET_KEY:?}`, so without these even `compose ps` exits 1 with an
+# interpolation error (observed). Neither service is started here; these values
+# exist only to let interpolation succeed.
+export ASK_DEV_WEB_CONTEXT="${ASK_DEV_WEB_CONTEXT:-${ops_root}}"
+export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-ask-dev-acceptance-unused}"
+export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-18080}"
+
+compose=(
+  docker compose
+  --project-name "${project_name}"
+  --project-directory "${ops_root}"
+  -f "${ops_root}/compose.yml"
+  -f "${ops_root}/tests/acceptance/compose.ask-dev.yml"
+  --profile ask-dev-acceptance
+)
+
+if ! "${compose[@]}" ps --status running --services | grep -qx api; then
+  echo "mint: the acceptance stack's api service is not running." >&2
+  echo "mint: bring the stack up with FRESH volumes first (see this script's header)." >&2
+  exit 69
+fi
+
+echo "mint: creating scratch databases"
+"${compose[@]}" exec -T postgres psql -U postgres -v ON_ERROR_STOP=1 \
+  -c "DROP DATABASE IF EXISTS ask_dev_world_scratch;" \
+  -c "CREATE DATABASE ask_dev_world_scratch;"
+# Single-line `python -c`, never a heredoc: `docker compose exec -T … python -`
+# reading a heredoc off this script's stdin hangs indefinitely when the script
+# runs non-interactively (observed -- the mint sat on the round-trip step for as
+# long as it was left running).
+"${compose[@]}" exec -T api python -c 'import clickhouse_connect; c = clickhouse_connect.get_client(host="clickhouse", port=8123, username="ch", password="ch"); c.command("DROP DATABASE IF EXISTS ask_dev_world_scratch"); c.command("CREATE DATABASE ask_dev_world_scratch")'
+
+echo "mint: migrating scratch databases"
+"${compose[@]}" exec -T \
+  -e POSTGRES_URI="${pg_scratch}" \
+  -e DATABASE_URI="${pg_scratch}" \
+  -e CLICKHOUSE_URI="${ch_scratch}" \
+  -e DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 \
+  api sh -c 'dev-hops migrate postgres && dev-hops migrate clickhouse'
+
+echo "mint: generating ask-dev-world.v1 (once) into the scratch databases"
+"${compose[@]}" exec -T api dev-hops fixtures world \
+  --manifest "${manifest}" \
+  --sink "${ch_scratch}" \
+  --postgres-uri "${pg_scratch}" \
+  --digest-path /tmp/WORLD_DIGEST_generated
+
+echo "mint: snapshotting the generated world"
+"${compose[@]}" exec -T api dev-hops fixtures world-snapshot \
+  --manifest "${manifest}" \
+  --sink "${ch_scratch}" \
+  --postgres-uri "${pg_scratch}" \
+  --baseline-sink "${ch_serving}" \
+  --baseline-postgres-uri "${pg_serving}" \
+  --out /tmp/world-snapshot
+
+echo "mint: restoring into the serving databases and re-pinning WORLD_DIGEST"
+"${compose[@]}" exec -T api dev-hops fixtures world-restore \
+  --manifest "${manifest}" \
+  --sink "${ch_serving}" \
+  --postgres-uri "${pg_serving}" \
+  --snapshot /tmp/world-snapshot \
+  --digest-path "${container_world_dir}/WORLD_DIGEST" \
+  --generated-digest-path /tmp/WORLD_DIGEST_generated \
+  --mint-digest
+
+# The differential proof: if the restore were lossy in any digested column,
+# these two would differ. Asserting it here means a lossy round trip can never
+# be minted into the pin and then "verified" against itself forever.
+echo "mint: proving the snapshot round trip is lossless"
+"${compose[@]}" exec -T api python \
+  /app/scripts/acceptance/assert_world_snapshot_round_trip.py \
+  --generated /tmp/WORLD_DIGEST_generated \
+  --restored "${container_world_dir}/WORLD_DIGEST"
+
+# CHAOS-3463 credential contract: a snapshot may only be minted if the
+# credentials it FREEZES actually authenticate. Runs against the stack's public
+# API from the host, and includes a wrong-password negative control -- an API
+# that accepted anything would otherwise satisfy every positive check.
+echo "mint: proving the corpus contract principals can log in"
+"${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/assert_world_principals_can_log_in.py" \
+  --api-url "http://127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT}" \
+  --manifest "${world_dir}/world.json"
+
+# Copy into a sibling directory and swap only once the replacement is
+# complete. Codex adversarial review round 3 (MEDIUM, confirmed): this used to
+# `rm -rf` the committed snapshot BEFORE `docker compose cp` had produced its
+# replacement, so any container/disk/copy failure after every proof had passed
+# destroyed the existing artifact and left a checkout with a pin and no
+# snapshot -- unbootable, and with any uncommitted artifact gone.
+echo "mint: copying the snapshot artifact into the repo"
+staging="${world_dir}/.snapshot.incoming"
+rm -rf "${staging}"
+"${compose[@]}" cp api:/tmp/world-snapshot "${staging}"
+if [[ ! -f "${staging}/manifest.json" ]]; then
+  echo "mint: the copied snapshot has no manifest.json -- refusing to replace" >&2
+  echo "mint: the existing artifact. Staged copy left at ${staging}." >&2
+  exit 1
+fi
+rm -rf "${world_dir}/snapshot"
+mv "${staging}" "${world_dir}/snapshot"
+"${compose[@]}" cp "api:${container_world_dir}/WORLD_DIGEST" "${world_dir}/WORLD_DIGEST"
+
+echo "mint: done. Commit ${world_dir#"${ops_root}/"}/snapshot AND"
+echo "mint: ${world_dir#"${ops_root}/"}/WORLD_DIGEST together -- they are only valid as a pair."
+du -sh "${world_dir}/snapshot"

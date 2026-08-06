@@ -714,6 +714,66 @@ dev-hops fixtures product-telemetry \
 
 ---
 
+### `fixtures world-snapshot` / `fixtures world-restore`
+
+Move the versioned `ask-dev-world.v1` fixture world from a scratch database into the database a stack actually serves.
+
+`fixtures world` deliberately refuses to run against a non-scratch database (`_require_scratch_database`), which includes ClickHouse `default` and Postgres `postgres` — the two databases the Ask Dev acceptance stack serves. Separately, two independent `fixtures world` runs do **not** produce the same `WORLD_DIGEST` (declared-blocked, see `world.json`'s `cross_generation_digest_status`), so regenerating the world per boot can never match a pinned digest.
+
+Both are solved the same way: **generate once into scratch, snapshot it, restore that snapshot on every boot.**
+
+```bash
+# 1. generate once, into a real scratch database
+dev-hops fixtures world --manifest tests/acceptance/world/ask-dev-world.v1/world.json \
+  --sink clickhouse://ch:ch@clickhouse:8123/ask_dev_world_scratch \
+  --postgres-uri postgresql+asyncpg://postgres:postgres@postgres:5432/ask_dev_world_scratch
+
+# 2. snapshot it (which tables were written is derived by diffing against a
+#    freshly-migrated baseline, never from a hardcoded list)
+dev-hops fixtures world-snapshot --manifest .../world.json \
+  --sink clickhouse://.../ask_dev_world_scratch \
+  --postgres-uri postgresql+asyncpg://.../ask_dev_world_scratch \
+  --baseline-sink clickhouse://.../default \
+  --baseline-postgres-uri postgresql+asyncpg://.../postgres \
+  --out tests/acceptance/world/ask-dev-world.v1/snapshot
+
+# 3. restore into the serving databases and verify the pin (what every boot runs)
+dev-hops fixtures world-restore --manifest .../world.json \
+  --sink clickhouse://.../default \
+  --postgres-uri postgresql+asyncpg://.../postgres \
+  --snapshot tests/acceptance/world/ask-dev-world.v1/snapshot
+```
+
+In practice you never run these by hand: `scripts/acceptance/mint_ask_dev_world_snapshot.sh` performs the whole mint (steps 1–3 plus `--mint-digest`), and `scripts/acceptance/run_ask_dev_compose.sh` runs the restore on every acceptance boot.
+
+`world-restore` is INSERT-only and issues no DDL. It refuses, before writing anything, unless `ENVIRONMENT=acceptance` **and** every table its snapshot carries is empty in the target — a real dev or production database always has organizations and commits, so it always fails that check. There is no `--force`. After restoring it verifies two things and exits non-zero on either: the per-table row-count delta it produced must equal the delta the original generation produced (which catches a table the snapshot missed), and the recomputed `WORLD_DIGEST` must equal the pinned one.
+
+It also refuses a snapshot that was not minted for the *current* `world.json`: the artifact records the world's `schema_version`, `master_seed`, and a hash of the identity/credential contract (org and user aliases, `id_seed`s, emails, usernames, roles, superuser flags), and all three must match the manifest being restored. This is not redundant with the digest guard — `WORLD_DIGEST` is computed from the restored *database*, so a `world.json` edit that leaves the derived ids alone (a changed email or `membership_role`, say) leaves every restored row and the digest bit-for-bit identical, while the manifest every consumer reads now disagrees with what the stack serves. A snapshot carrying no contract hash is refused rather than trusted. Re-mint after any such edit.
+
+Every acceptance boot additionally proves the restored world's principals can actually *authenticate* (`scripts/acceptance/assert_world_principals_can_log_in.py`, the same script the mint runs, wrong-password negative control included). The digest cannot cover this: it proves the credential bytes restored identically, not that the API still accepts them, so a login-path or bcrypt-policy regression would otherwise ride behind a green digest with the corpus silently falling back to the superuser.
+
+**`world-snapshot` options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--manifest` | — | Path to `world.json` (required) |
+| `--sink` | `CLICKHOUSE_URI` | ClickHouse URI of the **generated scratch** database |
+| `--postgres-uri` | — | Postgres URI of the **generated scratch** database (required) |
+| `--baseline-sink` | — | ClickHouse URI of a freshly-migrated, unseeded database (required) |
+| `--baseline-postgres-uri` | — | Postgres URI of a freshly-migrated, unseeded database (required) |
+| `--out` | — | Directory to write the snapshot into (required) |
+
+**`world-restore` options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--manifest` | — | Path to `world.json` (required) |
+| `--sink` | `CLICKHOUSE_URI` | Target ClickHouse URI |
+| `--postgres-uri` | — | Target Postgres URI (required) |
+| `--snapshot` | — | Snapshot directory to restore (required) |
+| `--digest-path` | alongside `--manifest` | `WORLD_DIGEST` file to verify against |
+| `--mint-digest` | off | Re-pin `WORLD_DIGEST` from the restored state instead of verifying. Mint flow only — on an ordinary boot this would make the digest guard verify the world against itself |
+
+---
+
 ## Admin Commands
 
 User and organization management commands. These use PostgreSQL (`POSTGRES_URI`).

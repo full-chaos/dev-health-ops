@@ -20,46 +20,60 @@
   "stale_row_count": 14,
   "stale_rows": {
     "attack.team-attribution.e2e-blocked-by-live-defect": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "attack.unrelated-evidence.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "defect.ask-dev-exact-commit.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "defect.ask-dev-not-found.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "gate.plan-registry-gap-is-loud.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.data-trust-organization-wide": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.exact-project-complete": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.multi-metric-comparison-organization-wide": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.operational-deficiency.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.registered-metric-catalog": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.remaining-work-exact-project": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.team-health.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.team-workload-balance.e2e-live-validated": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "positive-control.real-project-status": [
-      "scripts/acceptance/acceptance_artifact.py"
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ]
   },
   "items": [
@@ -135,7 +149,8 @@
         "limitation_names_unavailable_metric_source"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -176,7 +191,8 @@
         "unrelated_repo_excluded_from_named_answer"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -249,7 +265,8 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -271,7 +288,8 @@
         "answer_status_not_error"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -341,7 +359,8 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -432,7 +451,8 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -627,7 +647,8 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -649,7 +670,8 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -743,7 +765,8 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -769,7 +792,8 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -872,7 +896,8 @@
         "warnings_present_but_not_a_plan_registry_gap_signal"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -1139,7 +1164,8 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -1181,7 +1207,8 @@
         "safe_message_does_not_name_subject"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -1302,7 +1329,8 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "scripts/acceptance/acceptance_artifact.py"
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     }
   ]

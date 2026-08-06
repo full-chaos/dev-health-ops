@@ -37,6 +37,15 @@ TWO CLAUSES IT PINS, BOTH LOAD-BEARING FOR THE GO SIDE:
      produces through this predicate, so the two halves are measured
      together rather than asserted separately and hoped about.
 
+A THIRD THING IT PINS, ADDED FOR CHAOS-3465. Surplus retry introduced two new
+Python writers of the shared ``sync_run_units`` row, both of them landing
+between a budget deferral and the clear that ends the episode. Neither writes
+an episode column -- and the whole corpus below silently depends on that, since
+every case is an authored snapshot and none would ever be built from a
+laundered one. ``_assert_surplus_writes_leave_the_episode_alone`` reads the
+live source and enforces it, so the guarantee fails the GO gate rather than
+living in a Python code comment. See that function for the argument.
+
 WHAT THIS PAIR IS NOT. It is a PREDICATE-parity check, not a state-machine
 oracle. The Go side of the comparison is a hand-written mirror of this
 predicate (``budgetDeferralExhausted`` in
@@ -90,6 +99,27 @@ _PLACEHOLDER_MODEL_EXPORTS = (
     "SyncRunUnit",
     "SyncRunUnitStatus",
 )
+
+#: The columns ``_budget_deferral_exhausted`` reads off the unit row. Anything
+#: that writes one of these can move an exhaustion verdict, so the corpus below
+#: is only as valid as the set of writers that leave them alone.
+_EPISODE_COLUMNS_THE_PREDICATE_READS = (
+    "budget_deferrals",
+    "budget_first_deferred_at",
+    "result",
+)
+
+#: CHAOS-3465 added two NEW Python writers to the ``sync_run_units`` row the Go
+#: worker shares -- surplus retry's promotion and its withdrawal. Both are
+#: documented as writing ``available_at`` (plus ``updated_at``) and nothing
+#: else, and that is load-bearing for the GO side rather than Python-internal
+#: tidiness: budget_guard's own comment says a surplus admission that rewrote
+#: ``result`` "would quietly disarm the exhaustion path for that unit", and
+#: every ``go_stamp_*`` case in the Go test is built on that path still being
+#: armed. Until now the guarantee was a code comment plus Python tests -- the
+#: differential could not see it. The probe below makes it a measurement that
+#: fails THIS oracle, i.e. the Go gate, on drift.
+_SURPLUS_WRITE_PATHS = ("_admit_unit_from_surplus", "_withdraw_surplus_admission")
 
 #: The instant every case is evaluated at. Fixed so the wall-clock cap is a
 #: function of the case's own offset and nothing else.
@@ -179,6 +209,113 @@ def _assert_models_still_export(names: tuple[str, ...]) -> None:
         )
 
 
+def _row_columns_written_by(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> frozenset[str]:
+    """Every unit-row column ``function`` can write.
+
+    Two shapes, because the surplus writers use both and either one alone is
+    an incomplete reading: the keyword arguments of a ``.values(...)`` call
+    (the SQL UPDATE), and attribute assignment on the in-memory ORM mirror
+    (``unit.available_at = now``). This repository already recorded a masked
+    mutation against these exact statements -- corrupting the SQL alone left
+    the test PASSING because the autoflush rewrote the row from the ORM
+    object -- so a probe that read only one of the two would inherit the same
+    blind spot.
+
+    ``unit.result["error_category"] = ...`` is counted as a write of
+    ``result``: mutating the JSON document in place is the cheapest way to
+    disarm the defence-in-depth gate without ever naming the column in a
+    ``.values()``.
+    """
+    written: set[str] = set()
+    for node in ast.walk(function):
+        if isinstance(node, ast.Call):
+            callee = node.func
+            if isinstance(callee, ast.Attribute) and callee.attr == "values":
+                for keyword in node.keywords:
+                    if keyword.arg is not None:
+                        written.add(keyword.arg)
+            continue
+        if isinstance(node, ast.Assign):
+            targets: list[ast.expr] = list(node.targets)
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Attribute):
+                written.add(target.attr)
+            elif isinstance(target, ast.Subscript) and isinstance(
+                target.value, ast.Attribute
+            ):
+                written.add(target.value.attr)
+    return frozenset(written)
+
+
+def _assert_surplus_writes_leave_the_episode_alone() -> None:
+    """Fail loudly if a CHAOS-3465 surplus write path touches an episode column.
+
+    WHY THIS PROBE EXISTS, in the Go test's terms. The ``go_stamp_*`` cases
+    prove that Go's own non-terminal stamps cannot make stale budget counters
+    terminalization-eligible, because each stamp overwrites
+    ``result.error_category`` with its own cause. That argument is about the
+    LAST recorded cause, so it holds only while every other writer of the row
+    leaves that document alone between the deferral and the clear. CHAOS-3465
+    put two new writers in exactly that window. A surplus promotion that reset
+    ``budget_first_deferred_at`` would launder the wall-clock cap; one that
+    rewrote ``result`` would disarm the category gate outright -- and in both
+    cases every case below would keep passing, because the inputs are authored
+    snapshots and no case would ever be built from the laundered state.
+
+    So the guarantee is measured against the live source instead of trusted:
+    the two functions must exist, and neither may write any column
+    ``_budget_deferral_exhausted`` reads.
+
+    An empty ``_SURPLUS_WRITE_PATHS`` is itself a failure. A probe with
+    nothing to check reads as a passing one, which is the state this whole
+    file exists to refuse.
+    """
+    if not _SURPLUS_WRITE_PATHS:
+        raise RuntimeError(
+            "_SURPLUS_WRITE_PATHS is empty: this probe would measure nothing "
+            "and report success. Name the surplus write paths, or delete the "
+            "probe deliberately -- do not leave it vacuous."
+        )
+    module = ast.parse(_BUDGET_GUARD_SOURCE.read_text())
+    functions = {
+        node.name: node
+        for node in module.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for name in _SURPLUS_WRITE_PATHS:
+        function = functions.get(name)
+        if function is None:
+            raise RuntimeError(
+                f"{name} no longer exists in {_BUDGET_GUARD_SOURCE}. It is a "
+                "CHAOS-3465 writer of the sync_run_units row the Go worker "
+                "shares; if it was renamed, update _SURPLUS_WRITE_PATHS so "
+                "the probe keeps measuring the real write set. A rename must "
+                "not silently retire this check."
+            )
+        touched = sorted(
+            _row_columns_written_by(function).intersection(
+                _EPISODE_COLUMNS_THE_PREDICATE_READS
+            )
+        )
+        if touched:
+            raise RuntimeError(
+                f"{name} writes {', '.join(touched)} -- column(s) "
+                "_budget_deferral_exhausted reads. A surplus promotion or "
+                "withdrawal that moves the budget episode changes an "
+                "exhaustion verdict for a row the Go worker also stamps, and "
+                "every case in this pair is authored from states that assume "
+                "it does not. Either the write is wrong, or this oracle needs "
+                "cases built from the new post-surplus state before the "
+                "column list is relaxed."
+            )
+
+
 def _stub(name: str, **values: object) -> None:
     if name in sys.modules:
         return
@@ -248,6 +385,10 @@ def _install_budget_guard_imports() -> None:
 def _load_budget_guard() -> Any:
     if "dev_health_ops.sync.budget_guard" in sys.modules:
         return sys.modules["dev_health_ops.sync.budget_guard"]
+    # Runs before the module is trusted, for the same reason
+    # _assert_models_still_export does: a precondition checked after the fact
+    # is a precondition that already let the cases run.
+    _assert_surplus_writes_leave_the_episode_alone()
     _install_budget_guard_imports()
     spec = importlib.util.spec_from_file_location(
         "dev_health_ops.sync.budget_guard", _BUDGET_GUARD_SOURCE

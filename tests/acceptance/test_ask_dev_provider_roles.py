@@ -1022,9 +1022,21 @@ async def test_legacy_marker_question_is_persisted_verbatim_but_never_reaches_an
     themselves, which happens to contain the retired marker, is persisted
     exactly as they typed it (unavoidable and correct -- persistence always
     stores what the user actually asked; that is not a new leak). What must
-    never happen is the run producing a fabricated, case-shaped answer from
-    it: the scripted provider fails loud, the run terminates in a provider
-    error, and no assistant answer message is ever created.
+    never happen is the run producing a fabricated, case-shaped ANSWER from
+    it: the scripted provider fails loud and the run terminates in a
+    provider error.
+
+    CHAOS-3423 updated this test's own invariant (2026-08-05): a no-answer
+    terminal like this one now correctly persists ONE assistant
+    ``dev_messages`` row (``record_error_message``) -- the whole point of
+    that ticket is that the conversation transcript is no longer silently
+    incomplete for exactly this class of turn. What this test still must
+    prove, and does below, is that the persisted row is never a real
+    ``DevAnswer`` (schema_version dev_answer.v1/v2) -- only ever the
+    error-shaped ``dev_error.v1`` row -- and that neither the retired
+    marker nor a registry case id ever leaks into it, mirroring
+    ``test_scripted_case_leaves_no_acceptance_trace_in_the_persisted_transcript``'s
+    own leak checks for the completed-answer path.
     """
 
     question = f"{_POSITIVE_CONTROL_QUESTION} {provider_scripts.LEGACY_CASE_TAG_MARKER}status.single-project.positive-control-v1]]"
@@ -1056,8 +1068,23 @@ async def test_legacy_marker_question_is_persisted_verbatim_but_never_reaches_an
             .scalars()
             .all()
         )
-        assert assistant_messages == [], (
-            "a marker-containing question must never reach a persisted answer"
+        assert len(assistant_messages) == 1, (
+            "CHAOS-3423: this no-answer terminal must persist exactly one "
+            f"assistant transcript row -- got {len(assistant_messages)}."
+        )
+        assistant_message = assistant_messages[0]
+        assistant_payload = assistant_message.answer_payload
+        assert assistant_payload is not None
+        assert assistant_payload["schema_version"] == "dev_error.v1", (
+            "a marker-containing question must never reach a persisted "
+            "DevAnswer -- only the no-answer terminal's error row"
+        )
+        answer_text = json.dumps(assistant_payload)
+        assert provider_scripts.LEGACY_CASE_TAG_MARKER not in answer_text
+        registry_ids = provider_scripts.load_registry_ids(scripts_dir=_SCRIPTS_DIR)
+        leaked = [case_id for case_id in registry_ids if case_id in answer_text]
+        assert leaked == [], (
+            f"registry case id(s) leaked into the persisted error row: {leaked}"
         )
     finally:
         await session.close()

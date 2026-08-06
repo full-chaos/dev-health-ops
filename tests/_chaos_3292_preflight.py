@@ -393,6 +393,15 @@ class Recorder:
     async def record_answer(self, answer: DevAnswer) -> None:
         self.answers.append(answer)
 
+    async def record_error_message(self, error: Any, **_values: Any) -> None:
+        """No-op here; CHAOS-3423's persistence-prerequisite suite passes a
+        REAL ``PersistenceRunRecorder`` (never this fake) to assert on the
+        actual ``dev_messages`` row -- this only satisfies the RunRecorder
+        protocol shape so every other fixture in this module keeps
+        constructing ``DevOrchestrator`` with the default fake recorder.
+        """
+        del error
+
     async def record_preflight(
         self, *, preflight_outcome: str | None, legacy_guard_reason: str | None
     ) -> None:
@@ -537,6 +546,10 @@ async def run_preflight_orchestrator(
     scope_overrides: dict[str, Any] | None = None,
     requested_metric_ids: Sequence[str] = (),
     org_id: str = ORG_ID,
+    user_id: str = USER_ID,
+    conversation_id: str = CONVERSATION_ID,
+    run_id: str = RUN_ID,
+    answer_id: str = ANSWER_ID,
     fail_search: bool = False,
     preflight_enabled: bool = True,
     recorder_factory: Callable[[], Recorder] = Recorder,
@@ -558,6 +571,14 @@ async def run_preflight_orchestrator(
     second, divergent runner. It still receives the shared ``calls`` list, so a
     faulting executor's *attempted* request is recorded even though no tool
     result is produced.
+
+    ``user_id``/``conversation_id``/``run_id``/``answer_id`` default to the
+    module's own opaque fixture constants (unchanged for every existing
+    caller) -- CHAOS-3423/3424's persistence-prerequisite suite overrides all
+    four with real UUID strings so a ``recorder_factory`` can build a REAL
+    ``PersistenceRunRecorder`` against a seeded database and assert on the
+    actual rows a live run leaves behind, not a fake recorder's captured
+    call list.
     """
 
     catalog = SeededCatalog(entities, fail_search=fail_search)
@@ -606,11 +627,11 @@ async def run_preflight_orchestrator(
     result = await orchestrator.run(
         request=request,
         org_id=org_id,
-        user_id=USER_ID,
+        user_id=user_id,
         permission_fingerprint=PERMISSION_FINGERPRINT,
-        run_id=RUN_ID,
-        conversation_id=CONVERSATION_ID,
-        answer_id=ANSWER_ID,
+        run_id=run_id,
+        conversation_id=conversation_id,
+        answer_id=answer_id,
         cancellation=asyncio.Event(),
     )
     return RunOutput(result=result, calls=calls, provider=provider, recorder=recorder)

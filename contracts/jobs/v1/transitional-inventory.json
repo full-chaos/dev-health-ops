@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 156,
+  "row_count": 158,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -1569,12 +1569,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry_conditional:src/dev_health_ops/workers/config.py:311",
+      "id": "beat_entry_conditional:src/dev_health_ops/workers/config.py:325",
       "surface": "consume-pending-scheduled-sync-occurrences",
       "class": "beat_entry_conditional",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 311
+        "line": 325
       },
       "queue_or_cadence": "300s, default off (SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED)",
       "dispatches": "consume_pending_scheduled_sync_occurrences",
@@ -3739,12 +3739,12 @@
       "notes": "Keeps versioned exact-history projections warm; invalidated or missing projections return an explicit pending response until rebuilt."
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:300",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:314",
       "surface": "refresh-sync-coverage-projections",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 300
+        "line": 314
       },
       "queue_or_cadence": "300s",
       "dispatches": "refresh_sync_coverage_projections",
@@ -3761,6 +3761,54 @@
       "deletion_evidence_requirement": "Remove the Beat entry only after a native cadence refreshes every configuration without starvation.",
       "acceptance_test_id": "tests/api/admin/test_sync_coverage_api.py::test_sync_coverage_projection_is_reused_when_source_is_unchanged",
       "notes": "Unconditional five-minute refresh for exact coverage projections."
+    },
+    {
+      "id": "celery_task:src/dev_health_ops/workers/ask_dev_retention.py:163",
+      "surface": "run_ask_dev_retention_cleanup",
+      "class": "celery_task",
+      "source": {
+        "file": "src/dev_health_ops/workers/ask_dev_retention.py",
+        "line": 163
+      },
+      "queue_or_cadence": "default",
+      "dispatches": "self (Beat)",
+      "dispatch_mechanism": "celery_task_decorator",
+      "owner_role": "contributor",
+      "target_owner": {
+        "type": "native_process",
+        "value": "Go scheduler + ops worker"
+      },
+      "target_kind_id": "beat:ask-dev-retention-sweep",
+      "current_implementation_state": "celery_only",
+      "verification_status": "verified",
+      "compatibility_dependency": "Celery worker process consuming the Beat-scheduled dispatch.",
+      "deletion_evidence_requirement": "Deleted alongside Beat entry `ask-dev-retention-sweep` once its native replacement is proven.",
+      "acceptance_test_id": "tests/workers/test_ask_dev_retention_sweep.py::test_expired_30_day_conversation_is_purged",
+      "notes": "CHAOS-3404: production caller for DevPersistenceService.cleanup_expired (previously had none). Beat entry ask-dev-retention-sweep, crontab(5,30) UTC."
+    },
+    {
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:309",
+      "surface": "ask-dev-retention-sweep",
+      "class": "beat_entry",
+      "source": {
+        "file": "src/dev_health_ops/workers/config.py",
+        "line": 309
+      },
+      "queue_or_cadence": "crontab(hour=5,minute=30) UTC",
+      "dispatches": "run_ask_dev_retention_cleanup",
+      "dispatch_mechanism": "beat_schedule_entry",
+      "owner_role": "primary",
+      "target_owner": {
+        "type": "native_process",
+        "value": "Go scheduler + ops worker"
+      },
+      "target_kind_id": "beat:ask-dev-retention-sweep",
+      "current_implementation_state": "celery_only",
+      "verification_status": "verified",
+      "compatibility_dependency": "Celery Beat scheduler process + Redis/Valkey broker.",
+      "deletion_evidence_requirement": "Beat entry `ask-dev-retention-sweep` removed from src/dev_health_ops/workers/config.py; cadence contract comparison (this inventory vs. the checked schedule definition) shows the entry no longer present; the equivalent Go schedule/producer proven to preserve cadence and missed-run policy.",
+      "acceptance_test_id": "tests/workers/test_ask_dev_retention_sweep.py::test_beat_schedule_has_the_retention_sweep_entry",
+      "notes": "CHAOS-3404: the only production caller of DevPersistenceService.cleanup_expired."
     }
   ]
 }

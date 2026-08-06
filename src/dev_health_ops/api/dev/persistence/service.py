@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, TypeAlias
 
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import and_, case, event, func, or_, select
+from sqlalchemy import and_, case, event, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -2194,24 +2194,119 @@ class DevPersistenceService:
             run.ended_at = self._now()
         await self.session.flush()
 
+        ephemeral_conversation = None
+        if state in _TERMINAL_RUN_STATES:
+            ephemeral_conversation = await self._stamp_ephemeral_expiry_if_terminal(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=run.conversation_id,
+            )
+            if ephemeral_conversation is not None:
+                # Durable independent of the purge attempt below: flushed
+                # here so the caller's eventual commit persists the expiry
+                # stamp even if the purge itself fails or never runs.
+                await self.session.flush()
+
+        if (
+            ephemeral_conversation is not None
+            and await self._try_purge_ephemeral_conversation(
+                conversation=ephemeral_conversation, actor_user_id=user_id
+            )
+        ):
+            return None
+        return run
+
+    async def _stamp_ephemeral_expiry_if_terminal(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+    ) -> DevConversation | None:
+        """Mark a 0-day (ephemeral) conversation immediately expired the
+        instant its run goes terminal (CHAOS-3404).
+
+        Every path that can transition a run into a terminal state must call
+        this once that transition is decided -- ``update_run`` is the common
+        case; ``force_terminal_fallback`` and ``recover_stale_non_terminal_run``
+        are the documented last-resort recovery paths (CHAOS-3297 rounds
+        3/5/7) that used to skip this check entirely, leaving a 0-day
+        conversation whose run terminated via either path permanently
+        unpurgeable (``expires_at`` is otherwise never set for a
+        ``retention_days == 0`` row -- only the 30-day rolling window uses
+        it -- so ``cleanup_expired``'s safety-net sweep couldn't catch it
+        either).
+
+        This is deliberately the DURABLE half of the fix: a single column
+        mutation that cannot fail the way a cascading multi-table delete
+        can, and it MUST be committed together with (never conditioned on)
+        the terminal-state write itself -- see
+        ``_try_purge_ephemeral_conversation`` for the separate, best-effort
+        immediate-delete half. Once ``expires_at`` is set, the next
+        ``cleanup_expired`` sweep tick collects the row even if the
+        synchronous purge attempt right after this one never runs or fails:
+        the guarantee degrades from "purged immediately" to "purged within
+        one sweep interval," never to "leaked forever."
+        """
         conversation = await self._owned_conversation(
             org_id=org_id,
             user_id=user_id,
-            conversation_id=run.conversation_id,
+            conversation_id=conversation_id,
             include_expired=True,
         )
-        if (
-            state in _TERMINAL_RUN_STATES
-            and conversation is not None
-            and conversation.retention_days == 0
-        ):
-            await self._purge_conversation(
-                conversation=conversation,
-                reason="ephemeral_completed",
-                actor_user_id=user_id,
-            )
+        if conversation is None or conversation.retention_days != 0:
             return None
-        return run
+        conversation.expires_at = self._now()
+        return conversation
+
+    async def _try_purge_ephemeral_conversation(
+        self, *, conversation: DevConversation, actor_user_id: uuid.UUID | None
+    ) -> bool:
+        """Best-effort immediate purge of an already-expiry-stamped
+        ephemeral conversation (CHAOS-3404).
+
+        Only ``update_run`` calls this -- deliberately the ONE terminal-
+        transition site where an inline purge is safe. Neither
+        ``force_terminal_fallback`` nor ``recover_stale_non_terminal_run``
+        call it (they call ``_stamp_ephemeral_expiry_if_terminal`` alone):
+        both have a reader that immediately reads this same run's
+        answer/frame content back from the DB right after (a same-request
+        reader for ``recover_stale_non_terminal_run``, whose return value
+        the caller feeds straight into ``get_answer_message``/
+        ``get_answer_frame``; a concurrent duplicate-request reader for
+        ``force_terminal_fallback``, blocked on its ``SELECT ... FOR
+        UPDATE`` lock -- Codex adversarial-review rounds 2 and 3), and an
+        inline purge would delete that content out from under either read.
+        ``update_run`` has no such reader (the live SSE stream already has
+        the answer in memory; nothing re-reads it from the DB in the same
+        request), so it is the only site where deleting immediately is safe.
+
+        Must only be called AFTER the terminal state + expiry stamp from
+        ``_stamp_ephemeral_expiry_if_terminal`` are already durable (or at
+        least already flushed in a transaction the caller owns) -- a
+        failure here is caught and logged, never re-raised, so it can never
+        take the terminal-state write down with it. Runs inside a SAVEPOINT
+        (``begin_nested``, the same pattern ``append_assistant_answer`` uses
+        for its own idempotent-insert recovery) so a failed delete/tombstone
+        flush rolls back only itself, not the caller's outer transaction --
+        without this, a failed flush would leave a shared Postgres session
+        aborted, and ``update_run``'s own later commit (it does not commit
+        independently) would fail too.
+        """
+        try:
+            async with self.session.begin_nested():
+                await self._purge_conversation(
+                    conversation=conversation,
+                    reason="ephemeral_completed",
+                    actor_user_id=actor_user_id,
+                )
+        except Exception:
+            logger.exception(
+                "ask_dev_ephemeral_conversation_purge_failed",
+                extra={"conversation_id": str(conversation.id)},
+            )
+            return False
+        return True
 
     async def force_terminal_fallback(
         self, *, org_id: uuid.UUID, user_id: uuid.UUID, run_id: uuid.UUID
@@ -2250,6 +2345,35 @@ class DevPersistenceService:
         run.safe_error_code = "internal_error"
         run.terminal_error_payload = None
         run.ended_at = self._now()
+        # CHAOS-3404: stamp only -- deliberately NOT an immediate
+        # synchronous purge, even though THIS request has no same-request
+        # reader of the content (unlike recover_stale_non_terminal_run).
+        # Codex adversarial-review round 3 (MEDIUM, confirmed) found a
+        # different, CONCURRENT race an immediate purge here still has: a
+        # duplicate in-flight request for the same client_message_id can
+        # already be blocked in recover_stale_non_terminal_run's
+        # `SELECT ... FOR UPDATE` on this exact run, waiting on this
+        # method's commit below to release the lock. Once it does, that
+        # concurrent request reads the run as already-terminal and returns
+        # it immediately (recover_stale_non_terminal_run's own
+        # already-terminal early-return, which never stamps or purges) --
+        # then router.py's replay path reads THIS run's answer/frame
+        # content back to build ITS response. If this method had already
+        # purged inline, that concurrent reader's content would be gone
+        # too, degrading a response that should show real content, exactly
+        # the round-2 finding but via a different (concurrent, not
+        # same-request) path. Stamping expires_at is enough to make the
+        # row eligible for the next cleanup_expired sweep tick -- "purged
+        # within one sweep interval," never "leaked forever," and never
+        # racing any reader. The terminal-state write and the stamp commit
+        # together, unconditionally -- this durability guarantee is this
+        # method's entire purpose (CHAOS-3297 round 3) and must never be
+        # weakened by anything that follows.
+        await self._stamp_ephemeral_expiry_if_terminal(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=run.conversation_id,
+        )
         await self.session.commit()
 
     async def recover_stale_non_terminal_run(
@@ -2335,6 +2459,24 @@ class DevPersistenceService:
         run.safe_error_code = "internal_error"
         run.terminal_error_payload = None
         run.ended_at = self._now()
+        # CHAOS-3404: stamp only, same rationale as force_terminal_fallback
+        # -- this method's return value (`run`) is immediately read back by
+        # its caller (router.py's replay path: get_answer_message /
+        # get_answer_frame keyed off THIS run) to build a replay response.
+        # An immediate purge here would delete the conversation (and its
+        # cascaded messages/frames) out from under that same read, silently
+        # degrading a response that should show real content (Codex
+        # adversarial-review round 2, MEDIUM, confirmed). Stamping
+        # expires_at makes the row eligible for the next cleanup_expired
+        # sweep tick instead -- "purged within one sweep interval," not
+        # "purged before this replay reads it and not before this replay
+        # needs it." The terminal-state write and the stamp commit
+        # together, unconditionally, same as force_terminal_fallback.
+        await self._stamp_ephemeral_expiry_if_terminal(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=run.conversation_id,
+        )
         await self.session.commit()
         return run
 
@@ -3237,6 +3379,100 @@ class DevPersistenceService:
             selected=len(conversations),
             purged=len(conversations),
         )
+
+    async def count_expired(self) -> int:
+        """Count conversations currently due for retention purge (CHAOS-3404).
+
+        Deliberately a plain, non-locking ``COUNT`` -- unlike
+        ``cleanup_expired``'s selection query, this does NOT take
+        ``FOR UPDATE SKIP LOCKED``. That distinction is the whole point:
+        Postgres row locks block writers, not plain reads, so this count
+        sees every row matching the expiry predicate regardless of whether
+        another concurrent ``cleanup_expired`` invocation currently holds a
+        lock on some of them. The sweep caller uses this after its batch
+        loop to distinguish "genuinely drained" from "a batch merely
+        returned fewer than `limit` rows because a concurrent invocation
+        was holding the rest" -- a SKIP LOCKED short read alone cannot make
+        that distinction (Codex adversarial-review round 2, CHAOS-3404,
+        HIGH, confirmed: relying on it let a concurrently-contended,
+        still-nonempty backlog report a healthy "completed" sweep).
+        """
+        now = self._now()
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(DevConversation)
+                .where(
+                    DevConversation.expires_at.is_not(None),
+                    DevConversation.expires_at <= now,
+                )
+            )
+            or 0
+        )
+
+    async def backfill_stranded_ephemeral_expiry(self, *, limit: int = 500) -> int:
+        """One-time repair for 0-day conversations already stranded before
+        this fix existed (CHAOS-3404; Codex adversarial-review round 3,
+        HIGH, confirmed).
+
+        Before ``_stamp_ephemeral_expiry_if_terminal`` existed,
+        ``force_terminal_fallback``/``recover_stale_non_terminal_run``
+        could leave a ``retention_days == 0`` conversation with every one
+        of its runs already terminal but ``expires_at`` still ``NULL`` --
+        permanently invisible to ``cleanup_expired``, and this fix only
+        stops NEW rows from ending up that way; it does nothing for ones
+        already stranded in production before deployment. This finds
+        exactly those (a 0-day conversation with at least one run, and NO
+        run still non-terminal) and stamps ``expires_at = now()`` on them,
+        identically to the synchronous stamp -- the ordinary
+        ``cleanup_expired`` sweep then collects them on its next tick, same
+        as any other now-due row. Deliberately narrow: a conversation with
+        zero runs (freshly created, no message posted yet) or ANY
+        non-terminal run (genuinely still in flight) is never touched.
+
+        Bounded and idempotent -- returns the number stamped this call;
+        safe to run repeatedly (a resumable one-time operator action, e.g.
+        a ``dev-hops maintenance`` command) until it returns 0.
+        """
+        if limit < 1 or limit > 500:
+            raise DevPersistenceValidationError(
+                "backfill limit must be between 1 and 500"
+            )
+        now = self._now()
+        has_a_run = exists(
+            select(DevRun.id).where(DevRun.conversation_id == DevConversation.id)
+        )
+        has_a_non_terminal_run = exists(
+            select(DevRun.id).where(
+                DevRun.conversation_id == DevConversation.id,
+                DevRun.state.not_in(_TERMINAL_RUN_STATES),
+            )
+        )
+        stranded = (
+            (
+                await self.session.execute(
+                    select(DevConversation)
+                    .where(
+                        DevConversation.retention_days == 0,
+                        DevConversation.expires_at.is_(None),
+                        has_a_run,
+                        ~has_a_non_terminal_run,
+                    )
+                    .order_by(DevConversation.created_at, DevConversation.id)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for conversation in stranded:
+            conversation.expires_at = now
+        logger.info(
+            "ask_dev_ephemeral_expiry_backfill_completed",
+            extra={"stamped": len(stranded)},
+        )
+        return len(stranded)
 
     async def _owned_conversation(
         self,

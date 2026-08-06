@@ -268,6 +268,42 @@ if _PROMETHEUS_AVAILABLE:
         )
     )
 
+    # ---------------------------------------------------------------------------
+    # Ask Dev retention sweep (CHAOS-3404): DevPersistenceService.cleanup_expired
+    # previously had no production caller, so the 0/30-day retention policy
+    # never actually ran. Now beat-scheduled (workers/ask_dev_retention.py).
+    # ---------------------------------------------------------------------------
+    ASK_DEV_RETENTION_SWEEP_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_retention_sweep_total",
+        "Ask Dev retention sweep (cleanup_expired) completions by status "
+        "(completed/partial/failed -- partial means it hit its batch cap "
+        "without draining the backlog, not that it errored). A dashboard/"
+        "alert should page on status=failed and, more importantly, on this "
+        "counter's own absence -- see "
+        "devhealth_ask_dev_retention_sweep_last_success_timestamp for the "
+        "skipped-or-falling-behind-sweep (dead-man's-switch) signal.",
+        ["status"],
+    )
+
+    ASK_DEV_RETENTION_SWEEP_PURGED_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_retention_sweep_purged_total",
+        "Ask Dev conversations purged by the retention sweep, cumulative. "
+        "Incremented for every batch that actually committed a purge, "
+        "regardless of the sweep run's overall status (completed/partial/"
+        "failed) -- a purge that committed is real and durable even if a "
+        "later batch in the same run then failed.",
+    )
+
+    ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP = _prometheus_client_module.Gauge(
+        "devhealth_ask_dev_retention_sweep_last_success_timestamp",
+        "Unix timestamp (seconds) of the last time the Ask Dev retention "
+        "sweep completed successfully. Only ever advances on success -- "
+        "never set on a failed or skipped run -- so "
+        "`time() - this` growing unbounded is the receipt that a sweep "
+        "was silently skipped (beat never fired, worker down, queue "
+        "starved), not just that one run failed.",
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -293,6 +329,9 @@ else:
     ASK_DEV_QUA_SHADOW_LATENCY_SECONDS = _noop_histogram()
     ASK_DEV_QUA_SHADOW_FAULT_TOTAL = _noop_counter()
     ASK_DEV_QUA_SHADOW_CARDINALITY_UNCORROBORATED_TOTAL = _noop_counter()
+    ASK_DEV_RETENTION_SWEEP_TOTAL = _noop_counter()
+    ASK_DEV_RETENTION_SWEEP_PURGED_TOTAL = _noop_counter()
+    ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP = _noop_gauge()
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +408,38 @@ def record_investment_membership_scope_stale(
     INVESTMENT_MEMBERSHIP_SCOPE_LAG_SECONDS.labels(scope_mode=scope_mode).set(
         lag_seconds
     )
+
+
+def record_ask_dev_retention_sweep(
+    *, status: str, purged: int = 0, timestamp: float | None = None
+) -> None:
+    """Record one Ask Dev retention sweep completion (CHAOS-3404).
+
+    ``status`` is one of:
+
+    * ``"completed"`` -- the sweep drained its backlog with no error.
+    * ``"partial"`` -- the sweep ran error-free but hit its batch cap
+      before draining the backlog (a real, growing backlog, not a failure).
+    * ``"failed"`` -- the sweep raised. ``purged`` may still be > 0 (earlier
+      batches in the same run committed before a later one failed).
+
+    ``purged`` is recorded for every status, since a purge that committed is
+    real and durable regardless of how the overall run ended. The
+    last-success gauge, however, is deliberately advanced ONLY on
+    ``"completed"`` (Codex adversarial-review round 1, CHAOS-3404, HIGH,
+    confirmed: a "partial" run that still advanced it let retention debt
+    persist while the dead-man alert reported a healthy sweep) -- a failed,
+    partial, or never-run sweep must leave it stale so an alert on
+    ``time() - devhealth_ask_dev_retention_sweep_last_success_timestamp``
+    detects a failing, falling-behind, or silently skipped sweep alike.
+    """
+    ASK_DEV_RETENTION_SWEEP_TOTAL.labels(status=status).inc()
+    if purged:
+        ASK_DEV_RETENTION_SWEEP_PURGED_TOTAL.inc(purged)
+    if status == "completed":
+        ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP.set(
+            timestamp if timestamp is not None else time.time()
+        )
 
 
 @contextmanager

@@ -297,6 +297,20 @@ beat_schedule = {
         "schedule": crontab(hour=5, minute=15),
         "options": {"queue": "sync"},
     },
+    # Ask Dev retention sweep (CHAOS-3404): the only production caller of
+    # DevPersistenceService.cleanup_expired, which purges conversations past
+    # their persisted `expires_at` (the 30-day retention window; 0-day
+    # ephemeral conversations are purged synchronously on run completion --
+    # see workers/ask_dev_retention.py's module docstring). Previously had no
+    # beat entry, CLI, or caller at all, so retention never executed
+    # regardless of the org's configured ask_dev_retention_days. Scheduled
+    # immediately after prune-external-ingest-batches (5:15), clear of the
+    # other nightly jobs.
+    "ask-dev-retention-sweep": {
+        "task": "dev_health_ops.workers.tasks.run_ask_dev_retention_cleanup",
+        "schedule": crontab(hour=5, minute=30),
+        "options": {"queue": "default"},
+    },
     "refresh-sync-coverage-projections": {
         "task": "dev_health_ops.workers.tasks.refresh_sync_coverage_projections",
         "schedule": 300.0,

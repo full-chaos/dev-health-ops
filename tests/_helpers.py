@@ -16,6 +16,8 @@ from sqlalchemy import Table
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session
 
+from dev_health_ops.db import normalize_sync_postgres_uri
+
 
 def sync_postgres_test_url() -> URL:
     """Return ``DEV_HEALTH_POSTGRES_TEST_URI`` coerced to the blocking driver.
@@ -39,10 +41,23 @@ def sync_postgres_test_url() -> URL:
     the password as ``***``, so stringifying here swaps a ``MissingGreenlet``
     for a "password authentication failed" that reads like broken CI
     credentials rather than a broken test helper.
+
+    THE DRIVER IS NOT THE ONLY THING THAT DIFFERS between the async URI and a
+    blocking one, which is why this delegates to the PRODUCTION normalizer
+    rather than swapping ``drivername`` itself. ``asyncpg`` accepts
+    ``?ssl=`` and ``?channel_binding=``; psycopg2 accepts neither, and raises
+    ``invalid connection option "ssl"`` on a managed/TLS URI of the form
+    ``postgresql+asyncpg://...?ssl=require&channel_binding=require``.
+    ``normalize_sync_postgres_uri`` already owns that translation for
+    production (``ssl`` -> ``sslmode``, ``channel_binding`` dropped), so
+    reimplementing the driver half here left two normalizers that agreed on
+    CI's bare URI and disagreed on every TLS one -- a divergence found by
+    review after this helper replaced call sites that had been using the
+    production normalizer directly. One normalizer, not two.
     """
-    return make_url(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"]).set(
-        drivername="postgresql+psycopg2"
-    )
+    return make_url(
+        normalize_sync_postgres_uri(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    ).set(drivername="postgresql+psycopg2")
 
 
 def tables_of(*models: Any) -> list[Table]:

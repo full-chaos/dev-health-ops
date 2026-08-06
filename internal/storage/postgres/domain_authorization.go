@@ -539,6 +539,12 @@ func domainPosture() RolePosture {
 			{"sync_runs", true, true, false},
 			{"sync_dispatch_transport_routes", false, false, false},
 			{"sync_run_units", true, true, false},
+			// The only domain table carrying DELETE. Prepared recovery
+			// snapshots are transient state: written once when a route's
+			// manifest is prepared, read back on recovery, and cleared in the
+			// same transaction that terminalizes the unit. Nothing ever
+			// updates one in place, so UPDATE stays off.
+			{"sync_run_unit_effect_snapshots", true, false, true},
 			{"sync_watermarks", true, true, false},
 			{"sync_dispatch_outbox", true, true, false},
 			{"worker_job_outbox", true, false, false},

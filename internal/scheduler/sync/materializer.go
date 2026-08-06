@@ -43,13 +43,38 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 	return &NativeMaterializer{domainPool: domainPool, watermarkOverlap: time.Duration(overlap) * time.Second, defaultUnitCap: cap}, nil
 }
 
+// boundedEnvInt mirrors the two Python settings readers this materializer
+// ports: _watermark_overlap_seconds' max(0, int(os.getenv(...)))
+// (src/dev_health_ops/sync/watermarks.py:113-122) and _env_int's
+// max(1, int(raw)) (src/dev_health_ops/sync/guard.py:296-304).
+//
+// The TrimSpace is load-bearing parity, not tidiness: Python's int() strips
+// surrounding whitespace before parsing, so " 604800 " -- a value an operator
+// gets for free from a YAML block scalar, a here-doc, or a secret file with a
+// trailing newline -- is 604800 to the Python worker. A bare Atoi rejects it
+// and silently takes the fallback, which for SYNC_WATERMARK_OVERLAP is 0: the
+// two workers then read different incremental windows from one configuration,
+// and the HEAVY ratchet's C8 overlap clamp (effectiveHeavyMaxWindow) never
+// fires, because the overlap it clamps against was parsed away. Go's
+// unicode.IsSpace set matches CPython's whitespace stripping across the ASCII
+// controls, NBSP and the Unicode separators.
+//
+// Two int() acceptances are DELIBERATELY not ported, as an accepted grammar
+// restriction: underscore digit separators (Python int("3_0") == 30) and
+// non-ASCII decimal digits (Python int("٣٠") == 30). Neither has a
+// legitimate use in a deployment env var, and honouring them would mean
+// hand-rolling a parser that has to stay bug-compatible with CPython forever.
+// They are not left SILENT, though: an unparseable value warns with the raw
+// text, so an operator who writes one sees why the setting did not take
+// effect instead of quietly running on the fallback.
 func boundedEnvInt(key string, fallback, minimum int) int {
 	value, ok := os.LookupEnv(key)
 	if !ok {
 		return fallback
 	}
-	parsed, err := strconv.Atoi(value)
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil {
+		warnUnparseableEnvInt(key, value, fallback)
 		return fallback
 	}
 	if parsed < minimum {

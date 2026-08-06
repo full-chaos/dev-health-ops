@@ -287,6 +287,63 @@ func githubDerivedOracleCases() []oracleCase {
 			},
 		},
 		{
+			// SORTING-KEY COLLISION class. Two members of the SAME team are
+			// assigned to one issue, so the resolver emits two
+			// assignee_membership candidates that agree on team_id and differ
+			// only in the member behind them. Candidate dedup compares evidence
+			// and the evidence embeds member_id
+			// (github_work_items_derivation_context.go:328), so it cannot
+			// collapse them -- and the attribution table's sorting key
+			// (org_id, repo_id, work_item_id, ifNull(team_id,''), source)
+			// contains none of the fields they differ in. Two rows therefore
+			// land on ONE sorting key, differing in team_name, is_primary and
+			// evidence.
+			//
+			// This is the input class the write-side dedup exists for. Every
+			// other case has one candidate per (source, team_id), where a dedup
+			// that collapses correctly and one that does nothing at all are
+			// indistinguishable.
+			//
+			// The two facts carry DIFFERENT TeamName for one TeamID on purpose:
+			// with equal names the surviving row would look the same whichever
+			// of the two won, so which row survives would sit unasserted.
+			ID: "two_assignees_one_team_collide_on_sorting_key",
+			Input: map[string]any{
+				"OrgID": githubDerivedOracleOrg, "Day": "2026-08-04",
+				"ComputedAt": "2026-08-05T00:30:00Z", "AsOf": "2026-08-05T00:30:00Z",
+				"Facts": map[string]any{
+					"Teams": []any{}, "Projects": []any{}, "Repos": []any{},
+					"ManualFallbacks": []any{},
+					"Members": []any{
+						map[string]any{
+							"Provider": "github", "TeamID": "payments",
+							"TeamName": "Payments", "MemberID": "m1",
+							"RawProviderUserID": "octocat", "RawEmail": "octo@example.com",
+							"IdentityFacets": []any{"octocat"},
+							"IsPrimary":      1, "Specificity": 50, "Priority": 20,
+							"UpdatedAt": "2026-07-01T00:00:00Z",
+						},
+						map[string]any{
+							"Provider": "github", "TeamID": "payments",
+							"TeamName": "Payments Squad", "MemberID": "m2",
+							"RawProviderUserID": "hubcat", "RawEmail": "hub@example.com",
+							"IdentityFacets": []any{"hubcat"},
+							"IsPrimary":      0, "Specificity": 50, "Priority": 20,
+							"UpdatedAt": "2026-07-01T00:00:00Z",
+						},
+					},
+				},
+				"WorkItems": []any{
+					githubDerivedOracleItem("acme/api#40", map[string]any{
+						"assignees": []any{"octocat", "hubcat"},
+					}),
+				},
+				"Transitions": []any{
+					githubDerivedOracleTransition("acme/api#40", "2026-08-04T09:00:00Z", "todo", "in_progress"),
+				},
+			},
+		},
+		{
 			// LINKED-ISSUE DONOR class. The donor appears ONLY in `Donors`, never
 			// in `WorkItems`, so it can reach the resolver by exactly one route:
 			// the donor list both sides decode from this key. If either side

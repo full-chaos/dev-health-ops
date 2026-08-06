@@ -140,7 +140,19 @@ func githubWorkItemDerivedSeconds(value time.Time) time.Time {
 }
 
 // githubWorkItemDerivedSortingKeyDedupe collapses rows that share a full
-// ClickHouse sorting key, keeping the LAST occurrence.
+// ClickHouse sorting key, keeping the HIGHEST version and breaking ties by
+// order (last occurrence wins).
+//
+// Version first, not order first, because the destination is a
+// ReplacingMergeTree keyed on computed_at: the server resolves a collision by
+// VERSION and ignores insertion order entirely. Ordering alone is correct only
+// while every row in a batch shares one computed_at -- true today, enforced by
+// nothing. The day a batch carries mixed versions, an order-only dedup names a
+// row the server discards, the readback compares against a row that is not
+// there, and recovery wedges at Conflict permanently.
+//
+// The tie-break stays LAST-wins so the equal-version behaviour, which is the
+// case every real batch takes today, is unchanged.
 //
 // This is a PERSISTENCE-layer decision, not a compute-layer one, so it does
 // not touch the D16 mirroring of the builders: Python writes every row and
@@ -154,19 +166,33 @@ func githubWorkItemDerivedSeconds(value time.Time) time.Time {
 // differently -- collapse to one stored row, `found` is 1, the team_name
 // mismatch reads as Conflict, and recovery is wedged permanently.
 func githubWorkItemDerivedSortingKeyDedupe[T any](
-	rows []T, key func(T) string,
+	rows []T, key func(T) string, version func(T) time.Time,
 ) []T {
-	lastIndex := make(map[string]int, len(rows))
+	winner := make(map[string]int, len(rows))
 	for index, row := range rows {
-		lastIndex[key(row)] = index
+		current, exists := winner[key(row)]
+		// `!Before` keeps the LATER index on an exact tie, which is the
+		// last-wins tie-break.
+		if !exists || !version(row).Before(version(rows[current])) {
+			winner[key(row)] = index
+		}
 	}
 	result := make([]T, 0, len(rows))
 	for index, row := range rows {
-		if lastIndex[key(row)] == index {
+		if winner[key(row)] == index {
 			result = append(result, row)
 		}
 	}
 	return result
+}
+
+// githubTeamAttributionVersion is the ReplacingMergeTree version column for
+// work_item_team_attributions, read through the same stored-precision
+// truncation the write and the comparison use. Comparing raw stamps here while
+// storing truncated ones would let two rows that are one version after
+// truncation be ordered by digits the column cannot hold.
+func githubTeamAttributionVersion(row githubWorkItemTeamAttributionRow) time.Time {
+	return githubWorkItemDerivedMillis(row.ComputedAt)
 }
 
 // githubWorkItemDerivedUniqueSortingKeys reports whether every row already
@@ -346,7 +372,9 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) WriteGitHubWorkItemE
 	// destinations: the resolver emits one candidate per ownership fact, so two
 	// facts naming the same team differently produce two rows with an identical
 	// sorting key that differ only in team_name.
-	rows = githubWorkItemDerivedSortingKeyDedupe(rows, githubTeamAttributionSortingKey)
+	rows = githubWorkItemDerivedSortingKeyDedupe(
+		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion,
+	)
 	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO work_item_team_attributions
 (org_id, repo_id, work_item_id, provider, team_id, team_name, source,
 is_primary, confidence, evidence, computed_at)`)
@@ -389,7 +417,9 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) InspectGitHubWorkIte
 	}
 	// The expectation must name the row the WRITE will actually leave behind,
 	// or the readback compares against a row storage discarded.
-	rows = githubWorkItemDerivedSortingKeyDedupe(rows, githubTeamAttributionSortingKey)
+	rows = githubWorkItemDerivedSortingKeyDedupe(
+		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion,
+	)
 	return inspectGitHubWorkItemDerivedRows(rows, func(row githubWorkItemTeamAttributionRow) (EffectInspection, error) {
 		return sink.inspect(ctx, identity, row)
 	})

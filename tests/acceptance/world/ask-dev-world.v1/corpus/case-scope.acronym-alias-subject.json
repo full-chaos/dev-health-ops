@@ -40,6 +40,14 @@
       },
       "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
       "executable_today": true
+    },
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "terminal_persists_assistant_row",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
+      "executable_today": true,
+      "$comment": "ADDED (codex round-5, confirmed): this case's expected_public_outcome is needs_clarification (deterministic-v1.json's own entry), which CASE-SCHEMA.v1.md's taxonomy rule 4 explicitly requires this invariant for -- it was missing from the original authoring pass despite the case fitting the rule. Wired directly to the real graduated checker terminal_persists_assistant_row (no placeholder stage needed, unlike the batch of cases fixed earlier in this rebase pass)."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",

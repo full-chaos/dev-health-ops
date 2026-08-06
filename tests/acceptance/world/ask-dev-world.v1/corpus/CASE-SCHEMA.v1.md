@@ -83,9 +83,18 @@ changing any of these mappings.
    `needs_clarification` outcome, never a silent substitution. (CHAOS-3407
    class: the regex bug that dropped "Dev" and then silently ran org-wide.)
    **Wired to `scope_resolution_outcome_in`** (`args: {"from_profile":
-   "expected_scope_resolution_outcome"}`) for every case whose resolution
-   profile entry has a non-null `expected_scope_resolution_outcome` — this
-   checker unconditionally FAILS when no `scope.resolved` event was
+   "expected_scope_resolution_outcome"}`) on every case that CARRIES a
+   `no-silent-widening` invariant AND whose resolution profile entry has a
+   non-null `expected_scope_resolution_outcome` — this is NOT every active
+   case with a resolvable scope outcome; a case only gets this checker if
+   its own `invariants[]` documents the `no-silent-widening` claim in the
+   first place (codex round-5, confirmed: 24 active cases with a non-null
+   `expected_scope_resolution_outcome` — e.g. `adv.abuse.retry-storm`, both
+   `provider-fail.*` cases — never claimed `no-silent-widening` at all and
+   correctly carry no `scope_resolution_outcome_in` invariant; this is not a
+   coverage gap, it's cases whose scenario doesn't exercise that specific
+   claim). Within cases that DO carry `no-silent-widening`: this checker
+   unconditionally FAILS when no `scope.resolved` event was
    observed (`invariants.py`'s `outcome is None` branch), so it must never
    be wired onto a case whose profile's `expected_scope_resolution_outcome`
    is `null` (no scope resolution is attempted at all, e.g. n/a-subject
@@ -218,17 +227,21 @@ This is the file a runner iterates over identically to an authored case —
 it just skips execution and reports the block, loudly, rather than being
 silently absent from the corpus.
 
-**`blocked_by` is a `"CHAOS-XXXX"` ticket id when the blocker is a
-production-code/fixture defect** (the common case — e.g.
-`attention.team.valid-qualification-light-on-feature-work`'s
-`"CHAOS-3394"`). It is a short, free-text, machine-stable prefix like
-`"runner: <capability gap>"` when the blocker is a **runner/schema
-capability that doesn't exist yet** rather than a ticketed defect (e.g.
-`tenant.authorization-change-mid-conversation`'s `"runner: no structured
-multi-turn / actor-authorization-mutation support"`) — there is no ticket
-to cite for "this case format can't express what it needs to express yet."
-Both forms are valid; a consumer should treat `blocked_by` as opaque
-documentation, never parse it as strictly ticket-shaped.
+**CORRECTED 2026-08-06 (codex round-5, confirmed):** `blocked_by` MUST be a
+real `"CHAOS-<number>[ free-text description]"` ticket reference, for every
+declared-blocked case, with no exception — Lane 2a's real, merged
+`case_schema.py` (`_BLOCKED_BY_TICKET_PATTERN = re.compile(r"^CHAOS-\d+\b")`)
+anchors this at the start of the string and raises `CaseSchemaError` on
+anything else. An earlier draft of this doc described a second, free-text
+form (`"runner: <capability gap>"`) for a blocker with no ticket to cite —
+that form is REJECTED by the real loader, not merely discouraged; following
+it would fail the entire corpus load, not just the one case. All 50
+declared-blocked cases in this corpus already satisfy the real pattern
+(every "runner capability gap" category was filed as a real ticket instead
+— see `REGISTRY-AMENDMENT.v1.md`'s ticket table, e.g.
+`tenant.authorization-change-mid-conversation`'s `"CHAOS-3454"`). If a
+future case genuinely has no ticket to cite, file one first — do not invent
+a free-text `blocked_by` value.
 
 **`invariants` — `[]` (CLOSED 2026-08-06, rebase pass):** every
 declared-blocked case's `invariants` is the empty list — nothing runs,

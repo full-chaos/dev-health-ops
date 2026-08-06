@@ -314,12 +314,27 @@ func (sink GitHubWorkItemCycleTimesClickHouseEffects) InspectGitHubWorkItemEffec
 func (sink GitHubWorkItemCycleTimesClickHouseEffects) inspect(
 	ctx context.Context, expected githubWorkItemCycleTimePersistenceRow,
 ) (EffectInspection, error) {
+	// `day` is fenced even though it is NOT part of this table's sorting key
+	// (org_id, provider, work_item_id). It is the PARTITION key --
+	// toYYYYMM(day), migration 001 -- and whether FINAL collapses one natural
+	// key across two partitions depends on a server setting this code does not
+	// set and cannot see: measured on a real server, the default returns one
+	// row (newest wins), while `do_not_merge_across_partitions_select_final = 1`
+	// returns BOTH and lets the stale one be scanned last.
+	//
+	// That setting is an ordinary performance knob and can be enabled in a
+	// server profile. A readback whose verdict depends on it is not a readback.
+	// The other two destinations need nothing here: their partition column, day,
+	// is already inside their sorting keys.
+	//
+	// Reachable whenever an item's completed_at moves across a month boundary
+	// between generations, since day is derived from completed_at.
 	rows, err := sink.Conn.Query(ctx, `SELECT work_item_id, provider, day, work_scope_id,
 team_id, team_name, assignee, type, status, created_at, started_at, completed_at,
 cycle_time_hours, lead_time_hours, computed_at, org_id
 FROM work_item_cycle_times FINAL
-WHERE org_id = ? AND provider = ? AND work_item_id = ?`,
-		expected.OrgID, expected.Provider, expected.WorkItemID)
+WHERE org_id = ? AND provider = ? AND work_item_id = ? AND day = ?`,
+		expected.OrgID, expected.Provider, expected.WorkItemID, string(expected.Day))
 	if err != nil {
 		return EffectConflict, err
 	}
@@ -444,6 +459,16 @@ func validMetricCommon(
 func inspectGitHubWorkItemMetricRows[T any](
 	rows []T, inspect func(T) (EffectInspection, error),
 ) (EffectInspection, error) {
+	// A zero-row effect has written nothing, so it cannot be Exact. Without
+	// this the exact == len(rows) test below is satisfied vacuously by
+	// 0 == 0 and reports a verified write that never happened. The three
+	// adapters short-circuit an empty effect before reaching here, so today
+	// this is unreachable through them -- but that makes it a rail, not dead
+	// code: a fourth caller would otherwise inherit the vacuous answer with
+	// nothing pointing it out.
+	if len(rows) == 0 {
+		return EffectAbsent, nil
+	}
 	exact, absent := 0, 0
 	for _, row := range rows {
 		inspection, err := inspect(row)
@@ -481,10 +506,24 @@ func inspectGitHubWorkItemMetricRows[T any](
 func compareGitHubWorkItemMetricsDailyVersion(
 	expected, actual githubWorkItemMetricsDailyRow, found int,
 ) EffectInspection {
-	if found == 0 || actual.ComputedAt.IsZero() || actual.ComputedAt.Before(clickHouseSecond(expected.ComputedAt)) {
+	// found != 1 is tested FIRST, before anything looks at the scanned row.
+	// The scan keeps only the LAST row it saw, so with more than one row the
+	// verdict would otherwise be decided by whichever row the driver happened
+	// to return last: a stale one reads as Absent and the committer rewrites
+	// forever, a newer one reads as Conflict and the unit never completes.
+	// Neither is a judgement about the effect; both are judgements about row
+	// order. More than one row per natural key means the key or the query is
+	// wrong, which is a conflict regardless of what the rows contain.
+	if found != 1 {
+		if found == 0 {
+			return EffectAbsent
+		}
+		return EffectConflict
+	}
+	if actual.ComputedAt.IsZero() || actual.ComputedAt.Before(clickHouseSecond(expected.ComputedAt)) {
 		return EffectAbsent
 	}
-	if found != 1 || actual.ComputedAt.After(clickHouseSecond(expected.ComputedAt)) {
+	if actual.ComputedAt.After(clickHouseSecond(expected.ComputedAt)) {
 		return EffectConflict
 	}
 	expected.ComputedAt = clickHouseSecond(expected.ComputedAt)
@@ -498,10 +537,24 @@ func compareGitHubWorkItemMetricsDailyVersion(
 func compareGitHubWorkItemUserMetricsDailyVersion(
 	expected, actual githubWorkItemUserMetricsDailyRow, found int,
 ) EffectInspection {
-	if found == 0 || actual.ComputedAt.IsZero() || actual.ComputedAt.Before(clickHouseSecond(expected.ComputedAt)) {
+	// found != 1 is tested FIRST, before anything looks at the scanned row.
+	// The scan keeps only the LAST row it saw, so with more than one row the
+	// verdict would otherwise be decided by whichever row the driver happened
+	// to return last: a stale one reads as Absent and the committer rewrites
+	// forever, a newer one reads as Conflict and the unit never completes.
+	// Neither is a judgement about the effect; both are judgements about row
+	// order. More than one row per natural key means the key or the query is
+	// wrong, which is a conflict regardless of what the rows contain.
+	if found != 1 {
+		if found == 0 {
+			return EffectAbsent
+		}
+		return EffectConflict
+	}
+	if actual.ComputedAt.IsZero() || actual.ComputedAt.Before(clickHouseSecond(expected.ComputedAt)) {
 		return EffectAbsent
 	}
-	if found != 1 || actual.ComputedAt.After(clickHouseSecond(expected.ComputedAt)) {
+	if actual.ComputedAt.After(clickHouseSecond(expected.ComputedAt)) {
 		return EffectConflict
 	}
 	expected.ComputedAt = clickHouseSecond(expected.ComputedAt)
@@ -515,10 +568,24 @@ func compareGitHubWorkItemUserMetricsDailyVersion(
 func compareGitHubWorkItemCycleTimeVersion(
 	expected, actual githubWorkItemCycleTimePersistenceRow, found int,
 ) EffectInspection {
-	if found == 0 || actual.ComputedAt.IsZero() || actual.ComputedAt.Before(clickHouseSecond(expected.ComputedAt)) {
+	// found != 1 is tested FIRST, before anything looks at the scanned row.
+	// The scan keeps only the LAST row it saw, so with more than one row the
+	// verdict would otherwise be decided by whichever row the driver happened
+	// to return last: a stale one reads as Absent and the committer rewrites
+	// forever, a newer one reads as Conflict and the unit never completes.
+	// Neither is a judgement about the effect; both are judgements about row
+	// order. More than one row per natural key means the key or the query is
+	// wrong, which is a conflict regardless of what the rows contain.
+	if found != 1 {
+		if found == 0 {
+			return EffectAbsent
+		}
+		return EffectConflict
+	}
+	if actual.ComputedAt.IsZero() || actual.ComputedAt.Before(clickHouseSecond(expected.ComputedAt)) {
 		return EffectAbsent
 	}
-	if found != 1 || actual.ComputedAt.After(clickHouseSecond(expected.ComputedAt)) {
+	if actual.ComputedAt.After(clickHouseSecond(expected.ComputedAt)) {
 		return EffectConflict
 	}
 	expected = normalizeGitHubWorkItemCycleTimeStorage(expected)

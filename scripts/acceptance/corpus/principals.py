@@ -324,9 +324,16 @@ class PrincipalSessions:
         # principal's -- which is what /api/v1/dev/** actually reads. The
         # password is DERIVED, not stored: `password_for_alias` is the same
         # function `_build_auth_fixture` hashed when it seeded this account,
-        # so login and seeding cannot drift apart (CHAOS-3463). Nothing here
-        # writes to the world -- the earlier bridge mutated `password_hash`,
-        # a digest-covered column, and made a second armed run report drift.
+        # so login and seeding cannot drift apart (CHAOS-3463).
+        #
+        # PRECISELY what this does to the world, because "it only reads" is
+        # the tempting shorthand and it is FALSE: a successful login stamps
+        # `users.last_login_at` (api/auth/routers/login.py). That column is
+        # in `_VOLATILE_COLUMNS`, added by CHAOS-3463 for exactly this
+        # reason, so it is excluded from the world digest and a second armed
+        # run does NOT drift. What is gone is the write that DID drift --
+        # the bridge's `password_hash` mutation, on a column deliberately
+        # kept digested so credential tampering stays visible.
         api = self._api_factory()
         try:
             login = api.request(

@@ -360,15 +360,21 @@ def principal_sessions(
     covers, since it hashes ``SELECT *`` from ``users`` with only
     ``_VOLATILE_COLUMNS`` excluded -- so the digest had to be read before
     the runner touched it. CHAOS-3463 removed that mutation: credentials are
-    seeded at world generation and this fixture now only reads. The ordering
-    is kept because authenticating against a world whose integrity has not
-    been verified yet would produce evidence nobody can trust, not because
-    anything here writes.
+    seeded at world generation, so nothing here provisions anything. The
+    ordering is kept because authenticating against a world whose integrity
+    has not been verified yet would produce evidence nobody can trust.
 
-    That also retires the residual this fixture used to carry: a SECOND
-    armed run against the same stack no longer reports a ``postgres.users``
-    digest mismatch caused by the first run's own provisioning, so re-runs
-    no longer need a fresh seed/restore.
+    NOT because this fixture is write-free, which would be the tempting and
+    wrong way to put it: a successful login stamps ``users.last_login_at``.
+    That column is excluded from the digest (``_VOLATILE_COLUMNS``, added by
+    CHAOS-3463 after two boots both failed ``require_world_digest_match`` on
+    ``postgres.users`` for exactly this reason), so it does not drift --
+    which is a different statement from "nothing is written".
+
+    That does retire the residual this fixture used to carry: a SECOND armed
+    run against the same stack no longer reports a ``postgres.users`` digest
+    mismatch caused by the first run's own provisioning, so re-runs no
+    longer need a fresh seed/restore.
 
     ``acceptance_api`` is still requested although its client is no longer
     unpacked: it is what guarantees the stack is up and the superuser

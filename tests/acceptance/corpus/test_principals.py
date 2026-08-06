@@ -272,7 +272,7 @@ class TestPrincipalSessions:
         directory = PrincipalDirectory.from_world(_REAL_MANIFEST)
         return directory.principal_by_alias("primary.ordinary")
 
-    def test_logs_in_as_that_user_and_writes_nothing(self) -> None:
+    def test_logs_in_as_that_user_and_makes_no_other_call(self) -> None:
         principal = self._principal()
         principal_api = _FakeApi(
             {
@@ -295,7 +295,14 @@ class TestPrincipalSessions:
         # first mutated `password_hash`, a digest-covered column, so a second
         # armed run against the same stack reported drift. Asserting the call
         # list exactly -- rather than just that login happened -- is what
-        # would catch a re-introduced write.
+        # would catch a re-introduced provisioning call.
+        #
+        # This is a claim about CALLS, not about the world being untouched:
+        # the login itself stamps `users.last_login_at` server-side. That
+        # column is excluded from the world digest (`_VOLATILE_COLUMNS`), so
+        # it does not drift -- but "the runner writes nothing" would be an
+        # overstatement, and an overstated guarantee is the kind a reader
+        # stops checking.
         assert [(c[0], c[1]) for c in principal_api.calls] == [
             ("POST", "/api/v1/auth/login")
         ], "the runner made a call other than the login -- it must only read"
@@ -477,9 +484,14 @@ class TestSeededCredentialsAreTheOnlyPath:
     an absent flag would be theatre.
 
     What carries over is the property that actually mattered and CAN still
-    regress: authenticating a principal must not write to the world.
+    regress: authenticating a principal must not PROVISION anything.
     ``password_hash`` is inside the world digest, so a re-introduced write
-    would make a second armed run report drift against the same stack.
+    to it would make a second armed run report drift against the same stack.
+
+    Stated exactly, because the loose version ("the runner writes nothing")
+    is false: the login stamps ``users.last_login_at``, which is excluded
+    from the digest by ``_VOLATILE_COLUMNS``. The guarantee is "no
+    provisioning call, no digested column moved" -- not "no writes".
     """
 
     def _principal(self) -> CasePrincipal:
@@ -493,11 +505,11 @@ class TestSeededCredentialsAreTheOnlyPath:
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
         )
 
-    def test_authenticating_writes_nothing_to_the_world(self) -> None:
+    def test_authenticating_provisions_nothing(self) -> None:
         """``_FakeApi`` raises on any call it has no canned response for, so
         the login response being the ONLY one registered is what makes an
-        admin set-password (or any other write) fail this test rather than
-        pass unnoticed."""
+        admin set-password (or any other provisioning call) fail this test
+        rather than pass unnoticed."""
 
         principal = self._principal()
         api = _FakeApi(
@@ -511,8 +523,8 @@ class TestSeededCredentialsAreTheOnlyPath:
 
         assert session.api is api
         assert [(c[0], c[1]) for c in api.calls] == [("POST", "/api/v1/auth/login")], (
-            "the runner issued a call beyond the login -- a write here "
-            "mutates a digest-covered column and drifts the world"
+            "the runner issued a call beyond the login -- a provisioning "
+            "call here mutates a digest-covered column and drifts the world"
         )
 
     def test_the_provisioning_mode_reports_seeded_credentials(self) -> None:

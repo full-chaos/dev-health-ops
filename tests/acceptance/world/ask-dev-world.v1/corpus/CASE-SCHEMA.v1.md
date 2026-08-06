@@ -363,8 +363,11 @@ Two consequences for case authoring:
   what the digest is for. `fixtures/world.py::password_for_alias` is the ONE
   derivation: `_build_auth_fixture` hashes it when seeding and the corpus
   runner logs in with it, so seeding and login cannot disagree. The runner
-  only reads — every receipt is stamped
-  `provisioning=world-seeded-credentials`. A stack whose world snapshot
+  provisions nothing — every receipt is stamped
+  `provisioning=world-seeded-credentials`. (It is not write-free: a
+  successful login stamps `users.last_login_at`, which `_VOLATILE_COLUMNS`
+  excludes from the digest for exactly that reason. What it never does is
+  move a *digested* column.) A stack whose world snapshot
   predates seeded credentials answers 401; re-mint it
   (`scripts/acceptance/mint_ask_dev_world_snapshot.sh`) rather than
   provisioning a password at run time.

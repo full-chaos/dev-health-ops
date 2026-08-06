@@ -766,6 +766,75 @@ async def test_a_non_timeout_provider_error_keeps_its_own_code_as_error_class() 
     assert record.error_class == "rate_limited"
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        AgentProviderErrorCode.BUDGET_EXHAUSTED,
+        AgentProviderErrorCode.BUDGET_UNAVAILABLE,
+    ],
+)
+async def test_the_isolated_shadow_quota_running_out_is_a_typed_budget_skip(
+    code: AgentProviderErrorCode,
+) -> None:
+    """CHAOS-3452: ``attach_qua_shadow_budget_guard`` (llm/qua_shadow_budget.py)
+    raises exactly these two codes when the ISOLATED shadow quota -- never
+    the live BYO budget -- is exhausted or its accounting fails. Both must
+    read as the seam's OWN typed budget skip (``SKIPPED_BUDGET_EXHAUSTED``,
+    previously only reachable via the wall-clock deadline check), not fall
+    into the generic ``SKIPPED_PROVIDER_ERROR`` bucket every other
+    AgentProviderError kind uses."""
+
+    catalog = _catalog([(ORG_ID, ASK_DEV_PROJECT)])
+    scope_service = ScopeResolutionService(catalog, cache=ScopeRequestCache())
+    interpretation = await _interpretation("What's the status of the Ask Dev project?")
+    shadow = QuestionUnderstandingShadow(
+        provider=_RaisingProvider(AgentProviderError(code)),
+        scope_service=scope_service,
+        config=QUAShadowConfig(enabled=True),
+    )
+    record = await shadow.evaluate(
+        question="What's the status of the Ask Dev project?",
+        interpretation=interpretation,
+        org_id=ORG_ID,
+        permission_fingerprint=PERMISSION_FINGERPRINT,
+        deterministic_decision=PreflightDecision.PROCEED,
+        remaining_seconds=10.0,
+    )
+    assert record.status is QUAShadowStatus.SKIPPED_BUDGET_EXHAUSTED
+    assert record.error_class == code.value
+
+
+async def test_isolated_shadow_quota_exhaustion_is_byte_identical_for_a_proceed_run() -> (
+    None
+):
+    """The orchestrator-level companion to the unit test above: even a
+    shadow provider that always fails with the isolated quota's own
+    BUDGET_EXHAUSTED code -- exactly what a real exhausted
+    ``dev_qua_shadow_budget_reservations`` pool raises -- leaves the live
+    ``OrchestratorResult`` byte-identical to the flag being off."""
+
+    baseline = await run_preflight_orchestrator(
+        question="What's the status of the Ask Dev project?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script_id="qua-shadow-quota-baseline",
+    )
+    shadow_quota_exhausted = await run_preflight_orchestrator(
+        question="What's the status of the Ask Dev project?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script_id="qua-shadow-quota-exhausted",
+        qua_shadow=await _shadow(
+            enabled=True,
+            provider=_RaisingProvider(
+                AgentProviderError(AgentProviderErrorCode.BUDGET_EXHAUSTED)
+            ),
+        ),
+    )
+    assert shadow_quota_exhausted.outcome_tuple() == baseline.outcome_tuple()
+    [record] = _shadow_records(shadow_quota_exhausted)
+    assert record.status is QUAShadowStatus.SKIPPED_BUDGET_EXHAUSTED
+    assert record.error_class == "budget_exhausted"
+
+
 async def test_resolved_outcome_without_an_index_is_rejected_not_evaluated_clean() -> (
     None
 ):

@@ -63,6 +63,7 @@ from dev_health_ops.llm.providers import (
     resolve_provider_name,
 )
 from dev_health_ops.llm.providers.base import DEFAULT_MODEL_BY_PROVIDER
+from dev_health_ops.llm.qua_shadow_budget import attach_qua_shadow_budget_guard
 from dev_health_ops.models.settings import SettingCategory
 
 from .contracts import (
@@ -208,6 +209,19 @@ class ProductionProviderResolution:
     #: selected the platform provider acts on this -- see the dev router's
     #: message path. Codex CHAOS-3358 review, CONFIRMED reachable.
     platform_certification_stale: bool = False
+    #: CHAOS-3452. A SEPARATE, independently-constructed provider instance
+    #: already wrapped by ``attach_qua_shadow_budget_guard`` -- never the
+    #: SAME object as ``provider`` above, and never touched by
+    #: ``attach_agent_budget_guard``. ``None`` whenever the operator flag
+    #: ``ASK_DEV_QUA_SHADOW_ENABLED`` is unset (construction is skipped
+    #: entirely in that case, preserving CHAOS-3389's "an unset env var is
+    #: byte-identical to the seam not existing" invariant) or whenever
+    #: building it failed for any reason -- a shadow-provider construction
+    #: failure must never surface as a live-path failure; it degrades to the
+    #: existing typed ``SKIPPED_NO_PROVIDER`` outcome instead. Only
+    #: ``resolve_production_provider`` (the real production runtime path)
+    #: populates this; certification/admin routes never do.
+    qua_shadow_provider: AgentLLMProvider | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,6 +344,7 @@ async def resolve_production_provider(
         policy=policy,
         session=session,
         org_id=org_id,
+        include_qua_shadow=True,
     )
 
 
@@ -644,6 +659,38 @@ async def _provider_candidates(
     return byo, platform, policy
 
 
+def _qua_shadow_flag_enabled() -> bool:
+    return os.getenv("ASK_DEV_QUA_SHADOW_ENABLED") == "1"
+
+
+def _build_qua_shadow_provider(
+    selected: AgentProviderCandidate, *, org_id: str
+) -> AgentLLMProvider | None:
+    """A SECOND, independently-constructed provider instance for the QUA
+    shadow seam (CHAOS-3452) -- never ``provider.provider``'s object
+    identity, and guarded by the isolated shadow quota, never
+    ``attach_agent_budget_guard``. Never raises: a construction failure here
+    must degrade to the existing typed ``SKIPPED_NO_PROVIDER`` outcome, not
+    fail the live run that would otherwise be unaffected by this seam.
+    """
+
+    try:
+        return attach_qua_shadow_budget_guard(
+            _provider(selected),
+            org_id=org_id,
+            provider=selected.provider,
+            model=selected.model,
+            base_url=selected.credentials.base_url or None,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to construct isolated QUA shadow provider; the shadow "
+            "seam will resolve to SKIPPED_NO_PROVIDER for this run",
+            exc_info=True,
+        )
+        return None
+
+
 def _resolve_provider_selection(
     *,
     byo: AgentProviderCandidate | None,
@@ -651,6 +698,7 @@ def _resolve_provider_selection(
     policy: AgentProviderPolicy,
     session: AsyncSession,
     org_id: str,
+    include_qua_shadow: bool = False,
 ) -> ProductionProviderResolution:
     try:
         selected = resolve_agent_provider_selection(
@@ -679,8 +727,19 @@ def _resolve_provider_selection(
             model=selected.model,
             base_url=selected.credentials.base_url or None,
         )
+    # CHAOS-3452: constructed ONLY when both this call site opted in
+    # (``resolve_production_provider`` -- the real production runtime path;
+    # certification/admin routes never do) AND the operator flag is set, so
+    # an unset flag costs nothing extra here, preserving CHAOS-3389's
+    # "unset env var is byte-identical to the seam not existing" invariant.
+    qua_shadow_provider = (
+        _build_qua_shadow_provider(selected, org_id=org_id)
+        if include_qua_shadow and _qua_shadow_flag_enabled()
+        else None
+    )
     return ProductionProviderResolution(
         provider=provider,
+        qua_shadow_provider=qua_shadow_provider,
         source=selected.source,
         family=selected.provider,
         model=selected.model,
@@ -1484,6 +1543,11 @@ async def build_production_runtime(
             await provider.provider.aclose()
         except Exception:
             pass
+        if provider.qua_shadow_provider is not None:
+            try:
+                await provider.qua_shadow_provider.aclose()
+            except Exception:
+                pass
         raise
 
 
@@ -2399,26 +2463,26 @@ async def _assemble_production_runtime(
     # whole seam not existing (see qua_shadow.py's own module docstring and
     # the RED test proving it).
     #
-    # ``provider=None`` deliberately, even when the flag is on (Codex
-    # adversarial review round 1, HIGH, confirmed): ``provider.provider``
-    # here is the SAME instance ``attach_agent_budget_guard``
-    # (llm/budget.py) already wrapped for the live investigation call --
-    # `decide()` is monkeypatched in place, not copied, so a shadow call
-    # against it would consume the SAME org BYO budget/quota the live call
-    # needs, and could make the live call fail with budget_exhausted. That
-    # is a genuine live-outcome effect, exactly what shadow mode must never
-    # have. No isolated shadow quota exists yet, and no separate
-    # ``question_understanding`` role certification exists yet either (both
-    # explicitly follow-on work per the platform spec, comment 6fa38d88) --
-    # until one of those lands, `evaluate()` always resolves to
-    # SKIPPED_NO_PROVIDER in production, which is the correct, safe
-    # "unavailable" outcome this seam is built to degrade to. The QUA logic
-    # itself is fully implemented and exercised end-to-end by
-    # tests/api/dev/test_chaos_3389_qua_shadow.py's scripted (never
-    # budget-shared) providers.
+    # CHAOS-3452: ``provider.qua_shadow_provider`` is a SEPARATE,
+    # independently-constructed provider instance, guarded by the isolated
+    # shadow quota (``llm/qua_shadow_budget.py``) -- never
+    # ``provider.provider``'s object identity, and never touched by
+    # ``attach_agent_budget_guard`` (llm/budget.py). Before this, the shadow
+    # seam always passed ``provider=None`` because the only instance
+    # available was the SAME one ``attach_agent_budget_guard`` monkeypatches
+    # for the live investigation call -- a shadow call against it would have
+    # consumed the SAME org BYO budget/quota the live call needs (Codex
+    # adversarial review round 1 on CHAOS-3389, HIGH, confirmed; see design
+    # comment 16bd8fed). ``qua_shadow_provider`` is itself only populated
+    # when ``ASK_DEV_QUA_SHADOW_ENABLED=1`` (see
+    # ``_resolve_provider_selection``), so an unset flag still costs nothing
+    # extra and still resolves through the exact same typed
+    # ``SKIPPED_NO_PROVIDER`` path as before. The QUA logic itself is fully
+    # exercised end-to-end by tests/api/dev/test_chaos_3389_qua_shadow.py's
+    # scripted (never budget-shared) providers.
     qua_shadow = (
         QuestionUnderstandingShadow(
-            provider=None,
+            provider=provider.qua_shadow_provider,
             scope_service=scope_service,
             config=QUAShadowConfig(
                 enabled=os.getenv("ASK_DEV_QUA_SHADOW_ENABLED") == "1"
@@ -2493,6 +2557,12 @@ async def _assemble_production_runtime(
         platform_certification_stale=provider.platform_certification_stale,
         preflight=preflight,
         qua_shadow=qua_shadow,
+        # CHAOS-3452: closed alongside ``provider`` in ``BoundedDevRuntime.
+        # aclose()`` -- it is a genuinely separate provider instance/HTTP
+        # client and would otherwise leak a connection whenever the shadow
+        # flag is on, even on requests where wave_3_1 (and therefore
+        # ``qua_shadow`` itself) ends up ``None``.
+        qua_shadow_provider=provider.qua_shadow_provider,
         # CHAOS-3297 stack #3: the combined ten-plan lookup -- orchestrator.py's
         # own plan_registry.get(intent.intent_id) is intent-generic and needs
         # no change to reach the four new plans.

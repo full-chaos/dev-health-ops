@@ -64,9 +64,9 @@ class TestAlembicDirResolution:
             heads = script.get_heads()
             revisions = list(script.walk_revisions())
 
-        assert set(heads) == {"0066", "0086"}
+        assert set(heads) == {"0066", "0087"}
         assert script.get_revision("river_cutover@head").revision == "0066"
-        assert script.get_revision("application_schema@head").revision == "0086"
+        assert script.get_revision("application_schema@head").revision == "0087"
         assert revisions
 
 

@@ -767,6 +767,72 @@ def test_cooldown_landing_after_promotion_withdraws_it_without_ending_the_episod
     assert beta.available_at == deferred_until
 
 
+def test_a_failed_withdrawal_still_excludes_the_unit_from_the_claim(
+    db_session, monkeypatch
+):
+    """The withdrawal path must fail SAFE.
+
+    If the withdrawal CAS loses, the unit is still sitting at the promoted
+    ``available_at`` -- i.e. due -- with a cooldown this pass has just
+    matched. Excluding it only when the CAS succeeded (the shape copied from
+    the ordinary path below) hands it straight to ``_claim_units``, which
+    dispatches it into the active cooldown: precisely what the late re-check
+    exists to prevent.
+
+    The two paths are not analogous. Below, a ``None`` outcome PROVES the unit
+    stopped being claimable, so falling through is safe. Here, CAS failure
+    proves nothing about claimability -- so the exclusion is unconditional.
+    Excluding costs one pass; dispatching into a live cooldown costs a worker
+    slot and a 429.
+    """
+    from dev_health_ops.sync import budget_guard
+    from dev_health_ops.sync.budget_guard import BudgetGuard
+    from dev_health_ops.workers import sync_units
+
+    run, alpha, beta = _two_unit_run(
+        db_session, monkeypatch, costs={"alpha": 1, "beta": 1}, limit=10
+    )
+
+    real_reconfirm = BudgetGuard.reconfirm_cooldowns
+
+    def _reconfirm_after_concurrent_commit(*args, **kwargs):
+        db_session.add(
+            _observation(
+                run,
+                alpha,
+                route_family="git",
+                dimension="rest_core",
+                reset_at=datetime.now(timezone.utc) + timedelta(seconds=180),
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        db_session.flush()
+        return real_reconfirm(*args, **kwargs)
+
+    monkeypatch.setattr(
+        BudgetGuard,
+        "reconfirm_cooldowns",
+        staticmethod(_reconfirm_after_concurrent_commit),
+    )
+    # Force the CAS loss, leaving the row exactly as a lost race would: still
+    # promoted, still due. Patching the whole helper (rather than mutating its
+    # SQL) is deliberate -- an SQL-only change would be undone by the ORM
+    # autoflush rewriting the row from the in-memory object, so the write
+    # would silently still happen and the test would prove nothing.
+    monkeypatch.setattr(
+        budget_guard, "_withdraw_surplus_admission", lambda *a, **k: False
+    )
+
+    sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(beta)
+    assert beta.status != SyncRunUnitStatus.DISPATCHING.value, (
+        "a unit whose withdrawal CAS lost was dispatched into the cooldown "
+        "the late re-check had just matched"
+    )
+    assert beta.status == SyncRunUnitStatus.RETRYING.value
+
+
 def test_withdrawal_does_not_apply_to_an_ordinary_due_candidate(
     db_session, monkeypatch
 ):

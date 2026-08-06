@@ -686,14 +686,25 @@ class BudgetGuard:
                 # docstring): this unit was never going to dispatch this pass
                 # without the promotion, so the promotion is undone and its
                 # budget episode is left exactly as it was.
-                if _withdraw_surplus_admission(
+                _withdraw_surplus_admission(
                     session,
                     unit,
                     prior_available_at=prior_available_at,
                     now=checked_at,
                     log_ctx=log_ctx,
-                ):
-                    excluded.add(str(unit.id))
+                )
+                # UNCONDITIONAL, including when the withdrawal CAS lost
+                # (review round 2). The ordinary path below may treat a lost
+                # race as "leave it to _claim_units" because there a ``None``
+                # outcome PROVES the unit stopped being claimable. Here it
+                # proves nothing: a failed withdrawal leaves the unit due at
+                # the promoted available_at with a cooldown we have just
+                # matched, so skipping the exclusion would dispatch it
+                # straight into that cooldown -- the exact thing this whole
+                # re-check exists to prevent. Excluding costs one pass, and a
+                # withdrawal that lost means another writer owns the row
+                # anyway.
+                excluded.add(str(unit.id))
                 continue
             if cooldown_expiry is not None:
                 # Same helper enforce_run uses (review round 2, R2-F2): this

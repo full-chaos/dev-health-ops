@@ -119,9 +119,24 @@ func TestBuildGitHubWorkItemMetricTripletFailsClosedOnUnusableInput(t *testing.T
 // non-zero clock time: a build that trusted the caller's location or its
 // time-of-day would silently roll the whole window.
 func TestBuildGitHubWorkItemMetricTripletWindowIsUTCAndHalfOpen(t *testing.T) {
-	eastern := time.FixedZone("UTC+9", 9*60*60)
 	lastNanosecond := time.Date(2026, 8, 4, 23, 59, 59, 999999999, time.UTC)
 	firstOfNextDay := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	// Each zoned instant below is the SAME UTC day, 2026-08-04, expressed in a
+	// zone where the LOCAL calendar date differs from the UTC one. That
+	// difference is the whole point: at UTC+9 20:30 the local and UTC dates
+	// happen to agree, so that fixture alone cannot tell a correct conversion
+	// from one that reads the calendar fields in the caller's zone -- it only
+	// catches dropping the zone entirely. UTC+9 02:00 is the previous UTC day
+	// locally; UTC-9 20:30 is the next one.
+	zonedDays := map[string]time.Time{
+		"caller in UTC+9, evening (local date == UTC date)": time.Date(
+			2026, 8, 4, 20, 30, 0, 0, time.FixedZone("UTC+9", 9*60*60)),
+		"caller in UTC+9, early morning (local date is a day ahead)": time.Date(
+			2026, 8, 4, 2, 0, 0, 0, time.FixedZone("UTC+9", 9*60*60)).UTC().
+			In(time.FixedZone("UTC+9", 9*60*60)),
+		"caller in UTC-9, evening (local date is a day behind)": time.Date(
+			2026, 8, 4, 20, 30, 0, 0, time.FixedZone("UTC-9", -9*60*60)),
+	}
 	tests := []struct {
 		name        string
 		completedAt time.Time
@@ -130,34 +145,43 @@ func TestBuildGitHubWorkItemMetricTripletWindowIsUTCAndHalfOpen(t *testing.T) {
 		{"last nanosecond of the day is inside", lastNanosecond, 1},
 		{"midnight of the next day is outside", firstOfNextDay, 0},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			item := githubWorkItemMetricTestItem("gh:acme/api#1")
-			item.StartedAt = githubWorkItemMetricTestTime(githubWorkItemMetricTestDay)
-			item.CompletedAt = githubWorkItemMetricTestTime(test.completedAt)
-			// 2026-08-04T20:30 in UTC+9 is 2026-08-04T11:30Z -- the same UTC day,
-			// but a naive local truncation would land on 2026-08-04 in the WRONG
-			// zone and a naive use of the raw instant would start the window at
-			// 20:30 instead of midnight.
-			day := time.Date(2026, 8, 4, 20, 30, 0, 0, eastern)
-			triplet, err := buildGitHubWorkItemMetricTriplet(
-				githubWorkItemMetricTestClaim(), githubWorkItemRows{
-					WorkItems: []githubWorkItemRow{item},
-				}, day, githubWorkItemMetricTestNow, githubWorkItemDerivationContext{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(triplet.CycleTimes) != test.want {
-				t.Fatalf("cycle-time records = %d, want %d", len(triplet.CycleTimes), test.want)
-			}
-			if len(triplet.MetricsDaily) != 1 {
-				t.Fatalf("group rows = %d, want 1 (the item is WIP or completed either way)",
-					len(triplet.MetricsDaily))
-			}
-			if got := string(triplet.MetricsDaily[0].Day); got != "2026-08-04" {
-				t.Fatalf("group day = %q, want the UTC claim day", got)
-			}
-		})
+	for zone, rawDay := range zonedDays {
+		// Normalize each fixture to an instant that really is on 2026-08-04 UTC
+		// while keeping the caller's location, so the only thing under test is
+		// how the window is derived from it.
+		day := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC).In(rawDay.Location())
+		if zone == "caller in UTC+9, early morning (local date is a day ahead)" {
+			day = time.Date(2026, 8, 4, 21, 0, 0, 0, time.UTC).In(rawDay.Location())
+		}
+		if zone == "caller in UTC-9, evening (local date is a day behind)" {
+			day = time.Date(2026, 8, 4, 3, 0, 0, 0, time.UTC).In(rawDay.Location())
+		}
+		for _, test := range tests {
+			t.Run(zone+": "+test.name, func(t *testing.T) {
+				item := githubWorkItemMetricTestItem("gh:acme/api#1")
+				item.StartedAt = githubWorkItemMetricTestTime(githubWorkItemMetricTestDay)
+				item.CompletedAt = githubWorkItemMetricTestTime(test.completedAt)
+				triplet, err := buildGitHubWorkItemMetricTriplet(
+					githubWorkItemMetricTestClaim(), githubWorkItemRows{
+						WorkItems: []githubWorkItemRow{item},
+					}, day, githubWorkItemMetricTestNow, githubWorkItemDerivationContext{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(triplet.CycleTimes) != test.want {
+					t.Fatalf("cycle-time records = %d, want %d (day=%s local=%s)",
+						len(triplet.CycleTimes), test.want, day, day.Format("2006-01-02"))
+				}
+				if len(triplet.MetricsDaily) != 1 {
+					t.Fatalf("group rows = %d, want 1 (the item is WIP or completed either way)",
+						len(triplet.MetricsDaily))
+				}
+				if got := string(triplet.MetricsDaily[0].Day); got != "2026-08-04" {
+					t.Fatalf("group day = %q, want the UTC claim day (caller local date was %s)",
+						got, day.Format("2006-01-02"))
+				}
+			})
+		}
 	}
 }
 
@@ -783,6 +807,59 @@ func githubWorkItemMetricTestAssignee() *string {
 	return &value
 }
 
+// TestGitHubWorkItemMetricVersionComparisonRejectsDuplicatesWhateverWasScannedLast
+// is the regression guard for the branch-order defect. The scan keeps only the
+// LAST row it saw, so when a natural key returns more than one row the verdict
+// must not depend on which one that was. The existing duplicate cases all pass
+// actual == expected, which cannot tell a correct implementation from one that
+// decides on row order: a STALE last row previously read as EffectAbsent (the
+// committer rewrites forever) and a NEWER one as EffectConflict (the unit never
+// completes). Neither is a judgement about the effect.
+func TestGitHubWorkItemMetricVersionComparisonRejectsDuplicatesWhateverWasScannedLast(t *testing.T) {
+	older := githubWorkItemMetricTestNow.Add(-time.Hour)
+	newer := githubWorkItemMetricTestNow.Add(time.Hour)
+
+	t.Run(githubWorkItemMetricsDailyDestination, func(t *testing.T) {
+		expected := githubWorkItemMetricTestGroupRow()
+		for name, computedAt := range map[string]time.Time{
+			"stale row scanned last": older,
+			"newer row scanned last": newer,
+			"equal row scanned last": githubWorkItemMetricTestNow,
+		} {
+			t.Run(name, func(t *testing.T) {
+				actual := githubWorkItemMetricTestGroupRow()
+				actual.ComputedAt = computedAt
+				if got := compareGitHubWorkItemMetricsDailyVersion(expected, actual, 2); got != EffectConflict {
+					t.Fatalf("two rows for one key = %s, want conflict", got)
+				}
+			})
+		}
+	})
+	t.Run(githubWorkItemUserMetricsDailyDestination, func(t *testing.T) {
+		expected := githubWorkItemMetricTestUserRow()
+		actual := githubWorkItemMetricTestUserRow()
+		actual.ComputedAt = older
+		if got := compareGitHubWorkItemUserMetricsDailyVersion(expected, actual, 2); got != EffectConflict {
+			t.Fatalf("two rows with a stale one scanned last = %s, want conflict", got)
+		}
+	})
+	t.Run(githubWorkItemCycleTimesDestination, func(t *testing.T) {
+		expected := githubWorkItemMetricTestCycleRow()
+		actual := githubWorkItemMetricTestCycleRow()
+		actual.ComputedAt = older
+		if got := compareGitHubWorkItemCycleTimeVersion(expected, actual, 2); got != EffectConflict {
+			t.Fatalf("two rows with a stale one scanned last = %s, want conflict", got)
+		}
+	})
+	// A zero row count still has to read as Absent, not as the conflict the
+	// found != 1 branch now handles.
+	if got := compareGitHubWorkItemMetricsDailyVersion(
+		githubWorkItemMetricTestGroupRow(), githubWorkItemMetricsDailyRow{}, 0,
+	); got != EffectAbsent {
+		t.Fatalf("no rows = %s, want absent", got)
+	}
+}
+
 // TestInspectGitHubWorkItemMetricRowsRequiresUnanimity covers the aggregation
 // across an effect's rows. A partially written effect is NOT re-writable and NOT
 // already done: reporting either verdict would let the committer skip the write
@@ -820,19 +897,16 @@ func TestInspectGitHubWorkItemMetricRowsRequiresUnanimity(t *testing.T) {
 			}
 		})
 	}
-	// An empty row set inspects nothing, and the exact branch is checked first,
-	// so this aggregation alone would call a zero-row effect Exact. That is why
-	// the three adapters short-circuit an empty effect to EffectAbsent BEFORE
-	// reaching here -- asserted in TestGitHubWorkItemMetricAdaptersRequireContextAndLease.
-	// Pinning the raw behavior keeps that ordering a deliberate decision rather
-	// than an accident nobody would notice changing.
+	// A zero-row effect wrote nothing, so it must not report itself verified.
+	// Left to the exact == len(rows) test alone this is satisfied vacuously by
+	// 0 == 0; the guard makes it Absent regardless of who calls in.
 	if got, err := inspectGitHubWorkItemMetricRows(
 		[]EffectInspection{}, func(EffectInspection) (EffectInspection, error) {
 			t.Fatal("an empty row set must not be inspected row by row")
 			return EffectConflict, nil
 		},
-	); got != EffectExact || err != nil {
-		t.Fatalf("empty aggregation = %s / %v", got, err)
+	); got != EffectAbsent || err != nil {
+		t.Fatalf("empty aggregation = %s / %v, want absent", got, err)
 	}
 }
 

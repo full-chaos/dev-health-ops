@@ -443,6 +443,109 @@ func githubWorkItemMetricTripletOracleCases() []oracleCase {
 				},
 			}},
 		}),
+		// Flow segments in the SECONDS band, where the two ways of turning a
+		// duration into seconds actually disagree.
+		//
+		// Duration.Seconds() adds whole seconds to a nanosecond remainder;
+		// timedelta.total_seconds() divides one microsecond count. Across
+		// millisecond-aligned durations from 1s to 10s the two differ on 6.0% of
+		// values -- 1.118s is the first -- while across the 1min..160h band they
+		// differ on 0.0002%. An earlier version of this lane declared that
+		// difference an equivalence on the strength of a 200,000-point sweep that
+		// sampled only the wide band: exactly the shape of a measurement that
+		// confirms whatever it was pointed at. Every gap below is a value measured
+		// to diverge, so the seconds conversion is guarded rather than assumed.
+		githubWorkItemMetricOracleCase("flow_segments_in_the_divergent_seconds_band", map[string]any{
+			"WorkItems": []any{
+				githubWorkItemMetricOracleItem("gh:acme/api#400", map[string]any{
+					"status": "done", "assignees": []any{"dev@example.com"},
+					"started_at":   "2026-08-04T09:00:00.000000Z",
+					"completed_at": "2026-08-04T09:00:08.616000Z",
+				}),
+				githubWorkItemMetricOracleItem("gh:acme/api#401", map[string]any{
+					"status": "done", "assignees": []any{"dev@example.com"},
+					"started_at":   "2026-08-04T10:00:00.000000Z",
+					"completed_at": "2026-08-04T10:00:06.400000Z",
+				}),
+			},
+			"Transitions": []any{
+				githubWorkItemMetricOracleTransition("gh:acme/api#400", "blocked", "2026-08-04T09:00:01.118000Z"),
+				githubWorkItemMetricOracleTransition("gh:acme/api#400", "in_progress", "2026-08-04T09:00:02.240000Z"),
+				githubWorkItemMetricOracleTransition("gh:acme/api#401", "blocked", "2026-08-04T10:00:01.128000Z"),
+				githubWorkItemMetricOracleTransition("gh:acme/api#401", "in_progress", "2026-08-04T10:00:02.260000Z"),
+			},
+		}),
+		// An item STARTED today whose completion is six days old. This state is
+		// what makes the trailing-7-day throughput window reachable at all.
+		//
+		// relevant_activity is a DISJUNCTION, and started_today imposes no
+		// constraint whatsoever on completed_at -- so this row passes the gate at
+		// compute_work_items.py:844 and then reaches the window test at 900
+		// carrying a six-day-old completion. An earlier version of this lane
+		// declared the window dead on the argument that no row could reach it.
+		// That argument was wrong about the disjunction.
+		//
+		// The GitHub normalizer will not emit started_at > completed_at, but the
+		// compute reads work_items straight out of ClickHouse and nothing enforces
+		// that invariant there -- which is why the state is worth pinning rather
+		// than assuming away. Tracked on CHAOS-3486.
+		//
+		// THREE in-window completions make the denominator observable: with one,
+		// max(1, throughput) returns 1 whether it is counted or dropped, and a
+		// window bound tested at the denominator floor tests nothing.
+		githubWorkItemMetricOracleCase("throughput_window_is_reachable_via_started_today", map[string]any{
+			"WorkItems": []any{
+				githubWorkItemMetricOracleItem("gh:acme/api#500", map[string]any{
+					"status": "done", "created_at": "2026-07-01T00:00:00Z",
+					"assignees":  []any{"dev@example.com"},
+					"started_at": "2026-08-04T08:00:00Z", "completed_at": "2026-07-29T00:00:00Z",
+				}),
+				githubWorkItemMetricOracleItem("gh:acme/api#501", map[string]any{
+					"status": "done", "created_at": "2026-07-01T00:00:00Z",
+					"assignees":  []any{"dev@example.com"},
+					"started_at": "2026-08-04T08:00:00Z", "completed_at": "2026-07-29T12:00:00Z",
+				}),
+				githubWorkItemMetricOracleItem("gh:acme/api#502", map[string]any{
+					"status": "done", "created_at": "2026-07-01T00:00:00Z",
+					"assignees":  []any{"dev@example.com"},
+					"started_at": "2026-08-04T08:00:00Z", "completed_at": "2026-07-31T00:00:00Z",
+				}),
+				githubWorkItemMetricOracleItem("gh:acme/api#503", map[string]any{
+					"status": "done", "created_at": "2026-07-01T00:00:00Z",
+					"assignees":  []any{"dev@example.com"},
+					"started_at": "2026-08-04T08:00:00Z", "completed_at": "2026-07-28T23:59:00Z",
+				}),
+				githubWorkItemMetricOracleItem("gh:acme/api#504", map[string]any{
+					"status": "in_progress", "created_at": "2026-07-01T00:00:00Z",
+					"assignees": []any{"dev@example.com"}, "started_at": "2026-08-01T00:00:00Z",
+				}),
+			},
+		}),
+		// Unassigned work in progress, with two different ages so the WIP-age
+		// percentiles interpolate rather than collapse onto one sample.
+		// wip_unassigned_end_of_day is non-zero here and nowhere else in the batch,
+		// so without this case that counter is only ever compared as zero against
+		// zero -- which is not a comparison of the counter, only of its default.
+		githubWorkItemMetricOracleCase("unassigned_work_in_progress_has_an_age_spread", map[string]any{
+			"WorkItems": []any{
+				githubWorkItemMetricOracleItem("gh:acme/api#600", map[string]any{
+					"status": "in_progress", "assignees": []any{},
+					"created_at": "2026-07-20T00:00:00Z", "started_at": "2026-08-01T05:17:00Z",
+				}),
+				githubWorkItemMetricOracleItem("gh:acme/api#601", map[string]any{
+					"status": "in_progress", "assignees": []any{},
+					"created_at": "2026-07-20T00:00:00Z", "started_at": "2026-08-03T19:43:00Z",
+				}),
+				githubWorkItemMetricOracleItem("gh:acme/api#602", map[string]any{
+					"status": "in_progress", "assignees": []any{"dev@example.com"},
+					"created_at": "2026-07-20T00:00:00Z", "started_at": "2026-08-02T11:29:00Z",
+				}),
+				githubWorkItemMetricOracleItem("gh:acme/api#603", map[string]any{
+					"status": "in_progress", "assignees": []any{},
+					"created_at": "2026-07-20T00:00:00Z", "started_at": "2026-08-04T06:00:00Z",
+				}),
+			},
+		}),
 		// A percentile that is sensitive in its LAST BIT. These four cycle
 		// lengths were found by sweeping the production function against a
 		// deliberately-contracted variant of the same expression and keeping a

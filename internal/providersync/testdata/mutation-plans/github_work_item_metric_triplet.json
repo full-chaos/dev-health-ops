@@ -160,30 +160,28 @@
       "file": "internal/providersync/github_work_item_metric_triplet.go",
       "find": "if completedAt != nil && !completedAt.Before(weekStart) && completedAt.Before(end) {",
       "replace": "if completedAt != nil && completedAt.After(weekStart) && completedAt.Before(end) {",
-      "rationale": "the trailing seven days include their opening instant; excluding it drops a completion and inflates the congestion ratio",
+      "rationale": "the trailing seven days include their opening instant. Reachable because relevant_activity is a disjunction: an item started TODAY passes the gate whatever its completed_at, so a six-day-old completion reaches the window test",
       "proof": [
         [
           "bash",
           "ci/check_go.sh",
           "live-python-oracles"
         ]
-      ],
-      "expected_survivor_reason": "EQUIVALENT MUTANT: the trailing-7-day throughput window is DEAD CODE in the producer. compute_work_items.py:844 drops any item with no activity today before line 900 ever tests the window, and an item completed one to six days ago cannot pass that gate -- it is not started, completed or created today, and its terminal instant precedes the window end so it is not WIP either. The only completions the window can see are today's, and today is inside any window of a day or more. So wip_congestion_ratio is really wip / max(1, items_completed_TODAY), and no case can distinguish a 7-day bound from a 6-day one or from a left-exclusive one. Ported faithfully and recorded as a Python defect in the PR body rather than silently 'fixed' in a parity lane."
+      ]
     },
     {
       "id": "M12-the-throughput-window-is-seven-days-long",
       "file": "internal/providersync/github_work_item_metric_triplet.go",
       "find": "\tweekStart := end.AddDate(0, 0, -7)",
       "replace": "\tweekStart := end.AddDate(0, 0, -6)",
-      "rationale": "the congestion denominator counts completions over the seven days ending with this one",
+      "rationale": "the congestion denominator counts completions over the seven days ending with this one; reachable through the same started-today disjunct as M11",
       "proof": [
         [
           "bash",
           "ci/check_go.sh",
           "live-python-oracles"
         ]
-      ],
-      "expected_survivor_reason": "EQUIVALENT MUTANT: the trailing-7-day throughput window is DEAD CODE in the producer. compute_work_items.py:844 drops any item with no activity today before line 900 ever tests the window, and an item completed one to six days ago cannot pass that gate -- it is not started, completed or created today, and its terminal instant precedes the window end so it is not WIP either. The only completions the window can see are today's, and today is inside any window of a day or more. So wip_congestion_ratio is really wip / max(1, items_completed_TODAY), and no case can distinguish a 7-day bound from a 6-day one or from a left-exclusive one. Ported faithfully and recorded as a Python defect in the PR body rather than silently 'fixed' in a parity lane."
+      ]
     },
     {
       "id": "M13-congestion-never-divides-by-zero-throughput",
@@ -296,7 +294,7 @@
           "live-python-oracles"
         ]
       ],
-      "expected_survivor_reason": "EQUIVALENT MUTANT, and the equivalence is a property of the algorithm rather than of the cases: the branch is unreachable in Python too. The flow walk always closes with the segment from the last in-window transition (or from started_at, when there is none) to completed_at, and that segment is non-empty exactly when the cycle is -- which is the condition guarding the breakdown in the first place. So calculated_active + calculated_wait is never zero here and the fallback never fires. It is ported because it is in the live source (compute_work_items.py:957-960), not because it is reachable; deleting it would be a silent divergence from the producer."
+      "expected_survivor_reason": "EQUIVALENT MUTANT under a stated precondition. The flow walk always closes with the segment from the last in-window transition (or from started_at) to completed_at, and that segment is non-empty exactly when the cycle is -- the condition guarding the breakdown -- so calculated_active + calculated_wait is never zero and the fallback never fires. PRECONDITION: this holds because timestamps reaching the compute carry at most microsecond resolution, so a non-zero cycle is at least one microsecond. Go's RFC3339Nano parsing would accept a sub-microsecond gap that rounds the segment to zero while leaving the cycle non-zero; no Python datetime can express one, so it cannot arrive through the producer. Ported because it is in the live source (compute_work_items.py:957-960), not because it is reachable."
     },
     {
       "id": "M21-a-pre-start-todo-status-is-reseeded-as-active",
@@ -700,8 +698,8 @@
     {
       "id": "M46-an-older-persisted-version-is-absent-not-exact",
       "file": "internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go",
-      "find": "\tif found == 0 || actual.ComputedAt.IsZero() || actual.ComputedAt.Before(clickHouseSecond(expected.ComputedAt)) {",
-      "replace": "\tif found == 0 || actual.ComputedAt.IsZero() {",
+      "find": "\tif actual.ComputedAt.IsZero() || actual.ComputedAt.Before(clickHouseSecond(expected.ComputedAt)) {\n\t\treturn EffectAbsent\n\t}",
+      "replace": "\tif actual.ComputedAt.IsZero() {\n\t\treturn EffectAbsent\n\t}",
       "expect_occurrences": 3,
       "rationale": "a row left by an earlier generation is not this effect; treating it as present would skip the write and leave stale metrics",
       "proof": [
@@ -718,8 +716,8 @@
     {
       "id": "M47-more-than-one-row-per-key-is-a-conflict",
       "file": "internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go",
-      "find": "\tif found != 1 || actual.ComputedAt.After(clickHouseSecond(expected.ComputedAt)) {",
-      "replace": "\tif actual.ComputedAt.After(clickHouseSecond(expected.ComputedAt)) {",
+      "find": "\tif found != 1 {\n\t\tif found == 0 {\n\t\t\treturn EffectAbsent\n\t\t}\n\t\treturn EffectConflict\n\t}",
+      "replace": "\tif found == 0 {\n\t\treturn EffectAbsent\n\t}",
       "expect_occurrences": 3,
       "rationale": "FINAL should collapse a natural key to one row; more than one means the key or the query is wrong and the last row scanned would silently decide the verdict",
       "proof": [
@@ -736,8 +734,8 @@
     {
       "id": "M48-a-newer-persisted-version-is-a-conflict-not-a-match",
       "file": "internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go",
-      "find": "\tif found != 1 || actual.ComputedAt.After(clickHouseSecond(expected.ComputedAt)) {\n\t\treturn EffectConflict\n\t}",
-      "replace": "\tif found != 1 {\n\t\treturn EffectConflict\n\t}",
+      "find": "\tif actual.ComputedAt.After(clickHouseSecond(expected.ComputedAt)) {\n\t\treturn EffectConflict\n\t}",
+      "replace": "",
       "expect_occurrences": 3,
       "rationale": "another generation has already superseded this effect; overwriting it would move the table backwards",
       "proof": [
@@ -750,7 +748,7 @@
           "./internal/providersync/"
         ]
       ],
-      "expected_survivor_reason": "EQUIVALENT MUTANT: the newer-version clause is subsumed by the field comparison that follows it. computed_at is itself one of the compared fields on all three row types, so an actual row whose version is strictly newer than the expected one already differs from it and reaches EffectConflict through the row comparison. The clause is kept as an explicit early return because it names the situation ('another generation already superseded this effect') that the row comparison only implies. M47, which removes the found != 1 clause from the same condition, IS killed -- so this is a declaration about one clause, not about the guard."
+      "expected_survivor_reason": "DISTINGUISHABLE IN PRINCIPLE, UNREACHABLE THROUGH CLICKHOUSE -- not a true equivalence, and the earlier wording overstated it. The clause returns Conflict for an actual row that is strictly newer; the field comparison that follows would ALSO return Conflict, because computed_at is itself compared. A caller could distinguish them only by supplying an actual row whose computed_at is newer while every other field, computed_at included, matches -- which is self-contradictory. So no ClickHouse readback can tell them apart, and M47 (the found != 1 clause) plus M66 (its ordering) are killed, which is where the real behaviour of this condition is pinned."
     },
     {
       "id": "M49-persisted-instants-are-compared-at-clickhouse-resolution",
@@ -824,8 +822,8 @@
     {
       "id": "M53-an-empty-effect-inspects-as-absent",
       "file": "internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go",
-      "find": "\tif len(rows) == 0 {\n\t\treturn EffectAbsent, nil\n\t}",
-      "replace": "\tif len(rows) == 0 {\n\t\treturn EffectExact, nil\n\t}",
+      "find": "\tif len(rows) == 0 {\n\t\treturn EffectAbsent, nil\n\t}\n\tif sink.Conn == nil {\n\t\treturn EffectConflict, ErrInvalidConfiguration\n\t}",
+      "replace": "\tif len(rows) == 0 {\n\t\treturn EffectExact, nil\n\t}\n\tif sink.Conn == nil {\n\t\treturn EffectConflict, ErrInvalidConfiguration\n\t}",
       "rationale": "an empty effect has written nothing, so it must not report itself as already verified",
       "proof": [
         [
@@ -907,7 +905,7 @@
           "./internal/providersync/"
         ]
       ],
-      "expected_survivor_reason": "the parser matches the live sink today, so forcing the empty-parse branch to be unreachable changes nothing observable while work_graph.py still contains _insert_rows calls. The branch exists for the day the parser stops matching, and the mutation that PROVES the branch works is M58, which breaks the parser's anchor instead of its guard."
+      "expected_survivor_reason": "EQUIVALENT MUTANT: the empty-parse guard cannot fire while the parser still matches the live sink, so forcing its branch unreachable changes nothing observable. Note this is NOT a claim that the guard is unnecessary -- M58 breaks the parser's anchor instead, and M58 IS killed, which is what demonstrates the guard fires when the parser stops matching. (An earlier wording described M58 as 'the mutation that proves the branch works'; more precisely, M58 proves the TEST fails loudly on a broken parser, which is the property that matters.)"
     },
     {
       "id": "M58-a-source-reading-assertion-that-matches-nothing-fails-loudly",
@@ -951,7 +949,7 @@
       "file": "src/dev_health_ops/metrics/compute_work_items.py",
       "find": "        week_start = end - timedelta(days=7)",
       "replace": "        week_start = end - timedelta(days=6)",
-      "rationale": "same producer-side check for the trailing throughput window that feeds the congestion ratio",
+      "rationale": "the same window bound on the live producer, so a change there stops matching the port",
       "build": [
         "python",
         "-m",
@@ -964,8 +962,7 @@
           "ci/check_go.sh",
           "live-python-oracles"
         ]
-      ],
-      "expected_survivor_reason": "EQUIVALENT MUTANT: the trailing-7-day throughput window is DEAD CODE in the producer. compute_work_items.py:844 drops any item with no activity today before line 900 ever tests the window, and an item completed one to six days ago cannot pass that gate -- it is not started, completed or created today, and its terminal instant precedes the window end so it is not WIP either. The only completions the window can see are today's, and today is inside any window of a day or more. So wip_congestion_ratio is really wip / max(1, items_completed_TODAY), and no case can distinguish a 7-day bound from a 6-day one or from a left-exclusive one. Ported faithfully and recorded as a Python defect in the PR body rather than silently 'fixed' in a parity lane."
+      ]
     },
     {
       "id": "M61-hours-are-derived-the-way-python-derives-them",
@@ -986,15 +983,97 @@
       "file": "internal/providersync/github_work_item_metric_triplet.go",
       "find": "func githubWorkItemMetricSeconds(value time.Duration) float64 {\n\treturn float64(float64(value.Microseconds()) / 1e6)\n}",
       "replace": "func githubWorkItemMetricSeconds(value time.Duration) float64 {\n\treturn float64(value.Seconds())\n}",
-      "rationale": "the same decomposition problem on the flow-breakdown path: Duration.Seconds() adds whole seconds to a nanosecond remainder rather than dividing a single microsecond count, which is what total_seconds() does",
+      "rationale": "Duration.Seconds() adds whole seconds to a nanosecond remainder where timedelta.total_seconds() divides one microsecond count. Measured across millisecond-aligned durations from 1s to 10s the two disagree on 6.0% of values; the flow-breakdown case pins segments at gaps measured to diverge. An earlier declaration called this equivalent on a 200,000-point sweep that only sampled 1min..160h, where the divergence density is 0.0002% -- the sweep confirmed what it was pointed at",
       "proof": [
         [
           "bash",
           "ci/check_go.sh",
           "live-python-oracles"
         ]
-      ],
-      "expected_survivor_reason": "EQUIVALENT MUTANT, measured: Duration.Seconds() and Microseconds()/1e6 returned bit-identical results on 200000 microsecond-aligned durations spanning one minute to 160 hours -- the entire class a Python datetime difference can produce, since datetime resolution IS the microsecond. The two decompositions only diverge for sub-microsecond remainders, which cannot reach this code. The HOURS form is a different story and M61, which swaps it for Duration.Hours(), is killed: that one splits by whole hours rather than by seconds and does diverge."
+      ]
+    },
+    {
+      "id": "M64-the-claim-day-is-read-in-utc-not-in-the-callers-zone",
+      "file": "internal/providersync/github_work_item_metric_triplet.go",
+      "find": "\tdayUTC := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)",
+      "replace": "\tdayUTC := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)",
+      "rationale": "clause-level companion to M10: this one keeps time.UTC as the location and drops only the .UTC() normalization, so the calendar fields are read in the CALLER's zone. M10 changes both at once and is therefore killable by a fixture where local and UTC dates agree; this one is not, and needs a caller whose local date differs from the UTC one",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestBuildGitHubWorkItemMetricTripletWindowIsUTCAndHalfOpen$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M65-the-cycle-readback-fences-the-partition-key",
+      "file": "internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go",
+      "find": "WHERE org_id = ? AND provider = ? AND work_item_id = ? AND day = ?`,\n\t\texpected.OrgID, expected.Provider, expected.WorkItemID, string(expected.Day))",
+      "replace": "WHERE org_id = ? AND provider = ? AND work_item_id = ?`,\n\t\texpected.OrgID, expected.Provider, expected.WorkItemID)",
+      "rationale": "work_item_cycle_times partitions by toYYYYMM(day) and its sorting key does not contain day, so whether FINAL collapses one natural key across two partitions depends on do_not_merge_across_partitions_select_final -- a server setting this code neither sets nor can see. Measured on a real server: the default returns one row, the setting returns both and lets the stale one be scanned last",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemMetricReadbacksFenceTheRealSortingKey$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M66-duplicate-rows-conflict-before-the-scanned-row-is-read",
+      "file": "internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go",
+      "find": "\tif found != 1 {\n\t\tif found == 0 {\n\t\t\treturn EffectAbsent\n\t\t}\n\t\treturn EffectConflict\n\t}\n\tif actual.ComputedAt.IsZero() || actual.ComputedAt.Before(clickHouseSecond(expected.ComputedAt)) {\n\t\treturn EffectAbsent\n\t}",
+      "replace": "\tif found == 0 || actual.ComputedAt.IsZero() || actual.ComputedAt.Before(clickHouseSecond(expected.ComputedAt)) {\n\t\treturn EffectAbsent\n\t}\n\tif found != 1 {\n\t\treturn EffectConflict\n\t}",
+      "expect_occurrences": 3,
+      "rationale": "testing the Absent branch before the row count lets a duplicate key be decided by whichever row the driver returned last: a stale one reads as Absent and the committer rewrites forever. The order is the guard, not the presence of both tests",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemMetricVersionComparisonRejectsDuplicatesWhateverWasScannedLast$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M67-a-zero-row-effect-is-never-vacuously-exact",
+      "file": "internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go",
+      "find": "\tif len(rows) == 0 {\n\t\treturn EffectAbsent, nil\n\t}\n\texact, absent := 0, 0",
+      "replace": "\texact, absent := 0, 0",
+      "rationale": "without the guard the exact == len(rows) test is satisfied vacuously by 0 == 0 and an effect that wrote nothing reports itself verified",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestInspectGitHubWorkItemMetricRowsRequiresUnanimity$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M68-unassigned-work-in-progress-is-counted",
+      "file": "internal/providersync/github_work_item_metric_triplet.go",
+      "find": "\t\t\tif assignee == nil {\n\t\t\t\tbucket.wipUnassigned++\n\t\t\t}",
+      "replace": "\t\t\tif assignee == nil && false {\n\t\t\t\tbucket.wipUnassigned++\n\t\t\t}",
+      "rationale": "wip_unassigned_end_of_day was previously only ever compared as zero against zero, which is a comparison of the column's default rather than of the counter",
+      "proof": [
+        [
+          "bash",
+          "ci/check_go.sh",
+          "live-python-oracles"
+        ]
+      ]
     }
   ]
 }

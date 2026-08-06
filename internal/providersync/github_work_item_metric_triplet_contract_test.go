@@ -188,15 +188,29 @@ func TestGitHubWorkItemMetricReadbacksFenceTheRealSortingKey(t *testing.T) {
 					"leaves duplicate versions visible until a background merge runs", destination)
 			}
 			predicates := githubWorkItemMetricPredicateColumns(statement)
+			// The required fence is the sorting key UNION the partition key,
+			// not the sorting key alone.
+			//
+			// FINAL collapses one natural key across two partitions only when
+			// the server says so: measured on a real server, the default
+			// returns a single row while
+			// `do_not_merge_across_partitions_select_final = 1` returns both.
+			// This code sets no ClickHouse settings, so it inherits whatever
+			// the server profile chose. Fencing the partition column makes the
+			// verdict the same under either, which is the only version of this
+			// readback worth having. For the two daily rollups the partition
+			// column is already inside the sorting key and this adds nothing.
+			required := append(slices.Clone(key),
+				githubWorkItemMetricPartitionColumns(t, destination)...)
 			// Compared as SETS: ClickHouse does not care in which order a WHERE
-			// clause names the key columns, only that every one of them is
-			// fenced and none outside the key is.
-			fenced, expected := slices.Clone(predicates), slices.Clone(key)
+			// clause names the columns, only that every required one is fenced
+			// and none outside the required set is.
+			fenced, expected := slices.Clone(predicates), slices.Compact(slices.Sorted(slices.Values(required)))
 			slices.Sort(fenced)
-			slices.Sort(expected)
 			if !slices.Equal(fenced, expected) {
-				t.Fatalf("%s readback fences %v, migration 027 sorting key is %v",
-					destination, predicates, key)
+				t.Fatalf("%s readback fences %v; sorting key (migration 027) is %v and the "+
+					"partition key adds %v", destination, predicates, key,
+					githubWorkItemMetricPartitionColumns(t, destination))
 			}
 			if key[0] != "org_id" || !slices.Contains(predicates, "org_id") {
 				t.Fatalf("%s must be tenant-fenced on org_id, got key=%v predicates=%v",
@@ -204,6 +218,50 @@ func TestGitHubWorkItemMetricReadbacksFenceTheRealSortingKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+// githubWorkItemMetricPartitionColumns reads a table's PARTITION BY expression
+// out of the live migration that created it and returns the column names inside
+// it. Like the sorting key, this is PARSED rather than mirrored: a partition
+// scheme that changed without the readback following would otherwise leave the
+// fence silently short.
+func githubWorkItemMetricPartitionColumns(t *testing.T, table string) []string {
+	t.Helper()
+	source := githubWorkItemMetricReadSource(t,
+		"src/dev_health_ops/migrations/clickhouse/001_metrics_v2.sql")
+	index := strings.Index(source, "CREATE TABLE IF NOT EXISTS "+table+" (")
+	if index < 0 {
+		t.Fatalf("migration 001 does not create %q", table)
+	}
+	statement := source[index:]
+	if end := strings.Index(statement, ";"); end >= 0 {
+		statement = statement[:end]
+	}
+	marker := strings.Index(statement, "PARTITION BY ")
+	if marker < 0 {
+		t.Fatalf("%s has no PARTITION BY clause in migration 001 -- if the table is "+
+			"genuinely unpartitioned this helper needs to say so deliberately, not "+
+			"return an empty fence by accident", table)
+	}
+	clause := statement[marker+len("PARTITION BY "):]
+	if end := strings.IndexAny(clause, "\n"); end >= 0 {
+		clause = clause[:end]
+	}
+	open := strings.Index(clause, "(")
+	closed := strings.LastIndex(clause, ")")
+	if open < 0 || closed <= open {
+		t.Fatalf("%s: could not read the partition expression from %q", table, clause)
+	}
+	columns := []string{}
+	for _, column := range strings.Split(clause[open+1:closed], ",") {
+		if trimmed := strings.TrimSpace(column); trimmed != "" {
+			columns = append(columns, trimmed)
+		}
+	}
+	if len(columns) == 0 {
+		t.Fatalf("%s: parsed an empty partition key from %q", table, clause)
+	}
+	return columns
 }
 
 func githubWorkItemMetricSortingKey(t *testing.T, source, table string) []string {

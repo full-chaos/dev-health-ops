@@ -31,15 +31,20 @@ endpoint:
   failure than the one B5 exists to fix.
 
 So the only mechanism that yields an authentically-scoped token is a genuine
-login. World users cannot log in as seeded -- ``fixtures/world.py``'s
-``_build_auth_fixture`` writes ``password_hash=None`` for every one of them,
-and ``login.py`` explicitly refuses password login for such an account -- so
-the superuser first sets a password via ``POST
-/api/v1/admin/users/{id}/password`` (which verifies the CALLER's own
-password, hence ``admin_password``), and the runner then performs a real
-``POST /api/v1/auth/login``. Both are public API calls, keeping the
-"public-API-only seeding" philosophy ``prepare_ask_dev_acceptance.py``
-already follows -- no direct database writes, no test-only backdoor.
+``POST /api/v1/auth/login``, and the credential it uses comes from the world
+seed: ``fixtures/world.py::_build_auth_fixture`` hashes
+``password_for_alias(alias)`` for EVERY world user at generation time
+(CHAOS-3463). This module imports that same function rather than holding a
+password of its own, so the seeding side and the login side cannot disagree
+-- there is one derivation, not two copies that agree until one is edited.
+
+An earlier revision of this runner could not rely on that: world users had
+``password_hash=None``, so it set a password through ``POST
+/api/v1/admin/users/{id}/password`` behind an explicit opt-in flag. That
+bridge mutated ``password_hash``, a digest-covered column, so a second armed
+run against the same stack reported users-digest drift. It is gone now that
+credentials are seeded, along with the flag and the runner-local password
+constant it needed.
 
 NO SILENT FALLBACK, ANYWHERE
 ----------------------------
@@ -59,10 +64,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from dev_health_ops.fixtures.world import derive_id
+from dev_health_ops.fixtures.world import derive_id, password_for_alias
 
 __all__ = [
-    "PRINCIPAL_PASSWORD",
+    "SEEDED_PROVISIONING_MARKER",
     "CasePrincipal",
     "PrincipalDirectory",
     "PrincipalError",
@@ -70,44 +75,38 @@ __all__ = [
     "PrincipalSessions",
 ]
 
-#: The password the runner sets on every world principal before logging in
-#: as it. Must satisfy production's real ``validate_password`` (>= 12 chars,
-#: at least one letter and one digit, not in the common-password list) --
-#: ``tests/acceptance/corpus/test_principals.py`` asserts that against the
-#: real policy function rather than trusting this comment, because a
-#: non-compliant value would 422 every provisioning call and fail every case
-#: for a reason unrelated to the case.
-PRINCIPAL_PASSWORD = "ask-dev-world-acceptance-4242"
-
-#: Opt-in for the temporary admin-set-password bridge (team-lead ruling,
-#: 2026-08-06). The DURABLE design is that CHAOS-3463 seeds credentials at
-#: world-generation time and ``password_hash`` STAYS in the world digest:
-#: the snapshot/restore model makes hashes frozen bytes restored identically
-#: per boot, so the "bcrypt cannot reproduce across generations" argument
-#: does not apply, and keeping the column digested means credential
-#: tampering registers as drift -- which is what the digest is for.
-#:
-#: Until that lands, world users have ``password_hash=None`` and cannot log
-#: in at all, so this runner sets one. That MUTATES a digested column, which
-#: is why it is now opt-in rather than automatic: a run that took the bridge
-#: is not a clean run, and must not be mistaken for one. When the seeding
-#: lane lands, the bridge is removed and the runner requires seeded
-#: credentials.
-BRIDGE_ENV_VAR = "ASK_DEV_ACCEPTANCE_ALLOW_PASSWORD_BRIDGE"
-
-#: Stamped into every receipt of a bridged run (see the runner's
-#: ``provisioning_mode`` check) so the artifacts themselves say which mode
-#: produced them -- a receipt is evidence, and evidence that cannot
-#: distinguish a bridged run from a seeded one is weaker than it looks.
-BRIDGED_PROVISIONING_MARKER = "admin-set-password-bridge"
+#: Stamped into every receipt (see the runner's ``provisioning_mode`` check)
+#: so the artifacts themselves say where the credentials came from. Kept as a
+#: named marker now that the bridge is gone, because a receipt is evidence
+#: and a reader keys on this field to know the run authenticated against
+#: seeded world credentials rather than anything provisioned at run time.
 SEEDED_PROVISIONING_MARKER = "world-seeded-credentials"
 
-_ADMIN_SET_PASSWORD_PATH = "/api/v1/admin/users/{user_id}/password"
 _LOGIN_PATH = "/api/v1/auth/login"
 
 
 class PrincipalError(Exception):
     """A case's declared principal cannot be resolved or authenticated."""
+
+
+def _is_credential_rejection(exc: BaseException) -> bool:
+    """Whether a failed login means "wrong credential" or "the API is unwell".
+
+    Deliberately narrow, and matched against the shape its producer actually
+    emits rather than a bare status number. ``AcceptanceApi.request`` raises
+    ``AcceptanceFailure(f"{method} {path} returned HTTP {exc.code}: {detail}")``
+    -- and ``detail`` there is the raw RESPONSE BODY. Searching for ``"401"``
+    anywhere in that string would therefore also match a 500 whose body
+    happens to carry ``401`` inside a trace id or correlation token, and would
+    reframe an unwell API as an unseeded credential -- sending an operator off
+    to re-mint a world that is perfectly fine.
+
+    Anything that is not a credential rejection -- 5xx, 429, a transport
+    error -- must keep its own error rather than be reframed as one.
+    """
+
+    text = str(exc)
+    return "returned HTTP 401" in text or "Invalid credentials" in text
 
 
 class _Api(Protocol):
@@ -240,10 +239,9 @@ class PrincipalDirectory:
 class PrincipalSessions:
     """Lazily provisions and caches one authenticated session per alias.
 
-    Cached because provisioning is two HTTP calls and the corpus runs ~137
-    cases as the same ``primary.ordinary`` principal; re-logging-in per case
-    would add ~274 pointless calls and, worse, put the admin
-    set-password rate limit (``ADMIN_PASSWORD_LIMIT``) in the path of a
+    Cached because the corpus runs ~137 cases as the same
+    ``primary.ordinary`` principal; re-logging-in per case would add ~137
+    pointless round trips and put the login rate limiter in the path of a
     normal run.
 
     KNOWN LIMIT, stated rather than discovered later: the access token has a
@@ -261,17 +259,11 @@ class PrincipalSessions:
     def __init__(
         self,
         *,
-        admin_api: Any,
-        admin_password: str,
         api_factory: Callable[[], Any],
         directory: PrincipalDirectory,
-        allow_password_bridge: bool = False,
     ) -> None:
-        self._admin_api = admin_api
-        self._admin_password = admin_password
         self._api_factory = api_factory
         self._directory = directory
-        self._allow_password_bridge = allow_password_bridge
         self._sessions: dict[str, PrincipalSession] = {}
         self._failures: dict[str, BaseException] = {}
 
@@ -290,14 +282,12 @@ class PrincipalSessions:
         if cached is not None:
             return cached
         # NEGATIVE caching, deliberately (Codex adversarial round-1, MEDIUM):
-        # only successes were cached before, so a set-password that succeeded
-        # followed by a transient login failure left nothing cached -- and
-        # every later case using that alias re-ran the admin password
-        # mutation. With 137 cases on `primary.ordinary` and the endpoint
-        # rate-limited to a handful per hour, one login blip turned into a
-        # storm of 429s that both buried the original error and kept mutating
-        # shared world state. The first failure is now final for that alias
-        # and is re-raised verbatim, so the run fails on the REAL cause.
+        # only successes were cached before, so a transient login failure left
+        # nothing cached and every later case using that alias retried it.
+        # With 137 cases on `primary.ordinary` against a rate-limited login,
+        # one blip turned into a storm of 429s that buried the original error.
+        # The first failure is now final for that alias and is re-raised
+        # verbatim, so the run fails on the REAL cause.
         previous = self._failures.get(principal.user_alias)
         if previous is not None:
             # A NEW exception chained to the original, rather than re-raising
@@ -319,56 +309,67 @@ class PrincipalSessions:
 
     @property
     def provisioning_mode(self) -> str:
-        """Which credential path this run used -- stamped into receipts."""
+        """Where this run's credentials came from -- stamped into receipts.
 
-        return (
-            BRIDGED_PROVISIONING_MARKER
-            if self._allow_password_bridge
-            else SEEDED_PROVISIONING_MARKER
-        )
+        One value now that the admin-set-password bridge is gone: the runner
+        has exactly one credential path, the world seed. The property stays
+        so receipts keep the field readers already key on, and so a future
+        second path has an obvious place to declare itself.
+        """
+
+        return SEEDED_PROVISIONING_MARKER
 
     def _authenticate(self, principal: CasePrincipal) -> PrincipalSession:
-        # Step 1: give the world user a password -- ONLY under the explicit
-        # bridge opt-in, because this writes password_hash, a column the
-        # world digest covers. Without the opt-in the runner requires the
-        # credential to already be seeded, which is the durable design.
-        if self._allow_password_bridge:
-            self._admin_api.request(
-                "POST",
-                _ADMIN_SET_PASSWORD_PATH.format(user_id=principal.user_id),
-                {
-                    "admin_password": self._admin_password,
-                    "password": PRINCIPAL_PASSWORD,
-                },
-            )
-
-        # Step 2: a genuine login, so the JWT's own sub/org_id/role are the
-        # principal's -- which is what /api/v1/dev/** actually reads.
+        # A genuine login, so the JWT's own sub/org_id/role are the
+        # principal's -- which is what /api/v1/dev/** actually reads. The
+        # password is DERIVED, not stored: `password_for_alias` is the same
+        # function `_build_auth_fixture` hashed when it seeded this account,
+        # so login and seeding cannot drift apart (CHAOS-3463).
+        #
+        # PRECISELY what this does to the world, because "it only reads" is
+        # the tempting shorthand and it is FALSE: a successful login stamps
+        # `users.last_login_at` (api/auth/routers/login.py). That column is
+        # in `_VOLATILE_COLUMNS`, added by CHAOS-3463 for exactly this
+        # reason, so it is excluded from the world digest and a second armed
+        # run does NOT drift. What is gone is the write that DID drift --
+        # the bridge's `password_hash` mutation, on a column deliberately
+        # kept digested so credential tampering stays visible.
         api = self._api_factory()
         try:
             login = api.request(
                 "POST",
                 _LOGIN_PATH,
-                {"email": principal.email, "password": PRINCIPAL_PASSWORD},
+                {
+                    "email": principal.email,
+                    "password": password_for_alias(principal.user_alias),
+                },
             )
         except Exception as exc:
-            # An unseeded world user has password_hash=None, and login.py
-            # answers that with HTTP 401 -- which the API client raises on,
-            # BEFORE any response-body branch below could run. An earlier
-            # version put the remedy text on the no-access_token branch,
-            # where an operator could never see it: the reported failure was
-            # a bare "returned HTTP 401" with no hint that a flag exists.
-            if self._allow_password_bridge:
+            # A world that predates seeded credentials has password_hash=None
+            # and login.py answers 401 -- which the API client raises on,
+            # BEFORE any response-body branch below could run. The remedy
+            # therefore belongs HERE and not on the no-access_token branch,
+            # where an operator would never see it.
+            #
+            # ONLY for a credential rejection, though. A 503, a timeout or a
+            # rate-limit means something else entirely is wrong, and the
+            # seeded-credential remedy would be actively misleading -- it
+            # would send an operator to re-mint a world that is fine. The
+            # previous revision preserved that distinction via the bridge
+            # flag (`test_a_bridged_run_does_not_swallow_the_real_login_
+            # error` pinned it); with the flag gone the discriminator is the
+            # error itself, which is the more honest one anyway.
+            if not _is_credential_rejection(exc):
                 raise
             raise PrincipalError(
                 f"login as {principal.user_alias!r} ({principal.email}) "
-                f"failed: {exc}. This run did NOT take the password bridge, "
-                f"so it requires that account to have a credential seeded at "
-                f"world-generation time (CHAOS-3463). A world that predates "
-                f"seeded credentials has password_hash=None and answers 401. "
-                f"Set {BRIDGE_ENV_VAR}=1 to opt into the temporary "
-                f"admin-set-password bridge -- which mutates a "
-                f"digest-covered column and stamps every receipt as bridged."
+                f"failed: {exc}. This runner requires the account to carry the "
+                f"credential seeded at world-generation time (CHAOS-3463). A "
+                f"world snapshot minted before seeded credentials has "
+                f"password_hash=None and answers 401 -- re-mint the world "
+                f"snapshot (scripts/acceptance/mint_ask_dev_world_snapshot.sh) "
+                f"rather than provisioning a password at run time, which would "
+                f"mutate a digest-covered column."
             ) from exc
         if not isinstance(login, Mapping):
             raise PrincipalError(

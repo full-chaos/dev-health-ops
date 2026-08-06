@@ -45,8 +45,8 @@ __all__ = [
 ]
 
 #: Injectable for tests -- must behave like ``subprocess.run`` (accepting
-#: ``capture_output``/``text``/``timeout`` keywords and returning something
-#: with ``.returncode``/``.stdout``/``.stderr``).
+#: ``capture_output``/``text``/``timeout``/``stdin`` keywords and returning
+#: something with ``.returncode``/``.stdout``/``.stderr``).
 ExecRunner = Callable[..., Any]
 
 
@@ -77,7 +77,26 @@ def exec_in_api(
 
     args = [*context.base_args(), "exec", "-T", context.api_service, *command]
     try:
-        result = runner(args, capture_output=True, text=True, timeout=timeout)
+        # stdin=DEVNULL is load-bearing, not tidiness (CHAOS-3462; hazard
+        # reported by the world-seeding lane, which hit it for real). `-T`
+        # suppresses the pseudo-TTY but does NOT close stdin -- compose still
+        # forwards fd 0 into the container. With stdin merely INHERITED, this
+        # call blocks forever whenever the parent's fd 0 is an open pipe that
+        # nobody closes, which is exactly what happens when the runner is
+        # driven from a shell script rather than an interactive terminal --
+        # `scripts/acceptance/run_wave4_corpus.sh` is such a driver, and any
+        # `something | run_wave4_corpus.sh` or CI step with a held-open stdin
+        # reproduces it. The failure mode is the worst one available to this
+        # lane: not a red, but a silent hang with no output, burning the gate
+        # slot while looking like nothing is happening. Reproduced both ways
+        # before this line was added; see test_exec_in_api_never_inherits_stdin.
+        result = runner(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+        )
     except FileNotFoundError as exc:
         raise DbVerifyUnavailableError(
             f"docker compose is not available on this host: {exc}"

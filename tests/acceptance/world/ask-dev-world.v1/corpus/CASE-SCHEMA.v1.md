@@ -360,14 +360,23 @@ Two consequences for case authoring:
   2026-08-06, CHAOS-3463), and `password_hash` **stays in the world
   digest** — the snapshot/restore model makes hashes frozen bytes restored
   identically per boot, so credential tampering registers as drift, which is
-  what the digest is for. Until that lands, world users have
-  `password_hash=None` and cannot log in at all, so the runner offers a
-  TEMPORARY bridge: `ASK_DEV_ACCEPTANCE_ALLOW_PASSWORD_BRIDGE=1` opts into
-  setting a password via `POST /api/v1/admin/users/{id}/password`. It is
-  opt-in because it mutates a digest-covered column, and every receipt from
-  such a run is stamped `provisioning=admin-set-password-bridge` so a
-  bridged run can never be mistaken for one against properly seeded
-  credentials. Remove the bridge when CHAOS-3463 lands.
+  what the digest is for. `fixtures/world.py::password_for_alias` is the ONE
+  derivation: `_build_auth_fixture` hashes it when seeding and the corpus
+  runner logs in with it, so seeding and login cannot disagree. The runner
+  provisions nothing — every receipt is stamped
+  `provisioning=world-seeded-credentials`. (It is not write-free: a
+  successful login stamps `users.last_login_at`, which `_VOLATILE_COLUMNS`
+  excludes from the digest for exactly that reason. What it never does is
+  move a *digested* column.) A stack whose world snapshot
+  predates seeded credentials answers 401; re-mint it
+  (`scripts/acceptance/mint_ask_dev_world_snapshot.sh`) rather than
+  provisioning a password at run time.
+
+  *(Historical: a `ASK_DEV_ACCEPTANCE_ALLOW_PASSWORD_BRIDGE=1` opt-in used to
+  set a password via `POST /api/v1/admin/users/{id}/password`, because world
+  users then had `password_hash=None` and could not log in at all. It mutated
+  a digest-covered column, so a second armed run against the same stack
+  reported drift. Removed once CHAOS-3463 landed seeded credentials.)*
 
 ## `status: "declared-blocked"` cases
 

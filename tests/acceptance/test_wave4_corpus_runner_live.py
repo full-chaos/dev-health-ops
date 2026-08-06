@@ -141,7 +141,6 @@ from scripts.acceptance.corpus.db_verify import (
 )
 from scripts.acceptance.corpus.invariants import InvariantContext, evaluate_invariant
 from scripts.acceptance.corpus.principals import (
-    BRIDGE_ENV_VAR,
     SEEDED_PROVISIONING_MARKER,
     PrincipalDirectory,
     PrincipalSession,
@@ -355,40 +354,36 @@ def principal_sessions(
     routers do not honor impersonation, and would silently evaluate
     entitlement and readiness against the superuser's org instead).
 
-    THE ``_world_digest_pin`` DEPENDENCY IS LOAD-BEARING, NOT DECORATIVE.
-    Provisioning writes a real ``password_hash`` onto world-seeded users,
-    and ``compute_world_digest`` hashes ``SELECT *`` from ``users`` with
-    only ``_VOLATILE_COLUMNS`` excluded -- ``password_hash`` is NOT in that
-    exclusion set. So the very act of selecting a principal mutates a
-    digested column. Declaring the dependency pins the ordering (digest
-    verified first, against a world nobody has touched) instead of relying
-    on the incidental "autouse session fixtures instantiate before
-    requested ones" rule, which a future edit could silently invert.
+    THE ``_world_digest_pin`` DEPENDENCY IS STILL DECLARED, FOR A NARROWER
+    REASON THAN IT ONCE HAD. It used to be load-bearing because selecting a
+    principal MUTATED ``password_hash`` -- a column ``compute_world_digest``
+    covers, since it hashes ``SELECT *`` from ``users`` with only
+    ``_VOLATILE_COLUMNS`` excluded -- so the digest had to be read before
+    the runner touched it. CHAOS-3463 removed that mutation: credentials are
+    seeded at world generation, so nothing here provisions anything. The
+    ordering is kept because authenticating against a world whose integrity
+    has not been verified yet would produce evidence nobody can trust.
 
-    RESIDUAL, STATED RATHER THAN PAPERED OVER: this makes the FIRST armed
-    run against a freshly-seeded stack correct, and a SECOND run against
-    the same stack report a ``postgres.users`` digest mismatch caused by
-    the first run's own provisioning. Re-runs therefore need a fresh
-    seed/restore. The durable fix belongs to the world-seeding lane
-    (CHAOS-3219 B2/B3), and there are only two honest shapes for it: seed
-    the password in ``_build_auth_fixture`` so the pin includes it, or
-    exclude ``password_hash`` from the digest -- which is defensible on its
-    own terms, since a bcrypt hash is salted and therefore can never
-    reproduce across two generations of the same world anyway.
+    NOT because this fixture is write-free, which would be the tempting and
+    wrong way to put it: a successful login stamps ``users.last_login_at``.
+    That column is excluded from the digest (``_VOLATILE_COLUMNS``, added by
+    CHAOS-3463 after two boots both failed ``require_world_digest_match`` on
+    ``postgres.users`` for exactly this reason), so it does not drift --
+    which is a different statement from "nothing is written".
+
+    That does retire the residual this fixture used to carry: a SECOND armed
+    run against the same stack no longer reports a ``postgres.users`` digest
+    mismatch caused by the first run's own provisioning, so re-runs no
+    longer need a fresh seed/restore.
+
+    ``acceptance_api`` is still requested although its client is no longer
+    unpacked: it is what guarantees the stack is up and the superuser
+    session exists before any principal login is attempted.
     """
 
-    admin_api, _ = acceptance_api
     return PrincipalSessions(
-        admin_api=admin_api,
-        admin_password=_superuser_password(),
         api_factory=lambda: AcceptanceApi(_api_base_url()),
         directory=PrincipalDirectory.from_world(_WORLD_DIR / "world.json"),
-        # Team-lead ruling 2026-08-06: credentials belong in the world
-        # generation (CHAOS-3463) and password_hash STAYS digested. Setting
-        # a password at run time mutates a digested column, so it is opt-in
-        # and marks every receipt -- a bridged run must never be mistaken
-        # for a clean one.
-        allow_password_bridge=os.getenv(BRIDGE_ENV_VAR) == "1",
     )
 
 
@@ -705,16 +700,21 @@ def test_corpus_case(
     # is now its own NAMED, always-recorded check, so the receipt says which
     # credential path produced it in a field a reader can key on -- and a
     # test asserts the name is present for an executed case.
+    #
+    # The condition is a real assertion rather than a bare `True` (which it
+    # was while two modes existed and either was acceptable). With the
+    # admin-set-password bridge gone there is exactly ONE legitimate
+    # credential path, so a run reporting any other value is a run whose
+    # receipts mean something different from what a reader would assume --
+    # and that must show up as a failed check, not as prose in a detail
+    # string nobody diffs.
     recorder.check(
         category="provisioning-mode",
         name=f"provisioned_via_{principal_sessions.provisioning_mode}",
-        condition=True,
+        condition=(principal_sessions.provisioning_mode == SEEDED_PROVISIONING_MARKER),
         detail=(
-            "credentials came from the world seed"
-            if principal_sessions.provisioning_mode == SEEDED_PROVISIONING_MARKER
-            else "TEMPORARY admin-set-password bridge: this run mutated a "
-            "digest-covered column and is NOT equivalent to a run against "
-            "seeded credentials"
+            "credentials came from the world seed "
+            f"({principal_sessions.provisioning_mode})"
         ),
     )
     if ledger_classification_error is not None:

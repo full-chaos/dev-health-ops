@@ -550,6 +550,38 @@ GROUP BY org_id, provider, work_scope_id, team_id, status, day`,
 	return compareGitHubWorkItemStateDurationVersion(expected, actual, found, identity.OrgID), nil
 }
 
+// githubWorkItemDerivedVersionOrder is the THREE-WAY version comparison every
+// comparator in this file must apply BEFORE looking at any value column.
+//
+// A two-way `!Equal -> Absent` is not merely incomplete, it wedges. Consider a
+// byte-identical recompute where only computed_at moved -- the steady state for
+// work_item_team_attributions, whose producer is called once per backfill day
+// and re-emits identical rows. Persisted carries the NEWER stamp, the effect
+// being inspected carries the older one, and every value column agrees. Under
+// `!Equal -> Absent` that reads Absent, the committer rewrites the OLDER
+// generation, argMax (or RMT) keeps the newer one, the next readback answers
+// Absent again, and the loop never terminates. On plain-MergeTree
+// state_durations each iteration also APPENDS a row.
+//
+// Order matters as much as the three-way itself:
+//   - persisted OLDER than the effect: our write never landed, so value
+//     differences are EXPECTED and must not be reported as a conflict.
+//   - persisted NEWER: a later generation already superseded this key.
+//     Rewriting would regress it, and we cannot prove our write landed.
+//   - persisted EQUAL: same generation, so any value disagreement is a real
+//     contradiction rather than a version difference.
+//
+// This mirrors compareRepositoryVersion (github_repository_effects_clickhouse.go).
+func githubWorkItemDerivedVersionOrder(actual, expected time.Time) (EffectInspection, bool) {
+	switch {
+	case actual.Before(expected):
+		return EffectAbsent, true
+	case actual.After(expected):
+		return EffectConflict, true
+	}
+	return EffectExact, false
+}
+
 // The three comparators below all test `found != 1` FIRST. Reaching an
 // absent/stale branch before the duplicate check is what turns duplicates plus
 // a stale row into an infinite rewrite loop.
@@ -566,7 +598,17 @@ func compareGitHubEstimateCoverageVersion(
 		// would rewrite and duplicate again.
 		return EffectConflict
 	}
-	if actual.OrgID != orgID || actual.Day != expected.Day ||
+	// Tenancy is not a version question: a foreign tenant's row is a
+	// contradiction at ANY version.
+	if actual.OrgID != orgID {
+		return EffectConflict
+	}
+	if verdict, decided := githubWorkItemDerivedVersionOrder(
+		actual.ComputedAt, githubWorkItemDerivedMillis(expected.ComputedAt),
+	); decided {
+		return verdict
+	}
+	if actual.Day != expected.Day ||
 		actual.Provider != expected.Provider ||
 		actual.WorkScopeID != expected.WorkScopeID ||
 		!githubWorkItemDerivedStringPointerEqual(actual.TeamID, expected.TeamID) ||
@@ -576,9 +618,6 @@ func compareGitHubEstimateCoverageVersion(
 		actual.BacklogSize != expected.BacklogSize ||
 		!githubWorkItemDerivedFloatPointerEqual(actual.Ratio, expected.Ratio) {
 		return EffectConflict
-	}
-	if !actual.ComputedAt.Equal(githubWorkItemDerivedMillis(expected.ComputedAt)) {
-		return EffectAbsent
 	}
 	return EffectExact
 }
@@ -592,7 +631,15 @@ func compareGitHubWorkItemTeamAttributionVersion(
 		}
 		return EffectConflict
 	}
-	if actual.OrgID != orgID || actual.WorkItemID != expected.WorkItemID ||
+	if actual.OrgID != orgID {
+		return EffectConflict
+	}
+	if verdict, decided := githubWorkItemDerivedVersionOrder(
+		actual.ComputedAt, githubWorkItemDerivedMillis(expected.ComputedAt),
+	); decided {
+		return verdict
+	}
+	if actual.WorkItemID != expected.WorkItemID ||
 		actual.Provider != expected.Provider ||
 		githubWorkItemDerivedRepoID(actual.RepoID) != githubWorkItemDerivedRepoID(expected.RepoID) ||
 		!githubWorkItemDerivedStringPointerEqual(actual.TeamID, expected.TeamID) ||
@@ -600,9 +647,6 @@ func compareGitHubWorkItemTeamAttributionVersion(
 		actual.Source != expected.Source || actual.IsPrimary != expected.IsPrimary ||
 		actual.Confidence != expected.Confidence || actual.Evidence != expected.Evidence {
 		return EffectConflict
-	}
-	if !actual.ComputedAt.Equal(githubWorkItemDerivedMillis(expected.ComputedAt)) {
-		return EffectAbsent
 	}
 	return EffectExact
 }
@@ -619,14 +663,19 @@ func compareGitHubWorkItemStateDurationVersion(
 		// never a reason to rewrite.
 		return EffectConflict
 	}
-	if actual.OrgID != orgID || actual.TeamName != expected.TeamName ||
+	if actual.OrgID != orgID {
+		return EffectConflict
+	}
+	if verdict, decided := githubWorkItemDerivedVersionOrder(
+		actual.ComputedAt, githubWorkItemDerivedSeconds(expected.ComputedAt),
+	); decided {
+		return verdict
+	}
+	if actual.TeamName != expected.TeamName ||
 		actual.DurationHours != expected.DurationHours ||
 		actual.ItemsTouched != expected.ItemsTouched ||
 		actual.AvgWIP != expected.AvgWIP {
 		return EffectConflict
-	}
-	if !actual.ComputedAt.Equal(githubWorkItemDerivedSeconds(expected.ComputedAt)) {
-		return EffectAbsent
 	}
 	return EffectExact
 }

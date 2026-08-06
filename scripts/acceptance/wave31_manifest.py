@@ -1081,11 +1081,13 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
     claimed live reachability, only that the service's own evaluation logic
     is correct, and that claim is untouched by a bug in a different layer
     (the orchestrator's persistence write path) these unit tests never
-    exercise. PORTFOLIO_STATUS stays deliberately, permanently unwired this
-    wave (wave_3_1_plans.py's own module docstring: a real StepContext
-    single-DevScope limitation, tracked on the CHAOS-3297 Linear issue) --
-    its row stays honestly blocked, not force-fit to a citation that does
-    not actually prove it.
+    exercise. CHAOS-3393 closes PORTFOLIO_STATUS's own gap additively
+    (``StepContext.subject_set_scopes``, wave_3_1_plans.py's updated module
+    docstring) -- its row now flips to ``proven_unit`` too, backed by real
+    orchestrator-level tests (``test_chaos_3393_portfolio_orchestrator.py``)
+    that exercise the preflight-commit -> StepContext.subject_set_scopes ->
+    PortfolioStatusService.evaluate_portfolio -> frame path end to end,
+    including the partial-failure and org-wide-enumeration cases.
     """
 
     return (
@@ -1112,25 +1114,27 @@ def _blocking_matrix_blocked() -> tuple[ManifestItem, ...]:
             id="matrix.organization-portfolio-status",
             category="blocking_matrix",
             description="Organization portfolio status.",
-            status="blocked",
-            blocked_reason=(
-                "PORTFOLIO_STATUS is deliberately, not accidentally, "
-                "unwired this wave -- wave_3_1_plans.py's own module "
-                "docstring: PlanExecutor's StepContext carries exactly one "
-                "DevScope, but PortfolioStatusService.evaluate_portfolio "
-                "needs several project scopes at once, a real gap that "
-                "needs a StepContext-widening decision before this can be "
-                "wired (tracked on the CHAOS-3297 Linear issue). The "
-                "closest existing test, "
-                "test_chaos_3303_portfolio_status_service.py::"
-                "test_evaluate_portfolio_all_provisional_registry_reports_no_elevated_state, "
-                "is service-layer only and does not exercise the plan/"
-                "orchestrator path this row's claim needs -- not cited as "
-                "proof it would be overclaiming. The GAP itself being "
-                "handled honestly (loud, non-terminal fallback) is a "
-                "separate, already-proven claim -- see "
-                "gate.plan-registry-gap-is-loud and its e2e-live-validated "
-                "sibling."
+            status="proven_unit",
+            evidence=(
+                "tests/api/dev/test_chaos_3393_portfolio_orchestrator.py",
+                "tests/api/dev/test_chaos_3393_portfolio_preflight.py",
+            ),
+            content_markers=(
+                "test_named_project_cohort_batches_both_projects_through_"
+                "the_portfolio_step",
+            ),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3393_portfolio_orchestrator.py::"
+                "test_named_project_cohort_batches_both_projects_through_"
+                "the_portfolio_step",
+                "tests/api/dev/test_chaos_3393_portfolio_orchestrator.py::"
+                "test_partial_failure_is_disclosed_never_fabricated_or_refused",
+                "tests/api/dev/test_chaos_3393_portfolio_preflight.py::"
+                "test_organization_wide_portfolio_commits_a_bounded_project_set",
+                "tests/api/dev/test_chaos_3393_portfolio_preflight.py::"
+                "test_organization_wide_portfolio_with_no_projects_falls_back_cleanly",
+                "tests/api/dev/test_chaos_3393_portfolio_preflight.py::"
+                "test_organization_wide_portfolio_discloses_truncation_past_the_cap",
             ),
         ),
         ManifestItem(
@@ -1867,6 +1871,140 @@ def _mutation_proofs() -> tuple[ManifestItem, ...]:
     )
 
 
+def _readiness_and_resolution_safety_defects() -> tuple[ManifestItem, ...]:
+    """CHAOS-3408/3409/3421: the live "org-pinned wrong-subject + 0-of-0
+    readiness answer" investigation's three closed defects, each a codex
+    adversarial-review-prescribed fix over its own initial round (not
+    reviewer-prescribed fixes in the same sense as an ordinary review
+    round -- this is a genuinely new changeset with its own review).
+
+    Codex adversarial review finding (MED-2, confirmed): the initial cut of
+    these three fixes had NO manifest entries at all -- the readiness
+    report's executed-evidence set never touched them, so removing any of
+    the new guards (the explicit ``required_children_not_applicable``
+    field, the dedicated prompt branch, the leak-scan reroute) would leave
+    the report green. These three rows close that gap.
+    """
+
+    return (
+        ManifestItem(
+            id="defect.organization-readiness-honest-denominator",
+            category="readiness_and_resolution_safety_defect_reproduction",
+            description=(
+                "CHAOS-3408/3409: an ORGANIZATION/TEAM-scoped readiness "
+                "question must never report a fabricated '0 of 0 required "
+                "items are complete' -- the denominator is withheld via an "
+                "explicit, non-inferred signal (never conflated with a "
+                "genuine source truncation), and the real production "
+                "render/validation wiring (not just an isolated renderer "
+                "call) must render the distinct structural copy without "
+                "pairing it with the truncation disclosure."
+            ),
+            status="proven_unit",
+            evidence=(
+                "src/dev_health_ops/api/dev/status_change_service.py",
+                "src/dev_health_ops/api/dev/status_completion_copy.py",
+                "src/dev_health_ops/api/dev/status_answer_render.py",
+                "src/dev_health_ops/api/dev/contracts.py",
+                "src/dev_health_ops/api/dev/production_runtime.py",
+                "tests/api/dev/test_status_change_service.py",
+                "tests/api/dev/test_status_completion_copy.py",
+                "tests/api/dev/test_chaos_3377_status_answer_render.py",
+            ),
+            content_markers=("required_children_not_applicable",),
+            test_nodeids=(
+                "tests/api/dev/test_status_change_service.py::"
+                "test_organization_and_team_scope_withhold_the_required_child_denominator[_org_scope]",
+                "tests/api/dev/test_status_change_service.py::"
+                "test_organization_and_team_scope_withhold_the_required_child_denominator[_team_scope]",
+                "tests/api/dev/test_status_change_service.py::"
+                "test_project_scope_with_genuinely_zero_required_children_is_a_real_zero",
+                "tests/api/dev/test_status_completion_copy.py::"
+                "test_structural_non_applicability_is_trustworthy_not_untrustworthy",
+                "tests/api/dev/test_status_completion_copy.py::"
+                "test_a_genuine_source_truncation_is_untrustworthy",
+                "tests/api/dev/test_chaos_3377_status_answer_render.py::"
+                "test_production_wiring_never_pairs_the_scope_copy_with_the_truncation_disclosure",
+                "tests/api/dev/test_chaos_3377_status_answer_render.py::"
+                "test_production_wiring_still_discloses_a_genuine_truncation",
+            ),
+        ),
+        ManifestItem(
+            id="defect.bare-name-prompt-allowlist-consistency",
+            category="readiness_and_resolution_safety_defect_reproduction",
+            description=(
+                "CHAOS-3421 MED-1: the unresolved-bare-name organization-"
+                "wide-fallback preflight branch withholds resolve_scope.v1 "
+                "from allowed_tools, so the composed prompt must never "
+                "instruct the model to call it -- a dedicated prompt "
+                "section states resolution is unavailable and names the "
+                "permitted (organization-wide) fallback instead, and the "
+                "advertised tool registry and the prompt copy are proven "
+                "to agree, not merely asserted to."
+            ),
+            status="proven_unit",
+            evidence=(
+                "src/dev_health_ops/api/dev/prompts/composer.py",
+                "src/dev_health_ops/api/dev/subject_preflight.py",
+                "src/dev_health_ops/api/dev/orchestrator.py",
+                "tests/api/dev/test_prompt_composer.py",
+                "tests/api/dev/test_chaos_3292_review_findings.py",
+                "tests/api/dev/test_subject_preflight.py",
+            ),
+            content_markers=("resolution_unavailable",),
+            test_nodeids=(
+                "tests/api/dev/test_prompt_composer.py::"
+                "test_resolution_unavailable_never_instructs_calling_the_withheld_tool",
+                "tests/api/dev/test_prompt_composer.py::"
+                "test_resolution_unavailable_false_is_the_ordinary_uncommitted_section",
+                "tests/api/dev/test_prompt_composer.py::"
+                "test_subject_committed_wins_over_resolution_unavailable",
+                "tests/api/dev/test_chaos_3292_review_findings.py::"
+                "test_an_unresolved_bare_name_run_keeps_the_v1_prompt",
+                "tests/api/dev/test_chaos_3292_review_findings.py::"
+                "test_an_unresolved_bare_name_run_gets_a_dedicated_unavailable_section",
+                "tests/api/dev/test_subject_preflight.py::"
+                "test_an_unresolved_bare_name_withholds_resolve_scope",
+            ),
+        ),
+        ManifestItem(
+            id="defect.bare-name-leak-graceful-terminal",
+            category="readiness_and_resolution_safety_defect_reproduction",
+            description=(
+                "CHAOS-3421: a model that leaks the raw forbidden_or_"
+                "not_found outcome token (what resolve_scope.v1 returns "
+                "for a named subject the catalog cannot confirm) on the "
+                "organization-wide-fallback path must never fail the run "
+                "closed to a generic internal_error -- the leak scan "
+                "reroutes to the SAME graceful scope_not_found terminal "
+                "the legacy narration guard already ships for this exact "
+                "scenario class, reusing its copy verbatim rather than "
+                "forcing the stricter FORBIDDEN_OR_NOT_FOUND no-match "
+                "terminal open. Replicated directly against the real live-"
+                "incident question shape and the real CHAOS-3388 fixture "
+                "entity, with subject matching (CHAOS-3407) deliberately "
+                "left unfixed -- the run still misses, but never crashes."
+            ),
+            status="proven_unit",
+            evidence=(
+                "src/dev_health_ops/api/dev/orchestrator.py",
+                "src/dev_health_ops/api/dev/subject_preflight.py",
+                "src/dev_health_ops/api/dev/no_match_terminal.py",
+                "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py",
+            ),
+            content_markers=("legacy_guard_required", "scope_not_found"),
+            test_nodeids=(
+                "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py::"
+                "test_a_leaked_resolution_outcome_on_a_bare_name_fallback_is_graceful",
+                "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py::"
+                "test_an_unrelated_leak_off_this_branch_still_fails_closed",
+                "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py::"
+                "test_the_live_incident_question_never_crashes_even_though_it_still_misses",
+            ),
+        ),
+    )
+
+
 def _build_manifest() -> tuple[ManifestItem, ...]:
     return (
         _core_defect_reproductions()
@@ -1876,6 +2014,7 @@ def _build_manifest() -> tuple[ManifestItem, ...]:
         + _blocking_matrix_blocked()
         + _gates()
         + _mutation_proofs()
+        + _readiness_and_resolution_safety_defects()
     )
 
 
@@ -1951,33 +2090,90 @@ PROVEN_E2E_CLAIM_LIMITS = (
 #:
 #: Whether a stale row is ACCEPTABLE is a wave-close decision, not a CI
 #: one. CI's only job here is that nobody can be surprised by one.
-# The feature-only Go worker migration added the disabled-by-default
-# WORKER_GITLAB_INCIDENTS_ENABLED Compose wiring after these 14 live scenarios
-# were recorded.  That changes the governed runtime surface without changing
-# what any scenario exercised, so acknowledge this exact compose.yml content
-# hash until the scenarios are re-minted.  The hash binding makes the next
-# Compose edit fail loudly again instead of turning this into a permanent
-# exemption.
+#:
+#: HISTORY: from the CHAOS-3312 datastore reconciliation through CHAOS-3419
+#: (Python version standardization), this mapping carried a running set of
+#: acknowledged-stale declarations for all fourteen ``proven_e2e`` rows
+#: above -- each entry named the exact drifted-path/hash pair a routine,
+#: non-product dependency bump (compose datastore versions, the scripted
+#: provider, the Lane 1c launcher/compose/seeder, pyproject.toml) left
+#: behind, per the self-cleaning rule below: a declaration whose named hash
+#: no longer matches the drift, or that names a row with no drift at all,
+#: fails loudly rather than silently expiring.
+#:
+#: CHAOS-3219 Wave 4 Phase 1 barrier re-proof (2026-08-05): all fourteen
+#: rows were re-minted live against merged main in the SAME change that
+#: bound ``tests/acceptance/compose.ask-dev-acr.yml`` into
+#: ``RUNTIME_DEPENDENCY_PATHS`` (see acceptance_artifact.py's comment).
+#: A fresh run against the current tree has, by construction, no drift left
+#: to acknowledge -- so every prior declaration above was removed here,
+#: exactly as this mechanism requires ("once the scenario is re-run the
+#: entry MUST be deleted or the manifest breaks"). Empty is the correct
+#: steady state until the next real, acknowledged drift.
+#:
+#: CHAOS-3437 (Codex adversarial review follow-up, same day): the CHAOS-3437
+#: residual-gap paragraph was added to acceptance_artifact.py's
+#: ``RUNTIME_DEPENDENCY_PATHS`` comment immediately after the re-mint above
+#: -- a covered-dependency-file edit, so it genuinely drifts all fourteen
+#: rows' ``scripts/acceptance/acceptance_artifact.py`` hash again. Comment
+#: text only; no behavioral change to the recorder, the digest, or any
+#: scenario. Declared per team-lead ruling (2026-08-05) rather than
+#: triggering a third live re-mint for a doc-only edit -- the same
+#: "routine, non-product dependency bump" reasoning the HISTORY note above
+#: already established for pyproject.toml.
+_ACCEPTANCE_ARTIFACT_PY_AT_CHAOS_3437_DOC = (
+    "38d9503d5bd0c4e0ab3da72e2a8eeb069f7c1171cd3a9bff86742acf2239a34b"
+)
+#: Go worker runtime migration (feature branch only): the migration adds
+#: disabled-by-default Go worker Compose wiring on top of merged main's
+#: ``compose.yml``. That changes the governed runtime surface without
+#: changing what any of the fourteen scenarios exercised, so acknowledge
+#: this exact merged ``compose.yml`` content hash until the scenarios are
+#: re-minted on the migrated runtime. The hash binding makes the NEXT
+#: Compose edit fail loudly again instead of turning this into a permanent
+#: exemption. This entry is feature-branch-local and must be deleted when
+#: the Go worker scenarios are re-minted (or when this branch's Compose
+#: delta lands on main and the rows are re-recorded).
 _GO_WORKER_FEATURE_COMPOSE_SHA256 = (
-    "0f7ea9fc8466fd413c6b6a13e6112c60afa1663dccf82845fd549a7e1f6ae765"
+    "7438994fe1a356825c1b103fe83fbab046c2d73056ccfdb31122eb3f81f4c7d4"
+)
+#: Consequence of the Compose delta above, not a second independent change.
+#: The migration's two disabled-by-default GitLab worker flags are ``${VAR}``
+#: references in compose.yml, and
+#: test_launcher_hardens_compose_interpolation_env_for_every_var_it_boots
+#: (correctly) fails until the acceptance launcher unsets them -- otherwise an
+#: ambient direnv value silently reaches the acceptance stack's interpolation.
+#: Hardening the launcher edits a covered dependency file, so the same fourteen
+#: rows drift on it too. Deleted together with the Compose entry when the
+#: scenarios are re-minted on the migrated runtime.
+_GO_WORKER_FEATURE_LAUNCHER_SHA256 = (
+    "7903602dcb2ea4251a4f5ba522f16a4a8918bd485ead5c6aa37540631d8d5b61"
 )
 DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
-    item_id: {"compose.yml": _GO_WORKER_FEATURE_COMPOSE_SHA256}
+    item_id: {
+        "scripts/acceptance/acceptance_artifact.py": (
+            _ACCEPTANCE_ARTIFACT_PY_AT_CHAOS_3437_DOC
+        ),
+        "compose.yml": _GO_WORKER_FEATURE_COMPOSE_SHA256,
+        "scripts/acceptance/run_ask_dev_compose.sh": (
+            _GO_WORKER_FEATURE_LAUNCHER_SHA256
+        ),
+    }
     for item_id in (
-        "defect.ask-dev-not-found.e2e-live-validated",
-        "defect.ask-dev-exact-commit.e2e-live-validated",
-        "positive-control.real-project-status",
-        "attack.unrelated-evidence.e2e-live-validated",
         "attack.team-attribution.e2e-blocked-by-live-defect",
-        "matrix.exact-project-complete",
-        "matrix.registered-metric-catalog",
-        "matrix.multi-metric-comparison-organization-wide",
-        "matrix.remaining-work-exact-project",
+        "attack.unrelated-evidence.e2e-live-validated",
+        "defect.ask-dev-exact-commit.e2e-live-validated",
+        "defect.ask-dev-not-found.e2e-live-validated",
+        "gate.plan-registry-gap-is-loud.e2e-live-validated",
         "matrix.data-trust-organization-wide",
+        "matrix.exact-project-complete",
+        "matrix.multi-metric-comparison-organization-wide",
+        "matrix.operational-deficiency.e2e-live-validated",
+        "matrix.registered-metric-catalog",
+        "matrix.remaining-work-exact-project",
         "matrix.team-health.e2e-live-validated",
         "matrix.team-workload-balance.e2e-live-validated",
-        "matrix.operational-deficiency.e2e-live-validated",
-        "gate.plan-registry-gap-is-loud.e2e-live-validated",
+        "positive-control.real-project-status",
     )
 }
 
@@ -2517,17 +2713,17 @@ def validate_manifest(
     artifact whose recorded content digests no longer match this tree, or citing a script whose
     bytes have changed since.
 
-    Omitting ``items`` validates the complete landed manifest and therefore
-    also rejects stale declarations whose row no longer exists. Passing an
-    explicit subset validates only declarations owned by that subset; this
-    keeps focused integrity checks composable without treating the complete
-    manifest's declarations as orphans.
-
     This function is deliberately fast and offline -- it does NOT run any
     live scenario itself, only checks artifacts scenarios already wrote and
     runs cheap local ``git`` queries. That keeps every commit's normal test
     run able to catch a stale or fabricated ``proven_e2e`` claim without
     needing Docker/Compose.
+
+    Omitting ``items`` validates the complete landed manifest and therefore
+    also rejects stale declarations whose row no longer exists. Passing an
+    explicit subset validates only declarations owned by that subset; this
+    keeps focused integrity checks composable without treating the complete
+    manifest's declarations as orphans.
     """
 
     validate_declaration_ownership = items is None

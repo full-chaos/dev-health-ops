@@ -608,6 +608,132 @@ async def test_membership_source_truncation_signal_also_withholds_the_denominato
     assert result.actual.required_child_complete is None
 
 
+# ---------------------------------------------------------------------------
+# CHAOS-3408: required-children/blockers have NO single declared/children
+# completion tree for an ORGANIZATION or TEAM subject (a deliberate CHAOS-
+# 3303 design -- native_status_change.TEAM_NOT_APPLICABLE_SOURCES -- never a
+# data gap). ``RawStatusSnapshot.children`` is therefore always structurally
+# empty for these two scopes, and treating that the same as a genuinely-
+# computed real zero produced a fabricated-looking "0 of 0 required items
+# are complete" for every org-wide/team-wide readiness question. The
+# denominator must be WITHHELD (None) here, exactly like a truncated source
+# -- but distinguishably so: never carrying
+# ``assessment_source_limit_reached`` (this is not a truncation, and must
+# never be confused with one downstream).
+# ---------------------------------------------------------------------------
+
+
+def _org_scope() -> DevScope:
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id="org-a",
+        direct_scope=DirectScope.ORGANIZATION,
+        repositories=["repo-a"],
+        entity_refs=[],
+        time_range=DevTimeRange(start=NOW - timedelta(days=7), end=NOW, timezone="UTC"),
+        comparison_range=DevTimeRange(
+            start=NOW - timedelta(days=14),
+            end=NOW - timedelta(days=7),
+            timezone="UTC",
+        ),
+    )
+
+
+def _team_scope() -> DevScope:
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id="org-a",
+        direct_scope=DirectScope.TEAM,
+        repositories=[],
+        entity_refs=[
+            DevEntityRef(
+                entity_type=EntityType.TEAM,
+                entity_id="team-platform",
+                display_label="Platform",
+            )
+        ],
+        team_ids=["team-platform"],
+        time_range=DevTimeRange(start=NOW - timedelta(days=7), end=NOW, timezone="UTC"),
+        comparison_range=DevTimeRange(
+            start=NOW - timedelta(days=14),
+            end=NOW - timedelta(days=7),
+            timezone="UTC",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope_factory", [_org_scope, _team_scope])
+async def test_organization_and_team_scope_withhold_the_required_child_denominator(
+    scope_factory,
+) -> None:
+    """The live repro: an organization-wide (or team-wide) readiness
+    question must never report a fabricated "0 of 0 required items are
+    complete" -- the denominator is withheld (None), exactly as if the
+    source had reported a real truncation, but WITHOUT the truncation
+    reason code (this is a structural non-applicability, not a source
+    limit)."""
+
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=None,
+                children=(),
+                deployments=(_deployment(),),
+                source_refs=(_source_ref(),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(scope_factory(), as_of=NOW)
+    )
+
+    assert result.actual.required_child_total is None
+    assert result.actual.required_child_complete is None
+    # Never confused with a real source truncation downstream (the
+    # "assessment hit a display limit" copy would be actively misleading
+    # here -- nothing was ever attempted, let alone limited).
+    assert "assessment_source_limit_reached" not in result.actual.reason_codes
+    # CHAOS-3409 codex adversarial review (HIGH): the explicit signal
+    # render_verdict_summary/is_completion_assessment_untrustworthy read --
+    # never inferred from reason-code absence, which missed the real
+    # denominator_withheld production wiring entirely.
+    assert result.actual.required_children_not_applicable is True
+
+
+@pytest.mark.asyncio
+async def test_project_scope_with_genuinely_zero_required_children_is_a_real_zero() -> (
+    None
+):
+    """No regression: PROJECT/ISSUE/WORK_UNIT scope's required-child
+    concept IS applicable and IS queried -- a real query that genuinely
+    finds zero required children must still report a REAL ``0``, never
+    withheld, and this must stay distinguishable from CHAOS-3408's
+    organization/team non-applicability."""
+
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("project-1", "done"),
+                children=(),
+                deployments=(_deployment(),),
+                source_refs=(_source_ref(),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(DirectScope.PROJECT), as_of=NOW),
+    )
+
+    assert result.actual.required_child_total == 0
+    assert result.actual.required_child_complete == 0
+    assert result.actual.required_children_not_applicable is False
+
+
 def _many_blockers(n: int) -> tuple[StatusFact, ...]:
     return tuple(_fact(f"blocker-{i:04d}", "resolved") for i in range(n))
 

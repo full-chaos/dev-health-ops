@@ -32,6 +32,7 @@ from dev_health_ops.models.settings import (
     IntegrationCredential,
     ScheduledJob,
     SyncConfiguration,
+    SyncWatermark,
 )
 from dev_health_ops.models.users import Organization, User
 from dev_health_ops.sync.canonical_incident_gate import (
@@ -63,6 +64,8 @@ _TABLES = tables_of(
     SyncConfiguration,
     IntegrationCredential,
     ScheduledJob,
+    # The units endpoint reads watermark lag per (source, dataset) (CHAOS-3430).
+    SyncWatermark,
 )
 
 
@@ -172,7 +175,14 @@ async def _seed_source(session_maker, org_id: str, integration_id: str) -> str:
     return str(source_id)
 
 
-async def _seed_dataset(session_maker, org_id: str, integration_id: str) -> str:
+async def _seed_dataset(
+    session_maker,
+    org_id: str,
+    integration_id: str,
+    *,
+    dataset_key: str = "git",
+    is_enabled: bool = True,
+) -> str:
     """Directly insert an IntegrationDataset row and return its id."""
     dataset_id = uuid.uuid4()
     async with session_maker() as session:
@@ -180,8 +190,8 @@ async def _seed_dataset(session_maker, org_id: str, integration_id: str) -> str:
             id=dataset_id,
             org_id=org_id,
             integration_id=uuid.UUID(integration_id),
-            dataset_key="git",
-            is_enabled=True,
+            dataset_key=dataset_key,
+            is_enabled=is_enabled,
             options={},
         )
         session.add(dataset)
@@ -545,6 +555,134 @@ async def test_patch_datasets_not_found(client):
         json={"datasets": [{"dataset_key": "nonexistent", "is_enabled": False}]},
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_enabled", [True, False])
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+async def test_patch_missing_dataset_upserts_requested_state(
+    client, session_maker, seeded_state, provider, is_enabled
+):
+    # Given: an existing integration created before the tests dataset existed.
+    ac, _ = client
+    created = await _create_integration(ac, provider=provider)
+    integration_id = created["id"]
+
+    # When: the caller updates the missing tests dataset row.
+    resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/datasets",
+        json={"datasets": [{"dataset_key": "tests", "is_enabled": is_enabled}]},
+    )
+
+    # Then: the row is created with the explicitly requested enabled state.
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[0]["dataset_key"] == "tests"
+    assert resp.json()[0]["is_enabled"] is is_enabled
+    async with session_maker() as session:
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.org_id == seeded_state["org_id"],
+                    IntegrationDataset.integration_id == uuid.UUID(integration_id),
+                    IntegrationDataset.dataset_key == "tests",
+                )
+            )
+        ).scalar_one()
+    assert dataset.is_enabled is is_enabled
+
+
+@pytest.mark.asyncio
+async def test_patch_missing_dataset_rejects_provider_unsupported_key(
+    client, session_maker, seeded_state
+):
+    # Given: a Jira integration with no tests dataset row.
+    ac, _ = client
+    created = await _create_integration(ac, provider="jira")
+    integration_id = created["id"]
+
+    # When: the caller requests a dataset that exists but Jira does not support.
+    resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/datasets",
+        json={"datasets": [{"dataset_key": "tests", "is_enabled": True}]},
+    )
+
+    # Then: the API rejects the request without materializing the row.
+    assert resp.status_code == 404
+    async with session_maker() as session:
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.org_id == seeded_state["org_id"],
+                    IntegrationDataset.integration_id == uuid.UUID(integration_id),
+                    IntegrationDataset.dataset_key == "tests",
+                )
+            )
+        ).scalar_one_or_none()
+    assert dataset is None
+
+
+@pytest.mark.asyncio
+async def test_patch_missing_dataset_recovers_from_concurrent_insert(
+    client, session_maker, seeded_state, monkeypatch
+):
+    # Given: another transaction inserted a disabled tests row after the route's read.
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    await _seed_dataset(
+        session_maker,
+        seeded_state["org_id"],
+        integration_id,
+        dataset_key="tests",
+        is_enabled=False,
+    )
+    original_get_by_key = (
+        integrations_router_module.IntegrationDatasetService.get_by_key
+    )
+    read_count = 0
+
+    async def stale_once_get_by_key(service, requested_integration_id, dataset_key):
+        nonlocal read_count
+        read_count += 1
+        if read_count == 1:
+            return None
+        return await original_get_by_key(
+            service,
+            requested_integration_id,
+            dataset_key,
+        )
+
+    monkeypatch.setattr(
+        integrations_router_module.IntegrationDatasetService,
+        "get_by_key",
+        stale_once_get_by_key,
+    )
+
+    # When: the operator explicitly enables tests through the stale route state.
+    resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/datasets",
+        json={"datasets": [{"dataset_key": "tests", "is_enabled": True}]},
+    )
+
+    # Then: the conflict is recovered and the operator's requested state wins.
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[0]["is_enabled"] is True
+    async with session_maker() as session:
+        datasets = (
+            (
+                await session.execute(
+                    select(IntegrationDataset).where(
+                        IntegrationDataset.org_id == seeded_state["org_id"],
+                        IntegrationDataset.integration_id == uuid.UUID(integration_id),
+                        IntegrationDataset.dataset_key == "tests",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(datasets) == 1
+    assert datasets[0].is_enabled is True
 
 
 # ---------------------------------------------------------------------------
@@ -1092,6 +1230,94 @@ async def test_get_sync_run_units_exposes_error_category(
     assert resp.status_code == 200
     unit = resp.json()["units"][0]
     assert unit["error_category"] == "rate_limit"
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_surfaces_budget_blocked_units(
+    client, session_maker, seeded_state
+):
+    """CHAOS-3412: budget-blocked units must be COUNTED, not just present.
+
+    Before this, a run whose units were all deferred by the budget guard
+    reported zero failures, zero exhausted retries, and nothing else an
+    operator could act on -- the run simply looked idle. The rollup now
+    carries budget_blocked_unit_count, and each unit carries how many times
+    it has been deferred, so "enabled but producing nothing" is visible.
+    """
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+
+    async with session_maker() as session:
+        session.add_all(
+            [
+                SyncRunUnit(
+                    org_id=seeded_state["org_id"],
+                    sync_run_id=uuid.UUID(run_id),
+                    integration_id=uuid.UUID(integration_id),
+                    source_id=uuid.UUID(source_id),
+                    provider="github",
+                    dataset_key="tests",
+                    cost_class="heavy",
+                    mode="incremental",
+                    status="retrying",
+                    attempts=0,
+                    budget_deferrals=6,
+                    result={"error_category": "budget_deferred"},
+                ),
+                # Retrying for an UNRELATED reason -- must not be counted.
+                SyncRunUnit(
+                    org_id=seeded_state["org_id"],
+                    sync_run_id=uuid.UUID(run_id),
+                    integration_id=uuid.UUID(integration_id),
+                    source_id=uuid.UUID(source_id),
+                    provider="github",
+                    dataset_key="prs",
+                    cost_class="standard",
+                    mode="incremental",
+                    status="retrying",
+                    attempts=1,
+                    result={"error_category": "rate_limit"},
+                ),
+                # Already terminalized by the exhaustion path -- it is a
+                # FAILURE now, not a block, so it must not be counted either.
+                SyncRunUnit(
+                    org_id=seeded_state["org_id"],
+                    sync_run_id=uuid.UUID(run_id),
+                    integration_id=uuid.UUID(integration_id),
+                    source_id=uuid.UUID(source_id),
+                    provider="github",
+                    dataset_key="commit-stats",
+                    cost_class="heavy",
+                    mode="incremental",
+                    status="failed",
+                    attempts=0,
+                    budget_deferrals=10,
+                    result={"error_category": "budget_deferral_exhausted"},
+                ),
+            ]
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["budget_blocked_unit_count"] == 1
+    blocked = next(unit for unit in data["units"] if unit["dataset_key"] == "tests")
+    assert blocked["budget_deferrals"] == 6
+    assert blocked["error_category"] == "budget_deferred"
+    exhausted = next(
+        unit for unit in data["units"] if unit["dataset_key"] == "commit-stats"
+    )
+    assert exhausted["budget_deferrals"] == 10
+    assert exhausted["error_category"] == "budget_deferral_exhausted"
+    # A unit that never met the budget guard reports a zero, not a null.
+    unrelated = next(unit for unit in data["units"] if unit["dataset_key"] == "prs")
+    assert unrelated["budget_deferrals"] == 0
 
 
 @pytest.mark.asyncio

@@ -345,7 +345,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "984a7b92cc1476b929f895c009c4c7c061d7ad594427777329b7271a9b8a4f1f"
+        "sha256": "7e596208a1c2711a4d6b7d2e6ba202b971a1ae8eae0af215e06aa01511f3e07e"
       },
       "schema_version": "dev_tool_result.v1"
     },
@@ -424,6 +424,13 @@
     {
       "case": "invalid_out_of_order",
       "path": "examples/streams/invalid_out_of_order.json"
+    }
+  ],
+  "vocabulary": [
+    {
+      "case": "internal_prose_denylist",
+      "path": "vocabulary/internal_prose_denylist.v1.json",
+      "sha256": "621ed38192bb17f3c9e9f826a3b3572c29cc8cd58865c77e9ea4ad9296990e7a"
     }
   ]
 }

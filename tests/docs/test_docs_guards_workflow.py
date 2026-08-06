@@ -96,7 +96,7 @@ def test_path_filters_watch_canonical_docs_and_mkdocs() -> None:
         assert "mkdocs.yml" in paths
 
 
-def test_python_312_is_configured() -> None:
+def test_python_314_is_configured() -> None:
     setup_steps = [
         step
         for step in _docs_steps()
@@ -106,7 +106,7 @@ def test_python_312_is_configured() -> None:
     for step in setup_steps:
         params = step.get("with")
         assert isinstance(params, dict)
-        assert str(params.get("python-version")) == "3.12"
+        assert str(params.get("python-version")) == "3.14"
 
 
 def test_docs_guards_has_no_node_or_playwright_runtime() -> None:

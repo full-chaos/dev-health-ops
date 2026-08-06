@@ -205,9 +205,13 @@ def test_new_source_classes_are_present_in_every_totality_table() -> None:
         assert source_class in APPROVED_CONTENT_SLOTS
 
 
-def test_health_profile_slot_is_only_health_findings() -> None:
+def test_health_profile_slot_is_health_findings_and_portfolio_statuses() -> None:
+    # CHAOS-3393: status.portfolio.v1's adapter is also registered under
+    # HEALTH_PROFILE (a portfolio batch is several HEALTH_PROFILE
+    # evaluations flattened into one), so it shares this source class's
+    # approved-slots entry with the project/team health adapters.
     assert APPROVED_CONTENT_SLOTS[SourceClass.HEALTH_PROFILE] == frozenset(
-        {"health_findings"}
+        {"health_findings", "portfolio_project_statuses"}
     )
 
 

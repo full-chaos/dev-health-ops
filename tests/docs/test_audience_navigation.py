@@ -3,7 +3,8 @@
 Navigation is organized by durable reader task, not by the superseded
 six-audience buckets. The root ``/`` is the task router and its first
 viewport surfaces the accepted primary tasks directly, so they are
-reachable without search.
+reachable without search. One explicitly governed top-level product overview
+may appear between the home router and the task domains.
 """
 
 from pathlib import Path
@@ -15,8 +16,14 @@ MKDOCS_PATH = ROOT / "mkdocs.yml"
 DOCS_DIR = ROOT / "docs"
 INDEX_PATH = DOCS_DIR / "index.md"
 
+# The single accepted top-level product overview. This is not an audience
+# bucket or a replacement for the task-oriented documentation domains.
+PRODUCT_OVERVIEW_SECTIONS = ("Context Fabric",)
+PRODUCT_OVERVIEW_PATHS = {"Context Fabric": "context-fabric/index.md"}
+
 # The accepted top-level task domains, in navigation order, after the home
-# router entry. These mirror the canonical IA task domains.
+# router and governed product overview. These mirror the canonical IA task
+# domains.
 TASK_DOMAIN_SECTIONS = (
     "Get started",
     "Use Dev Health",
@@ -84,8 +91,16 @@ def test_navigation_is_task_oriented_not_audience_bucketed() -> None:
     assert labels[0] == "Documentation home"
     assert nav[0]["Documentation home"] == "index.md"
 
+    # The only non-task top-level entry is the explicitly governed product
+    # overview, with one exact canonical page.
+    product_start = 1
+    product_end = product_start + len(PRODUCT_OVERVIEW_SECTIONS)
+    assert tuple(labels[product_start:product_end]) == PRODUCT_OVERVIEW_SECTIONS
+    for index, label in enumerate(PRODUCT_OVERVIEW_SECTIONS, start=product_start):
+        assert nav[index][label] == PRODUCT_OVERVIEW_PATHS[label]
+
     # The remaining top level is exactly the accepted task domains, in order.
-    assert tuple(labels[1:]) == TASK_DOMAIN_SECTIONS
+    assert tuple(labels[product_end:]) == TASK_DOMAIN_SECTIONS
 
     # None of the superseded six-audience buckets survive.
     for legacy_section in LEGACY_AUDIENCE_SECTIONS:

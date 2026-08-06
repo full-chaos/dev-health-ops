@@ -60,6 +60,10 @@ class Recorder:
         self.narratives: list[Any] = []
         self.terminal_calls: list[dict[str, Any]] = []
         self.resolutions: list[Any] = []
+        #: CHAOS-3423: every no-answer terminal's persisted transcript-row
+        #: write, captured the same way ``self.answers`` captures the
+        #: answer-path's equivalent.
+        self.error_messages: list[Any] = []
         self.rollbacks = 0
         self.fail_answer_write = fail_answer_write
         self.fail_frame_write = fail_frame_write
@@ -76,6 +80,9 @@ class Recorder:
         if self.fail_answer_write:
             raise RuntimeError("storage unavailable")
         self.answers.append(answer)
+
+    async def record_error_message(self, error: Any, **_values: Any) -> None:
+        self.error_messages.append(error)
 
     async def record_preflight(
         self, *, preflight_outcome: str | None, legacy_guard_reason: str | None
@@ -1364,6 +1371,577 @@ async def test_resolved_project_scope_is_committed_for_the_status_tool() -> None
     assert committed_scope.direct_scope.value == "project"
 
 
+def _scope_shaped_status_completion(*, direct_scope: str) -> dict:
+    """A distinct, recognizable ``actual_completion`` payload per scope kind
+    -- 'ready' for organization scope, 'not_ready' for anything else -- so a
+    test can prove WHICH of several status_snapshot.v1 results the
+    deterministic renderer actually used."""
+
+    if direct_scope == "organization":
+        return {
+            "state": "ready",
+            "rule_id": "actual-completion",
+            "rule_version": "actual-completion.v4",
+            "reason_codes": [],
+            "required_children": [],
+            "blockers": [],
+            "required_child_total": 1,
+            "required_child_complete": 1,
+            "display_truncated": False,
+            "conflicts": [],
+            # Non-empty: the verdict claim's text states the completion
+            # fraction (a number), and DevAnswer's numeric-claim check
+            # requires a metric or evidence reference on any claim
+            # containing one.
+            "evidence_ref_ids": ["ev_01"],
+        }
+    return {
+        "state": "not_ready",
+        "rule_id": "actual-completion",
+        "rule_version": "actual-completion.v4",
+        "reason_codes": ["open_blocker"],
+        "required_children": [],
+        "blockers": [
+            {
+                "fact_id": "issue:B1",
+                "text": "Open blocker for the resolved subject",
+                "status": "open",
+                "evidence_ref_ids": ["ev_01"],
+            }
+        ],
+        "required_child_total": 3,
+        "required_child_complete": 1,
+        "display_truncated": False,
+        "conflicts": [],
+        "evidence_ref_ids": ["ev_01"],
+    }
+
+
+def _multi_scope_status_registry(
+    *, resolve_scope_result: DevScopeResolution
+) -> AskDevToolRegistry:
+    """resolve_scope.v1 commits ``resolve_scope_result``; every
+    status_snapshot.v1 call gets an ``actual_completion`` shaped by ITS OWN
+    request scope, so a test can distinguish a stale (pre-commit) snapshot
+    from the current (post-commit) one purely by content.
+    """
+
+    async def execute(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+            }
+        )
+        if request.tool_id is ToolID.RESOLVE_SCOPE:
+            payload["scope_resolution"] = resolve_scope_result.model_dump(mode="json")
+        elif request.tool_id is ToolID.STATUS_SNAPSHOT:
+            payload["actual_completion"] = _scope_shaped_status_completion(
+                direct_scope=request.scope.direct_scope.value
+            )
+        return DevToolResult.model_validate(payload)
+
+    return AskDevToolRegistry({tool_id: execute for tool_id in ToolID})
+
+
+@pytest.mark.asyncio
+async def test_earlier_differently_scoped_status_snapshot_is_never_used_for_the_final_answer() -> (
+    None
+):
+    """CHAOS-3377 HIGH 1 fail->pass, full orchestrator run (codex adversarial
+    review): the model calls status_snapshot.v1 under organization scope
+    FIRST (a 'ready' verdict), then resolves to a more specific project
+    scope, then calls status_snapshot.v1 AGAIN under the newly-committed
+    scope (a 'not_ready' verdict with a real blocker). The deterministic
+    renderer must reflect ONLY the project-scoped (current) result -- the
+    stale organization-scoped 'ready' verdict must never leak into, or
+    overwrite, the final differently-scoped answer.
+    """
+
+    script_id = "multi-scope-status-snapshot"
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Ask Dev project", "limit": 25},
+                        call_id="tool_call_02",
+                    ),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_03",
+                    ),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=_multi_scope_status_registry(
+                resolve_scope_result=_project_resolution()
+            ),
+            scope_resolver=resolve,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status.value != "refused"
+    summary = result.answer.direct_summary.casefold()
+    # Reflects the SECOND (project-scoped, not_ready) snapshot...
+    assert "not ready" in summary
+    # ...never the first (organization-scoped, ready) one.
+    assert summary.strip() != "ready: every required item is complete."
+    assert any(
+        "Open blocker for the resolved subject" in claim.text
+        for claim in result.answer.claims
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_refusal_after_status_snapshot_is_never_refused() -> None:
+    """CHAOS-3377 HIGH 2 fail->pass: a provider that emits AgentRefusal
+    AFTER a real status_snapshot.v1 result already exists for the run's
+    current resolved scope must not terminate REFUSED -- the deterministic
+    §10 verdict is rendered instead, the same as it would be for a
+    validated AgentFinalAnswer.
+    """
+
+    script_id = "status-snapshot-then-refusal"
+
+    async def status_snapshot(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": _scope_shaped_status_completion(
+                    direct_scope=request.scope.direct_scope.value
+                ),
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(decision=AgentRefusal(code="unsupported", message="no")),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status.value != "refused"
+    assert "not ready" in result.answer.direct_summary.casefold()
+
+
+@pytest.mark.asyncio
+async def test_status_snapshot_declared_project_state_reaches_the_final_verdict() -> (
+    None
+):
+    """CHAOS-3368 step 2 fail->pass, full orchestrator run: a status_snapshot.v1
+    result carrying a declared project state/target date (projects.state/
+    target_date, migration 073) must reach the final §10 answer's
+    direct_summary AND its own grounded claim -- translated (never the raw
+    provider token) -- riding the exact same scope-verified DevToolResult
+    the deterministic renderer already selects for the verdict/blockers.
+    """
+
+    script_id = "status-snapshot-declared-project"
+
+    async def status_snapshot(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": _scope_shaped_status_completion(
+                    direct_scope=request.scope.direct_scope.value
+                ),
+                "declared_project_state": "started",
+                "declared_project_target_date": "2026-09-01",
+                "declared_project_evidence_ref_ids": ["ev_01"],
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(decision=AgentRefusal(code="unsupported", message="no")),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    summary = result.answer.direct_summary
+    assert "Declared state: in progress." in summary
+    assert "Target date: 2026-09-01." in summary
+    # The raw provider token never reaches user-visible copy.
+    assert "started" not in summary.casefold()
+    assert any(
+        claim.claim_id.startswith("status-declared-project:")
+        for claim in result.answer.claims
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_snapshot_no_declared_project_state_renders_no_extra_clause() -> (
+    None
+):
+    """CHAOS-3368 negative control: a status_snapshot.v1 result with no
+    declared project state/target date (an ISSUE-scope run, or a PROJECT
+    scope whose catalog row carried neither) must not append any clause to
+    the deterministic verdict -- the pre-existing CHAOS-3377 verdict text
+    stays exactly as it was before this ticket.
+    """
+
+    script_id = "status-snapshot-no-declared-project"
+
+    async def status_snapshot(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": _scope_shaped_status_completion(
+                    direct_scope=request.scope.direct_scope.value
+                ),
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(decision=AgentRefusal(code="unsupported", message="no")),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert "Declared state:" not in result.answer.direct_summary
+    assert "Target date:" not in result.answer.direct_summary
+    assert not any(
+        claim.claim_id.startswith("status-declared-project:")
+        for claim in result.answer.claims
+    )
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_after_status_snapshot_renders_the_deterministic_verdict() -> (
+    None
+):
+    """CHAOS-3377 HIGH 2 fail->pass: budget exhaustion AFTER a real
+    status_snapshot.v1 result already exists for the run's current resolved
+    scope must not discard it for the generic "budget reached" boilerplate
+    ``_budget_answer`` otherwise falls back to.
+    """
+
+    script_id = "status-snapshot-then-budget"
+
+    async def status_snapshot(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": _scope_shaped_status_completion(
+                    direct_scope=request.scope.direct_scope.value
+                ),
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(estimated_cost_microusd=600_000),
+                )
+            ],
+            script_id=script_id,
+            registry=registry,
+            limits=DevRunLimits(
+                max_estimated_cost_microusd=1_500_000,
+                estimated_cost_per_call_microusd=1_000_000,
+            ),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status.value != "refused"
+    assert "not ready" in result.answer.direct_summary.casefold()
+    assert result.answer.direct_summary != (
+        "The provider budget was reached. This answer contains only the "
+        "validated data retrieved before the limit."
+    )
+    assert any(
+        "Open blocker for the resolved subject" in claim.text
+        for claim in result.answer.claims
+    )
+
+
+def _declared_project_truncation_registry() -> AskDevToolRegistry:
+    """First status_snapshot.v1 call ('tool_call_01') fills the run-wide
+    canonical evidence cap (``Orchestrator._limits.evidence_refs`` == 25)
+    with 25 evidence refs; the SECOND status_snapshot.v1 call
+    ('tool_call_02') -- the one that actually carries ``actual_completion``
+    and is bound to the run's final resolved scope -- carries a declared
+    project state/target date backed by evidence NOT among those 25, so it
+    must be truncated out of the run-wide canonical evidence set (CHAOS-3368
+    Codex HIGH, delta review, 2026-08-04).
+
+    ``"ev_01"`` -- the evidence id ``_scope_shaped_status_completion``'s
+    verdict/blocker facts reference -- is deliberately INCLUDED among the
+    25 (not left to compete with the 26th slot), so this fixture isolates
+    ONLY the declared-project truncation this test exists to exercise: the
+    pre-existing verdict/blocker claims must keep behaving exactly as they
+    do in ``test_agent_refusal_after_status_snapshot_is_never_refused`` and
+    siblings, unaffected by this fixture's added filler evidence.
+    """
+
+    filler_ids = ["ev_01", *(f"ev_fill_{i:02d}" for i in range(24))]
+
+    def _evidence_stub(eid: str) -> dict:
+        return {
+            **positive_fixtures()["dev_tool_result.v1"]["evidence"][0],
+            "evidence_ref_id": eid,
+        }
+
+    async def status_snapshot(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+            }
+        )
+        if request.tool_call_id == "tool_call_01":
+            payload["evidence"] = [_evidence_stub(eid) for eid in filler_ids]
+        else:
+            payload["actual_completion"] = _scope_shaped_status_completion(
+                direct_scope=request.scope.direct_scope.value
+            )
+            payload["declared_project_state"] = "paused"
+            payload["declared_project_target_date"] = "2026-12-25"
+            payload["declared_project_evidence_ref_ids"] = ["ev_declared"]
+            payload["evidence"] = [
+                _evidence_stub(eid) for eid in ("ev_01", "ev_declared")
+            ]
+        return DevToolResult.model_validate(payload)
+
+    return AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+
+
+def _assert_declared_project_state_fully_absent(answer) -> None:
+    """The consistency invariant this fix round exists to enforce: the
+    summary clause, its claim, AND its evidence must be omitted TOGETHER --
+    never a summary sentence asserting a declared state with no claim and
+    no evidence anywhere in the answer backing it.
+    """
+
+    assert "Declared state:" not in answer.direct_summary
+    assert "Target date:" not in answer.direct_summary
+    assert not any(
+        claim.claim_id.startswith("status-declared-project:") for claim in answer.claims
+    )
+    assert "ev_declared" not in {item.evidence_ref_id for item in answer.evidence}
+
+
+@pytest.mark.asyncio
+async def test_declared_project_state_omitted_together_when_run_wide_cap_truncates_it_final_answer() -> (
+    None
+):
+    """CHAOS-3368 Codex HIGH fix, AgentFinalAnswer terminal."""
+
+    script_id = "declared-project-truncation-final-answer"
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_02",
+                    ),
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=_declared_project_truncation_registry(),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    # The verdict itself still renders -- only the declared-project content
+    # is gated, not the whole deterministic override.
+    assert "not ready" in result.answer.direct_summary.casefold()
+    _assert_declared_project_state_fully_absent(result.answer)
+
+
+@pytest.mark.asyncio
+async def test_declared_project_state_omitted_together_when_run_wide_cap_truncates_it_agent_refusal() -> (
+    None
+):
+    """CHAOS-3368 Codex HIGH fix, AgentRefusal terminal."""
+
+    script_id = "declared-project-truncation-refusal"
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_02",
+                    ),
+                ),
+                ScriptedStep(decision=AgentRefusal(code="unsupported", message="no")),
+            ],
+            script_id=script_id,
+            registry=_declared_project_truncation_registry(),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status.value != "refused"
+    assert "not ready" in result.answer.direct_summary.casefold()
+    _assert_declared_project_state_fully_absent(result.answer)
+
+
+@pytest.mark.asyncio
+async def test_declared_project_state_omitted_together_when_run_wide_cap_truncates_it_budget_exhaustion() -> (
+    None
+):
+    """CHAOS-3368 Codex HIGH fix, BudgetExceeded terminal."""
+
+    script_id = "declared-project-truncation-budget"
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                    # Explicit zero, not the ``AgentUsage`` default (``None``
+                    # cost, which the budget check falls back to estimating
+                    # at ``estimated_cost_per_call_microusd`` -- that would
+                    # exhaust the budget after this FIRST call alone, before
+                    # ``tool_call_02`` (the one this test needs) ever runs).
+                    usage=AgentUsage(estimated_cost_microusd=0),
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_02",
+                    ),
+                    usage=AgentUsage(estimated_cost_microusd=600_000),
+                ),
+            ],
+            script_id=script_id,
+            registry=_declared_project_truncation_registry(),
+            limits=DevRunLimits(
+                max_estimated_cost_microusd=1_500_000,
+                estimated_cost_per_call_microusd=1_000_000,
+            ),
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status.value != "refused"
+    assert "not ready" in result.answer.direct_summary.casefold()
+    _assert_declared_project_state_fully_absent(result.answer)
+
+
 @pytest.mark.asyncio
 async def test_unresolved_named_entity_never_falls_back_to_organization_scope() -> None:
     """An explicit reference that resolves to nothing must never leave the
@@ -2503,13 +3081,22 @@ async def test_second_false_complete_claim_still_fails_closed() -> None:
 async def test_repair_exhausted_completion_ratio_claim_surfaces_truncation_detail() -> (
     None
 ):
-    """CHAOS-3297 s2 round 5 (codex MEDIUM): rejecting a fabricated
-    completion ratio must not leave the user with only a generic
-    "validation failed" if the one bounded repair pass also fails -- the
-    FAILED terminal's DevError.safe_message must still surface the reason
-    codes and how many required items were actually displayed, end to
-    end through the real orchestrator run loop (not just the validator
-    function in isolation).
+    """CHAOS-3297 s2 round 5 (codex MEDIUM) established: rejecting a
+    fabricated completion ratio must not leave the user with only a generic
+    "validation failed" if the one bounded repair pass also fails.
+
+    CHAOS-3377 supersedes the ORIGINAL outcome this test pinned (a FAILED
+    terminal whose DevError.safe_message surfaced the raw reason codes),
+    for exactly the reason that ticket exists: a run whose tool results
+    include a real ``actual_completion`` assessment now gets the §10
+    deterministic renderer, which overwrites the model's fabricated
+    status/direct_summary/claims with a server-rendered, honest verdict
+    BEFORE validation ever runs -- so the fabricated "100% complete" claim
+    here never reaches the validator at all, and the run completes with
+    truthful content instead of failing. The two things this test always
+    cared about -- (1) the user is never left with nothing, and (2) the
+    reason codes never reach them raw -- both still hold, just via the
+    better mechanism: end to end through the real orchestrator run loop.
     """
     script_id = "repair-exhausted-completion-ratio"
 
@@ -2580,15 +3167,503 @@ async def test_repair_exhausted_completion_ratio_claim_surfaces_truncation_detai
         )
     )
 
-    assert result.state is RunState.FAILED
-    assert result.error is not None
-    # DevError.code is a closed wire vocabulary (dev_error.v1); the
-    # specific "completion_denominator_withheld" classification is
-    # internal-only (AnswerValidationError.code), used to select this
-    # enriched message, not to widen the wire contract.
-    assert result.error.code == "answer_validation_failed"
-    assert "assessment_source_limit_reached" in result.error.safe_message
-    assert "1 required item" in result.error.safe_message
+    assert result.state is RunState.COMPLETED
+    assert result.error is None
+    assert result.answer is not None
+    assert result.answer.status is not AnswerStatus.REFUSED
+    # The fabricated model claim never reached the wire -- the deterministic
+    # verdict replaced it entirely.
+    assert "100% complete" not in result.answer.direct_summary
+    for claim in result.answer.claims:
+        assert "100% complete" not in claim.text
+    # The withheld-denominator disclosure obligation (CHAOS-3297 s2 round 8)
+    # still applies to the deterministic verdict, exactly as it did to a
+    # model-authored one.
+    all_text = " ".join(
+        [result.answer.direct_summary, *(claim.text for claim in result.answer.claims)]
+    )
+    assert (
+        "the required-work completion total could not be fully verified"
+        in all_text.casefold()
+    )
+    # And the raw reason code that used to leak into DevError.safe_message
+    # (pre-CHAOS-3377) must not leak into the answer either.
+    assert "assessment_source_limit_reached" not in all_text
+
+
+# --- CHAOS-3377 acceptance: the live defect, end to end ------------------
+
+
+# The PRD's literal prohibited strings for a substantive project-status
+# answer -- bound as literals here, never derived from the code under test
+# (a control that imports its own expected value from the module it is
+# checking cannot fail when that module is wrong). Mirrors
+# test_no_match_terminal.py's PRD_PROHIBITED_TOKENS convention.
+CHAOS_3377_PROHIBITED_STRINGS = (
+    "actual_completion",
+    "not_ready",
+    "open_blocker",
+    "required_child_incomplete",
+    "required_release_evidence_missing",
+    "ev1_",
+    "}}}{",
+)
+
+
+@pytest.mark.asyncio
+async def test_substantive_status_answer_is_never_refused_and_never_leaks_internal_vocabulary() -> (
+    None
+):
+    """CHAOS-3377 acceptance test, all five defects at once, end to end
+    through the real orchestrator run loop -- not the render functions in
+    isolation.
+
+    The model's own (fabricated) final answer below is deliberately built
+    to hit every one of the five reported defects at once: it self-declares
+    ``status=refused`` over a real ``actual_completion`` assessment (defect
+    1), narrates the raw internal tokens verbatim plus a couple more the
+    live defect didn't show but the same class covers (defect 2), leaks a
+    trailing JSON artifact (defect 3), and lists a 'done' required item
+    under its own fabricated 'blockers' claim while omitting the genuinely
+    open one (defect 5) -- and its ``resolved_scope`` is a PROJECT scope, so
+    a client rendering it would hit defect 4's repository-count line if it
+    doesn't special-case a non-repository scope (asserted at the DevScope
+    level here; the chip/count rendering itself is a web-side fix, tested
+    in AskDevAnswer.test.tsx).
+
+    None of that model text may reach the wire: the §10 deterministic
+    renderer overwrites status/direct_summary/claims entirely once a
+    status_snapshot result carries ``actual_completion``.
+    """
+
+    script_id = "chaos-3377-acceptance-substantive"
+
+    project_scope = deepcopy(positive_fixtures()["dev_scope_resolution.v1"])
+    project_scope["requested_scope"]["direct_scope"] = "project"
+    project_scope["requested_scope"]["repositories"] = []
+    project_scope["requested_scope"]["entity_refs"] = [
+        {
+            "entity_type": "project",
+            "entity_id": "project_falcon_nine",
+            "display_label": "Falcon Nine",
+            "repository_id": None,
+        }
+    ]
+    # The shared fixture's surface_context is repository-shaped; DevScope
+    # cross-validates it against direct_scope, so it must move with it.
+    project_scope["requested_scope"]["surface_context"] = None
+    project_scope["resolved_scope"] = deepcopy(project_scope["requested_scope"])
+    project_scope["authorized_repository_ids"] = []
+    project_scope["authorized_entity_ids"] = ["project_falcon_nine"]
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return DevScopeResolution.model_validate(project_scope)
+
+    open_evidence_id = "ev1_" + hashlib.sha256(b"open-child").hexdigest()[:40]
+    done_evidence_id = "ev1_" + hashlib.sha256(b"done-child").hexdigest()[:40]
+    verdict_evidence_id = "ev1_" + hashlib.sha256(b"verdict").hexdigest()[:40]
+
+    async def status_snapshot(_context: Any, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "scope_resolution": project_scope,
+                "metrics": [],
+                "evidence": [
+                    {
+                        **positive_fixtures()["dev_tool_result.v1"]["evidence"][0],
+                        "evidence_ref_id": eid,
+                    }
+                    for eid in (open_evidence_id, done_evidence_id, verdict_evidence_id)
+                ],
+                "actual_completion": {
+                    "state": "not_ready",
+                    "rule_id": "actual-completion",
+                    "rule_version": "actual-completion.v4",
+                    "reason_codes": ["open_blocker", "required_child_incomplete"],
+                    "required_children": [
+                        {
+                            "fact_id": "issue:OPEN-1",
+                            "text": "Wire the presentation seam",
+                            "status": "in_progress",
+                            "evidence_ref_ids": [open_evidence_id],
+                        },
+                        {
+                            "fact_id": "issue:DONE-1",
+                            "text": "Land the frame contract",
+                            "status": "completed",
+                            "evidence_ref_ids": [done_evidence_id],
+                        },
+                    ],
+                    "required_child_total": 69,
+                    "required_child_complete": 39,
+                    "display_truncated": False,
+                    "conflicts": [],
+                    "evidence_ref_ids": [verdict_evidence_id],
+                },
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+
+    fabricated_answer = _answer(script_id=script_id)
+    fabricated_answer.update(
+        {
+            "resolved_scope": project_scope,
+            "status": "refused",
+            "direct_summary": (
+                "actual_completion state is not_ready with open_blocker and "
+                "required_child_incomplete; required_release_evidence_missing "
+                "also fired. See ev1_deadbeef for detail.}}}{"
+            ),
+            "claims": [
+                {
+                    **fabricated_answer["claims"][0],
+                    "text": "Current blockers: Land the frame contract (done).",
+                    "evidence_ref_ids": [],
+                    "metric_ref_ids": [],
+                    "kind": "inferred",
+                    "confidence": 0.5,
+                    "validity_scope": project_scope["resolved_scope"],
+                }
+            ],
+            "metrics": [],
+            "evidence": [],
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(fabricated_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+            scope_resolver=resolve,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    answer = result.answer
+
+    # Defect 1: never a "Refused" label over a substantive, assessed answer.
+    assert answer.status is not AnswerStatus.REFUSED
+
+    # Defects 2/3/5: none of the PRD-prohibited strings anywhere the client
+    # renders prose, and the model's fabricated, self-contradicting blocker
+    # claim is gone.
+    all_text = " ".join(user_visible_strings(answer=answer))
+    for forbidden in CHAOS_3377_PROHIBITED_STRINGS:
+        assert forbidden not in all_text, f"{forbidden!r} leaked into: {all_text!r}"
+    assert "done" not in " ".join(claim.text for claim in answer.claims).casefold() or (
+        "Land the frame contract" not in " ".join(claim.text for claim in answer.claims)
+    )
+    # The genuinely open item is present in some form; the completed one
+    # naming "Land the frame contract" as a blocker is not.
+    blocker_texts = " ".join(claim.text for claim in answer.claims)
+    assert "Land the frame contract" not in blocker_texts
+    assert "39" in answer.direct_summary and "69" in answer.direct_summary
+
+    # Defect 4 (scope-level half): the resolved scope is a PROJECT scope,
+    # not a repository count -- a client has the subject to render.
+    assert answer.resolved_scope.resolved_scope is not None
+    assert answer.resolved_scope.resolved_scope.direct_scope.value == "project"
+    assert answer.resolved_scope.resolved_scope.entity_refs[0].display_label == (
+        "Falcon Nine"
+    )
+
+
+# --- CHAOS-3377 leak-hardening: the second live-probe failure -------------
+#
+# A run past the acceptance test above (22f97bee-0b8b-44a5-979f-78d7d7a80a82)
+# still terminated as a bare internal_error even though status_snapshot.v1
+# bound a real actual_completion, so the §10 deterministic renderer had
+# already overwritten status/direct_summary/claims with safe content. Two
+# hypotheses were investigated:
+#
+# H1 (confirmed by code-path reading, reproduced below): the renderer never
+# touches warnings/conflicts/suggested_follow_up_questions -- a model echo
+# of the tool result's own raw reason codes into any of those three still
+# trips orchestrator.finish()'s fail-closed scan, which destroyed the WHOLE
+# terminal, safe deterministic core included.
+#
+# H2 (investigated against real production data -- org
+# 70d529e0-3c06-4597-8480-794fd02328b6's ClickHouse work_items.title --
+# which found genuine denylist-token collisions in real titles, e.g. a title
+# literally containing "model_not_found"): REFUTED for the deterministic
+# claims path specifically. status_answer_render.build_deterministic_status_
+# claims already only emits a blocker/required-child claim when its evidence
+# is present in canonical_evidence_ids, which guarantees attested_strings
+# (reading answer.evidence[].display_label) already covers any title text
+# that survives into a claim. Reproduced below as a regression lock, not a
+# fix -- it already passed.
+
+
+@pytest.mark.asyncio
+async def test_auxiliary_field_leak_is_scrubbed_not_the_whole_answer() -> None:
+    """H1, fail-to-pass. Before ``scrub_auxiliary_leaks`` was wired into
+    ``finish()``, this failed: ``result.state`` was ``RunState.FAILED`` and
+    ``result.answer`` was ``None`` -- the model's echoed reason code in
+    ``suggested_follow_up_questions`` destroyed the entire, otherwise-safe,
+    server-rendered answer. After the fix, the leaked follow-up question is
+    dropped and the deterministic core (status/direct_summary/claims,
+    entirely server-rendered once status_snapshot.v1 bound a real
+    actual_completion) survives untouched.
+    """
+
+    script_id = "chaos-3377-leak-hardening-auxiliary"
+    open_evidence_id = "ev1_" + hashlib.sha256(b"aux-open").hexdigest()[:40]
+    verdict_evidence_id = "ev1_" + hashlib.sha256(b"aux-verdict").hexdigest()[:40]
+
+    async def status_snapshot(_context: Any, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "metrics": [],
+                "evidence": [
+                    {
+                        **positive_fixtures()["dev_tool_result.v1"]["evidence"][0],
+                        "evidence_ref_id": eid,
+                    }
+                    for eid in (open_evidence_id, verdict_evidence_id)
+                ],
+                "actual_completion": {
+                    "state": "not_ready",
+                    "rule_id": "actual-completion",
+                    "rule_version": "actual-completion.v4",
+                    "reason_codes": ["required_child_incomplete"],
+                    "required_children": [
+                        {
+                            "fact_id": "issue:OPEN-1",
+                            "text": "Wire the presentation seam",
+                            "status": "in_progress",
+                            "evidence_ref_ids": [open_evidence_id],
+                        }
+                    ],
+                    "required_child_total": 5,
+                    "required_child_complete": 4,
+                    "display_truncated": False,
+                    "conflicts": [],
+                    "evidence_ref_ids": [verdict_evidence_id],
+                },
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+
+    fabricated_answer = _answer(script_id=script_id)
+    fabricated_answer.update(
+        {
+            "status": "complete",
+            "direct_summary": "This placeholder is overwritten by the deterministic renderer.",
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+            "warnings": [],
+            "conflicts": [],
+            # The leak: the model has seen the raw tool-result JSON and
+            # echoes its own reason code into a follow-up question -- a
+            # field the deterministic renderer never touches.
+            "suggested_follow_up_questions": [
+                "Why is required_child_incomplete still blocking this?"
+            ],
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(fabricated_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    answer = result.answer
+
+    # The deterministic core survived: it is the server-rendered content,
+    # not the model's fabricated placeholder.
+    assert answer.status is not AnswerStatus.REFUSED
+    assert "4" in answer.direct_summary and "5" in answer.direct_summary
+
+    # The leaked follow-up question is gone -- dropped, not translated into
+    # a WITHHELD_COPY placeholder (a suggested question with no real content
+    # left is worse than one fewer suggestion).
+    assert not answer.suggested_follow_up_questions
+
+    # And the raw token never reached the wire in any field.
+    all_text = " ".join(user_visible_strings(answer=answer))
+    assert "required_child_incomplete" not in all_text
+
+
+@pytest.mark.asyncio
+async def test_attested_real_title_collision_survives_in_a_blocker_claim() -> None:
+    """H2, reproduced against real production data -- REFUTED for the
+    deterministic claims path (regression lock, not a fix: this already
+    passed before this round's changes).
+
+    ``real_title`` is an actual ``work_items.title`` value for org
+    ``70d529e0-3c06-4597-8480-794fd02328b6``, read read-only from the dev
+    ClickHouse stack (never hand-invented), that happens to literally
+    contain the denylisted substring ``not_found``. It flows through the
+    same shape ``production_runtime.wire_required_child`` mints in
+    production: the required-child fact's own ``text`` AND its evidence's
+    ``display_label`` are the identical string, so ``attested_strings``
+    already exempts it once that evidence is canonical.
+    """
+
+    script_id = "chaos-3377-leak-hardening-attested-title"
+    real_title = (
+        "Fail fast on deterministic LLM errors (insufficient_quota / "
+        "invalid_api_key / model_not_found) with classified verdicts"
+    )
+    child_evidence_id = (
+        "ev1_" + hashlib.sha256(b"attested-title-child").hexdigest()[:40]
+    )
+    verdict_evidence_id = (
+        "ev1_" + hashlib.sha256(b"attested-title-verdict").hexdigest()[:40]
+    )
+
+    async def status_snapshot(_context: Any, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "metrics": [],
+                "evidence": [
+                    {
+                        **positive_fixtures()["dev_tool_result.v1"]["evidence"][0],
+                        "evidence_ref_id": child_evidence_id,
+                        "display_label": real_title,
+                    },
+                    {
+                        **positive_fixtures()["dev_tool_result.v1"]["evidence"][0],
+                        "evidence_ref_id": verdict_evidence_id,
+                    },
+                ],
+                "actual_completion": {
+                    "state": "not_ready",
+                    "rule_id": "actual-completion",
+                    "rule_version": "actual-completion.v4",
+                    "reason_codes": ["required_child_incomplete"],
+                    "required_children": [
+                        {
+                            "fact_id": "issue:REAL-TITLE-1",
+                            "text": real_title,
+                            "status": "in_progress",
+                            "evidence_ref_ids": [child_evidence_id],
+                        }
+                    ],
+                    "required_child_total": 3,
+                    "required_child_complete": 2,
+                    "display_truncated": False,
+                    "conflicts": [],
+                    "evidence_ref_ids": [verdict_evidence_id],
+                },
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+
+    fabricated_answer = _answer(script_id=script_id)
+    fabricated_answer.update(
+        {
+            "status": "complete",
+            "direct_summary": "This placeholder is overwritten by the deterministic renderer.",
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+            "warnings": [],
+            "conflicts": [],
+            "suggested_follow_up_questions": [],
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(decision=AgentFinalAnswer(fabricated_answer)),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    answer = result.answer
+    assert answer.status is not AnswerStatus.REFUSED
+    blocker_texts = " ".join(claim.text for claim in answer.claims)
+    assert real_title in blocker_texts
+
+
+@pytest.mark.asyncio
+async def test_genuine_refusal_with_no_grounding_still_completes_as_refused() -> None:
+    """Negative control (do not regress CHAOS-3367/#1449 or the CHAOS-3377
+    validator check): a run whose tool results carry NO ``actual_completion``
+    and whose model answer carries no grounding either is a genuine refusal,
+    and must still render as one end to end.
+    """
+
+    script_id = "chaos-3377-negative-control-genuine-refusal"
+    refusal_answer = _answer(script_id=script_id)
+    refusal_answer.update(
+        {
+            "status": "refused",
+            "direct_summary": "I can't help with that request.",
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [ScriptedStep(decision=AgentFinalAnswer(refusal_answer))],
+            script_id=script_id,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.status is AnswerStatus.REFUSED
+    assert result.answer.direct_summary == "I can't help with that request."
 
 
 # --- CHAOS-3262: an invalid model tool request degrades, it does not kill the run ---

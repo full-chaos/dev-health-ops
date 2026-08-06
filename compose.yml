@@ -109,7 +109,7 @@ services:
         condition: service_healthy
 
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5
     container_name: clickhouse
     restart: on-failure
     environment:
@@ -134,7 +134,7 @@ services:
       start_period: 30s
 
   valkey:
-    image: valkey/valkey:8-alpine
+    image: valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328
     container_name: valkey
     restart: unless-stopped
     ports:

@@ -1,0 +1,109 @@
+# CHAOS-3219 D3: optional ACR (Agent Context Runtime) evidence-adapter
+# profile for Ask Dev acceptance. OFF by default -- only pulled in when the
+# launcher is armed with ASK_DEV_ACCEPTANCE_ACR=1 (see
+# scripts/acceptance/run_ask_dev_compose.sh), which adds this file with
+# `-f` and activates the ask-dev-acceptance-acr profile.
+#
+# D3 ruling: "acr-api comes from the parent-repo compose, and is also
+# available in the new `deploy` stack (local Kubernetes cluster) ... Lane 1c
+# evaluates both wiring options." Evaluated:
+#   - deploy/ (../../deploy relative to this repo's parent) is a Helm/k3d/k3s
+#     stack whose own AGENTS.md states "Docker Compose ... are not supported
+#     [full-stack] deployment paths" and, as of this writing, "ACR is still
+#     disabled in the local [k3d] profile" -- it is a different orchestration
+#     technology (Kubernetes, not Compose) and does not currently even boot
+#     ACR locally. Not usable from a Compose-based acceptance launcher
+#     without reimplementing this gate's boot/teardown model on Helm.
+#   - The parent dev-health repo's compose.yml (sibling checkout,
+#     ../compose.yml relative to this ops repo's root) already has working
+#     acr-db-init / acr-migrate / acr-api service definitions, proven daily
+#     by that repo's own local dev stack.
+# => compose-overlay option, reusing the parent's service definitions via
+#    `extends` (not re-declared here) so this file cannot silently drift from
+#    the parent's authoritative acr-api shape.
+#
+# Requires a sibling dev-health checkout at the path given by
+# ASK_DEV_ACCEPTANCE_PARENT_COMPOSE (default: ../compose.yml, i.e.
+# <checkout-root>/compose.yml one level up from this ops repo) with the ACR
+# images buildable there (`docker compose build acr-api acr-migrate` in that
+# repo) and its one-time local secret bootstrap already run (the acr-api
+# service mounts ./.acr-dev/{evidence-kid,evidence-keys,web-jwks.json} from
+# THAT repo's working directory -- extends resolves relative build/volume
+# paths against the extended file's own directory, per Compose semantics).
+# This overlay only proves *structural* wiring (`docker compose config`
+# validity, off-by-default, profile gating); it does not itself run the
+# parent repo's secret bootstrap, which is that repo's concern, not this
+# acceptance lane's.
+services:
+  # `networks:` is force-replaced (`!override`) on every extended service:
+  # the parent definitions attach to its own `dev-health` network, which
+  # does not exist in this acceptance project and would otherwise fail
+  # `compose config` with "refers to undefined network".
+  #
+  # Postgres/ClickHouse credential mismatch: the parent's acr-* definitions
+  # default to POSTGRES_USER/PASSWORD=devhealth (its own postgres creates
+  # that role); THIS ops project's postgres hardcodes POSTGRES_USER/
+  # POSTGRES_DB=postgres (compose.yml, not env-overridable). acr-db-init's
+  # entrypoint embeds `${POSTGRES_USER:-devhealth}`/`${POSTGRES_PASSWORD:-...}`
+  # directly in its `sh -c` command string, which Compose interpolates at
+  # `config`/`up` time (same mechanism as the env-hardening fix in the
+  # launcher) -- there is no per-service `environment:` override that reaches
+  # it. The launcher exports POSTGRES_USER=postgres / POSTGRES_PASSWORD=postgres
+  # for the compose invocation itself, but ONLY when ASK_DEV_ACCEPTANCE_ACR=1
+  # (see run_ask_dev_compose.sh) -- scoped so the non-ACR path is unaffected
+  # by yet another interpolated var. acr-api/acr-migrate's own DSNs are
+  # additionally pinned explicitly below so they do not depend on that
+  # launcher-side export succeeding first.
+  acr-db-init:
+    extends:
+      file: ${ASK_DEV_ACCEPTANCE_PARENT_COMPOSE:-../compose.yml}
+      service: acr-db-init
+    profiles: ["ask-dev-acceptance-acr"]
+    networks: !override
+      - default
+
+  acr-migrate:
+    extends:
+      file: ${ASK_DEV_ACCEPTANCE_PARENT_COMPOSE:-../compose.yml}
+      service: acr-migrate
+    profiles: ["ask-dev-acceptance-acr"]
+    environment:
+      ACR_POSTGRES_MIGRATION_DSN: postgres://postgres:postgres@postgres:5432/acr?sslmode=disable
+    networks: !override
+      - default
+
+  acr-api:
+    extends:
+      file: ${ASK_DEV_ACCEPTANCE_PARENT_COMPOSE:-../compose.yml}
+      service: acr-api
+    container_name: ask-dev-acceptance-acr-api
+    profiles: ["ask-dev-acceptance-acr"]
+    # The parent definition publishes 127.0.0.1:18080 -- the same host port
+    # ask-dev-acceptance's own `api` service already parameterizes around
+    # (see compose.ask-dev.yml). Never publish acr-api's port from this
+    # acceptance overlay; it is reached only over the internal network by
+    # the `web` service's Context Fabric panel, same as the parent stack.
+    ports: !reset []
+    environment:
+      ACR_POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/acr?sslmode=disable
+      ACR_CLICKHOUSE_DSN: clickhouse://ch:ch@clickhouse:9000/default
+    networks: !override
+      - default
+
+  # Ops evidence-adapter cases in the Wave 4 corpus reach acr-api through the
+  # web BFF, which signs the EdDSA assertion acr-api verifies. Only armed
+  # alongside ASK_DEV_ACCEPTANCE_ACR=1; harmless (unused) otherwise since
+  # the base `web` service already only starts under the ask-dev-acceptance
+  # profile.
+  web:
+    environment:
+      ACR_API_ORIGIN: http://acr-api:8080
+      ACR_WEB_ASSERTION_ISSUER: dev-health-web
+      ACR_WEB_ASSERTION_AUDIENCE: dev-health-acr
+      ACR_WEB_ASSERTION_KID: acr-dev-web
+      ACR_WEB_ASSERTION_KEY_FILE: /secrets/web-assertion.key
+    volumes:
+      - ${ASK_DEV_ACCEPTANCE_PARENT_ACR_DEV_DIR:-../.acr-dev}/web-assertion.key:/secrets/web-assertion.key:ro
+    depends_on:
+      acr-api:
+        condition: service_started

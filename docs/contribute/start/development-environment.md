@@ -22,7 +22,7 @@ Use this guide for a source checkout. Production configuration, secrets, sizing,
 
 ## Prerequisites
 
-- Python 3.12 or newer. The project currently declares support for Python 3.12, 3.13, and 3.14.
+- Python 3.14. The project declares `requires-python = ">=3.14"` and containers ship 3.14 (`docker/Dockerfile`); older interpreters are not tested (CHAOS-3419).
 - Docker with Compose.
 - Git.
 - A supported Node.js release only when the change touches JavaScript tooling, Wrangler, or a related frontend repository.
@@ -35,7 +35,7 @@ Read the root `AGENTS.md` and the nearest directory-level contributor guidance b
 git clone https://github.com/full-chaos/dev-health-ops.git
 cd dev-health-ops
 
-python3.12 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'

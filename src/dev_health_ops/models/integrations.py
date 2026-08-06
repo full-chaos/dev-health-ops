@@ -262,6 +262,28 @@ class SyncRunUnit(Base):
     rate_limit_first_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Budget-deferral episode bookkeeping (CHAOS-3412) -- the same
+    # count-plus-wall-clock pair shape as the rate-limit episode above, but a
+    # SEPARATE episode: a budget deferral is not a rate limit, and each kind
+    # clears the other's pair at its own episode boundaries (see
+    # docs/contribute/architecture/contracts.md "Deferral-episode contracts").
+    budget_deferrals: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    budget_first_deferred_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # AGGREGATE blocked clock (CHAOS-3412 review round 2). Deliberately NOT a
+    # per-episode column: because each episode kind clears the other's pair, a
+    # unit alternating between budget deferral and rate-limit cooldown keeps
+    # BOTH per-episode caps permanently out of reach while never running. This
+    # is set once when a unit first becomes blocked for ANY reason, SURVIVES
+    # episode changes, and is cleared only on a successful dispatch claim or
+    # SUCCESS -- so it measures "how long has this unit been going nowhere",
+    # which no per-episode counter can.
+    first_blocked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     expired_lease_retry_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )

@@ -105,6 +105,15 @@ _module(
 _module(
     "dev_health_ops.sync.watermarks",
     get_watermark_with_overlap=lambda *_args: None,
+    # CHAOS-3412 gave planner.py a second dependency on this module:
+    # ``_effective_heavy_max_window_days`` and ``_watermark_stamping_window``
+    # both read the configured watermark overlap. The stub must expose the name
+    # or planner.py fails to IMPORT (verified: the oracle died with
+    # ImportError until this was added). ``_planned`` re-binds it per case to
+    # that case's own overlap, so the Python side clamps against exactly the
+    # overlap the Go side is handed in PlannerInput.WatermarkOverlap rather
+    # than against this process's ambient environment.
+    _watermark_overlap_seconds=lambda: 0,
 )
 planner = _load("dev_health_ops.sync.planner", SOURCE / "sync/planner.py")
 trigger_routing = _load(
@@ -187,7 +196,18 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
         return value - timedelta(seconds=overlap) if value is not None else None
 
     setattr(planner, "get_watermark_with_overlap", watermark)
+    # The case's overlap, not the process environment: the same value the Go
+    # planner receives as PlannerInput.WatermarkOverlap, so the C8 cap clamp and
+    # the C10(a) recovery window are computed from identical inputs on both
+    # sides. planner.py imported this name into its own namespace, so rebinding
+    # it on the module object is what _effective_heavy_max_window_days and
+    # _watermark_stamping_window actually call.
+    setattr(planner, "_watermark_overlap_seconds", lambda: overlap)
     setattr(planner, "_get_tier_backfill_days_cap", lambda *_args: case.get("tier_cap"))
+    # Each case is an independent process-wide configuration; without this a
+    # clamp warned about in an earlier case would be suppressed in a later one,
+    # making the "warn once" guard order-dependent across the batch.
+    planner._WARNED_CAP_CLAMPS.clear()
     integration = SimpleNamespace(
         id=case["integration_id"],
         org_id=case["org_id"],

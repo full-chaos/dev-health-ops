@@ -63,6 +63,26 @@ Generate current entries for:
 - scheduler ownership;
 - Go job registry, migration state, deployment profiles, health, operator token, River schema, retention, and pool limits.
 
+Deferral exhaustion on the dispatcher uses three non-secret, restart-loaded
+caps. Two bound a single budget-deferral episode: `SYNC_BUDGET_MAX_DEFERRALS`
+(default 10) and `SYNC_BUDGET_DEFERRAL_WALL_CLOCK_SECONDS` (default 21,600),
+whichever is reached first. Both are deliberately generous relative to the
+deferral interval, so a bucket that frees up admits the unit rather than
+terminalizing it.
+
+The third, `SYNC_DEFERRAL_TOTAL_WALL_CLOCK_SECONDS` (default 86,400), bounds
+how long a unit may remain blocked in total, regardless of how many times the
+*reason* changes. The per-episode caps cannot cover that case: each blocking
+reason resets the other's counters, so a unit alternating between a budget
+block and a rate-limit cooldown would otherwise never reach either cap while
+never running. This aggregate clock starts when a unit first becomes blocked
+for any reason and stops only when the unit is dispatched or succeeds.
+
+No cap changes what is admitted — to change that, adjust the bucket limits
+themselves. A unit is only ever failed by one of these caps on a pass where it
+is confirmed to still be blocked; one that has become admissible is dispatched
+instead, however long it was previously held back.
+
 A setting that enables a route is not sufficient evidence that the corresponding worker owns production work. The checked-in route, handler coverage, profile, and migration state must agree.
 
 ## External services and telemetry

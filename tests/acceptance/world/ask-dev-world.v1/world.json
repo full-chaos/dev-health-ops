@@ -1,0 +1,158 @@
+{
+  "schema_version": "ask_dev_world.v1",
+  "$comment": "CHAOS-3219 Wave 4 Phase 1 Lane 1a. Read alongside subjects.json and sources.json (same directory). Every id_seed below is fed through uuid.uuid5(WORLD_NAMESPACE, id_seed) by dev_health_ops.fixtures.world -- this file stores the deterministic SEED strings, never raw UUIDs, so there is exactly one place (the loader) that can compute an id and no risk of the JSON and the generator silently drifting apart. WORLD_NAMESPACE == 6ba7b810-9dad-11d1-80b4-00c04fd430c8, the same fixture namespace already used throughout dev_health_ops.fixtures.",
+  "master_seed": 3219000,
+  "pinned_now": "2026-08-05T00:00:00+00:00",
+  "$comment_pinned_now": "The single reference instant every relative timestamp (staleness cutoffs, retention ages, conversation-rotation windows) is computed from. CHAOS-3392 lesson: the world generator must never call datetime.now()/utcnow() to decide freshness -- every age-relative fixture row is pinned off this value, threaded explicitly through dev_health_ops.fixtures.world's call graph.",
+
+  "cross_generation_digest_status": {
+    "status": "declared-blocked",
+    "blocked_by": "CHAOS-3432 concurrent ClickHouse batch-insert nondeterminism",
+    "note": "SINGLE-generation WORLD_DIGEST pinning IS proven: compute_world_digest + `fixtures world --verify-digest` correctly detect drift within one generated database (every HIGH-3/HIGH-5 mutation test in this round relies on exactly that, live). What is NOT proven, and was an explicit goal of this round's HIGH-4 work: that two INDEPENDENT `fixtures world` runs against fresh scratch databases produce an IDENTICAL digest. Root-caused down to five real, fixed defects (wall-clock modules missing from the clock-freeze list, a random per-run categorization_run_id needing digest exclusion, a postprocess handler running outside frozen-clock scope) -- each individually confirmed via live two-generation reruns. One residual remains open: an isolated, single-repo-at-a-time row-count divergence (ci_pipeline_runs/deployments/work_graph_pr_commit/work_unit_investments), narrowed to 'concurrent ClickHouse batch insertion via fixtures/runner.py's _insert_batches (asyncio.gather, MAX_WORKERS default 4)' as the leading hypothesis but not yet confirmed by the discriminating serialization experiment (stopped mid-run by explicit user direction, not by a negative result) -- see fixtures/world.py's _frozen_clock docstring for the full evidence trail and ruled-out theories (mock LLM provider has no randomness; PYTHONHASHSEED=0 did not converge and made drift worse/broader; global-random-desync-cascades-forward is contradicted by unaffected repos generated after the affected one). Any future claim of proven cross-generation digest reproducibility must update this field, not just prose elsewhere.",
+    "$comment_status_values": "Mirrors sources.json's DECLARED_BLOCKED_STATUS (CHAOS-3428) and subjects.json's REALIZED_UNVERIFIED_LIVE_STATUS (CHAOS-3429) -- the same discipline applied at the whole-world/digest level rather than a single manifest entry: an honest, ticketed, schema-validated 'not proven' beats either a false pass or a silent omission."
+  },
+
+  "orgs": [
+    {
+      "alias": "primary",
+      "id_seed": "ask-dev-world.v1:org:primary",
+      "slug": "ask-dev-world-primary",
+      "name": "Meridian (Ask Dev World Primary)",
+      "role": "primary",
+      "ask_dev_entitlement": "enabled",
+      "ask_dev_contextual_entrypoints_entitlement": "enabled",
+      "acr_evidence_adapter": "not_configured",
+      "$comment_acr": "ACR is the SourceClass.SOURCE_HEALTH 'acr' key, which NativeDataHealthReader.read hardcodes as SourceHealthObservation(configured=False, required=False) for every org regardless of fixture state -- this is the sources.json 'not_applicable' realization (see sources.json deg.source-state.not-applicable), not something the fixture world needs to toggle per org.",
+      "sync_providers": {
+        "local": {"state": "active_success"},
+        "jira": {"state": "active_success"},
+        "pagerduty": {"state": "unconfigured"}
+      },
+      "$comment_sync_providers": "Realizes DataHealthState per NATIVE_EVIDENCE_SOURCES (data_health_service.py): 'local'/'git' backs commits/pull_requests/reviews/deployments/work_units, 'jira' backs work_items, 'pagerduty' backs incidents. pagerduty deliberately absent -> incidents reads UNCONFIGURED org-wide for primary (sources.json deg.source-state.unconfigured).",
+      "retention_policies": [
+        {"resource_type": "dev_conversation", "retention_days": 30}
+      ],
+      "kill_switches": {
+        "global": "enabled",
+        "org": "enabled",
+        "provider": {"scripted-v1": "enabled"},
+        "role": {"primary_answer": "enabled"},
+        "surface": {"window": "enabled", "dev_workspace": "enabled"},
+        "contextual_entry": "enabled"
+      }
+    },
+    {
+      "alias": "sibling",
+      "id_seed": "ask-dev-world.v1:org:sibling",
+      "slug": "ask-dev-world-sibling",
+      "name": "Orbit (Ask Dev World Sibling Tenant)",
+      "role": "sibling_tenant",
+      "ask_dev_entitlement": "enabled",
+      "ask_dev_contextual_entrypoints_entitlement": "enabled",
+      "acr_evidence_adapter": "not_configured",
+      "sync_providers": {
+        "local": {"state": "active_failure"},
+        "jira": {"state": "active_success"},
+        "pagerduty": {"state": "active_success"}
+      },
+      "$comment_sync_providers": "local sync marked active_failure (last_sync_success=False) -> commits/pull_requests/reviews/deployments read UNAVAILABLE org-wide for the sibling tenant (sources.json deg.source-state.unavailable). work_units is NOT in that list -- it is only provider-mapped to jira/linear/github/gitlab (source_health.PROVIDER_SUPPORTS_SOURCE), never 'local', and sibling's jira provider below is active_success, so work_units correctly reads COMPLETE (live-verification correction, 2026-08-05 -- see sources.json's matching $comment_source_classes). A visibly degraded sibling is also a MORE realistic cross-tenant probe target than a pristine one.",
+      "retention_policies": [
+        {"resource_type": "dev_conversation", "retention_days": 0}
+      ],
+      "kill_switches": {
+        "global": "enabled",
+        "org": "enabled",
+        "provider": {"scripted-v1": "enabled"},
+        "role": {"primary_answer": "enabled"},
+        "surface": {"window": "enabled", "dev_workspace": "enabled"},
+        "contextual_entry": "enabled"
+      }
+    },
+    {
+      "alias": "disabled",
+      "id_seed": "ask-dev-world.v1:org:disabled-entitlement",
+      "slug": "ask-dev-world-disabled-entitlement",
+      "name": "Vantage (Ask Dev World Disabled-Entitlement Org)",
+      "role": "disabled_entitlement",
+      "ask_dev_entitlement": "disabled",
+      "ask_dev_contextual_entrypoints_entitlement": "disabled",
+      "acr_evidence_adapter": "not_configured",
+      "sync_providers": {
+        "local": {"state": "active_success"},
+        "jira": {"state": "active_success"},
+        "pagerduty": {"state": "active_success"}
+      },
+      "retention_policies": [
+        {"resource_type": "dev_conversation", "retention_days": 30}
+      ],
+      "kill_switches": {
+        "global": "enabled",
+        "org": "disabled",
+        "provider": {"scripted-v1": "enabled"},
+        "role": {"primary_answer": "enabled"},
+        "surface": {"window": "enabled", "dev_workspace": "enabled"},
+        "contextual_entry": "enabled"
+      }
+    }
+  ],
+
+  "users": [
+    {"alias": "primary.ordinary", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:ordinary", "email": "ordinary@ask-dev-world-primary.example", "username": "primary-ordinary", "full_name": "Priya Ordinary", "membership_role": "member", "is_superuser": false, "feature_overrides": {}},
+    {"alias": "primary.org-admin", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:org-admin", "email": "org-admin@ask-dev-world-primary.example", "username": "primary-org-admin", "full_name": "Owen OrgAdmin", "membership_role": "admin", "is_superuser": false, "feature_overrides": {}},
+    {"alias": "primary.platform-admin", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:platform-admin", "email": "platform-admin@ask-dev-world-primary.example", "username": "primary-platform-admin", "full_name": "Pat PlatformAdmin", "membership_role": "member", "is_superuser": true, "feature_overrides": {}},
+    {"alias": "primary.impersonation-target", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:impersonation-target", "email": "impersonation-target@ask-dev-world-primary.example", "username": "primary-impersonation-target", "full_name": "Ivy ImpersonationTarget", "membership_role": "member", "is_superuser": false, "feature_overrides": {}, "impersonatable": true},
+    {"alias": "primary.unsupported-model-user", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:unsupported-model-user", "email": "unsupported-model@ask-dev-world-primary.example", "username": "primary-unsupported-model", "full_name": "Uma UnsupportedModel", "membership_role": "member", "is_superuser": false, "feature_overrides": {}, "provider_profile_override": "unsupported-model-profile"},
+    {"alias": "primary.degraded-readiness-user", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:degraded-readiness-user", "email": "degraded-readiness@ask-dev-world-primary.example", "username": "primary-degraded-readiness", "full_name": "Dana DegradedReadiness", "membership_role": "member", "is_superuser": false, "feature_overrides": {}, "provider_profile_override": "degraded-profile"},
+
+    {"alias": "sibling.ordinary", "org_alias": "sibling", "id_seed": "ask-dev-world.v1:user:sibling:ordinary", "email": "ordinary@ask-dev-world-sibling.example", "username": "sibling-ordinary", "full_name": "Sasha SiblingOrdinary", "membership_role": "member", "is_superuser": false, "feature_overrides": {}},
+    {"alias": "sibling.org-admin", "org_alias": "sibling", "id_seed": "ask-dev-world.v1:user:sibling:org-admin", "email": "org-admin@ask-dev-world-sibling.example", "username": "sibling-org-admin", "full_name": "Sam SiblingOrgAdmin", "membership_role": "admin", "is_superuser": false, "feature_overrides": {}},
+
+    {"alias": "disabled.ordinary", "org_alias": "disabled", "id_seed": "ask-dev-world.v1:user:disabled:ordinary", "email": "ordinary@ask-dev-world-disabled-entitlement.example", "username": "disabled-ordinary", "full_name": "Devon DisabledOrdinary", "membership_role": "member", "is_superuser": false, "feature_overrides": {}},
+    {"alias": "disabled.org-admin", "org_alias": "disabled", "id_seed": "ask-dev-world.v1:user:disabled:org-admin", "email": "org-admin@ask-dev-world-disabled-entitlement.example", "username": "disabled-org-admin", "full_name": "Deepa DisabledOrgAdmin", "membership_role": "admin", "is_superuser": false, "feature_overrides": {}}
+  ],
+
+  "provider_profiles": {
+    "scripted-v1": {
+      "kind": "scripted",
+      "readiness": "ready",
+      "intent": "primary_certified",
+      "$comment": "The Lane 1b role-aware scripted_openai_service provider. Owned by provider-scripts/ (Lane 1b territory) -- world.json only records the readiness/intent label so subjects/sources fixtures can reference a real profile id."
+    },
+    "lmstudio-local": {
+      "kind": "live",
+      "readiness": "not_configured",
+      "intent": "scheduled_smoke_nonblocking"
+    },
+    "ollama": {
+      "kind": "live",
+      "readiness": "not_configured",
+      "intent": "scheduled_smoke_nonblocking"
+    },
+    "unsupported-model-profile": {
+      "kind": "scripted",
+      "readiness": "unsupported_model",
+      "intent": "readiness_probe",
+      "$comment": "Realizes readiness.capabilities.unsupported-model (corpus registry). DevCapabilitiesReadiness.unsupported_model."
+    },
+    "degraded-profile": {
+      "kind": "scripted",
+      "readiness": "degraded",
+      "intent": "readiness_probe",
+      "$comment": "Realizes readiness.capabilities.degraded."
+    }
+  },
+
+  "retention_policy_catalog": [
+    {"id": "retention-0-day", "days": 0, "resource_type": "dev_conversation"},
+    {"id": "retention-30-day", "days": 30, "resource_type": "dev_conversation"}
+  ],
+
+  "generation": {
+    "days_of_history": 10,
+    "commits_per_day": 3,
+    "pr_count": 6,
+    "team_count": 3,
+    "with_metrics": true,
+    "with_work_graph": true
+  }
+}

@@ -7,6 +7,7 @@ detail.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -308,6 +309,58 @@ async def test_an_unresolved_bare_name_run_keeps_the_v1_prompt() -> None:
     system_text = output.provider.system_texts[0]
     assert '"prompt_version":"' + LEGACY_PROMPT_VERSION in system_text
     assert "named_entity_resolution" in system_text
+    # CHAOS-3421 codex adversarial review (MED-1): this exact branch
+    # (subject_preflight's unresolved_untyped -> proceeded_unresolved_
+    # bare_name) withholds resolve_scope.v1 from allowed_tools (the leak-
+    # closing fix) -- the prompt must never INSTRUCT the model to call a
+    # tool that is not actually advertised to it (naming it as explicitly
+    # UNAVAILABLE, as the dedicated section below does, is fine -- that is
+    # the opposite instruction), or a compliant model burns a tool turn on
+    # a request the registry rejects as unavailable.
+    assert "call resolve_scope.v1" not in system_text
+    tool_ids = {
+        tool["tool_id"] for tool in json.loads(system_text)["tool_registry"]["tools"]
+    }
+    assert "resolve_scope.v1" not in tool_ids
+
+
+@pytest.mark.asyncio
+async def test_an_unresolved_bare_name_run_gets_a_dedicated_unavailable_section() -> (
+    None
+):
+    """MED-1's own fix: a dedicated prompt branch for this flow, distinct
+    from BOTH the ordinary uncommitted-subject section (which still tells
+    the model to call resolve_scope.v1 -- correct for every OTHER
+    uncommitted run) and the committed-subject section (false here: no
+    subject was committed). States resolution is unavailable and names the
+    permitted fallback, without re-advertising the withheld tool.
+    """
+
+    output = await run_preflight_orchestrator(
+        question="How is Nightfall doing?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script_id="prompt-bare-unavailable",
+    )
+    assert output.provider is not None
+    system_text = output.provider.system_texts[0]
+    sections = {
+        section["id"]: section["text"]
+        for section in json.loads(system_text)["policy_sections"]
+    }
+    # Never the ordinary uncommitted section (it instructs resolve_scope.v1)
+    # and never the committed one (no subject was committed).
+    assert "committed_subject" not in sections
+    resolution_section = next(
+        text for section_id, text in sections.items() if "named_entity" in section_id
+    )
+    # The dedicated section still NAMES resolve_scope.v1 -- explicitly, as
+    # unavailable, which is more useful to the model than silence -- but
+    # never as an instruction to call it.
+    assert "call resolve_scope.v1" not in resolution_section
+    assert "resolve_scope.v1" in resolution_section
+    assert "unavailable" in resolution_section.casefold()
+    # Describes the permitted fallback, not just a bare prohibition.
+    assert "organization" in resolution_section.casefold()
 
 
 @pytest.mark.asyncio

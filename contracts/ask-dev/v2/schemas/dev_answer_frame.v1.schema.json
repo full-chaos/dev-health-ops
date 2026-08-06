@@ -1612,6 +1612,67 @@
       "title": "DevObservedChangeV2",
       "type": "object"
     },
+    "DevPortfolioProjectStatusV2": {
+      "additionalProperties": false,
+      "description": "One project row of a ``status.portfolio.v1`` batch (CHAOS-3393).\n\n``worst_state`` mirrors ``portfolio_status_service._worst_state`` --\nthe worst ``DimensionState`` across the project's own launch-eligible\n``HealthRuleFinding`` set, ``UNKNOWN`` when it has none.\n``evaluated=False`` marks a project ``PortfolioStatusService`` could not\nevaluate at all (a ``PortfolioProjectFailure``, isolated per-project) --\ndisclosed here rather than silently dropped from the batch, mirroring\n``DeficiencyCategoryStatus``'s evaluated/unevaluated split one level up\nat the per-project granularity.",
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "evaluated": {
+          "title": "Evaluated",
+          "type": "boolean"
+        },
+        "failure_reason": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Reason"
+        },
+        "finding_count": {
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Finding Count",
+          "type": "integer"
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "dev_portfolio_project_status.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "worst_state": {
+          "$ref": "#/$defs/DimensionState"
+        }
+      },
+      "required": [
+        "schema_version",
+        "project_id",
+        "display_label",
+        "worst_state",
+        "finding_count",
+        "evaluated"
+      ],
+      "title": "DevPortfolioProjectStatusV2",
+      "type": "object"
+    },
     "DevPullRequestFactV2": {
       "additionalProperties": false,
       "properties": {
@@ -2054,6 +2115,19 @@
           "maxItems": 25,
           "title": "Observed Changes",
           "type": "array"
+        },
+        "portfolio_project_statuses": {
+          "items": {
+            "$ref": "#/$defs/DevPortfolioProjectStatusV2"
+          },
+          "maxItems": 25,
+          "title": "Portfolio Project Statuses",
+          "type": "array"
+        },
+        "portfolio_project_statuses_truncated": {
+          "default": false,
+          "title": "Portfolio Project Statuses Truncated",
+          "type": "boolean"
         },
         "pull_requests": {
           "items": {
@@ -2805,6 +2879,19 @@
       "maxItems": 12,
       "title": "Metrics",
       "type": "array"
+    },
+    "portfolio_project_statuses": {
+      "items": {
+        "$ref": "#/$defs/DevPortfolioProjectStatusV2"
+      },
+      "maxItems": 25,
+      "title": "Portfolio Project Statuses",
+      "type": "array"
+    },
+    "portfolio_project_statuses_truncated": {
+      "default": false,
+      "title": "Portfolio Project Statuses Truncated",
+      "type": "boolean"
     },
     "public_outcome": {
       "$ref": "#/$defs/PublicOutcome"

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -150,6 +151,40 @@ class AssertionResult:
 #: smoke scripts are excluded too: each is already bound by its own
 #: ``script_sha256``, and folding them in here would make editing one
 #: scenario invalidate the other thirteen.
+#: CHAOS-3219 Wave 4 Phase 1 Lane 1c deferred this addition (Codex round 2,
+#: 2026-08-05) to the Phase 1 barrier re-proof, because landing it requires
+#: re-minting every citing artifact in the SAME change -- a missing key in
+#: an already-committed artifact's `runtime_dependencies` map is a
+#: structural error in `_recorded_dependency_errors` (wave31_manifest.py),
+#: unconditionally, before drift-declaration logic ever runs (a missing key
+#: is not evidence of anything, staleness-declared or not). That barrier
+#: re-proof is THIS change: tests/acceptance/compose.ask-dev-acr.yml (the
+#: optional, off-by-default ACR evidence-adapter overlay) is now covered,
+#: and all fourteen citing artifacts were re-minted live against merged
+#: main in the same commit that added this path.
+#:
+#: Residual gap, CHAOS-3437 (Codex adversarial review, 2026-08-05, both a
+#: `task --effort high` pass and an `adversarial-review` pass independently
+#: raised this): covering `compose.ask-dev-acr.yml`'s own bytes does NOT
+#: cover what that overlay pulls in at `docker compose config`/`up` time --
+#: `scripts/acceptance/resolve_acr_parent_compose.sh` (the resolver that
+#: locates the parent dev-health checkout's compose.yml), the parent
+#: repo's own acr-db-init/acr-migrate/acr-api service definitions the
+#: overlay `extends:` from, or the mounted `.acr-dev/{evidence-kid,
+#: evidence-keys,web-jwks.json,web-assertion.key}` secret material. None of
+#: those are covered dependencies, so an ACR-armed artifact's digest can go
+#: stale silently if any of them drift. Same reasoning as CHAOS-3351 for
+#: why this is a narrower residual gap and not a blocking defect: closing
+#: it means hashing a SEPARATE repository's files that change for reasons
+#: having nothing to do with ask-dev acceptance, which is a real design
+#: decision (not this lane's to make unilaterally) with the same
+#: "gate that expensive gets switched off" cost this file already accepts
+#: for pyproject.toml/requirements.txt. Relatedly, `acr_armed` is recorded
+#: on every artifact but never enforced -- no current `proven_e2e` row
+#: claims ACR-backed evidence, so this is a forward-looking note rather
+#: than a live gap today, but the next row that DOES claim ACR-backed
+#: evidence must also require `acr_armed=true` at validation time, not
+#: just record it. See CHAOS-3437.
 RUNTIME_DEPENDENCY_PATHS: tuple[str, ...] = (
     "compose.yml",
     "docker/Dockerfile",
@@ -159,6 +194,7 @@ RUNTIME_DEPENDENCY_PATHS: tuple[str, ...] = (
     "scripts/acceptance/prepare_ask_dev_acceptance.py",
     "scripts/acceptance/run_ask_dev_compose.sh",
     "src/dev_health_ops/llm/agent/scripted_openai_service.py",
+    "tests/acceptance/compose.ask-dev-acr.yml",
     "tests/acceptance/compose.ask-dev-provider-profile.yml",
     "tests/acceptance/compose.ask-dev.yml",
 )
@@ -374,9 +410,18 @@ class ScenarioRecorder:
         all_passed = bool(self.assertions) and all(a.passed for a in self.assertions)
         status = "passed" if (error is None and all_passed) else "failed"
         redacted_error = redact_secrets(error) if error is not None else None
+        # Codex finding (MEDIUM, 2026-08-05): a case whose evidence is
+        # claimed to be ACR-backed must be provably from a run where ACR was
+        # actually armed, not just a run that happened to pass while ACR was
+        # off. run_ask_dev_compose.sh exports ASK_DEV_ACCEPTANCE_ACR (always,
+        # "0" or "1") into every smoke script's environment before invoking
+        # it -- read here, at write time, rather than threaded through the
+        # constructor, so no caller can forget to pass it.
+        acr_armed = os.getenv("ASK_DEV_ACCEPTANCE_ACR") == "1"
         artifact: dict[str, Any] = {
             "schema_version": ARTIFACT_SCHEMA_VERSION,
             "scenario_id": self.scenario_id,
+            "acr_armed": acr_armed,
             "tree_clean": tree_clean,
             "tree_digest": tree_digest,
             "script": str(self.script_path.resolve().relative_to(root)),

@@ -92,6 +92,19 @@ def test_health_endpoint_returns_503_when_required_service_is_down(monkeypatch):
     assert body["services"]["redis"] == "ok"
 
 
+def test_ready_endpoint_returns_ok_when_required_service_is_down(monkeypatch):
+    async def _pg_down():
+        return "postgres", "down"
+
+    monkeypatch.setattr(main, "_check_postgres_health", _pg_down)
+
+    with TestClient(main.app) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
 def test_health_workers_returns_celery_status(monkeypatch):
     async def _celery_ok():
         return "celery", "ok"

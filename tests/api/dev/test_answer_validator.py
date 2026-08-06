@@ -741,3 +741,33 @@ def test_unsupported_inferred_claim_does_not_disable_the_grounding_floor() -> No
     with pytest.raises(AnswerValidationError) as raised:
         validate_answer_candidate(payload, _context_without_groundable_material())
     assert raised.value.code == "answer_grounding_floor_not_met"
+
+
+# CHAOS-3377 defect 1: PRD §12's "a result with content is not a refusal"
+# applied to a model that self-declares ``status=refused`` alongside real
+# claim/metric/evidence grounding -- the live defect reported as a "Refused"
+# chip over a fully substantive answer. This is the mirror image of the
+# CHAOS-3290 floor above (a substantive-looking answer with no grounding);
+# here a substantively-grounded answer is dishonestly labeled as having no
+# content at all.
+def test_refused_status_with_material_grounding_is_rejected_and_repairable() -> None:
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "refused"
+    with pytest.raises(AnswerValidationError) as raised:
+        validate_answer_candidate(payload, _context())
+    assert raised.value.code == "refused_with_material_grounding"
+    # Repairable: this is a one-field labeling mistake, not a trust breach --
+    # the model can reissue the same grounded content under an honest status
+    # in the same bounded repair pass CHAOS-3257 already gives a
+    # status/coverage mismatch.
+    assert raised.value.repairable is True
+
+
+def test_refused_status_with_no_grounding_is_still_a_valid_refusal() -> None:
+    """Negative control: a genuine refusal (nothing retrieved, nothing
+    claimed) must not be caught by the new check -- only a refusal that
+    contradicts itself by also carrying real content is rejected.
+    """
+    payload = _empty_payload(status="refused", direct_summary="I can't help with that.")
+    answer = validate_answer_candidate(payload, _context_without_groundable_material())
+    assert answer.status.value == "refused"

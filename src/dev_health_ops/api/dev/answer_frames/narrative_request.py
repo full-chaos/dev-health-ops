@@ -148,6 +148,11 @@ NARRATIVE_BRIEF_FIELD_POLICY: dict[str, NarrativeFieldDisposition] = {
     # evaluated-vs-unevaluated bookkeeping, not narrative content) -- no
     # validator grounds a claim against it either.
     "deficiency_category_statuses": _EXCLUDED,
+    # CHAOS-3393's embedded portfolio batch rows -- same posture as
+    # health_findings/deficiency_findings above (a structured block no
+    # narrative validator grounds a claim against yet).
+    "portfolio_project_statuses": _EXCLUDED,
+    "portfolio_project_statuses_truncated": _EXCLUDED,
     # Producer-authored conflict summaries the narrative may need to
     # reflect faithfully.
     "conflicts": _INCLUDED,

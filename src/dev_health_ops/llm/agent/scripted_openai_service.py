@@ -3,6 +3,21 @@
 This module is not a product provider family. It is launched only by the
 Compose acceptance profile and exercises the production OpenAI-compatible
 adapter over real HTTP.
+
+CHAOS-3219 Phase 1 Lane 1b: a request whose (normalized) question text
+matches one of the active role's scripted cases (see ``provider_scripts.py``'s
+module docstring -- routing is by a hash of the question text itself, never
+a marker embedded in it, so nothing acceptance-specific ever enters the
+persisted transcript) is routed through the per-role, per-case scripted
+decision/fault engine in ``provider_scripts``. A request whose question
+matches no scripted case is indistinguishable from an ordinary one and falls
+through to the pre-existing default heuristic unchanged -- every branch
+below this point that does not mention ``provider_scripts`` is the original,
+pre-CHAOS-3219 heuristic, preserved byte-for-byte so every existing smoke
+script and unit test against this server keeps passing unmodified. The one
+exception is the retired ``[[case:`` marker, reserved defensively: its mere
+presence anywhere in a question always fails loud, never falls through --
+see ``provider_scripts.LEGACY_CASE_TAG_MARKER``.
 """
 
 from __future__ import annotations
@@ -14,6 +29,7 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from dev_health_ops.llm.agent import provider_scripts
 from dev_health_ops.llm.providers.openai_capabilities import is_wire_legal_tool_name
 
 SCRIPTED_OPENAI_MODEL = "ask-dev-scripted-v1"
@@ -401,7 +417,46 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
         tool_results = _tool_results_from_messages(payload)
         requested_tool_names = _requested_tool_names_from_messages(payload)
         result_tool_ids = {str(result.get("tool_id") or "") for result in tool_results}
-        if _question_from_messages(payload) == LIST_METRICS_QUESTION:
+        question = _question_from_messages(payload)
+
+        # CHAOS-3219 Phase 1 Lane 1b: the retired [[case: marker is reserved
+        # defensively -- ANY occurrence (well-formed, malformed, truncated,
+        # duplicated) always fails loud, never falls through. A pure string
+        # check: no file I/O, so it can never be skipped due to a missing
+        # scripts directory the way question-hash routing below can be.
+        if question is not None and provider_scripts.LEGACY_CASE_TAG_MARKER in question:
+            self._write_unmapped_case_error(
+                provider_scripts.UnmappedCaseError(
+                    "legacy_case_tag_marker_present",
+                    "questions may not contain the retired "
+                    f"{provider_scripts.LEGACY_CASE_TAG_MARKER!r} marker; route "
+                    "scripted cases by exact question text instead (see "
+                    "provider-scripts/README.md)",
+                )
+            )
+            return
+
+        # Question-hash routing: a question whose normalized text matches no
+        # scripted case (the routine outcome for every non-corpus question,
+        # incl. every pre-CHAOS-3219 smoke/oracle/probe question) is
+        # indistinguishable from an ordinary one and falls straight through
+        # to the untagged heuristic below, completely unchanged.
+        if question is not None:
+            engine = provider_scripts.try_load_engine(provider_scripts.current_role())
+            if engine is not None:
+                try:
+                    resolution = engine.resolve(question, round_index=len(tool_results))
+                except provider_scripts.UnmappedCaseError as exc:
+                    self._write_unmapped_case_error(exc)
+                    return
+                if resolution is not None and not isinstance(resolution, str):
+                    self._serve_scripted_turn(payload, resolution, tool_names)
+                    return
+                # `resolution` is DELEGATE_DEFAULT or None (no scripted case
+                # matched this question) -- fall through to the untagged
+                # heuristic below, question text unchanged either way.
+
+        if question == LIST_METRICS_QUESTION:
             list_metrics_message, list_metrics_finish_reason = _list_metrics_script(
                 tool_results
             )
@@ -460,9 +515,7 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
                                     # repository identity when the question names
                                     # one, otherwise an org-wide query that is not
                                     # restricted to a single repository.
-                                    "query": _evidence_query_from_question(
-                                        _question_from_messages(payload)
-                                    ),
+                                    "query": _evidence_query_from_question(question),
                                     "limit": 25,
                                 },
                                 separators=(",", ":"),
@@ -510,13 +563,142 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
             finish_reason = "stop"
         self._send_completion(payload, message, finish_reason)
 
-    def _write_json(self, status: int, payload: dict[str, Any]) -> None:
+    def _write_json(
+        self,
+        status: int,
+        payload: dict[str, Any],
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         encoded = json.dumps(payload, separators=(",", ":")).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(encoded)
+
+    def _write_unmapped_case_error(
+        self, exc: provider_scripts.UnmappedCaseError
+    ) -> None:
+        """CHAOS-3219 Phase 1 Lane 1b requirement 4: an unmapped case tag
+        must never accidentally pass as a generic canned answer. Always a
+        distinct HTTP 422 with a ``type`` no legitimate wire-protocol error
+        this server sends ever uses (``invalid_request_error`` is the
+        wire-legal-tool-name 400 above; every scripted fault below uses
+        ``scripted_provider_fault``), so a corpus runner or conformance test
+        can tell "your case id/script is wrong" apart from both.
+        """
+
+        self._write_json(
+            422,
+            {
+                "error": {
+                    "type": "scripted_provider_unmapped_case",
+                    "code": exc.code,
+                    "message": exc.message,
+                }
+            },
+        )
+
+    def _serve_scripted_turn(
+        self,
+        payload: dict[str, Any],
+        turn: provider_scripts.ScriptTurn,
+        tool_names: list[str],
+    ) -> None:
+        provider_scripts.sleep_for_fault(turn.delay_ms)
+        if turn.http_error is not None:
+            extra_headers = (
+                {"Retry-After": str(int(turn.http_error.retry_after_seconds))}
+                if turn.http_error.retry_after_seconds is not None
+                else None
+            )
+            self._write_json(
+                turn.http_error.status,
+                {
+                    "error": {
+                        "type": "scripted_provider_fault",
+                        "code": turn.http_error.code,
+                        "message": turn.http_error.message,
+                    }
+                },
+                extra_headers=extra_headers,
+            )
+            return
+
+        decision = turn.decision
+        message: dict[str, Any]
+        finish_reason: str
+        if isinstance(decision, provider_scripts.ToolCallDecision):
+            if decision.tool not in tool_names:
+                # The script asked for a tool the client never offered on
+                # this round -- a script/production drift, not a real
+                # provider failure. Fail loud rather than send a tool_call
+                # the client cannot possibly service.
+                self._write_unmapped_case_error(
+                    provider_scripts.UnmappedCaseError(
+                        "scripted_tool_not_offered",
+                        f"scripted decision requested tool {decision.tool!r}, "
+                        f"which was not among the offered tools {tool_names!r}",
+                    )
+                )
+                return
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "scripted-call-provider-scripts-v1",
+                        "type": "function",
+                        "function": {
+                            "name": decision.tool,
+                            "arguments": json.dumps(
+                                dict(decision.arguments), separators=(",", ":")
+                            ),
+                        },
+                    }
+                ],
+            }
+            finish_reason = "tool_calls"
+        elif isinstance(decision, provider_scripts.FinalAnswerDecision):
+            message = {
+                "role": "assistant",
+                "content": json.dumps(
+                    {"kind": "final_answer", "value": dict(decision.value)},
+                    separators=(",", ":"),
+                ),
+            }
+            finish_reason = "stop"
+        elif isinstance(decision, provider_scripts.DisambiguationDecision):
+            message = {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "kind": "disambiguation",
+                        "prompt": decision.prompt,
+                        "candidates": list(decision.candidates),
+                    },
+                    separators=(",", ":"),
+                ),
+            }
+            finish_reason = "stop"
+        else:
+            assert isinstance(decision, provider_scripts.RefusalDecision)  # noqa: S101
+            message = {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "kind": "refusal",
+                        "code": decision.code,
+                        "message": decision.message,
+                    },
+                    separators=(",", ":"),
+                ),
+            }
+            finish_reason = "stop"
+        self._send_completion(payload, message, finish_reason)
 
     def _send_completion(
         self,

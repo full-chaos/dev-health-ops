@@ -37,12 +37,118 @@ services:
       ASK_DEV_ACCEPTANCE_OPENAI_BASE_URL: http://ask-dev-scripted-openai:8001/v1
       ASK_DEV_ACCEPTANCE_OPENAI_API_KEY: ask-dev-acceptance-local-v1
       JWT_SECRET_KEY: ask-dev-acceptance-jwt-secret-key-v1
+      # CHAOS-3219 Wave 4 quota plumbing: these are the ONLY two Ask Dev
+      # settings production code actually reads from the environment
+      # (org_policy.py platform_operator_request_limit /
+      # platform_operator_cost_limit_microusd -- os.getenv, not a settings-DB
+      # lookup). They are OPERATOR CEILINGS that clamp the per-org
+      # ask_dev_platform_monthly_request_limit / ..._cost_microusd settings
+      # (which default to 1_000 requests / 100_000_000 microusd when no org
+      # override exists -- settings-DB-backed, category ASK_DEV, set via the
+      # generic admin settings API, NOT env vars). Retention (0/30-day) has
+      # NO env var in production -- it is a per-conversation request field
+      # validated against models.dev_persistence.DEV_RETENTION_DAYS, with an
+      # org-level default stored under the settings key
+      # ask_dev_retention_days (category ASK_DEV); set it through the admin
+      # settings API, not through this compose file.
+      #
+      # Live-proven 2026-08-05: pinning these to org_policy.py's documented
+      # hard FLOOR (PLATFORM_MONTHLY_REQUEST_LIMIT_MIN=100 /
+      # PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD=10_000_000) does make the
+      # enforcement fire for real -- a full boot tripped
+      # DevMonthlyCostLimitExceeded (HTTP 429 cost_limit_reached) partway
+      # through the existing smoke suite, proving the wiring end-to-end. But
+      # the floor is *too* tight to be this gate's shared default: it broke
+      # already-passing coverage before Wave 4's corpus even exists. Pinned
+      # here to a value with real headroom over current smoke-suite usage
+      # (still below the operator hard max of 5_000/500_000_000) so the
+      # baseline gate stays green; Phase 3c's dedicated quota-exceeded corpus
+      # case should trip the limit with its OWN scoped mechanism (e.g. an
+      # admin settings override on just that case's org, or a short-lived env
+      # override for a dedicated run) rather than by lowering this shared
+      # default -- reuse the floor values above as the known-good "this WILL
+      # trip it" reference point.
+      ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX: "1000"
+      ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD: "200000000"
     depends_on:
       ask-dev-scripted-openai:
         condition: service_healthy
     networks:
       - default
       - ask-dev-acceptance
+
+  # ---------------------------------------------------------------------------
+  # CHAOS-3219 Wave 4: general jobs fleet for "API+jobs" acceptance parity.
+  #
+  # Evidence (see ops PR description / CHAOS-3219 report for full citations):
+  # Ask Dev itself has ZERO Celery dependency today -- answer generation runs
+  # synchronously in the API/SSE request path (api/dev/orchestrator.py,
+  # runtime.py), quota enforcement is inline SQL (persistence/service.py
+  # _enforce_admission_limits/_enforce_platform_allowance), and its retention
+  # sweep (DevPersistenceService.cleanup_expired,
+  # persistence/service.py:2858) is NEVER called from workers/tasks.py, any
+  # beat_schedule entry (workers/config.py), or any CLI command -- it is
+  # dead/unwired code today (a product gap, not an acceptance-environment
+  # gap; flagged upstream). So no queue name is "required by Ask Dev".
+  # `worker` + `beat` are still booted because the release-blocking gate's
+  # "API+jobs" framing and Wave 4 Phase 3c (persistence/retention/ops corpus
+  # group) need a live, real Celery+beat fleet to exercise the platform's
+  # GENERAL scheduled jobs (prune-rate-limit-observations,
+  # prune-external-ingest-batches, monitor-queue-depths, ...) -- topology
+  # parity with production, not an Ask Dev-specific requirement. Per the
+  # "no required job may exit success after skipping substantive work"
+  # principle, each gets a healthcheck that proves the process is doing real
+  # work, not just that the container is running.
+  # ---------------------------------------------------------------------------
+  worker:
+    container_name: ask-dev-acceptance-worker
+    healthcheck:
+      # Codex finding (HIGH, 2026-08-05): `celery inspect ping` only proves
+      # the control-plane RPC answers -- it is served independently of the
+      # task pool, so a worker whose pool is wedged (deadlock, exhausted
+      # concurrency, a stuck task) can keep answering ping while never
+      # draining a single queued task. Real receipt instead: dispatch a
+      # uniquely-identified task through the SAME required queue
+      # (`monitoring`) the worker actually consumes and block for ITS
+      # result (scripts/acceptance/healthcheck_worker_probe.py -- reuses
+      # the existing monitor_queue_depths production task, no new
+      # production code). RED-verified: a `--pool=solo` worker occupied by
+      # a deliberately blocking task times this out and `up --wait`
+      # correctly reports unhealthy (see run history / PR description for
+      # the live proof).
+      test:
+        - "CMD"
+        - "python"
+        - "/app/scripts/acceptance/healthcheck_worker_probe.py"
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+  beat:
+    container_name: ask-dev-acceptance-beat
+    healthcheck:
+      # Codex finding (HIGH, 2026-08-05): the persistent schedule file's
+      # mtime is touched by beat's own bookkeeping regardless of whether a
+      # due task was actually published and consumed -- it does not prove
+      # publication or consumption. beat cannot itself execute a probe (it
+      # only schedules), so the real receipt is what its own dispatching
+      # already produces: the existing `monitor-queue-depths` beat entry
+      # (interval 60s, queue `monitoring`) is the sentinel, and a WORKER
+      # executing it writes a timestamped result into the shared Celery
+      # result backend -- read here
+      # (scripts/acceptance/healthcheck_beat_sentinel.py) and required to
+      # be within a bounded freshness window. A beat that stopped
+      # dispatching (or a fleet that stopped consuming) ages out and this
+      # reports unhealthy.
+      test:
+        - "CMD"
+        - "python"
+        - "/app/scripts/acceptance/healthcheck_beat_sentinel.py"
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
 
   ask-dev-scripted-openai:
     container_name: ask-dev-acceptance-scripted-openai

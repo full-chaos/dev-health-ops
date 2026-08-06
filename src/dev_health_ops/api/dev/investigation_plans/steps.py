@@ -63,6 +63,15 @@ class StepContext:
     #: intent.v1.requested_metric_ids``). Only ``metric.comparison.v1``'s
     #: step reads this; every other plan ignores it.
     requested_metric_ids: tuple[str, ...] = ()
+    #: CHAOS-3393: the several committed, per-subject ``DevScope``s a
+    #: PLURAL_COHORT/ORGANIZATION_WIDE plan step batches over -- e.g.
+    #: ``status.portfolio.v1``'s ``portfolio_status_evaluation`` step, which
+    #: needs one committed ``DirectScope.PROJECT`` scope per project in the
+    #: batch. ``scope`` above remains the single org-level authorized scope
+    #: for every step (the executor's authorization-scope snapshot anchors
+    #: on it, unchanged); this is purely additive, empty for every plan that
+    #: does not read it -- mirrors ``requested_metric_ids``'s own posture.
+    subject_set_scopes: tuple[DevScope, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

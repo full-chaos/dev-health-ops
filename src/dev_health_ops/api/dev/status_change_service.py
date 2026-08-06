@@ -8,7 +8,7 @@ may replace the rule result or widen the requested scope.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Protocol
 
@@ -33,6 +33,118 @@ STATUS_RULE_VERSION = "actual-completion.v4"
 MAX_STATUS_ITEMS = 100
 MAX_CHANGE_ITEMS = 100
 MAX_STATUS_ASSESSMENT_ITEMS = 1_000
+
+#: CHAOS-3377: the closed vocabulary of ``ActualCompletion.reason_codes`` this
+#: module's ``_assess`` can emit, listed once here rather than only as the
+#: scattered ``reasons.add(...)`` literals below, so a consumer that must
+#: never let a raw reason code reach user-visible prose (the internal-token
+#: denylist in ``no_match_terminal.py``, and the closed-vocabulary
+#: translation table in ``status_answer_render.py``) has one place to derive
+#: its "every code this rule can produce" set from instead of hand-copying
+#: the list a second time. ``test_status_change_service.py`` pins this
+#: against the literal ``reasons.add(...)`` calls in ``_assess`` so the two
+#: cannot silently drift apart.
+STATUS_REASON_CODES: frozenset[str] = frozenset(
+    {
+        "child_requirement_unknown",
+        "declared_status_missing",
+        "required_source_not_fresh",
+        "assessment_source_limit_reached",
+        "required_release_evidence_missing",
+        "required_child_incomplete",
+        "open_blocker",
+        "required_pull_request_unmerged",
+        "required_review_unresolved",
+        "review_changes_requested",
+        "ci_requirement_unknown",
+        "required_ci_skip_state_unknown",
+        "required_ci_work_skipped",
+        "required_ci_not_passing",
+        "required_deployment_not_succeeded",
+        "active_blocking_incident",
+    }
+)
+
+# --- CHAOS-3377 HIGH 3 (codex adversarial review): the assessor's own
+# "is this outstanding" predicates, extracted into named, importable
+# functions rather than left as inline literals inside ``_assess`` below.
+# ``status_answer_render.py`` (the §10 deterministic renderer) imports and
+# calls these directly instead of re-deriving its own copy -- a prior
+# revision hand-copied a "safe superset" of the required-child predicate
+# that silently disagreed with this one (treated ``resolved``/``merged`` as
+# closed when this predicate does not), which could render an item as a
+# closed required-child while `_assess` itself still counted it as the
+# reason a verdict was NOT_READY. ``_assess`` below now calls these same
+# functions, so the two can never diverge again -- there is exactly one
+# place each predicate is written.
+#
+# Required children and blockers use two SLIGHTLY DIFFERENT closed-status
+# vocabularies (blockers additionally treat ``resolved`` as closed; neither
+# treats ``merged`` as closed for either category) -- this is not an
+# oversight to unify, it is `_assess`'s own pre-existing, tested behavior,
+# preserved exactly rather than "cleaned up" into one shared set.
+REQUIRED_CHILD_CLOSED_STATUS_TOKENS: frozenset[str] = frozenset(
+    {"complete", "completed", "done", "closed", "canceled", "cancelled"}
+)
+BLOCKER_CLOSED_STATUS_TOKENS: frozenset[str] = frozenset(
+    {"complete", "completed", "done", "closed", "resolved", "canceled", "cancelled"}
+)
+_CI_PASSING_TOKENS: frozenset[str] = frozenset({"success", "passed", "green"})
+_DEPLOYMENT_SUCCESS_TOKENS: frozenset[str] = frozenset(
+    {"success", "succeeded", "deployed", "complete", "completed"}
+)
+
+
+def is_required_child_open(status: str) -> bool:
+    """Whether a required child's own ``status`` reads as still outstanding."""
+
+    return status.casefold() not in REQUIRED_CHILD_CLOSED_STATUS_TOKENS
+
+
+def is_blocker_open(status: str) -> bool:
+    """Whether a blocker's own ``status`` reads as still outstanding."""
+
+    return status.casefold() not in BLOCKER_CLOSED_STATUS_TOKENS
+
+
+def is_pull_request_unmerged(*, required: bool, merged: bool) -> bool:
+    return required and not merged
+
+
+def is_pull_request_review_unresolved(
+    *, required: bool, review_state: str | None
+) -> bool:
+    return required and not review_state
+
+
+def is_pull_request_changes_requested(
+    *, required: bool, changes_requested: int
+) -> bool:
+    return required and changes_requested > 0
+
+
+def is_ci_skip_state_unknown(
+    *, required: bool | None, skipped_required_work: bool | None
+) -> bool:
+    return bool(required) and skipped_required_work is None
+
+
+def is_ci_work_skipped(
+    *, required: bool | None, skipped_required_work: bool | None
+) -> bool:
+    return bool(required) and skipped_required_work is True
+
+
+def is_ci_not_passing(*, required: bool | None, conclusion: str) -> bool:
+    return bool(required) and conclusion.casefold() not in _CI_PASSING_TOKENS
+
+
+def is_deployment_not_succeeded(*, required: bool, status: str) -> bool:
+    return required and status.casefold() not in _DEPLOYMENT_SUCCESS_TOKENS
+
+
+def is_incident_active_and_blocking(*, active: bool, blocking: bool) -> bool:
+    return blocking and active
 
 
 class StatusResultState(StrEnum):
@@ -173,12 +285,59 @@ class ActualCompletion:
     conflicts: tuple[StatusConflict, ...]
     source_ref_ids: tuple[str, ...]
     evidence_ref_ids: tuple[str, ...]
+    # CHAOS-3377 HIGH 3 (codex adversarial review): the §10 deterministic
+    # renderer's blocker list previously came ONLY from ``required_children``
+    # -- ``raw.blockers`` never had a typed home on ``ActualCompletion`` at
+    # all, so a NOT_READY verdict caused entirely by ``open_blocker`` (no
+    # incomplete required child) rendered an empty blocker list, silently
+    # omitting the exact work making it not ready. Mirrors
+    # ``required_children``: ALL blockers (not pre-filtered to open ones),
+    # ordered the same way, so a consumer applies its own closed-vocabulary
+    # openness predicate (``is_blocker_open`` below) rather than trusting a
+    # pre-filtered list it cannot independently verify. Defaulted to ``()``
+    # so the ~10 existing direct-construction call sites across the test
+    # suite (predating this field) do not have to be touched.
+    blockers: tuple[StatusFact, ...] = ()
+    # CHAOS-3409 codex adversarial review (HIGH): distinguishes CHAOS-3408's
+    # structural non-applicability (ORGANIZATION/TEAM scope) from a genuine
+    # required_child_total-withholding source truncation -- both null out
+    # required_child_total/complete identically, but only a real truncation
+    # is "untrustworthy" (is_completion_assessment_untrustworthy,
+    # status_completion_copy.py). Deliberately NOT a reason code: reasons
+    # feeds state computation (any code not in contradiction_codes forces
+    # CompletionState.INDETERMINATE), and a structural absence must never
+    # do that -- the state/reason codes computed from real PR/CI/deployment/
+    # incident evidence for an org/team subject are fully trustworthy on
+    # their own.
+    required_children_not_applicable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class RawStatusSnapshot:
     declared: StatusFact | None
     children: tuple[StatusFact, ...] = ()
+    # CHAOS-3368: the project's own DECLARED lifecycle state / target date
+    # (projects.state/target_date, migration 073) for PROJECT scope --
+    # additive data alongside the derived completion/blockers below.
+    # Deliberately NEVER read by ``_assess``: these describe what the
+    # PROVIDER declared for the project as a whole, not an input to the
+    # derived actual-completion verdict, and wiring them in would change
+    # that rule's behavior -- out of this ticket's scope. ``None``/``None``
+    # when the scope is not PROJECT, the catalog row could not be resolved
+    # unambiguously, the row was updated after ``as_of`` (no history left
+    # to answer an as-of read from once ``FINAL`` collapses it), or the
+    # provider populated neither column -- every one of those renders as
+    # an absent fact, never a fabricated one.
+    #
+    # Codex adversarial review (HIGH, 2026-08-04): kept as TYPED scalars,
+    # never pre-joined into a single presentation string -- a consumer
+    # (the interim status_facts wiring today, a future deterministic
+    # renderer tomorrow) must be able to use ``declared_project_state`` and
+    # ``declared_project_target_date`` independently without parsing
+    # semicolon-delimited prose back apart.
+    declared_project_state: str | None = None
+    declared_project_target_date: date | None = None
+    declared_project_observed_at: datetime | None = None
     blockers: tuple[StatusFact, ...] = ()
     pull_requests: tuple[PullRequestFact, ...] = ()
     ci: tuple[CIFact, ...] = ()
@@ -247,6 +406,16 @@ class StatusSnapshotResult:
     incidents: tuple[IncidentFact, ...]
     source_refs: tuple[SourceReference, ...]
     warnings: tuple[str, ...]
+    # CHAOS-3368: see RawStatusSnapshot's own declared_project_* fields --
+    # carried through unchanged, never consumed by ``_assess``. Defaulted
+    # (unlike every other field on this frozen dataclass) so the many
+    # existing direct ``StatusSnapshotResult(...)`` test fixtures across
+    # the CHAOS-3303 service suite keep constructing valid instances
+    # without being touched by this change -- every one of them predates
+    # project declared-state facts and legitimately has none.
+    declared_project_state: str | None = None
+    declared_project_target_date: date | None = None
+    declared_project_observed_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,6 +583,9 @@ class StatusChangeService:
         bounded = replace(
             raw,
             children=self._bounded(raw.children, request.max_items),
+            # declared_project_* fields are scalars, not a list -- no
+            # truncation bound applies; they pass through `replace`
+            # unchanged since they're not named here.
             blockers=self._bounded(raw.blockers, request.max_items),
             pull_requests=self._bounded(raw.pull_requests, request.max_items),
             ci=self._bounded(raw.ci, request.max_items),
@@ -441,17 +613,46 @@ class StatusChangeService:
                 DirectScope.WORK_UNIT,
                 DirectScope.PULL_REQUEST,
             },
+            # CHAOS-3408: ORGANIZATION/TEAM have no single declared/children
+            # completion tree (native_status_change.TEAM_NOT_APPLICABLE_
+            # SOURCES) -- withhold the denominator rather than report the
+            # structurally-empty ``raw.children`` as a real zero.
+            required_children_applicable=request.scope.direct_scope
+            not in {DirectScope.ORGANIZATION, DirectScope.TEAM},
         )
         actual = replace(
             actual,
-            # Read from the still-unbounded ``actual.required_children``
-            # (set by ``_assess``) before it is overwritten below with the
-            # bounded display list -- both keyword arguments are evaluated
-            # against the pre-replace object.
-            display_truncated=len(actual.required_children) > request.max_items,
+            # Read from the still-unbounded ``actual.required_children``/
+            # ``actual.blockers`` (set by ``_assess``) before they are
+            # overwritten below with their bounded display lists -- every
+            # keyword argument here is evaluated against the pre-``replace``
+            # object.
+            #
+            # CHAOS-3377 hotfix (live acceptance probe): ``actual.blockers``
+            # was added alongside ``required_children`` but never went
+            # through this same bounding step -- the wire type
+            # (``DevActualCompletion.blockers``) caps at
+            # ``max_length=100`` (``contracts.py``) exactly like
+            # ``required_children`` does, but nothing enforced that cap on
+            # the ``ActualCompletion`` domain object before
+            # ``production_runtime.py`` handed it straight to the wire
+            # constructor. A real project with >100 blocker facts (155,
+            # confirmed against the live org) raised a pydantic
+            # ``too_long`` ``ValidationError`` there, which surfaced as the
+            # status tool erroring and the whole §10 deterministic render
+            # never running -- unit fixtures never exercised more than 100
+            # blockers, so nothing caught it before now. ``display_truncated``
+            # covers BOTH lists (one flag, not two) -- it already means "the
+            # display doesn't reflect everything assessed", and blockers
+            # being cut is exactly that same claim.
+            display_truncated=(
+                len(actual.required_children) > request.max_items
+                or len(actual.blockers) > request.max_items
+            ),
             required_children=self._bounded(
                 actual.required_children, request.max_items
             ),
+            blockers=self._bounded(actual.blockers, request.max_items),
         )
         assessment_source_ids = set(actual.source_ref_ids)
         freshness = {
@@ -477,6 +678,9 @@ class StatusChangeService:
             declared=bounded.declared,
             actual=actual,
             children=self._ordered_status(bounded.children),
+            declared_project_state=bounded.declared_project_state,
+            declared_project_target_date=bounded.declared_project_target_date,
+            declared_project_observed_at=bounded.declared_project_observed_at,
             blockers=self._ordered_status(bounded.blockers),
             pull_requests=tuple(sorted(bounded.pull_requests, key=self._pr_key)),
             ci=tuple(sorted(bounded.ci, key=self._ci_key)),
@@ -675,6 +879,25 @@ class StatusChangeService:
         *,
         assessment_source_limit_reached: bool = False,
         children_source_truncated: bool = False,
+        # CHAOS-3408: an ORGANIZATION or TEAM subject has no single
+        # declared/children completion tree at all -- a deliberate,
+        # structural design (native_status_change.TEAM_NOT_APPLICABLE_
+        # SOURCES: "_WORK_ITEMS_SQL produces a single declared/children
+        # completion tree ... neither concept maps onto a team cohort of
+        # repositories"), never a data gap -- so ``raw.children`` is always
+        # empty for these two scopes. Left at the default ``True``
+        # (applicable), that structural absence and a genuinely-computed
+        # real zero were indistinguishable: both produced
+        # ``required_child_total = len(()) = 0``, a fabricated-looking
+        # "0 of 0 required items are complete" for every org-wide/team-wide
+        # readiness question (the live incident this closes). ``False``
+        # withholds the denominator exactly like ``children_source_
+        # truncated`` does -- but WITHOUT the ``assessment_source_limit_
+        # reached`` reason code that truncation carries, so a consumer
+        # (``status_answer_render.render_verdict_summary``) can render a
+        # distinct, honest "not applicable to this scope" copy instead of
+        # the truncation-specific disclosure (CHAOS-3409).
+        required_children_applicable: bool = True,
         declared_optional: bool = False,
         release_evidence_required: bool = False,
     ) -> ActualCompletion:
@@ -712,55 +935,69 @@ class StatusChangeService:
         if release_evidence_required and not raw.deployments:
             reasons.add("required_release_evidence_missing")
         incomplete_children = [
-            child
-            for child in required_children
-            if child.status.casefold()
-            not in {"complete", "completed", "done", "closed", "canceled", "cancelled"}
+            child for child in required_children if is_required_child_open(child.status)
         ]
         if incomplete_children:
             reasons.add("required_child_incomplete")
+        blockers = self._ordered_status(raw.blockers)
         open_blockers = [
-            blocker
-            for blocker in raw.blockers
-            if blocker.status.casefold()
-            not in {
-                "complete",
-                "completed",
-                "done",
-                "closed",
-                "resolved",
-                "canceled",
-                "cancelled",
-            }
+            blocker for blocker in blockers if is_blocker_open(blocker.status)
         ]
         if open_blockers:
             reasons.add("open_blocker")
-        if any(pr.required and not pr.merged for pr in raw.pull_requests):
+        if any(
+            is_pull_request_unmerged(required=pr.required, merged=pr.merged)
+            for pr in raw.pull_requests
+        ):
             reasons.add("required_pull_request_unmerged")
-        if any(pr.required and not pr.review_state for pr in raw.pull_requests):
+        if any(
+            is_pull_request_review_unresolved(
+                required=pr.required, review_state=pr.review_state
+            )
+            for pr in raw.pull_requests
+        ):
             reasons.add("required_review_unresolved")
-        if any(pr.required and pr.changes_requested > 0 for pr in raw.pull_requests):
+        if any(
+            is_pull_request_changes_requested(
+                required=pr.required, changes_requested=pr.changes_requested
+            )
+            for pr in raw.pull_requests
+        ):
             reasons.add("review_changes_requested")
         if any(ci.required is None for ci in raw.ci):
             reasons.add("ci_requirement_unknown")
-        if any(ci.required and ci.skipped_required_work is None for ci in raw.ci):
+        if any(
+            is_ci_skip_state_unknown(
+                required=ci.required, skipped_required_work=ci.skipped_required_work
+            )
+            for ci in raw.ci
+        ):
             reasons.add("required_ci_skip_state_unknown")
-        if any(ci.required and ci.skipped_required_work is True for ci in raw.ci):
+        if any(
+            is_ci_work_skipped(
+                required=ci.required, skipped_required_work=ci.skipped_required_work
+            )
+            for ci in raw.ci
+        ):
             reasons.add("required_ci_work_skipped")
         if any(
-            ci.required
-            and ci.conclusion.casefold() not in {"success", "passed", "green"}
+            is_ci_not_passing(required=ci.required, conclusion=ci.conclusion)
             for ci in raw.ci
         ):
             reasons.add("required_ci_not_passing")
         if any(
-            deployment.required
-            and deployment.status.casefold()
-            not in {"success", "succeeded", "deployed", "complete", "completed"}
+            is_deployment_not_succeeded(
+                required=deployment.required, status=deployment.status
+            )
             for deployment in raw.deployments
         ):
             reasons.add("required_deployment_not_succeeded")
-        if any(incident.blocking and incident.active for incident in raw.incidents):
+        if any(
+            is_incident_active_and_blocking(
+                active=incident.active, blocking=incident.blocking
+            )
+            for incident in raw.incidents
+        ):
             reasons.add("active_blocking_incident")
 
         declared_complete = declared_optional or (
@@ -807,10 +1044,14 @@ class StatusChangeService:
         # (``None``, never a fabricated count) when the required-child
         # source itself was truncated -- an honest "unknown" beats a
         # count that looks complete only because the omitted children
-        # were never fetched.
+        # were never fetched -- OR (CHAOS-3408) when the required-child
+        # concept is not applicable to this scope at all (ORGANIZATION/
+        # TEAM), which is structurally identical to truncation from this
+        # count's own point of view: either way, ``0`` would be a claim
+        # about data that was never real.
         required_child_total: int | None
         required_child_complete: int | None
-        if children_source_truncated:
+        if children_source_truncated or not required_children_applicable:
             required_child_total = None
             required_child_complete = None
         else:
@@ -828,6 +1069,13 @@ class StatusChangeService:
             conflicts=tuple(conflicts),
             source_ref_ids=used_source_ids,
             evidence_ref_ids=self._fact_evidence(raw),
+            blockers=blockers,
+            # CHAOS-3409: True ONLY for the structural flavor -- never set
+            # merely because the total is None, and never set for a real
+            # source truncation (children_source_truncated).
+            required_children_not_applicable=(
+                not required_children_applicable and not children_source_truncated
+            ),
         )
 
     @staticmethod

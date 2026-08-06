@@ -1,27 +1,29 @@
 {
   "schema_version": "ask_dev_acceptance_artifact.v1",
   "scenario_id": "data_trust_organization_wide",
+  "acr_armed": true,
   "tree_clean": true,
   "tree_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "script": "scripts/acceptance/smoke_ask_dev_core_intents.py",
   "script_sha256": "d433ff3432b7415609a1a7231fb8a80ccf7ad86de28260f566a61e9dd073cbd1",
-  "runtime_digest": "74cdc3461d3aa2c35b7fa5af834884d5fa09485f5b31bcc66c4937c67092d507",
+  "runtime_digest": "5be79434aa24ca170f8deaae8d04fd2d89c2aa0aef37e04f57060d33d205da48",
   "runtime_dependencies": {
-    "compose.yml": "bada6bb643a76178a446333e61434878b054bac88c0f11c9222a434de084fbcf",
+    "compose.yml": "0beb7626fb984d736b0e65feb72209779c6b258e22c13f57b3cda10b946a8ceb",
     "docker/Dockerfile": "c8b2107d0d7cc780ac6010600ec66de3b0d41e70cdc9ac77b80a134aecadce6f",
-    "pyproject.toml": "e6426b64a1bac28e43ecd4d992f082ef2680842e437bd0094b5eb645b4ce834e",
+    "pyproject.toml": "b3306059b9cf888d4bb6b1021525576870f4a81c2576a1ca483e87ab874ebb06",
     "requirements.txt": "cbb3d1a9ccb506efa9a503e39ba9cc02576ae4c252550a2a1a904519f54d64d8",
-    "scripts/acceptance/acceptance_artifact.py": "a9d375da4cf648aab162816f6bc79c914bc9f8bea74b9619791f809f20b78aa2",
-    "scripts/acceptance/prepare_ask_dev_acceptance.py": "a6a7b052a944762dab78e1c514e849acfc8fbd19d6061d303b6ddf18b801afda",
-    "scripts/acceptance/run_ask_dev_compose.sh": "a0932f03003e4d764de476d45a79c784abd553e6dc48a44cd8f314416ad3b898",
-    "src/dev_health_ops/llm/agent/scripted_openai_service.py": "31b8ddb59d0fb2a0f96e687ab857d57cbf5198ba4327437c70dfee83927e1592",
+    "scripts/acceptance/acceptance_artifact.py": "a99d719dee0d641369a5945fcdc58ba0ebb978d536afbe304a1e65994e9a5197",
+    "scripts/acceptance/prepare_ask_dev_acceptance.py": "5daf40ef225bbe8e8c4ccdef103c42343fb033d36caab03807f5407417967ff7",
+    "scripts/acceptance/run_ask_dev_compose.sh": "b5c9fd6f060ac2c6320be033b3d76ff37adfb083931cf5dfeb026eb56fc0bbfb",
+    "src/dev_health_ops/llm/agent/scripted_openai_service.py": "8efe7a5d1b26574fbd97c2df9c2aec961ebb3ce62a7419a667a0e4f28300b8a7",
+    "tests/acceptance/compose.ask-dev-acr.yml": "e490d1666ad33ee05a419b79365384f566f373a8b87e612d76cf4600c0c181a2",
     "tests/acceptance/compose.ask-dev-provider-profile.yml": "815cb497b955d344412339e037cb21bc846d817803dc87ad7efabf8937b02c23",
-    "tests/acceptance/compose.ask-dev.yml": "126625be3fda01108fd623e660ec3fd6dd8b4415dc4958283144e0173135fae1"
+    "tests/acceptance/compose.ask-dev.yml": "bd8d92bc96836e77dd8701a1e04e4178b63b4c65660fd48fe7e4a26306a290df"
   },
-  "commit_sha": "bc7bd4267ffd1f9a2e04020b6d4decc878995471",
+  "commit_sha": "2b577bfb14e69b3ef054c475642b0aaa8218f695",
   "command": "python smoke_ask_dev_core_intents.py",
-  "started_at": "2026-08-03T18:09:42.739776+00:00",
-  "finished_at": "2026-08-03T18:09:43.493393+00:00",
+  "started_at": "2026-08-05T21:48:00.670767+00:00",
+  "finished_at": "2026-08-05T21:48:01.264715+00:00",
   "status": "passed",
   "error": null,
   "assertions": [
@@ -54,16 +56,6 @@
       "name": "sse_frame_has_data",
       "passed": true,
       "detail": "SSE run.started frame omitted data"
-    },
-    {
-      "name": "sse_frame_has_event_name",
-      "passed": true,
-      "detail": "SSE frame omitted event name"
-    },
-    {
-      "name": "sse_frame_has_data",
-      "passed": true,
-      "detail": "SSE progress frame omitted data"
     },
     {
       "name": "sse_frame_has_event_name",

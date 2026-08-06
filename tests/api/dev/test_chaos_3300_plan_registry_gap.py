@@ -12,12 +12,14 @@ ASK_DEV_PLAN_REGISTRY_GAP_TOTAL).
 Team-lead ratification (2026-08-02, superseding an earlier, reverted
 attempt at an honest "feature_not_enabled" early termination here): the
 legacy fallback stays the TERMINAL behavior for both cases -- terminating
-unsupported for a recognized-but-unwired intent (PORTFOLIO_STATUS today)
-would regress live free-form traffic that previously degraded to
-BOUNDED_INVESTIGATION and got a real, if ungoverned, answer. That
-behavioral cliff is exactly what the epic's own §g sequencing defers to
-the stack-5 guard cutover, once frames are proven. One rule until then: a
-recognized-but-unwired intent falls back loudly, never terminally.
+unsupported for a recognized-but-unwired intent (PORTFOLIO_STATUS was
+exactly this until CHAOS-3393 wired it; simulated below via ENTITY_STATUS
+with its registry entry removed) would regress live free-form traffic
+that previously degraded to BOUNDED_INVESTIGATION and got a real, if
+ungoverned, answer. That behavioral cliff is exactly what the epic's own
+§g sequencing defers to the stack-5 guard cutover, once frames are
+proven. One rule until then: a recognized-but-unwired intent falls back
+loudly, never terminally.
 
 Driven through the real orchestrator seam (``run_preflight_orchestrator``),
 never a diagnostic that inspects internals without exercising the seam --
@@ -63,8 +65,11 @@ async def test_plan_registry_gap_is_loud_for_a_normally_plan_governed_intent(
     """Simulates the exact CHAOS-3300 scenario directly: ENTITY_STATUS is a
     real, wired core plan, but this run's own ``plan_registry`` is built
     with it deliberately removed (standing in for "not wired on this
-    runtime yet", the same shape PORTFOLIO_STATUS is in today). The run
-    must still complete via the legacy fallback (ratified: no terminal
+    runtime yet" -- the shape PORTFOLIO_STATUS was in before CHAOS-3393
+    wired ``status.portfolio.v1``; that intent's own ``plan is not None``
+    case is no longer exercised by this gap path, so ENTITY_STATUS remains
+    this test's stand-in rather than a live PORTFOLIO_STATUS repro). The
+    run must still complete via the legacy fallback (ratified: no terminal
     behavior change before the stack-5 guard cutover) but must also emit
     the WARNING log record and increment the counter -- silence is the bug
     this closes.

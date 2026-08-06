@@ -1,2 +1,3 @@
 id	parent_id	url	label	kind	nav	public_state	lifecycle	provisional	summary
 home		/	Documentation home	landing	true	public	planned	false	Route readers to a stable task domain.
+context-fabric	home	/context-fabric/	Context Fabric	marketing	true	public	active	false	Understand how Context Fabric connects engineering evidence for people and agents.

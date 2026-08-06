@@ -34,6 +34,7 @@ from dev_health_ops.api.services.configuration import (
     IntegrationCredentialsService,
     SyncConfigurationService,
 )
+from dev_health_ops.api.services.integrations import IntegrationDatasetService
 from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.api.services.sync_coverage import (
     HISTORY_LOOKBACK_DAYS,
@@ -960,6 +961,78 @@ def _planner_dataset_keys(provider: str, sync_targets: list[str]) -> list[str]:
         for spec in supported_datasets(provider)
         if targets.intersection(spec.legacy_targets)
     ]
+
+
+async def _reconcile_dataset_rows_for_sync_targets(
+    session: AsyncSession,
+    org_id: str,
+    integration_id: uuid.UUID,
+    provider: str,
+    sync_targets: list[str],
+    previous_sync_targets: list[str],
+) -> None:
+    """Make an edited ``sync_targets`` list authoritative over ``IntegrationDataset``
+    rows, in BOTH directions.
+
+    ``IntegrationDataset`` rows are only seeded once, at integration-create
+    time, from the config's ``sync_targets`` (see ``_planner_dataset_keys``
+    above). The planner (``sync/planner.py::_load_enabled_datasets``) plans
+    strictly from those rows, never from ``sync_targets`` directly, so an
+    operator who edits an *existing* sync configuration to add a target (e.g.
+    ``tests``) previously saw the checkbox flip on with no effect: the
+    dataset was never planned because no row was ever created (CHAOS-3398).
+    This mirrors the admin batch-update endpoint
+    (``PATCH /integrations/{id}/datasets``) so editing sync_targets on an
+    existing integration is a genuine, working enable path -- not just a
+    create-time-only one.
+
+    Symmetric with removal (Codex adversarial-review finding, round 1): the
+    web edit form's own copy (``formDiff.ts::getDatasetWarnings``) tells the
+    operator that unchecking a dataset "will stop syncing" it. An enable-only
+    reconciliation would leave that a broken promise -- the row stays
+    enabled and the planner keeps running it even though the UI/API now
+    reports it deselected, a real operator-visible control-plane
+    inconsistency, not just a cosmetic one. So: datasets present in
+    ``previous_sync_targets`` but absent from the new ``sync_targets`` are
+    disabled (only if currently enabled; never deleted).
+
+    Both directions run through the SAME ``_planner_dataset_keys`` used at
+    create time, so provider-specific rules (e.g. github/gitlab's
+    git-implies-blame expansion) apply identically to both the old and new
+    computed sets -- removing "git" symmetrically drops "blame" from
+    ``desired_keys`` too, with no special-casing needed. Datasets never
+    exposed as a sync_targets checkbox (e.g. "security", which the platform
+    manages via ``_ensure_security_dataset_for_scheduled_code_host_sync``)
+    have legacy_targets that never appear in an operator-supplied
+    sync_targets list, so they never appear in either the old or new
+    computed set and are untouched by this function either way.
+    """
+    try:
+        desired_keys = set(_planner_dataset_keys(provider, sync_targets))
+    except ValueError:
+        return
+    try:
+        previously_desired_keys = set(
+            _planner_dataset_keys(provider, previous_sync_targets)
+        )
+    except ValueError:
+        previously_desired_keys = set()
+
+    if not desired_keys and not previously_desired_keys:
+        return
+
+    svc = IntegrationDatasetService(session, org_id)
+    for dataset_key in desired_keys:
+        dataset = await svc.get_by_key(str(integration_id), dataset_key)
+        if dataset is None:
+            await svc.create(integration_id, dataset_key, True)
+        elif not dataset.is_enabled:
+            await svc.set_enabled(dataset, True)
+
+    for dataset_key in previously_desired_keys - desired_keys:
+        dataset = await svc.get_by_key(str(integration_id), dataset_key)
+        if dataset is not None and dataset.is_enabled:
+            await svc.set_enabled(dataset, False)
 
 
 def _planner_source_rows(
@@ -2135,7 +2208,33 @@ async def update_sync_config(
 
     mutable_config = cast(_MutableSyncConfiguration, config)
     if payload.sync_targets is not None:
+        previous_sync_targets = list(getattr(config, "sync_targets") or [])
         mutable_config.sync_targets = payload.sync_targets
+        config_integration_id = getattr(config, "integration_id", None)
+        # IntegrationDataset rows are shared across every SyncConfiguration
+        # that points at the same integration_id (CHAOS-2762: a planner
+        # parent plus its per-repo children can share one Integration).
+        # _load_enabled_datasets (sync/planner.py) always reads that SHARED
+        # row set for the whole integration; only a source_id-scoped CHILD
+        # config additionally narrows which dataset_keys it requests
+        # (trigger_routing.py::_dataset_keys_for_config). So reconciling from
+        # a child's sync_targets would let one repo's edit silently disable a
+        # dataset for every sibling config sharing the integration (Codex
+        # adversarial-review finding, round 2). Only the config that
+        # represents the WHOLE integration (source_id is None) may mutate
+        # the shared rows.
+        if (
+            config_integration_id is not None
+            and getattr(config, "source_id", None) is None
+        ):
+            await _reconcile_dataset_rows_for_sync_targets(
+                session,
+                org_id,
+                config_integration_id,
+                str(getattr(config, "provider", "")),
+                payload.sync_targets,
+                previous_sync_targets,
+            )
     if sync_options_provided:
         merged_options = {
             **dict(getattr(config, "sync_options") or {}),

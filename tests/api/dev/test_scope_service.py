@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, tzinfo
+from typing import Self
 
 import pytest
 
+from dev_health_ops.api.dev import scope_service as scope_service_module
 from dev_health_ops.api.dev.contracts import DevScope, DevTimeRange, DirectScope
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
@@ -15,6 +17,42 @@ from dev_health_ops.api.dev.scope_service import (
     ScopeSearchRequest,
     TimeRangeRequest,
 )
+
+
+class _ScriptedNow(datetime):
+    """A ``datetime`` subclass whose ``.now()`` pops from a scripted queue
+    instead of reading the real system clock.
+
+    CHAOS-3392 codex MEDIUM: ``ScopeResolutionService.resolve_contract``'s
+    "caller omitted ``resolved_at``" fallback is
+    ``resolved_at or datetime.now(timezone.utc)`` -- the REAL wall clock,
+    called fresh on every invocation. A test that wants to deterministically
+    prove two such "unpinned" calls collide (or don't) on the request-local
+    cache can't rely on real elapsed microseconds between two lines of test
+    code; monkeypatching ``scope_service.datetime`` to this subclass lets a
+    test script exactly which instant each ``datetime.now()`` call inside
+    the module returns while every OTHER ``datetime`` usage in that module
+    (``datetime.combine``, the ``datetime(...)`` constructor, etc.) keeps
+    working unchanged, since this class inherits the real implementation of
+    everything except ``now`` itself.
+    """
+
+    _queue: list[datetime] = []
+
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> Self:
+        value = cls._queue.pop(0)
+        result = value if tz is None else value.astimezone(tz)
+        return cls(
+            result.year,
+            result.month,
+            result.day,
+            result.hour,
+            result.minute,
+            result.second,
+            result.microsecond,
+            tzinfo=result.tzinfo,
+        )
 
 
 class FakeCatalog:
@@ -30,9 +68,11 @@ class FakeCatalog:
         self.search_calls = 0
         self.watermark_calls = 0
         self.organization_repository_ids_calls = 0
+        self.organization_project_entities_calls = 0
         self.fail_exact = False
         self.fail_watermark = False
         self.fail_organization_repository_ids = False
+        self.fail_organization_project_entities = False
 
     async def watermark(self, org_id: str, kinds: tuple[EntityKind, ...]) -> str:
         self.watermark_calls += 1
@@ -63,6 +103,7 @@ class FakeCatalog:
         kinds: tuple[EntityKind, ...],
         *,
         limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]:
         self.search_calls += 1
         return [
@@ -79,6 +120,18 @@ class FakeCatalog:
             raise RuntimeError("organization repository catalog unavailable")
         ids = sorted(self.organization_repositories)
         return ids[:limit], len(ids)
+
+    async def organization_project_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        self.organization_project_entities_calls += 1
+        if self.fail_organization_project_entities:
+            raise RuntimeError("organization project catalog unavailable")
+        projects = sorted(
+            (entity for entity in self.entities if entity.kind is EntityKind.PROJECT),
+            key=lambda entity: (entity.label.casefold(), entity.canonical_id),
+        )
+        return projects[:limit], len(projects)
 
 
 def _entity(
@@ -568,6 +621,131 @@ async def test_request_local_cache_is_partitioned_by_permission_and_watermark() 
 
 
 @pytest.mark.asyncio
+async def test_resolve_contract_unpinned_repeated_calls_share_one_cache_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3392 codex MEDIUM regression (RED on commit 0e029a122):
+    production callers of ``resolve_contract`` never pass ``resolved_at``
+    -- it falls back to ``datetime.now(timezone.utc)`` INSIDE
+    ``resolve_contract`` itself, so two calls in the SAME request each got
+    their own fresh, microsecond-distinct instant even though neither
+    caller asked to pin anything. The fixed commit folded that raw instant
+    directly into ``resolve()``'s request-local cache key, so two such
+    "unpinned" calls never shared a cache entry -- defeating the whole
+    point of a request-local cache for the overwhelming majority
+    (unpinned) production callers. Scripted instants a few hundred
+    microseconds apart, same calendar day -- exactly what two real,
+    back-to-back ``datetime.now()`` calls in one request would produce.
+    """
+
+    repository = _entity(EntityKind.REPOSITORY, "repo-a", "full-chaos/dev-health")
+    catalog = FakeCatalog([repository])
+    service = ScopeResolutionService(catalog)
+    request = ScopeResolveRequest(
+        explicit_refs=(ScopeRef(EntityKind.REPOSITORY, repository.canonical_id),)
+    )
+    _ScriptedNow._queue = [
+        datetime(2026, 7, 28, 10, 0, 0, 111111, tzinfo=timezone.utc),
+        datetime(2026, 7, 28, 10, 0, 0, 999999, tzinfo=timezone.utc),
+    ]
+    monkeypatch.setattr(scope_service_module, "datetime", _ScriptedNow)
+
+    first = await service.resolve_contract("org-a", "perm-a", request)
+    second = await service.resolve_contract("org-a", "perm-a", request)
+
+    assert first.outcome is ScopeResolutionOutcome.EXACT
+    assert second.outcome is ScopeResolutionOutcome.EXACT
+    assert catalog.exact_calls == 1, (
+        "two unpinned calls in one request must share one cache entry, "
+        f"not each hit the catalog (exact_calls={catalog.exact_calls})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_contract_different_effective_days_do_not_collide(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cache-key fix must not COLLAPSE genuinely different preset
+    windows onto one entry -- two calls whose effective local day differs
+    (24h apart here) must each resolve, and cache, independently."""
+
+    repository = _entity(EntityKind.REPOSITORY, "repo-a", "full-chaos/dev-health")
+    catalog = FakeCatalog([repository])
+    service = ScopeResolutionService(catalog)
+    request = ScopeResolveRequest(
+        explicit_refs=(ScopeRef(EntityKind.REPOSITORY, repository.canonical_id),)
+    )
+    _ScriptedNow._queue = [
+        datetime(2026, 7, 28, 10, 0, tzinfo=timezone.utc),
+        datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc),
+    ]
+    monkeypatch.setattr(scope_service_module, "datetime", _ScriptedNow)
+
+    first = await service.resolve_contract("org-a", "perm-a", request)
+    second = await service.resolve_contract("org-a", "perm-a", request)
+
+    assert catalog.exact_calls == 2, (
+        "two calls landing on DIFFERENT effective days must not share a "
+        f"cache entry (exact_calls={catalog.exact_calls})"
+    )
+    assert first.resolved_scope is not None
+    assert second.resolved_scope is not None
+    assert (
+        first.resolved_scope.time_range.end != second.resolved_scope.time_range.end
+    ), "the two resolutions must carry genuinely different time windows"
+
+
+@pytest.mark.asyncio
+async def test_transient_catalog_failure_on_second_call_cannot_flip_a_cached_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3392 codex MEDIUM behavioral repro (RED on commit 0e029a122):
+    before the cache-key fix, two unpinned calls in one request never
+    shared a cache entry, so a TRANSIENT catalog failure on the SECOND
+    call re-ran full entity resolution (``exact()``, which only ever
+    fires on a cache MISS -- ``watermark()`` itself is intentionally
+    re-queried on every call regardless of caching, precisely so the
+    cache invalidates the instant the catalog's data changes; a
+    transient failure THERE can never be masked by any cache-key fix,
+    which is why this repro targets ``exact()`` instead) and flipped an
+    already-successfully-resolved, already-cacheable request from EXACT
+    to UNRESOLVED/``catalog_unavailable`` -- even though the first call,
+    microseconds earlier, had already proven the catalog reachable and
+    the resolution EXACT. A request-local cache exists precisely to make
+    this impossible: a cache HIT must never re-touch ``exact()`` at all.
+    """
+
+    repository = _entity(EntityKind.REPOSITORY, "repo-a", "full-chaos/dev-health")
+    catalog = FakeCatalog([repository])
+    service = ScopeResolutionService(catalog)
+    request = ScopeResolveRequest(
+        explicit_refs=(ScopeRef(EntityKind.REPOSITORY, repository.canonical_id),)
+    )
+    _ScriptedNow._queue = [
+        datetime(2026, 7, 28, 10, 0, 0, 111111, tzinfo=timezone.utc),
+        datetime(2026, 7, 28, 10, 0, 0, 999999, tzinfo=timezone.utc),
+    ]
+    monkeypatch.setattr(scope_service_module, "datetime", _ScriptedNow)
+
+    first = await service.resolve_contract("org-a", "perm-a", request)
+    assert first.outcome is ScopeResolutionOutcome.EXACT
+
+    catalog.fail_exact = True
+    second = await service.resolve_contract("org-a", "perm-a", request)
+
+    assert second.outcome is ScopeResolutionOutcome.EXACT, (
+        "a transient catalog failure on a second, cache-hit call must "
+        f"never surface -- got outcome={second.outcome!r} "
+        f"warnings={second.warnings!r}"
+    )
+    assert "catalog_unavailable" not in second.warnings
+    assert catalog.exact_calls == 1, (
+        "the second call must be a cache HIT and never re-invoke exact() "
+        f"at all (exact_calls={catalog.exact_calls})"
+    )
+
+
+@pytest.mark.asyncio
 async def test_scope_search_is_bounded_and_deterministically_ordered() -> None:
     catalog = FakeCatalog(
         [
@@ -586,6 +764,82 @@ async def test_scope_search_is_bounded_and_deterministically_ordered() -> None:
     assert [candidate.canonical_id for candidate in result.candidates] == ["a", "z"]
     assert result.query_version == "resolve-scope.v1"
     assert result.catalog_watermark == "org-a:watermark-1"
+
+
+@pytest.mark.asyncio
+async def test_resolved_at_anchors_the_window_it_stamps() -> None:
+    """``resolved_at`` must govern the window, not merely label it.
+
+    ``resolve_contract`` stamped the caller's instant on the contract while
+    ``resolve`` took the preset window from ``datetime.now``. Callers that
+    pinned the instant therefore got a scope that still moved with the wall
+    clock, and every assertion written against it held only until the next
+    local midnight -- a whole test module went red overnight on exactly that
+    (``tests/api/dev/test_project_scope_status_snapshot_repositories.py``),
+    with nothing in the diff that broke it.
+
+    The boundaries below are absolute, so this test cannot itself expire: a
+    30-day preset resolved at 2026-08-04T01:44Z is the half-open UTC window
+    [2026-07-06, 2026-08-05), whatever day it is read on.
+    """
+
+    service = ScopeResolutionService(FakeCatalog([]))
+    resolved_at = datetime(2026, 8, 4, 1, 44, tzinfo=timezone.utc)
+
+    result = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        ScopeResolveRequest(
+            explicit_refs=(ScopeRef(EntityKind.ORGANIZATION, "org-a"),),
+            time_range=TimeRangeRequest(preset_days=30, timezone="UTC"),
+        ),
+        resolved_at=resolved_at,
+    )
+
+    assert result.resolved_at == resolved_at
+    assert result.requested_scope.time_range.end == datetime(
+        2026, 8, 5, tzinfo=timezone.utc
+    )
+    assert result.requested_scope.time_range.start == datetime(
+        2026, 7, 6, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_instants_do_not_share_one_cached_resolution() -> None:
+    """The request cache must not serve a window resolved at another instant.
+
+    The window is derived from the instant but was absent from the cache key,
+    so the second of two resolutions differing only in ``resolved_at`` would
+    silently inherit the first one's window -- the same stale-window bug as
+    above, reintroduced through the cache.
+    """
+
+    service = ScopeResolutionService(FakeCatalog([]))
+    request = ScopeResolveRequest(
+        explicit_refs=(ScopeRef(EntityKind.ORGANIZATION, "org-a"),),
+        time_range=TimeRangeRequest(preset_days=7, timezone="UTC"),
+    )
+
+    first = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        request,
+        resolved_at=datetime(2026, 8, 4, 1, 44, tzinfo=timezone.utc),
+    )
+    second = await service.resolve_contract(
+        "org-a",
+        "perm-a",
+        request,
+        resolved_at=datetime(2026, 8, 5, 1, 44, tzinfo=timezone.utc),
+    )
+
+    assert first.requested_scope.time_range.end == datetime(
+        2026, 8, 5, tzinfo=timezone.utc
+    )
+    assert second.requested_scope.time_range.end == datetime(
+        2026, 8, 6, tzinfo=timezone.utc
+    )
 
 
 def test_relative_time_range_uses_local_day_boundaries_across_dst() -> None:
@@ -816,6 +1070,113 @@ async def test_team_filtered_organization_scope_skips_repository_enumeration() -
     assert result.authorized_repository_ids == []
     assert catalog.organization_repository_ids_calls == 0
     assert not any("organization-natively" in warning for warning in result.warnings)
+
+
+# --- CHAOS-3393: bounded org-wide project enumeration for status.portfolio.v1 ---
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_projects_returns_labeled_bounded_page() -> None:
+    entities = [
+        _entity(EntityKind.PROJECT, "project-z", "Zeta"),
+        _entity(EntityKind.PROJECT, "project-a", "Alpha"),
+        _entity(EntityKind.TEAM, "team-a", "Platform"),
+    ]
+    catalog = FakeCatalog(entities)
+    service = ScopeResolutionService(catalog)
+
+    projects, total, catalog_available = await service.organization_committed_projects(
+        "org-a", "perm-a", limit=25
+    )
+
+    # Deterministic label-then-id order, never insertion order, and never
+    # any non-PROJECT entity from the catalog.
+    assert [entity.canonical_id for entity in projects] == ["project-a", "project-z"]
+    assert total == 2
+    assert catalog_available is True
+    assert catalog.organization_project_entities_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_projects_discloses_true_total_when_capped() -> (
+    None
+):
+    entities = [
+        _entity(EntityKind.PROJECT, f"project-{index:02}", f"Project {index:02}")
+        for index in range(30)
+    ]
+    catalog = FakeCatalog(entities)
+    service = ScopeResolutionService(catalog)
+
+    projects, total, catalog_available = await service.organization_committed_projects(
+        "org-a", "perm-a", limit=25
+    )
+
+    # The page is bounded at the caller's cap, but the TRUE total is
+    # returned alongside so the caller can disclose truncation -- never a
+    # silently sampled "complete" page.
+    assert len(projects) == 25
+    assert total == 30
+    assert catalog_available is True
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_projects_catalog_failure_is_flagged_unavailable() -> (
+    None
+):
+    """CHAOS-3393 codex MED-3: a catalog OUTAGE must be distinguishable
+    from an authoritative, confirmed-zero enumeration -- ``([], 0)`` alone
+    is exactly the same shape either way, and the caller
+    (``subject_preflight._organization_wide_portfolio_result``) used to
+    treat both identically, silently widening a transient catalog failure
+    into an ordinary organization-wide PROCEED with unrestricted
+    ``ALL_TOOLS`` access. The third element makes the two cases
+    structurally distinct at the return-type level, not just in a comment.
+    """
+
+    catalog = FakeCatalog([_entity(EntityKind.PROJECT, "project-a", "Alpha")])
+    catalog.fail_organization_project_entities = True
+    service = ScopeResolutionService(catalog)
+
+    projects, total, catalog_available = await service.organization_committed_projects(
+        "org-a", "perm-a", limit=25
+    )
+
+    assert projects == []
+    assert total == 0
+    assert catalog_available is False
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_projects_confirmed_zero_is_flagged_available() -> (
+    None
+):
+    """The other half of MED-3: an authoritative, confirmed-empty catalog
+    (the organization genuinely has zero authorized projects) is NOT
+    ``catalog_available=False`` -- only a real exception is."""
+
+    catalog = FakeCatalog([])
+    service = ScopeResolutionService(catalog)
+
+    projects, total, catalog_available = await service.organization_committed_projects(
+        "org-a", "perm-a", limit=25
+    )
+
+    assert projects == []
+    assert total == 0
+    assert catalog_available is True
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_projects_is_request_cached() -> None:
+    catalog = FakeCatalog([_entity(EntityKind.PROJECT, "project-a", "Alpha")])
+    service = ScopeResolutionService(catalog)
+
+    first = await service.organization_committed_projects("org-a", "perm-a", limit=25)
+    second = await service.organization_committed_projects("org-a", "perm-a", limit=25)
+
+    assert first == second
+    assert catalog.organization_project_entities_calls == 1
 
 
 # --- CHAOS-3256: resolve named entities before executing status tools ---

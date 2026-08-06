@@ -55,6 +55,30 @@ class EntityKind(StrEnum):
     TEAM = "team"
 
 
+def subject_set_fingerprint(kind: EntityKind, canonical_ids: Sequence[str]) -> str:
+    """Mint-derived, opaque set fingerprint (structural pattern 5).
+
+    ``"set1_" + sha256(kind, sorted(canonical_ids)).hexdigest()[:40]``.
+    Hex cannot spell a subject name, and the value is stable across runs
+    for the same (kind, member set), which is what makes it usable as a
+    batch cache key.
+
+    CHAOS-3393 codex HIGH-1: a public, module-level function (not a
+    ``ScopeResolutionService`` method) specifically so
+    ``investigation_plans.executor`` can recompute it from the SAME
+    canonical formula ``committed_subject_set_for`` used to mint the
+    caller's authorization receipt (``DevSubjectSet.fingerprint`` /
+    ``DevInvestigationResult.subject_set_fingerprint``), and cross-check a
+    step's actual batch against it before executing -- imported by
+    reference, never a second, divergent copy of the hash formula.
+    """
+
+    digest = hashlib.sha256(
+        "\0".join((kind.value, *sorted(canonical_ids))).encode()
+    ).hexdigest()[:40]
+    return f"set1_{digest}"
+
+
 #: Kinds with a real v1 ``DevScope.direct_scope`` representation. CHAOS-3301
 #: adds ``TEAM`` here: a client (or the subject preflight) can now commit and
 #: re-validate a team-direct ``DevScope`` through ``resolve_contract`` /
@@ -248,6 +272,17 @@ class ScopeSearchRequest:
     #: search on the GraphQL field or the model-facing ``resolve_scope.v1``
     #: tool, both of which CHAOS-3301 owns.
     allowed_kinds: frozenset[EntityKind] = V1_SEARCHABLE_ENTITY_KINDS
+    #: CHAOS-3388. Never set by an ordinary caller -- only
+    #: ``subject_preflight._close_matches`` (the CHAOS-3366 closest-matches
+    #: fallback for an already-unresolved named mention) opts in. Acronym
+    #: matching is a derived, candidate-only signal (see ``alias_matching``'s
+    #: module docstring): folding it into the *primary* resolution search
+    #: would let a query like "ACR" land in the ordinary ``AMBIGUOUS_
+    #: CANDIDATES``/"more than one entity matches this name" outcome, which
+    #: is the wrong copy for "nothing matched literally, but here is
+    #: something close" -- that is exactly the outcome and copy the
+    #: closest-matches fallback already owns.
+    include_alias_matches: bool = False
 
     def __post_init__(self) -> None:
         query = self.query.strip()
@@ -317,6 +352,7 @@ class AuthorizedEntityCatalog(Protocol):
         kinds: tuple[EntityKind, ...],
         *,
         limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]: ...
 
     async def organization_repository_ids(
@@ -327,6 +363,17 @@ class AuthorizedEntityCatalog(Protocol):
         The total must reflect every repository authorized for ``org_id``,
         not just the returned page, so callers can detect when the org
         exceeds the public ``authorized_repository_ids`` contract cap.
+        """
+        ...
+
+    async def organization_project_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """CHAOS-3393: up to ``limit`` authorized projects (labeled,
+        deterministically ordered by display label then id), and the true
+        total authorized for ``org_id`` -- so a caller enumerating an
+        ORGANIZATION_WIDE portfolio can disclose truncation rather than
+        silently sampling.
         """
         ...
 
@@ -469,7 +516,33 @@ class ScopeResolutionService:
         org_id: str,
         permission_fingerprint: str,
         request: ScopeResolveRequest,
+        *,
+        now: datetime | None = None,
     ) -> ScopeResolution:
+        """Resolve ``request`` as of ``now`` (defaults to the real current
+        instant -- production callers never pass this explicitly).
+
+        ``now`` governs the *whole* resolution, not just part of it: a
+        preset window must be anchored on the SAME instant the caller
+        believes it pinned. CHAOS-3392: ``now`` used to be silently dropped
+        here -- every preset-relative ``time_range`` (the common case;
+        explicit ``start_date``/``end_date`` was unaffected) was always
+        computed against the REAL wall clock even when a caller resolved an
+        otherwise fully deterministic, watermark-cached result via
+        ``resolve_contract(resolved_at=...)`` (below), so a resolution that
+        took its window from the wall clock while its caller believed it
+        had pinned the instant was reproducible only until the next local
+        midnight. Threading ``now`` through closes that leak; the default
+        keeps today's production behavior (resolve against the actual
+        current moment) byte-for-byte unchanged.
+
+        (An independently-diagnosed fix for this same defect landed on
+        main as #1366 while this branch's own codex-hardened fix was in
+        flight; reconciled here onto this branch's semantics -- see the
+        cache-key comment below for why, and its ``resolved_at``-anchors-
+        the-window / two-instants-do-not-collide tests are kept alongside
+        this branch's own three.)
+        """
         if not org_id or not permission_fingerprint:
             raise ValueError("Tenant and permission fingerprint are required")
 
@@ -484,6 +557,13 @@ class ScopeResolutionService:
                 key=lambda kind: kind.value,
             )
         )
+        # Resolved once, up front: the catalog-failure branch below, the
+        # cache key, and the eventual ``ScopeResolution.time_range`` all
+        # share this SAME value, so a transient catalog failure on a
+        # SECOND, microseconds-later call in the same request can never
+        # observe a different ``time_range`` than a first call that already
+        # succeeded and was cached (see the cache-key comment below).
+        time_range = self.resolve_time_range(request.time_range, now=now)
         try:
             watermark = await self._catalog.watermark(org_id, relevant_kinds)
         except Exception:
@@ -492,21 +572,51 @@ class ScopeResolutionService:
                 entities=(),
                 team_filters=(),
                 candidates=(),
-                time_range=self.resolve_time_range(request.time_range),
+                time_range=time_range,
                 warnings=("catalog_unavailable",),
             )
+        payload = _request_payload(request)
+        if request.time_range.start_date is None or request.time_range.end_date is None:
+            # Preset-relative window: ``now`` DOES affect the result, but
+            # the raw instant must never be the cache key material itself.
+            # CHAOS-3392 codex MEDIUM: keying on ``now.isoformat()`` (as
+            # main's independent #1366 fix for this same defect did too --
+            # reconciled here onto this branch's semantics, not main's) gave
+            # every call within one request its own microsecond-distinct
+            # key (``resolve_contract`` always resolves a concrete instant,
+            # even for callers who never pin one), which defeated the
+            # request-local cache entirely for the common, unpinned
+            # production path -- repeated calls in one request each re-hit
+            # the catalog instead of reusing the first result, and a
+            # transient catalog failure on that SECOND call could flip an
+            # already-resolved, already-cacheable request from exact to
+            # unresolved. Keyed instead by the EFFECTIVE resolved boundary
+            # (``time_range.utc_start``/``utc_end``): two calls landing on
+            # the same local day -- the only thing a preset window is
+            # actually sensitive to -- collapse onto the SAME cache entry,
+            # exactly like two calls with no ``now`` divergence at all did
+            # before CHAOS-3392 threaded ``now`` through in the first place.
+            payload = {
+                **payload,
+                "resolved_utc_start": time_range.utc_start.isoformat(),
+                "resolved_utc_end": time_range.utc_end.isoformat(),
+            }
+        # Absolute ``start_date``/``end_date`` ranges are left untouched:
+        # ``now`` cannot affect their result (``resolve_time_range`` never
+        # reads it in that branch), so the cache key stays byte-for-byte
+        # identical to pre-CHAOS-3392 -- no needless cache-busting for the
+        # case this ticket was never about.
         cache_key = self._cache_key(
             "resolve",
             org_id,
             permission_fingerprint,
-            _request_payload(request),
+            payload,
             watermark,
         )
         cached = self._cache.get(cache_key)
         if isinstance(cached, ScopeResolution):
             return cached
 
-        time_range = self.resolve_time_range(request.time_range)
         if not active_refs:
             result = ScopeResolution(
                 outcome=ScopeResolutionOutcome.UNRESOLVED,
@@ -597,6 +707,11 @@ class ScopeResolutionService:
             "query": request.query,
             "kinds": [kind.value for kind in kinds],
             "limit": request.limit,
+            # CHAOS-3388: distinct cache entry from an alias-unaware search of
+            # the same query/kinds/limit -- the two can return different
+            # candidate sets, so sharing a cache key would let whichever
+            # request happened to run first silently answer the other's call.
+            "include_alias_matches": request.include_alias_matches,
         }
         cache_key = self._cache_key(
             "search", org_id, permission_fingerprint, payload, watermark
@@ -605,7 +720,11 @@ class ScopeResolutionService:
         if isinstance(cached, ScopeSearchResult):
             return cached
         entities = await self._catalog.search(
-            org_id, request.query, kinds, limit=request.limit
+            org_id,
+            request.query,
+            kinds,
+            limit=request.limit,
+            include_alias_matches=request.include_alias_matches,
         )
         result = ScopeSearchResult(
             candidates=_dedupe_entities(entities)[: request.limit],
@@ -708,6 +827,26 @@ class ScopeResolutionService:
         # the user did not name. Committing therefore requires the name to
         # equal a label or canonical id outright; a partial name that matched
         # something real is offered back as candidates instead.
+        #
+        # CHAOS-3388 codex re-review (HIGH, confirmed): a candidate's own
+        # parenthetical segment ("Dev Health Agent Context Runtime (Context
+        # Fabric)" -> "Context Fabric") is NOT eligible for the same
+        # outright-equality commit as its primary label, however real the
+        # alternate name reads in ordinary language. The catalog carries no
+        # explicit alias field -- ``alias_forms`` *derives* every
+        # parenthetical the same mechanical way, by splitting one label
+        # string on its parentheses, with no way to distinguish a genuine
+        # alternate name ("Context Fabric") from a qualifier appended to the
+        # primary label ("Payments (Legacy)", "Reports (Archived)"). The
+        # first commit of this check treated both identically and
+        # auto-committed "the Legacy project" onto ``payments-legacy`` --
+        # answering about an entity the user never actually named. So a
+        # parenthetical match is held to exactly the acronym rule: candidate
+        # list only, never a pick, however unique the match turns out to be
+        # (see ``alias_matching``'s module docstring). Should the catalog
+        # ever grow a real, explicit alias field -- distinct from splitting
+        # the display label -- that field's values would be the eligible
+        # input here instead; a derived parenthetical never is.
         wanted = lookup_text.strip().casefold()
         exact_matches = tuple(
             candidate
@@ -799,21 +938,6 @@ class ScopeResolutionService:
             resolved_at=resolved_at,
         )
 
-    @staticmethod
-    def _subject_set_fingerprint(kind: EntityKind, canonical_ids: Sequence[str]) -> str:
-        """Mint-derived, opaque set fingerprint (structural pattern 5).
-
-        ``"set1_" + sha256(kind, sorted(canonical_ids)).hexdigest()[:40]``.
-        Hex cannot spell a subject name, and the value is stable across runs
-        for the same (kind, member set), which is what makes it usable as a
-        batch cache key.
-        """
-
-        digest = hashlib.sha256(
-            "\0".join((kind.value, *sorted(canonical_ids))).encode()
-        ).hexdigest()[:40]
-        return f"set1_{digest}"
-
     def committed_subject_set_for(
         self,
         entities: Sequence[AuthorizedEntity],
@@ -862,7 +986,7 @@ class ScopeResolutionService:
             ambiguous_mention_ids=ambiguous_mention_ids,
             cohort_complete=omitted == 0,
             warnings=warnings,
-            fingerprint=self._subject_set_fingerprint(
+            fingerprint=subject_set_fingerprint(
                 kind, [entity.canonical_id for entity in entities]
             ),
         )
@@ -963,8 +1087,21 @@ class ScopeResolutionService:
         *,
         resolved_at: datetime | None = None,
     ) -> DevScopeResolution:
-        """Resolve ``resolve_scope.v1`` into the canonical CHAOS-3223 contract."""
-        domain = await self.resolve(org_id, permission_fingerprint, request)
+        """Resolve ``resolve_scope.v1`` into the canonical CHAOS-3223 contract.
+
+        ``resolved_at`` is the instant the resolution is *made at*, so it
+        also anchors the resolved preset window -- it is not merely a
+        label applied to a window taken from a second, unrelated clock.
+        Resolved early (was previously computed only for the OUTPUT
+        ``resolved_at`` field, at the very end of this method) so the SAME
+        instant also pins ``domain.time_range`` via ``self.resolve`` below
+        -- see that method's docstring. Production callers pass ``None``
+        and get the wall clock for both, unchanged.
+        """
+        resolved_at = resolved_at or datetime.now(timezone.utc)
+        domain = await self.resolve(
+            org_id, permission_fingerprint, request, now=resolved_at
+        )
         requested = self._requested_scope(org_id, request, domain.time_range)
         resolved = self._resolved_scope(org_id, request, domain)
         outcome = domain.outcome
@@ -1026,7 +1163,9 @@ class ScopeResolutionService:
             candidates=candidates,
             fallbacks=list(domain.fallbacks),
             warnings=warnings,
-            resolved_at=resolved_at or datetime.now(timezone.utc),
+            # Already resolved above (and threaded into ``self.resolve`` as
+            # ``now``) -- always non-None by this point.
+            resolved_at=resolved_at,
         )
 
     async def _organization_scope_repositories(
@@ -1097,6 +1236,64 @@ class ScopeResolutionService:
                 ],
             )
         return sorted(repo_ids), outcome, resolved, warnings
+
+    async def organization_committed_projects(
+        self,
+        org_id: str,
+        permission_fingerprint: str,
+        *,
+        limit: int,
+    ) -> tuple[list[AuthorizedEntity], int, bool]:
+        """CHAOS-3393: bounded, deterministic project enumeration for an
+        ORGANIZATION_WIDE ``status.portfolio.v1`` run (no named subjects).
+
+        Unlike :meth:`_organization_scope_repositories`, which DROPS the
+        whole set once ``total`` exceeds its cap (an authorized-repository
+        list is either complete or entirely re-derived native-side, never
+        partial), a portfolio batch is legitimate as a bounded, DISCLOSED
+        subset of a larger organization -- ``PortfolioStatusService`` itself
+        already caps at ``MAX_PORTFOLIO_PROJECTS`` and expects the caller
+        to say so, not omit the whole answer. ``limit`` is therefore always
+        honored as a page bound, never a completeness gate; the true
+        ``total`` is returned alongside so the caller can disclose
+        truncation. Watermark-cached exactly like the repository path
+        above.
+
+        CHAOS-3393 codex MED-3: the third element, ``catalog_available``,
+        distinguishes a genuine catalog OUTAGE from an authoritative,
+        confirmed-zero enumeration -- both used to collapse to the
+        identical ``([], 0)`` shape, and the caller
+        (``subject_preflight._organization_wide_portfolio_result``) could
+        not tell "the organization truly has no authorized projects" from
+        "the catalog could not be queried at all", so it silently widened
+        BOTH into an ordinary organization-wide PROCEED with unrestricted
+        ``ALL_TOOLS`` access -- exactly the wrong failure mode for an
+        outage. Only the ``except`` branch below returns ``False``; a
+        real, successful zero-row catalog read (including a cache hit,
+        which by definition came from a prior successful read) returns
+        ``True``.
+        """
+
+        try:
+            watermark = await self._catalog.watermark(org_id, (EntityKind.PROJECT,))
+            cache_key = self._cache_key(
+                "organization_portfolio_projects",
+                org_id,
+                permission_fingerprint,
+                {"limit": limit},
+                watermark,
+            )
+            cached = self._cache.get(cache_key)
+            if isinstance(cached, tuple) and len(cached) == 2:
+                entities, total = cached
+                return entities, total, True
+            entities, total = await self._catalog.organization_project_entities(
+                org_id, limit=limit
+            )
+            self._cache.put(cache_key, (entities, total))
+            return entities, total, True
+        except Exception:
+            return [], 0, False
 
     def _requested_scope(
         self,
@@ -1292,6 +1489,18 @@ class ScopeResolutionService:
         payload: dict[str, object],
         watermark: str,
     ) -> str:
+        # CHAOS-3392 codex MEDIUM: a caller-pinned instant (``resolve``'s
+        # ``now``) must NOT be folded into this key as a raw timestamp --
+        # main's independent #1366 fix for this same defect did exactly
+        # that (a ``resolved_as_of`` parameter here, keyed on
+        # ``now.isoformat()``), reintroducing the round-1 flaw this
+        # branch's own codex review round refuted: ``resolve_contract``
+        # always resolves a concrete instant, even for callers who never
+        # pin one, so every "unpinned" production call got its own
+        # microsecond-distinct key and the request-local cache never hit.
+        # ``resolve``'s caller instead folds the EFFECTIVE resolved
+        # boundary into ``payload`` itself when it matters (preset-relative
+        # windows only) -- see that method's cache-key comment.
         raw = json.dumps(
             {
                 "operation": operation,

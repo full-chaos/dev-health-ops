@@ -58,6 +58,55 @@ logger = logging.getLogger(__name__)
 
 AnswerPayloadValidator: TypeAlias = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
+#: CHAOS-3423 Codex adversarial review (MEDIUM, confirmed): the closed set
+#: of ``DevMessage.answer_payload`` schema versions that are a genuine
+#: ``DevAnswer`` -- as opposed to a ``dev_error.v1`` no-answer transcript row
+#: (``append_assistant_error``), which also sets ``answer_id`` (to the run's
+#: own id) and therefore also satisfies every ``role == "assistant" AND
+#: answer_id IS NOT NULL`` query written before that method existed.
+#: ``get_answer_message`` and ``record_feedback`` both filter on this so an
+#: answer-only reader can never be handed error content it cannot parse as
+#: (or should never treat as) an answer.
+_REAL_ANSWER_SCHEMA_VERSIONS = frozenset({"dev_answer.v1", "dev_answer.v2"})
+
+
+def _is_real_answer_message(message: DevMessage) -> bool:
+    """Whether an assistant ``DevMessage`` carries a genuine ``DevAnswer``.
+
+    ``False`` for a no-answer terminal's transcript row -- role and a
+    non-null ``answer_id`` alone cannot tell the two apart (CHAOS-3423
+    Codex adversarial review, MEDIUM).
+    """
+
+    payload = message.answer_payload
+    return (
+        isinstance(payload, Mapping)
+        and payload.get("schema_version") in _REAL_ANSWER_SCHEMA_VERSIONS
+    )
+
+
+def _wire_visible_message_condition():
+    """A user row, OR an assistant row carrying a genuine ``DevAnswer``.
+
+    Shared SQL-level predicate (CHAOS-3423/CHAOS-3440) for every read that
+    must agree with what the v1 wire transcript actually shows: excludes a
+    no-answer terminal's ``append_assistant_error`` row without disturbing
+    any user row. Used to keep ``message_count`` honest against the
+    transcript it describes (Codex adversarial review round 3, MEDIUM,
+    confirmed: a no-answer turn used to count 2 while the transcript
+    rendered 1), and by ``list_transcript_records``/
+    ``list_prompt_history_messages``'s own ``include_errors=False`` filter
+    -- one predicate, not four independently-maintained copies.
+    """
+
+    return or_(
+        DevMessage.role != "assistant",
+        DevMessage.answer_payload["schema_version"]
+        .as_string()
+        .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
+    )
+
+
 _TERMINAL_RUN_STATES = frozenset(
     {
         "completed",
@@ -1161,6 +1210,14 @@ class DevPersistenceService:
                 DevMessage.user_id == DevConversation.user_id,
                 DevMessage.role == "assistant",
                 DevMessage.answer_id.is_not(None),
+                # CHAOS-3423 Codex adversarial review (MEDIUM, confirmed):
+                # a no-answer terminal's transcript row also has
+                # role="assistant" and a non-null answer_id (the run's own
+                # id) -- excluded here so this client-visible field keeps
+                # meaning exactly what its name says, "the latest genuine
+                # answer", never a run a client would then dereference into
+                # a 503 or a misattached feedback row.
+                _wire_visible_message_condition(),
             )
             .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
             .limit(1)
@@ -1172,6 +1229,13 @@ class DevPersistenceService:
                 DevMessage.conversation_id == DevConversation.id,
                 DevMessage.org_id == DevConversation.org_id,
                 DevMessage.user_id == DevConversation.user_id,
+                # CHAOS-3423 Codex adversarial review round 3 (MEDIUM,
+                # confirmed): a no-answer terminal's transcript row is
+                # excluded from the wire transcript (CHAOS-3440) -- counting
+                # it here would report 2 messages for a conversation whose
+                # transcript renders 1, exactly the drift a client-visible
+                # count must never show.
+                _wire_visible_message_condition(),
             )
             .scalar_subquery()
         )
@@ -1244,6 +1308,10 @@ class DevPersistenceService:
                 DevMessage.conversation_id == conversation.id,
                 DevMessage.org_id == org_id,
                 DevMessage.user_id == user_id,
+                # CHAOS-3423 Codex adversarial review round 3 (MEDIUM,
+                # confirmed): see the identical filter/rationale in
+                # list_conversation_records.
+                _wire_visible_message_condition(),
             )
         )
         latest_answer_id = await self.session.scalar(
@@ -1254,6 +1322,9 @@ class DevPersistenceService:
                 DevMessage.user_id == user_id,
                 DevMessage.role == "assistant",
                 DevMessage.answer_id.is_not(None),
+                # CHAOS-3423 Codex adversarial review (MEDIUM, confirmed):
+                # see the identical filter in list_conversation_records.
+                _wire_visible_message_condition(),
             )
             .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
             .limit(1)
@@ -1273,8 +1344,27 @@ class DevPersistenceService:
         limit: int = 50,
         after: datetime | None = None,
         after_id: uuid.UUID | None = None,
+        include_errors: bool = False,
     ) -> TranscriptPage:
-        """Return only safe persisted user questions and validated answers."""
+        """Return only safe persisted user questions and validated answers.
+
+        ``include_errors`` (CHAOS-3423, CHAOS-3440): a no-answer terminal's
+        assistant row (``append_assistant_error``) defaults EXCLUDED --
+        this is the wire-facing v1 transcript read
+        (``router.get_conversation_transcript``), and the checked-in
+        ``dev-health-web`` client runtime-validates every response against
+        the pinned ``dev_conversation_transcript.v1`` schema with a
+        closed-world validator (unknown keys rejected) plus its own
+        hand-written invariant that every assistant entry carries a real
+        ``answer`` -- a no-answer row on the wire 502s every deployed web
+        client the moment it appears. The v1 wire shape is therefore left
+        byte-identical to before CHAOS-3423 (verified in
+        ``test_chaos_3423_3424_persistence_prerequisites.py`` against the
+        actual vendored schema file); surfacing these turns to web is
+        CHAOS-3440, gated on a coordinated client update. Pass
+        ``include_errors=True`` for an internal (non-wire) reader that
+        wants them -- see ``list_prompt_history_messages``.
+        """
 
         if limit < 1 or limit > 100:
             raise DevPersistenceValidationError("limit must be between 1 and 100")
@@ -1297,6 +1387,8 @@ class DevPersistenceService:
             DevMessage.org_id == org_id,
             DevMessage.user_id == user_id,
         ]
+        if not include_errors:
+            conditions.append(_wire_visible_message_condition())
         if after is not None and after_id is not None:
             conditions.append(
                 or_(
@@ -1340,6 +1432,16 @@ class DevPersistenceService:
                         or_(
                             DevRun.user_message_id.in_(user_message_ids),
                             DevRun.answer_id.in_(answer_ids),
+                            # CHAOS-3423: a no-answer terminal's assistant row
+                            # never sets dev_runs.answer_id (that column's
+                            # existing meaning -- "this run completed with a
+                            # real DevAnswer" -- must stay intact for
+                            # router._replayed_result's replay branch) --
+                            # its DevMessage.answer_id is the run's own id
+                            # instead (PersistenceRunRecorder.
+                            # record_error_message), so the owning run is
+                            # found here too.
+                            DevRun.id.in_(answer_ids),
                         ),
                     )
                 )
@@ -1349,12 +1451,13 @@ class DevPersistenceService:
             run.user_message_id: run for run in runs if run.user_message_id is not None
         }
         by_answer = {run.answer_id: run for run in runs if run.answer_id is not None}
+        by_id = {run.id: run for run in runs}
         records: list[TranscriptRecord] = []
         for message in messages:
             if message.role == "user":
                 run = by_user_message.get(message.id)
             elif message.answer_id is not None:
-                run = by_answer.get(message.answer_id)
+                run = by_answer.get(message.answer_id) or by_id.get(message.answer_id)
             else:
                 run = None
             if run is None:
@@ -1443,7 +1546,16 @@ class DevPersistenceService:
                 DevMessage.role == "assistant",
             )
         )
-        if answer is None:
+        if answer is None or not _is_real_answer_message(answer):
+            # CHAOS-3423 Codex adversarial review (MEDIUM, confirmed): a
+            # no-answer terminal's transcript row (append_assistant_error)
+            # also has role="assistant" and a non-null answer_id (the run's
+            # own id) -- indistinguishable from a real answer by the query
+            # above alone. Every caller of this method (evidence expansion,
+            # feedback) means "a genuine DevAnswer", so a dev_error.v1 row
+            # here is reported exactly like it does not exist, never handed
+            # to a caller that will crash trying to DevAnswer.model_validate
+            # it.
             raise DevPersistenceNotFound("answer not found")
         return answer
 
@@ -1455,8 +1567,19 @@ class DevPersistenceService:
         conversation_id: uuid.UUID,
         exclude_message_id: uuid.UUID,
         limit: int,
+        include_errors: bool = True,
     ) -> Sequence[DevMessage]:
-        """Return a bounded chronological suffix for safe prompt projection."""
+        """Return a bounded chronological suffix for safe prompt projection.
+
+        ``include_errors`` (CHAOS-3423) defaults ``True`` here, unlike
+        ``list_transcript_records``'s wire-facing default of ``False``:
+        this feeds the NEXT turn's model prompt (``router.
+        _bounded_prompt_history``), an internal server-to-provider channel
+        that never reaches a client, so a prior clarification/error turn's
+        ``safe_message`` is included for continuity -- no wire-compatibility
+        concern applies here the way it does for the transcript endpoint
+        (CHAOS-3440).
+        """
 
         if limit < 1 or limit > 100:
             raise DevPersistenceValidationError(
@@ -1467,16 +1590,19 @@ class DevPersistenceService:
             user_id=user_id,
             conversation_id=conversation_id,
         )
+        conditions = [
+            DevMessage.conversation_id == conversation_id,
+            DevMessage.org_id == org_id,
+            DevMessage.user_id == user_id,
+            DevMessage.id != exclude_message_id,
+        ]
+        if not include_errors:
+            conditions.append(_wire_visible_message_condition())
         messages = list(
             (
                 await self.session.scalars(
                     select(DevMessage)
-                    .where(
-                        DevMessage.conversation_id == conversation_id,
-                        DevMessage.org_id == org_id,
-                        DevMessage.user_id == user_id,
-                        DevMessage.id != exclude_message_id,
-                    )
+                    .where(*conditions)
                     .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
                     .limit(limit)
                 )
@@ -1641,7 +1767,7 @@ class DevPersistenceService:
             dict(validated),
             field="answer_payload",
         )
-        if payload.get("schema_version") not in {"dev_answer.v1", "dev_answer.v2"}:
+        if payload.get("schema_version") not in _REAL_ANSWER_SCHEMA_VERSIONS:
             raise DevPersistenceValidationError(
                 "validated answer payload must use dev_answer.v1 or dev_answer.v2"
             )
@@ -1689,6 +1815,104 @@ class DevPersistenceService:
             existing = await self.session.scalar(
                 select(DevMessage).where(
                     DevMessage.answer_id == answer_id,
+                    DevMessage.org_id == org_id,
+                    DevMessage.user_id == user_id,
+                    DevMessage.conversation_id == conversation_id,
+                    DevMessage.role == "assistant",
+                )
+            )
+            if existing is None:
+                raise
+            return existing
+        self._touch(conversation)
+        return message
+
+    async def append_assistant_error(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+        message_id: uuid.UUID,
+        error_payload: Mapping[str, Any],
+        validator: AnswerPayloadValidator,
+        scope_snapshot: Mapping[str, Any],
+        rendered_content: str,
+    ) -> DevMessage:
+        """Persist one ``dev_error.v1``-shaped assistant transcript row (CHAOS-3423).
+
+        Mirrors ``append_assistant_answer``'s idempotent-insert shape, for the
+        terminal that carries no ``DevAnswer`` at all -- a clarification or
+        error terminal, which already validates and persists a real
+        ``dev_answer_frame.v1`` (``record_frame``) but, until this method
+        existed, never a ``dev_messages`` row, leaving the transcript
+        structurally incomplete for exactly the turns where guidance matters
+        most.
+
+        ``message_id`` doubles as ``DevMessage.answer_id`` -- the caller
+        derives it deterministically from the run (see
+        ``PersistenceRunRecorder.record_error_message``), so a retried flush
+        is idempotent the same way ``append_assistant_answer``'s own
+        ``answer_id`` already is. Deliberately a DISTINCT column value space
+        from a real ``DevAnswer.answer_id``: ``dev_runs.answer_id`` is never
+        pointed at this row (only a genuine completed answer sets that FK-ish
+        column), so the existing replay path
+        (``router._replayed_result``'s ``run.answer_id is not None`` branch)
+        is untouched -- it keeps reconstructing from ``terminal_error_payload``
+        / ``frame_payload`` exactly as before. This row exists purely for the
+        conversation-transcript and prompt-history read paths.
+        """
+
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        try:
+            validated = validator(error_payload)
+        except Exception as exc:
+            raise DevPersistenceValidationError(
+                "error payload validation failed"
+            ) from exc
+        payload = _json_copy(
+            dict(validated),
+            field="answer_payload",
+        )
+        if payload.get("schema_version") != "dev_error.v1":
+            raise DevPersistenceValidationError(
+                "validated error payload must use dev_error.v1"
+            )
+        existing = await self.session.scalar(
+            select(DevMessage).where(
+                DevMessage.answer_id == message_id,
+                DevMessage.org_id == org_id,
+                DevMessage.user_id == user_id,
+                DevMessage.conversation_id == conversation_id,
+                DevMessage.role == "assistant",
+            )
+        )
+        if existing is not None:
+            return existing
+        content = _bounded_text(
+            rendered_content, field="rendered_content", max_bytes=32 * 1024
+        )
+        message = DevMessage(
+            conversation_id=conversation_id,
+            org_id=org_id,
+            user_id=user_id,
+            role="assistant",
+            content=content,
+            answer_id=message_id,
+            answer_payload=payload,
+            scope_snapshot=_json_copy(dict(scope_snapshot), field="scope_snapshot"),
+            created_at=self._now(),
+        )
+        try:
+            async with self.session.begin_nested():
+                self.session.add(message)
+                await self.session.flush()
+        except IntegrityError:
+            existing = await self.session.scalar(
+                select(DevMessage).where(
+                    DevMessage.answer_id == message_id,
                     DevMessage.org_id == org_id,
                     DevMessage.user_id == user_id,
                     DevMessage.conversation_id == conversation_id,
@@ -1902,7 +2126,21 @@ class DevPersistenceService:
         run.state = state
         run.answer_id = answer_id
         run.terminal_reason = safe_terminal_reason
-        run.provider_source = provider_source
+        # Leave-unchanged, NOT clobber-to-None -- matching tool_call_count /
+        # citation_count / metric_count below. provider_source is set once at
+        # admission (append_user_message_and_run) and is then read back by
+        # _enforce_platform_allowance, which filters on
+        # `provider_source == "platform"`. Assigning it unconditionally from a
+        # parameter defaulting to None meant every caller that did not re-pass
+        # it nulled the column and dropped the run out of the allowance query
+        # -- silently disabling the monthly request and cost limits. Two real
+        # callers send a bare state update: OrchestratorPersistence.mark_state
+        # (state only, every non-terminal transition) and router.py's
+        # provider-unavailable 503 path (terminal, so the loss is permanent).
+        # No caller ever needs to clear this back to NULL; a run's provider is
+        # a fact about how it was admitted, not mutable per-update state.
+        if provider_source is not None:
+            run.provider_source = provider_source
         run.provider_fingerprint = safe_provider_fingerprint
         run.model_fingerprint = safe_model_fingerprint
         run.prompt_version = safe_prompt_version
@@ -2539,10 +2777,28 @@ class DevPersistenceService:
             public_outcome=public_outcome,
             created_at=self._now(),
         )
-        self.session.add(record)
-        run.contract_generation = "v2"
-        run.public_outcome = public_outcome
-        await self.session.flush()
+        # CHAOS-3423 Codex adversarial review round 3 (HIGH, confirmed):
+        # isolated in a SAVEPOINT, matching append_assistant_answer/
+        # append_assistant_error's own pattern -- a real mid-flush database
+        # failure here (not just a pre-flush construction exception) used
+        # to be able to mark the WHOLE outer session rollback-only, which
+        # could silently discard an already-flushed answer or no-answer
+        # transcript row the moment finish()'s own failure handler chose
+        # not to roll back (to protect that exact row). Any exception here
+        # now unwinds only to this savepoint -- the outer session, and
+        # every write already flushed on it, stays healthy regardless of
+        # what kind of failure this was. This is CHAOS-3441's own scope,
+        # brought forward and closed inline here rather than deferred: round
+        # 3's finding supplied a concrete, reproducible mid-flush failure
+        # (a real IntegrityError, not the round-2 finding's abstract
+        # concern), verified against a genuine duplicate-insert test
+        # (test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session)
+        # rather than only documented as a residual.
+        async with self.session.begin_nested():
+            self.session.add(record)
+            run.contract_generation = "v2"
+            run.public_outcome = public_outcome
+            await self.session.flush()
         return record
 
     async def record_narrative(
@@ -2740,7 +2996,10 @@ class DevPersistenceService:
                 DevMessage.role == "assistant",
             )
         )
-        if answer is None:
+        if answer is None or not _is_real_answer_message(answer):
+            # CHAOS-3423 Codex adversarial review (MEDIUM, confirmed): a
+            # no-answer terminal's transcript row must never accept
+            # helpful/not_helpful feedback -- there was no answer to rate.
             raise DevPersistenceNotFound("answer not found")
         feedback = await self.session.scalar(
             select(DevFeedback).where(

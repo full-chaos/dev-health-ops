@@ -167,6 +167,13 @@ def gitlab_issue_to_work_item(
         provider="gitlab",
         repo_id=repo_id,
         native_team_key=None,
+        # GitLab has no separate "project key" concept -- project_id (below)
+        # carries the raw path, which is ALL the project subject catalog
+        # (workers/team_autoimport_gitlab.py, CHAOS-3380) needs: its identity
+        # match's compatibility arm (native_status_change._project_identity_
+        # match) compares this row's project_id directly against the
+        # catalog's CURRENT path, so nothing about work_items -- old rows or
+        # new -- ever needs to change for that join to resolve.
         project_key=None,
         # For work tracking metrics, treat the GitLab project path as the "project" scope.
         project_id=str(project_full_path)
@@ -324,6 +331,8 @@ def gitlab_mr_to_work_item(
         provider="gitlab",
         repo_id=repo_id,
         native_team_key=None,
+        # See gitlab_issue_to_work_item's identical field for why this stays
+        # None rather than mirroring project_id.
         project_key=None,
         project_id=str(project_full_path) if project_full_path else None,
         title=str(title),

@@ -364,6 +364,11 @@ CONTENT_SLOT_FIELDS: tuple[str, ...] = (
     # shipped plans' own truncation behavior.
     "health_findings",
     "deficiency_findings",
+    # CHAOS-3393: appended at the tail for the same reason -- no observation
+    # this priority order ever ranks against exists yet (HEALTH_PROFILE's
+    # portfolio adapter never co-populates status_facts/graph_edges/etc.
+    # alongside this slot).
+    "portfolio_project_statuses",
 )
 
 #: Which ``DevSourceContent`` slot(s) each ``SourceClass``'s own registered
@@ -415,7 +420,14 @@ APPROVED_CONTENT_SLOTS: dict[SourceClass, frozenset[str]] = {
     # CHAOS-3297 stack #3 -- see the matching RELATIONSHIP_MATRIX entries
     # above. Each is the ONLY slot its own steps (registered in the new
     # wave_3_1_plans.py module) are ever allowed to populate.
-    SourceClass.HEALTH_PROFILE: frozenset({"health_findings"}),
+    # CHAOS-3393: the portfolio adapter (status.portfolio.v1) is also
+    # registered under HEALTH_PROFILE (a portfolio batch is several
+    # HEALTH_PROFILE evaluations flattened into one -- see SourceClass.
+    # HEALTH_PROFILE's own docstring), so it shares this source class's
+    # approved-slots entry with the project/team health adapters.
+    SourceClass.HEALTH_PROFILE: frozenset(
+        {"health_findings", "portfolio_project_statuses"}
+    ),
     SourceClass.DEFICIENCY_INVENTORY: frozenset({"deficiency_findings"}),
 }
 
@@ -716,6 +728,21 @@ EVIDENCE_IDENTITY_TABLE: dict[str, EvidenceIdentityCell] = {
             "executor-level identity-binding check exists to catch a "
             "fabricated PRIMARY fact and has no single recomputable "
             "identity tuple to check a derived finding against."
+        ),
+    ),
+    # CHAOS-3393: same posture as health_findings/deficiency_findings above
+    # -- DevPortfolioProjectStatusV2 is itself a derived aggregate (worst
+    # state + finding count rolled up from that project's own, already
+    # HEALTH_PROFILE-identity-checked HealthRuleFinding set), with no
+    # per-row evidence_ref_ids field to bind.
+    "portfolio_project_statuses": EvidenceIdentityCell(
+        mode="accepted_risk",
+        rationale=(
+            "DevPortfolioProjectStatusV2 is a derived rollup (worst state, "
+            "finding count) over a project's own already-identity-checked "
+            "health_findings -- it has no per-row evidence_ref_ids field to "
+            "bind; per-finding evidence discipline is enforced one layer "
+            "down, on health_findings itself."
         ),
     ),
 }

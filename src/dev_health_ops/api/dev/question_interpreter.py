@@ -159,13 +159,23 @@ _NAME = r"[A-Z][A-Za-z0-9&/'\-]*(?:[ \t]+[A-Z][A-Za-z0-9&/'\-]*){0,3}"
 #: required inside it.
 _QUOTED = r"[\"'‘’“”`](?P<quoted>[^\"'‘’“”`]{1,120})[\"'‘’“”`]"
 
-# Noun leading: "project Ask Dev", 'repo "dev-health-ops"'.
+# Noun leading: "project Ask Dev", 'repo "dev-health-ops"'. CHAOS-3388: only
+# the noun alternation is matched case-insensitively -- via the scoped inline
+# flag `(?i:...)`, not a top-level `re.IGNORECASE`, which would also fold
+# `_NAME`'s `[A-Z]` and silently turn any lowercase word into a "capitalized"
+# name span. "the ACR Project" (a capitalized noun immediately after an
+# all-caps acronym) is exactly as much a named mention as "the ACR project"
+# is, and `_candidate_from` already `.casefold()`s the matched noun before its
+# `_KIND_BY_NOUN` lookup, which only makes sense if the match itself can be
+# any case. Without case-insensitivity here that casefold was dead code: the
+# noun literal never matched a capitalized occurrence in the first place, so
+# the mention was silently dropped to the untyped bare-name path instead.
 _NOUN_LEADING = re.compile(
-    rf"\b(?P<noun>{_NOUN_ALTERNATION})\s+(?:{_QUOTED}|(?P<plain>{_NAME}))",
+    rf"\b(?P<noun>(?i:{_NOUN_ALTERNATION}))\s+(?:{_QUOTED}|(?P<plain>{_NAME}))",
 )
 # Noun trailing: "the Ask Dev project", '"dev-health-ops" repo'.
 _NOUN_TRAILING = re.compile(
-    rf"(?:{_QUOTED}|(?P<plain>{_NAME}))\s+(?P<noun>{_NOUN_ALTERNATION})\b",
+    rf"(?:{_QUOTED}|(?P<plain>{_NAME}))\s+(?P<noun>(?i:{_NOUN_ALTERNATION}))\b",
 )
 
 #: Capitalized words that are never a subject name on their own. A candidate

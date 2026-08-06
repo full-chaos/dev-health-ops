@@ -13,7 +13,7 @@ import json
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from dev_health_ops.api.graphql.resolvers._membership_run_scope import (
@@ -23,6 +23,10 @@ from dev_health_ops.api.graphql.resolvers._membership_run_scope import (
 )
 from dev_health_ops.api.queries.client import query_dicts
 
+from ._project_identity import (
+    project_identity_cte,
+    project_identity_match,
+)
 from .contracts import ClaimKind, DevScope, DirectScope, FreshnessState
 from .native_evidence import (
     SourceFreshnessPolicy,
@@ -155,23 +159,253 @@ ORDER BY m.node_type, m.node_id
 LIMIT {{limit:UInt32}}
 """
 
-_WORK_ITEMS_SQL = """
+#: CHAOS-3374: every project-scoped fact arm below (plus ``PROJECT_REPOSITORIES_SQL``)
+#: joins through the catalog's OWN ``projects`` row for ``{entity_id:String}`` instead
+#: of comparing ``work_items.project_id``/``project_key`` against the catalog id
+#: directly. The two are NOT the same value space for every provider:
+#: ``team_autoimport_jira._project_id`` mints a Jira project's catalog id as
+#: ``f"{org_id}:jira:{project_key}"`` (workers/team_autoimport_jira.py:106-107)
+#: while ``providers/jira/normalize.py:517-518`` writes the RAW Jira id/key onto
+#: ``work_items`` -- so ``project_id = {entity_id:String} OR project_key =
+#: {entity_id:String}`` can never match a Jira row: neither side of the OR is ever
+#: the prefixed catalog id. Linear's catalog id IS the raw ``work_items.project_id``
+#: (see ``team_autoimport_linear._linear_project_records``'s own docstring), which
+#: is why Linear worked and Jira didn't with the identical predicate.
+#:
+#: The fix resolves the catalog row's ``provider`` and (nullable) ``project_key``
+#: through this shared CTE and requires BOTH ``work_items.provider = catalog_provider``
+#: and (``work_items.project_id = {entity_id:String}`` OR the two raw
+#: ``project_key`` values match) -- so a Jira project matches by its own raw key, a
+#: Linear project keeps matching by the raw id it always used, and neither can ever
+#: match the other's rows even if a raw key/id value collided (``provider`` is a
+#: real ``work_items`` column -- CHAOS-3374 requires this explicitly: GitLab's own
+#: ``work_items.project_id`` is a bare repo full path, e.g. "group/project", which
+#: could otherwise coincidentally equal another provider's project id/key string in
+#: the same org). CHAOS-3380 is that case made real, and (round 2, Codex HIGH)
+#: mints the catalog identity Jira-style rather than Linear-style for exactly
+#: the reason this paragraph names: a GitLab project's PATH is mutable
+#: (rename, group transfer) while Linear's/Jira's own ids are not.
+#: ``team_autoimport_gitlab.py``'s catalog ``id`` is GitLab's own IMMUTABLE
+#: numeric project id, prefixed like Jira's (``f"{org_id}:gitlab:{numeric_id}"``);
+#: ``project_key`` carries the CURRENT ``path_with_namespace``, refreshed on
+#: every discovery run.
+#:
+#: CHAOS-3380 round 3 (Codex HIGH -- incremental sync strands historical
+#: GitLab rows): unlike Jira, ``providers/gitlab/normalize.py`` does NOT
+#: write anything onto ``work_items.project_key`` -- it stays empty for
+#: EVERY GitLab row, old and new alike (an earlier revision of this comment
+#: had normalize.py mirror the path onto ``project_key`` too; reverted --
+#: pointless once the arm below exists, and it would have made "did this row
+#: sync after the cutover" a THIRD identity dimension for no reason).
+#: ``work_items.project_id`` is, and always has been, the raw path for every
+#: GitLab issue/MR row regardless of when it was synced -- ``updated_after``
+#: incremental syncs never rewrite a row that has not itself changed, so
+#: "before this ticket" and "after" rows are IDENTICAL in shape. The two arms
+#: above (raw id match, key-to-key match) both miss this: GitLab's entity id
+#: is prefixed (never equals any raw ``project_id``) and its ``project_key``
+#: is always empty (never satisfies ``catalog_project_key != ''`` on its own
+#: side). A THIRD arm closes it: ``{alias}project_id = catalog_project_key``
+#: (guarded by the same ``catalog_project_key != ''``) -- the work item's raw
+#: path against the catalog's CURRENT path, independent of when the row was
+#: synced. Provider-guarded like the other two, so it cannot cross-match:
+#: a Jira row's ``project_id`` is always empty (``providers/jira/normalize``
+#: never sets it), so it can never equal a non-empty ``catalog_project_key``;
+#: a Linear native project row's ``project_key`` is empty (this arm is a
+#: no-op for it), but a Linear TEAM-derived catalog row's ``project_key`` IS
+#: a real value (the team key) -- this arm still cannot false-match it in
+#: practice, since no Linear work item's ``project_id`` (Linear's own project
+#: UUID) is ever going to literally equal a short team-key string, but the
+#: claim "Linear's project_key is always empty" from the previous revision of
+#: this comment was not true of every catalog row Linear writes, only the
+#: native-project ones -- corrected here rather than left as a latent false
+#: assumption (see ``ask_dev_project_subject_oracle.py`` for where believing
+#: it uncritically actually mattered).
+#:
+#: ``_project_identity_cte``/``_project_identity_match`` both take an
+#: ``entity_param`` (default ``"entity_id"``, this module's own parameter
+#: name everywhere below) so ``native_evidence.py`` can reuse the EXACT same
+#: predicate text keyed off ITS OWN differently-named scope parameter
+#: (``scope_entity_id``) instead of hand-copying a variant that could drift
+#: (CHAOS-3380 round 3, Codex HIGH -- native_evidence project search/expand
+#: compared work_items directly against a prefixed catalog id and could never
+#: match a real row for any provider using the prefixed-id model, not just
+#: GitLab).
+#:
+#: ``LEFT JOIN`` (every arm that also serves 'issue'/'work_unit'/'team'/
+#: 'organization'/'repository' scope types): a project-identity lookup miss must
+#: never blank out those OTHER scope types' rows -- only the project arm's own
+#: predicate is gated (``ifNull(catalog_provider, '') != ''`` in
+#: ``_project_identity_match``). ``PROJECT_REPOSITORIES_SQL`` is project-scope-only
+#: and uses ``INNER JOIN``: an unresolvable identity there means the derivation has
+#: nothing to derive, which IS the correct fail-closed answer (an empty repository
+#: set), not a silent bypass of the join.
+#:
+#: Codex adversarial review (MEDIUM, 2026-08-04), two findings against the first
+#: cut of this CTE, both fixed here rather than accepted as residual risk:
+#:
+#: 1. ``projects``' ReplacingMergeTree key is ``(org_id, provider, id)``, NOT
+#:    ``(org_id, id)`` -- ``id`` alone is only unique WITHIN one provider, not
+#:    across providers in the same org. A same-org, same-id row minted by two
+#:    different providers (today only a coincidence; nothing enforces cross-
+#:    provider id uniqueness) survives ``FINAL`` as TWO rows, since they differ
+#:    on the provider component of the key. The original ``LIMIT 1`` (no
+#:    ``ORDER BY``) would then pick one of them *nondeterministically*, and the
+#:    provider guard would faithfully protect the WRONG provider's identity.
+#:    Fixed by aggregating with no ``GROUP BY`` (the whole filtered set is one
+#:    implicit group) and admitting a result only when ``count() = 1`` --
+#:    exactly one row for this ``(org_id, id)``, at any provider. Two or more
+#:    (or zero) both correctly yield an empty CTE, which every call site above
+#:    already treats as an unresolvable identity (fail closed).
+#: 2. The authorized-entity catalog's own committing query
+#:    (``scope_catalog.ClickHouseAuthorizedEntityCatalog._query_for``,
+#:    ``EntityKind.PROJECT``) filters ``is_active = 1`` -- a project retired
+#:    AFTER a scope was committed against it (a newer ReplacingMergeTree row
+#:    with ``is_active = 0``) must not keep answering here just because this
+#:    CTE re-reads the same table without that filter. Added explicitly rather
+#:    than assumed from ``FINAL`` alone, since retirement is a data state
+#:    (``is_active``), not a version-ordering property ``FINAL`` enforces on
+#:    its own.
+#: Both helpers live in ``_project_identity.py`` (CHAOS-3380 round 3) so
+#: ``native_evidence.py`` can reuse them without a circular import (this
+#: module already imports FROM ``native_evidence.py``). Re-exported here
+#: under their historical private names -- every internal usage below, and
+#: the test assertions against ``native_status_change._PROJECT_IDENTITY_CTE``
+#: / ``native_status_change._project_identity_match``, keep working
+#: unchanged.
+_project_identity_cte = project_identity_cte
+_project_identity_match = project_identity_match
+
+#: The default-parameterized text, used verbatim by every arm in THIS module
+#: (all of which key off ``{entity_id:String}``) -- a plain string constant so
+#: existing ``_PROJECT_IDENTITY_CTE + "..."`` splices and ``in`` assertions
+#: keep working unchanged. ``native_evidence.py`` calls
+#: ``project_identity_cte("scope_entity_id")`` directly instead, for its own
+#: differently-named parameter.
+_PROJECT_IDENTITY_CTE = _project_identity_cte()
+
+
+def _project_scope_arm(alias: str = "") -> str:
+    """The full ``scope_type = 'project'`` disjunction arm, identity-scoped."""
+    return (
+        "({scope_type:String} = 'project'\n"
+        f"      AND {_project_identity_match(alias)})"
+    )
+
+
+_PROJECT_LINKED_WORK_ITEMS_CTE = (
+    _PROJECT_IDENTITY_CTE
+    + """, linked AS (
+  SELECT toString(link.repo_id) AS repository_id, link.pr_number
+  FROM work_graph_issue_pr AS link FINAL
+  INNER JOIN work_items AS item FINAL
+    ON item.org_id = link.org_id
+   AND item.repo_id = link.repo_id
+   AND item.work_item_id = link.work_item_id
+  LEFT JOIN project ON 1 = 1
+  WHERE link.org_id = {org_id:String}
+    AND item.org_id = {org_id:String}
+    AND toString(link.repo_id) IN {repository_ids:Array(String)}
+    AND (
+      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
+      OR """
+    + _project_scope_arm("item.")
+    + """
+      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
+    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    + """
+      ))
+    )
+)"""
+)
+
+
+_WORK_ITEMS_SQL = (
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """
 SELECT toString(repo_id) AS repository_id, work_item_id, title, status,
        parent_id, project_id, project_key, updated_at, last_synced
 FROM work_items FINAL
+LEFT JOIN project ON 1 = 1
 WHERE org_id = {org_id:String}
   AND toString(repo_id) IN {repository_ids:Array(String)}
   AND updated_at <= {as_of:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'issue'
       AND (work_item_id = {entity_id:String} OR parent_id = {entity_id:String}))
-    OR ({scope_type:String} = 'project'
-      AND (project_id = {entity_id:String} OR project_key = {entity_id:String}))
+    OR """
+    + _project_scope_arm()
+    + """
     OR ({scope_type:String} = 'work_unit'
       AND work_item_id IN {member_issue_ids:Array(String)})
   )
 ORDER BY (work_item_id = {entity_id:String}) DESC, updated_at DESC, work_item_id
 LIMIT {limit:UInt32}
+"""
+)
+
+#: CHAOS-3368: the project's own DECLARED lifecycle state / target date
+#: (``projects.state``/``projects.target_date``, migration 073 -- see
+#: ``metrics.schemas.ProjectRecord``'s own docstring: "the provider's OWN
+#: lifecycle vocabulary, stored verbatim"). Read with the same RMT
+#: discipline every other catalog read in this module uses: ``FINAL`` for
+#: the current row, ``org_id`` in the WHERE, ``is_active = 1`` so a
+#: retired project row does not resurrect a stale declared state. Guarded
+#: by an explicit ``HAVING count() = 1`` for the same reason CHAOS-3374's
+#: ``_PROJECT_IDENTITY_CTE`` guards its own read of this table: the
+#: ReplacingMergeTree key is ``(org_id, provider, id)``, not ``(org_id,
+#: id)``, so a same-org, same-``id`` row minted by two different
+#: providers survives ``FINAL`` as two rows and an unguarded ``LIMIT 1``
+#: would pick one nondeterministically. This read is deliberately
+#: narrower than that CTE: it never resolves which provider a project
+#: SUBJECT belongs to (CHAOS-3374's turf) -- it only reads the declared-
+#: state columns of a subject the scope has ALREADY resolved and
+#: authorized, so an ambiguous match here is grounds to render the
+#: declared-state facts absent (fail closed), never to guess a provider.
+#: Selects ``last_synced`` under that exact alias so ``_read``'s existing
+#: watermark/freshness plumbing applies unchanged -- no bespoke handling
+#: needed here.
+#:
+#: Codex adversarial review (MEDIUM, 2026-08-04): ``FINAL`` collapses the
+#: RMT to its single CURRENT row per key -- there is no history left to read
+#: here, so ``updated_at <= {as_of:DateTime64(3, 'UTC')}`` (mirroring every
+#: other as-of-bounded read in this module, e.g. ``_WORK_ITEMS_SQL``) is not
+#: a narrowing filter, it is the difference between "this project's
+#: declared state as of the requested instant" and "whatever it is RIGHT
+#: NOW, mislabeled as of an earlier instant". A project updated after
+#: ``as_of`` is excluded entirely (``count() = 0`` -> absent facts) rather
+#: than answered with its current, not-yet-true-at-as_of state -- this
+#: ticket deliberately does not attempt a real history representation; an
+#: as-of snapshot of a since-changed declared state is simply unavailable.
+#: CHAOS-3377 residual defect (live acceptance probe, 2026-08-04): the
+#: aggregate below was originally aliased ``AS updated_at`` -- the SAME name
+#: as the raw column the ``WHERE`` clause filters on two lines down.
+#: ClickHouse resolves a bare ``WHERE`` identifier against a same-named
+#: ``SELECT`` alias in preference to the source column, so ``WHERE
+#: updated_at <= {as_of:...}`` was silently rewritten to filter on
+#: ``any(updated_at)`` -- an aggregate function, which ``WHERE`` (unlike
+#: ``HAVING``) can never contain. The result was ``Code: 184
+#: (ILLEGAL_AGGREGATION)`` raised on EVERY invocation of this query,
+#: unconditionally (never a timestamp-skew or evidence-cap artifact).
+#: ``_read`` (below) catches that exception and reports the ``projects``
+#: source as merely "unavailable" -- indistinguishable, from every caller's
+#: perspective, from a genuinely absent declared state, which is exactly why
+#: this went unnoticed: the declared-state clause simply never rendered, for
+#: any project, on any run. Aliased to ``declared_updated_at`` instead so the
+#: ``WHERE`` clause's ``updated_at`` reference stays bound to the raw
+#: column -- the fix is the rename alone; ``state``/``target_date``/
+#: ``last_synced`` are left untouched (not aggregation-clause hazards, since
+#: nothing filters on them) so ``_read``'s own generic
+#: ``row.get("last_synced")`` watermark lookup keeps working unchanged.
+_PROJECT_DECLARED_FACTS_SQL = """
+SELECT any(state) AS state,
+       any(target_date) AS target_date,
+       any(updated_at) AS declared_updated_at,
+       any(last_synced) AS last_synced
+FROM projects FINAL
+WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
+  AND updated_at <= {as_of:DateTime64(3, 'UTC')}
+HAVING count() = 1
 """
 
 _BLOCKER_WATERMARK_SQL = """
@@ -195,52 +429,127 @@ HAVING countIf(scope_repo_id IS NULL) > 0
        = length({repository_ids:Array(String)})
 """
 
-_BLOCKERS_SQL = """
-SELECT blocker.work_item_id AS entity_id,
-       blocker.title AS display_label,
-       blocker.status,
-       greatest(blocker.updated_at, edge.event_ts) AS observed_at,
-       greatest(blocker.last_synced, edge.last_synced) AS last_synced
-FROM work_graph_edges AS edge FINAL
-INNER JOIN work_items AS blocker FINAL
-  ON blocker.org_id = edge.org_id AND blocker.work_item_id = edge.source_id
-INNER JOIN work_items AS blocked FINAL
-  ON blocked.org_id = edge.org_id AND blocked.work_item_id = edge.target_id
-WHERE edge.org_id = {org_id:String}
-  AND edge.source_type = 'issue'
-  AND edge.target_type = 'issue'
-  AND edge.edge_type = 'blocks'
-  AND edge.provenance = 'native'
-  AND toString(blocker.repo_id) IN {repository_ids:Array(String)}
-  AND toString(blocked.repo_id) IN {repository_ids:Array(String)}
-  AND edge.event_ts <= {as_of:DateTime64(3, 'UTC')}
-  AND blocker.updated_at <= {as_of:DateTime64(3, 'UTC')}
-  AND blocked.updated_at <= {as_of:DateTime64(3, 'UTC')}
-  AND (
-    ({scope_type:String} = 'issue' AND edge.target_id = {entity_id:String})
-    OR ({scope_type:String} = 'project'
-      AND (blocked.project_id = {entity_id:String} OR blocked.project_key = {entity_id:String}))
-    OR ({scope_type:String} = 'work_unit'
-      AND edge.target_id IN {member_issue_ids:Array(String)})
-  )
+#: CHAOS-3377 residual defect (Codex adversarial review HIGH, live
+#: acceptance probe 2026-08-04): this query used to ``SELECT`` directly off
+#: the ``edge``/``blocker``/``blocked`` join with no ``GROUP BY`` -- one row
+#: PER MATCHING EDGE, not per blocker. A blocker whose ``blocks`` edges
+#: target several blocked issues in the SAME project scope therefore
+#: returned its own entity ``N`` times (once per edge), and ``ORDER BY`` /
+#: ``LIMIT`` applied to those MULTIPLIED rows -- so a blocker with more
+#: edges than the page ``limit`` could fill the ENTIRE result page by
+#: itself, silently crowding out every other, genuinely distinct blocker
+#: (and the evidence minted from it) with no way for anything downstream
+#: (the renderer's own defense-in-depth dedup included) to recover what the
+#: page never contained. ``matched_edges`` now holds the pre-collapse,
+#: one-row-per-edge result the query used to return directly; the outer
+#: ``SELECT ... GROUP BY entity_id`` collapses it to one row per blocker
+#: BEFORE ``ORDER BY``/``LIMIT`` ever run, so a page of ``limit`` rows can
+#: hold up to ``limit`` DISTINCT blockers again, exactly as intended.
+#: ``max()`` (not ``any()``) for the three non-key columns: ``display_label``
+#: and ``status`` are properties of the ONE blocker work-item row joined
+#: repeatedly (identical across every duplicate, so any aggregate is
+#: equivalent in practice, but ``max()`` is deterministic even if that ever
+#: stops being true), while ``observed_at`` (a ``greatest()`` of two
+#: timestamps per edge) genuinely differs per edge and must take the
+#: latest, matching this query's own pre-existing "most recently observed"
+#: intent for ``ORDER BY``.
+_BLOCKERS_SQL = (
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """, matched_edges AS (
+  SELECT blocker.work_item_id AS entity_id,
+         blocker.title AS display_label,
+         blocker.status AS status,
+         greatest(blocker.updated_at, edge.event_ts) AS observed_at,
+         greatest(blocker.last_synced, edge.last_synced) AS last_synced
+  FROM work_graph_edges AS edge FINAL
+  INNER JOIN work_items AS blocker FINAL
+    ON blocker.org_id = edge.org_id AND blocker.work_item_id = edge.source_id
+  INNER JOIN work_items AS blocked FINAL
+    ON blocked.org_id = edge.org_id AND blocked.work_item_id = edge.target_id
+  LEFT JOIN project ON 1 = 1
+  WHERE edge.org_id = {org_id:String}
+    AND edge.source_type = 'issue'
+    AND edge.target_type = 'issue'
+    AND edge.edge_type = 'blocks'
+    AND edge.provenance = 'native'
+    AND toString(blocker.repo_id) IN {repository_ids:Array(String)}
+    AND toString(blocked.repo_id) IN {repository_ids:Array(String)}
+    AND edge.event_ts <= {as_of:DateTime64(3, 'UTC')}
+    AND blocker.updated_at <= {as_of:DateTime64(3, 'UTC')}
+    AND blocked.updated_at <= {as_of:DateTime64(3, 'UTC')}
+    AND (
+      ({scope_type:String} = 'issue' AND edge.target_id = {entity_id:String})
+      OR """
+    + _project_scope_arm("blocked.")
+    + """
+      OR ({scope_type:String} = 'work_unit'
+        AND edge.target_id IN {member_issue_ids:Array(String)})
+    )
+)
+SELECT entity_id,
+       max(display_label) AS display_label,
+       max(status) AS status,
+       max(observed_at) AS observed_at,
+       max(last_synced) AS last_synced
+FROM matched_edges
+GROUP BY entity_id
 ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
 """
+)
 
+#: CHAOS-3376 residual defect (live EXPLAIN fixture repair, 2026-08-04; root
+#: cause corrected in codex review round 2, 2026-08-04): the ``latest_reviews``
+#: CTE below used to alias its per-reviewer watermark
+#: ``max(submitted_at) AS submitted_at`` -- the SAME name as the raw
+#: ``git_pull_request_reviews.submitted_at`` column it aggregates -- in the
+#: SAME SELECT LIST as ``argMax(state, (submitted_at, last_synced,
+#: review_id)) AS state``, which passes that bare ``submitted_at`` as one of
+#: ITS OWN arguments. ClickHouse resolves every bare identifier across a
+#: WHOLE SELECT list against any alias defined ANYWHERE in that SAME list
+#: as one order-independent unit (NOT sequentially/textually -- verified
+#: directly: the self-collision reproduces standalone, with no ``WITH`` CTE
+#: involved at all, and conversely a genuinely cross-CTE reference to a
+#: same-named column with NO same-list collision does not reproduce it), so
+#: the ``submitted_at`` argument inside ``argMax(state, (submitted_at, ...))``
+#: -- textually BEFORE the ``max(submitted_at) AS submitted_at`` alias it
+#: collides with -- resolved to that ALIASED aggregate expression instead of
+#: the plain column, nesting one aggregate function inside another, which
+#: ClickHouse rejects unconditionally with ``Code: 184 (ILLEGAL_AGGREGATION)``
+#: on every invocation. (The originally-shipped fix diagnosed this as a
+#: cross-CTE "WITH is inlined, not materialized" hazard -- reproduction
+#: disproved that: the ``reviews`` CTE's own, unrelated reference to
+#: ``state``/``latest_submitted_at`` from ``latest_reviews`` is completely
+#: safe, exactly because it is a DIFFERENT SELECT list / query block.) Exactly
+#: the same alias-shadowing hazard CLASS as ``_PROJECT_DECLARED_FACTS_SQL``'s
+#: CHAOS-3377 fix (WHERE resolving to a same-named aggregate alias instead of
+#: the raw column) -- here the collision is with a SIBLING SELECT-list
+#: expression instead of a WHERE predicate, in the SAME query block. Never
+#: reached by the unit fake (a predicate evaluator, not a SQL engine); only
+#: surfaced once the live EXPLAIN fixture's shared ``common`` params dict
+#: actually supplied every placeholder this query's text binds (CHAOS-3376)
+#: and the query ran against the real engine for the first time. Fixed by
+#: renaming the alias to ``latest_submitted_at`` so every reference to it --
+#: within ``latest_reviews`` itself and from ``reviews`` below -- stays bound
+#: to a plain per-row column, not the aggregate that produced it.
 _PULL_REQUESTS_SQL = (
-    """
-WITH linked AS (
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """, linked AS (
   SELECT toString(link.repo_id) AS repository_id, link.pr_number
   FROM work_graph_issue_pr AS link FINAL
   LEFT JOIN work_items AS item FINAL
     ON item.repo_id = link.repo_id AND item.work_item_id = link.work_item_id
+  LEFT JOIN project ON 1 = 1
   WHERE link.org_id = {org_id:String}
     AND item.org_id = {org_id:String}
     AND toString(link.repo_id) IN {repository_ids:Array(String)}
     AND (
       ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+      OR """
+    + _project_scope_arm("item.")
+    + """
       OR ({scope_type:String} = 'work_unit'
         AND link.work_item_id IN {member_issue_ids:Array(String)})
       OR ({scope_type:String} = 'team'
@@ -252,7 +561,7 @@ WITH linked AS (
 ), latest_reviews AS (
   SELECT toString(repo_id) AS repository_id, number, reviewer,
          argMax(state, (submitted_at, last_synced, review_id)) AS state,
-         max(submitted_at) AS submitted_at
+         max(submitted_at) AS latest_submitted_at
   FROM git_pull_request_reviews FINAL
   WHERE org_id = {org_id:String}
     AND toString(repo_id) IN {repository_ids:Array(String)}
@@ -264,7 +573,7 @@ WITH linked AS (
            'CHANGES_REQUESTED',
            countIf(upper(state) = 'APPROVED') > 0,
            'APPROVED',
-           argMax(state, submitted_at)
+           argMax(state, latest_submitted_at)
          ) AS review_state,
          countIf(upper(state) = 'CHANGES_REQUESTED') AS changes_requested
   FROM latest_reviews
@@ -449,6 +758,19 @@ LIMIT 1
 #: excluding pattern-matched-but-unresolved ownership rows (``repo_id IS
 #: NULL`` -- a ``match_type='pattern'`` row that has not yet resolved to a
 #: concrete repository contributes no queryable repository id).
+#:
+#: CHAOS-3375 (Codex adversarial review, HIGH): the first cut stopped there
+#: and trusted every ``team_repo_ownership.repo_id`` outright, exactly the
+#: mistake the adjacent ``PROJECT_REPOSITORIES_SQL`` derivation's own review
+#: comment above documents for ``work_items.repo_id``. ClickHouse enforces no
+#: foreign key, so a repository revoked from ``repos`` -- de-authorized, and
+#: correctly invisible to the ORGANIZATION branch, which enumerates ``repos``
+#: itself -- can keep a stale ``team_repo_ownership`` row and would have
+#: become an admitted read bound for team scope alone. Every *real*
+#: repository id must therefore still resolve through the same org-scoped
+#: ``repos`` catalog. Verified against a live migrated ClickHouse: an
+#: orphaned ownership row (repo_id absent from ``repos``) is admitted by the
+#: query without this clause and excluded with it.
 _TEAM_REPOSITORIES_SQL = """
 SELECT toString(g.repo_id) AS repository_id
 FROM (
@@ -466,6 +788,9 @@ FROM (
   GROUP BY org_id, provider, repo_full_name, team_id
 ) AS g
 WHERE g.repo_id IS NOT NULL
+  AND toString(g.repo_id) IN (
+    SELECT toString(id) FROM repos FINAL WHERE org_id = {org_id:String}
+  )
 """
 
 #: Re-derive one project's repository set from canonical work-item attribution.
@@ -500,20 +825,22 @@ WHERE g.repo_id IS NOT NULL
 #: read bound for project scope alone. Every *real* repository id must therefore
 #: still resolve through the same org-scoped ``repos`` catalog.
 #:
-#: Provider scope, deliberate (Codex adversarial review HIGH, 2026-08-03;
-#: ruling: keep the arm provider-scoped rather than grow it). Sharing the fact
-#: queries' predicate exactly is also what stops this arm from *helping* a
-#: provider whose committed id those queries cannot match. Jira is that case:
-#: ``team_autoimport_jira._project_id`` mints the catalog id as
-#: ``f"{org_id}:jira:{project_key}"`` while ``providers/jira/normalize`` writes
-#: the raw Jira id/key onto ``work_items``, so neither arm matches. Deriving
-#: repositories for it anyway would be strictly *worse* than not: the fact
-#: queries would still match nothing and the run would report a confident empty
-#: answer for a project that has data, in place of the disclosed fail-closed
-#: one it reports today. Jira project subjects therefore keep exactly their
-#: current behavior here; making them answerable needs a coordinated
-#: provider-aware change across every project arm at once. Asserted by
-#: ``test_jira_shaped_project_keeps_todays_fail_closed_behaviour``.
+#: Provider-identity scoped (CHAOS-3374, superseding the prior "provider scope,
+#: deliberate" ruling below it superseded a "clean and small" derivation-only
+#: fix that would have made Jira *worse* -- a confident empty answer instead of
+#: a disclosed fail-closed one -- for exactly the reason described in
+#: ``_PROJECT_IDENTITY_CTE``'s own comment: ``team_autoimport_jira._project_id``
+#: mints the catalog id as ``f"{org_id}:jira:{project_key}"`` while
+#: ``providers/jira/normalize`` writes the raw Jira id/key onto ``work_items``.
+#: Rather than leaving the mismatch in place, this arm now joins through the
+#: catalog's own ``provider``/``project_key`` columns (``_project_identity_match``)
+#: so a Jira project matches its own raw key, a Linear project keeps matching
+#: the raw id it always used, and neither can match the other's (or a future
+#: GitLab catalog row's) rows even on a coincidental key/id collision. Asserted
+#: end to end by ``test_jira_shaped_project_resolves_via_provider_scoped_identity``
+#: and the cross-provider collision coverage beside it; the derivation and
+#: ``_WORK_ITEMS_SQL`` share ``_project_identity_match``'s exact text, pinned by
+#: ``test_derivation_matches_projects_exactly_as_the_queries_it_bounds_do``.
 #:
 #: The zero UUID is admitted explicitly rather than by omitting that check.
 #: It is not a repository at all: it is the sentinel
@@ -524,12 +851,18 @@ WHERE g.repo_id IS NOT NULL
 #: existence join would re-empty the set for the exact provider this fix exists
 #: for -- while a blanket "skip the catalog" would have de-authorized nothing
 #: and admitted everything. Naming the sentinel keeps both properties.
-PROJECT_REPOSITORIES_SQL = """
+PROJECT_REPOSITORIES_SQL = (
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """
 SELECT DISTINCT toString(repo_id) AS repository_id
 FROM work_items FINAL
+INNER JOIN project ON 1 = 1
 WHERE org_id = {org_id:String}
   AND updated_at <= {as_of:DateTime64(3, 'UTC')}
-  AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
+  AND """
+    + _project_identity_match()
+    + """
   AND (
     toString(repo_id) = '00000000-0000-0000-0000-000000000000'
     OR toString(repo_id) IN (
@@ -537,9 +870,12 @@ WHERE org_id = {org_id:String}
     )
   )
 """
+)
 
 _TRANSITIONS_SQL = (
-    """
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """
 SELECT transition.work_item_id AS entity_id, item.title AS display_label,
        transition.from_status, transition.to_status,
        transition.occurred_at AS observed_at, transition.last_synced
@@ -548,6 +884,7 @@ INNER JOIN work_items AS item FINAL
   ON item.org_id = transition.org_id
  AND item.repo_id = transition.repo_id
  AND item.work_item_id = transition.work_item_id
+LEFT JOIN project ON 1 = 1
 WHERE transition.org_id = {org_id:String}
   AND item.org_id = {org_id:String}
   AND toString(item.repo_id) IN {repository_ids:Array(String)}
@@ -555,8 +892,9 @@ WHERE transition.org_id = {org_id:String}
   AND transition.occurred_at < {end:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'issue' AND transition.work_item_id = {entity_id:String})
-    OR ({scope_type:String} = 'project'
-      AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+    OR """
+    + _project_scope_arm("item.")
+    + """
     OR ({scope_type:String} = 'team' AND transition.work_item_id IN ("""
     + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
     + """
@@ -569,7 +907,9 @@ LIMIT {limit:UInt32}
 )
 
 _RELATIONSHIPS_SQL = (
-    """
+    "WITH "
+    + _PROJECT_IDENTITY_CTE
+    + """
 SELECT edge_id AS change_id, source_type, source_id, edge_type,
        target_type, target_id, provenance, confidence,
        discovered_at AS observed_at, last_synced
@@ -584,15 +924,21 @@ WHERE org_id = {org_id:String}
     OR ({scope_type:String} = 'project' AND (
       source_id IN (
         SELECT work_item_id FROM work_items FINAL
+        INNER JOIN project ON 1 = 1
         WHERE org_id = {org_id:String}
           AND toString(repo_id) IN {repository_ids:Array(String)}
-          AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
+          AND """
+    + _project_identity_match()
+    + """
       )
       OR target_id IN (
         SELECT work_item_id FROM work_items FINAL
+        INNER JOIN project ON 1 = 1
         WHERE org_id = {org_id:String}
           AND toString(repo_id) IN {repository_ids:Array(String)}
-          AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
+          AND """
+    + _project_identity_match()
+    + """
       )
     ))
     OR ({scope_type:String} = 'team' AND (
@@ -613,27 +959,9 @@ LIMIT {limit:UInt32}
 )
 
 _PULL_REQUEST_CHANGES_SQL = (
-    """
-WITH linked AS (
-  SELECT toString(link.repo_id) AS repository_id, link.pr_number
-  FROM work_graph_issue_pr AS link FINAL
-  INNER JOIN work_items AS item FINAL
-    ON item.org_id = link.org_id
-   AND item.repo_id = link.repo_id
-   AND item.work_item_id = link.work_item_id
-  WHERE link.org_id = {org_id:String}
-    AND item.org_id = {org_id:String}
-    AND toString(link.repo_id) IN {repository_ids:Array(String)}
-    AND (
-      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
-    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    "WITH "
+    + _PROJECT_LINKED_WORK_ITEMS_CTE
     + """
-      ))
-    )
-)
 SELECT concat(toString(pr.repo_id), '#pr', toString(pr.number), '#state#',
               if(isNotNull(pr.merged_at), 'merged',
                  if(isNotNull(pr.closed_at), 'closed', ifNull(pr.state, 'open')))) AS change_id,
@@ -663,27 +991,9 @@ LIMIT {limit:UInt32}
 )
 
 _REVIEW_CHANGES_SQL = (
-    """
-WITH linked AS (
-  SELECT toString(link.repo_id) AS repository_id, link.pr_number
-  FROM work_graph_issue_pr AS link FINAL
-  INNER JOIN work_items AS item FINAL
-    ON item.org_id = link.org_id
-   AND item.repo_id = link.repo_id
-   AND item.work_item_id = link.work_item_id
-  WHERE link.org_id = {org_id:String}
-    AND item.org_id = {org_id:String}
-    AND toString(link.repo_id) IN {repository_ids:Array(String)}
-    AND (
-      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
-    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    "WITH "
+    + _PROJECT_LINKED_WORK_ITEMS_CTE
     + """
-      ))
-    )
-)
 SELECT concat(toString(review.repo_id), '#pr', toString(review.number),
               '#review#', review.review_id) AS change_id,
        change_id AS entity_id,
@@ -710,27 +1020,9 @@ LIMIT {limit:UInt32}
 )
 
 _CI_CHANGES_SQL = (
-    """
-WITH linked AS (
-  SELECT toString(link.repo_id) AS repository_id, link.pr_number
-  FROM work_graph_issue_pr AS link FINAL
-  INNER JOIN work_items AS item FINAL
-    ON item.org_id = link.org_id
-   AND item.repo_id = link.repo_id
-   AND item.work_item_id = link.work_item_id
-  WHERE link.org_id = {org_id:String}
-    AND item.org_id = {org_id:String}
-    AND toString(link.repo_id) IN {repository_ids:Array(String)}
-    AND (
-      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
-    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    "WITH "
+    + _PROJECT_LINKED_WORK_ITEMS_CTE
     + """
-      ))
-    )
-)
 SELECT concat(toString(run.repo_id), '#ci#', run.run_id) AS change_id,
        change_id AS entity_id,
        ifNull(run.pipeline_name, concat('CI run ', run.run_id)) AS display_label,
@@ -756,27 +1048,9 @@ LIMIT {limit:UInt32}
 )
 
 _DEPLOYMENT_CHANGES_SQL = (
-    """
-WITH linked AS (
-  SELECT toString(link.repo_id) AS repository_id, link.pr_number
-  FROM work_graph_issue_pr AS link FINAL
-  INNER JOIN work_items AS item FINAL
-    ON item.org_id = link.org_id
-   AND item.repo_id = link.repo_id
-   AND item.work_item_id = link.work_item_id
-  WHERE link.org_id = {org_id:String}
-    AND item.org_id = {org_id:String}
-    AND toString(link.repo_id) IN {repository_ids:Array(String)}
-    AND (
-      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
-    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    "WITH "
+    + _PROJECT_LINKED_WORK_ITEMS_CTE
     + """
-      ))
-    )
-)
 SELECT concat(toString(deployment.repo_id), '#deployment#',
               deployment.deployment_id) AS change_id,
        change_id AS entity_id,
@@ -805,27 +1079,9 @@ LIMIT {limit:UInt32}
 )
 
 _INCIDENT_CHANGES_SQL = (
-    """
-WITH linked AS (
-  SELECT toString(link.repo_id) AS repository_id, link.pr_number
-  FROM work_graph_issue_pr AS link FINAL
-  INNER JOIN work_items AS item FINAL
-    ON item.org_id = link.org_id
-   AND item.repo_id = link.repo_id
-   AND item.work_item_id = link.work_item_id
-  WHERE link.org_id = {org_id:String}
-    AND item.org_id = {org_id:String}
-    AND toString(link.repo_id) IN {repository_ids:Array(String)}
-    AND (
-      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
-      OR ({scope_type:String} = 'project'
-        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
-      OR ({scope_type:String} = 'team' AND link.work_item_id IN ("""
-    + _TEAM_OWNED_WORK_ITEM_IDS_SUBQUERY
+    "WITH "
+    + _PROJECT_LINKED_WORK_ITEMS_CTE
     + """
-      ))
-    )
-)
 SELECT concat(incident.id, '#state#',
               ifNull(incident.normalized_status, 'unknown')) AS change_id,
        incident.id AS entity_id,
@@ -1422,6 +1678,45 @@ class ClickHouseStatusChangeSource:
                 warnings.append(warning)
 
         declared, children = self._work_item_facts(work_item_rows, scope, source_refs)
+
+        # CHAOS-3368: the project's own declared state/target date, additive
+        # to (never mixed into) `declared`/`children` above -- those still
+        # describe the derived work-item completion tree; this describes
+        # what the provider itself declared for the project as a whole.
+        # Only ever queried for PROJECT scope, mirroring every other
+        # project-only read in this method (_BLOCKERS_SQL's own guard,
+        # just above): an issue/work-unit/team/org/repository scope must
+        # see byte-identical behavior to before this change.
+        #
+        # Codex adversarial review (HIGH, 2026-08-04): kept as TYPED scalars
+        # here, never pre-joined into presentation text -- a renderer that
+        # only ever sees "started; target date 2026-09-01" would have to
+        # parse it back apart to use the pieces independently. Formatting
+        # into a display fact is production_runtime.py's job, sourced from
+        # these typed fields.
+        declared_project_state: str | None = None
+        declared_project_target_date: date | None = None
+        declared_project_observed_at: datetime | None = None
+        if scope.direct_scope is DirectScope.PROJECT:
+            project_rows, project_ref, warning = await self._read(
+                "projects", _PROJECT_DECLARED_FACTS_SQL, common, scope
+            )
+            source_refs.append(project_ref)
+            if warning:
+                warnings.append(warning)
+            if project_rows:
+                row = project_rows[0]
+                state = str(row.get("state") or "").strip()
+                target_date = row.get("target_date")
+                if state or target_date is not None:
+                    declared_project_state = state or None
+                    declared_project_target_date = (
+                        target_date if target_date is not None else None
+                    )
+                    declared_project_observed_at = self._datetime(
+                        row.get("declared_updated_at"), as_of
+                    )
+
         pull_requests = tuple(
             PullRequestFact(
                 entity_id=str(row.get("entity_id") or ""),
@@ -1562,6 +1857,9 @@ class ClickHouseStatusChangeSource:
         return RawStatusSnapshot(
             declared=declared,
             children=children,
+            declared_project_state=declared_project_state,
+            declared_project_target_date=declared_project_target_date,
+            declared_project_observed_at=declared_project_observed_at,
             blockers=tuple(
                 StatusFact(
                     entity_type="issue",

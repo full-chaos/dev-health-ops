@@ -12,6 +12,7 @@ from dev_health_ops.api.services.sync_coverage import (
     SyncCoverageComplexityError,
     UnitWindow,
     _effective_dataset_keys_for_unit,
+    _not_enabled_dataset_keys,
     _query_dataset_keys_for_scope,
     build_coverage_summary_payload,
     classify_staleness,
@@ -83,6 +84,7 @@ def _summary(
     now: datetime = _dt(2, 1),
     config: SyncConfiguration | None = None,
     scope: EffectiveScope | None = None,
+    not_enabled_dataset_keys: frozenset[str] = frozenset(),
 ) -> dict:
     source_id = uuid.UUID(windows[0].source_id) if windows else uuid.uuid4()
     config = config or _config()
@@ -108,6 +110,7 @@ def _summary(
         active_schedule=schedule,
         has_schedule_row=True,
         generated_at=now,
+        not_enabled_dataset_keys=not_enabled_dataset_keys,
     )
 
 
@@ -204,6 +207,63 @@ def test_complete_summary_is_healthy():
     assert summary["overall"]["health"] == "healthy"
     assert summary["datasets"][0]["status"] == "healthy"
     assert summary["datasets"][0]["gaps"] == []
+
+
+def test_not_enabled_dataset_appended_distinctly_from_zero_row_dataset():
+    """CHAOS-3399: a dataset with an enabled row but zero synced rows must
+    read differently from one that was never enabled at all -- before this,
+    a never-enabled dataset was simply absent from the ``datasets`` list,
+    indistinguishable from one that doesn't apply to this provider.
+    """
+    # "commits" is enabled and has never produced a row -- pre-existing
+    # "insufficient_data" semantics, must be unaffected by the new kwarg.
+    summary = _summary(
+        [],
+        now=_dt(2, 1),
+        not_enabled_dataset_keys=frozenset({"tests"}),
+    )
+
+    by_key = {d["dataset_key"]: d for d in summary["datasets"]}
+    assert by_key["commits"]["status"] == "insufficient_data"
+    assert by_key["tests"]["status"] == "not_enabled"
+    assert by_key["tests"]["covered_ranges"] == []
+    assert by_key["tests"]["requested_ranges"] == []
+
+    # The not-enabled placeholder must not perturb overall health/gap/stale
+    # rollups, which are computed from real (enabled) datasets only.
+    assert summary["overall"]["gap_count"] == 0
+    assert summary["overall"]["stale_dataset_count"] == 0
+
+
+def test_not_enabled_dataset_keys_empty_for_source_scoped_config():
+    """A source/child-scoped config's dataset_keys is an intentional subset
+    of the integration's -- flagging the rest "not_enabled" there would be
+    noise; the parent/integration-level config already surfaces it.
+    """
+    config = _config()
+    config.source_id = uuid.uuid4()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(),
+        dataset_keys=("commits",),
+    )
+
+    assert _not_enabled_dataset_keys(config, scope) == frozenset()
+
+
+def test_not_enabled_dataset_keys_reports_unplanned_supported_datasets():
+    config = _config()  # planner_managed=True, source_id=None, provider=github
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(),
+        dataset_keys=("git", "commits", "prs"),
+    )
+
+    not_enabled = _not_enabled_dataset_keys(config, scope)
+
+    assert "tests" in not_enabled
+    # Never claim a dataset that IS already in scope is "not enabled".
+    assert "commits" not in not_enabled
 
 
 def test_summary_caps_covered_through_at_generation_time():

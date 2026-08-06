@@ -140,6 +140,112 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 			Route: &plannerOracleRoute{SourceID: routeCase.source, SyncTargets: routeCase.targets},
 		})
 	}
+	// CHAOS-3427: the Go mirror of Python's deterministic ratchet contract
+	// table (tests/test_sync_planner.py::test_ratchet_window_contract, pinned
+	// verbatim on CHAOS-3412). Same pinned inputs on both sides --
+	// now = 2026-06-17T12:00:00Z, initial depth 30 (default), cap 7 (env
+	// unset), SYNC_WATERMARK_OVERLAP = 0, provider github, tier cap 30 (the
+	// community default a non-UUID org resolves to on the Python side) -- so
+	// the (since, before) pair must match EXACTLY, with no tolerance.
+	//
+	// These run through the live differential oracle rather than as a Go-only
+	// expectation table on purpose: a hand-copied expectation table would pass
+	// while the two implementations diverged, which is the entire failure mode
+	// this ticket exists to prevent. The one clause the table structurally
+	// cannot reach (HEAVY + WatermarkBehavior.NONE -- no such dataset is
+	// registered) has its own forced case in
+	// TestHeavyRatchetNeverCapsAnOpenStartWindow.
+	const ratchetNow = "2026-06-17T12:00:00Z"
+	ratchetBefore := "2026-03-04T12:00:00Z"
+	ratchetTierCap := 30
+	for _, ratchet := range []struct {
+		id        string
+		dataset   string
+		watermark *string
+		before    *string
+	}{
+		// HEAVY cold-start is capped at window_start + cap, NOT at now.
+		{id: "ratchet_heavy_cold_start_is_capped", dataset: "commit-stats"},
+		{id: "ratchet_heavy_cold_start_is_capped_for_every_heavy_key", dataset: "files"},
+		// The cap is scoped to CostClass.HEAVY only.
+		{id: "ratchet_medium_cold_start_is_uncapped", dataset: "commits"},
+		{id: "ratchet_light_cold_start_is_uncapped", dataset: "work-item-labels"},
+		{id: "ratchet_medium_behind_watermark_is_uncapped", dataset: "commits", watermark: ptr("2026-03-01T12:00:00Z")},
+		// The cap applies to the behind-watermark case too.
+		{id: "ratchet_heavy_behind_watermark_is_capped", dataset: "commit-stats", watermark: ptr("2026-03-01T12:00:00Z")},
+		// The cap only ever moves the END in: it is a min, never an assignment.
+		{id: "ratchet_heavy_watermark_inside_cap_keeps_natural_end", dataset: "commit-stats", watermark: ptr("2026-06-15T12:00:00Z")},
+		{id: "ratchet_heavy_watermark_exactly_at_cap_boundary_keeps_natural_end", dataset: "commit-stats", watermark: ptr("2026-06-10T12:00:00Z")},
+		{id: "ratchet_heavy_requested_before_tighter_than_cap_wins", dataset: "commit-stats", watermark: ptr("2026-03-01T12:00:00Z"), before: &ratchetBefore},
+		// A NONE-watermark-behavior dataset keeps its open start.
+		{id: "ratchet_none_watermark_behavior_keeps_open_start", dataset: "repo-metadata"},
+	} {
+		testCase := plannerOracleCase{
+			ID: ratchet.id, OrgID: "org-ratchet", IntegrationID: "integration-ratchet",
+			Provider: "github", Mode: SyncModeIncremental, Now: ratchetNow, Before: ratchet.before,
+			TierCap: &ratchetTierCap, WatermarkOverlapSeconds: 0,
+			Sources:  []plannerOracleSource{{ID: "source-r", ExternalID: "owner/r", Provider: "github", FullName: "owner/r"}},
+			Datasets: []plannerOracleDataset{{DatasetKey: ratchet.dataset}},
+		}
+		if ratchet.watermark != nil {
+			testCase.Watermarks = []plannerOracleWatermark{
+				{SourceID: "owner/r", DatasetKey: ratchet.dataset, At: *ratchet.watermark},
+			}
+		}
+		cases = append(cases, testCase)
+	}
+	// C10/C11: a corrupt FUTURE watermark must heal into a bounded recovery
+	// window on both sides rather than planning zero units forever, and a
+	// dataset already synced past the requested end must plan NO unit rather
+	// than an inverted, zero-width one that fetches nothing and finalizes
+	// SUCCESS. Both are window-postcondition clauses the ratchet table above
+	// does not reach.
+	pastBefore := "2026-02-01T12:00:00Z"
+	futureBefore := "2026-09-01T12:00:00Z"
+	cases = append(cases,
+		// C10(a)/C11 first rule: the window END is clamped to now. A future
+		// `before` would otherwise persist a FUTURE watermark on success, and
+		// the next run would start in the future and silently skip everything
+		// up to it.
+		plannerOracleCase{
+			ID: "window_future_before_is_clamped_to_now", OrgID: "org-window",
+			IntegrationID: "integration-window", Provider: "github", Mode: SyncModeIncremental,
+			Now: ratchetNow, Before: &futureBefore, TierCap: &ratchetTierCap,
+			Sources:  []plannerOracleSource{{ID: "source-w", ExternalID: "owner/w", Provider: "github", FullName: "owner/w"}},
+			Datasets: []plannerOracleDataset{{DatasetKey: "commits"}, {DatasetKey: "repo-metadata"}},
+		},
+		plannerOracleCase{
+			ID: "window_future_watermark_heals", OrgID: "org-window", IntegrationID: "integration-window",
+			Provider: "github", Mode: SyncModeIncremental, Now: ratchetNow, TierCap: &ratchetTierCap,
+			Sources:  []plannerOracleSource{{ID: "source-w", ExternalID: "owner/w", Provider: "github", FullName: "owner/w"}},
+			Datasets: []plannerOracleDataset{{DatasetKey: "commits"}},
+			Watermarks: []plannerOracleWatermark{
+				{SourceID: "owner/w", DatasetKey: "commits", At: "2027-01-01T12:00:00Z"},
+			},
+		},
+		plannerOracleCase{
+			ID: "window_synced_past_requested_before_plans_no_unit", OrgID: "org-window",
+			IntegrationID: "integration-window", Provider: "github", Mode: SyncModeIncremental,
+			Now: ratchetNow, Before: &pastBefore, TierCap: &ratchetTierCap,
+			Sources:  []plannerOracleSource{{ID: "source-w", ExternalID: "owner/w", Provider: "github", FullName: "owner/w"}},
+			Datasets: []plannerOracleDataset{{DatasetKey: "commits"}},
+			Watermarks: []plannerOracleWatermark{
+				{SourceID: "owner/w", DatasetKey: "commits", At: "2026-03-01T12:00:00Z"},
+			},
+		},
+		// C9: a FULL_RESYNC HEAVY window is uncapped BY DESIGN. A one-shot
+		// resync has no next tick, so a capped window would cover only the
+		// cap's span and finalize SUCCESS -- claiming a resync that did not
+		// happen. If the Go ratchet ever loses its incremental-mode conjunct,
+		// this case diverges.
+		plannerOracleCase{
+			ID: "ratchet_full_resync_heavy_is_uncapped", OrgID: "org-ratchet",
+			IntegrationID: "integration-ratchet", Provider: "github", Mode: SyncModeFullResync,
+			Now: ratchetNow, TierCap: &ratchetTierCap,
+			Sources:  []plannerOracleSource{{ID: "source-r", ExternalID: "owner/r", Provider: "github", FullName: "owner/r"}},
+			Datasets: []plannerOracleDataset{{DatasetKey: "commit-stats"}},
+		},
+	)
 	allDatasets := []string{
 		"repo-metadata", "commits", "commit-stats", "files", "blame", "prs", "pr-reviews", "pr-comments",
 		"cicd", "tests", "deployments", "incidents", "security", "work-items", "work-item-labels",
@@ -226,6 +332,8 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 	}
 }
 
+func ptr[T any](value T) *T { return &value }
+
 func runPythonPlannerOracle(t *testing.T, cases []plannerOracleCase) map[string][]map[string]any {
 	t.Helper()
 	python := livePythonExecutable(t)
@@ -239,9 +347,20 @@ func runPythonPlannerOracle(t *testing.T, cases []plannerOracleCase) map[string]
 	}
 	command := exec.Command(python, filepath.Join(filepath.Dir(currentFile), "testdata", "python_planner_oracle.py"))
 	command.Stdin = bytes.NewReader(encoded)
-	output, err := command.CombinedOutput()
+	// stdout and stderr are captured SEPARATELY, not combined: the real
+	// planner logs (CHAOS-3412's future-watermark clamp and heavy-cap clamp
+	// warnings both fire for cases this table drives) go to stderr, and
+	// folding them into stdout corrupts the JSON document the comparison
+	// reads. Keeping stderr means those log lines still reach the failure
+	// message, which is where they are useful.
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err = command.Run()
+	output := stdout.Bytes()
 	if err != nil {
-		t.Fatalf("execute live Python planner oracle: %v\n%s", err, output)
+		t.Fatalf("execute live Python planner oracle: %v\nstdout:\n%s\nstderr:\n%s",
+			err, output, stderr.String())
 	}
 	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), livePythonOracleProofFile)
 	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {

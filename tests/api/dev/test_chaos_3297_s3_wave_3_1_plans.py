@@ -1,7 +1,8 @@
-"""Tests for CHAOS-3297 stack #3's wave-3.1 plan wiring: the four new
-DevInvestigationPlan documents (health.project.v1/health.team.v1/
-balance.team_workload.v1/deficiency.operational.v1) and their step
-registrations against CHAOS-3303/3304/3305's own services.
+"""Tests for CHAOS-3297 stack #3 / CHAOS-3393's wave-3.1 plan wiring: the
+five DevInvestigationPlan documents (health.project.v1/health.team.v1/
+balance.team_workload.v1/deficiency.operational.v1/status.portfolio.v1)
+and their step registrations against CHAOS-3303/3304/3305/3393's own
+services.
 
 Every step here is source-anchored against fake service DOUBLES that
 implement this module's own narrow Protocols (never the full concrete
@@ -56,6 +57,7 @@ from dev_health_ops.api.dev.investigation_plans.wave_3_1_plans import (
     build_registry_with_wave_3_1,
     register_wave_3_1_steps,
 )
+from dev_health_ops.api.dev.portfolio_status_service import PortfolioStatusResult
 from tests._chaos_3295_plan_executor import FakePlanExecutorRuntime
 
 _ORG_ID = "org_fullchaos"
@@ -324,12 +326,52 @@ class _FakeOperationalDeficiency:
         return self._team_result
 
 
+class _FakePortfolioStatus:
+    def __init__(self, result: PortfolioStatusResult | None = None) -> None:
+        self._result = result or PortfolioStatusResult(
+            projects=(),
+            counts_by_worst_state={},
+            failures=(),
+            unresolved_mention_ids=(),
+            ambiguous_mention_ids=(),
+            warnings=(),
+            evaluated_at=_NOW,
+        )
+        self.calls: list[dict[str, Any]] = []
+
+    async def evaluate_portfolio(
+        self,
+        *,
+        org_id,
+        permission_fingerprint,
+        projects,
+        now,
+        unresolved_mention_ids=(),
+        ambiguous_mention_ids=(),
+        warnings=(),
+        per_project_timeout_seconds=None,
+        batch_deadline_seconds=None,
+    ):
+        self.calls.append(
+            {
+                "org_id": org_id,
+                "permission_fingerprint": permission_fingerprint,
+                "projects": tuple(projects),
+                "now": now,
+                "per_project_timeout_seconds": per_project_timeout_seconds,
+                "batch_deadline_seconds": batch_deadline_seconds,
+            }
+        )
+        return self._result
+
+
 def _registry(
     *,
     project_health: _FakeProjectHealth,
     team_health: _FakeTeamHealth,
     team_workload: _FakeTeamWorkload,
     operational_deficiency: _FakeOperationalDeficiency,
+    portfolio_status: _FakePortfolioStatus | None = None,
 ) -> StepRegistry:
     registry = StepRegistry()
     register_wave_3_1_steps(
@@ -338,6 +380,7 @@ def _registry(
         team_health=team_health,
         team_workload=team_workload,
         operational_deficiency=operational_deficiency,
+        portfolio_status=portfolio_status or _FakePortfolioStatus(),
     )
     return registry
 
@@ -360,13 +403,14 @@ def _empty_doubles() -> _Doubles:
     }
 
 
-def test_wave_3_1_plans_cover_exactly_the_four_intents():
+def test_wave_3_1_plans_cover_exactly_the_five_intents():
     assert WAVE_3_1_QUESTION_INTENT_IDS == frozenset(WAVE_3_1_PLANS_BY_INTENT)
     assert WAVE_3_1_QUESTION_INTENT_IDS == {
         QuestionIntentID.PROJECT_HEALTH,
         QuestionIntentID.TEAM_HEALTH,
         QuestionIntentID.TEAM_WORKLOAD_BALANCE,
         QuestionIntentID.OPERATIONAL_DEFICIENCY_INVENTORY,
+        QuestionIntentID.PORTFOLIO_STATUS,
     }
 
 
@@ -547,9 +591,9 @@ async def test_health_findings_within_the_cap_are_not_marked_truncated():
     assert outcome.content.health_findings_truncated is False
 
 
-def test_build_registry_with_wave_3_1_validates_all_ten_plans_together():
+def test_build_registry_with_wave_3_1_validates_all_eleven_plans_together():
     """The real production entry point: the six core plans PLUS this
-    module's four, one shared registry, one combined totality check --
+    module's five, one shared registry, one combined totality check --
     proves a plan_id collision or cross-registration mismatch between the
     two groups fails construction, not the first request that reaches it.
     """
@@ -557,6 +601,7 @@ def test_build_registry_with_wave_3_1_validates_all_ten_plans_together():
     registry = build_registry_with_wave_3_1(
         FakePlanExecutorRuntime(),
         **_empty_doubles(),
+        portfolio_status=_FakePortfolioStatus(),
     )
     for plan in {**CORE_PLANS_BY_INTENT, **WAVE_3_1_PLANS_BY_INTENT}.values():
         registered = registry.for_plan(plan.plan_id)

@@ -11,7 +11,42 @@ from dev_health_ops.api.queries.client import query_dicts
 from dev_health_ops.api.queries.scopes import resolve_repo_id
 from dev_health_ops.api.services.identity import resolve_scope_display_names
 
+from .alias_matching import alias_forms
 from .scope_service import AuthorizedEntity, EntityKind, ScopeRef
+
+#: CHAOS-3388. Kinds whose display name is a stable proper noun an acronym or
+#: parenthetical alias can meaningfully apply to. Deliberately narrow and
+#: explicit rather than "every searchable kind": an issue/PR/work-unit
+#: "title" is prose, not a name, and taking word-initials of prose produces
+#: noise, not a plausible shorthand.
+ALIAS_AWARE_ENTITY_KINDS = (EntityKind.PROJECT, EntityKind.TEAM)
+
+#: Bound on the full active-roster fetch the alias/acronym pass runs when
+#: the ordinary substring search finds nothing to offer. An acronym cannot be
+#: matched by ``LIKE``, so there is no SQL predicate to push this into; the
+#: roster is org-scoped and, unlike the unbounded catalog, actually small
+#: enough in practice for a bounded in-Python scan to be cheap. This only
+#: runs from the already-terminal CHAOS-3366 closest-matches fallback (one
+#: bounded call per unresolved named subject), never from the primary
+#: resolution path.
+_ALIAS_ROSTER_LIMIT = 1000
+
+_ALIAS_ROSTER_SQL: dict[EntityKind, str] = {
+    EntityKind.PROJECT: """
+        SELECT id AS canonical_id, name AS label
+        FROM projects FINAL
+        WHERE org_id = {org_id:String} AND is_active = 1
+        ORDER BY lowerUTF8(name), canonical_id
+        LIMIT {limit:UInt32}
+    """,
+    EntityKind.TEAM: """
+        SELECT id AS canonical_id, name AS label
+        FROM teams FINAL
+        WHERE org_id = {org_id:String}
+        ORDER BY lowerUTF8(name), canonical_id
+        LIMIT {limit:UInt32}
+    """,
+}
 
 _ORGANIZATION_REPOSITORY_IDS_SQL = """
     SELECT toString(id) AS repository_id, count() OVER () AS total_authorized
@@ -20,6 +55,29 @@ _ORGANIZATION_REPOSITORY_IDS_SQL = """
     ORDER BY repository_id
     LIMIT {limit:UInt32}
 """
+
+#: CHAOS-3393: bounded, deterministic, LABELED project enumeration for an
+#: ORGANIZATION_WIDE ``status.portfolio.v1`` run (no named subjects) --
+#: mirrors ``_ORGANIZATION_REPOSITORY_IDS_SQL``'s one-query "page + true
+#: total via count() OVER ()" shape (an atomic snapshot, not two racing
+#: queries), but returns ``(canonical_id, label)`` pairs directly rather
+#: than bare ids, like ``_ALIAS_ROSTER_SQL[EntityKind.PROJECT]`` -- a
+#: portfolio row needs a real display label, not a second lookup. Ordered
+#: by lowercased name then id, matching the alias roster's own
+#: deterministic order (never insertion/watermark order, which would make
+#: the "first N" truncation pick change between otherwise-identical calls).
+_ORGANIZATION_PROJECT_ENTITIES_SQL = """
+    SELECT id AS canonical_id, name AS label, count() OVER () AS total_authorized
+    FROM projects FINAL
+    WHERE org_id = {org_id:String} AND is_active = 1
+    ORDER BY lowerUTF8(name), canonical_id
+    LIMIT {limit:UInt32}
+"""
+
+
+def _entity_sort_key(entity: AuthorizedEntity) -> tuple[str, str, str]:
+    return (entity.label.casefold(), entity.kind.value, entity.canonical_id)
+
 
 _WATERMARK_TABLES: dict[EntityKind, tuple[str, str]] = {
     EntityKind.REPOSITORY: ("repos", "last_synced"),
@@ -86,6 +144,7 @@ class ClickHouseAuthorizedEntityCatalog:
         kinds: tuple[EntityKind, ...],
         *,
         limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]:
         rows_by_kind = await asyncio.gather(
             *(
@@ -105,14 +164,73 @@ class ClickHouseAuthorizedEntityCatalog:
                     org_id, kind_entities
                 )
             entities.extend(kind_entities)
-        entities.sort(
-            key=lambda entity: (
-                entity.label.casefold(),
-                entity.kind.value,
-                entity.canonical_id,
+        alias_entities: list[AuthorizedEntity] = []
+        if include_alias_matches:
+            alias_hits = await asyncio.gather(
+                *(
+                    self._alias_matches(org_id, kind, query, limit=limit)
+                    for kind in kinds
+                    if kind in ALIAS_AWARE_ENTITY_KINDS
+                )
             )
+            for kind_hits in alias_hits:
+                alias_entities.extend(kind_hits)
+        # Alias/acronym hits are ordered AHEAD of plain substring hits, before
+        # either is truncated to `limit` -- never merged into one alphabetical
+        # sort. CHAOS-3388 live finding: a real organization can hold far more
+        # than `limit` incidental substring hits for a short query
+        # (issue/work-unit titles that happen to contain "acr" as a literal
+        # substring, e.g. "Harden ACR runtime client boundary") than it holds
+        # true acronym matches. A single combined alphabetical sort let that
+        # noise crowd the one real acronym match for the named project out of
+        # the returned page entirely -- the closest-matches offer named
+        # everything BUT the thing the acronym actually stood for. An
+        # acronym/alias equality is a strictly more precise signal than an
+        # incidental substring containment, so it always survives the bound.
+        alias_by_key: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
+        for entity in alias_entities:
+            alias_by_key.setdefault((entity.kind, entity.canonical_id), entity)
+        ordered_alias = sorted(alias_by_key.values(), key=_entity_sort_key)
+        substring_by_key: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
+        for entity in entities:
+            key = (entity.kind, entity.canonical_id)
+            if key not in alias_by_key:
+                substring_by_key.setdefault(key, entity)
+        ordered_substring = sorted(substring_by_key.values(), key=_entity_sort_key)
+        return (ordered_alias + ordered_substring)[:limit]
+
+    async def _alias_matches(
+        self, org_id: str, kind: EntityKind, query: str, *, limit: int
+    ) -> list[AuthorizedEntity]:
+        """CHAOS-3388: entities of ``kind`` whose acronym or parenthetical
+        alias equals ``query`` outright, found via a bounded roster scan.
+
+        Never called for a kind outside ``ALIAS_AWARE_ENTITY_KINDS``. Every hit is
+        returned regardless of provenance (acronym vs. literal alias) --
+        ``scope_service.resolve_mention`` is the layer that decides which of
+        those is auto-commit eligible; this method only reports "matches
+        something", the same contract ``search()``'s substring pass already
+        has.
+        """
+
+        normalized_query = query.strip().casefold()
+        roster_sql = _ALIAS_ROSTER_SQL.get(kind)
+        if not normalized_query or roster_sql is None:
+            return []
+        rows = await query_dicts(
+            self._client,
+            roster_sql,
+            {"org_id": org_id, "limit": _ALIAS_ROSTER_LIMIT},
         )
-        return entities[:limit]
+        matches: list[AuthorizedEntity] = []
+        for row in self._entities(rows, expected_kind=kind):
+            forms = alias_forms(row.label)
+            if (
+                normalized_query in forms.literal_aliases
+                or normalized_query in forms.acronyms
+            ):
+                matches.append(row)
+        return matches[:limit]
 
     async def organization_repository_ids(
         self, org_id: str, *, limit: int
@@ -134,6 +252,34 @@ class ClickHouseAuthorizedEntityCatalog:
         )
         total = int(rows[0]["total_authorized"])
         return ids, total
+
+    async def organization_project_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """CHAOS-3393: up to ``limit`` authorized projects (labeled,
+        deterministically ordered), and the true total -- see
+        ``_ORGANIZATION_PROJECT_ENTITIES_SQL`` for the one-query
+        page+total snapshot rationale.
+        """
+
+        rows = await query_dicts(
+            self._client,
+            _ORGANIZATION_PROJECT_ENTITIES_SQL,
+            {"org_id": org_id, "limit": limit},
+        )
+        if not rows:
+            return [], 0
+        entities = [
+            AuthorizedEntity(
+                kind=EntityKind.PROJECT,
+                canonical_id=str(row["canonical_id"]),
+                label=str(row["label"]),
+            )
+            for row in rows
+            if row.get("canonical_id")
+        ]
+        total = int(rows[0]["total_authorized"])
+        return entities, total
 
     async def _with_repository_display_names(
         self, org_id: str, entities: list[AuthorizedEntity]

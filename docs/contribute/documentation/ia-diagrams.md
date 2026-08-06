@@ -18,6 +18,7 @@ These diagrams are explanatory views of the IA manifest. The TSV manifest is aut
 ```mermaid
 flowchart TD
   HOME["/ — Documentation home"]
+  CF["/context-fabric/ — product overview"]
   GS["/get-started/ — provisional"]
   USE["/use/"]
   ADMIN["/admin/"]
@@ -26,6 +27,7 @@ flowchart TD
   REF["/reference/"]
   CONTRIB["/contribute/"]
 
+  HOME --> CF
   HOME --> GS
   HOME --> USE
   HOME --> ADMIN
@@ -92,6 +94,7 @@ flowchart TD
 
 ```mermaid
 flowchart LR
+  PROSPECT["Prospective team or stakeholder"] --> CF["Context Fabric product overview"]
   USER["Product user"] --> USE
   LEADER["Engineering leader"] --> USE
   ADMINR["Workspace administrator"] --> ADMIN
@@ -104,6 +107,7 @@ flowchart LR
   SEC --> OPERATE
   SEC --> REF
   NEW["New reader"] --> GS["Get started (provisional)"]
+  CF -. supported workflow .-> USE
   GS -. next real task .-> USE
   GS -. next real task .-> ADMIN
   GS -. next real task .-> OPERATE
@@ -132,13 +136,15 @@ flowchart TD
   START["New or changed material"] --> PUBLIC{"Supported public reader need?"}
   PUBLIC -- No --> INTERNAL["Internal plan, PRD, QA, evidence, or implementation record"]
   PUBLIC -- Yes --> INTENT{"Primary intent?"}
+  INTENT -- Understand product capability --> MARKETING["Canonical marketing page"]
   INTENT -- Complete a task --> DOMAIN{"Which task domain owns the outcome?"}
   DOMAIN --> TASK["Task or workflow page in that domain"]
   INTENT -- Diagnose failure --> TROUBLE["Troubleshooting beside the task/domain"]
   INTENT -- Understand concept --> CONCEPT["One canonical concept page"]
   INTENT -- Look up exact fact --> REFERENCE["Reference"]
   INTENT -- Change the product --> CONTRIBUTOR["Contribute"]
-  TASK --> EXISTS{"Canonical page already exists?"}
+  MARKETING --> EXISTS{"Canonical page already exists?"}
+  TASK --> EXISTS
   CONCEPT --> EXISTS
   REFERENCE --> EXISTS
   EXISTS -- Yes --> MERGE["Extend or merge; add contextual links"]
@@ -212,6 +218,8 @@ flowchart LR
   APP["Application help links"] --> CANON["docs.fullchaos.dev"]
   README["Repository READMEs"] --> CANON
   SEARCH["Search engines"] --> CANON
+  SOCIAL["Marketing and social posts"] --> CF["/context-fabric/"]
+  CF --> CANON
   OLD_WORKER["Non-canonical preview"] --> POLICY{"Preview disposition"}
   OLD_GHP["Legacy GitHub Pages"] --> REDIRECTS["Redirect manifest"]
   OLD_PATH["Moved or merged paths"] --> REDIRECTS

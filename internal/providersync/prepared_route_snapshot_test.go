@@ -423,9 +423,14 @@ func TestPreparedRecoveryRefusesLegacyV1LedgerForGitHubWorkItems(t *testing.T) {
 func TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	// Both pairs must be ones a real claim can carry. "github/work-item-labels"
+	// looks like the natural second case and is not: the alias family collapses
+	// to work-items before a unit exists, so Claim.Validate rejects it and
+	// Execute refuses at its first check without ever reaching this guard --
+	// which is how R18 survived a version of this test that used it.
 	for name, pair := range map[string]struct{ provider, dataset string }{
 		"another provider": {provider: "linear", dataset: "work-items"},
-		"another dataset":  {provider: "github", dataset: "work-item-labels"},
+		"another dataset":  {provider: "github", dataset: "prs"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			claim, session := preparedWorkItemsSession(t, now, pair.provider, pair.dataset)

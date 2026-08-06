@@ -469,7 +469,26 @@ class ScopeResolutionService:
         org_id: str,
         permission_fingerprint: str,
         request: ScopeResolveRequest,
+        *,
+        now: datetime | None = None,
     ) -> ScopeResolution:
+        """Resolve ``request`` as of ``now`` (defaults to the real current
+        instant -- production callers never pass this explicitly).
+
+        ``now`` governs the *whole* resolution, not just part of it: a
+        preset window must be anchored on the SAME instant the caller
+        believes it pinned. CHAOS-3392: ``now`` used to be silently
+        dropped here -- every preset-relative ``time_range`` (the common
+        case; explicit ``start_date``/``end_date`` was unaffected) was
+        always computed against the REAL wall clock even when a caller
+        resolved an otherwise fully deterministic, watermark-cached result
+        via ``resolve_contract(resolved_at=...)`` (below), so a resolution
+        that took its window from the wall clock while its caller believed
+        it had pinned the instant was reproducible only until the next
+        local midnight. Threading ``now`` through closes that leak; the
+        default keeps today's production behavior (resolve against the
+        actual current moment) byte-for-byte unchanged.
+        """
         if not org_id or not permission_fingerprint:
             raise ValueError("Tenant and permission fingerprint are required")
 
@@ -484,6 +503,13 @@ class ScopeResolutionService:
                 key=lambda kind: kind.value,
             )
         )
+        # Resolved once, up front: the catalog-failure branch below, the
+        # cache key, and the eventual ``ScopeResolution.time_range`` all
+        # share this SAME value, so a transient catalog failure on a
+        # SECOND, microseconds-later call in the same request can never
+        # observe a different ``time_range`` than a first call that already
+        # succeeded and was cached (see the cache-key comment below).
+        time_range = self.resolve_time_range(request.time_range, now=now)
         try:
             watermark = await self._catalog.watermark(org_id, relevant_kinds)
         except Exception:
@@ -492,21 +518,43 @@ class ScopeResolutionService:
                 entities=(),
                 team_filters=(),
                 candidates=(),
-                time_range=self.resolve_time_range(request.time_range),
+                time_range=time_range,
                 warnings=("catalog_unavailable",),
             )
+        payload = _request_payload(request)
+        if request.time_range.start_date is None or request.time_range.end_date is None:
+            # Preset-relative window: ``now`` DOES affect the result, but
+            # the raw instant must never be the cache key material itself
+            # (codex MEDIUM, CHAOS-3392) -- ``resolve_contract`` always
+            # resolves a concrete instant, even for callers who never pin
+            # one, so keying on ``now.isoformat()`` would give every call
+            # within one request its own microsecond-distinct key and
+            # defeat the request-local cache entirely for the common,
+            # unpinned production path. Keyed instead by the EFFECTIVE
+            # resolved boundary (``time_range.utc_start``/``utc_end``): two
+            # calls landing on the same local day -- the only thing a
+            # preset window is actually sensitive to -- collapse onto the
+            # SAME cache entry.
+            payload = {
+                **payload,
+                "resolved_utc_start": time_range.utc_start.isoformat(),
+                "resolved_utc_end": time_range.utc_end.isoformat(),
+            }
+        # Absolute ``start_date``/``end_date`` ranges are left untouched:
+        # ``now`` cannot affect their result (``resolve_time_range`` never
+        # reads it in that branch), so the cache key stays unaffected by
+        # this change for the case CHAOS-3392 was never about.
         cache_key = self._cache_key(
             "resolve",
             org_id,
             permission_fingerprint,
-            _request_payload(request),
+            payload,
             watermark,
         )
         cached = self._cache.get(cache_key)
         if isinstance(cached, ScopeResolution):
             return cached
 
-        time_range = self.resolve_time_range(request.time_range)
         if not active_refs:
             result = ScopeResolution(
                 outcome=ScopeResolutionOutcome.UNRESOLVED,
@@ -963,8 +1011,21 @@ class ScopeResolutionService:
         *,
         resolved_at: datetime | None = None,
     ) -> DevScopeResolution:
-        """Resolve ``resolve_scope.v1`` into the canonical CHAOS-3223 contract."""
-        domain = await self.resolve(org_id, permission_fingerprint, request)
+        """Resolve ``resolve_scope.v1`` into the canonical CHAOS-3223 contract.
+
+        ``resolved_at`` is the instant the resolution is *made at*, so it
+        also anchors the resolved preset window -- it is not merely a
+        label applied to a window taken from a second, unrelated clock.
+        Resolved early (was previously computed only for the OUTPUT
+        ``resolved_at`` field, at the very end of this method) so the SAME
+        instant also pins ``domain.time_range`` via ``self.resolve`` below
+        -- see that method's docstring. Production callers pass ``None``
+        and get the wall clock for both, unchanged.
+        """
+        resolved_at = resolved_at or datetime.now(timezone.utc)
+        domain = await self.resolve(
+            org_id, permission_fingerprint, request, now=resolved_at
+        )
         requested = self._requested_scope(org_id, request, domain.time_range)
         resolved = self._resolved_scope(org_id, request, domain)
         outcome = domain.outcome
@@ -1026,7 +1087,9 @@ class ScopeResolutionService:
             candidates=candidates,
             fallbacks=list(domain.fallbacks),
             warnings=warnings,
-            resolved_at=resolved_at or datetime.now(timezone.utc),
+            # Already resolved above (and threaded into ``self.resolve`` as
+            # ``now``) -- always non-None by this point.
+            resolved_at=resolved_at,
         )
 
     async def _organization_scope_repositories(

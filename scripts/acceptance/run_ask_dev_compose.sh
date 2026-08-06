@@ -213,7 +213,8 @@ trap report_failure EXIT
 "${ops_root}/.venv/bin/python" \
   "${ops_root}/scripts/acceptance/assert_world_principals_can_log_in.py" \
   --api-url "${acceptance_api_url}" \
-  --manifest "${ops_root}/tests/acceptance/world/ask-dev-world.v1/world.json"
+  --manifest "${ops_root}/tests/acceptance/world/ask-dev-world.v1/world.json" \
+  --boot-subset
 
 # --overwrite-real-users (CHAOS-3463): the world restore above legitimately
 # populates orgs/users first, which trips `_seed_auth_data`'s CHAOS-2458 guard

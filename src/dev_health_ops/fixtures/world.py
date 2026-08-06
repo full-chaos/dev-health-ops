@@ -644,6 +644,40 @@ CORPUS_CONTRACT_USER_ALIASES: tuple[str, ...] = (
     "primary.unsupported-model-user",
 )
 
+#: The subset proven on EVERY BOOT, as opposed to at mint time.
+#:
+#: Codex review (P1, CHAOS-3490): proving all ten per boot is not affordable.
+#: ``run_ask_dev_compose.sh`` also performs two ``prepare_ask_dev_acceptance``
+#: superuser logins, seven smoke-script logins and a Playwright backend login,
+#: so ten positives plus the negative control pushed a normal acceptance boot
+#: past ``AUTH_LOGIN_IP_LIMIT`` ("20/15minutes", per IP) and the 21st request
+#: took a 429. The exit-run boot script never caught it because it stops before
+#: the smoke and web legs -- a truncated boot cannot observe a budget the full
+#: boot spends.
+#:
+#: WHY A SUBSET IS SOUND HERE, and it is not "sampling because it is cheaper".
+#: The two failure modes are different in kind:
+#:
+#: * A per-ACCOUNT fault (one pool member never seeded, wrong org) is caught at
+#:   MINT time, where :data:`CORPUS_CONTRACT_USER_ALIASES` is proven in full
+#:   with no downstream login pressure -- and WORLD_DIGEST covers
+#:   ``password_hash``, so every later boot restoring a verified digest is
+#:   restoring the exact credential bytes the mint proved.
+#: * A per-PATH regression (a login-path change, a bcrypt cost/policy change,
+#:   an auth refactor) is what the digest cannot see, and it breaks every
+#:   principal identically rather than one of them. Detecting it needs *a*
+#:   principal, not all ten.
+#:
+#: So the boot subset keeps exactly the four originals -- one ordinary member,
+#: a second org, and both provider-profile users -- which is what the check
+#: cost before the pool existed.
+BOOT_LOGIN_PROOF_ALIASES: tuple[str, ...] = (
+    "primary.ordinary",
+    "sibling.ordinary",
+    "primary.degraded-readiness-user",
+    "primary.unsupported-model-user",
+)
+
 #: Label that separates credential derivation from id derivation inside the
 #: shared ``FIXTURE_NAMESPACE``. Not a secret and not secret-shaped -- it is a
 #: namespace discriminator, exactly like the ``id_seed`` strings beside it.

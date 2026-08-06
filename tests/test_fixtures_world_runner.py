@@ -715,3 +715,69 @@ class TestWorldUsersAreSeededWithWorkingCredentials:
         ) != _row_content_key(
             columns, ("u-1", "$2b$12$SWAPPED", stamp), volatile=volatile
         ), "the last_login_at exclusion also blinded the digest to password_hash"
+
+
+class TestBootLoginProofFitsTheAuthIpBudget:
+    """CHAOS-3490 / Codex P1: the per-boot login proof must leave room for the
+    rest of the boot.
+
+    ``AUTH_LOGIN_IP_LIMIT`` is "20/15minutes" keyed by IP
+    (``api/middleware/rate_limit.py``). A full acceptance boot
+    (``run_ask_dev_compose.sh``) spends that budget on more than this check:
+    ``prepare_ask_dev_acceptance.py`` logs in, seven smoke scripts each log in,
+    and the Playwright leg logs in again. Proving all ten contract aliases per
+    boot pushed the total past 20 and the boot died on a 429 -- and the
+    exit-run boot script could not catch it, because it stops before the smoke
+    and web legs.
+
+    This pins the arithmetic so the next person to grow the pool sees the
+    budget rather than discovering it in a live boot.
+    """
+
+    #: api/middleware/rate_limit.py AUTH_LOGIN_IP_LIMIT = "20/15minutes".
+    AUTH_LOGIN_IP_LIMIT_PER_15_MIN = 20
+
+    #: Logins a full run_ask_dev_compose.sh boot performs BESIDES this proof:
+    #: prepare_ask_dev_acceptance.py (superuser + multi-org provisioning),
+    #: seven smoke scripts, and the Playwright backend login.
+    OTHER_BOOT_LOGINS = 10
+
+    def test_boot_subset_plus_the_rest_of_the_boot_fits(self) -> None:
+        from dev_health_ops.fixtures.world import BOOT_LOGIN_PROOF_ALIASES
+
+        # One login per alias, plus exactly one wrong-password negative control.
+        proof_cost = len(BOOT_LOGIN_PROOF_ALIASES) + 1
+        assert (
+            proof_cost + self.OTHER_BOOT_LOGINS <= self.AUTH_LOGIN_IP_LIMIT_PER_15_MIN
+        ), (
+            f"the per-boot login proof costs {proof_cost} logins and the rest of "
+            f"a full acceptance boot costs about {self.OTHER_BOOT_LOGINS}, which "
+            f"exceeds AUTH_LOGIN_IP_LIMIT ({self.AUTH_LOGIN_IP_LIMIT_PER_15_MIN}"
+            "/15min, per IP). The boot will 429 partway through. Shrink "
+            "BOOT_LOGIN_PROOF_ALIASES rather than raising this number."
+        )
+
+    def test_boot_subset_is_a_subset_of_the_contract_aliases(self) -> None:
+        from dev_health_ops.fixtures.world import (
+            BOOT_LOGIN_PROOF_ALIASES,
+            CORPUS_CONTRACT_USER_ALIASES,
+        )
+
+        assert set(BOOT_LOGIN_PROOF_ALIASES) <= set(CORPUS_CONTRACT_USER_ALIASES), (
+            "the boot subset must be drawn from the contract aliases, or it "
+            "proves a principal the corpus never binds to"
+        )
+
+    def test_boot_subset_still_covers_both_orgs_and_both_provider_profiles(
+        self,
+    ) -> None:
+        """A cheaper subset must not become a vacuous one. The point of the
+        four is coverage of DISTINCT shapes -- a second org, and both
+        provider-profile users -- not merely a smaller number."""
+
+        from dev_health_ops.fixtures.world import BOOT_LOGIN_PROOF_ALIASES
+
+        assert "sibling.ordinary" in BOOT_LOGIN_PROOF_ALIASES, "no second org"
+        assert "primary.degraded-readiness-user" in BOOT_LOGIN_PROOF_ALIASES
+        assert "primary.unsupported-model-user" in BOOT_LOGIN_PROOF_ALIASES
+        assert "primary.ordinary" in BOOT_LOGIN_PROOF_ALIASES

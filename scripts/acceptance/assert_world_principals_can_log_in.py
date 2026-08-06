@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from dev_health_ops.fixtures.world import (  # noqa: E402
+    BOOT_LOGIN_PROOF_ALIASES,
     CORPUS_CONTRACT_USER_ALIASES,
     load_world_manifest,
     password_for_alias,
@@ -74,11 +75,14 @@ def _login(api_url: str, email: str, password: str) -> dict[str, Any]:
     return payload
 
 
-def check(api_url: str, manifest_path: str) -> list[str]:
+def check(
+    api_url: str, manifest_path: str, *, aliases: tuple[str, ...] | None = None
+) -> list[str]:
+    required = aliases if aliases is not None else CORPUS_CONTRACT_USER_ALIASES
     manifest = load_world_manifest(manifest_path)
     by_alias = {user["alias"]: user for user in manifest.world["users"]}
 
-    missing = [a for a in CORPUS_CONTRACT_USER_ALIASES if a not in by_alias]
+    missing = [a for a in required if a not in by_alias]
     if missing:
         raise PrincipalLoginError(
             f"world.json no longer defines corpus contract principal(s) {missing}. "
@@ -89,7 +93,7 @@ def check(api_url: str, manifest_path: str) -> list[str]:
 
     verified: list[str] = []
     negative_control_done = False
-    for alias in CORPUS_CONTRACT_USER_ALIASES:
+    for alias in required:
         user = by_alias[alias]
         expected_user_id = str(manifest.user_id(alias))
         expected_org_id = str(manifest.org_id(user["org_alias"]))
@@ -172,10 +176,25 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-url", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument(
+        "--boot-subset",
+        action="store_true",
+        help=(
+            "prove BOOT_LOGIN_PROOF_ALIASES instead of every contract alias. "
+            "Used by the per-boot launcher: proving all ten costs more of "
+            "AUTH_LOGIN_IP_LIMIT (20/15minutes, per IP) than a full acceptance "
+            "boot can spare. Full coverage still runs at mint time, where "
+            "there is no downstream login pressure."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
-        verified = check(args.api_url, args.manifest)
+        verified = check(
+            args.api_url,
+            args.manifest,
+            aliases=BOOT_LOGIN_PROOF_ALIASES if args.boot_subset else None,
+        )
     except PrincipalLoginError as exc:
         print(f"mint: WORLD PRINCIPAL CHECK FAILED -- {exc}", file=sys.stderr)
         return 1

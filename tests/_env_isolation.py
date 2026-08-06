@@ -167,11 +167,11 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "ASK_DEV_ACCEPTANCE_OPENAI_PORT",
         "ASK_DEV_LIVE_ACCEPTANCE",
         "ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD",
-        "ASK_DEV_QUA_SHADOW_ENABLED",
-        "ASK_DEV_SCRIPTED_PROVIDER_ROLE",
-        "ASK_DEV_SCRIPTED_PROVIDER_SCRIPTS_DIR",
         "ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX",
         "ASK_DEV_QUA_SHADOW_ENABLED",
+        "ASK_DEV_QUA_SHADOW_MAX_BUDGET_MICRO_USD",
+        "ASK_DEV_SCRIPTED_PROVIDER_ROLE",
+        "ASK_DEV_SCRIPTED_PROVIDER_SCRIPTS_DIR",
         "ATLASSIAN_API_TOKEN",
         "ATLASSIAN_CLIENT_ENABLED",
         "ATLASSIAN_CLIENT_ID",
@@ -318,8 +318,6 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "QWEN_API_KEY",
         "QWEN_LOCAL_MODEL",
         "QWEN_MODEL",
-        # Scrubbed by default; see CONDITIONAL_KEEP_ENV_NAMES for the one lane
-        # that gets it back.
         "REDIS_URL",
         "REPO_PATH",
         "REPO_UUID",
@@ -406,20 +404,32 @@ _ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def _module_string_constants(tree: ast.Module) -> dict[str, str]:
-    """Module-level ``NAME = "STRING"`` bindings.
+    """Module-level ``NAME = "STRING"`` (and ``NAME: Final = "STRING"``)
+    bindings.
 
     ``api/auth/config.py`` reads ``os.getenv(AUTH_AUTO_CREATE_ORG_ENV)``; without
     resolving constants the scan misses the very variable that broke eight tests.
+    Both plain ``ast.Assign`` and annotated ``ast.AnnAssign`` (the ``: Final``
+    style already used throughout ``llm/budget.py`` and friends) are handled --
+    CHAOS-3452's ``QUA_SHADOW_BUDGET_ENV_KEY: Final = "..."`` was the first
+    ``os.getenv(CONST)`` read to use the annotated form, which the
+    ``ast.Assign``-only version of this function silently missed.
     """
     consts: dict[str, str] = {}
     for node in tree.body:
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
-            continue
-        if not isinstance(node.value.value, str):
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name):
-                consts[target.id] = node.value.value
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            if not isinstance(node.value.value, str):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    consts[target.id] = node.value.value
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            consts[node.target.id] = node.value.value
     return consts
 
 

@@ -402,6 +402,77 @@ def test_0086_downgrade_refuses_with_populated_shadow_data() -> None:
         engine.dispose()
 
 
+def test_0087_downgrade_refuses_with_populated_shadow_budget_data() -> None:
+    """CHAOS-3452: ``dev_qua_shadow_budget_reservations`` gets the SAME
+    populated-data downgrade guard 0086 established for
+    ``dev_run_qua_shadow`` -- this table holds real monetary
+    reservation/usage evidence once the shadow flag is on, and an
+    unconditional drop would silently erase it on a routine downgrade
+    rehearsal. Fail-before/pass-after, mirroring
+    ``test_0086_downgrade_refuses_with_populated_shadow_data`` above.
+
+    Only ``organizations`` is needed as a parent: unlike ``dev_run_qua_shadow``
+    (FK'd to ``dev_runs``), this table FKs directly to ``organizations.id``
+    (CHAOS-3452's isolation design deliberately keeps it OUT of the
+    ``dev_runs``-owned audit-table family -- see
+    ``QUAShadowBudgetReservation``'s own docstring).
+    """
+
+    m87 = _load("0087_add_dev_qua_shadow_budget_reservations")
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.connect() as connection:
+            _parent_and_v1_tables(connection)
+            context = MigrationContext.configure(connection)
+            with Operations.context(context):
+                m87.upgrade()
+
+            tables = set(sa.inspect(connection).get_table_names())
+            assert "dev_qua_shadow_budget_reservations" in tables
+
+            org_id = str(uuid.uuid4())
+            connection.execute(
+                sa.text("INSERT INTO organizations (id, name) VALUES (:id, 'o')"),
+                {"id": org_id},
+            )
+            connection.commit()
+
+            reservation_id = str(uuid.uuid4())
+            connection.execute(
+                sa.text(
+                    "INSERT INTO dev_qua_shadow_budget_reservations "
+                    "(id, org_id, window_start, idempotency_key, provider, "
+                    "model, reserved_micro_usd, status, pricing_version, "
+                    "created_at) VALUES "
+                    "(:id, :org_id, CURRENT_TIMESTAMP, 'k', 'openai', "
+                    "'gpt-5-mini', 1, 'reserved', 'v1', CURRENT_TIMESTAMP)"
+                ),
+                {"id": reservation_id, "org_id": org_id},
+            )
+            connection.commit()
+
+            with Operations.context(context):
+                with pytest.raises(
+                    RuntimeError, match="dev_qua_shadow_budget_reservations"
+                ):
+                    m87.downgrade()
+
+            connection.execute(
+                sa.text(
+                    "DELETE FROM dev_qua_shadow_budget_reservations WHERE id = :id"
+                ),
+                {"id": reservation_id},
+            )
+            connection.commit()
+            with Operations.context(context):
+                m87.downgrade()  # now succeeds
+            tables = set(sa.inspect(connection).get_table_names())
+            assert "dev_qua_shadow_budget_reservations" not in tables
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.skipif(
     not os.getenv(_POSTGRES_URI_ENV), reason=f"requires {_POSTGRES_URI_ENV}"
 )

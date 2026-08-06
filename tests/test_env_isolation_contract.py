@@ -63,6 +63,12 @@ def test_discovery_finds_env_reads_in_src():
     # literals would miss the cause of eight of the fifteen failures.
     assert "LOG_LEVEL" in names
     assert "AUTH_AUTO_CREATE_ORG_ON_REGISTER" in names
+    # CHAOS-3452: an ANNOTATED module constant (``NAME: Final = "..."``,
+    # llm/qua_shadow_budget.py's own style) is a THIRD constant-resolution
+    # shape, distinct from AUTH_AUTO_CREATE_ORG_ON_REGISTER's plain
+    # ``NAME = "..."`` above -- _module_string_constants originally only
+    # matched ast.Assign, silently missing every ast.AnnAssign constant.
+    assert "ASK_DEV_QUA_SHADOW_MAX_BUDGET_MICRO_USD" in names
 
 
 def test_discovery_finds_declarations_in_env_example():

@@ -241,6 +241,11 @@ async def get_dev_capability_runtime(
             await provider.provider.aclose()
         except Exception:
             pass
+        if provider.qua_shadow_provider is not None:
+            try:
+                await provider.qua_shadow_provider.aclose()
+            except Exception:
+                pass
 
 
 async def get_dev_execution_runtime(

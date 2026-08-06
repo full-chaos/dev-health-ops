@@ -346,14 +346,36 @@ class QuestionUnderstandingShadow:
             # the SAME closed status this method's own asyncio.wait_for
             # timeout already uses -- both really are "the call did not
             # finish in time", just raised from two different layers.
-            # `error_class` carries the specific code (budget_exhausted,
-            # rate_limited, ...) for every OTHER AgentProviderError kind,
-            # so those stay distinguishable in the persisted record/logs
-            # without growing the closed status vocabulary itself.
+            # `error_class` carries the specific code (rate_limited, ...)
+            # for every OTHER AgentProviderError kind, so those stay
+            # distinguishable in the persisted record/logs without growing
+            # the closed status vocabulary itself.
+            #
+            # CHAOS-3452: BUDGET_EXHAUSTED/BUDGET_UNAVAILABLE -- raised by
+            # ``attach_qua_shadow_budget_guard`` (llm/qua_shadow_budget.py)
+            # when the ISOLATED shadow quota (never the live BYO budget) is
+            # exhausted or its accounting fails -- get their own case here
+            # rather than falling into the generic provider-error bucket:
+            # the isolated shadow quota running out is an expected,
+            # frequent, typed-skip outcome (this seam's OWN budget
+            # discipline working as designed), not a provider fault.
+            # Reuses ``SKIPPED_BUDGET_EXHAUSTED`` (previously only reached
+            # via the wall-clock deadline check above) since both really are
+            # "this call's own budget ran out", just in two different
+            # currencies (seconds vs. micro-USD) -- ``error_class`` keeps
+            # them distinguishable in the persisted record/logs.
             status = (
                 QUAShadowStatus.SKIPPED_TIMEOUT
                 if exc.code is AgentProviderErrorCode.TIMEOUT
-                else QUAShadowStatus.SKIPPED_PROVIDER_ERROR
+                else (
+                    QUAShadowStatus.SKIPPED_BUDGET_EXHAUSTED
+                    if exc.code
+                    in (
+                        AgentProviderErrorCode.BUDGET_EXHAUSTED,
+                        AgentProviderErrorCode.BUDGET_UNAVAILABLE,
+                    )
+                    else QUAShadowStatus.SKIPPED_PROVIDER_ERROR
+                )
             )
             logger.warning(
                 "ask_dev.qua_shadow.provider_error",

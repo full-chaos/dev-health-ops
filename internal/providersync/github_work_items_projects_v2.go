@@ -442,6 +442,7 @@ func normalizeGitHubProjectV2Item(
 			FromStatusRaw: nullableString(fromRaw), ToStatusRaw: nullableString(toRaw),
 			FromStatus: githubProjectV2Status(fromRaw, nil, ""),
 			ToStatus:   githubProjectV2Status(toRaw, nil, ""), Actor: actor, OrgID: claim.OrgID,
+			LastSynced: normalizedAt.UTC(),
 		}
 		if err := transition.validate(claim); err != nil {
 			return githubWorkItemRow{}, nil, false, err
@@ -496,7 +497,7 @@ func normalizeGitHubProjectV2Item(
 		RepoID: nil, ProjectID: stringPointer(projectScopeID), Assignees: assignees,
 		Reporter: reporter, CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(),
 		ClosedAt: closedAt, Labels: labels, StoryPoints: storyPoints, URL: content.URL,
-		OrgID: claim.OrgID,
+		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
 	}
 	if statusRaw == "" {
 		row.StatusRaw = nullableString(state)

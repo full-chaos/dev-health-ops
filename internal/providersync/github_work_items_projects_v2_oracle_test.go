@@ -42,7 +42,7 @@ func TestGitHubProjectV2WorkItemMatchesLivePythonProductionRow(t *testing.T) {
 				t.Fatal("Go normalizer skipped issue")
 			}
 			return row
-		}, nil,
+		}, githubWorkItemWriteStampGoOnly,
 	)
 }
 
@@ -61,7 +61,7 @@ func TestGitHubProjectV2DraftIssueMatchesLivePythonProductionRow(t *testing.T) {
 				t.Fatal("Go normalizer skipped draft issue")
 			}
 			return row
-		}, nil,
+		}, githubWorkItemWriteStampGoOnly,
 	)
 }
 
@@ -77,7 +77,7 @@ func TestGitHubProjectV2TransitionMatchesLivePythonProductionRow(t *testing.T) {
 				t.Fatalf("emitted=%t transitions=%+v", emitted, transitions)
 			}
 			return transitions[input["transition_index"].(int)]
-		}, nil,
+		}, githubWorkItemWriteStampGoOnly,
 	)
 }
 

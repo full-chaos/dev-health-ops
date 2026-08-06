@@ -42,6 +42,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "ci" / "local_validate.sh"
 _BASE_PATH = "/usr/bin:/bin:/usr/local/bin"
@@ -540,3 +542,367 @@ def test_default_lock_dir_ignores_tmpdir_and_still_serializes(tmp_path):
         )
     finally:
         expected_lock_dir.unlink(missing_ok=True)
+
+
+# --- CHAOS-3403 adversarial-review follow-up findings. -----------------------------
+#
+# The tests above cover the review that introduced the lock. The tests below cover
+# five further defects found in a SECOND adversarial review of that same lock:
+# ps -o lstart= rendering under the caller's locale (Finding 1), reclaim/release
+# acting on "whatever is currently at the path" instead of what was actually read
+# (Findings 1 and 2), every `ln -s` failure being treated as "already held"
+# (Finding 3), and --lock-probe's own timestamps silently degrading to whole-second
+# resolution on this repo's exact test PATH (Finding 5) -- which made the
+# interval-overlap tests above unable to ever fail. Finding 4 (SIGINT delivered to
+# only the tracked PID cannot interrupt a blocked foreground external command) has
+# no deterministic regression test here -- see the comment above the INT trap in
+# local_validate.sh for why, and the honest limitation is documented there rather
+# than hidden behind a test that would always pass.
+
+
+def _locale_available(loc: str) -> bool:
+    try:
+        out = subprocess.run(
+            ["locale", "-a"], capture_output=True, text=True, timeout=5
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return loc in out.split()
+
+
+@pytest.mark.skipif(
+    not _locale_available("de_DE.UTF-8"),
+    reason="de_DE.UTF-8 locale not installed on this host",
+)
+def test_reclaim_ignores_locale_when_checking_holder_liveness(tmp_path):
+    """A live holder recorded under one locale must not be judged dead by a
+    checker running under a different locale.
+
+    ``ps -o lstart=`` renders under the caller's LC_TIME/LC_ALL ("Wed Aug 5
+    20:46:09 2026" under C, "Mi.  5 Aug. 20:46:09 2026" under de_DE.UTF-8).
+    Before every lock-metadata ``ps`` call pinned LC_ALL=C, a holder that
+    acquired under one locale and a checker running under another would
+    compare two different renderings of the exact same start time, see a
+    byte-for-byte mismatch, and reclaim a perfectly live lock -- no timing
+    race required, purely a function of the two processes' ambient locale.
+
+    This launches a real, currently-held holder under LC_ALL=C and a checker
+    under LC_ALL=de_DE.UTF-8, and asserts the checker waits (never reclaims)
+    the live holder.
+    """
+    lock_dir = tmp_path / "locale.lock"
+    holder = subprocess.Popen(
+        ["bash", str(SCRIPT), "--lock-probe", "5"],
+        cwd=ROOT,
+        env={
+            "LOCK_DIR": str(lock_dir),
+            "LOCK_WAIT_SECS": "30",
+            "PATH": _BASE_PATH,
+            "LC_ALL": "C",
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while not lock_dir.is_symlink() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert lock_dir.is_symlink(), "holder never acquired the lock to begin with"
+
+        checker = subprocess.run(
+            ["bash", str(SCRIPT), "--lock-probe", "0.1"],
+            cwd=ROOT,
+            env={
+                "LOCK_DIR": str(lock_dir),
+                "LOCK_WAIT_SECS": "3",
+                "LOCK_POLL_SECS": "1",
+                "PATH": _BASE_PATH,
+                "LC_ALL": "de_DE.UTF-8",
+            },
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        combined = checker.stdout + checker.stderr
+        assert checker.returncode != 0, (
+            f"checker under a different locale must time out waiting on the "
+            f"live holder, not reclaim it.\n{combined}"
+        )
+        assert "reclaiming" not in combined, (
+            f"a live holder must never be reclaimed just because the checker "
+            f"runs under a different locale.\n{combined}"
+        )
+        assert "already running" in combined, combined
+    finally:
+        out = holder.communicate(timeout=20)[0]
+        assert holder.returncode == 0, out
+        assert not lock_dir.is_symlink(), "lock leaked after the holder exited"
+
+
+def test_release_lock_is_compare_and_delete_not_unconditional(tmp_path):
+    """release_lock() must verify the lock still points at ITS OWN metadata
+    before removing it -- not ``rm -f`` gated only on the local LOCK_HELD flag.
+
+    Simulates the reviewer's cascade: holder H is (for whatever reason --
+    the locale bug above is one way, a widened reclaim race is another)
+    wrongly judged stale and reclaimed while still alive, a legitimate new
+    owner T acquires the now-free lock, and H eventually exits normally. H's
+    own release_lock() must NOT delete T's live lock just because H once
+    held it -- LOCK_HELD only proves H once acquired, not that the symlink
+    at LOCK_DIR right now is still the one H wrote.
+    """
+    lock_dir = tmp_path / "cascade.lock"
+    holder = _spawn_probe(lock_dir, hold_secs=4, wait_secs=30)
+    try:
+        deadline = time.monotonic() + 15
+        while not lock_dir.is_symlink() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert lock_dir.is_symlink(), "holder never acquired the lock to begin with"
+
+        # Simulate T reclaiming + acquiring while H still believes it holds
+        # the lock (H is mid-`sleep 4`, unaware anything happened).
+        lock_dir.unlink()
+        fake_t_target = "999999|Wed Jan  1 00:00:00 2020|/some/t/cwd"
+        os.symlink(fake_t_target, lock_dir)
+
+        out = holder.communicate(timeout=20)[0]
+        assert holder.returncode == 0, out
+
+        assert lock_dir.is_symlink(), (
+            "T's live lock must survive H's exit -- H's release_lock deleted it "
+            "outright instead of no-op'ing against content it no longer owns"
+        )
+        assert os.readlink(lock_dir) == fake_t_target, (
+            f"H's release_lock altered T's live lock -- expected {fake_t_target!r}, "
+            f"got {os.readlink(lock_dir)!r}"
+        )
+    finally:
+        lock_dir.unlink(missing_ok=True)
+
+
+_SLOW_PS_WRAPPER = """#!/bin/bash
+# Test-only ps wrapper (Finding 2 repro): delays the specific "-p
+# $SLOW_PS_TARGET_PID" lookup used by lock_holder_alive's re-check, widening
+# the gap between reclaim_stale_lock's stale DECISION and its DELETE to
+# something a test can reliably land a concurrent reclaimer inside of --
+# the same technique this file's module docstring says was needed to prove
+# the original mkdir-based bug.
+real_ps=/bin/ps
+if [ -n "${SLOW_PS_TARGET_PID:-}" ] && [ -n "${SLOW_PS_DELAY:-}" ]; then
+  for a in "$@"; do
+    if [ "$a" = "$SLOW_PS_TARGET_PID" ]; then
+      sleep "${SLOW_PS_DELAY}"
+      break
+    fi
+  done
+fi
+exec "$real_ps" "$@"
+"""
+
+
+def test_reclaim_is_compare_and_delete_under_widened_window(tmp_path):
+    """Widen reclaim_stale_lock's stale-decision-to-delete gap and confirm a
+    concurrent live reclaimer's fresh lock survives.
+
+    Process X's ``ps -p <pid>`` lookup (inside lock_holder_alive) is delayed
+    several seconds via a PATH-shadowing wrapper. In that gap, process Y
+    independently reclaims the same lock (fast ps, no delay) and acquires it
+    for real. When X's delayed decision finally resolves "stale", X's delete
+    must be a no-op against Y's now-different lock content -- not an
+    unconditional ``rm -f`` of whatever happens to be at the path when X
+    finally gets there. Asserted the same way the concurrency tests above
+    assert real mutual exclusion: via non-overlapping high-resolution
+    [acquired, released) intervals, not a wall-clock budget.
+    """
+    slow_ps_dir = tmp_path / "slow_ps_bin"
+    slow_ps_dir.mkdir()
+    slow_ps = slow_ps_dir / "ps"
+    slow_ps.write_text(_SLOW_PS_WRAPPER)
+    slow_ps.chmod(0o755)
+
+    lock_dir = tmp_path / "widen.lock"
+    # A genuinely live process, referenced with a WRONG recorded lstart, so
+    # lock_holder_alive's ps-based re-check (not a dead-PID kill -0
+    # short-circuit) is what decides "stale".
+    live = subprocess.Popen(["sleep", "60"])
+    try:
+        os.symlink(f"{live.pid}|Mon Jan  1 00:00:00 1999|/some/x/cwd", lock_dir)
+
+        x = subprocess.Popen(
+            ["bash", str(SCRIPT), "--lock-probe", "1"],
+            cwd=ROOT,
+            env={
+                "SLOW_PS_TARGET_PID": str(live.pid),
+                "SLOW_PS_DELAY": "3",
+                "LOCK_DIR": str(lock_dir),
+                "LOCK_WAIT_SECS": "30",
+                "LOCK_POLL_SECS": "1",
+                "PATH": f"{slow_ps_dir}:{_BASE_PATH}",
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        # Let X get into its delayed ps call before Y starts racing it.
+        time.sleep(1)
+        y = _spawn_probe(lock_dir, hold_secs=4, wait_secs=30)
+
+        out_x = x.communicate(timeout=40)[0]
+        out_y = y.communicate(timeout=40)[0]
+        assert x.returncode == 0, out_x
+        assert y.returncode == 0, out_y
+
+        (a_start, a_end), (b_start, b_end) = sorted(_parse_intervals([out_x, out_y]))
+        assert a_end <= b_start, (
+            f"overlapping lock ownership detected: [{a_start}, {a_end}) vs "
+            f"[{b_start}, {b_end}) -- X's widened stale-reclaim window let it "
+            f"delete Y's live lock and re-acquire while Y still held it.\n"
+            f"X:\n{out_x}\nY:\n{out_y}"
+        )
+        assert not lock_dir.is_symlink(), "lock leaked after both exited"
+    finally:
+        live.kill()
+        live.wait()
+        lock_dir.unlink(missing_ok=True)
+
+
+def test_ln_s_failure_from_missing_parent_dir_dies_immediately(tmp_path):
+    """A LOCK_DIR whose parent directory doesn't exist must fail FAST with
+    the real reason -- not be treated as lock contention and polled out to
+    the full LOCK_WAIT_SECS with a diagnostic naming a PID that doesn't exist.
+
+    Every nonzero ``ln -s`` exit used to be treated as "someone else holds
+    the lock": a missing parent directory, a read-only filesystem, and a
+    permissions error all looked identical to real contention, and none of
+    them will ever resolve by polling.
+    """
+    bad_lock_dir = tmp_path / "no" / "such" / "parent" / "lock.file"
+    started_at = time.monotonic()
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--lock-probe", "0.1"],
+        cwd=ROOT,
+        env={"LOCK_DIR": str(bad_lock_dir), "LOCK_WAIT_SECS": "20", "PATH": _BASE_PATH},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    elapsed = time.monotonic() - started_at
+    combined = result.stdout + result.stderr
+
+    assert result.returncode != 0, combined
+    assert "NOT lock contention" in combined, (
+        f"expected the real-failure diagnosis, not a contention message.\n{combined}"
+    )
+    assert "PID ?" not in combined, (
+        f"must not report a diagnosis naming a nonexistent PID.\n{combined}"
+    )
+    assert elapsed < 10, (
+        f"took {elapsed:.1f}s -- looks like this was treated as contention and "
+        f"polled toward LOCK_WAIT_SECS=20 instead of dying immediately.\n{combined}"
+    )
+
+
+def test_lock_probe_time_has_subsecond_resolution(tmp_path):
+    """--lock-probe's own timestamps must carry real sub-second precision
+    under this test file's exact PATH (_BASE_PATH) -- not silently degrade to
+    whole seconds.
+
+    Whole-second resolution doesn't just make the probe coarser: it makes
+    the interval-overlap tests earlier in this file UNFALSIFIABLE. Two
+    racing acquisitions rounding to the same integer second would satisfy
+    ``a_end <= b_start`` and PASS even in the presence of a real
+    microsecond-scale double-acquisition bug.
+    """
+    lock_dir = tmp_path / "resolution.lock"
+    probe = _spawn_probe(lock_dir, hold_secs=0.2, wait_secs=10)
+    out = probe.communicate(timeout=20)[0]
+    assert probe.returncode == 0, out
+
+    (acquired, released) = _parse_intervals([out])[0]
+    assert released - acquired < 1.0, (
+        f"hold was 0.2s but the measured interval is {released - acquired}s -- "
+        f"resolution looks like it degraded to whole seconds.\n{out}"
+    )
+    # A whole-second fallback reports exact integers; a real sub-second
+    # source practically never lands on one.
+    assert acquired != int(acquired) or released != int(released), (
+        f"acquired/released look like exact integers -- resolution may have "
+        f"silently degraded to whole seconds.\n{out}"
+    )
+
+
+def test_lock_probe_fails_loudly_without_subsecond_time_source(tmp_path):
+    """With NO sub-second time source available at all (an old bash lacking
+    EPOCHREALTIME, a ``date`` that doesn't interpret %N, and no python3/perl
+    on PATH), the probe must FAIL LOUDLY -- not silently hand back
+    whole-second timestamps that make the interval-overlap tests unable to
+    ever fail. A measurement that did not happen must FAIL, not pass quietly.
+
+    Only meaningful on a host where /bin/bash itself lacks EPOCHREALTIME
+    (true on macOS's stock bash 3.2; typically false on a modern Linux image
+    where /bin/bash is bash 5+) -- skips rather than asserting anything on a
+    host where this fallback path can't actually be forced this way.
+    """
+    system_bash = Path("/bin/bash")
+    has_epochrealtime = (
+        subprocess.run(
+            [str(system_bash), "-c", "echo ${EPOCHREALTIME:-UNSET}"],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        != "UNSET"
+    )
+    if has_epochrealtime:
+        pytest.skip(
+            "/bin/bash on this host already has EPOCHREALTIME -- cannot force "
+            "the no-resolution branch this way"
+        )
+
+    # fake_bin is put FIRST on PATH (ahead of _BASE_PATH) so it shadows just
+    # four names: `bash` (the no-EPOCHREALTIME system one), `date` (%N not
+    # interpreted, like old BSD date), and `python3`/`perl` (stubs that exit
+    # nonzero with no output, so lock_probe_time's own output validation --
+    # not just a bare `command -v` check -- is what makes it fall through).
+    # Everything else the script needs (dirname, awk, sed, ln, ps, ...)
+    # still resolves from _BASE_PATH behind it.
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    os.symlink(system_bash, fake_bin / "bash")
+
+    fake_date = fake_bin / "date"
+    fake_date.write_text(
+        "#!/bin/bash\n"
+        "# Mimics old BSD date: %N is not a real conversion, emitted literally.\n"
+        'if [ "$1" = "+%s.%N" ]; then printf \'%s.N\\n\' "$(command date +%s)"; exit 0; fi\n'
+        'exec /bin/date "$@"\n'
+    )
+    fake_date.chmod(0o755)
+
+    for absent_tool in ("python3", "perl"):
+        stub = fake_bin / absent_tool
+        stub.write_text("#!/bin/bash\nexit 1\n")
+        stub.chmod(0o755)
+
+    lock_dir = tmp_path / "no-resolution.lock"
+    result = subprocess.run(
+        [str(fake_bin / "bash"), str(SCRIPT), "--lock-probe", "0.1"],
+        cwd=ROOT,
+        env={
+            "LOCK_DIR": str(lock_dir),
+            "LOCK_WAIT_SECS": "10",
+            "PATH": f"{fake_bin}:{_BASE_PATH}",
+        },
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, (
+        f"expected the probe to fail loudly with no sub-second time source "
+        f"available, got success.\n{combined}"
+    )
+    assert "FATAL" in combined and "sub-second" in combined, (
+        f"expected an explicit fail-loud message, not a silent whole-second "
+        f"fallback.\n{combined}"
+    )

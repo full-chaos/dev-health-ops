@@ -320,23 +320,34 @@ case "${LOCK_DIR}" in
   ;;
 esac
 
+# ps -o lstart= renders under the caller's LC_TIME/LC_ALL ("Wed Aug  5
+# 20:46:09 2026" in C, "Mi.  5 Aug. 20:46:09 2026" in de_DE.UTF-8) and neither
+# writer nor reader pinned a locale — so a holder that recorded its own start
+# time under one locale could be judged dead by a checker (or by itself, on
+# release) running under another, deterministically, no timing luck involved.
+# Every lock-metadata callsite goes through this one function so there is
+# exactly one place the locale is pinned.
+ps_lstart() {
+  LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//'
+}
+
 # Packs this process's identity into the exact string that becomes the lock
 # symlink's target — the ONLY thing written by acquire, and the whole reason
 # publication is atomic (see header comment above). '|'-delimited; a worktree
 # path containing a literal '|' is not supported (pathological, not defended).
 lock_owner_metadata() {
-  local lstart
-  lstart="$(ps -o lstart= -p "$$" 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//')"
-  printf '%s|%s|%s' "$$" "${lstart}" "${ROOT}"
+  printf '%s|%s|%s' "$$" "$(ps_lstart "$$")" "${ROOT}"
 }
 
-# Parses the CURRENT lock symlink's target into LOCK_OWNER_{PID,LSTART,CWD}.
+# Parses the CURRENT lock symlink's target into LOCK_OWNER_{PID,LSTART,CWD}
+# (plus LOCK_OWNER_RAW_TARGET, the exact string read, for compare-and-delete).
 # Always re-reads from disk — never caches across calls — so every check reflects
 # whatever is actually there right now, not what used to be there.
 parse_lock_owner() {
   local target
   target="$(readlink "${LOCK_DIR}" 2>/dev/null)" || return 1
   [ -n "${target}" ] || return 1
+  LOCK_OWNER_RAW_TARGET="${target}"
   IFS='|' read -r LOCK_OWNER_PID LOCK_OWNER_LSTART LOCK_OWNER_CWD <<<"${target}"
   [ -n "${LOCK_OWNER_PID}" ]
 }
@@ -345,8 +356,25 @@ lock_holder_alive() {
   parse_lock_owner || return 1
   kill -0 "${LOCK_OWNER_PID}" 2>/dev/null || return 1
   local current_lstart
-  current_lstart="$(ps -o lstart= -p "${LOCK_OWNER_PID}" 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//')"
+  current_lstart="$(ps_lstart "${LOCK_OWNER_PID}")"
   [ -n "${current_lstart}" ] && [ "${current_lstart}" = "${LOCK_OWNER_LSTART}" ]
+}
+
+# Removes LOCK_DIR ONLY if its current on-disk target still matches
+# expected_target — closes the TOCTOU window between deciding "this lock is
+# stale / this lock is mine" and actually deleting it. Several syscalls
+# (readlink, kill -0, ps) separate a "stale"/"mine" decision from the `rm -f`
+# that acts on it; without this, the delete acts on "whatever is currently at
+# the path", not on what was actually read/decided against, and a reclaimer or
+# releaser can delete a DIFFERENT process's lock that was created in that gap.
+# Re-reads from disk right now rather than trusting any cached state, and
+# compares against the exact string the caller read/computed — not merely
+# "a symlink exists".
+lock_compare_and_delete() {
+  local expected_target="$1" current_target
+  current_target="$(readlink "${LOCK_DIR}" 2>/dev/null)" || return 0
+  [ "${current_target}" = "${expected_target}" ] && rm -f "${LOCK_DIR}"
+  return 0
 }
 
 # Reclaim only on PROOF the recorded owner is dead — never on age/heuristics, and
@@ -356,28 +384,52 @@ lock_holder_alive() {
 # `ln -s` (in acquire_lock) is still the sole arbiter of who actually wins: if two
 # runs both judge the lock stale and both race to reclaim + recreate, at most one
 # `ln -s` succeeds and the loser loops back and observes the winner's fresh
-# metadata via a fresh parse_lock_owner() call, not stale in-memory state.
+# metadata via a fresh parse_lock_owner() call, not stale in-memory state. The
+# delete itself is compare-and-delete against LOCK_OWNER_RAW_TARGET — the exact
+# target this call just read stale — so a reclaimer that loses a race against a
+# fresh acquire (widened window: readlink/kill-0/ps all happen before the
+# delete) never removes the new owner's live lock.
 reclaim_stale_lock() {
   if [ -L "${LOCK_DIR}" ]; then
     if ! lock_holder_alive; then
       printf '   %s stale lock at %s (PID %s not running) — reclaiming.\n' \
         "$(c_yellow 'NOTE:')" "${LOCK_DIR}" "${LOCK_OWNER_PID:-?}"
-      rm -f "${LOCK_DIR}"
+      lock_compare_and_delete "${LOCK_OWNER_RAW_TARGET}"
     fi
   elif [ -e "${LOCK_DIR}" ]; then
     die "LOCK_DIR ${LOCK_DIR} exists and is not a lock symlink — refusing to touch it. Check for a mistaken LOCK_DIR override before removing it by hand."
   fi
 }
 
+# Attempts to create the lock symlink exactly once. Returns 0 on success, 1 on
+# genuine contention (LOCK_DIR is already a symlink — someone else's lock, or a
+# racing reclaimer's fresh one), and `die`s immediately for anything else. A
+# bare `ln -s` failure is ALSO what you get from a missing parent directory,
+# read-only filesystem, or a permissions error — none of which is "someone
+# else holds the lock", and none of which will ever resolve by polling, so
+# treating every nonzero exit as contention silently turns a structurally-bad
+# LOCK_DIR into a full LOCK_WAIT_SECS hang with a diagnosis ("remove it by
+# hand") that is actively wrong (there is no PID, nothing to remove).
+try_acquire_once() {
+  local ln_err
+  if ln_err="$(ln -s "$(lock_owner_metadata)" "${LOCK_DIR}" 2>&1)"; then
+    return 0
+  fi
+  if [ -L "${LOCK_DIR}" ]; then
+    return 1
+  fi
+  die "cannot create lock symlink at ${LOCK_DIR}: ${ln_err}. This is NOT lock contention (no symlink exists there) -- check that LOCK_DIR's parent directory exists and is writable."
+}
+
 acquire_lock() {
   banner "single-flight lock (${LOCK_DIR})"
   reclaim_stale_lock
-  if ! ln -s "$(lock_owner_metadata)" "${LOCK_DIR}" 2>/dev/null; then
+  if ! try_acquire_once; then
     local waited=0
     parse_lock_owner || true
     printf '   gate already running in %s, PID %s — waiting (LOCK_WAIT_SECS=%s; set 0 to fail fast)...\n' \
       "${LOCK_OWNER_CWD:-?}" "${LOCK_OWNER_PID:-?}" "${LOCK_WAIT_SECS}"
-    while ! ln -s "$(lock_owner_metadata)" "${LOCK_DIR}" 2>/dev/null; do
+    while ! try_acquire_once; do
       if [ "${waited}" -ge "${LOCK_WAIT_SECS}" ]; then
         parse_lock_owner || true
         die "gate already running in ${LOCK_OWNER_CWD:-?}, PID ${LOCK_OWNER_PID:-?} — timed out after ${LOCK_WAIT_SECS}s waiting for ${LOCK_DIR}. If that PID is not actually running local_validate.sh, remove ${LOCK_DIR} by hand."
@@ -391,9 +443,17 @@ acquire_lock() {
   printf '   %s %s (PID %s)\n' "$(c_green 'lock acquired:')" "${LOCK_DIR}" "$$"
 }
 
+# Compare-and-delete against this process's OWN metadata, never a bare `rm -f`
+# gated only on the local LOCK_HELD flag: LOCK_HELD only proves this process
+# once acquired the lock, not that the symlink currently at LOCK_DIR is still
+# the one it wrote. A holder wrongly judged stale elsewhere (see the locale
+# mismatch this guards against, and the widened reclaim-race window) releases
+# here too — without this check it would delete whatever new owner reclaimed
+# and re-acquired in the meantime, freeing the mutex while that new owner
+# still believes it holds it.
 release_lock() {
   if [ "${LOCK_HELD}" = "1" ]; then
-    rm -f "${LOCK_DIR}"
+    lock_compare_and_delete "$(lock_owner_metadata)"
   fi
 }
 
@@ -415,6 +475,40 @@ on_exit() {
   cleanup_scratch
 }
 trap on_exit EXIT
+# Explicit INT trap (CHAOS-3403 adversarial-review fix), added and verified --
+# NOT assumed -- rather than blindly adding "trap on_exit INT TERM EXIT" as a
+# single line. `exit 130` (not `on_exit` directly), so the already-registered
+# EXIT trap is what actually runs on_exit -- trapping INT straight to on_exit
+# would return from the trap without exiting and let the script silently keep
+# running past the signal.
+#
+# Deliberately NOT trapping TERM: measured directly against this script, an
+# untrapped SIGTERM sent to only the bash PID already interrupts a blocked
+# foreground external command (run_stage, ch_migrate, docker exec) immediately
+# -- its default disposition terminates the process outright, which unwinds
+# straight through the existing EXIT trap. Adding an explicit `trap ... TERM`
+# made this WORSE, not better: installing ANY trap for a signal makes bash
+# defer running that trap's action until control returns to it (the same
+# deferral rule that already applies to SIGINT below) -- so a caught TERM
+# handler sat blocked behind the foreground command exactly like INT does,
+# regressing a case that worked. Left untrapped, TERM keeps its immediate
+# default behavior.
+#
+# SIGINT has no such immediate default: bash defers it while any foreground
+# job is running whether or not a trap is registered (this is job-control
+# behavor, not a trap-specific deferral) -- confirmed identical with and
+# without this trap. So this line fixes the case an orchestrator signals the
+# whole process group (a real terminal Ctrl-C) or SIGINT arrives between
+# commands (no foreground child running), and gives a defined exit code
+# (130) instead of relying on the default. It does NOT fix -- and cannot, by
+# any trap -- the specific case this was reviewed against: SIGINT sent to
+# ONLY the bash PID (e.g. Python's `Popen.send_signal(SIGINT)`, standard for
+# non-terminal automation) while bash is blocked waiting on a foreground
+# external command. That signal still has no effect until the command
+# finishes on its own, with or without this trap. SIGTERM, or a
+# process-group-wide signal, are the reliable ways to hard-stop a hung gate --
+# not SIGINT to the tracked PID alone.
+trap 'exit 130' INT
 
 # --- Result tracking. --------------------------------------------------------------
 declare -a RESULTS=()
@@ -750,6 +844,64 @@ main() {
   exit 0
 }
 
+# High-resolution timestamp for --lock-probe, in order of preference: bash's
+# own EPOCHREALTIME builtin (no fork); `date +%s.%N` where it is actually
+# interpreted (GNU date, and modern BSD date); python3 -- available under this
+# harness's PATH and virtually every CI image, and unlike EPOCHREALTIME/date it
+# cannot silently degrade to whole seconds; perl's Time::HiRes as a last resort.
+#
+# This exists because whole-second resolution doesn't just make the probe
+# coarser -- it makes the tests that consume it UNFALSIFIABLE. Those tests
+# assert non-overlapping [acquired, released) intervals specifically so a
+# reintroduced microsecond-scale double-acquisition bug can be caught; at
+# whole-second resolution two racing acquisitions round to IDENTICAL integer
+# timestamps, and `a_end <= b_start` treats equal integers as "no overlap" --
+# i.e. PASS. That failure mode is silent (a test that cannot fail reads as
+# coverage), so a source that can't actually produce sub-second resolution
+# must FAIL LOUDLY here rather than quietly handing back whole seconds.
+
+# Accepts only a string that is purely digits-and-a-single-dot (e.g.
+# "1785988080.123456") -- rejects empty output, a literal "N" (old BSD date's
+# unsubstituted %N), and anything else a fallback might emit on failure.
+# `command -v` / a zero exit status from a fallback proves the TOOL exists,
+# not that its OUTPUT this time was actually a valid high-res timestamp --
+# every fallback below is validated the same way rather than trusted blind.
+_looks_like_subsecond_time() {
+  case "$1" in
+  '' | *[!0-9.]*) return 1 ;;
+  *.*) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+lock_probe_time() {
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    printf '%s' "${EPOCHREALTIME}"
+    return 0
+  fi
+  local t
+  t="$(date +%s.%N 2>/dev/null)"
+  if _looks_like_subsecond_time "${t}"; then
+    printf '%s' "${t}"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    t="$(python3 -c 'import time; print(f"{time.time():.6f}")' 2>/dev/null)"
+    if _looks_like_subsecond_time "${t}"; then
+      printf '%s' "${t}"
+      return 0
+    fi
+  fi
+  if command -v perl >/dev/null 2>&1; then
+    t="$(perl -MTime::HiRes=time -e 'printf "%.6f", time()' 2>/dev/null)"
+    if _looks_like_subsecond_time "${t}"; then
+      printf '%s' "${t}"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 # Test-only harness hook (CHAOS-3403), same idea as ci/check_go.sh's narrow
 # "integration-coverage" verb (see tests/tooling/test_check_go_integration_coverage.py):
 # exercises the REAL acquire_lock/release_lock/reclaim_stale_lock functions above —
@@ -761,15 +913,17 @@ if [ "${1:-}" = "--lock-probe" ]; then
   shift
   hold_secs="${1:-0}"
   acquire_lock
-  # High-resolution timestamps (bash's own EPOCHREALTIME builtin, no external
-  # dependency) so a test can assert non-overlapping [acquire, release)
-  # intervals across many concurrent probes — the actual atomicity property,
-  # not just "eventually both ran". Test-only instrumentation; falls back to
-  # second resolution on a bash old enough to lack the builtin rather than
-  # failing the probe outright.
-  printf 'lock-probe: acquired (pid %s) at %s\n' "$$" "${EPOCHREALTIME:-$(date +%s)}"
+  acquired_at="$(lock_probe_time)" || {
+    printf 'lock-probe: FATAL -- no sub-second time source available (EPOCHREALTIME unset, date +%%N not interpreted, no python3/perl on PATH); refusing to silently degrade to whole-second resolution.\n' >&2
+    exit 1
+  }
+  printf 'lock-probe: acquired (pid %s) at %s\n' "$$" "${acquired_at}"
   sleep "${hold_secs}"
-  printf 'lock-probe: releasing (pid %s) at %s\n' "$$" "${EPOCHREALTIME:-$(date +%s)}"
+  released_at="$(lock_probe_time)" || {
+    printf 'lock-probe: FATAL -- lost sub-second time source between acquire and release.\n' >&2
+    exit 1
+  }
+  printf 'lock-probe: releasing (pid %s) at %s\n' "$$" "${released_at}"
   exit 0
 fi
 

@@ -201,8 +201,13 @@ func TestBeatScheduleParserFindsTheCheckedInventory(t *testing.T) {
 	// The TRD acceptance criteria are stated against exactly these counts. A
 	// change here means a Beat entry was added or removed, which must be a
 	// reviewed ownership decision rather than an unnoticed coverage change.
-	if unconditional != 20 {
-		t.Fatalf("parsed %d unconditional beat entries, want 20", unconditional)
+	//
+	// 20 -> 21 when CHAOS-3404's `ask-dev-retention-sweep` merged from main.
+	// The reviewed decision: it is owned by the already-ported Go schedule
+	// `prune_ask_dev_conversations` (CHAOS-3209), which stopped being Native
+	// in the same change because it now has a Python predecessor.
+	if unconditional != 21 {
+		t.Fatalf("parsed %d unconditional beat entries, want 21", unconditional)
 	}
 	if optional != 1 {
 		t.Fatalf("parsed %d optional beat entries, want 1", optional)

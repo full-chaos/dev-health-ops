@@ -51,6 +51,18 @@ type budgetEpisodeSnapshot struct {
 // producer to drive here instead of this mirror. Adding one would be unwired
 // code pretending to be a second implementation.
 //
+// CHAOS-3465 re-tested that claim rather than inheriting it, because surplus
+// retry is new budget-ADMISSION behaviour and admission is the thing Go would
+// have to mirror if it owned any. It does not: the surplus phase lives
+// entirely in sync/budget_guard.py, the Go scheduler mirrors Python's PLANNER
+// (windows and the HEAVY ratchet) and not unit admission, and the Go budget
+// footprint is still exactly the two clears above. The predicate this mirror
+// tracks, _budget_deferral_exhausted, is byte-identical across that commit.
+// So the CHAOS-3465 mirror is deliberately no Go behaviour change -- plus the
+// two half_cleared_* cases below, and the surplus write-set probe in the pair
+// file, which is what stops the new Python writers from invalidating this
+// corpus unobserved.
+//
 // What the mirror IS for is the differential against the live Python
 // authority: the pair below fails the moment the two readings of a shared
 // sync_run_units row disagree, so when the Go runtime does take over unit
@@ -158,6 +170,27 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 			Input: snapshot(budgetMaxDeferralsDefault+5, wallClock*2, "rate_limit_deferred")},
 		{ID: "absent_result_document_is_refused",
 			Input: snapshot(budgetMaxDeferralsDefault+5, wallClock*2, nil)},
+		// A HALF-CLEARED episode: budget_deferrals back to zero while
+		// budget_first_deferred_at survives. Clause 1 short-circuits only when
+		// BOTH are empty, so this row falls through to the wall clock and the
+		// stale stamp decides -- which is why Go's clears must zero the pair
+		// in ONE statement, and why clearing "the counter" is not the same
+		// thing as clearing the episode.
+		//
+		// The SQL-string guards already assert that both columns appear in
+		// completeUnitSQL and in the reconciler's retry stamp. What they
+		// cannot say is what a half-clear would COST, because they never ask
+		// the predicate. These two cases do, and they are the only inputs in
+		// the corpus pairing a zero counter with a live stamp: every
+		// pre-existing zero-counter case has a nil stamp, so a Go mirror that
+		// dropped clause 1's `&& FirstDeferredAt == nil` conjunct agreed with
+		// Python on all of them. Verified by planting exactly that mutation --
+		// M4 in testdata/mutation-plans/chaos_3465_budget_surplus_parity.json,
+		// which survives the old corpus and dies against these two.
+		{ID: "half_cleared_episode_past_the_wall_clock_is_still_terminalizable",
+			Input: snapshot(0, wallClock+3600, budgetDeferredCategory)},
+		{ID: "half_cleared_episode_inside_the_wall_clock_is_not",
+			Input: snapshot(0, 60, budgetDeferredCategory)},
 	}
 	// The go_stamp_* cases: a unit deep into a budget episode that a Go stamp
 	// then re-stamps. The stale counters survive (Go's stamps other than the
@@ -210,6 +243,14 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 //     here drives those; the integration suites above are the closest thing,
 //     and Python's own tests/test_budget_guard_cooldown.py owns the admission
 //     loop itself.
+//   - CHAOS-3465's surplus retry as BEHAVIOUR. No case drives it, and none
+//     could: surplus writes only available_at, which this predicate does not
+//     read, so it produces no new input here. What the pair does own is the
+//     premise that makes that sentence true -- the pair file's
+//     _assert_surplus_writes_leave_the_episode_alone reads the live surplus
+//     write paths and fails this oracle if either ever touches an episode
+//     column. tests/test_chaos_3465_budget_surplus_retry.py owns the phase's
+//     own behaviour.
 func TestBudgetExhaustionPredicateMatchesLivePython(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "syncunit/budget/exhaustion", budgetExhaustionOracleCases(t),

@@ -11,11 +11,21 @@ from git import Repo as GitRepo
 
 from tests._env_isolation import (
     ALLOW_ENV,
+    SCRUB_ENV_NAMES,
     exempted_names,
+    lane_conditional_keeps,
     scrub_ambient_env,
 )
 
 _SCRUBBED_ENV_NAMES: list[str] = []
+_KEPT_ENV_NAMES: list[str] = []
+#: Scrub-list names still present in ``os.environ`` immediately AFTER the scrub.
+#: Must stay empty. Snapshotted at configure time rather than read live at
+#: assertion time because tests legitimately set some of these during the run
+#: (``tests/test_core_extraction.py`` writes SETTINGS_ENCRYPTION_KEY and never
+#: cleans up), and a live read would blame the scrub for another test's leftovers.
+_POST_SCRUB_RESIDUE: list[str] = []
+_SCRUB_RAN = False
 
 
 @pytest.fixture(autouse=True)
@@ -122,7 +132,15 @@ def pytest_configure(config):
     # here rather than in an autouse fixture also covers import-time reads and
     # subprocesses that inherit via `os.environ.copy()`. Rationale and the
     # keep-list justification live in tests/_env_isolation.py.
-    _SCRUBBED_ENV_NAMES[:] = scrub_ambient_env(os.environ, exempt=exempted_names())
+    global _SCRUB_RAN
+
+    kept = exempted_names() | lane_conditional_keeps()
+    _KEPT_ENV_NAMES[:] = sorted(kept)
+    _SCRUBBED_ENV_NAMES[:] = scrub_ambient_env(os.environ, exempt=kept)
+    _POST_SCRUB_RESIDUE[:] = sorted(
+        name for name in SCRUB_ENV_NAMES if name not in kept and name in os.environ
+    )
+    _SCRUB_RAN = True
 
 
 def pytest_report_header(config):
@@ -141,5 +159,10 @@ def pytest_report_header(config):
     if exempt:
         lines.append(
             f"ambient env NOT scrubbed via {ALLOW_ENV}: " + ", ".join(sorted(exempt))
+        )
+    lane_kept = lane_conditional_keeps()
+    if lane_kept:
+        lines.append(
+            "ambient env kept for an announced lane: " + ", ".join(sorted(lane_kept))
         )
     return lines

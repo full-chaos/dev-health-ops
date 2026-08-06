@@ -12,30 +12,35 @@ covering nothing. These tests pin four separate ways it could rot:
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
-from tests import _env_isolation
+from tests import _env_isolation, conftest
 from tests._env_isolation import (
+    CONDITIONAL_KEEP_ENV_NAMES,
     KEEP_ENV_NAMES,
     SCRUB_ENV_NAMES,
     derive_scrub_names,
     discover_env_example_names,
     discover_src_env_names,
     exempted_names,
+    lane_conditional_keeps,
     scrub_ambient_env,
 )
 
-# The four ambient variables that were observed flipping code paths in fifteen
-# tests across five files. Each is here because a run with it set was watched
-# failing and a run with it absent was watched passing -- not because it looked
-# risky.
+# The ambient variables that were observed flipping code paths, across six test
+# files. Each is here because a run with it set was watched failing and a run
+# with it absent was watched passing -- not because it looked risky.
 OBSERVED_ROOT_CAUSES = (
     "GITHUB_APP_PRIVATE_KEY_PATH",
     "AUTH_AUTO_CREATE_ORG_ON_REGISTER",
     "LOG_LEVEL",
     "LICENSE_PRIVATE_KEY",
+    # Fifth, and initially excluded by CHAOS-3402 as a "pure concurrency flake"
+    # because it passes when run alone. It does not pass alongside its siblings:
+    # ops/.env points REDIS_URL at the live shared valkey container, whose
+    # rate-limit state survives between tests. Whole file, populated shell:
+    # 1 failed (assert 5 == 4); same file with REDIS_URL unset: 65 passed.
+    "REDIS_URL",
 )
 
 # Scrubbing any of these would break the lane that supplies it: ci/local_validate.sh
@@ -100,12 +105,13 @@ def test_scrub_removes_offenders_and_preserves_lane_variables():
         "AUTH_AUTO_CREATE_ORG_ON_REGISTER": "false",
         "LOG_LEVEL": "debug",
         "LICENSE_PRIVATE_KEY": "x" * 88,
+        "REDIS_URL": "redis://localhost:6379/0",
         "CLICKHOUSE_URI": "clickhouse://ch:ch@localhost:8123/ci_local_validate",
         "DEV_HEALTH_POSTGRES_TEST_URI": "postgresql+asyncpg://u:p@localhost/test",
         "PATH": "/usr/bin",
     }
 
-    removed = scrub_ambient_env(environ)
+    removed = scrub_ambient_env(environ, exempt=lane_conditional_keeps(environ))
 
     assert sorted(removed) == sorted(OBSERVED_ROOT_CAUSES)
     assert environ == {
@@ -113,6 +119,29 @@ def test_scrub_removes_offenders_and_preserves_lane_variables():
         "DEV_HEALTH_POSTGRES_TEST_URI": "postgresql+asyncpg://u:p@localhost/test",
         "PATH": "/usr/bin",
     }
+
+
+def test_conditional_keep_returns_redis_url_to_the_live_e2e_lane():
+    """Both directions, because only the pair proves the condition does anything.
+
+    ci/run_live_backend_e2e.sh exports REDIS_URL and LIVE_E2E_BASE_URL together,
+    then runs the one module that skipifs itself without REDIS_URL. Scrubbing it
+    there would convert that lane's coverage into a silent skip.
+    """
+    assert CONDITIONAL_KEEP_ENV_NAMES["REDIS_URL"] == "LIVE_E2E_BASE_URL"
+
+    unit_tier = {"REDIS_URL": "redis://localhost:6379/0"}
+    assert scrub_ambient_env(unit_tier, exempt=lane_conditional_keeps(unit_tier)) == [
+        "REDIS_URL"
+    ]
+    assert unit_tier == {}
+
+    live_lane = {
+        "REDIS_URL": "redis://localhost:6379/0",
+        "LIVE_E2E_BASE_URL": "http://127.0.0.1:8000",
+    }
+    assert scrub_ambient_env(live_lane, exempt=lane_conditional_keeps(live_lane)) == []
+    assert live_lane["REDIS_URL"] == "redis://localhost:6379/0"
 
 
 def test_scrub_honours_the_debug_exemption():
@@ -137,12 +166,15 @@ def test_scrub_actually_ran_in_this_process():
 
     If ``pytest_configure`` stops calling the scrub, every other test in this
     module still passes -- they only inspect lists. This one fails.
+
+    It asserts the residue snapshotted immediately after the scrub rather than a
+    live read of ``os.environ``: tests legitimately write scrub-listed names
+    during a run and do not always clean up (``tests/test_core_extraction.py:19``
+    sets SETTINGS_ENCRYPTION_KEY unconditionally), and under ``--dist loadscope``
+    such a leftover lands on this worker. A live read blamed the scrub for
+    another test's leftover and failed the whole-suite run.
     """
-    exempt = exempted_names()
-    leaked = sorted(
-        name for name in SCRUB_ENV_NAMES if name not in exempt and name in os.environ
-    )
-    assert not leaked, (
-        f"ambient environment still carries {leaked} during the test run; "
-        "the conftest scrub did not run"
+    assert conftest._SCRUB_RAN, "conftest.pytest_configure did not run the scrub"
+    assert not conftest._POST_SCRUB_RESIDUE, (
+        f"scrub-listed names survived the scrub: {conftest._POST_SCRUB_RESIDUE}"
     )

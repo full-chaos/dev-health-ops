@@ -73,9 +73,10 @@ KEEP_ENV_NAMES: frozenset[str] = frozenset(
         # exports CLICKHOUSE_URI at an isolated scratch db for the clickhouse-marked
         # tier and the live argMax proof. Scrubbing these makes the gate's live
         # stage and 36 CH-reading test modules silently lose their target.
+        # (DATABASE_URL, the legacy alias, is NOT here: no lane sets it, and it
+        # feeds the same resolve_credentials_sync branch DATABASE_URI does.)
         "CLICKHOUSE_URI",
         "DATABASE_URI",
-        "DATABASE_URL",
         "POSTGRES_URI",
         "SECONDARY_DATABASE_URI",
         # --- opt-in live-Postgres tiers. test.yml's second pytest step sets these;
@@ -113,13 +114,42 @@ KEEP_ENV_NAMES: frozenset[str] = frozenset(
         # OTEL off in CI and in the gate: with it on, the exporter retries to
         # localhost:4317 on every span, flooding logs and slowing the suite.
         "OTEL_ENABLED",
-        "REDIS_URL",
         # --- owned by pytest itself.
         "PYTEST_CURRENT_TEST",
         "CI",
         "GITHUB_ACTIONS",
     }
 )
+
+# ---------------------------------------------------------------------------
+# Conditional keeps — scrubbed by default, retained only when the lane that
+# needs them announces itself. Maps the variable to the sentinel that proves
+# the lane is running.
+# ---------------------------------------------------------------------------
+CONDITIONAL_KEEP_ENV_NAMES: dict[str, str] = {
+    # REDIS_URL is a *pollutant* in the unit tier and a *requirement* in exactly
+    # one CI lane, so it can be neither plainly scrubbed nor plainly kept.
+    #
+    # Pollutant: ops/.env points it at the live shared valkey container, whose
+    # rate-limit state survives between tests in an xdist worker. With it set,
+    # `pytest tests/test_linear_provider.py` fails
+    # TestLinearClientRetry::test_429_backoff_grows_exponentially (assert 5 == 4);
+    # with it unset, 65/65 pass. The whole file, not the single test -- running
+    # that test alone passes either way, which is how CHAOS-3402 came to exclude
+    # it as a "pure concurrency flake". No unit lane supplies it: `test.yml`,
+    # `ci/run_tests.sh` and `ci/local_validate.sh` mention neither REDIS_URL nor
+    # VALKEY.
+    #
+    # Requirement: ci/run_live_backend_e2e.sh:399 exports it, and :406 runs
+    # tests/test_external_ingest_customer_push_live.py -- "the only module in
+    # this repo that needs all three live services at once", which reads
+    # REDIS_URL at import (:91) and skipifs the WHOLE MODULE without it (:96).
+    # An unconditional scrub would turn that lane's coverage into a silent skip.
+    #
+    # LIVE_E2E_BASE_URL is that lane's own sentinel, exported at
+    # run_live_backend_e2e.sh:405 -- one line after REDIS_URL, same subshell.
+    "REDIS_URL": "LIVE_E2E_BASE_URL",
+}
 
 # ---------------------------------------------------------------------------
 # Scrub list — derived; see module docstring. Regenerate with
@@ -174,6 +204,7 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "CORS_ALLOWED_ORIGINS",
         "DASHSCOPE_API_KEY",
         "DASHSCOPE_BASE_URL",
+        "DATABASE_URL",
         "DEV_HEALTH_ALLOW_PLACEHOLDER_CLICKHOUSE_URI",
         "DEV_HEALTH_SINK",
         "EMAIL_API_KEY",
@@ -285,6 +316,9 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "QWEN_API_KEY",
         "QWEN_LOCAL_MODEL",
         "QWEN_MODEL",
+        # Scrubbed by default; see CONDITIONAL_KEEP_ENV_NAMES for the one lane
+        # that gets it back.
+        "REDIS_URL",
         "REPO_PATH",
         "REPO_UUID",
         "RESEND_API_KEY",
@@ -458,6 +492,23 @@ def exempted_names(environ: Mapping[str, str] | None = None) -> frozenset[str]:
     source = os.environ if environ is None else environ
     raw = source.get(ALLOW_ENV, "")
     return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
+def lane_conditional_keeps(
+    environ: Mapping[str, str] | None = None,
+) -> frozenset[str]:
+    """Conditional keeps whose lane sentinel is present in ``environ``.
+
+    Reported separately from :func:`exempted_names` in the pytest header: "a
+    lane needs this" and "a human asked for this" are different claims, and a
+    run that silently conflated them could not be audited afterwards.
+    """
+    source = os.environ if environ is None else environ
+    return frozenset(
+        name
+        for name, sentinel in CONDITIONAL_KEEP_ENV_NAMES.items()
+        if sentinel in source
+    )
 
 
 def scrub_ambient_env(

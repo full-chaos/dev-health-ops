@@ -442,6 +442,85 @@ func githubDerivedOracleCases() []oracleCase {
 			},
 		},
 		{
+			// M7 -- from_status FALLBACK. The first transition carries an EMPTY
+			// from_status, so both sides must fall back to the ITEM's status
+			// (compute_work_item_state_durations.py:86,
+			// githubWorkItemStatusSegments). The item's status is deliberately
+			// NOT "todo": with "todo" the fallback and the decoder default are
+			// the same value and the arm stays unmeasured.
+			ID: "from_status_empty_falls_back_to_item_status",
+			Input: map[string]any{
+				"OrgID": githubDerivedOracleOrg, "Day": "2026-08-04",
+				"ComputedAt": "2026-08-05T00:30:00Z", "AsOf": "2026-08-05T00:30:00Z",
+				"Facts": githubDerivedOracleEmptyFacts(),
+				"WorkItems": []any{
+					githubDerivedOracleItem("acme/api#60", map[string]any{
+						"status": "in_review",
+					}),
+				},
+				"Transitions": []any{
+					githubDerivedOracleTransition("acme/api#60", "2026-08-04T06:00:00Z", "", "done"),
+				},
+			},
+		},
+		{
+			// M7 -- EMPTY-STRING team_id, which is NOT the same as NULL. A fact
+			// carrying a blank team id makes the attribution row persist "" while
+			// the coverage rollup normalises the same resolution to "unassigned".
+			// Only the unassigned_candidate case covers the NULL side.
+			ID: "empty_string_team_id_is_not_null",
+			Input: map[string]any{
+				"OrgID": githubDerivedOracleOrg, "Day": "2026-08-04",
+				"ComputedAt": "2026-08-05T00:30:00Z", "AsOf": "2026-08-05T00:30:00Z",
+				"Facts": map[string]any{
+					"Teams": []any{}, "Projects": []any{}, "Members": []any{},
+					"ManualFallbacks": []any{},
+					"Repos": []any{
+						githubDerivedOracleRepoFact(
+							"44444444-4444-4444-8444-444444444444", "acme/blank-team", "", "",
+						),
+					},
+				},
+				"WorkItems": []any{
+					githubDerivedOracleItem("acme/api#61", map[string]any{
+						"repo_id": "44444444-4444-4444-8444-444444444444",
+					}),
+				},
+				"Transitions": []any{
+					githubDerivedOracleTransition("acme/api#61", "2026-08-04T05:00:00Z", "todo", "in_progress"),
+				},
+			},
+		},
+		{
+			// M7 -- EQUALITY BOUNDARIES, all three in one case because they share
+			// a window. #62 reaches a terminal state EXACTLY at the window end
+			// (terminalAt == end, so `terminalAt.Before(end)` is false and the
+			// item is NOT skipped). #63 is created EXACTLY at the window end
+			// (createdAt == end, so `!createdAt.Before(end)` holds and it IS
+			// skipped). #64's only segment ends exactly where it starts once
+			// clipped, so overlapEnd == overlapStart and it contributes nothing.
+			ID: "equality_boundaries_at_window_edges",
+			Input: map[string]any{
+				"OrgID": githubDerivedOracleOrg, "Day": "2026-08-04",
+				"ComputedAt": "2026-08-06T00:30:00Z", "AsOf": "2026-08-06T00:30:00Z",
+				"Facts": githubDerivedOracleEmptyFacts(),
+				"WorkItems": []any{
+					githubDerivedOracleItem("acme/api#62", map[string]any{
+						"story_points": 3, "completed_at": "2026-08-05T00:00:00Z",
+					}),
+					githubDerivedOracleItem("acme/api#63", map[string]any{
+						"created_at": "2026-08-05T00:00:00Z",
+					}),
+					githubDerivedOracleItem("acme/api#64", nil),
+				},
+				"Transitions": []any{
+					// Ends exactly at the window start, so after clipping the
+					// segment has zero length.
+					githubDerivedOracleTransition("acme/api#64", "2026-08-04T00:00:00Z", "todo", "done"),
+				},
+			},
+		},
+		{
 			// TIMEZONE: the window is UTC, and this case is chosen so the
 			// local and UTC calendar dates DISAGREE. 2026-08-04T23:30:00Z is
 			// still 2026-08-04 in UTC but already 2026-08-05 at +02:00, and
@@ -508,8 +587,15 @@ func TestGitHubWorkItemStateDurationsMatchLivePythonProduction(t *testing.T) {
 
 // The column structs below are the Go half of the column-oriented comparison.
 // They are STRUCTS, not maps, on purpose: typedEncode walks a struct's fields
-// exhaustively, so a field the production row declares and this projection
-// forgets is a compile-time or comparison failure, never a silent narrowing.
+// exhaustively, so every field this projection declares is compared.
+//
+// A field this projection FORGETS is caught as a COMPARISON failure, not a
+// compile-time one -- Go never requires a struct field to be used, so omitting
+// one compiles cleanly. What catches it is the OTHER side: the Python pair
+// reflects its field set from the production dataclass, so a field the record
+// declares and this struct omits appears in the Python row and not in the Go
+// row, and the comparison fails on the missing key. The guarantee rests on the
+// Python-side reflection, not on the Go type.
 
 type githubEstimateCoverageColumns struct {
 	Day              []githubWorkItemDerivedDay `json:"day"`

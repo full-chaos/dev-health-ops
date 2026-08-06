@@ -354,8 +354,21 @@ func githubWorkItemDerivationCandidateFromFact(
 	if teamName == "" {
 		teamName = teamID
 	}
+	// An ownership row's team_id is passed through RAW by Python, so a blank
+	// team id persists as "" on work_item_team_attributions -- NOT as NULL.
+	// githubWorkItemDerivationStringPointer maps "" to nil, which made Go write
+	// NULL where Python writes "", and in a Nullable(String) column those are
+	// different values. The two daily rollups normalise both to "unassigned",
+	// so the attribution table is the only surface that can see it. Pinned by
+	// the empty_string_team_id_is_not_null oracle case.
+	//
+	// Only this FACT-derived path is corrected, because only it is measured.
+	// The native_team, issue_project, manual_fallback and linked_issue
+	// candidates still route through the nil-on-empty helper: a blank team id
+	// is not reachable there from any oracle case in this PR, and changing
+	// them would be an unmeasured claim.
 	return githubWorkItemDerivationCandidate{
-		Source: source, TeamID: githubWorkItemDerivationStringPointer(teamID), TeamName: githubWorkItemDerivationStringPointer(teamName),
+		Source: source, TeamID: &teamID, TeamName: &teamName,
 		Confidence: confidenceForPrimary(isPrimary), Evidence: evidence,
 		IsPrimary: isPrimary, Specificity: specificity, Priority: priority,
 		UpdatedAt: normalizedDerivationTime(updatedAt),

@@ -40,12 +40,33 @@ const RepositoryIdentityCategory = "repository_identity_ambiguous"
 // never established.
 const GitHubFilesInventoryFailureCategory = "github_files_inventory_failed"
 
+// EffectRecoveryAmbiguousCategory records a unit whose effect recovery cannot
+// be reconciled: a readback found a stored row that disagrees with the effect
+// being replayed, the effect was marked recovery-blocked, or the committer had
+// no readback to consult (effect_committer.go:128,158,163).
+//
+// Every one of those is decided by state already durably persisted, so a later
+// attempt re-reads the same rows and reaches the same verdict. Retrying burns
+// the remaining attempts and then buries the real cause under the generic
+// provider_unit_exhausted category, which is exactly the outcome that makes a
+// wedged effect hard to find.
+const EffectRecoveryAmbiguousCategory = "effect_recovery_ambiguous"
+
 // deterministicTerminalCategory maps executor failures that no retry can clear
 // onto their own durable category. Anything not listed keeps the ordinary
 // bounded-retry path.
+//
+// This is ADAPTER-INDEPENDENT: it reclassifies ErrEffectRecoveryAmbiguous for
+// every route that reaches the shared committer, not only the three derived
+// destinations this lane adds. That is intended -- the error means the same
+// thing wherever it comes from -- but it does change the recorded category and
+// the retry count for existing adapters that previously exhausted instead.
 func deterministicTerminalCategory(err error) (string, bool) {
 	if errors.Is(err, providersync.ErrRepositoryIdentityAmbiguous) {
 		return RepositoryIdentityCategory, true
+	}
+	if errors.Is(err, providersync.ErrEffectRecoveryAmbiguous) {
+		return EffectRecoveryAmbiguousCategory, true
 	}
 	return "", false
 }

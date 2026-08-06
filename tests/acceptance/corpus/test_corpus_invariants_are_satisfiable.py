@@ -256,6 +256,115 @@ class TestEveryActiveCaseCanPass:
             assert domain, f"{check}'s production value domain resolved empty"
 
 
+class TestNoResolutionPathCaseCanProduceZeroLedgerRows:
+    """The declared-value guard above is necessary but NOT sufficient.
+
+    Adversarial round 2 found six cases whose profile value was a perfectly
+    good non-null string, and which were still unpassable -- because the RUN
+    writes no ``dev_run_resolutions`` row at all, so
+    ``derive_resolution_path`` returns ``None`` and ``resolution_path_in``
+    refuses it regardless of what the profile says. Checking the declared
+    value can never see that; only the producer can.
+
+    So this asks the real producer. A question that yields zero mentions
+    takes preflight's ``proceeded_organization_wide`` branch with
+    ``ledger=None``, and every ``append_resolution`` site requires a non-None
+    ledger -- zero rows, guaranteed, in every catalog world. A case in that
+    state must not declare ``resolution_path_in``.
+
+    THE ORACLE MATTERS, and getting it wrong is how three cases were
+    mis-dispositioned: ``extract_mentions`` is NOT production's mention set.
+    ``QuestionInterpreter.interpret`` additionally mints untyped bare-name
+    mentions (``_add_untyped_mentions``), so ``"Update the ticket status to
+    Done"`` yields zero under the former and one under the latter. This uses
+    the interpreter, with the same request shape the runner really sends.
+    """
+
+    @staticmethod
+    def _request(question: str) -> Any:
+        import uuid
+        from datetime import UTC, datetime, timedelta
+
+        from dev_health_ops.api.dev.contracts import DevMessageRequest
+
+        now = datetime.now(UTC).replace(microsecond=0)
+
+        def span(start: Any, end: Any) -> dict[str, str]:
+            return {
+                "start": start.isoformat().replace("+00:00", "Z"),
+                "end": end.isoformat().replace("+00:00", "Z"),
+                "timezone": "UTC",
+            }
+
+        return DevMessageRequest.model_validate(
+            {
+                "schema_version": "dev_message_request.v1",
+                "request_id": str(uuid.uuid4()),
+                "client_message_id": str(uuid.uuid4()),
+                "conversation_id": str(uuid.uuid4()),
+                "question": question,
+                "question_class": "status",
+                "scope": {
+                    "schema_version": "dev_scope.v1",
+                    "organization_id": str(uuid.uuid4()),
+                    "direct_scope": "organization",
+                    "repositories": [],
+                    "entity_refs": [],
+                    "team_ids": [],
+                    "time_range": span(now - timedelta(days=28), now),
+                    "comparison_range": span(
+                        now - timedelta(days=56), now - timedelta(days=28)
+                    ),
+                    "surface_context": None,
+                },
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_every_resolution_path_case_names_at_least_one_mention(self) -> None:
+        from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
+
+        interpreter = QuestionInterpreter()
+        declaring = [
+            case
+            for case in _active_cases()
+            if any(e.get("check") == "resolution_path_in" for e in case.invariants)
+        ]
+        assert declaring, (
+            "no active case declares resolution_path_in -- this guard would "
+            "report green having measured nothing"
+        )
+
+        zero_mention: list[str] = []
+        failures: list[str] = []
+        for case in declaring:
+            try:
+                interpreted = await interpreter.interpret(self._request(case.question))
+            except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+                # Rule 4: a case we could not measure must FAIL, not quietly
+                # count as fine. An earlier version of this probe stored the
+                # error string in the count variable, where a truthy value
+                # read as "has mentions" -- a check that could not fail.
+                failures.append(f"{case.id}: {type(exc).__name__}: {exc}")
+                continue
+            if not interpreted.mentions:
+                zero_mention.append(case.id)
+
+        assert not failures, (
+            "the interpreter raised for these cases, so their mention count "
+            "was never measured:\n  " + "\n  ".join(failures)
+        )
+        assert not zero_mention, (
+            "these cases declare resolution_path_in but their question names "
+            "ZERO mentions under production's real QuestionInterpreter, so "
+            "preflight proceeds organization-wide with ledger=None, no "
+            "dev_run_resolutions row is written, derive_resolution_path "
+            "returns None, and resolution_path_in can never pass -- in any "
+            "catalog world, whatever the profile declares:\n  "
+            + "\n  ".join(sorted(zero_mention))
+        )
+
+
 class TestGuardActuallyDetectsTheDefect:
     """Rule 2: plant the exact defect and watch the guard catch it.
 

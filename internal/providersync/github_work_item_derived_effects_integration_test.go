@@ -14,68 +14,30 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// The DDL below is these three tables AS PRODUCTION HAS THEM after the
-// migrations that shaped them: 001 (create) and 002 (avg_wip) for state
-// durations, 051 for team attributions, 063 for estimate coverage, 024/027 for
-// org_id and org_id-first sorting keys. It runs against a throwaway container,
-// never a developer's database and never the ask-dev acceptance stack.
+// This file authors NO DDL. The three tables come from the real migration
+// chain (src/dev_health_ops/migrations/clickhouse), applied by chschema through
+// the project's own canonical entrypoint.
 //
-// The engines are the whole point of this file and are NOT simplified:
+// The previous hand-typed CREATE TABLE constants were a second, unversioned
+// copy of the schema, and the SHOW CREATE TABLE test below could only ever
+// confirm what those constants declared. They had already drifted: the
+// work_item_team_attributions copy carried the PRE-053 enums, missing the
+// `issue_project` and `manual_fallback` source values and the `manual` and
+// `none` confidence values that the production resolver genuinely emits. The
+// unassigned fixture in this file had been written as confidence "low" -- a
+// value the resolver never produces -- which is exactly what kept the stale
+// enum from failing anything.
+//
+// The engines remain the whole point of this file, and now they are the
+// migrations' engines rather than our restatement of them:
 //   - estimate coverage is ReplacingMergeTree PARTITION BY toYYYYMM(day)
 //   - state durations is PLAIN MergeTree, also partitioned, where FINAL does
 //     nothing at all
 //   - team attributions is ReplacingMergeTree with NO PARTITION BY
-const (
-	githubEstimateCoverageDDL = `CREATE TABLE estimate_coverage_metrics_daily (
-  day Date,
-  provider String,
-  work_scope_id String,
-  team_id Nullable(String),
-  team_name Nullable(String),
-  estimated_count UInt32,
-  unestimated_count UInt32,
-  backlog_size UInt32,
-  ratio Nullable(Float64),
-  computed_at DateTime64(3, 'UTC'),
-  org_id String DEFAULT ''
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY toYYYYMM(day)
-ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`
-
-	githubStateDurationsDDL = `CREATE TABLE work_item_state_durations_daily (
-  day Date,
-  provider LowCardinality(String),
-  work_scope_id LowCardinality(String),
-  team_id LowCardinality(String),
-  team_name String,
-  status LowCardinality(String),
-  duration_hours Float64,
-  items_touched UInt32,
-  computed_at DateTime('UTC'),
-  avg_wip Float64 DEFAULT 0.0,
-  org_id String DEFAULT ''
-) ENGINE = MergeTree
-PARTITION BY toYYYYMM(day)
-ORDER BY (org_id, provider, work_scope_id, team_id, status, day)`
-
-	githubTeamAttributionsDDL = `CREATE TABLE work_item_team_attributions (
-  org_id String,
-  repo_id UUID,
-  work_item_id String,
-  provider String,
-  team_id Nullable(String),
-  team_name Nullable(String),
-  source Enum8('native_team' = 1, 'linked_issue' = 2, 'project_ownership' = 3, 'repo_ownership' = 4, 'assignee_membership' = 5, 'unassigned' = 6),
-  is_primary UInt8,
-  confidence Enum8('high' = 1, 'medium' = 2, 'low' = 3),
-  evidence String,
-  computed_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source)`
-)
 
 const githubDerivedIntegrationOrg = "org-acme"
 
@@ -92,25 +54,146 @@ func githubDerivedIntegrationConn(t *testing.T, ctx context.Context) driver.Conn
 			t.Errorf("terminate ClickHouse: %v", err)
 		}
 	})
+	// Migrate BEFORE opening the Go connection, so a failure to apply the real
+	// chain surfaces as a migration failure rather than as a confusing "table
+	// does not exist" from the first query.
+	chschema.Apply(ctx, t, instance)
 	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	for _, statement := range []string{
-		githubEstimateCoverageDDL, githubStateDurationsDDL, githubTeamAttributionsDDL,
-	} {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
 	return conn
 }
 
+// githubWorkItemDerivedEmittableSources and ...Confidences are every value the
+// production resolver can put in these two enum columns
+// (github_work_items_derivation_context.go:327,404,462,491,510,561 and
+// confidenceForPrimary). "low" is deliberately ABSENT: the resolver never emits
+// it, and the fixture in this file that used to claim it was written to fit a
+// stale hand-typed enum rather than to describe anything production produces.
+var (
+	githubWorkItemDerivedEmittableSources = []string{
+		"native_team", "issue_project", "project_ownership", "repo_ownership",
+		"assignee_membership", "linked_issue", "manual_fallback", "unassigned",
+	}
+	githubWorkItemDerivedEmittableConfidences = []string{
+		"high", "medium", "manual", "none",
+	}
+)
+
+// TestGitHubWorkItemTeamAttributionEnumsAcceptEveryResolverValue closes the
+// drift class directly, rather than trusting that sourcing the schema from the
+// migrations happens to keep it closed.
+//
+// The hand-typed DDL this file used to create carried the PRE-053 enums, so
+// `issue_project`, `manual_fallback`, `manual` and `none` -- all genuinely
+// reachable resolver outputs -- would have been REJECTED with
+// UNKNOWN_ELEMENT_OF_ENUM by the real column. Nothing failed, because no
+// fixture ever used one.
+//
+// This asserts against the enum the MIGRATION CHAIN produced, and the value
+// list comes from the producer, so it fails if either side moves: a new
+// resolver source without a migration, or a migration that narrows an enum.
+func TestGitHubWorkItemTeamAttributionEnumsAcceptEveryResolverValue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	conn := githubDerivedIntegrationConn(t, ctx)
+
+	for _, tt := range []struct {
+		column string
+		values []string
+	}{
+		{"source", githubWorkItemDerivedEmittableSources},
+		{"confidence", githubWorkItemDerivedEmittableConfidences},
+	} {
+		t.Run(tt.column, func(t *testing.T) {
+			var columnType string
+			if err := conn.QueryRow(ctx,
+				"SELECT type FROM system.columns WHERE table = 'work_item_team_attributions' "+
+					"AND name = ? AND database = currentDatabase()", tt.column,
+			).Scan(&columnType); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(columnType, "Enum") {
+				t.Fatalf("%s is %s, not an Enum -- this guard assumes an enum and would "+
+					"otherwise pass vacuously", tt.column, columnType)
+			}
+			for _, value := range tt.values {
+				// Match the quoted enum element, not a bare substring: 'none'
+				// must not be satisfied by a hypothetical 'none_given'.
+				if !strings.Contains(columnType, "'"+value+"'") {
+					t.Errorf("the resolver can emit %s=%q but the migrated column cannot "+
+						"store it, so a real row would be rejected with "+
+						"UNKNOWN_ELEMENT_OF_ENUM\ncolumn type: %s",
+						tt.column, value, columnType)
+				}
+			}
+		})
+	}
+}
+
+// githubDerivedSortingKeyColumns extracts the sorting key's top-level entries
+// from a SHOW CREATE TABLE body.
+//
+// A substring test is NOT good enough here: `strings.Contains(orderBy, "day")`
+// is satisfied by a column named `birthday`, by `toYYYYMM(day)` appearing in
+// the PARTITION BY clause the slice may still include, and by a column named
+// `day_bucket` -- none of which put `day` itself in the key. The whole point of
+// the assertion is that the partition expression is derivable from the sorting
+// key, so it has to compare real key entries.
+func githubDerivedSortingKeyColumns(t *testing.T, ddl string) []string {
+	t.Helper()
+	marker := "\nORDER BY "
+	start := strings.Index(ddl, marker)
+	if start < 0 {
+		t.Fatalf("no ORDER BY clause in DDL:\n%s", ddl)
+	}
+	clause := ddl[start+len(marker):]
+	if end := strings.IndexAny(clause, "\n"); end >= 0 {
+		clause = clause[:end]
+	}
+	clause = strings.TrimSpace(clause)
+	// A single-column key has no parentheses; a tuple key does.
+	if strings.HasPrefix(clause, "(") && strings.HasSuffix(clause, ")") {
+		clause = clause[1 : len(clause)-1]
+	}
+	var columns []string
+	depth, current := 0, strings.Builder{}
+	flush := func() {
+		if value := strings.TrimSpace(current.String()); value != "" {
+			columns = append(columns, value)
+		}
+		current.Reset()
+	}
+	for _, symbol := range clause {
+		switch {
+		case symbol == '(':
+			depth++
+			current.WriteRune(symbol)
+		case symbol == ')':
+			depth--
+			current.WriteRune(symbol)
+		case symbol == ',' && depth == 0:
+			// Only a top-level comma separates key entries; a comma inside
+			// ifNull(team_id, '') does not.
+			flush()
+		default:
+			current.WriteRune(symbol)
+		}
+	}
+	flush()
+	return columns
+}
+
 // TestGitHubDerivedTablesPartitionExpressionsAreDerivableFromTheSortingKey is
-// the precondition every partition-fenced readback in this package rests on,
-// and it reads the LIVE schema via SHOW CREATE TABLE rather than trusting the
-// migration file we believe produced it.
+// the precondition every partition-fenced readback in this package rests on.
+//
+// It is only meaningful because the schema now comes from the real migration
+// chain. While the tables were created from hand-typed constants in this file,
+// reading them back via SHOW CREATE TABLE proved nothing beyond "ClickHouse
+// stored what we just typed" -- the assertion and the input had the same
+// author.
 //
 // The rule (cross-lane finding, measured on a real container): fencing a
 // readback on the partition key is only safe when the partition expression is
@@ -155,17 +238,21 @@ func TestGitHubDerivedTablesPartitionExpressionsAreDerivableFromTheSortingKey(t 
 				t.Fatalf("%s: partition expression is not toYYYYMM(day); a fence on `day` "+
 					"may no longer pin one partition\nDDL: %s", tt.table, ddl)
 			}
-			orderBy := ddl[strings.Index(ddl, "ORDER BY"):]
-			if end := strings.Index(orderBy, "\nSETTINGS"); end > 0 {
-				orderBy = orderBy[:end]
-			}
 			// `day` must be IN the sorting key, so toYYYYMM(day) is derivable
 			// from it and one key cannot span two partitions.
-			if !strings.Contains(orderBy, "day") {
-				t.Fatalf("%s: `day` is NOT in the sorting key, so toYYYYMM(day) is not "+
-					"derivable from it and fencing the readback on day is UNSAFE "+
+			columns := githubDerivedSortingKeyColumns(t, ddl)
+			present := false
+			for _, column := range columns {
+				if column == "day" {
+					present = true
+					break
+				}
+			}
+			if !present {
+				t.Fatalf("%s: `day` is NOT a column of the sorting key, so toYYYYMM(day) "+
+					"is not derivable from it and fencing the readback on day is UNSAFE "+
 					"under the default do_not_merge_across_partitions_select_final=0"+
-					"\nORDER BY: %s", tt.table, orderBy)
+					"\nsorting key columns: %q", tt.table, columns)
 			}
 		})
 	}
@@ -418,9 +505,16 @@ func TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse(t *testing.
 		OrgID: githubDerivedIntegrationOrg,
 	}
 	// The unassigned shape this table persists: NULL team, nil repo.
+	//
+	// Confidence is "none", which is what the production resolver actually
+	// emits for this candidate (derivation_context.go:462). It was "low"
+	// before -- a value the resolver never produces -- because "none" only
+	// entered the enum in migration 053 and would have been REJECTED by the
+	// hand-typed DDL this file used to create. The fixture was shaped to fit
+	// the stale copy of the schema instead of the schema failing.
 	unassigned := githubWorkItemTeamAttributionRow{
 		WorkItemID: "acme/api#2", Provider: "github", Source: "unassigned",
-		IsPrimary: 1, Confidence: "low", Evidence: "no_candidate",
+		IsPrimary: 1, Confidence: "none", Evidence: "no_candidate",
 		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 123456789, time.UTC),
 		RepoID:     nil, TeamID: nil, TeamName: nil,
 		OrgID: githubDerivedIntegrationOrg,

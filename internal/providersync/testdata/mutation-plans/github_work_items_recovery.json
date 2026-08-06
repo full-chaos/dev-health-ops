@@ -570,8 +570,8 @@
     {
       "id": "R27-failed-unit-keeps-the-ledger-key",
       "file": "internal/providersync/repository_postgres.go",
-      "find": "    result = COALESCE(unit.result::jsonb, '{}'::jsonb) || $6::jsonb,",
-      "replace": "    result = $6::jsonb,",
+      "find": "      THEN jsonb_build_object(\n             'go_effect_ledger_v1', unit.result::jsonb -> 'go_effect_ledger_v1'\n           ) || $6::jsonb\n      ELSE $6::jsonb",
+      "replace": "      THEN $6::jsonb\n      ELSE $6::jsonb",
       "rationale": "contract point 5 retains the snapshot on failure; a wholesale result replace destroys go_effect_ledger_v1 and with it the only reference that makes the retained row findable",
       "build": [
         "go",
@@ -883,9 +883,9 @@
     {
       "id": "R40-failed-unit-survives-a-non-object-result",
       "file": "internal/providersync/repository_postgres.go",
-      "find": "      WHEN jsonb_typeof(unit.result::jsonb) = 'object'\n       AND unit.result::jsonb ? 'go_effect_ledger_v1'",
-      "replace": "      WHEN unit.result::jsonb ? 'go_effect_ledger_v1'",
-      "rationale": "result is sa.JSON and can hold the literal null; without the type guard the concatenation raises and Fail() reports ErrLeaseLost -- a failure to record a failure, blamed on the lease",
+      "find": "      WHEN unit.result::jsonb ? 'go_effect_ledger_v1'",
+      "replace": "      WHEN TRUE",
+      "rationale": "the key-presence test is the whole guard: without it a predecessor with no ledger key gains an explicit go_effect_ledger_v1: null -- a snapshot reference that reads as present and decodes to nothing -- and a non-object predecessor loses its error_category to array concatenation",
       "build": [
         "go",
         "test",

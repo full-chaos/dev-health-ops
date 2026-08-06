@@ -491,17 +491,22 @@ WHERE unit.id = $1::uuid
 // sync_units.py) -- this was the only one that would not have.
 //
 // The CASE is not decoration: unit.result is sa.JSON, so it can hold a JSON
-// literal `null`. `'null'::jsonb || '{}'::jsonb` raises (non-object operand),
-// and the raise surfaces from Fail() as ErrLeaseLost -- a failure to record a
-// failure, reported as something else entirely.
+// literal `null`, and `'null'::jsonb || '{...}'::jsonb` does NOT raise -- it
+// ARRAY-concatenates to `[null, {...}]`. The failure document then has no
+// readable error_category at all, because `->>` on an array returns NULL. A
+// raise would have been the kinder outcome; this loses the reason a unit
+// failed, silently. Verified on PostgreSQL 18.4 rather than assumed.
+//
+// `?` returns false for every non-object, so it is the whole guard: a null,
+// array or scalar predecessor takes the ELSE branch, and the THEN branch only
+// ever concatenates two objects.
 const failUnitSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'failed',
     duration_seconds = $4,
     error = $5,
     result = CASE
-      WHEN jsonb_typeof(unit.result::jsonb) = 'object'
-       AND unit.result::jsonb ? 'go_effect_ledger_v1'
+      WHEN unit.result::jsonb ? 'go_effect_ledger_v1'
       THEN jsonb_build_object(
              'go_effect_ledger_v1', unit.result::jsonb -> 'go_effect_ledger_v1'
            ) || $6::jsonb

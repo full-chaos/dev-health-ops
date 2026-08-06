@@ -898,6 +898,21 @@ FROM public.sync_run_units WHERE id = $1`, unitID,
 			if status != "failed" || category != "provider_unit_failed" {
 				t.Fatalf("status=%q category=%q", status, category)
 			}
+			// And the stamp must not INVENT a ledger key. Without the guard,
+			// `-> 'go_effect_ledger_v1'` on a predecessor that has none yields
+			// SQL NULL, and jsonb_build_object turns that into an explicit
+			// `"go_effect_ledger_v1": null` -- a snapshot reference that reads
+			// as present and decodes to nothing.
+			var hasLedger bool
+			if err := pool.QueryRow(ctx, `
+SELECT COALESCE(result::jsonb ? 'go_effect_ledger_v1', false)
+FROM public.sync_run_units WHERE id = $1`, unitID,
+			).Scan(&hasLedger); err != nil {
+				t.Fatal(err)
+			}
+			if hasLedger {
+				t.Fatal("terminal Fail invented a go_effect_ledger_v1 key on a unit that never had one")
+			}
 		})
 	}
 

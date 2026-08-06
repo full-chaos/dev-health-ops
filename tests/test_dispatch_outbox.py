@@ -900,6 +900,15 @@ def test_backoff_seconds_sequence_is_capped():
     reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
 )
 def test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible():
+    """A writer that sets only the pre-0049 lease columns still commits.
+
+    The trigger under test is ``trg_sync_dispatch_outbox_route_fence``. It
+    reaches production as migration 0049 and reaches the ``create_all``
+    schema this test builds through the ``after_create`` DDL registrations
+    in ``models/integrations.py`` -- same statement text, two install
+    paths. Naming only the migration would be a claim this test cannot
+    make, because ``create_all`` never runs one.
+    """
     engine = create_engine(sync_postgres_test_url())
     Base.metadata.create_all(engine)
     run_id = None

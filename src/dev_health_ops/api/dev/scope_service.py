@@ -455,9 +455,23 @@ def _dedupe_preserving_rank(
 
     Not a behaviour change for the alias-unaware callers: with
     ``include_alias_matches=False`` the catalog's own order *is* label order,
-    the identical sequence ``_dedupe_entities`` produced. Only the
-    closest-matches fallback, the one caller that enables alias matching, sees
-    a different page — which is precisely the ranking this ticket restores.
+    the identical sequence ``_dedupe_entities`` produced.
+
+    Exactly **two** callers enable alias matching and therefore see a
+    different page — counted, because an earlier draft of this docstring
+    claimed there was only one and a reviewer had to find the other:
+
+    * ``subject_preflight._close_matches`` — the closest-matches fallback,
+      whose ranking is what this ticket restores.
+    * ``qua_shadow.QUAShadowEvaluator._shortlist`` — the CHAOS-3389 shadow
+      seam. Its shortlist is reordered the same way, which is safe because
+      the model is shown the very list its returned indices are resolved
+      against, so there is no index/list skew, and because nothing downstream
+      reads the record it produces. It needs no ``preferred_kinds`` of its
+      own: it already searches a single kind for a typed mention, so a
+      preference would be vacuous, and for an untyped one the kind is a
+      declared default that must not be preferred at all.
+
     ``resolve()``'s exact path still uses ``_dedupe_entities``: those entities
     come from ``exact()``, which has no rank of its own to preserve.
     """

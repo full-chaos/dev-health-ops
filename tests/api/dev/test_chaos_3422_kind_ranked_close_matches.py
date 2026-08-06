@@ -475,7 +475,27 @@ async def test_the_seeded_catalog_agrees_with_the_production_catalog(
 
     Both sides are driven from the *same* rows, through the same WHERE
     semantics, so the comparison cannot be satisfied by two different inputs.
-    Repository search is deliberately outside this oracle: production enriches
+
+    **What this oracle cannot catch, stated so the green tick is not read as
+    more than it is.** ``SeededCatalog`` imports the production
+    ``merge_search_candidates`` rather than re-implementing it, so a defect
+    *inside* that function is invisible here: both sides call it and agree on
+    the same wrong answer. Two independent reviewers reproduced exactly that
+    — planting the CHAOS-3388 alias-tier defect leaves all twelve cases below
+    green. That is the deliberate trade for killing the input-construction
+    drift this test exists to kill, and it is only safe because the ranking
+    itself is pinned by *hardcoded* expectations elsewhere, which do die on
+    that mutation: ``test_the_oracle_rows_rank_the_way_the_contract_says``
+    (drives the real catalog), plus
+    ``test_inside_the_preferred_kind_alias_precision_still_decides`` and
+    ``test_merging_without_a_preference_keeps_the_chaos_3388_order`` (call the
+    helper directly). Delete those and this oracle does not cover for them.
+
+    So: this test covers how each side *builds the input* — SQL WHERE
+    semantics, parameter binding, alias eligibility, org scoping. It does not
+    cover the ranking.
+
+    Repository search is deliberately outside it too: production enriches
     repository labels through ``resolve_scope_display_names``, which the fake
     does not model at all — a pre-existing divergence this ticket does not
     close, and pretending otherwise here would be the false confidence the

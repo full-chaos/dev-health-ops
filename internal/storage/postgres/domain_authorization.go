@@ -542,8 +542,13 @@ func domainPosture() RolePosture {
 			// The only domain table carrying DELETE. Prepared recovery
 			// snapshots are transient state: written once when a route's
 			// manifest is prepared, read back on recovery, and cleared in the
-			// same transaction that terminalizes the unit. Nothing ever
-			// updates one in place, so UPDATE stays off.
+			// same transaction that completes the unit SUCCESSFULLY. A failed
+			// or retrying unit deliberately keeps its snapshot, so "cleared on
+			// any terminal transition" would be wrong. Nothing ever updates a
+			// snapshot in place, so UPDATE stays off -- and note that means no
+			// row-locking clause can be used against this table either, since
+			// PostgreSQL treats FOR UPDATE/FOR SHARE as UPDATE-class
+			// privileges. See loadPreparedRouteSnapshotRowSQL.
 			{"sync_run_unit_effect_snapshots", true, false, true},
 			{"sync_watermarks", true, true, false},
 			{"sync_dispatch_outbox", true, true, false},

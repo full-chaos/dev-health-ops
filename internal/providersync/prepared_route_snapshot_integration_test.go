@@ -5,6 +5,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"net/url"
 	"testing"
 	"time"
 
@@ -110,12 +111,16 @@ WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 	}
 	assertPreparedSnapshotCount(t, ctx, pool, claim, 1)
 	// The snapshot is retained across the release, but it is not readable
-	// without a live lease. The unit is `dispatching` here, so the status
-	// fence alone must refuse the load even though the row is still present
-	// and the tenant/unit/generation key still matches exactly.
+	// without a live lease. The refusal must be ErrLeaseLost and NOT
+	// ErrPreparedRouteSnapshotNotFound: the row is still present and its
+	// tenant/unit/generation key still matches exactly, so "not found" would
+	// be a false statement about durable state. The wrong-tenant and
+	// wrong-generation probes above are the cases that genuinely find nothing,
+	// and they are the ones that keep reporting NotFound -- that contrast is
+	// the whole point of separating the two.
 	if _, err := repository.LoadRouteSnapshot(
 		ctx, claim, state, now.Add(2*time.Second),
-	); !errors.Is(err, ErrPreparedRouteSnapshotNotFound) {
+	); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("released-lease load error=%v", err)
 	}
 	reclaimed, err := repository.Claim(ctx, ClaimRequest{
@@ -135,10 +140,11 @@ WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 		t.Fatalf("reclaimed owner load error=%v", err)
 	}
 	// A worker holding the superseded lease must not be able to read the
-	// snapshot the new owner is now responsible for.
+	// snapshot the new owner is now responsible for -- and must be told it
+	// lost the lease, not that the snapshot vanished.
 	if _, err := repository.LoadRouteSnapshot(
 		ctx, claim, state, now.Add(4*time.Second),
-	); !errors.Is(err, ErrPreparedRouteSnapshotNotFound) {
+	); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("stale owner load error=%v", err)
 	}
 	// Now isolate the three lease fences one at a time. ReleaseForRetry clears
@@ -148,6 +154,60 @@ WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 	// restores it, and re-proves the load succeeds again, so no refusal can be
 	// left over from the previous iteration.
 	assertLeaseFencesIsolateTheSnapshotLoad(t, ctx, pool, repository, reclaimed, state, now)
+
+	// The terminal-run fence, which lives on sync_runs rather than the unit.
+	// loadEffectLedgerSQL has always excluded finished runs; this query gained
+	// the same exclusion so the two cannot disagree about entitlement.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_runs SET status = 'success'
+WHERE id = (SELECT sync_run_id FROM public.sync_run_units WHERE id = $1)`, reclaimed.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.LoadRouteSnapshot(
+		ctx, reclaimed, state, now.Add(4*time.Second),
+	); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("terminal-run fence load error=%v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_runs SET status = 'running'
+WHERE id = (SELECT sync_run_id FROM public.sync_run_units WHERE id = $1)`, reclaimed.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.LoadRouteSnapshot(
+		ctx, reclaimed, state, now.Add(4*time.Second),
+	); err != nil {
+		t.Fatalf("terminal-run fence restore left the load refused: %v", err)
+	}
+
+	// verifyPreparedRouteSnapshotRow's payload comparison: a stored payload
+	// that no longer matches what this attempt would write must be refused on
+	// re-prepare, not silently accepted because the ledger metadata still
+	// agrees. Only the ledger-exists branch reads the row back, so a first
+	// prepare never exercises this.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_run_unit_effect_snapshots
+SET payload = decode('00', 'hex') || substring(payload from 2)
+WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
+		reclaimed.OrgID, reclaimed.ID, reclaimed.GenerationKey(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.PrepareRouteSnapshot(
+		ctx, reclaimed, preparedGitHubWorkItemsFixture(t, reclaimed),
+		ShadowComparison{Match: true}, now,
+	); !errors.Is(err, ErrEffectLedgerConflict) {
+		t.Fatalf("re-prepare over a corrupted payload error=%v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_run_unit_effect_snapshots
+SET payload = decode('7b', 'hex') || substring(payload from 2)
+WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
+		reclaimed.OrgID, reclaimed.ID, reclaimed.GenerationKey(),
+	); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.Complete(
 		ctx, reclaimed, map[string]any{"records": 16}, nil,
 		now.Add(3*time.Second), now.Add(4*time.Second),
@@ -301,7 +361,7 @@ FROM public.sync_run_units WHERE id = $1`, claim.ID,
 			t.Fatal(err)
 		}
 		if _, err := repository.LoadRouteSnapshot(ctx, claim, state, at); !errors.Is(
-			err, ErrPreparedRouteSnapshotNotFound,
+			err, ErrLeaseLost,
 		) {
 			t.Fatalf("%s fence did not refuse the load: error=%v", fence.name, err)
 		}
@@ -316,5 +376,223 @@ WHERE id = $1`, claim.ID, liveOwner, liveExpires, liveStatus); err != nil {
 		if _, err := repository.LoadRouteSnapshot(ctx, claim, state, at); err != nil {
 			t.Fatalf("%s fence restore left the load refused: error=%v", fence.name, err)
 		}
+	}
+}
+
+// TestPostgresPreparedRouteSnapshotRunsUnderTheRestrictedDomainRole executes
+// the snapshot statements as the ACTUAL domain role rather than the table
+// owner.
+//
+// Every other test in this file connects as the owner, who bypasses privilege
+// checks entirely. That missing venue is precisely why a `FOR UPDATE` on the
+// snapshot row survived review, a full mutation plan and a green gate: any
+// row-locking clause requires an UPDATE-class privilege, the domain role holds
+// only SELECT/INSERT/DELETE here, and so the re-prepare path failed with
+// "permission denied" on every production attempt while passing locally 100%
+// of the time. Owner-privileged tests cannot observe a privilege bug.
+func TestPostgresPreparedRouteSnapshotRunsUnderTheRestrictedDomainRole(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeContext); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	ownerPool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownerPool.Close()
+	createProviderSyncFixture(t, ctx, ownerPool)
+	seedProviderSyncFixture(t, ctx, ownerPool)
+
+	// The venue isolates ONE property: the snapshot table carries no
+	// UPDATE-class privilege. Everything else is granted broadly on purpose --
+	// this test is not a posture audit (internal/domaingrants owns that), and
+	// a venue that also under-grants unrelated tables would fail for reasons
+	// that say nothing about the defect class under test. Granting wide and
+	// revoking exactly UPDATE on the snapshot table makes any failure here
+	// attributable to that single missing privilege.
+	const role = "providersync_domain_probe"
+	for _, statement := range []string{
+		`DROP ROLE IF EXISTS ` + role,
+		`CREATE ROLE ` + role + ` LOGIN PASSWORD 'probe'`,
+		`GRANT USAGE ON SCHEMA public TO ` + role,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ` + role,
+		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ` + role,
+		`REVOKE UPDATE ON TABLE public.sync_run_unit_effect_snapshots FROM ` + role,
+	} {
+		if _, err := ownerPool.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	restrictedURI, err := restrictedRoleURI(instance.URI, role, "probe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restrictedPool, err := pgxpool.New(ctx, restrictedURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restrictedPool.Close()
+	var current string
+	if err := restrictedPool.QueryRow(ctx, "SELECT current_user").Scan(&current); err != nil {
+		t.Fatal(err)
+	}
+	if current != role {
+		t.Fatalf("connected as %q, want the restricted role %q", current, role)
+	}
+
+	repository, err := NewPostgresRepository(restrictedPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	unitID := uuid.NewString()
+	seedWorkItemAliasUnit(t, ctx, ownerPool, unitID, "incremental", `{
+		"sync_prs":true,"family_dataset_work_items":true
+	}`)
+	claim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: unitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
+		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	state, err := repository.PrepareRouteSnapshot(
+		ctx, claim, batch, ShadowComparison{Match: true}, now,
+	)
+	if err != nil {
+		t.Fatalf("prepare under the restricted role: %v", err)
+	}
+
+	// THE regression: the second prepare takes the ledger-exists branch, which
+	// is the only path that reads the snapshot row back inside the
+	// transaction. That read is what used to demand a row lock the role may
+	// not take. A first prepare alone never reaches it, which is how this
+	// stayed invisible.
+	reprepared, err := repository.PrepareRouteSnapshot(
+		ctx, claim, batch, ShadowComparison{Match: true}, now,
+	)
+	if err != nil {
+		t.Fatalf("re-prepare under the restricted role: %v", err)
+	}
+	if !sameEffectManifest(state, reprepared) {
+		t.Fatalf("re-prepare returned a different manifest: %+v vs %+v", state, reprepared)
+	}
+	if _, err := repository.LoadRouteSnapshot(ctx, claim, state, now.Add(time.Second)); err != nil {
+		t.Fatalf("load under the restricted role: %v", err)
+	}
+	if err := repository.Complete(
+		ctx, claim, map[string]any{"records": 16}, nil, now, now.Add(time.Second),
+	); err != nil {
+		t.Fatalf("complete under the restricted role: %v", err)
+	}
+	assertPreparedSnapshotCount(t, ctx, ownerPool, claim, 0)
+}
+
+// restrictedRoleURI rewrites a connection URI's credentials, leaving host,
+// port, database and parameters untouched.
+func restrictedRoleURI(base string, role string, password string) (string, error) {
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	parsed.User = url.UserPassword(role, password)
+	return parsed.String(), nil
+}
+
+// TestPostgresFailedUnitKeepsTheSnapshotReachable covers contract point 5's
+// other half: a failed unit RETAINS its snapshot. Retention is only
+// meaningful if the reference survives too. failUnitSQL used to replace the
+// result document wholesale, which deleted the go_effect_ledger_v1 key and
+// with it the prepared-snapshot reference -- leaving a row up to 64 MiB that
+// nothing could ever find again, reclaimed only if the owning unit was
+// eventually deleted and the CASCADE fired.
+func TestPostgresFailedUnitKeepsTheSnapshotReachable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeContext); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	unitID := uuid.NewString()
+	seedWorkItemAliasUnit(t, ctx, pool, unitID, "incremental", `{
+		"sync_prs":true,"family_dataset_work_items":true
+	}`)
+	claim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: unitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
+		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := repository.PrepareRouteSnapshot(
+		ctx, claim, preparedGitHubWorkItemsFixture(t, claim),
+		ShadowComparison{Match: true}, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Fail(
+		ctx, claim, "provider_unit_failed", now, now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	assertPreparedSnapshotCount(t, ctx, pool, claim, 1)
+	var status, category string
+	var ledger []byte
+	if err := pool.QueryRow(ctx, `
+SELECT unit.status,
+       COALESCE(unit.result::jsonb ->> 'error_category', ''),
+       COALESCE((unit.result::jsonb -> 'go_effect_ledger_v1')::text, '')
+FROM public.sync_run_units AS unit WHERE unit.id = $1`, claim.ID,
+	).Scan(&status, &category, &ledger); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || category != "provider_unit_failed" {
+		t.Fatalf("status=%q category=%q", status, category)
+	}
+	// The failure category is recorded AND the ledger survives. Asserting only
+	// the category would pass against the wholesale replace this test exists
+	// to catch.
+	if len(ledger) == 0 {
+		t.Fatal("Fail destroyed the go_effect_ledger_v1 key; the retained snapshot is unreachable")
+	}
+	survived, err := decodeEffectLedgerState(ledger)
+	if err != nil {
+		t.Fatalf("decode surviving ledger: %v", err)
+	}
+	if survived.SchemaVersion != "v2" || survived.PreparedSnapshot == nil ||
+		!samePreparedRouteSnapshotReference(survived.PreparedSnapshot, state.PreparedSnapshot) {
+		t.Fatalf("surviving ledger lost the snapshot reference: %+v", survived)
 	}
 }

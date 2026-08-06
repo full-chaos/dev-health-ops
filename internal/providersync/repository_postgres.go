@@ -471,12 +471,20 @@ WHERE unit.id = $1::uuid
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
 
+// failUnitSQL MERGES the failure result rather than replacing it, exactly as
+// releaseForRetrySQL above already does. A wholesale replace destroyed the
+// go_effect_ledger_v1 key, and with it the prepared snapshot reference --
+// the only thing that makes a retained sidecar row findable. Contract point 5
+// retains the snapshot on failure so a later attempt or an operator can reason
+// about it; a retained row whose only pointer has been erased is not retained,
+// it is leaked, and nothing short of the sync_run_units CASCADE ever reclaims
+// it (up to 64 MiB each).
 const failUnitSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'failed',
     duration_seconds = $4,
     error = $5,
-    result = $6::jsonb,
+    result = COALESCE(unit.result::jsonb, '{}'::jsonb) || $6::jsonb,
     lease_owner = NULL,
     lease_expires_at = NULL,
     last_heartbeat_at = $3,

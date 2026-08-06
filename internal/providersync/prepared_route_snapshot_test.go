@@ -3,8 +3,11 @@ package providersync
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -516,5 +519,175 @@ func TestPreparedRecoveryRevalidatesTheManifestAgainstTheLiveDescriptor(t *testi
 	).Execute(context.Background(), session, descriptor)
 	if !errors.Is(err, ErrEffectLedgerConflict) || len(sink.destinations) != 0 {
 		t.Fatalf("error=%v writes=%v", err, sink.destinations)
+	}
+}
+
+// recordingEffectReadback remembers which destinations it was asked about, so
+// a test can assert WHICH batch a recovery decision consulted rather than only
+// what it decided.
+type recordingEffectReadback struct {
+	inspections map[string]EffectInspection
+	asked       []string
+}
+
+func (readback *recordingEffectReadback) InspectEffect(
+	_ context.Context,
+	_ Claim,
+	batch EffectBatch,
+) (EffectInspection, error) {
+	readback.asked = append(readback.asked, batch.Destination)
+	inspection, known := readback.inspections[batch.Destination]
+	if !known {
+		// Loud, not zero-valued. Returning the zero EffectInspection for an
+		// unexpected destination turns a mis-pairing into some generic
+		// downstream error whose message never names the destination that was
+		// actually inspected -- which is the one fact a reader needs.
+		return inspection, fmt.Errorf(
+			"readback asked about %q, which this test never staged", batch.Destination,
+		)
+	}
+	return inspection, nil
+}
+
+// Recovery pairs prepared batches to ledger entries BY POSITION, so every
+// producer of that order must use the same comparator. This pins it with a
+// destination whose priority order and alphabetical order DISAGREE:
+// github_blame_path_progress sorts last alphabetically and first by priority.
+// Under the old plain-destination sort, index 0 of the batch slice was
+// ai_attribution while index 0 of the ledger was github_blame_path_progress --
+// so the readback would have inspected one destination's rows to resolve
+// another's ledger entry, and the mis-pairing would look like an ordinary
+// recovery decision.
+func TestCommitPreparedPairsEachEffectWithItsOwnLedgerEntry(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	effects := make([]EffectBatch, 0, 2)
+	for _, spec := range []struct {
+		destination string
+		policy      EffectRecoveryPolicy
+	}{
+		{"ai_attribution", EffectReplaySafe},
+		{"github_blame_path_progress", EffectReadbackRequired},
+	} {
+		row, err := json.Marshal(map[string]any{
+			"org_id": claim.OrgID, "destination": spec.destination,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		effect, err := BuildEffectBatch(spec.destination, spec.policy, []json.RawMessage{row})
+		if err != nil {
+			t.Fatal(err)
+		}
+		effects = append(effects, effect)
+	}
+	persisted, err := NewEffectLedgerState(claim, effects, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Find the priority entry rather than assuming its index. Asserting
+	// position here would make a divergent comparator fail at the setup line,
+	// which proves the ledger order changed but says nothing about pairing --
+	// and pairing is the invariant under test.
+	priority := -1
+	for index, entry := range persisted.Effects {
+		if entry.Destination == "github_blame_path_progress" {
+			priority = index
+		}
+	}
+	if priority < 0 {
+		t.Fatalf("priority destination missing from the ledger: %+v", persisted.Effects)
+	}
+	startedAt := now.Add(time.Second)
+	persisted.Effects[priority].Status = GenerationBlockWriting
+	persisted.Effects[priority].StartedAt = &startedAt
+
+	ledger := &memoryEffectLedger{state: persisted}
+	sink := &memoryEffectSink{}
+	readback := &recordingEffectReadback{
+		inspections: map[string]EffectInspection{
+			"github_blame_path_progress": EffectExact,
+		},
+	}
+	committer := EffectCommitter{
+		Ledger: ledger, Sink: sink, Readback: readback,
+		Now: func() time.Time { return now.Add(time.Minute) },
+	}
+	result, err := committer.CommitPrepared(context.Background(), claim, effects, persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The readback must have been asked about the destination whose ledger
+	// entry was mid-write -- not whichever batch happened to share its index.
+	if len(readback.asked) != 1 || readback.asked[0] != "github_blame_path_progress" {
+		t.Fatalf("readback consulted %v, want [github_blame_path_progress]", readback.asked)
+	}
+	if result.MarkedCommitted != 1 || result.Written != 1 ||
+		len(sink.destinations) != 1 || sink.destinations[0] != "ai_attribution" {
+		t.Fatalf("result=%+v writes=%v", result, sink.destinations)
+	}
+}
+
+// The decode-side size cap is a separate guard from the encode-side cap in
+// R4: a payload can reach decode from a peer that never ran this binary's
+// encoder, or from a row written before the cap existed. Nothing exercised it,
+// so the clause was free to be deleted.
+func TestPreparedRouteSnapshotDecodeRejectsAnOversizedPayload(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	oversized := make([]byte, maxPreparedRouteSnapshotBytes+1)
+	digest := sha256.Sum256(oversized)
+	state, err := NewEffectLedgerState(claim, batch.Effects, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SchemaVersion = "v2"
+	// The reference agrees with the payload on length and digest, so the only
+	// thing standing between this input and a 64 MiB decode is the cap itself.
+	state.PreparedSnapshot = &PreparedRouteSnapshotReference{
+		SchemaVersion: preparedRouteSnapshotSchemaVersion,
+		ContentDigest: hex.EncodeToString(digest[:]),
+		PayloadBytes:  len(oversized),
+	}
+	if _, err := decodePreparedRouteManifest(oversized, claim, state); !errors.Is(
+		err, ErrEffectLedgerConflict,
+	) {
+		t.Fatalf("oversized decode error=%v", err)
+	}
+}
+
+// Every key containsPreparedRouteSensitiveKey knows about must actually be
+// refused. The existing tamper test covers one of them, which is enough for a
+// whole-function mutation and useless against the deletion of a single name --
+// and a single name is what a careless edit removes.
+func TestPreparedRouteSnapshotRefusesEverySensitiveKey(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	for _, key := range []string{
+		"authorization", "credential", "credentials", "token", "headers",
+		"source_metadata", "integration_config", "ciphertext", "raw_payload",
+		"response_body",
+		// Spelling normalization: hyphens, case and surrounding space must not
+		// smuggle a key past the check.
+		"Authorization", "raw-payload", "  token  ",
+	} {
+		batch := preparedGitHubWorkItemsFixture(t, claim)
+		batch.Result[key] = "must-not-persist"
+		if _, _, err := encodePreparedRouteManifest(
+			claim, batch, ShadowComparison{Match: true}, now,
+		); !errors.Is(err, ErrEffectRecoveryUnsafe) {
+			t.Fatalf("result key %q was accepted: error=%v", key, err)
+		}
+		nested := preparedGitHubWorkItemsFixture(t, claim)
+		nested.Result["envelope"] = map[string]any{"inner": map[string]any{key: "x"}}
+		if _, _, err := encodePreparedRouteManifest(
+			claim, nested, ShadowComparison{Match: true}, now,
+		); !errors.Is(err, ErrEffectRecoveryUnsafe) {
+			t.Fatalf("nested result key %q was accepted: error=%v", key, err)
+		}
 	}
 }

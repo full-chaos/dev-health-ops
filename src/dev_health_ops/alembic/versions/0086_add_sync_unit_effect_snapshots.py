@@ -50,6 +50,14 @@ def upgrade() -> None:
             "length(payload) = payload_bytes",
             name="ck_sync_run_unit_effect_snapshots_payload_length",
         ),
+        # 'v1' here is the PAYLOAD schema, which is a different version
+        # namespace from the effect LEDGER schema stored under the
+        # go_effect_ledger_v1 result key -- that one is at v2 once a snapshot
+        # reference is present. The two advance independently: the ledger went
+        # to v2 to carry the reference, while the payload's own shape has not
+        # changed. Reading this constraint as "the snapshot feature is v1" and
+        # bumping it to match the ledger would reject every row the current
+        # encoder writes.
         sa.CheckConstraint(
             "schema_version = 'v1'",
             name="ck_sync_run_unit_effect_snapshots_schema_version",

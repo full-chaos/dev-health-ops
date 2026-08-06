@@ -61,9 +61,7 @@ func (committer EffectCommitter) Commit(
 	}
 	normalizedAt = normalizedAt.UTC()
 	ordered := append([]EffectBatch(nil), batches...)
-	sort.Slice(ordered, func(left, right int) bool {
-		return effectBatchLess(ordered[left], ordered[right])
-	})
+	sortEffectBatches(ordered)
 	desired, err := NewEffectLedgerState(claim, ordered, normalizedAt)
 	if err != nil {
 		return EffectCommitResult{}, err
@@ -92,9 +90,7 @@ func (committer EffectCommitter) CommitPrepared(
 		return EffectCommitResult{}, ErrInvalidConfiguration
 	}
 	ordered := append([]EffectBatch(nil), batches...)
-	sort.Slice(ordered, func(left, right int) bool {
-		return ordered[left].Destination < ordered[right].Destination
-	})
+	sortEffectBatches(ordered)
 	desired, err := NewEffectLedgerState(claim, ordered, persisted.CreatedAt)
 	if err != nil || !sameEffectEntries(persisted, desired) {
 		return EffectCommitResult{}, ErrEffectLedgerConflict
@@ -188,6 +184,19 @@ func (committer EffectCommitter) commitPrepared(
 		result.Written++
 	}
 	return result, nil
+}
+
+// sortEffectBatches is THE ordering for effect batches. It exists as one
+// function because it used to exist as three inline comparators, and two of
+// them ordered by destination alone while the ledger ordered priority-first.
+// They agree only while no priority destination participates -- and recovery
+// pairs snapshot effects to ledger entries BY POSITION, so the day one joined,
+// a recovering route would have committed each destination's rows against a
+// different destination's ledger entry. Callers must not re-implement this.
+func sortEffectBatches(batches []EffectBatch) {
+	sort.Slice(batches, func(left, right int) bool {
+		return effectBatchLess(batches[left], batches[right])
+	})
 }
 
 func effectBatchLess(left, right EffectBatch) bool {

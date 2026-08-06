@@ -470,16 +470,15 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
 			last_retry_reason text, updated_at timestamptz NOT NULL
 		)`,
-		`CREATE TABLE public.sync_run_unit_effect_snapshots (
-			org_id text NOT NULL, sync_run_unit_id uuid NOT NULL,
-			generation text NOT NULL, provider text NOT NULL,
-			dataset_key text NOT NULL, schema_version text NOT NULL,
-			content_digest text NOT NULL, payload_bytes integer NOT NULL,
-			payload bytea NOT NULL, created_at timestamptz NOT NULL,
-			PRIMARY KEY (org_id, sync_run_unit_id, generation),
-			FOREIGN KEY (sync_run_unit_id) REFERENCES public.sync_run_units(id)
-				ON DELETE CASCADE
-		)`,
+		// Must stay byte-for-byte equivalent to migration 0086. This fixture
+		// previously dropped all three CHECK constraints and widened
+		// content_digest to text, so every integration test here ran against a
+		// schema more permissive than production -- the class of gap where a
+		// test proves the code works on a table that does not exist anywhere
+		// real. tests/test_effect_snapshot_migration.py::
+		// test_integration_fixture_ddl_matches_migration_0086 fails if the two
+		// drift apart.
+		snapshotFixtureDDL,
 		`CREATE TABLE public.sync_watermarks (
 			id uuid PRIMARY KEY, org_id text NOT NULL, repo_id text NOT NULL,
 			source_id text NOT NULL, target text NOT NULL, dataset_key text NOT NULL,
@@ -541,3 +540,26 @@ func seedProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		}
 	}
 }
+
+// snapshotFixtureDDL mirrors migration 0086 exactly, constraints included.
+const snapshotFixtureDDL = `CREATE TABLE public.sync_run_unit_effect_snapshots (
+	org_id text NOT NULL,
+	sync_run_unit_id uuid NOT NULL,
+	generation text NOT NULL,
+	provider text NOT NULL,
+	dataset_key text NOT NULL,
+	schema_version text NOT NULL,
+	content_digest varchar(64) NOT NULL,
+	payload_bytes integer NOT NULL,
+	payload bytea NOT NULL,
+	created_at timestamptz NOT NULL,
+	CONSTRAINT ck_sync_run_unit_effect_snapshots_payload_bytes
+		CHECK (payload_bytes >= 1 AND payload_bytes <= 67108864),
+	CONSTRAINT ck_sync_run_unit_effect_snapshots_payload_length
+		CHECK (length(payload) = payload_bytes),
+	CONSTRAINT ck_sync_run_unit_effect_snapshots_schema_version
+		CHECK (schema_version = 'v1'),
+	PRIMARY KEY (org_id, sync_run_unit_id, generation),
+	FOREIGN KEY (sync_run_unit_id) REFERENCES public.sync_run_units(id)
+		ON DELETE CASCADE
+)`

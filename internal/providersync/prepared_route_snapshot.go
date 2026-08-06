@@ -92,9 +92,7 @@ func encodePreparedRouteManifest(
 		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
 	}
 	ordered := append([]EffectBatch(nil), batch.Effects...)
-	sort.Slice(ordered, func(left, right int) bool {
-		return ordered[left].Destination < ordered[right].Destination
-	})
+	sortEffectBatches(ordered)
 	effects := make([]storedPreparedEffect, 0, len(ordered))
 	for _, effect := range ordered {
 		for _, row := range effect.Rows {
@@ -331,15 +329,23 @@ func (repository *PostgresRepository) LoadRouteSnapshot(
 	var schemaVersion, contentDigest string
 	var payloadBytes int
 	var payload []byte
+	var leaseLive bool
 	if err := repository.Pool.QueryRow(
 		ctx, loadPreparedRouteSnapshotSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(), claim.Provider, claim.Dataset,
 		claim.Owner, now.UTC(),
-	).Scan(&schemaVersion, &contentDigest, &payloadBytes, &payload); err != nil {
+	).Scan(&schemaVersion, &contentDigest, &payloadBytes, &payload, &leaseLive); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return PreparedRouteManifest{}, ErrPreparedRouteSnapshotNotFound
 		}
-		return PreparedRouteManifest{}, ErrEffectLedgerConflict
+		return PreparedRouteManifest{}, err
+	}
+	// Order matters: the snapshot demonstrably exists for this
+	// tenant/unit/generation, so a refusal here is about entitlement, not
+	// absence. Reporting it as "not found" told a recovering worker to
+	// fail closed for the wrong reason and hid genuine lease handoffs.
+	if !leaseLive {
+		return PreparedRouteManifest{}, ErrLeaseLost
 	}
 	if schemaVersion != state.PreparedSnapshot.SchemaVersion ||
 		contentDigest != state.PreparedSnapshot.ContentDigest ||
@@ -363,7 +369,16 @@ func verifyPreparedRouteSnapshotRow(
 		ctx, loadPreparedRouteSnapshotRowSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(), claim.Provider, claim.Dataset,
 	).Scan(&schemaVersion, &digest, &payloadBytes, &payload); err != nil {
-		return ErrEffectLedgerConflict
+		// Only an absent row is a ledger conflict. Folding every error into
+		// ErrEffectLedgerConflict is what let a permission failure -- one that
+		// happened on EVERY re-prepare in production -- read as ordinary
+		// disagreement between the ledger and the sidecar, and be retried
+		// forever instead of surfacing. A database error must arrive as
+		// itself.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrEffectLedgerConflict
+		}
+		return err
 	}
 	reference := state.PreparedSnapshot
 	if reference == nil || schemaVersion != reference.SchemaVersion ||
@@ -374,31 +389,83 @@ func verifyPreparedRouteSnapshotRow(
 	return nil
 }
 
+// A plain INSERT, deliberately without ON CONFLICT. The primary key is
+// (org_id, sync_run_unit_id, generation), and this statement runs only on the
+// branch where the ledger key was absent -- so a conflict would mean a
+// snapshot row exists for a generation whose ledger does not, which is a state
+// no code path produces and which should fail loudly rather than be papered
+// over by an upsert.
+//
+// One interaction is worth naming because it is unreachable today and would
+// not be obvious later: EffectLedgerReplanner lets a route discard a prepared
+// manifest and build a new one for the SAME generation. A route that both
+// replans and prepares snapshots would hit this insert with the old row still
+// present. github/work-items has no replanner (only GitHub blame does, and it
+// does not use snapshots), so the combination cannot occur -- but whoever
+// gives a snapshot route a replanner must delete the old snapshot inside the
+// replan transaction first.
 const insertPreparedRouteSnapshotSQL = `
 INSERT INTO public.sync_run_unit_effect_snapshots (
     org_id, sync_run_unit_id, generation, provider, dataset_key,
     schema_version, content_digest, payload_bytes, payload, created_at
 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 
+// loadPreparedRouteSnapshotSQL answers two questions separately on purpose:
+// does this snapshot exist for this tenant/unit/generation, and is the caller
+// still entitled to it. Folding the lease fence into the WHERE clause made
+// both answers the same sentinel, so "someone else took over this unit" and
+// "there is no snapshot to recover" were indistinguishable to the caller and
+// to anyone reading a log. The identity predicates stay in WHERE; the lease
+// fence is computed, and the caller turns a false into ErrLeaseLost.
+//
+// The fence mirrors loadEffectLedgerSQL exactly, including the IS NOT NULL
+// guard and the terminal-run exclusion: two queries that decide the same
+// entitlement must not drift apart, or a route can load a snapshot for a run
+// the ledger would already refuse.
 const loadPreparedRouteSnapshotSQL = `
 SELECT snapshot.schema_version, snapshot.content_digest,
-       snapshot.payload_bytes, snapshot.payload
+       snapshot.payload_bytes, snapshot.payload,
+       COALESCE(
+         unit.status = 'running'
+         AND unit.lease_owner = $6
+         AND unit.lease_expires_at IS NOT NULL
+         AND unit.lease_expires_at > $7
+         AND run.status NOT IN ('success', 'partial_failed', 'failed'),
+         false
+       )
 FROM public.sync_run_unit_effect_snapshots AS snapshot
 JOIN public.sync_run_units AS unit
   ON unit.id = snapshot.sync_run_unit_id
  AND unit.org_id = snapshot.org_id
+JOIN public.sync_runs AS run
+  ON run.id = unit.sync_run_id AND run.org_id = unit.org_id
 WHERE snapshot.org_id = $1
   AND snapshot.sync_run_unit_id = $2
   AND snapshot.generation = $3
   AND snapshot.provider = $4
-  AND snapshot.dataset_key = $5
-  AND unit.lease_owner = $6
-  AND unit.lease_expires_at > $7
-  AND unit.status = 'running'`
+  AND snapshot.dataset_key = $5`
 
+// loadPreparedRouteSnapshotRowSQL deliberately takes NO row lock. It used to
+// end in FOR UPDATE, which is a permission error rather than a lock: any
+// row-locking clause requires an UPDATE-class privilege, and the domain role
+// holds only SELECT/INSERT/DELETE here (see required_table_privileges). That
+// made every re-prepare fail with "permission denied" in production while
+// passing in tests, which run as the owner. Widening the grant to buy the lock
+// would hand the role a privilege nothing else needs -- and the lock is
+// already held anyway.
+//
+// The serialization comes from the caller: this runs only inside
+// mutateGenerationJournalTx's callback, and that transaction opens with
+// lockGenerationJournalSQL (generation_journal.go), which ends in
+// `FOR UPDATE OF unit` on the owning sync_run_units row. A snapshot row is
+// keyed by (org_id, sync_run_unit_id, generation) and is only ever written by
+// the holder of that unit's lease, so a competing writer must take the same
+// unit lock first. Locking the snapshot row again adds nothing.
+//
+// sync_run_units is where the repo already pays for this: the domain role is
+// granted UPDATE on it partly because Fanout's FOR SHARE needs the privilege.
 const loadPreparedRouteSnapshotRowSQL = `
 SELECT schema_version, content_digest, payload_bytes, payload
 FROM public.sync_run_unit_effect_snapshots
 WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3
-  AND provider = $4 AND dataset_key = $5
-FOR UPDATE`
+  AND provider = $4 AND dataset_key = $5`

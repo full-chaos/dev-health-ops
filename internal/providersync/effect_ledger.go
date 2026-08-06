@@ -118,9 +118,7 @@ func NewEffectLedgerState(
 		return EffectLedgerState{}, ErrEffectRecoveryUnsafe
 	}
 	batches = append([]EffectBatch(nil), batches...)
-	sort.Slice(batches, func(left, right int) bool {
-		return effectBatchLess(batches[left], batches[right])
-	})
+	sortEffectBatches(batches)
 	state := EffectLedgerState{
 		SchemaVersion: "v1", Generation: claim.GenerationKey(),
 		Provider: claim.Provider, Dataset: claim.Dataset,

@@ -1075,6 +1075,13 @@ async def test_backfill_stranded_ephemeral_expiry_repairs_pre_fix_rows(persisten
     async with maker() as session2:
         service2 = DevPersistenceService(session2)
         stamped = await service2.backfill_stranded_ephemeral_expiry(limit=10)
+        # CHAOS-3441 Codex adversarial review round 3 (MEDIUM, confirmed):
+        # the stamp must be flushed before returning, not left dirty for
+        # whatever this session does next. Unflushed state is emitted by the
+        # NEXT operation's savepoint entry -- before the SAVEPOINT is
+        # emitted, so outside it -- where a failure poisons the whole
+        # transaction and takes unrelated already-flushed rows with it.
+        assert not session2.dirty, session2.dirty
         await session2.commit()
     assert stamped == 1
 

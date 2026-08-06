@@ -1767,8 +1767,31 @@ class DevPersistenceService:
                 raise
             return existing
 
-        conversation.current_scope = scope
-        self._touch(conversation)
+        # CHAOS-3441: the conversation mutation gets its OWN savepoint, and
+        # deliberately not a place inside the row-write savepoint above.
+        # Two failure modes are being closed at once:
+        #
+        # 1. Left dirty until after this method returned (as it was), the
+        #    `UPDATE dev_conversations` was emitted by the NEXT operation's
+        #    savepoint entry -- SessionTransaction._take_snapshot() flushes
+        #    pending state BEFORE emitting the SAVEPOINT, so that UPDATE ran
+        #    outside every savepoint. A server-side failure on it poisoned
+        #    the session and took the transcript row just flushed above down
+        #    with it: this ticket's exact loss, via a statement nobody was
+        #    looking at.
+        # 2. Folded INTO the row-write savepoint, its rollback on the
+        #    idempotent-duplicate path would expire this conversation object
+        #    while the caller still holds it, so a later attribute read
+        #    would emit lazy IO from async code (Codex adversarial review
+        #    round 2, MEDIUM). Its own savepoint keeps the duplicate path
+        #    byte-identical to before: the conversation is never touched
+        #    when the insert loses that race.
+        #
+        # Pinned by test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        async with self.session.begin_nested():
+            conversation.current_scope = scope
+            self._touch(conversation)
+            await self.session.flush()
         return MessageRunResult(message=message, run=run, created=True)
 
     async def append_assistant_answer(
@@ -1852,7 +1875,30 @@ class DevPersistenceService:
             if existing is None:
                 raise
             return existing
-        self._touch(conversation)
+        # CHAOS-3441: the conversation mutation gets its OWN savepoint, and
+        # deliberately not a place inside the row-write savepoint above.
+        # Two failure modes are being closed at once:
+        #
+        # 1. Left dirty until after this method returned (as it was), the
+        #    `UPDATE dev_conversations` was emitted by the NEXT operation's
+        #    savepoint entry -- SessionTransaction._take_snapshot() flushes
+        #    pending state BEFORE emitting the SAVEPOINT, so that UPDATE ran
+        #    outside every savepoint. A server-side failure on it poisoned
+        #    the session and took the transcript row just flushed above down
+        #    with it: this ticket's exact loss, via a statement nobody was
+        #    looking at.
+        # 2. Folded INTO the row-write savepoint, its rollback on the
+        #    idempotent-duplicate path would expire this conversation object
+        #    while the caller still holds it, so a later attribute read
+        #    would emit lazy IO from async code (Codex adversarial review
+        #    round 2, MEDIUM). Its own savepoint keeps the duplicate path
+        #    byte-identical to before: the conversation is never touched
+        #    when the insert loses that race.
+        #
+        # Pinned by test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        async with self.session.begin_nested():
+            self._touch(conversation)
+            await self.session.flush()
         return message
 
     async def append_assistant_error(
@@ -1950,7 +1996,30 @@ class DevPersistenceService:
             if existing is None:
                 raise
             return existing
-        self._touch(conversation)
+        # CHAOS-3441: the conversation mutation gets its OWN savepoint, and
+        # deliberately not a place inside the row-write savepoint above.
+        # Two failure modes are being closed at once:
+        #
+        # 1. Left dirty until after this method returned (as it was), the
+        #    `UPDATE dev_conversations` was emitted by the NEXT operation's
+        #    savepoint entry -- SessionTransaction._take_snapshot() flushes
+        #    pending state BEFORE emitting the SAVEPOINT, so that UPDATE ran
+        #    outside every savepoint. A server-side failure on it poisoned
+        #    the session and took the transcript row just flushed above down
+        #    with it: this ticket's exact loss, via a statement nobody was
+        #    looking at.
+        # 2. Folded INTO the row-write savepoint, its rollback on the
+        #    idempotent-duplicate path would expire this conversation object
+        #    while the caller still holds it, so a later attribute read
+        #    would emit lazy IO from async code (Codex adversarial review
+        #    round 2, MEDIUM). Its own savepoint keeps the duplicate path
+        #    byte-identical to before: the conversation is never touched
+        #    when the insert loses that race.
+        #
+        # Pinned by test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        async with self.session.begin_nested():
+            self._touch(conversation)
+            await self.session.flush()
         return message
 
     async def record_run_diagnostics(
@@ -2950,72 +3019,114 @@ class DevPersistenceService:
         row identity closure.
         """
 
-        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
-        if run is None:
-            raise DevPersistenceNotFound("run not found")
-        if public_outcome not in _PUBLIC_OUTCOMES:
-            raise DevPersistenceValidationError("invalid public_outcome")
-        try:
-            validated = DevAnswerFrameContract.model_validate(payload)
-        except PydanticValidationError as exc:
-            raise DevPersistenceValidationError(
-                f"frame_payload is not a valid dev_answer_frame.v1: {exc}"
-            ) from exc
-        if validated.frame_id != str(frame_id):
-            raise DevPersistenceValidationError(
-                "frame_payload.frame_id does not match the frame_id argument"
-            )
-        if validated.run_id != str(run_id):
-            raise DevPersistenceValidationError(
-                "frame_payload.run_id does not match the run_id argument"
-            )
-        if validated.public_outcome.value != public_outcome:
-            raise DevPersistenceValidationError(
-                "frame_payload.public_outcome does not match the "
-                "public_outcome argument"
-            )
-        # CHAOS-3325 Codex review (NO-SHIP, confirmed): the contract only
-        # enforces wire shape, not provenance -- see
-        # _authorize_clarification_candidates's own docstring. Runs before
-        # the row is constructed, so an unauthorized candidate list never
-        # reaches the payload-bearing row at all.
-        await _authorize_clarification_candidates(
-            self.session,
-            run_id=run_id,
-            org_id=org_id,
-            user_id=user_id,
-            validated=validated,
-        )
-        record = await self._construct_validated_payload_row(
-            model_cls=DevAnswerFrame,
-            payload_dict=validated.model_dump(mode="json"),
-            field_name="frame_payload",
-            max_bytes=_FRAME_PAYLOAD_MAX_BYTES,
-            run_id=run.id,
-            org_id=org_id,
-            user_id=user_id,
-            frame_id=frame_id,
-            public_outcome=public_outcome,
-            created_at=self._now(),
-        )
-        # CHAOS-3423 Codex adversarial review round 3 (HIGH, confirmed):
-        # isolated in a SAVEPOINT, matching append_assistant_answer/
-        # append_assistant_error's own pattern -- a real mid-flush database
-        # failure here (not just a pre-flush construction exception) used
-        # to be able to mark the WHOLE outer session rollback-only, which
-        # could silently discard an already-flushed answer or no-answer
-        # transcript row the moment finish()'s own failure handler chose
-        # not to roll back (to protect that exact row). Any exception here
-        # now unwinds only to this savepoint -- the outer session, and
-        # every write already flushed on it, stays healthy regardless of
-        # what kind of failure this was. This is CHAOS-3441's own scope,
-        # brought forward and closed inline here rather than deferred: round
-        # 3's finding supplied a concrete, reproducible mid-flush failure
-        # (a real IntegrityError, not the round-2 finding's abstract
-        # concern), verified against a genuine duplicate-insert test
-        # (test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session)
-        # rather than only documented as a residual.
+        # CHAOS-3441 Codex adversarial review round 1 (HIGH, confirmed): the
+        # SAVEPOINT opens HERE, before the ownership and authorization
+        # SELECTs, not just around the write. Wrapping only the flush left a
+        # real window open: on PostgreSQL a server-side failure on any
+        # statement -- a `statement_timeout` firing on one of the SELECTs
+        # below is the realistic case -- aborts the WHOLE transaction, so
+        # every later statement fails with InFailedSqlTransaction and the
+        # caller's already-flushed transcript row, diagnostics, tool calls
+        # and resolutions all die with the commit that can no longer happen.
+        # A SAVEPOINT entered before the first statement makes that
+        # recoverable: `ROLLBACK TO SAVEPOINT` returns an aborted PostgreSQL
+        # transaction to a usable state, which is the whole reason savepoints
+        # exist. Entering the savepoint first is behavior-preserving for the
+        # write path: `begin_nested()` flushes the caller's pending state
+        # BEFORE emitting the SAVEPOINT, so outer pending writes land in the
+        # outer transaction and a savepoint rollback never takes them
+        # (verified, and pinned by
+        # test_chaos_3441_savepoint_opens_before_the_pre_write_selects; the
+        # semantics -- ROLLBACK TO SAVEPOINT actually recovering an aborted
+        # PostgreSQL transaction, which sqlite cannot express -- are proven on
+        # the real engine by
+        # test_persistence_postgres.py::test_chaos_3441_savepoint_recovers_an_aborted_transaction,
+        # which fails with InFailedSQLTransactionError if this savepoint is
+        # moved back after the ownership SELECT).
+        #
+        # The flip side of that entry-flush, stated where it lives (Codex
+        # adversarial review round 2, HIGH): pending state the CALLER left
+        # unflushed is flushed BEFORE the SAVEPOINT exists, so a failure on
+        # it is outside this savepoint and does poison the session. Every
+        # write in this service returns with nothing dirty -- the transcript
+        # writes' conversation touch is the one that did not, and now runs
+        # inside its own savepoint (see append_assistant_answer) -- so no
+        # production caller reaches here with pending state. That is an
+        # invariant of the callers, not something this method can enforce,
+        # and it is guarded by
+        # test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        #
+        # One failure class remains outside any savepoint's reach, stated
+        # plainly rather than implied: if the CONNECTION itself dies, there
+        # is no session left to roll back to a savepoint and an uncommitted
+        # transaction is lost by definition. That is recovered at the system
+        # level only, by force_terminal_fallback's fresh session.
         async with self.session.begin_nested():
+            run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+            if run is None:
+                raise DevPersistenceNotFound("run not found")
+            if public_outcome not in _PUBLIC_OUTCOMES:
+                raise DevPersistenceValidationError("invalid public_outcome")
+            try:
+                validated = DevAnswerFrameContract.model_validate(payload)
+            except PydanticValidationError as exc:
+                raise DevPersistenceValidationError(
+                    f"frame_payload is not a valid dev_answer_frame.v1: {exc}"
+                ) from exc
+            if validated.frame_id != str(frame_id):
+                raise DevPersistenceValidationError(
+                    "frame_payload.frame_id does not match the frame_id argument"
+                )
+            if validated.run_id != str(run_id):
+                raise DevPersistenceValidationError(
+                    "frame_payload.run_id does not match the run_id argument"
+                )
+            if validated.public_outcome.value != public_outcome:
+                raise DevPersistenceValidationError(
+                    "frame_payload.public_outcome does not match the "
+                    "public_outcome argument"
+                )
+            # CHAOS-3325 Codex review (NO-SHIP, confirmed): the contract only
+            # enforces wire shape, not provenance -- see
+            # _authorize_clarification_candidates's own docstring. Runs before
+            # the row is constructed, so an unauthorized candidate list never
+            # reaches the payload-bearing row at all.
+            await _authorize_clarification_candidates(
+                self.session,
+                run_id=run_id,
+                org_id=org_id,
+                user_id=user_id,
+                validated=validated,
+            )
+            record = await self._construct_validated_payload_row(
+                model_cls=DevAnswerFrame,
+                payload_dict=validated.model_dump(mode="json"),
+                field_name="frame_payload",
+                max_bytes=_FRAME_PAYLOAD_MAX_BYTES,
+                run_id=run.id,
+                org_id=org_id,
+                user_id=user_id,
+                frame_id=frame_id,
+                public_outcome=public_outcome,
+                created_at=self._now(),
+            )
+            # CHAOS-3423 Codex adversarial review round 3 (HIGH, confirmed):
+            # the write is isolated by the SAVEPOINT above, matching
+            # append_assistant_answer/append_assistant_error's own pattern --
+            # a real mid-flush database failure here (not just a pre-flush
+            # construction exception) used to be able to mark the WHOLE outer
+            # session rollback-only, which could silently discard an
+            # already-flushed answer or no-answer transcript row the moment
+            # finish()'s own failure handler chose not to roll back (to
+            # protect that exact row). Any exception now unwinds only to this
+            # savepoint -- the outer session, and every write already flushed
+            # on it, stays healthy regardless of what kind of failure this
+            # was. Verified by REAL database failures on both transcript
+            # paths, each of which fails if the begin_nested is removed:
+            # test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session
+            # (no-answer row, duplicate-insert IntegrityError) and
+            # tests/api/dev/test_chaos_3441_record_frame_savepoint.py
+            # (real DevAnswer row, driver-level write rejection).
             self.session.add(record)
             run.contract_generation = "v2"
             run.public_outcome = public_outcome
@@ -3055,102 +3166,124 @@ class DevPersistenceService:
         any mismatch rejects, no write.
         """
 
-        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
-        if run is None:
-            raise DevPersistenceNotFound("run not found")
-        if mode not in _NARRATIVE_MODES:
-            raise DevPersistenceValidationError("invalid narrative mode")
-        frame = await self.session.scalar(
-            select(DevAnswerFrame).where(
-                DevAnswerFrame.run_id == run.id,
-                DevAnswerFrame.org_id == org_id,
-                DevAnswerFrame.user_id == user_id,
-            )
-        )
-        if frame is None or frame.frame_id != frame_id:
-            raise DevPersistenceValidationError(
-                "narrative frame_id must match the run's recorded answer frame"
-            )
-        reconstructed = dict(payload)
-        reconstructed["body"] = narrative_text
-        try:
-            validated = DevNarrativeContract.model_validate(reconstructed)
-        except PydanticValidationError as exc:
-            raise DevPersistenceValidationError(
-                f"narrative payload is not a valid dev_narrative.v1: {exc}"
-            ) from exc
-        if validated.narrative_id != str(narrative_id):
-            raise DevPersistenceValidationError(
-                "narrative payload's narrative_id does not match the "
-                "narrative_id argument"
-            )
-        if validated.run_id != str(run_id):
-            raise DevPersistenceValidationError(
-                "narrative payload's run_id does not match the run_id argument"
-            )
-        if validated.frame_id != str(frame_id):
-            raise DevPersistenceValidationError(
-                "narrative payload's frame_id does not match the frame_id argument"
-            )
-        if validated.mode != mode:
-            raise DevPersistenceValidationError(
-                "narrative payload's mode does not match the mode argument"
-            )
-        # provider_fingerprint arrives already hashed (the caller -- see
-        # orchestrator_persistence.PersistenceRunRecorder.record_narrative --
-        # digests narrative.provider_metadata.model_fingerprint before this
-        # call); _digest here only validates that shape. To cross-check it
-        # against the *payload's own* raw model_fingerprint, that raw value
-        # must be hashed the identical way, not passed through the
-        # shape-only validator.
-        expected_provider_fingerprint = (
-            _sha256_digest(validated.provider_metadata.model_fingerprint)
-            if validated.provider_metadata is not None
-            else None
-        )
-        safe_provider_fingerprint = _digest(
-            provider_fingerprint, field="provider_fingerprint"
-        )
-        if expected_provider_fingerprint != safe_provider_fingerprint:
-            raise DevPersistenceValidationError(
-                "narrative payload's provider_metadata does not match the "
-                "provider_fingerprint argument"
-            )
-        text = _bounded_text(
-            validated.body, field="narrative_text", max_bytes=_NARRATIVE_TEXT_MAX_BYTES
-        )
-        if not text:
-            raise DevPersistenceValidationError("narrative_text must not be empty")
-        record = await self._construct_validated_payload_row(
-            model_cls=DevRunNarrative,
-            payload_dict=validated.model_dump(mode="json", exclude={"body"}),
-            field_name="narrative_payload",
-            max_bytes=_NARRATIVE_PAYLOAD_MAX_BYTES,
-            run_id=run.id,
-            org_id=org_id,
-            user_id=user_id,
-            narrative_id=narrative_id,
-            frame_id=frame_id,
-            mode=mode,
-            provider_fingerprint=safe_provider_fingerprint,
-            narrative_text=text,
-            created_at=self._now(),
-        )
-        # codex NO-SHIP finding round 1 (HIGH #2b): the narrative row is an
-        # *optional* write on a session that may already carry a
-        # successfully-flushed frame/answer earlier in the same request
-        # (orchestrator.finish() calls this after record_frame). A flush
-        # failure here (a CHECK-constraint violation, a byte-bound
-        # rejection) previously poisoned the WHOLE session -- the
-        # terminal() write that follows would then raise
-        # PendingRollbackError, and recovery would roll back the
-        # already-flushed frame/answer along with it, downgrading an
-        # otherwise-valid run. A SAVEPOINT isolates this one flush: on
-        # failure, only the savepoint rolls back (automatic, on exception
-        # exit from this block) -- the outer transaction, and everything
-        # already flushed on it, stays intact and the session stays usable
-        # for the terminal() write that follows.
+        # CHAOS-3441 Codex adversarial review round 1 (HIGH, confirmed): the
+        # SAVEPOINT opens before the ownership/frame SELECTs, not just around
+        # the write, for the same reason as record_frame -- see that method's
+        # own comment. A narrative failure is the worst place to lose the
+        # outer transaction: by the time this runs, the transcript row AND
+        # the frame are already flushed on it.
         async with self.session.begin_nested():
+            run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+            if run is None:
+                raise DevPersistenceNotFound("run not found")
+            if mode not in _NARRATIVE_MODES:
+                raise DevPersistenceValidationError("invalid narrative mode")
+            frame = await self.session.scalar(
+                select(DevAnswerFrame).where(
+                    DevAnswerFrame.run_id == run.id,
+                    DevAnswerFrame.org_id == org_id,
+                    DevAnswerFrame.user_id == user_id,
+                )
+            )
+            if frame is None or frame.frame_id != frame_id:
+                raise DevPersistenceValidationError(
+                    "narrative frame_id must match the run's recorded answer frame"
+                )
+            reconstructed = dict(payload)
+            reconstructed["body"] = narrative_text
+            try:
+                validated = DevNarrativeContract.model_validate(reconstructed)
+            except PydanticValidationError as exc:
+                raise DevPersistenceValidationError(
+                    f"narrative payload is not a valid dev_narrative.v1: {exc}"
+                ) from exc
+            if validated.narrative_id != str(narrative_id):
+                raise DevPersistenceValidationError(
+                    "narrative payload's narrative_id does not match the "
+                    "narrative_id argument"
+                )
+            if validated.run_id != str(run_id):
+                raise DevPersistenceValidationError(
+                    "narrative payload's run_id does not match the run_id argument"
+                )
+            if validated.frame_id != str(frame_id):
+                raise DevPersistenceValidationError(
+                    "narrative payload's frame_id does not match the frame_id argument"
+                )
+            if validated.mode != mode:
+                raise DevPersistenceValidationError(
+                    "narrative payload's mode does not match the mode argument"
+                )
+            # provider_fingerprint arrives already hashed (the caller -- see
+            # orchestrator_persistence.PersistenceRunRecorder.record_narrative --
+            # digests narrative.provider_metadata.model_fingerprint before this
+            # call); _digest here only validates that shape. To cross-check it
+            # against the *payload's own* raw model_fingerprint, that raw value
+            # must be hashed the identical way, not passed through the
+            # shape-only validator.
+            expected_provider_fingerprint = (
+                _sha256_digest(validated.provider_metadata.model_fingerprint)
+                if validated.provider_metadata is not None
+                else None
+            )
+            safe_provider_fingerprint = _digest(
+                provider_fingerprint, field="provider_fingerprint"
+            )
+            if expected_provider_fingerprint != safe_provider_fingerprint:
+                raise DevPersistenceValidationError(
+                    "narrative payload's provider_metadata does not match the "
+                    "provider_fingerprint argument"
+                )
+            text = _bounded_text(
+                validated.body,
+                field="narrative_text",
+                max_bytes=_NARRATIVE_TEXT_MAX_BYTES,
+            )
+            if not text:
+                raise DevPersistenceValidationError("narrative_text must not be empty")
+            record = await self._construct_validated_payload_row(
+                model_cls=DevRunNarrative,
+                payload_dict=validated.model_dump(mode="json", exclude={"body"}),
+                field_name="narrative_payload",
+                max_bytes=_NARRATIVE_PAYLOAD_MAX_BYTES,
+                run_id=run.id,
+                org_id=org_id,
+                user_id=user_id,
+                narrative_id=narrative_id,
+                frame_id=frame_id,
+                mode=mode,
+                provider_fingerprint=safe_provider_fingerprint,
+                narrative_text=text,
+                created_at=self._now(),
+            )
+            # codex NO-SHIP finding round 1 (HIGH #2b): the narrative row is an
+            # *optional* write on a session that may already carry a
+            # successfully-flushed frame/answer earlier in the same request
+            # (orchestrator.finish() calls this after record_frame). A flush
+            # failure here (a CHECK-constraint violation, a byte-bound
+            # rejection) previously poisoned the WHOLE session -- the
+            # terminal() write that follows would then raise
+            # PendingRollbackError, and recovery would roll back the
+            # already-flushed frame/answer along with it, downgrading an
+            # otherwise-valid run. A SAVEPOINT isolates this one flush: on
+            # failure, only the savepoint rolls back (automatic, on exception
+            # exit from this block) -- the outer transaction, and everything
+            # already flushed on it, stays intact and the session stays usable
+            # for the terminal() write that follows.
+            # codex NO-SHIP finding round 1 (HIGH #2b): the narrative row is
+            # an *optional* write on a session that may already carry a
+            # successfully-flushed frame/answer earlier in the same request
+            # (orchestrator.finish() calls this after record_frame). A flush
+            # failure here (a CHECK-constraint violation, a byte-bound
+            # rejection) previously poisoned the WHOLE session -- the
+            # terminal() write that follows would then raise
+            # PendingRollbackError, and recovery would roll back the
+            # already-flushed frame/answer along with it, downgrading an
+            # otherwise-valid run. The SAVEPOINT isolates this flush: on
+            # failure only the savepoint rolls back (automatic, on exception
+            # exit from the block) -- the outer transaction, and everything
+            # already flushed on it, stays intact and the session stays
+            # usable for the terminal() write that follows.
             self.session.add(record)
             await self.session.flush()
         return record
@@ -3468,6 +3601,16 @@ class DevPersistenceService:
         )
         for conversation in stranded:
             conversation.expires_at = now
+        # CHAOS-3441 Codex adversarial review round 3 (MEDIUM, confirmed):
+        # flushed here rather than left dirty for whatever the caller does
+        # next. Every mutating method on this service returns with nothing
+        # pending, and that is load-bearing, not tidiness:
+        # SessionTransaction._take_snapshot() flushes pending state BEFORE
+        # emitting a SAVEPOINT, so a stamp left dirty here would be emitted
+        # by the next operation's savepoint entry -- outside that savepoint,
+        # where a failure poisons the whole transaction and takes the
+        # unrelated rows already flushed on it (see record_frame).
+        await self.session.flush()
         logger.info(
             "ask_dev_ephemeral_expiry_backfill_completed",
             extra={"stamped": len(stranded)},

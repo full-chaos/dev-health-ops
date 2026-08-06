@@ -191,7 +191,28 @@ func (collector GitHubWorkItemsRESTCollector) Collect(
 		if err := collector.collectPullRequests(
 			ctx, claim, &counted, root, normalizedAt, &result,
 		); err != nil {
-			return result, err
+			// provider.py:339-343 catches everything but a rate limit here and
+			// continues with the issues it already has, so a failing /pulls
+			// listing degrades the run instead of blocking the five-alias
+			// family for this repository forever. A pagination cap is NOT that
+			// case: the collected set would be deterministically truncated and
+			// every later run would reproduce the same truncation, so it stays
+			// fatal (recipe: never both capped and successful).
+			if errors.Is(err, ErrPaginationCapExceeded) {
+				return result, err
+			}
+			if fatalErr := githubWorkItemsRESTOptionalFailure(
+				ctx, &counted, err,
+			); fatalErr != nil {
+				return result, fatalErr
+			}
+			// Python loses every pull request here (`prs = list(...)` never
+			// binds, so its else-branch is skipped wholesale). We keep the ones
+			// already fetched: under D17 a partial set is safe precisely
+			// because the omission is recorded, and it matches the
+			// retain-earlier-pages behaviour of the milestone and comment paths
+			// above.
+			result.addIncomplete("pull_requests", "", err)
 		}
 	}
 	result.Evidence.Records = len(result.Rows.WorkItems) +

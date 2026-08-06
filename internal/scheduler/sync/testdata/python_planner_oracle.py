@@ -176,8 +176,20 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
         (str(row["source_id"]), str(row["dataset_key"])): _instant(str(row["at"]))
         for row in _rows(case.get("watermarks"), "watermarks", allow_none=True)
     }
-    overlap = _integer(
-        case.get("watermark_overlap_seconds", 0), "watermark_overlap_seconds"
+    # max(0, ...) is production behaviour, not oracle convenience: the real
+    # _watermark_overlap_seconds clamps to zero
+    # (src/dev_health_ops/sync/watermarks.py:120,
+    # `max(0, int(os.getenv("SYNC_WATERMARK_OVERLAP", "0")))`), and the Go
+    # planner clamps identically at every use site
+    # (resolveWindowStart's `max(input.WatermarkOverlap, 0)`). An oracle that
+    # subtracted a NEGATIVE overlap directly would push the window start
+    # FORWARD -- behaviour neither implementation has -- so a negative fixture
+    # would measure the oracle against itself and report a divergence that does
+    # not exist in production. Clamp here so a negative case exercises the real
+    # clamp on both sides instead.
+    overlap = max(
+        0,
+        _integer(case.get("watermark_overlap_seconds", 0), "watermark_overlap_seconds"),
     )
 
     def watermark(

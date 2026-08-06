@@ -54,6 +54,12 @@
 #   already pass one (e.g. to force a shared name, or to inspect a completed run's
 #   database before it's reclaimed).
 #
+#   That per-worktree scratch db fixed ClickHouse-state collisions across
+#   worktrees, but every worktree still shares ONE ClickHouse container and ONE
+#   host's CPU/RAM (gate_unit_suite alone forks 4 pytest-xdist workers per run).
+#   See the SINGLE-FLIGHT LOCK section below (CHAOS-3403) for the mutex this
+#   script now takes on that shared resource before doing any work.
+#
 # USAGE:
 #   Run from the worktree ROOT (the dir containing ci/run_tests.sh) using its .venv:
 #     bash ci/local_validate.sh
@@ -62,6 +68,8 @@
 #   Force a specific scratch db name (rarely needed — the default is already
 #   unique per worktree):
 #     SCRATCH_DB=my_custom_scratch bash ci/local_validate.sh
+#   Fail fast instead of waiting if another gate already holds the lock:
+#     LOCK_WAIT_SECS=0 bash ci/local_validate.sh
 #
 set -uo pipefail
 
@@ -111,7 +119,140 @@ DEVHOPS="${ROOT}/.venv/bin/dev-hops"
 # Neutralize the local socks5h proxy for every pytest/python invocation. Without
 # this, httpx-based tests fail with 'socksio not installed' — false negatives, not
 # real defects.
-PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy)
+#
+# Also neutralize two operator-shell env vars (CHAOS-3439 interim; the durable fix
+# is CHAOS-3402's tests/conftest.py scrubbing in the suite itself — this is
+# belt-and-braces at the gate):
+#   - LOG_LEVEL: if an operator's shell exports LOG_LEVEL=debug, configure_logging()
+#     takes the root level from it, and aiosqlite (not in logging_config.py's quiet
+#     list) logs the raw SQL INSERT with bind parameters at DEBUG. Two
+#     log-sanitization tests sweep ALL caplog records, so the planted malicious
+#     string in that SQL statement gets captured and the sanitization assertion
+#     goes red on unmodified code — false negative, not a real defect. Deterministic
+#     both directions: LOG_LEVEL=debug fails, unset/info passes.
+#   - GITHUB_APP_PRIVATE_KEY_PATH: an operator's shell may export this as a RELATIVE
+#     path (./github-app-local.pem) that only resolves from the primary checkout's
+#     CWD; resolver.py opens it directly, so any gate run from a worktree (the
+#     team's standing practice) resolves it to a directory that never contains the
+#     file and goes red on clean main with no code change.
+#   - GITHUB_APP_ID: measured empirically (CHAOS-3439), not just inferred — with
+#     ONLY GITHUB_APP_PRIVATE_KEY_PATH neutralized, 3 of 4 known-false-red
+#     tests in tests/test_credential_resolver.py still failed; neutralizing
+#     GITHUB_APP_ID alone (leaving the path var live) fixed NONE of the 4. Only
+#     unsetting BOTH clears all 4. A live GITHUB_APP_ID with the (now-absent)
+#     private key path makes the env-fallback path attempt github-app auth with
+#     a partial credential instead of falling through to GITHUB_TOKEN, which is
+#     what those tests actually exercise — unsetting only the path was an
+#     incomplete fix on this checkout's ambient .env.
+PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID)
+
+# --- Single-flight lock (CHAOS-3403). -----------------------------------------------
+# ops/AGENTS.md documents this gate as single-flight, but nothing enforced it:
+# every operator/agent had to `ps aux | grep local_validate` before launching — a
+# time-of-check-to-time-of-use race. One collision had to be killed by hand and two
+# near-misses were caught only by a human watching `ps` in real time, in both cases
+# AFTER a correct check had already gone stale in the seconds before launch.
+#
+# RESIDUAL MECHANISM (investigated for CHAOS-3403 — not assumed): the CONCURRENCY
+# CONTRACT above already gives every worktree its own scratch ClickHouse database
+# (hashed from ROOT), and this codebase uses plain MergeTree tables with no
+# ReplicatedMergeTree/ZooKeeper coordination — so two gates from DIFFERENT
+# worktrees no longer corrupt each other's ClickHouse schema; that collision is
+# fixed. What is NOT fixed: every worktree still shares the ONE ClickHouse
+# container (${CH_CONTAINER}) and ONE host's CPU/RAM/disk. gate_unit_suite() alone
+# forks 4 pytest-xdist workers; N concurrent gates fork 4N, plus N concurrent mypy
+# and ruff invocations. The actual collision mechanism is host resource
+# exhaustion severe enough that a test's real completion signal never fires within
+# its timeout (see AGENTS.md's "Timeout-fallback masquerade") — not ClickHouse
+# corruption. A run from the SAME worktree path launched twice (e.g. an agent
+# fanning out sub-agents without giving each its own worktree, contrary to
+# AGENTS.md) is additionally exposed to the pre-fix scratch-db collision directly,
+# since SCRATCH_DB is derived from ROOT and would be identical for both runs.
+# The lock below is a mutex on that shared resource, scoped to CH_CONTAINER (the
+# thing actually contended) rather than to this worktree — matching the team's
+# current manual "ps aux" convention, which is host-wide, not per-worktree.
+#
+# Uses mkdir, not flock(1): flock(1) does not exist on stock macOS, the target dev
+# platform (verified: `command -v flock` fails here), and mkdir is atomic on every
+# POSIX filesystem with no separate check-then-create step. A run killed with
+# `kill -9` leaves the lock DIRECTORY behind (mkdir, unlike flock, has no
+# release-on-process-exit), so staleness is reclaimed by PID liveness (`kill -0`)
+# — the same "a run that dies before its EXIT trap fires is reclaimed by the next
+# run" precedent ch_create_scratch() already applies to the scratch db.
+#
+# Semantics: bounded blocking wait, not pure block-forever or pure fail-fast.
+# Blocking suits agents — they can fire-and-wait rather than hand-writing a
+# retry loop — but a pure block-forever wait is unfriendly to a human debugging a
+# genuinely wedged lock, and offers no circuit breaker if the diagnosed resource
+# contention above turns out to itself hang. LOCK_WAIT_SECS=0 gives the fail-fast
+# behavior outright for a human who wants it immediately.
+LOCK_DIR="${LOCK_DIR:-${TMPDIR:-/tmp}/dev-health-ops-local-validate.${CH_CONTAINER}.lock}"
+LOCK_WAIT_SECS="${LOCK_WAIT_SECS:-1800}"
+LOCK_POLL_SECS="${LOCK_POLL_SECS:-2}"
+LOCK_HELD=0
+
+lock_holder_alive() {
+  local pid
+  [ -f "${LOCK_DIR}/pid" ] || return 1
+  pid="$(cat "${LOCK_DIR}/pid" 2>/dev/null)"
+  [ -n "${pid}" ] || return 1
+  kill -0 "${pid}" 2>/dev/null
+}
+
+# Reclaim only on PROOF the recorded PID is dead — never on age/heuristics.
+# mkdir is still the sole arbiter of who actually wins: if two runs both judge the
+# lock stale and both race to reclaim, at most one mkdir succeeds and the loser
+# loops back and observes the winner's fresh pid/cwd.
+reclaim_stale_lock() {
+  if [ -d "${LOCK_DIR}" ] && ! lock_holder_alive; then
+    printf '   %s stale lock at %s (PID %s not running) — reclaiming.\n' \
+      "$(c_yellow 'NOTE:')" "${LOCK_DIR}" "$(cat "${LOCK_DIR}/pid" 2>/dev/null || echo '?')"
+    rm -rf "${LOCK_DIR}"
+  fi
+}
+
+acquire_lock() {
+  banner "single-flight lock (${LOCK_DIR})"
+  reclaim_stale_lock
+  if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+    local waited=0 owner_pid owner_cwd
+    owner_pid="$(cat "${LOCK_DIR}/pid" 2>/dev/null || echo '?')"
+    owner_cwd="$(cat "${LOCK_DIR}/cwd" 2>/dev/null || echo '?')"
+    printf '   gate already running in %s, PID %s — waiting (LOCK_WAIT_SECS=%s; set 0 to fail fast)...\n' \
+      "${owner_cwd}" "${owner_pid}" "${LOCK_WAIT_SECS}"
+    while ! mkdir "${LOCK_DIR}" 2>/dev/null; do
+      if [ "${waited}" -ge "${LOCK_WAIT_SECS}" ]; then
+        owner_pid="$(cat "${LOCK_DIR}/pid" 2>/dev/null || echo '?')"
+        owner_cwd="$(cat "${LOCK_DIR}/cwd" 2>/dev/null || echo '?')"
+        die "gate already running in ${owner_cwd}, PID ${owner_pid} — timed out after ${LOCK_WAIT_SECS}s waiting for ${LOCK_DIR}. If that PID is not actually running local_validate.sh, remove ${LOCK_DIR} by hand."
+      fi
+      sleep "${LOCK_POLL_SECS}"
+      waited=$((waited + LOCK_POLL_SECS))
+      reclaim_stale_lock
+    done
+  fi
+  printf '%s\n' "$$" >"${LOCK_DIR}/pid"
+  printf '%s\n' "${ROOT}" >"${LOCK_DIR}/cwd"
+  LOCK_HELD=1
+  printf '   %s %s (PID %s)\n' "$(c_green 'lock acquired:')" "${LOCK_DIR}" "$$"
+}
+
+release_lock() {
+  if [ "${LOCK_HELD}" = "1" ]; then
+    rm -rf "${LOCK_DIR}"
+  fi
+}
+
+# Single EXIT trap for the whole script (trap does not stack — a second `trap ...
+# EXIT` would silently replace this one, which is why ch_create_scratch() below
+# does NOT set its own trap and instead relies on this handler calling
+# cleanup_scratch() unconditionally; cleanup_scratch() itself no-ops when
+# SCRATCH_CREATED was never set).
+on_exit() {
+  cleanup_scratch
+  release_lock
+}
+trap on_exit EXIT
 
 # --- Result tracking. --------------------------------------------------------------
 declare -a RESULTS=()
@@ -302,7 +443,11 @@ ch_create_scratch() {
   ch_query "DROP DATABASE IF EXISTS ${SCRATCH_DB}" || true
   ch_query "CREATE DATABASE ${SCRATCH_DB}" || return 1
   SCRATCH_CREATED=1
-  trap cleanup_scratch EXIT
+  # NOTE: no `trap cleanup_scratch EXIT` here — trap does not stack, and a second
+  # `trap ... EXIT` set here would silently replace the single on_exit handler
+  # (registered near the top of this script) that also releases the CHAOS-3403
+  # single-flight lock. on_exit() calls cleanup_scratch() unconditionally; it
+  # no-ops until SCRATCH_CREATED=1, which is set on the line above.
   return 0
 }
 
@@ -422,6 +567,7 @@ print_summary() {
 
 # ===================================================================================
 main() {
+  acquire_lock # CHAOS-3403 single-flight mutex — before any work is done
   preflight
 
   run_stage "lint: ruff format --check" gate_lint_format
@@ -441,5 +587,22 @@ main() {
   printf '\n%s safe to push.\n' "$(c_green 'GATE PASSED.')"
   exit 0
 }
+
+# Test-only harness hook (CHAOS-3403), same idea as ci/check_go.sh's narrow
+# "integration-coverage" verb (see tests/tooling/test_check_go_integration_coverage.py):
+# exercises the REAL acquire_lock/release_lock/reclaim_stale_lock functions above —
+# not a reimplementation — without paying for preflight, lint, mypy, ClickHouse, or
+# the unit suite, so a regression test can race the actual lock acquisition path
+# cheaply and repeatably. Never invoked by main(); only by
+# tests/tooling/test_local_validate_lock.py.
+if [ "${1:-}" = "--lock-probe" ]; then
+  shift
+  hold_secs="${1:-0}"
+  acquire_lock
+  printf 'lock-probe: acquired (pid %s)\n' "$$"
+  sleep "${hold_secs}"
+  printf 'lock-probe: releasing (pid %s)\n' "$$"
+  exit 0
+fi
 
 main "$@"

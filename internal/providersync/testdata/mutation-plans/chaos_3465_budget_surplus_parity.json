@@ -6,7 +6,7 @@
     "build",
     "./..."
   ],
-  "$determination": "CHAOS-3465 changed Python UNIT ADMISSION (sync/budget_guard.py's surplus phase, sync/guard.py's slot_headroom, the sync_units.py wiring). Go owns no unit-admission decision: internal/scheduler/sync mirrors Python's PLANNER (windows + HEAVY ratchet, pinned by planner_oracle_test.go, whose case schema carries no budget, deferral or concurrency field), and the only budget references in non-test Go source remain the two SQL episode clears at internal/providersync/repository_postgres.go:395-396 and internal/syncreconciler/lease_repair.go:383-384. _budget_deferral_exhausted -- the one Go-facing budget surface this repository pins -- is byte-identical across 7063b83ad. So the mirror is NO Go behaviour change. What it is instead: a probe that stops CHAOS-3465's two new Python writers of the shared sync_run_units row from invalidating the exhaustion corpus unobserved, and the two half-cleared-episode cases the corpus was missing. This file is the proof that both actually measure something.",
+  "$determination": "CHAOS-3465 changed Python UNIT-DISPATCH ADMISSION (sync/budget_guard.py's surplus phase, sync/guard.py's slot_headroom, the sync_units.py wiring). Go owns no unit-DISPATCH admission: internal/scheduler/sync mirrors Python's PLANNER (windows + HEAVY ratchet, pinned by planner_oracle_test.go, whose case schema carries no budget, deferral or concurrency field), and the only budget references in non-test Go source remain the two SQL episode clears at internal/providersync/repository_postgres.go:395-396 and internal/syncreconciler/lease_repair.go:383-384. Two things the earlier wording got wrong and that are corrected here, because both were read as evidence of Go admission that does not exist: (a) 'Go owns no unit admission' was too broad -- internal/scheduler/sync/materializer.go DOES load max_sync_units and reject a plan over the total cap, which is plan-time validation of the same limits at a different moment, reading none of the columns these predicates read; (b) providerfoundation/budget.go's SyncBudgetKey and PostgresBudgetLocker have ZERO callers outside that package's tests -- prepared, not wired, and its comment previously described the serialization in the present tense. _budget_deferral_exhausted -- the one Go-facing budget surface this repository pins -- is byte-identical across 7063b83ad. So the mirror is NO Go behaviour change. What it is instead: a probe that stops CHAOS-3465's two new Python writers of the shared sync_run_units row from invalidating the exhaustion corpus unobserved, and the two half-cleared-episode cases the corpus was missing. This file is the proof that both actually measure something.",
   "$limitation": "M1-M3 mutate LIVE PYTHON that the Go oracle executes at test time, so every proof below must run through `go test -count=1` with the live-oracle env set -- a cached PASS would report a killed mutation that was never run. M4 mutates the Go mirror. Not covered here, and covered elsewhere: the surplus phase's own behaviour (tests/test_chaos_3465_budget_surplus_retry.py, which carries its own mutation record in that PR), and the reached-state proofs against real PostgreSQL (internal/providersync/budget_episode_integration_test.go, internal/syncreconciler/lease_repair_integration_test.go, both integration-tagged).",
   "mutations": [
     {
@@ -28,7 +28,8 @@
           "^TestBudgetExhaustionPredicateMatchesLivePython$",
           "./internal/providersync/"
         ]
-      ]
+      ],
+      "observed_kill": "Killed in the probe helper (_assert_surplus_writes_leave_the_episode_alone): '_admit_unit_from_surplus writes budget_first_deferred_at'. All 14 cases fail together, because the probe raises before any row is built. See $where_mutations_die."
     },
     {
       "id": "M2-surplus-withdrawal-rewrites-the-result-document",
@@ -49,7 +50,8 @@
           "^TestBudgetExhaustionPredicateMatchesLivePython$",
           "./internal/providersync/"
         ]
-      ]
+      ],
+      "observed_kill": "Killed in the same probe helper: '_withdraw_surplus_admission writes result'. All 14 cases fail together. See $where_mutations_die."
     },
     {
       "id": "M3-probe-loses-its-subject",
@@ -70,14 +72,15 @@
           "^TestBudgetExhaustionPredicateMatchesLivePython$",
           "./internal/providersync/"
         ]
-      ]
+      ],
+      "observed_kill": "Killed by the probe's own empty-tuple refusal, before it reads any source: '_SURPLUS_WRITE_PATHS is empty: this probe would measure nothing and report success.' This is the one mutation whose kill site being the helper is the entire point -- it mutates the guard, not the guarded code."
     },
     {
       "id": "M4-clause-1-drops-the-first-deferred-conjunct",
       "file": "internal/providersync/syncunit_budget_exhaustion_oracle_test.go",
       "find": "\tif state.Deferrals <= 0 && state.FirstDeferredAt == nil {\n",
       "replace": "\tif state.Deferrals <= 0 {\n",
-      "rationale": "Clause 1 of the Go mirror, mutated at the CONJUNCT rather than the whole condition. A half-cleared row (counter zeroed, stamp surviving) now short-circuits to 'not exhausted' in Go while live Python still terminalizes it. Recorded because it SURVIVED the pre-existing corpus: every zero-counter case there pairs the zero with a nil stamp, so the conjunct was never load-bearing for any of them. The two half_cleared_* cases added in this change are what kill it, and are the reason they are not decoration.",
+      "rationale": "Clause 1 of the Go mirror, mutated at the CONJUNCT rather than the whole condition. A half-cleared row (counter zeroed, stamp surviving) now short-circuits to 'not exhausted' in Go while live Python still terminalizes it. Recorded because it SURVIVED the pre-existing corpus: every zero-counter case there pairs the zero with a nil stamp, so the conjunct was never load-bearing for any of them. Killed by ONE of the two half_cleared_* cases added here -- the past-the-wall-clock one; the inside-the-wall-clock case agrees with the mutant and is its boundary companion, not a second killer. See observed_kill.",
       "proof": [
         [
           "env",
@@ -91,7 +94,53 @@
           "^TestBudgetExhaustionPredicateMatchesLivePython$",
           "./internal/providersync/"
         ]
-      ]
+      ],
+      "observed_kill": "Killed in the row comparison, by exactly ONE case: half_cleared_episode_past_the_wall_clock_is_still_terminalizable (Go false, live Python true). half_cleared_episode_inside_the_wall_clock_is_not AGREES with the mutant and kills nothing -- it is the boundary companion proving the killer turns on elapsed time rather than on the stamp merely being present. Also observed SURVIVING the pre-existing corpus with both cases removed, which is what makes them coverage rather than decoration."
+    },
+    {
+      "id": "M5-surplus-promotion-launders-the-aggregate-clock",
+      "file": "src/dev_health_ops/sync/budget_guard.py",
+      "find": "        .values(available_at=now, updated_at=now)\n",
+      "replace": "        .values(available_at=now, updated_at=now, first_blocked_at=now)\n",
+      "rationale": "The gap review found in the probe's own column list, now closed and measured. first_blocked_at is CHAOS-3412's AGGREGATE wall clock -- the outer bound no per-episode reset may move -- and it is read by _deferral_total_exhausted, NOT by the _budget_deferral_exhausted this pair differences. So a surplus promotion resetting it launders the total clock while every column the compared predicate reads stays untouched: invisible to the corpus, and invisible to the probe too while the column list named only the compared predicate's inputs. Distinct from M1, which launders the per-EPISODE clock.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "GOWORK=off",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestBudgetExhaustionPredicateMatchesLivePython$",
+          "./internal/providersync/"
+        ]
+      ],
+      "observed_kill": "Killed in the probe helper: '_admit_unit_from_surplus writes first_blocked_at'. Confirms the added column is genuinely guarded rather than merely listed -- against the pre-review column tuple this mutation SURVIVED, since first_blocked_at was absent from it and no case reads it."
+    },
+    {
+      "id": "M6-column-derivation-loses-the-aggregate-clock",
+      "file": "internal/providersync/testdata/oracle_pairs/syncunit_budget_exhaustion.py",
+      "find": "    \"first_blocked_at\",\n",
+      "replace": "",
+      "rationale": "The derivation guard's own vacuity mode. Dropping a column from the declared tuple silently narrows what the surplus probe checks, and nothing else in the file would notice -- which is exactly how first_blocked_at went missing in the first place. _assert_declared_columns_match_the_predicates re-derives the set from the live predicates and must reject the narrowed list rather than trusting it.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "GOWORK=off",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestBudgetExhaustionPredicateMatchesLivePython$",
+          "./internal/providersync/"
+        ]
+      ],
+      "observed_kill": "Killed by _assert_declared_columns_match_the_predicates: '_EPISODE_COLUMNS_THE_PREDICATES_READ has drifted from the live predicates ... Missing entries ([\\'first_blocked_at\\'])'. Kill site is the helper by design -- the mutation targets the guard, as M3 does."
     }
-  ]
+  ],
+  "$where_mutations_die": "M1-M3 all die inside _assert_surplus_writes_leave_the_episode_alone in internal/providersync/testdata/oracle_pairs/syncunit_budget_exhaustion.py -- the shared probe helper, not in any individual case assertion, and every case fails together because the probe raises during module load. Recorded rather than left to be noticed, because 'died in a shared helper' is normally a warning sign that a mutation was killed by setup rather than by the invariant it claimed to test. Here the probe IS the invariant: the claim under test is precisely 'no surplus write path touches a column the exhaustion predicates read', which is a property of the source rather than of any single decision row, so a source-reading assertion is the only place it can be measured. What would be illegitimate is a CASE-shaped mutation dying there; none of these is. M4 is different in kind and dies where it should: in the row comparison for the single case half_cleared_episode_past_the_wall_clock_is_still_terminalizable, as a Go/Python verdict disagreement."
 }

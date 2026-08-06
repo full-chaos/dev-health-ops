@@ -51,12 +51,23 @@ type budgetEpisodeSnapshot struct {
 // producer to drive here instead of this mirror. Adding one would be unwired
 // code pretending to be a second implementation.
 //
+// "No admission" is too broad and is narrowed here deliberately: Go owns no
+// unit-DISPATCH admission. It does own PLAN-TIME validation of the same
+// limits -- internal/scheduler/sync/materializer.go loads max_sync_units and
+// rejects a plan whose unit count exceeds the total cap. That is a different
+// decision at a different moment (before units exist, not before they are
+// queued), and it reads none of the columns this predicate reads, which is
+// why it changes nothing here. It is named so the narrower claim is the one
+// on record.
+//
 // CHAOS-3465 re-tested that claim rather than inheriting it, because surplus
 // retry is new budget-ADMISSION behaviour and admission is the thing Go would
 // have to mirror if it owned any. It does not: the surplus phase lives
 // entirely in sync/budget_guard.py, the Go scheduler mirrors Python's PLANNER
-// (windows and the HEAVY ratchet) and not unit admission, and the Go budget
-// footprint is still exactly the two clears above. The predicate this mirror
+// (windows and the HEAVY ratchet) and not unit-DISPATCH admission, and the Go
+// budget footprint is still exactly the two clears above -- providerfoundation
+// /budget.go's SyncBudgetKey and PostgresBudgetLocker are prepared but have no
+// caller outside tests, so they are not a third. The predicate this mirror
 // tracks, _budget_deferral_exhausted, is byte-identical across that commit.
 // So the CHAOS-3465 mirror is deliberately no Go behaviour change -- plus the
 // two half_cleared_* cases below, and the surplus write-set probe in the pair
@@ -186,7 +197,17 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 		// dropped clause 1's `&& FirstDeferredAt == nil` conjunct agreed with
 		// Python on all of them. Verified by planting exactly that mutation --
 		// M4 in testdata/mutation-plans/chaos_3465_budget_surplus_parity.json,
-		// which survives the old corpus and dies against these two.
+		// which survives the old corpus.
+		//
+		// Which of the two kills it, stated exactly rather than as "these
+		// cases": only the PAST-the-wall-clock one. Under the mutant, Go
+		// short-circuits on the zero counter and answers "not exhausted" while
+		// live Python answers "exhausted" -- the disagreement. The
+		// inside-the-wall-clock case AGREES with the mutant (both say "not
+		// exhausted"), so it kills nothing on its own. It is the boundary
+		// companion: it proves the past-the-cap case is decided by the elapsed
+		// time and not merely by the stamp being present, which is what stops
+		// the killer from passing for the wrong reason.
 		{ID: "half_cleared_episode_past_the_wall_clock_is_still_terminalizable",
 			Input: snapshot(0, wallClock+3600, budgetDeferredCategory)},
 		{ID: "half_cleared_episode_inside_the_wall_clock_is_not",
@@ -220,11 +241,12 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 // WHAT IT MEASURES. One side is the live, unmodified
 // sync/budget_guard.py::_budget_deferral_exhausted; the other is the
 // hand-written Go mirror above. Given the same unit-state snapshot, the two
-// must return the same verdict. Two of the case inputs are DERIVED from the
-// production Go SQL constants (the go_stamp_* cases read the stamped
-// error_category straight out of releaseForRetrySQL), so those cases do bind
-// real Go statements to the live predicate -- but the rest compare two
-// predicates, not two producers.
+// must return the same verdict. ONE case input is DERIVED from a production
+// Go SQL constant (the single go_stamp_* case reads the stamped
+// error_category straight out of releaseForRetrySQL), so that one case does
+// bind a real Go statement to the live predicate -- the rest compare two
+// predicates, not two producers. It said "two" while the loop below built
+// one, which overstates how much of this corpus is anchored to real SQL.
 //
 // WHAT IT DOES NOT MEASURE, and what covers that instead:
 //

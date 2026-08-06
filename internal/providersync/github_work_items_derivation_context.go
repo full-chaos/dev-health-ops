@@ -160,6 +160,21 @@ func loadGitHubWorkItemDerivationContext(
 			return githubWorkItemDerivationContext{}, providerfoundation.ErrInvalidScope
 		}
 	}
+	// D17 (owner ruling, 2026-08-06) ratifies failing closed on BOTH branches
+	// below, as a deliberate divergence from job_work_items.py:1196-1210, which
+	// catches a donor-load failure, logs it, and continues with whatever
+	// inheritance it has left.
+	//
+	// This is deliberately NOT the optional-data class the same ruling governs
+	// for fetches. A missing donor does not omit a row: it writes a DIFFERENT
+	// team onto work_item_team_attributions and every derived surface
+	// downstream, with nothing in the row saying the attribution was computed
+	// blind. There is no "land what you have and record what you lost" shape
+	// available here, so the unit fails instead. The Python-side silent
+	// degradation is tracked as CHAOS-3467.
+	//
+	// The limit is the same rail for the same reason: a truncated donor set
+	// produces confidently wrong attribution, not absent attribution.
 	donorIDs, donorKeys := githubWorkItemDerivationDonorTargets(rows.Dependencies)
 	if len(donorIDs)+len(donorKeys) > githubWorkItemDerivationContextLimit {
 		return githubWorkItemDerivationContext{}, ErrEffectRecoveryUnsafe

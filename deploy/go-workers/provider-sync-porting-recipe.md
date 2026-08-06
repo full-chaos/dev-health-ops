@@ -626,9 +626,25 @@ question.
       is not an optional-data fetch failure. It still fails the unit closed.
 
     Python does not yet satisfy the recording half — it logs and drops — and
-    is tracked separately to emit the same durable evidence. Do **not** port
-    the log-and-drop: this is one of the few places the port is deliberately
-    ahead of its source, so `D16`'s mirror rule does not apply to it.
+    is tracked separately to emit the same durable evidence (CHAOS-3467
+    covers the work-items case). Do **not** port the log-and-drop: this is
+    one of the few places the port is deliberately ahead of its source, so
+    `D16`'s mirror rule does not apply to it.
+
+    **The contract is about MISSING data, not WRONG data. Where a degraded
+    read produces a confidently incorrect value instead of an absent one,
+    fail closed — D17 ratifies that too.** The donor read in
+    `github_work_items_derivation_context.go` is the worked case: Python
+    (`job_work_items.py:1196-1210`) catches a donor-load failure and
+    continues with whatever inheritance survives, which does not omit a
+    team-attribution row — it writes a *different team* onto
+    `work_item_team_attributions` and every derived surface downstream, with
+    nothing in the row marking it as computed blind. "Land what you have and
+    record what you lost" has no meaning when what you'd land is wrong
+    rather than partial, so the unit fails and the 100k donor rail fails
+    with it. Ask which of the two you have before reaching for the
+    continue-and-record shape; the answer is not "is this data optional?"
+    but "if I continue, is the output absent or is it a lie?"
 
 ## The recipe
 
@@ -1001,13 +1017,35 @@ Write the plan to `internal/providersync/testdata/mutation-plans/<pair>.json`
 (checked in, reviewable) and run it with:
 
 ```
-python3 scripts/mutation_harness.py run \
+PATH="$PWD/.venv/bin:$PATH" python3 scripts/mutation_harness.py run \
   --plan internal/providersync/testdata/mutation-plans/<pair>.json \
   --assert-all-killed
 ```
 
 Report which mutation was caught by which test — that mapping is what makes
 "I mutation-tested this" a checkable claim instead of an assertion.
+
+**`BASELINE_FAILED` is an UNMEASURED mutation, not a known-failing one — and
+it is easiest to misread in a fresh worktree.** Proof commands are argv
+arrays resolved against `PATH` (`_run_command` uses `shell=False` and no
+interpreter pinning), so a plan's `pytest …` proof runs whatever `pytest`
+`PATH` finds — a pyenv shim or a Homebrew install, not this tree's `.venv`.
+Two failure modes stack:
+
+- the worktree venv does not exist or is incomplete — fix with `uv sync
+  --all-extras --dev`; `pyproject.toml` is the source of truth and `uv.lock`
+  is never hand-edited;
+- the venv exists and the proof still runs a different interpreter, because
+  `PATH` was not prefixed. This one is the trap: `./.venv/bin/python
+  scripts/mutation_harness.py` pins the *harness*, not the *proofs*.
+
+Measured instance: four `github/work-items` REST mutations reported
+`BASELINE_FAILED` from `ModuleNotFoundError: pytest_asyncio` and were carried
+in two consecutive reports as "pre-existing environment noise". They were
+neither pre-existing nor noise — with the venv synced and on `PATH` all four
+are `KILLED`. A verdict of `BASELINE_FAILED` says the mutation proved
+**nothing**; never total it alongside kills, and never let it ride into a
+second report.
 
 ## Difficulty tiers for the remaining GitHub pairs
 

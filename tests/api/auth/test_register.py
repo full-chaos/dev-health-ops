@@ -30,6 +30,21 @@ VALID_PASSWORD = "SecurePass123!"
 VALID_EMAIL = "user@example.com"
 
 
+@pytest.fixture(autouse=True)
+def _default_auto_create_org_flag(monkeypatch):
+    """Pin ``AUTH_AUTO_CREATE_ORG_ON_REGISTER`` to its unset default (on).
+
+    With the flag falsy, ``/auth/register`` correctly returns ``org_id: null``
+    and routes the user into guided onboarding instead of creating an org --
+    designed behaviour, not a bug. ``ops/.env`` carries
+    ``AUTH_AUTO_CREATE_ORG_ON_REGISTER=false``, which is what turned four of
+    these tests red on a developer machine while CI stayed green (CHAOS-3402).
+    Tests that exercise the off path set the variable themselves, after this
+    fixture has run.
+    """
+    monkeypatch.delenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER", raising=False)
+
+
 @pytest_asyncio.fixture
 async def session_maker(tmp_path: Path):
     db_path = tmp_path / "register.db"

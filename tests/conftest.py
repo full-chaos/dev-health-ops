@@ -1,5 +1,6 @@
 """Shared test fixtures for the test suite."""
 
+import logging
 import mimetypes
 import os
 import uuid
@@ -7,6 +8,24 @@ from pathlib import Path
 
 import pytest
 from git import Repo as GitRepo
+
+from tests._env_isolation import (
+    ALLOW_ENV,
+    SCRUB_ENV_NAMES,
+    exempted_names,
+    lane_conditional_keeps,
+    scrub_ambient_env,
+)
+
+_SCRUBBED_ENV_NAMES: list[str] = []
+_KEPT_ENV_NAMES: list[str] = []
+#: Scrub-list names still present in ``os.environ`` immediately AFTER the scrub.
+#: Must stay empty. Snapshotted at configure time rather than read live at
+#: assertion time because tests legitimately set some of these during the run
+#: (``tests/test_core_extraction.py`` writes SETTINGS_ENCRYPTION_KEY and never
+#: cleans up), and a live read would blame the scrub for another test's leftovers.
+_POST_SCRUB_RESIDUE: list[str] = []
+_SCRUB_RAN = False
 
 
 @pytest.fixture(autouse=True)
@@ -76,6 +95,74 @@ def test_file(repo_path):
     return os.path.join(repo_path, "README.md")
 
 
+@pytest.fixture
+def quiet_aiosqlite_logger():
+    """Stop the test harness's own SQL driver from echoing bind parameters.
+
+    ``aiosqlite`` logs every operation — including INSERT statements with their
+    bind parameters — at DEBUG. Tests that assert "this secret never reaches the
+    logs" by sweeping every captured record therefore rediscover their own
+    planted secret whenever the root level is DEBUG, even though production never
+    runs on aiosqlite (it is a test-fixture-only driver, see ops/AGENTS.md) and
+    the code under test never logged it.
+
+    ``LOG_LEVEL`` is scrubbed suite-wide (CHAOS-3402), so this is the belt to
+    that braces: it states the precondition at the tests that depend on it, and
+    keeps holding if a future run configures logging some other way. It narrows
+    only the driver, so a genuine DEBUG-level leak from application code is still
+    captured and still fails the assertion.
+    """
+    driver_logger = logging.getLogger("aiosqlite")
+    previous = driver_logger.level
+    driver_logger.setLevel(logging.INFO)
+    try:
+        yield
+    finally:
+        driver_logger.setLevel(previous)
+
+
 def pytest_configure(config):
     # Ensure TypeScript files are treated as text, not video/mp2t.
     mimetypes.add_type("text/x-typescript", ".ts")
+
+    # CHAOS-3402: make the process environment CI-equivalent before any test
+    # module is imported. A developer shell carries direnv-loaded `ops/.env`,
+    # so tests whose intent is "this variable is ABSENT" would otherwise see a
+    # real-looking-but-wrong value and take a different code path. Scrubbing
+    # here rather than in an autouse fixture also covers import-time reads and
+    # subprocesses that inherit via `os.environ.copy()`. Rationale and the
+    # keep-list justification live in tests/_env_isolation.py.
+    global _SCRUB_RAN
+
+    kept = exempted_names() | lane_conditional_keeps()
+    _KEPT_ENV_NAMES[:] = sorted(kept)
+    _SCRUBBED_ENV_NAMES[:] = scrub_ambient_env(os.environ, exempt=kept)
+    _POST_SCRUB_RESIDUE[:] = sorted(
+        name for name in SCRUB_ENV_NAMES if name not in kept and name in os.environ
+    )
+    _SCRUB_RAN = True
+
+
+def pytest_report_header(config):
+    """Say out loud what the shell was carrying.
+
+    A scrub that silently succeeded is indistinguishable from a clean shell, and
+    an exemption that silently applied is indistinguishable from a scrubbed run.
+    Both are reported so neither can be mistaken for the other.
+    """
+    lines = []
+    if _SCRUBBED_ENV_NAMES:
+        lines.append(
+            "ambient env scrubbed (CHAOS-3402): " + ", ".join(_SCRUBBED_ENV_NAMES)
+        )
+    exempt = exempted_names()
+    if exempt:
+        lines.append(
+            f"ambient env NOT scrubbed via {ALLOW_ENV}: " + ", ".join(sorted(exempt))
+        )
+    lane_kept = lane_conditional_keeps()
+    if lane_kept:
+        lines.append(
+            "ambient env kept for an announced lane: " + ", ".join(sorted(lane_kept))
+        )
+    return lines

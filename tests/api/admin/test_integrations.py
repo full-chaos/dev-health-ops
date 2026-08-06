@@ -372,7 +372,14 @@ async def test_discover_integration_not_found(client):
 
 
 @pytest.mark.asyncio
-async def test_discover_integration_sanitizes_provider_error(client, caplog):
+async def test_discover_integration_sanitizes_provider_error(
+    client, caplog, quiet_aiosqlite_logger
+):
+    # `captured` below sweeps every record from every logger, so this assertion
+    # is only meaningful when the harness's own SQL driver is not echoing the
+    # planted provider string back as a bind parameter. quiet_aiosqlite_logger
+    # states that precondition rather than inheriting it from the shell's
+    # LOG_LEVEL (CHAOS-3402); application loggers keep capturing at DEBUG.
     ac, _ = client
     secret = "ghp_" + "FAKE1234567890abcdefghijklmnopqrst"
     malicious_fragments = (

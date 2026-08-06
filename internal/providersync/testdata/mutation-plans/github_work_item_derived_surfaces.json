@@ -194,6 +194,16 @@
      "-run",
      "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
      "./internal/providersync/"
+    ],
+    [
+     "go",
+     "test",
+     "-tags",
+     "integration",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
+     "./internal/providersync/"
     ]
    ]
   },
@@ -210,6 +220,16 @@
      "-count=1",
      "-run",
      "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ],
+    [
+     "go",
+     "test",
+     "-tags",
+     "integration",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
      "./internal/providersync/"
     ]
    ]
@@ -228,6 +248,16 @@
      "-run",
      "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
      "./internal/providersync/"
+    ],
+    [
+     "go",
+     "test",
+     "-tags",
+     "integration",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
+     "./internal/providersync/"
     ]
    ]
   },
@@ -241,43 +271,49 @@
     [
      "go",
      "test",
+     "-tags",
+     "integration",
      "-count=1",
      "-run",
-     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
      "./internal/providersync/"
     ]
    ]
   },
   {
-   "id": "E3-state-durations-dedupe-with-argmax-not-any",
+   "id": "E3-state-durations-argmax-takes-the-newest-version",
    "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
    "find": "argMax(items_touched, computed_at), max(computed_at), argMax(avg_wip, computed_at)",
-   "replace": "any(items_touched), max(computed_at), any(avg_wip)",
-   "rationale": "work_item_state_durations_daily is PLAIN MergeTree where FINAL is a no-op; any() over appended versions can return an older value than max(computed_at) reports, so the readback would confirm a row it never wrote",
+   "replace": "argMin(items_touched, computed_at), max(computed_at), argMin(avg_wip, computed_at)",
+   "rationale": "work_item_state_durations_daily is PLAIN MergeTree where FINAL is a no-op, so the readback must take the NEWEST version by computed_at. argMin takes the oldest -- the deterministic inverse. An earlier form used any(), which is nondeterministic and survived by happening to return the newest row; a mutation whose verdict depends on which part the server reads first measures nothing reliable.",
    "proof": [
     [
      "go",
      "test",
+     "-tags",
+     "integration",
      "-count=1",
      "-run",
-     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
      "./internal/providersync/"
     ]
    ]
   },
   {
-   "id": "E4-state-durations-group-by-is-the-natural-key",
+   "id": "E4-state-durations-status-is-part-of-the-fence",
    "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
-   "find": "GROUP BY org_id, provider, work_scope_id, team_id, status, day",
-   "replace": "GROUP BY org_id, provider, work_scope_id, team_id, day",
-   "rationale": "dropping status from the grouping merges two statuses' argMax into one row, so a per-status effect would verify against a blended value",
+   "find": "AND team_id = ? AND status = ?",
+   "replace": "AND team_id = ? AND (status = ? OR 1 = 1)",
+   "rationale": "status must be part of the readback fence: two statuses share one (org, provider, work_scope_id, team_id, day) key, so a readback that does not pin status aggregates both and verifies an effect against a blended row. The first form of this mutation removed status from the GROUP BY instead and SURVIVED -- correctly, because the WHERE already pins every grouping column, which makes the GROUP BY list redundant and that mutation genuinely equivalent. Mutating the fence tests the property the grouping only restates.",
    "proof": [
     [
      "go",
      "test",
+     "-tags",
+     "integration",
      "-count=1",
      "-run",
-     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
      "./internal/providersync/"
     ]
    ]
@@ -292,9 +328,11 @@
     [
      "go",
      "test",
+     "-tags",
+     "integration",
      "-count=1",
      "-run",
-     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
      "./internal/providersync/"
     ]
    ]

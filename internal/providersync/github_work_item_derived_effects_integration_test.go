@@ -4,9 +4,11 @@ package providersync
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
@@ -105,6 +107,70 @@ func githubDerivedIntegrationConn(t *testing.T, ctx context.Context) driver.Conn
 	return conn
 }
 
+// TestGitHubDerivedTablesPartitionExpressionsAreDerivableFromTheSortingKey is
+// the precondition every partition-fenced readback in this package rests on,
+// and it reads the LIVE schema via SHOW CREATE TABLE rather than trusting the
+// migration file we believe produced it.
+//
+// The rule (cross-lane finding, measured on a real container): fencing a
+// readback on the partition key is only safe when the partition expression is
+// DERIVABLE from the sorting key, so a given key can occupy exactly one
+// partition. If a table partitioned on a column outside its sorting key, the
+// fence would be actively WRONG under the default server setting: FINAL merges
+// across partitions to a single winner, the fence filters that winner out, a
+// correctly superseded row reads Absent, and the committer rewrites forever.
+//
+// All three tables here satisfy the rule -- the two partitioned ones carry
+// `day` in their sorting keys, and the third has no PARTITION BY at all -- but
+// that is a fact to VERIFY, not to assume, because it is the migration
+// authors' choice and not ours.
+func TestGitHubDerivedTablesPartitionExpressionsAreDerivableFromTheSortingKey(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	conn := githubDerivedIntegrationConn(t, ctx)
+
+	for _, tt := range []struct {
+		table           string
+		wantPartitioned bool
+	}{
+		{"estimate_coverage_metrics_daily", true},
+		{"work_item_state_durations_daily", true},
+		{"work_item_team_attributions", false},
+	} {
+		t.Run(tt.table, func(t *testing.T) {
+			var ddl string
+			if err := conn.QueryRow(ctx, "SHOW CREATE TABLE "+tt.table).Scan(&ddl); err != nil {
+				t.Fatal(err)
+			}
+			partitioned := strings.Contains(ddl, "PARTITION BY")
+			if partitioned != tt.wantPartitioned {
+				t.Fatalf("%s: PARTITION BY present = %v, want %v -- the readback shape "+
+					"chosen for this table assumes otherwise\nDDL: %s",
+					tt.table, partitioned, tt.wantPartitioned, ddl)
+			}
+			if !partitioned {
+				return
+			}
+			if !strings.Contains(ddl, "PARTITION BY toYYYYMM(day)") {
+				t.Fatalf("%s: partition expression is not toYYYYMM(day); a fence on `day` "+
+					"may no longer pin one partition\nDDL: %s", tt.table, ddl)
+			}
+			orderBy := ddl[strings.Index(ddl, "ORDER BY"):]
+			if end := strings.Index(orderBy, "\nSETTINGS"); end > 0 {
+				orderBy = orderBy[:end]
+			}
+			// `day` must be IN the sorting key, so toYYYYMM(day) is derivable
+			// from it and one key cannot span two partitions.
+			if !strings.Contains(orderBy, "day") {
+				t.Fatalf("%s: `day` is NOT in the sorting key, so toYYYYMM(day) is not "+
+					"derivable from it and fencing the readback on day is UNSAFE "+
+					"under the default do_not_merge_across_partitions_select_final=0"+
+					"\nORDER BY: %s", tt.table, orderBy)
+			}
+		})
+	}
+}
+
 func githubDerivedIntegrationLease() providerfoundation.LeaseGuard {
 	return providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 }
@@ -192,6 +258,24 @@ WHERE org_id = ? AND provider = ? AND work_scope_id = ? AND ifNull(team_id, '') 
 	if unfenced != 2 {
 		t.Fatalf("fence precondition: unfenced count = %d, want 2 -- the two rows must "+
 			"straddle a month boundary or this test proves nothing about partitioning", unfenced)
+	}
+
+	// BOTH SETTINGS. Under the DEFAULT (0) the server may merge across
+	// partitions when evaluating FINAL, so a #1535-class fence defect presents
+	// as a FALSE CONFLICT (the wrong month's row wins the merge and is
+	// compared) rather than as found=2. A test asserting only the found=2
+	// symptom therefore passes on a default server while the bug is live.
+	// Running the real readback under both settings pins the verdict rather
+	// than the symptom: with `day` in the sorting key the answer must be
+	// Exact either way.
+	for _, merge := range []int{0, 1} {
+		settingCtx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
+			"do_not_merge_across_partitions_select_final": merge,
+		}))
+		if inspection, err := sink.InspectGitHubWorkItemEffect(settingCtx, identity, effect); err != nil || inspection != EffectExact {
+			t.Fatalf("do_not_merge_across_partitions_select_final=%d: inspection = %v, err = %v, want EffectExact",
+				merge, inspection, err)
+		}
 	}
 
 	// A stale persisted version must read as Absent so the writer replaces it.

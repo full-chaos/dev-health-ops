@@ -140,11 +140,72 @@ func (executor CompleteRouteExecutor) Execute(
 		(executor.Committer.Ledger == nil || executor.Committer.Sink == nil) {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
+	if descriptor.PreparedManifestRecovery &&
+		(descriptor.Provider != "github" || descriptor.RouteDataset != "work-items") {
+		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
+	}
+	preparedLedger, preparedRecovery := executor.Committer.Ledger.(PreparedEffectLedger)
+	if descriptor.RouteEnabled && descriptor.PreparedManifestRecovery && !preparedRecovery {
+		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
+	}
 	var result CompleteRouteExecutionResult
 	err := session.Run(ctx, executor.HeartbeatInterval, func(
 		workContext context.Context,
 		guard providerfoundation.LeaseGuard,
 	) error {
+		normalizedAt := executor.now()
+		var recoveredEffects *EffectLedgerState
+		// Load the durable manifest before touching credentials or provider
+		// state. Snapshot-backed recovery must be able to resume the exact batch
+		// even when the live provider selection has changed since prepare.
+		if descriptor.RouteEnabled {
+			state, loadErr := executor.Committer.Ledger.LoadEffects(
+				workContext, session.Claim, normalizedAt,
+			)
+			switch {
+			case loadErr == nil:
+				if state.Generation != session.Claim.GenerationKey() ||
+					state.Provider != session.Claim.Provider ||
+					state.Dataset != session.Claim.Dataset {
+					return ErrEffectLedgerConflict
+				}
+				normalizedAt = state.CreatedAt.UTC()
+				recoveredEffects = &state
+			case errors.Is(loadErr, ErrEffectLedgerNotFound):
+			default:
+				return loadErr
+			}
+		}
+		if recoveredEffects != nil && descriptor.PreparedManifestRecovery {
+			// Contract point 7. New workers may continue an existing route from
+			// a legacy v1 ledger, but a route that requires prepared recovery
+			// must never resume from a document written before that contract
+			// existed. Both decoders below also refuse it; the policy belongs
+			// here, where the route declares the requirement, rather than
+			// surviving only as a side effect of two independent decoders that
+			// a later change could relax one at a time.
+			if recoveredEffects.SchemaVersion != "v2" ||
+				recoveredEffects.PreparedSnapshot == nil {
+				return ErrEffectRecoveryUnsafe
+			}
+			manifest, err := preparedLedger.LoadRouteSnapshot(
+				workContext, session.Claim, *recoveredEffects, executor.now(),
+			)
+			if err != nil {
+				return err
+			}
+			if err := manifest.Batch.validate(descriptor); err != nil ||
+				!manifest.NormalizedAt.Equal(normalizedAt) {
+				return ErrEffectLedgerConflict
+			}
+			result.Fetch, result.Result, result.Watermark =
+				manifest.Batch.Evidence, manifest.Batch.Result, manifest.Batch.Watermark
+			result.Comparison = manifest.Comparison
+			result.Effects, err = executor.Committer.CommitPrepared(
+				workContext, session.Claim, manifest.Batch.Effects, *recoveredEffects,
+			)
+			return err
+		}
 		credential, err := executor.Credentials.Resolve(
 			workContext,
 			guard,
@@ -173,8 +234,6 @@ func (executor CompleteRouteExecutor) Execute(
 			return ErrInvalidConfiguration
 		}
 		client.Metrics = executor.Metrics
-		normalizedAt := executor.now()
-		var recoveredEffects *EffectLedgerState
 		// Every attempt for this unit occurrence must rebuild byte-identical
 		// rows, not just expired-lease recoveries. Effect digests cover the
 		// serialized rows, so a wall-clock timestamp regenerated on an ordinary
@@ -183,24 +242,6 @@ func (executor CompleteRouteExecutor) Execute(
 		// run — wedging the unit until it exhausts. ReleaseForRetry returns the
 		// unit to `dispatching`, so the next claim is *not* Recovered; gating
 		// this on Recovered covered only a fraction of the real retry paths.
-		if descriptor.RouteEnabled {
-			state, loadErr := executor.Committer.Ledger.LoadEffects(
-				workContext, session.Claim, normalizedAt,
-			)
-			switch {
-			case loadErr == nil:
-				if state.Generation != session.Claim.GenerationKey() ||
-					state.Provider != session.Claim.Provider ||
-					state.Dataset != session.Claim.Dataset {
-					return ErrEffectLedgerConflict
-				}
-				normalizedAt = state.CreatedAt.UTC()
-				recoveredEffects = &state
-			case errors.Is(loadErr, ErrEffectLedgerNotFound):
-			default:
-				return loadErr
-			}
-		}
 		if recoveredEffects != nil {
 			if replanning, ok := executor.Handler.(SafeReplanningCompleteRouteHandler); ok {
 				canReplan, replanErr := replanning.CanReplanRecovery(
@@ -269,9 +310,21 @@ func (executor CompleteRouteExecutor) Execute(
 		// persist a later time than the rows were built with, so the next
 		// attempt would reload that later time, rebuild different rows, and be
 		// rejected on digest — the wedge in a second disguise.
-		result.Effects, err = executor.Committer.Commit(
-			workContext, session.Claim, batch.Effects, normalizedAt,
-		)
+		if descriptor.PreparedManifestRecovery {
+			prepared, prepareErr := preparedLedger.PrepareRouteSnapshot(
+				workContext, session.Claim, batch, comparison, normalizedAt,
+			)
+			if prepareErr != nil {
+				return prepareErr
+			}
+			result.Effects, err = executor.Committer.CommitPrepared(
+				workContext, session.Claim, batch.Effects, prepared,
+			)
+		} else {
+			result.Effects, err = executor.Committer.Commit(
+				workContext, session.Claim, batch.Effects, normalizedAt,
+			)
+		}
 		return err
 	})
 	return result, err

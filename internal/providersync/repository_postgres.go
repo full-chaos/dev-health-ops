@@ -126,6 +126,15 @@ func (repository *PostgresRepository) Complete(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	// The prepared effect payload is recovery state, not a product record.
+	// Delete it in the same transaction that terminalizes the unit so any
+	// later watermark/outbox failure rolls both operations back together.
+	if _, err := tx.Exec(
+		ctx, deletePreparedRouteSnapshotSQL,
+		claim.OrgID, claim.ID, claim.GenerationKey(),
+	); err != nil {
+		return ErrInvalidConfiguration
+	}
 	if watermark != nil {
 		for _, datasetKey := range datasetKeys {
 			// THE write boundary (CHAOS-3412 C10(c), CHAOS-3427). Every Go
@@ -155,6 +164,10 @@ func (repository *PostgresRepository) Complete(
 	}
 	return nil
 }
+
+const deletePreparedRouteSnapshotSQL = `
+DELETE FROM public.sync_run_unit_effect_snapshots
+WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`
 
 // ReleaseForRetry returns a live claim to dispatching for the same River job's
 // bounded retry. A process death cannot call this method; expired-lease
@@ -458,12 +471,47 @@ WHERE unit.id = $1::uuid
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
 
+// failUnitSQL carries forward EXACTLY ONE key and drops the rest.
+//
+// A wholesale replace lost go_effect_ledger_v1, and with it the prepared
+// snapshot reference. Contract point 5 retains the snapshot on failure, and
+// the reference is what makes the retained row VALIDATABLE -- the row is still
+// findable by sync_run_unit_id, but without the digest, size and schema
+// recorded in the ledger nothing can tell a good payload from a corrupt one.
+//
+// A blanket `unit.result || $6` overcorrected. The result document also
+// accumulates CLAIMABLE-STATE keys -- next_retry_at, retry_exhausted,
+// retry_reason, and the rate-limit and budget deferral keys -- written by
+// markExpiredLeaseRetryingSQL, the soft-timeout retry path, rate-limit
+// deferral and the budget guard. Nothing clears them on claim, so preserving
+// everything freezes a live "will retry at T" claim onto a unit that is
+// terminally failed. The admin integrations API projects these keys with no
+// status gate and treats them as authoritative, and every other terminal stamp
+// in the repo deliberately nulls next_retry_at (lease_repair.go,
+// sync_units.py) -- this was the only one that would not have.
+//
+// The CASE is not decoration: unit.result is sa.JSON, so it can hold a JSON
+// literal `null`, and `'null'::jsonb || '{...}'::jsonb` does NOT raise -- it
+// ARRAY-concatenates to `[null, {...}]`. The failure document then has no
+// readable error_category at all, because `->>` on an array returns NULL. A
+// raise would have been the kinder outcome; this loses the reason a unit
+// failed, silently. Verified on PostgreSQL 18.4 rather than assumed.
+//
+// `?` returns false for every non-object, so it is the whole guard: a null,
+// array or scalar predecessor takes the ELSE branch, and the THEN branch only
+// ever concatenates two objects.
 const failUnitSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'failed',
     duration_seconds = $4,
     error = $5,
-    result = $6::jsonb,
+    result = CASE
+      WHEN unit.result::jsonb ? 'go_effect_ledger_v1'
+      THEN jsonb_build_object(
+             'go_effect_ledger_v1', unit.result::jsonb -> 'go_effect_ledger_v1'
+           ) || $6::jsonb
+      ELSE $6::jsonb
+    END,
     lease_owner = NULL,
     lease_expires_at = NULL,
     last_heartbeat_at = $3,

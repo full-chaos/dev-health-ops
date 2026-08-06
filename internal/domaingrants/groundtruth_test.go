@@ -78,6 +78,32 @@ func TestLoadGroundTruth_MatchesKnownShape(t *testing.T) {
 		t.Errorf("required: worker_job_outbox = %+v, want SELECT+INSERT only", set)
 	}
 
+	// sync_run_unit_effect_snapshots pins all four privileges, ABSENCE
+	// included. The count pin below cannot see a privilege change -- adding
+	// UPDATE to this tuple leaves every other assertion in this file green --
+	// and the grants-vs-posture divergence check is advisory by design. The
+	// no-UPDATE property is load-bearing: PostgreSQL treats FOR UPDATE and
+	// FOR SHARE as UPDATE-class privileges, so granting UPDATE here would
+	// silently re-enable the row-locking clause that broke every re-prepare
+	// in production. It must be pinned in the posture, not only in migrate.go
+	// and the provisioning scripts.
+	snapshots := gt.RequiredTablePrivileges["sync_run_unit_effect_snapshots"]
+	if !snapshots.Has(PrivSelect) || !snapshots.Has(PrivInsert) ||
+		!snapshots.Has(PrivDelete) || snapshots.Has(PrivUpdate) {
+		t.Errorf(
+			"required: sync_run_unit_effect_snapshots = %+v, want SELECT+INSERT+DELETE and NOT UPDATE",
+			snapshots,
+		)
+	}
+	snapshotGrants := gt.Grants["sync_run_unit_effect_snapshots"]
+	if !snapshotGrants.Has(PrivSelect) || !snapshotGrants.Has(PrivInsert) ||
+		!snapshotGrants.Has(PrivDelete) || snapshotGrants.Has(PrivUpdate) {
+		t.Errorf(
+			"grants: sync_run_unit_effect_snapshots = %+v, want SELECT+INSERT+DELETE and NOT UPDATE",
+			snapshotGrants,
+		)
+	}
+
 	// DELETE is an ordinary privilege since Phase 2 added AllowDelete to the
 	// posture; these tables used to be reported as permanently unrepresentable.
 	for _, table := range []string{"dev_conversations", "external_ingest_batch_payloads", "provider_rate_limit_observations"} {
@@ -105,12 +131,12 @@ func TestLoadGroundTruth_MatchesKnownShape(t *testing.T) {
 		}
 	}
 
-	if len(gt.RequiredTablePrivileges) != 34 {
-		t.Errorf("domain posture: got %d tables, want 34 (Option B two-role split) -- "+
+	if len(gt.RequiredTablePrivileges) != 35 {
+		t.Errorf("domain posture: got %d tables, want 35 (Option B two-role split) -- "+
 			"if this changed intentionally, the ground-truth reader is fine, just update this pin", len(gt.RequiredTablePrivileges))
 	}
-	if len(gt.Grants) != 34 {
-		t.Errorf("runtimeGrantStatements: got %d granted tables, want 34 -- see note above", len(gt.Grants))
+	if len(gt.Grants) != 35 {
+		t.Errorf("runtimeGrantStatements: got %d granted tables, want 35 -- see note above", len(gt.Grants))
 	}
 	// The two lists agreeing on their size is the property that matters most
 	// here: this checker exists because they disagreed once.

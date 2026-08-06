@@ -120,6 +120,12 @@ SELECT format(
  WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
 \gexec
 SELECT format(
+         'GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.sync_run_unit_effect_snapshots') IS NOT NULL
+\gexec
+SELECT format(
          'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO %I',
          :'domain_role'
        )

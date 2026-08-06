@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from dev_health_ops.api.dev.scope_catalog import merge_search_candidates
 from dev_health_ops.api.dev.scope_service import AuthorizedEntity, EntityKind
 from dev_health_ops.api.graphql.context import GraphQLContext
 from dev_health_ops.api.graphql.resolvers import dev_entitlement
@@ -49,10 +50,19 @@ class FakeCatalog:
         assert query == "ask"
         assert kinds == (EntityKind.ISSUE, EntityKind.PROJECT)
         assert limit == 25
-        return [
-            AuthorizedEntity(EntityKind.PROJECT, "project-z", "Ask Dev"),
-            AuthorizedEntity(EntityKind.ISSUE, "issue-a", "ask dev"),
-        ]
+        # Ranked and truncated by the production helper, not by hand: the
+        # service now preserves the catalog's order instead of re-sorting it
+        # (CHAOS-3422), so a double that returned rows in seeded order would
+        # be asserting an order the real catalog never emits.
+        return merge_search_candidates(
+            alias_hits=(),
+            substring_hits=[
+                AuthorizedEntity(EntityKind.PROJECT, "project-z", "Ask Dev"),
+                AuthorizedEntity(EntityKind.ISSUE, "issue-a", "ask dev"),
+            ],
+            preferred_kinds=preferred_kinds,
+            limit=limit,
+        )
 
     async def exact(self, *_args: Any, **_kwargs: Any) -> list[AuthorizedEntity]:
         raise AssertionError("GraphQL scope search must use the shared search service")

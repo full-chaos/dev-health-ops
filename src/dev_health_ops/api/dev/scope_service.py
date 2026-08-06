@@ -437,23 +437,47 @@ def _dedupe_entities(
     return tuple(sorted(unique.values(), key=_entity_order))
 
 
+def _dedupe_preserving_rank(
+    entities: Sequence[AuthorizedEntity],
+) -> tuple[AuthorizedEntity, ...]:
+    """Deduplicate a search page **without** re-ordering it.
+
+    Search results arrive already ranked by ``merge_search_candidates`` — the
+    named kind, then alias-equality over incidental substring containment,
+    then label. Passing them through ``_dedupe_entities`` re-sorted the whole
+    page by label and destroyed both of the first two keys, because an
+    ``AuthorizedEntity`` carries no match provenance for a later layer to
+    recover. That is what listed the one real project last in the CHAOS-3422
+    repro even though the catalog had ranked it first, and it silently
+    undid CHAOS-3388's alias precedence for every same-kind pair
+    (codex review round 3, confirmed: alias ``Zeta Runtime (ACR)`` lost its
+    lead to substring-only ``Aardvark ACR Notes``).
+
+    Not a behaviour change for the alias-unaware callers: with
+    ``include_alias_matches=False`` the catalog's own order *is* label order,
+    the identical sequence ``_dedupe_entities`` produced. Only the
+    closest-matches fallback, the one caller that enables alias matching, sees
+    a different page — which is precisely the ranking this ticket restores.
+    ``resolve()``'s exact path still uses ``_dedupe_entities``: those entities
+    come from ``exact()``, which has no rank of its own to preserve.
+    """
+
+    unique: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
+    for entity in entities:
+        unique.setdefault((entity.kind, entity.canonical_id), entity)
+    return tuple(unique.values())
+
+
 def _rank_preferred_kinds(
     entities: Sequence[AuthorizedEntity], preferred_kinds: frozenset[EntityKind]
 ) -> tuple[AuthorizedEntity, ...]:
     """CHAOS-3422: the kind the user named leads, everything else follows.
 
-    ``_dedupe_entities`` orders the whole page by label, which is what buried
-    the one real project behind four incidental issue matches in the live
-    repro. This is a **stable** partition on top of that order, so with no
-    preference the result is the identical tuple, and with one the relative
-    order inside each side is still the label order every other caller sees.
-
-    Known residual, deliberately not widened here: ``_dedupe_entities``'s
-    alphabetical sort also discards the catalog's alias-before-substring rank
-    within a kind, since ``AuthorizedEntity`` carries no match provenance for
-    this layer to preserve. That is pre-existing and unchanged; the catalog's
-    own ``merge_search_candidates`` still applies both keys where it matters,
-    which is before the page bound truncates.
+    A **stable** partition, so with no preference the result is the identical
+    tuple and with one the catalog's rank still decides the order inside each
+    side. Applied here as well as in the catalog because the two truncate
+    separately: the catalog bounds its page, this bounds what a caller asked
+    for, and a rank applied at only one of them is a rank applied after a cut.
     """
 
     if not preferred_kinds:
@@ -774,7 +798,7 @@ class ScopeResolutionService:
         )
         result = ScopeSearchResult(
             candidates=_rank_preferred_kinds(
-                _dedupe_entities(entities), request.preferred_kinds
+                _dedupe_preserving_rank(entities), request.preferred_kinds
             )[: request.limit],
             query_version=QUERY_VERSION,
             catalog_watermark=watermark,

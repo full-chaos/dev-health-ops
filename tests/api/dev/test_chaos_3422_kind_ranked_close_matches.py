@@ -5,12 +5,12 @@ The live repro (run ``acdc0a67-8312-43e0-8b59-0aafc0f10a68``, main @
 acronym matcher correctly finds the one real project, and the clarification
 then lists it **5th of 5**, behind four irrelevant issue substring hits.
 
-Two kind-blind ranking seams produced that, and each has its own test here:
+Two kind-blind seams produced that, and each has its own test here:
 
-* ``ClickHouseAuthorizedEntityCatalog.search`` merges alias hits ahead of
-  substring hits and truncates to ``limit`` — precision-ranked, kind-blind.
-* ``ScopeResolutionService.search`` then re-sorts the whole page into one
-  alphabetical order by label, which discards even that alias-first rank.
+* ``ClickHouseAuthorizedEntityCatalog.search`` merged alias hits ahead of
+  substring hits and truncated to ``limit`` — precision-ranked, kind-blind.
+* ``ScopeResolutionService.search`` then re-sorted the whole page into one
+  alphabetical order by label, discarding even that alias-first rank.
   ``[CHAOS-2911] Harden ACR runtime client boundary`` casefolds to a ``[``
   that sorts ahead of ``dev health agent context runtime…``.
 
@@ -304,8 +304,16 @@ async def test_an_untyped_span_beside_a_typed_one_ranks_only_the_typed_kind() ->
 
 
 @pytest.mark.asyncio
-async def test_search_without_a_preference_is_byte_for_byte_todays_ordering() -> None:
-    """Every existing caller passes no preference and must be untouched."""
+async def test_search_without_a_preference_keeps_the_catalogs_own_rank() -> None:
+    """No preference must leave the catalog's ranking exactly as it arrived.
+
+    Codex review round 3, confirmed: the service used to re-sort every page by
+    label, which discarded CHAOS-3388's alias precedence as well as this
+    ticket's kind key — the acronym-matched project arrived first from the
+    catalog and left the service last. Preserving the order is only visible
+    for the one caller that enables alias matching; with substring hits alone
+    the catalog's order already *is* label order.
+    """
 
     entities = [(ORG_ID, ACR_PROJECT)] + [
         (ORG_ID, issue) for issue in ACR_SUBSTRING_ISSUES
@@ -324,8 +332,8 @@ async def test_search_without_a_preference_is_byte_for_byte_todays_ordering() ->
     )
 
     assert [candidate.label for candidate in result.candidates] == [
-        *(issue.label for issue in ACR_SUBSTRING_ISSUES),
         ACR_PROJECT.label,
+        *(issue.label for issue in ACR_SUBSTRING_ISSUES),
     ]
 
 
@@ -335,10 +343,19 @@ async def test_a_preference_and_no_preference_do_not_share_a_cache_entry() -> No
 
     A shared cache key would let whichever request ran first silently answer
     the other's call, which is the defect CHAOS-3388 already documented for
-    ``include_alias_matches``.
+    ``include_alias_matches``. The seeded rows must be a case where the two
+    genuinely differ, or the test would pass with the cache keys collided:
+    ``Aardvark ACR Notes`` is a project matching only by substring, so it
+    trails the acronym hit either way, while the *issues* lead the page
+    without a preference and trail both projects with one.
     """
 
-    entities = [(ORG_ID, ACR_PROJECT)] + [
+    aardvark = AuthorizedEntity(
+        kind=EntityKind.PROJECT,
+        canonical_id="project-aardvark",
+        label="Aardvark ACR Notes",
+    )
+    entities = [(ORG_ID, ACR_PROJECT), (ORG_ID, aardvark)] + [
         (ORG_ID, issue) for issue in ACR_SUBSTRING_ISSUES
     ]
     service = ScopeResolutionService(SeededCatalog(entities), cache=ScopeRequestCache())
@@ -358,13 +375,93 @@ async def test_a_preference_and_no_preference_do_not_share_a_cache_entry() -> No
         ScopeSearchRequest(preferred_kinds=frozenset({EntityKind.PROJECT}), **kwargs),
     )
 
-    assert unpreferred.candidates[0].label != preferred.candidates[0].label
-    assert preferred.candidates[0].label == ACR_PROJECT.label
+    assert [candidate.label for candidate in unpreferred.candidates] == [
+        ACR_PROJECT.label,
+        *(issue.label for issue in ACR_SUBSTRING_ISSUES),
+    ]
+    assert [candidate.label for candidate in preferred.candidates] == [
+        ACR_PROJECT.label,
+        aardvark.label,
+        *(issue.label for issue in ACR_SUBSTRING_ISSUES[:3]),
+    ]
+
+
+#: Rows the oracle below drives through both search implementations. Chosen so
+#: every tier boundary is crossed: alias-only, alias *and* substring, and
+#: substring-only, with the substring-only label sorting first so a lost alias
+#: rank is visible as a reordering rather than hidden by the alphabet.
+_ORACLE_ROWS = (
+    AuthorizedEntity(
+        kind=EntityKind.PROJECT, canonical_id="project-zeta", label="Zeta Runtime (ACR)"
+    ),
+    AuthorizedEntity(
+        kind=EntityKind.PROJECT,
+        canonical_id="project-aardvark",
+        label="Aardvark ACR Notes",
+    ),
+    AuthorizedEntity(
+        kind=EntityKind.PROJECT, canonical_id="project-agile", label="Agile Core Runway"
+    ),
+    AuthorizedEntity(
+        kind=EntityKind.TEAM, canonical_id="team-acr", label="Analytics Core Reporting"
+    ),
+    AuthorizedEntity(
+        kind=EntityKind.TEAM, canonical_id="team-beta", label="Beta ACR Guild"
+    ),
+)
+
+
+def _oracle_query_dicts(rows: tuple[AuthorizedEntity, ...]) -> Any:
+    """``query_dicts`` over ``rows``, mirroring each production query's WHERE.
+
+    The roster scan and the substring pass are told apart by their *parameters*
+    -- only the substring pass binds ``query`` -- not by matching SQL text.
+    Codex review round 3, confirmed: the first version keyed on the substring
+    ``lowerUTF8(name)``, which the project substring SQL also contains
+    (``scope_catalog`` line 402), so both production queries were handed the
+    unfiltered roster and the two sides were never driven from equal inputs.
+    It passed anyway, by luck, because the extra row was an alias hit too.
+    """
+
+    kind_by_table = {
+        "FROM projects FINAL": EntityKind.PROJECT,
+        "FROM teams FINAL": EntityKind.TEAM,
+    }
+
+    async def query_dicts(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        kind = next(
+            (kind for table, kind in kind_by_table.items() if table in sql), None
+        )
+        if kind is None:
+            return []
+        matching = [row for row in rows if row.kind is kind]
+        if "query" in params:  # the substring pass
+            needle = params["query"].casefold()
+            matching = [
+                row
+                for row in matching
+                if needle == row.canonical_id.casefold()
+                or needle in row.label.casefold()
+            ]
+        return [
+            {"canonical_id": row.canonical_id, "label": row.label} for row in matching
+        ]
+
+    return query_dicts
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query", ["acr", "runtime", "project-zeta", "nothing-matches-this"]
+)
+@pytest.mark.parametrize(
+    "preferred",
+    [frozenset(), frozenset({EntityKind.PROJECT}), frozenset({EntityKind.TEAM})],
+)
 async def test_the_seeded_catalog_agrees_with_the_production_catalog(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, query: str, preferred: frozenset[EntityKind]
 ) -> None:
     """A differential oracle over the two search implementations.
 
@@ -374,74 +471,142 @@ async def test_the_seeded_catalog_agrees_with_the_production_catalog(
     they agree. Codex review, medium: they did not — the fake skipped the
     alias pass for any entity the substring pass had already matched, so
     ``Zeta Runtime (ACR)`` was an alias hit in production and a substring hit
-    in the fake, one rank lower. Both are driven from the *same* rows here,
-    with the production side's ``query_dicts`` returning exactly what the fake
-    is seeded with, so the comparison cannot be satisfied by two different
-    inputs.
+    in the fake, one rank lower.
+
+    Both sides are driven from the *same* rows, through the same WHERE
+    semantics, so the comparison cannot be satisfied by two different inputs.
+    Repository search is deliberately outside this oracle: production enriches
+    repository labels through ``resolve_scope_display_names``, which the fake
+    does not model at all — a pre-existing divergence this ticket does not
+    close, and pretending otherwise here would be the false confidence the
+    oracle exists to remove.
     """
 
-    rows = [
-        AuthorizedEntity(
-            kind=EntityKind.PROJECT,
-            canonical_id="project-zeta",
-            label="Zeta Runtime (ACR)",
-        ),
-        AuthorizedEntity(
-            kind=EntityKind.PROJECT,
-            canonical_id="project-aardvark",
-            label="Aardvark ACR Notes",
-        ),
-        AuthorizedEntity(
-            kind=EntityKind.PROJECT,
-            canonical_id="project-agile",
-            label="Agile Core Runway",
-        ),
-    ]
-
-    async def fake_query_dicts(
-        _client: object, sql: str, params: dict[str, Any]
-    ) -> list[dict[str, Any]]:
-        if "FROM projects FINAL" not in sql:
-            return []
-        if "lowerUTF8(name)" in sql:  # the alias roster scan
-            return [
-                {"canonical_id": row.canonical_id, "label": row.label} for row in rows
-            ]
-        return [  # the substring pass
-            {"canonical_id": row.canonical_id, "label": row.label}
-            for row in rows
-            if "acr" in row.label.casefold()
-        ]
-
     monkeypatch.setattr(
-        "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts
+        "dev_health_ops.api.dev.scope_catalog.query_dicts",
+        _oracle_query_dicts(_ORACLE_ROWS),
+    )
+    kinds = (EntityKind.PROJECT, EntityKind.TEAM)
+
+    production = await ClickHouseAuthorizedEntityCatalog(object()).search(
+        ORG_ID,
+        query,
+        kinds,
+        limit=NOT_FOUND_FALLBACK_LIMIT,
+        include_alias_matches=True,
+        preferred_kinds=preferred,
+    )
+    seeded = await SeededCatalog([(ORG_ID, row) for row in _ORACLE_ROWS]).search(
+        ORG_ID,
+        query,
+        kinds,
+        limit=NOT_FOUND_FALLBACK_LIMIT,
+        include_alias_matches=True,
+        preferred_kinds=preferred,
     )
 
-    for preferred in (frozenset(), frozenset({EntityKind.PROJECT})):
-        production = await ClickHouseAuthorizedEntityCatalog(object()).search(
-            ORG_ID,
-            "acr",
-            (EntityKind.PROJECT,),
-            limit=NOT_FOUND_FALLBACK_LIMIT,
-            include_alias_matches=True,
-            preferred_kinds=preferred,
-        )
-        seeded = await SeededCatalog([(ORG_ID, row) for row in rows]).search(
-            ORG_ID,
-            "acr",
-            (EntityKind.PROJECT,),
-            limit=NOT_FOUND_FALLBACK_LIMIT,
-            include_alias_matches=True,
-            preferred_kinds=preferred,
-        )
-        assert seeded == production, f"the fake diverges for preferred={preferred}"
+    assert seeded == production, f"the fake diverges for {query!r}/{preferred}"
 
-    # And the agreed-upon answer is the right one, so agreeing on a wrong
-    # order could not satisfy this test either.
-    assert [entity.canonical_id for entity in seeded] == [
-        "project-agile",  # alias only, sorts first inside the alias tier
-        "project-zeta",  # alias AND substring -- still an alias hit
+
+@pytest.mark.asyncio
+async def test_the_oracle_rows_rank_the_way_the_contract_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agreeing on a *wrong* order must not satisfy the oracle above."""
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts",
+        _oracle_query_dicts(_ORACLE_ROWS),
+    )
+
+    result = await ClickHouseAuthorizedEntityCatalog(object()).search(
+        ORG_ID,
+        "acr",
+        (EntityKind.PROJECT, EntityKind.TEAM),
+        limit=NOT_FOUND_FALLBACK_LIMIT,
+        include_alias_matches=True,
+        preferred_kinds=frozenset({EntityKind.PROJECT}),
+    )
+
+    assert [entity.canonical_id for entity in result] == [
+        # Preferred kind first: alias hits by label, then the substring-only one.
+        "project-agile",  # "Agile Core Runway" -> acronym "acr"
+        "project-zeta",  # alias AND substring -- still ranked as an alias hit
         "project-aardvark",  # substring only
+        # Then the other kind, same two keys.
+        "team-acr",  # "Analytics Core Reporting" -> acronym "acr"
+        "team-beta",  # substring only
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_service_ranks_even_when_the_catalog_ignores_the_hint() -> None:
+    """``preferred_kinds`` is a hint to the catalog and a guarantee at the service.
+
+    ``AuthorizedEntityCatalog`` is a Protocol, and ``preferred_kinds`` reaches
+    it with a default of ``frozenset()`` — so an implementation that simply
+    ignores the argument is a valid one, and would silently return a
+    kind-blind page. Depending on every implementation to honour a ranking
+    hint is the kind of unstated assumption that only shows up in production,
+    so the service re-applies the key over whatever it is handed. Without
+    this, that re-application has no witness at all: the real catalog already
+    ranks, so removing it changes nothing any other test can see.
+    """
+
+    class RankIgnoringCatalog(SeededCatalog):
+        async def search(
+            self,
+            org_id: str,
+            query: str,
+            kinds: tuple[EntityKind, ...],
+            *,
+            limit: int,
+            include_alias_matches: bool = False,
+            preferred_kinds: frozenset[EntityKind] = frozenset(),
+        ) -> list[AuthorizedEntity]:
+            return await super().search(
+                org_id,
+                query,
+                kinds,
+                limit=limit,
+                include_alias_matches=include_alias_matches,
+            )
+
+    # A plain substring match on both sides, so nothing but the kind key can
+    # move the project: its label sorts last, and the catalog here ignores the
+    # hint that would otherwise have raised it.
+    project = AuthorizedEntity(
+        kind=EntityKind.PROJECT,
+        canonical_id="project-zulu",
+        label="Zulu Runtime Program",
+    )
+    issues = [
+        AuthorizedEntity(
+            kind=EntityKind.ISSUE,
+            canonical_id=f"linear:CHAOS-{2911 + index}",
+            label=f"{index} runtime task",
+        )
+        for index in range(4)
+    ]
+    service = ScopeResolutionService(
+        RankIgnoringCatalog([(ORG_ID, entity) for entity in [project, *issues]]),
+        cache=ScopeRequestCache(),
+    )
+
+    result = await service.search(
+        ORG_ID,
+        "permissions_01",
+        ScopeSearchRequest(
+            query="runtime",
+            kinds=(EntityKind.ISSUE, EntityKind.PROJECT),
+            limit=NOT_FOUND_FALLBACK_LIMIT,
+            preferred_kinds=frozenset({EntityKind.PROJECT}),
+        ),
+    )
+
+    assert [candidate.canonical_id for candidate in result.candidates] == [
+        project.canonical_id,
+        *(issue.canonical_id for issue in issues),
     ]
 
 

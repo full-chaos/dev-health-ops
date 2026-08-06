@@ -1442,15 +1442,23 @@ async def create_message(
         # (and terminal_error_payload is set so a duplicate request replays
         # this exact copy, not the generic fallback).
         error_code = runtime_resolution.error_code or "provider_not_configured"
+        safe_message = (
+            runtime_resolution.safe_message or "No certified Ask Dev model is ready."
+        )
+        # CHAOS-3423 Codex adversarial review round 4 (MEDIUM, confirmed): a
+        # SINGLE DevError, reused for the persisted transcript row AND the
+        # immediate HTTP response below -- the two used to disagree on
+        # `retryable` (this call site's own pre-CHAOS-3423 `_raise(...)`
+        # never passed one, i.e. `False`; the newly-added persisted row
+        # hard-coded `True`), which would make a duplicate-request replay
+        # tell the client something different from what the live response
+        # already told it.
         error = DevError(
             schema_version="dev_error.v1",
             request_id=request_id or str(accepted.run.request_id),
             code=error_code,
-            safe_message=(
-                runtime_resolution.safe_message
-                or "No certified Ask Dev model is ready."
-            ),
-            retryable=True,
+            safe_message=safe_message,
+            retryable=False,
         )
         recorder = PersistenceRunRecorder(
             service,
@@ -1487,7 +1495,7 @@ async def create_message(
         _raise(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             error_code,
-            runtime_resolution.safe_message or "No certified Ask Dev model is ready.",
+            safe_message,
             request_id=request_id,
         )
         raise AssertionError("unreachable")

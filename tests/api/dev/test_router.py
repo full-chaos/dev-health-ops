@@ -1740,6 +1740,11 @@ async def test_dev_message_fails_closed_when_no_certified_runtime_is_ready(
 
     assert response.status_code == 503
     assert response.json()["code"] == "provider_not_configured"
+    # CHAOS-3423 Codex adversarial review round 4 (MEDIUM, confirmed): the
+    # live response and the persisted (later replayed) error must agree on
+    # retryability -- the immediate response here has never passed
+    # `retryable=True` to `_raise`.
+    assert response.json()["retryable"] is False
     async with dev_api_context.maker() as session:
         run = await session.scalar(select(DevRun))
         assert run is not None
@@ -1751,6 +1756,7 @@ async def test_dev_message_fails_closed_when_no_certified_runtime_is_ready(
         # close, for a real, reachable no-answer terminal.
         assert run.terminal_error_payload is not None
         assert run.terminal_error_payload["code"] == "provider_not_configured"
+        assert run.terminal_error_payload["retryable"] is False
         assistant_rows = (
             await session.scalars(
                 select(DevMessage).where(DevMessage.role == "assistant")

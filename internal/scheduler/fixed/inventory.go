@@ -203,10 +203,22 @@ func checkedInSchedules() []Schedule {
 				"Immediately after the rate-limit prune, terminal-status rows only.",
 		},
 		{
-			ID:       "prune_ask_dev_conversations",
-			Native:   true,
-			Cadence:  DailyAt(5, 30),
-			Timezone: inventoryTimezone,
+			ID: "prune_ask_dev_conversations",
+			// Declared Native by CHAOS-3209, which built this schedule before
+			// any Python one existed. CHAOS-3404 then added the Celery beat
+			// entry `ask-dev-retention-sweep` for the SAME work at the SAME
+			// 05:30 cadence, so the schedule stopped being native the moment
+			// that landed: it now has a legacy predecessor, and leaving Native
+			// set would have kept it out of the bidirectional inventory check
+			// -- the exact bypass the Native field's own comment warns about.
+			// The two implementations agree on the predicate, the ordering,
+			// the FOR UPDATE SKIP LOCKED selection, the tombstone reason
+			// mapping and the chunked commits; see AskDevConversationStore in
+			// internal/jobs/system/retention_postgres.go against
+			// DevPersistenceService.cleanup_expired/_purge_conversation.
+			LegacyBeatEntry: "ask-dev-retention-sweep",
+			Cadence:         DailyAt(5, 30),
+			Timezone:        inventoryTimezone,
 			// Product reads enforce expires_at immediately. The scheduled pass
 			// durably removes expired content and is cumulative, so a missed run
 			// is repaired by the next occurrence without replaying stale buckets.
@@ -427,6 +439,12 @@ func LegacyBeatInventory() []LegacyEntry {
 			Cadence:  DailyAt(5, 15),
 			Owner:    OwnerFixedSchedule,
 			OwnerRef: "prune_external_ingest_batches",
+		},
+		{
+			Name:     "ask-dev-retention-sweep",
+			Cadence:  DailyAt(5, 30),
+			Owner:    OwnerFixedSchedule,
+			OwnerRef: "prune_ask_dev_conversations",
 		},
 		{
 			Name:     "refresh-sync-coverage-projections",

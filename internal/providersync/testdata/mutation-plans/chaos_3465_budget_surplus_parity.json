@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "name": "CHAOS-3465 Go parity: surplus retry leaves the budget episode alone + the half-cleared episode",
+  "build": [
+    "go",
+    "build",
+    "./..."
+  ],
+  "$determination": "CHAOS-3465 changed Python UNIT ADMISSION (sync/budget_guard.py's surplus phase, sync/guard.py's slot_headroom, the sync_units.py wiring). Go owns no unit-admission decision: internal/scheduler/sync mirrors Python's PLANNER (windows + HEAVY ratchet, pinned by planner_oracle_test.go, whose case schema carries no budget, deferral or concurrency field), and the only budget references in non-test Go source remain the two SQL episode clears at internal/providersync/repository_postgres.go:395-396 and internal/syncreconciler/lease_repair.go:383-384. _budget_deferral_exhausted -- the one Go-facing budget surface this repository pins -- is byte-identical across 7063b83ad. So the mirror is NO Go behaviour change. What it is instead: a probe that stops CHAOS-3465's two new Python writers of the shared sync_run_units row from invalidating the exhaustion corpus unobserved, and the two half-cleared-episode cases the corpus was missing. This file is the proof that both actually measure something.",
+  "$limitation": "M1-M3 mutate LIVE PYTHON that the Go oracle executes at test time, so every proof below must run through `go test -count=1` with the live-oracle env set -- a cached PASS would report a killed mutation that was never run. M4 mutates the Go mirror. Not covered here, and covered elsewhere: the surplus phase's own behaviour (tests/test_chaos_3465_budget_surplus_retry.py, which carries its own mutation record in that PR), and the reached-state proofs against real PostgreSQL (internal/providersync/budget_episode_integration_test.go, internal/syncreconciler/lease_repair_integration_test.go, both integration-tagged).",
+  "mutations": [
+    {
+      "id": "M1-surplus-promotion-launders-the-wall-clock",
+      "file": "src/dev_health_ops/sync/budget_guard.py",
+      "find": "        .values(available_at=now, updated_at=now)\n",
+      "replace": "        .values(available_at=now, updated_at=now, budget_first_deferred_at=now)\n",
+      "rationale": "The defect the probe exists for. A surplus promotion that restamps budget_first_deferred_at resets the episode's wall clock every time spare budget appears, so a unit that can never fit is rescued past CHAOS-3412's cap forever. Every authored case in the pair keeps passing -- none is built from the laundered state -- so without the probe this is invisible to the differential.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "GOWORK=off",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestBudgetExhaustionPredicateMatchesLivePython$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M2-surplus-withdrawal-rewrites-the-result-document",
+      "file": "src/dev_health_ops/sync/budget_guard.py",
+      "find": "        .values(available_at=prior_available_at, updated_at=now)\n",
+      "replace": "        .values(available_at=prior_available_at, updated_at=now, result=None)\n",
+      "rationale": "The other half of the same clause, on the WITHDRAWAL path rather than the promotion, and the one budget_guard's own comment calls out: _budget_deferral_exhausted's defence-in-depth gate reads result.error_category, so a surplus write that clears it disarms the exhaustion path for that unit. Mutating only the promotion (M1) would leave this path unmeasured -- the probe names both functions for exactly this reason.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "GOWORK=off",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestBudgetExhaustionPredicateMatchesLivePython$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M3-probe-loses-its-subject",
+      "file": "internal/providersync/testdata/oracle_pairs/syncunit_budget_exhaustion.py",
+      "find": "_SURPLUS_WRITE_PATHS = (\"_admit_unit_from_surplus\", \"_withdraw_surplus_admission\")\n",
+      "replace": "_SURPLUS_WRITE_PATHS = ()\n",
+      "rationale": "A probe with nothing to check must fail, not pass. This is the vacuity mode the probe would otherwise acquire the day a surplus function is renamed and the tuple is 'fixed' by emptying it: the oracle would stay green while measuring nothing. Killed by the explicit empty-tuple refusal, not by any case.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "GOWORK=off",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestBudgetExhaustionPredicateMatchesLivePython$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M4-clause-1-drops-the-first-deferred-conjunct",
+      "file": "internal/providersync/syncunit_budget_exhaustion_oracle_test.go",
+      "find": "\tif state.Deferrals <= 0 && state.FirstDeferredAt == nil {\n",
+      "replace": "\tif state.Deferrals <= 0 {\n",
+      "rationale": "Clause 1 of the Go mirror, mutated at the CONJUNCT rather than the whole condition. A half-cleared row (counter zeroed, stamp surviving) now short-circuits to 'not exhausted' in Go while live Python still terminalizes it. Recorded because it SURVIVED the pre-existing corpus: every zero-counter case there pairs the zero with a nil stamp, so the conjunct was never load-bearing for any of them. The two half_cleared_* cases added in this change are what kill it, and are the reason they are not decoration.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "GOWORK=off",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestBudgetExhaustionPredicateMatchesLivePython$",
+          "./internal/providersync/"
+        ]
+      ]
+    }
+  ]
+}

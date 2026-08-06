@@ -76,9 +76,12 @@ Celery Beat remains required for current production schedules. The Go scheduler 
 
 Run exactly one active production scheduler unless the deployment contract explicitly provides leader election or another duplicate-prevention mechanism. Verify that recurring work cannot overlap beyond provider, worker, and store capacity.
 
-The Ask Dev expiry repair is a native Go fixed schedule rather than a migrated
-Celery Beat entry. Its staged v3 contract uses the table-scoped
-`ask_dev_conversations` policy at 05:30 UTC. Its cutoff is the occurrence time
+The Ask Dev expiry repair (`prune_ask_dev_conversations`) was built in Go
+first, with no Celery predecessor. CHAOS-3404 has since added the Beat entry
+`ask-dev-retention-sweep` for the same work at the same cadence, so it is now a
+migrated schedule like the rest: the Go schedule owns that Beat entry in the
+legacy inventory, and the two must not both run. Its staged v3 contract uses
+the table-scoped `ask_dev_conversations` policy at 05:30 UTC. Its cutoff is the occurrence time
 because each conversation already persists its exact expiry; adding an
 environment retention horizon would incorrectly extend or shorten the user's
 0/30-day choice.

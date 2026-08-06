@@ -11,20 +11,23 @@ import (
 )
 
 var (
-	ErrInvalidConfiguration          = errors.New("provider sync configuration is invalid")
-	ErrUnitNotClaimable              = errors.New("provider sync unit is not claimable")
-	ErrLeaseLost                     = errors.New("provider sync unit lease is lost")
-	ErrCompatibilityRequired         = errors.New("provider sync dataset requires Python compatibility execution")
-	ErrGenerationJournalConflict     = errors.New("provider sync generation journal conflicts with persisted state")
-	ErrGenerationBlockAmbiguous      = errors.New("provider sync generation block requires readback reconciliation")
-	ErrGenerationRecoveryUnsafe      = errors.New("provider sync generation recovery payload is outside the bounded contract")
-	ErrEffectLedgerConflict          = errors.New("provider sync effect ledger conflicts with persisted state")
-	ErrEffectLedgerNotFound          = errors.New("provider sync effect ledger is not present")
-	ErrPreparedRouteSnapshotNotFound = errors.New("provider sync prepared route snapshot is not present")
-	ErrEffectRecoveryAmbiguous       = errors.New("provider sync effect recovery requires exact reconciliation")
-	ErrEffectRecoveryUnsafe          = errors.New("provider sync effect recovery is outside the bounded contract")
-	ErrShadowMismatch                = errors.New("provider sync native shadow differs from Python compatibility output")
-	ErrRepositoryIdentityAmbiguous   = errors.New(
+	ErrInvalidConfiguration             = errors.New("provider sync configuration is invalid")
+	ErrUnitNotClaimable                 = errors.New("provider sync unit is not claimable")
+	ErrLeaseLost                        = errors.New("provider sync unit lease is lost")
+	ErrCompatibilityRequired            = errors.New("provider sync dataset requires Python compatibility execution")
+	ErrGenerationJournalConflict        = errors.New("provider sync generation journal conflicts with persisted state")
+	ErrGenerationBlockAmbiguous         = errors.New("provider sync generation block requires readback reconciliation")
+	ErrGenerationRecoveryUnsafe         = errors.New("provider sync generation recovery payload is outside the bounded contract")
+	ErrEffectLedgerConflict             = errors.New("provider sync effect ledger conflicts with persisted state")
+	ErrEffectLedgerNotFound             = errors.New("provider sync effect ledger is not present")
+	ErrPreparedRouteSnapshotNotFound    = errors.New("provider sync prepared route snapshot is not present")
+	ErrPreparedRouteSnapshotRunTerminal = errors.New(
+		"provider sync prepared route snapshot belongs to a run that already finished",
+	)
+	ErrEffectRecoveryAmbiguous     = errors.New("provider sync effect recovery requires exact reconciliation")
+	ErrEffectRecoveryUnsafe        = errors.New("provider sync effect recovery is outside the bounded contract")
+	ErrShadowMismatch              = errors.New("provider sync native shadow differs from Python compatibility output")
+	ErrRepositoryIdentityAmbiguous = errors.New(
 		"provider sync repository identity cannot be proven identical to the Python derivation",
 	)
 	// ErrPaginationCapExceeded means a paginated fetch hit its page cap

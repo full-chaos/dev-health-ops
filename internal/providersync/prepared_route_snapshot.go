@@ -329,21 +329,30 @@ func (repository *PostgresRepository) LoadRouteSnapshot(
 	var schemaVersion, contentDigest string
 	var payloadBytes int
 	var payload []byte
-	var leaseLive bool
+	var leaseLive, runLive bool
 	if err := repository.Pool.QueryRow(
 		ctx, loadPreparedRouteSnapshotSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(), claim.Provider, claim.Dataset,
 		claim.Owner, now.UTC(),
-	).Scan(&schemaVersion, &contentDigest, &payloadBytes, &payload, &leaseLive); err != nil {
+	).Scan(
+		&schemaVersion, &contentDigest, &payloadBytes, &payload,
+		&leaseLive, &runLive,
+	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return PreparedRouteManifest{}, ErrPreparedRouteSnapshotNotFound
 		}
 		return PreparedRouteManifest{}, err
 	}
-	// Order matters: the snapshot demonstrably exists for this
+	// Order matters twice over. The snapshot demonstrably exists for this
 	// tenant/unit/generation, so a refusal here is about entitlement, not
-	// absence. Reporting it as "not found" told a recovering worker to
-	// fail closed for the wrong reason and hid genuine lease handoffs.
+	// absence -- reporting it as "not found" told a recovering worker to fail
+	// closed for the wrong reason and hid genuine handoffs. And a terminal run
+	// is checked BEFORE the lease, because a finished run explains a live
+	// lease that is simply no longer relevant; the reverse order would send an
+	// operator hunting a lease problem that does not exist.
+	if !runLive {
+		return PreparedRouteManifest{}, ErrPreparedRouteSnapshotRunTerminal
+	}
 	if !leaseLive {
 		return PreparedRouteManifest{}, ErrLeaseLost
 	}
@@ -372,9 +381,11 @@ func verifyPreparedRouteSnapshotRow(
 		// Only an absent row is a ledger conflict. Folding every error into
 		// ErrEffectLedgerConflict is what let a permission failure -- one that
 		// happened on EVERY re-prepare in production -- read as ordinary
-		// disagreement between the ledger and the sidecar, and be retried
-		// forever instead of surfacing. A database error must arrive as
-		// itself.
+		// disagreement between the ledger and the sidecar. It would not have
+		// retried forever: it would have burned the unit's MaxAttempts and
+		// then terminalized under the generic provider_unit_exhausted
+		// category, with the actual cause (SQLSTATE 42501) nowhere in the
+		// record. A database error must arrive as itself.
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrEffectLedgerConflict
 		}
@@ -410,40 +421,56 @@ INSERT INTO public.sync_run_unit_effect_snapshots (
     schema_version, content_digest, payload_bytes, payload, created_at
 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 
-// loadPreparedRouteSnapshotSQL answers two questions separately on purpose:
-// does this snapshot exist for this tenant/unit/generation, and is the caller
-// still entitled to it. Folding the lease fence into the WHERE clause made
-// both answers the same sentinel, so "someone else took over this unit" and
-// "there is no snapshot to recover" were indistinguishable to the caller and
-// to anyone reading a log. The identity predicates stay in WHERE; the lease
-// fence is computed, and the caller turns a false into ErrLeaseLost.
+// loadPreparedRouteSnapshotSQL answers three questions separately on purpose:
+// does this snapshot exist for this tenant/unit/generation, is the caller
+// still the unit's writer, and is the owning run still live. Folding them into
+// one WHERE clause made all three the same sentinel, so "someone else took
+// over", "this run already finished" and "there is nothing to recover" were
+// indistinguishable to the caller and in any log.
 //
-// The fence mirrors loadEffectLedgerSQL exactly, including the IS NOT NULL
-// guard and the terminal-run exclusion: two queries that decide the same
-// entitlement must not drift apart, or a route can load a snapshot for a run
-// the ledger would already refuse.
+// Splitting lease from run status is not pedantry: a finalized run with a
+// perfectly live lease reported ErrLeaseLost, which sends an operator to look
+// at leases when the actual cause is a run that already reached a terminal
+// state. Each term now carries its own error.
+//
+// The fence mirrors loadEffectLedgerSQL clause for clause, IS NOT NULL guard
+// and terminal-run exclusion included: two queries deciding the same
+// entitlement must not drift apart.
+//
+// The payload is gated behind both fences rather than selected unconditionally
+// -- a refused load has no business moving up to 64 MiB across the wire, and
+// the CASE means the column is never even detoasted on that path.
 const loadPreparedRouteSnapshotSQL = `
-SELECT snapshot.schema_version, snapshot.content_digest,
-       snapshot.payload_bytes, snapshot.payload,
-       COALESCE(
-         unit.status = 'running'
-         AND unit.lease_owner = $6
-         AND unit.lease_expires_at IS NOT NULL
-         AND unit.lease_expires_at > $7
-         AND run.status NOT IN ('success', 'partial_failed', 'failed'),
-         false
-       )
-FROM public.sync_run_unit_effect_snapshots AS snapshot
-JOIN public.sync_run_units AS unit
-  ON unit.id = snapshot.sync_run_unit_id
- AND unit.org_id = snapshot.org_id
-JOIN public.sync_runs AS run
-  ON run.id = unit.sync_run_id AND run.org_id = unit.org_id
-WHERE snapshot.org_id = $1
-  AND snapshot.sync_run_unit_id = $2
-  AND snapshot.generation = $3
-  AND snapshot.provider = $4
-  AND snapshot.dataset_key = $5`
+SELECT fenced.schema_version, fenced.content_digest, fenced.payload_bytes,
+       CASE WHEN fenced.lease_live AND fenced.run_live
+            THEN fenced.payload ELSE ''::bytea END,
+       fenced.lease_live, fenced.run_live
+FROM (
+  SELECT snapshot.schema_version, snapshot.content_digest,
+         snapshot.payload_bytes, snapshot.payload,
+         COALESCE(
+           unit.status = 'running'
+           AND unit.lease_owner = $6
+           AND unit.lease_expires_at IS NOT NULL
+           AND unit.lease_expires_at > $7,
+           false
+         ) AS lease_live,
+         COALESCE(
+           run.status NOT IN ('success', 'partial_failed', 'failed'),
+           false
+         ) AS run_live
+  FROM public.sync_run_unit_effect_snapshots AS snapshot
+  JOIN public.sync_run_units AS unit
+    ON unit.id = snapshot.sync_run_unit_id
+   AND unit.org_id = snapshot.org_id
+  JOIN public.sync_runs AS run
+    ON run.id = unit.sync_run_id AND run.org_id = unit.org_id
+  WHERE snapshot.org_id = $1
+    AND snapshot.sync_run_unit_id = $2
+    AND snapshot.generation = $3
+    AND snapshot.provider = $4
+    AND snapshot.dataset_key = $5
+) AS fenced`
 
 // loadPreparedRouteSnapshotRowSQL deliberately takes NO row lock. It used to
 // end in FOR UPDATE, which is a permission error rather than a lock: any

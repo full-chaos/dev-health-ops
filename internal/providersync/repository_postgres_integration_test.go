@@ -476,7 +476,7 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 		// schema more permissive than production -- the class of gap where a
 		// test proves the code works on a table that does not exist anywhere
 		// real. tests/test_effect_snapshot_migration.py::
-		// test_integration_fixture_ddl_matches_migration_0086 fails if the two
+		// test_integration_fixture_ddl_matches_migration_0088 fails if the two
 		// drift apart.
 		snapshotFixtureDDL,
 		`CREATE TABLE public.sync_watermarks (

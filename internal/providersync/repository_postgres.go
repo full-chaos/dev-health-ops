@@ -471,20 +471,42 @@ WHERE unit.id = $1::uuid
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
 
-// failUnitSQL MERGES the failure result rather than replacing it, exactly as
-// releaseForRetrySQL above already does. A wholesale replace destroyed the
-// go_effect_ledger_v1 key, and with it the prepared snapshot reference --
-// the only thing that makes a retained sidecar row findable. Contract point 5
-// retains the snapshot on failure so a later attempt or an operator can reason
-// about it; a retained row whose only pointer has been erased is not retained,
-// it is leaked, and nothing short of the sync_run_units CASCADE ever reclaims
-// it (up to 64 MiB each).
+// failUnitSQL carries forward EXACTLY ONE key and drops the rest.
+//
+// A wholesale replace lost go_effect_ledger_v1, and with it the prepared
+// snapshot reference. Contract point 5 retains the snapshot on failure, and
+// the reference is what makes the retained row VALIDATABLE -- the row is still
+// findable by sync_run_unit_id, but without the digest, size and schema
+// recorded in the ledger nothing can tell a good payload from a corrupt one.
+//
+// A blanket `unit.result || $6` overcorrected. The result document also
+// accumulates CLAIMABLE-STATE keys -- next_retry_at, retry_exhausted,
+// retry_reason, and the rate-limit and budget deferral keys -- written by
+// markExpiredLeaseRetryingSQL, the soft-timeout retry path, rate-limit
+// deferral and the budget guard. Nothing clears them on claim, so preserving
+// everything freezes a live "will retry at T" claim onto a unit that is
+// terminally failed. The admin integrations API projects these keys with no
+// status gate and treats them as authoritative, and every other terminal stamp
+// in the repo deliberately nulls next_retry_at (lease_repair.go,
+// sync_units.py) -- this was the only one that would not have.
+//
+// The CASE is not decoration: unit.result is sa.JSON, so it can hold a JSON
+// literal `null`. `'null'::jsonb || '{}'::jsonb` raises (non-object operand),
+// and the raise surfaces from Fail() as ErrLeaseLost -- a failure to record a
+// failure, reported as something else entirely.
 const failUnitSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'failed',
     duration_seconds = $4,
     error = $5,
-    result = COALESCE(unit.result::jsonb, '{}'::jsonb) || $6::jsonb,
+    result = CASE
+      WHEN jsonb_typeof(unit.result::jsonb) = 'object'
+       AND unit.result::jsonb ? 'go_effect_ledger_v1'
+      THEN jsonb_build_object(
+             'go_effect_ledger_v1', unit.result::jsonb -> 'go_effect_ledger_v1'
+           ) || $6::jsonb
+      ELSE $6::jsonb
+    END,
     lease_owner = NULL,
     lease_expires_at = NULL,
     last_heartbeat_at = $3,

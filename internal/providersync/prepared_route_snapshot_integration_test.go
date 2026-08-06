@@ -194,10 +194,38 @@ WHERE id = (SELECT sync_run_id FROM public.sync_run_units WHERE id = $1)`, recla
 	); err != nil {
 		t.Fatal(err)
 	}
+	// A finalized run reports ITS OWN error, not lease loss -- the lease here
+	// is live and correct, and saying "lease lost" would send an operator to
+	// the wrong place entirely.
 	if _, err := repository.LoadRouteSnapshot(
 		ctx, reclaimed, state, now.Add(4*time.Second),
-	); !errors.Is(err, ErrLeaseLost) {
+	); !errors.Is(err, ErrPreparedRouteSnapshotRunTerminal) {
 		t.Fatalf("terminal-run fence load error=%v", err)
+	}
+	// partial_failed is a distinct element of the NOT IN list and a distinct
+	// production state; covering only 'success' left the other two elements
+	// pinned by nothing but a whole-predicate mutation.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_runs SET status = 'partial_failed'
+WHERE id = (SELECT sync_run_id FROM public.sync_run_units WHERE id = $1)`, reclaimed.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.LoadRouteSnapshot(
+		ctx, reclaimed, state, now.Add(4*time.Second),
+	); !errors.Is(err, ErrPreparedRouteSnapshotRunTerminal) {
+		t.Fatalf("partial_failed run fence load error=%v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_runs SET status = 'failed'
+WHERE id = (SELECT sync_run_id FROM public.sync_run_units WHERE id = $1)`, reclaimed.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.LoadRouteSnapshot(
+		ctx, reclaimed, state, now.Add(4*time.Second),
+	); !errors.Is(err, ErrPreparedRouteSnapshotRunTerminal) {
+		t.Fatalf("failed run fence load error=%v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 UPDATE public.sync_runs SET status = 'running'
@@ -235,6 +263,44 @@ UPDATE public.sync_run_unit_effect_snapshots
 SET payload = decode('7b', 'hex') || substring(payload from 2)
 WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 		reclaimed.OrgID, reclaimed.ID, reclaimed.GenerationKey(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// The ErrNoRows arm of verifyPreparedRouteSnapshotRow: ledger present,
+	// sidecar row gone. That is a genuine ledger/sidecar disagreement and must
+	// map to ErrEffectLedgerConflict -- distinct from the pass-through the
+	// same function now uses for real database errors. Reverting that
+	// remapping used to be silently green.
+	var savedPayload []byte
+	if err := pool.QueryRow(ctx, `
+SELECT payload FROM public.sync_run_unit_effect_snapshots
+WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
+		reclaimed.OrgID, reclaimed.ID, reclaimed.GenerationKey(),
+	).Scan(&savedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+DELETE FROM public.sync_run_unit_effect_snapshots
+WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
+		reclaimed.OrgID, reclaimed.ID, reclaimed.GenerationKey(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.PrepareRouteSnapshot(
+		ctx, reclaimed, preparedGitHubWorkItemsFixture(t, reclaimed),
+		ShadowComparison{Match: true}, now,
+	); !errors.Is(err, ErrEffectLedgerConflict) {
+		t.Fatalf("re-prepare with the sidecar row deleted: error=%v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_run_unit_effect_snapshots (
+    org_id, sync_run_unit_id, generation, provider, dataset_key,
+    schema_version, content_digest, payload_bytes, payload, created_at)
+VALUES ($1, $2, $3, 'github', 'work-items', $4, $5, $6, $7, $8)`,
+		reclaimed.OrgID, reclaimed.ID, reclaimed.GenerationKey(),
+		state.PreparedSnapshot.SchemaVersion, state.PreparedSnapshot.ContentDigest,
+		len(savedPayload), savedPayload, now,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -591,6 +657,24 @@ func TestPostgresFailedUnitKeepsTheSnapshotReachable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Stamp the claimable-state keys a real unit accumulates before failing:
+	// markExpiredLeaseRetryingSQL, the soft-timeout retry path, rate-limit
+	// deferral and the budget guard all write into this same document, and
+	// NOTHING clears them on claim. A terminal stamp that preserves them
+	// freezes a live "will retry at T" claim onto a dead unit -- and the admin
+	// integrations API projects these keys with no status gate.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_run_units
+SET result = (COALESCE(result::jsonb, '{}'::jsonb) || $2::jsonb)::json
+WHERE id = $1`, claim.ID, `{
+		"next_retry_at": "2026-08-04T13:00:00Z",
+		"retry_exhausted": false,
+		"retry_reason": "provider_rate_limited",
+		"rate_limit_deferred_until": "2026-08-04T13:30:00Z",
+		"budget_deferred": true
+	}`); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.Fail(
 		ctx, claim, "provider_unit_failed", now, now.Add(time.Second),
 	); err != nil {
@@ -598,6 +682,24 @@ func TestPostgresFailedUnitKeepsTheSnapshotReachable(t *testing.T) {
 	}
 
 	assertPreparedSnapshotCount(t, ctx, pool, claim, 1)
+	var leftoverKeys []string
+	if err := pool.QueryRow(ctx, `
+SELECT COALESCE(array_agg(key ORDER BY key), ARRAY[]::text[])
+FROM public.sync_run_units AS unit,
+     LATERAL jsonb_object_keys(unit.result::jsonb) AS key
+WHERE unit.id = $1
+  AND key IN ('next_retry_at', 'retry_exhausted', 'retry_reason',
+              'rate_limit_deferred_until', 'budget_deferred')`, claim.ID,
+	).Scan(&leftoverKeys); err != nil {
+		t.Fatal(err)
+	}
+	if len(leftoverKeys) != 0 {
+		t.Fatalf(
+			"terminal Fail preserved claimable-state keys %v; the admin API reads "+
+				"these with no status gate and would report a failed unit as retrying",
+			leftoverKeys,
+		)
+	}
 	var status, category string
 	var ledger []byte
 	if err := pool.QueryRow(ctx, `
@@ -721,5 +823,103 @@ WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 		ctx, intruder, state, now.Add(time.Second),
 	); !errors.Is(err, ErrPreparedRouteSnapshotNotFound) {
 		t.Fatalf("intruder load error=%v, want not-found", err)
+	}
+}
+
+// TestPostgresFailedUnitSurvivesAJSONNullResult covers the sa.JSON hazard:
+// result is a JSON column, so it can legitimately hold the literal `null`.
+// `'null'::jsonb || '{}'::jsonb` raises a non-object-operand error, and that
+// raise surfaces out of Fail() as ErrLeaseLost -- a failure to record a
+// failure, reported as a lease problem, on a unit whose lease is fine.
+func TestPostgresFailedUnitSurvivesAJSONNullResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeContext); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+
+	for _, predecessor := range []struct {
+		name  string
+		value any
+	}{
+		{"SQL NULL", nil},
+		{"JSON literal null", "null"},
+	} {
+		t.Run(predecessor.name, func(t *testing.T) {
+			unitID := uuid.NewString()
+			seedWorkItemAliasUnit(t, ctx, pool, unitID, "incremental", `{
+				"sync_prs":true,"family_dataset_work_items":true
+			}`)
+			if _, err := pool.Exec(ctx,
+				"UPDATE public.sync_run_units SET result = $2 WHERE id = $1",
+				unitID, predecessor.value,
+			); err != nil {
+				t.Fatal(err)
+			}
+			claim, err := repository.Claim(ctx, ClaimRequest{
+				UnitID: unitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
+				LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := repository.Fail(
+				ctx, claim, "provider_unit_failed", now, now.Add(time.Second),
+			); err != nil {
+				t.Fatalf("Fail over a %s result: %v", predecessor.name, err)
+			}
+			var status, category string
+			if err := pool.QueryRow(ctx, `
+SELECT status, COALESCE(result::jsonb ->> 'error_category', '')
+FROM public.sync_run_units WHERE id = $1`, unitID,
+			).Scan(&status, &category); err != nil {
+				t.Fatal(err)
+			}
+			if status != "failed" || category != "provider_unit_failed" {
+				t.Fatalf("status=%q category=%q", status, category)
+			}
+		})
+	}
+
+	// A non-object result document is NOT a state Fail has to survive, and the
+	// reason is worth pinning rather than leaving to inference: Claim refuses
+	// such a unit outright, so no lease is ever held over one and Fail is
+	// unreachable. Measured -- an earlier version of this test carried a JSON
+	// scalar case that failed here, at Claim, not at Fail.
+	scalarUnitID := uuid.NewString()
+	seedWorkItemAliasUnit(t, ctx, pool, scalarUnitID, "incremental", `{
+		"sync_prs":true,"family_dataset_work_items":true
+	}`)
+	if _, err := pool.Exec(ctx,
+		"UPDATE public.sync_run_units SET result = $2 WHERE id = $1",
+		scalarUnitID, `"a string, not an object"`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: scalarUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
+		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	}); err == nil {
+		t.Fatal("Claim accepted a unit whose result is a JSON scalar; Fail would then have to handle it")
 	}
 }

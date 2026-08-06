@@ -336,6 +336,82 @@
      "./internal/providersync/"
     ]
    ]
+  },
+  {
+   "id": "E6-coverage-compares-at-stored-millisecond-precision",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "\tif !actual.ComputedAt.Equal(githubWorkItemDerivedMillis(expected.ComputedAt)) {\n\t\treturn EffectAbsent\n\t}\n\treturn EffectExact\n}\n\nfunc compareGitHubWorkItemTeamAttributionVersion(",
+   "replace": "\tif !actual.ComputedAt.Equal(expected.ComputedAt) {\n\t\treturn EffectAbsent\n\t}\n\treturn EffectExact\n}\n\nfunc compareGitHubWorkItemTeamAttributionVersion(",
+   "rationale": "estimate_coverage_metrics_daily.computed_at is DateTime64(3): a sub-millisecond stamp quantizes on write, so an untruncated expectation can NEVER equal the stored value and replay answers Absent forever. #1537 shipped 13 green integration tests over this because every fixture had ns=0.",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-tags",
+     "integration",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "E7-state-durations-compares-at-stored-second-precision",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "\tif !actual.ComputedAt.Equal(githubWorkItemDerivedSeconds(expected.ComputedAt)) {\n\t\treturn EffectAbsent\n\t}",
+   "replace": "\tif !actual.ComputedAt.Equal(githubWorkItemDerivedMillis(expected.ComputedAt)) {\n\t\treturn EffectAbsent\n\t}",
+   "rationale": "work_item_state_durations_daily.computed_at is a plain DateTime -- SECONDS, not milliseconds. Truncating to milliseconds like the other two tables leaves any sub-second stamp permanently unequal to the stored value.",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-tags",
+     "integration",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "E8-attribution-dedupes-colliding-sorting-keys-on-write",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "\trows = githubWorkItemDerivedSortingKeyDedupe(rows, githubTeamAttributionSortingKey)\n\tbatch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO work_item_team_attributions",
+   "replace": "\tbatch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO work_item_team_attributions",
+   "rationale": "two candidates differing only in team_name share a full sorting key and collapse under RMT to ONE row; without deterministic dedup the readback finds 1 row whose team_name matches only one of the two expectations, reads Conflict, and wedges recovery permanently",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-tags",
+     "integration",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "E9-attribution-dedupes-the-expectation-too",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "\trows = githubWorkItemDerivedSortingKeyDedupe(rows, githubTeamAttributionSortingKey)\n\treturn inspectGitHubWorkItemDerivedRows(rows, func(row githubWorkItemTeamAttributionRow) (EffectInspection, error) {",
+   "replace": "\treturn inspectGitHubWorkItemDerivedRows(rows, func(row githubWorkItemTeamAttributionRow) (EffectInspection, error) {",
+   "rationale": "deduping only the write is not enough: the expectation must name the row the write actually leaves behind, or the readback compares against a row storage discarded",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-tags",
+     "integration",
+     "-count=1",
+     "-run",
+     "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
+     "./internal/providersync/"
+    ]
+   ]
   }
  ]
 }

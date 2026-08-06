@@ -46,6 +46,14 @@ from dev_health_ops.api.dev.persistence import (
     DevPersistenceNotFound,
     DevPersistenceService,
 )
+from dev_health_ops.api.dev.qua_shadow import (
+    QUAShadowConfig,
+    QuestionUnderstandingShadow,
+)
+from dev_health_ops.api.dev.scope_service import (
+    ScopeRequestCache,
+    ScopeResolutionService,
+)
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.llm.agent.contracts import AgentFinalAnswer
 from dev_health_ops.llm.agent.scripted import ScriptedStep
@@ -59,6 +67,7 @@ from dev_health_ops.models.dev_persistence import (
     DevRun,
     DevRunIntent,
     DevRunNarrative,
+    DevRunQuaShadow,
     DevRunResolution,
     DevRunSourceObservation,
     DevRunStageDiagnostic,
@@ -72,6 +81,7 @@ from tests._chaos_3292_preflight import (
     ATLAS_PROJECT_ONE,
     ATLAS_PROJECT_TWO,
     Recorder,
+    SeededCatalog,
     grounded_answer_payload,
     run_preflight_orchestrator,
     scope_dict,
@@ -96,6 +106,7 @@ _TABLES = tables_of(
     DevRunIntent,
     DevRunSourceObservation,
     DevRunStageDiagnostic,
+    DevRunQuaShadow,
 )
 
 #: The exact real member of ``ScopeResolutionOutcome`` the CHAOS-3421 live
@@ -811,6 +822,137 @@ async def test_chaos_3424_ledger_write_failure_never_strands_the_run(
         # The CHAOS-3423 transcript row still landed -- proof the session
         # recovered cleanly enough for finish()'s own later writes to
         # succeed on it.
+        assistant_rows = (
+            await session.scalars(
+                select(DevMessage).where(
+                    DevMessage.conversation_id == conversation_id,
+                    DevMessage.role == "assistant",
+                )
+            )
+        ).all()
+        assert len(assistant_rows) == 1
+        assert assistant_rows[0].content == output.result.error.safe_message
+
+
+@pytest.mark.asyncio
+async def test_chaos_3389_shadow_write_failure_preserves_the_already_flushed_ledger(
+    seeded, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Codex adversarial review round 1 on CHAOS-3389 (HIGH, confirmed): the
+    QUA shadow-write recovery originally mirrored CHAOS-3424's OWN ledger-
+    write-fault handler byte-for-byte -- but the two failures are not
+    symmetric. CHAOS-3424's handler fires when the ledger write ITSELF
+    fails, so there is nothing valid to replay. This shadow-write failure
+    fires AFTER the SAME PROCEED decision's resolution ledger already
+    flushed successfully in this transaction -- rolling back and
+    re-persisting only preflight diagnostics/subject set (as the recovery
+    originally did) would silently discard those already-good ledger rows,
+    the exact CHAOS-3424 forensic data this scenario is built to prove
+    survives. Drives a REAL ``DevPersistenceService.record_qua_shadow``
+    failure on the identical PROCEED widening scenario CHAOS-3424's own
+    sibling test above uses, and asserts the ledger rows are still there
+    after recovery -- not merely that the run reaches a terminal state.
+    """
+
+    maker, org_id, user_id = seeded
+    question = "How is Nightfall doing?"
+    conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
+
+    class ShadowWriteBoom(Exception):
+        pass
+
+    async def _always_failing(self, *args, **kwargs):
+        raise ShadowWriteBoom("simulated qua_shadow storage failure")
+
+    monkeypatch.setattr(DevPersistenceService, "record_qua_shadow", _always_failing)
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+
+        def recorder_factory() -> Recorder:
+            return cast(
+                Recorder,
+                PersistenceRunRecorder(
+                    service,
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    provider_source="platform",
+                ),
+            )
+
+        # provider=None -> evaluate() always resolves to a real (non-None)
+        # SKIPPED_NO_PROVIDER record without ever touching the network --
+        # exactly production's own posture today (Codex round 1 finding on
+        # budget isolation) -- which is enough to reach record_qua_shadow
+        # and exercise the failure this test is about. The catalog is real
+        # but never consulted (evaluate() returns before the shortlist
+        # fetch when the provider is absent).
+        qua_shadow = QuestionUnderstandingShadow(
+            provider=None,
+            scope_service=ScopeResolutionService(
+                SeededCatalog([]), cache=ScopeRequestCache()
+            ),
+            config=QUAShadowConfig(enabled=True),
+        )
+
+        with caplog.at_level(logging.ERROR):
+            output = await run_preflight_orchestrator(
+                question=question,
+                entities=[(str(org_id), ASK_DEV_PROJECT)],
+                org_id=str(org_id),
+                user_id=str(user_id),
+                conversation_id=str(conversation_id),
+                run_id=str(run_id),
+                answer_id=str(uuid.uuid4()),
+                script=_leaking_but_not_narrating(str(org_id)),
+                script_id="chaos-3389-shadow-write-failure",
+                recorder_factory=recorder_factory,
+                qua_shadow=qua_shadow,
+            )
+        await session.commit()
+
+        shadow_faults = _log_records(
+            caplog, "ask_dev.orchestrator.qua_shadow_write_fault"
+        )
+        assert len(shadow_faults) == 1
+        assert _log_extra(shadow_faults[0], "exception_type") == "ShadowWriteBoom"
+
+        # Setup control: the same PROCEED widening shape CHAOS-3424's own
+        # sibling test exercises.
+        assert output.result.state is RunState.INSUFFICIENT_EVIDENCE
+        assert output.result.error is not None
+        assert output.result.error.code == "scope_not_found"
+
+        # The real assertion: the resolution ledger entries that flushed
+        # successfully BEFORE the shadow write ever ran must still be there
+        # after the shadow-write-failure recovery rolled back and replayed.
+        ledger_rows = (
+            await session.scalars(
+                select(DevRunResolution).where(DevRunResolution.run_id == run_id)
+            )
+        ).all()
+        assert len(ledger_rows) >= 1, (
+            "a failed OPTIONAL shadow-record write must never discard the "
+            f"already-flushed resolution ledger -- got {len(ledger_rows)} rows."
+        )
+        assert all(row.outcome != "exact_match" for row in ledger_rows)
+
+        # No shadow row landed (the write genuinely failed) -- but nothing
+        # ELSE the run wrote is missing either.
+        shadow_rows = (
+            await session.scalars(
+                select(DevRunQuaShadow).where(DevRunQuaShadow.run_id == run_id)
+            )
+        ).all()
+        assert shadow_rows == []
+
+        run_row = await session.get(DevRun, run_id)
+        assert run_row is not None
+        assert run_row.state == "insufficient_evidence"
+        assert run_row.preflight_outcome == "proceeded_unresolved_bare_name"
+
         assistant_rows = (
             await session.scalars(
                 select(DevMessage).where(

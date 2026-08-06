@@ -67,13 +67,52 @@ func StartPostgres(ctx context.Context) (*Instance, error) {
 	return &Instance{Container: container, URI: uri.String()}, nil
 }
 
+// ClickHouse test credentials, exported so a helper that must address the
+// container over a DIFFERENT protocol than Instance.URI can build its own DSN
+// instead of re-declaring these and drifting from them.
+const (
+	ClickHouseUser     = "worker_test"
+	ClickHousePassword = "worker_test_password"
+	ClickHouseDatabase = "worker_test"
+	// ClickHouseHTTPPort is exposed alongside the native port. Instance.URI
+	// addresses the NATIVE protocol, which the Go driver speaks; the Python
+	// migration runner is an HTTP client and needs this one.
+	ClickHouseHTTPPort = "8123/tcp"
+)
+
+// ClickHouseHTTPDSN returns a clickhouse:// DSN addressed at the container's
+// mapped HTTP port. The scheme must stay clickhouse:// -- the Python sink
+// factory rejects http:// outright ("Only ClickHouse is supported", CHAOS-641)
+// -- while the PORT must be the HTTP one, because that client speaks HTTP and
+// not the native protocol Instance.URI points at.
+func ClickHouseHTTPDSN(ctx context.Context, instance *Instance) (string, error) {
+	if instance == nil || instance.Container == nil {
+		return "", fmt.Errorf("clickhouse HTTP DSN: no container")
+	}
+	host, err := instance.Container.Host(ctx)
+	if err != nil {
+		return "", fmt.Errorf("clickhouse HTTP DSN host: %w", err)
+	}
+	mapped, err := instance.Container.MappedPort(ctx, ClickHouseHTTPPort)
+	if err != nil {
+		return "", fmt.Errorf("clickhouse HTTP DSN port: %w", err)
+	}
+	uri := url.URL{
+		Scheme: "clickhouse",
+		User:   url.UserPassword(ClickHouseUser, ClickHousePassword),
+		Host:   host + ":" + mapped.Port(),
+		Path:   ClickHouseDatabase,
+	}
+	return uri.String(), nil
+}
+
 func StartClickHouse(ctx context.Context) (*Instance, error) {
 	const (
-		user     = "worker_test"
-		password = "worker_test_password"
-		database = "worker_test"
+		user     = ClickHouseUser
+		password = ClickHousePassword
+		database = ClickHouseDatabase
 		port     = "9000/tcp"
-		httpPort = "8123/tcp"
+		httpPort = ClickHouseHTTPPort
 	)
 	container, host, mappedPort, err := start(ctx, testcontainers.ContainerRequest{
 		Image:        ClickHouseImage,

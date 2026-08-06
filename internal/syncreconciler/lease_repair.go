@@ -343,6 +343,24 @@ func leaseRepairBucketAdvisoryID(orgID, provider, costClass string) int64 {
 // tenancy predicates. This CAS complements the advisory locks: it remains
 // correct if a future caller reuses the write helper without the selector and
 // fails closed if ownership changes before the write.
+//
+// CHAOS-3427 episode symmetry: this is a non-terminal RETRYING stamp, so it
+// clears BOTH per-episode pairs -- rate-limit (CHAOS-2760) and budget
+// (CHAOS-3412) -- exactly as the Python analogue
+// (src/dev_health_ops/workers/sync_reconciler.py's RETRYING stamp) does. An
+// expired lease is neither a rate-limit episode nor a budget episode, so
+// leaving either pair set lets a resolved episode's counters decide a later
+// exhaustion.
+//
+// It deliberately does NOT touch `first_blocked_at`, matching Python: the
+// AGGREGATE clock is started (COALESCE) only by real DEFERRAL stamps and
+// cleared only by SUCCESS and the dispatch claim. Resetting it here would let
+// worker churn clear the outer bound the alternating-episode case depends on.
+//
+// The result document is rebuilt with jsonb_build_object, so 'error_category'
+// is OVERWRITTEN with 'worker_lost'. Never change this into a merge that keeps
+// the prior value -- see lease_repair_test.go's
+// TestNoLeaseRepairStampPreservesAPriorErrorCategory.
 const markExpiredLeaseRetryingSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'retrying',
@@ -362,6 +380,8 @@ SET status = 'retrying',
 	retry_exhausted_at = NULL,
 	rate_limit_deferrals = 0,
 	rate_limit_first_seen_at = NULL,
+	budget_deferrals = 0,
+	budget_first_deferred_at = NULL,
 	updated_at = $3,
 	lease_owner = NULL,
 	lease_expires_at = NULL

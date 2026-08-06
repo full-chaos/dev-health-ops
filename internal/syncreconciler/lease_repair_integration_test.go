@@ -247,6 +247,9 @@ func createLeaseRepairIntegrationFixture(ctx context.Context, pool *pgxpool.Pool
 			available_at timestamptz,
 			rate_limit_deferrals integer NOT NULL DEFAULT 0,
 			rate_limit_first_seen_at timestamptz,
+			budget_deferrals integer NOT NULL DEFAULT 0,
+			budget_first_deferred_at timestamptz,
+			first_blocked_at timestamptz,
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
 			last_retry_reason text,
 			retry_exhausted_at timestamptz,
@@ -283,9 +286,10 @@ func seedLeaseRepairUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_run_units (
 			id, org_id, sync_run_id, provider, dataset_key, cost_class, mode, status,
-			rate_limit_deferrals, rate_limit_first_seen_at, expired_lease_retry_count,
-			lease_owner, lease_expires_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, 'standard', $6, 'running', 7, $7, $8, 'worker-a', $9, $7)`,
+			rate_limit_deferrals, rate_limit_first_seen_at,
+			budget_deferrals, budget_first_deferred_at, first_blocked_at,
+			expired_lease_retry_count, lease_owner, lease_expires_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, 'standard', $6, 'running', 7, $7, 4, $7, $7, $8, 'worker-a', $9, $7)`,
 		id, orgID, runID, provider, dataset, mode, expiresAt.Add(-time.Hour), retries, expiresAt); err != nil {
 		t.Fatal(err)
 	}
@@ -294,20 +298,26 @@ func seedLeaseRepairUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 func assertLeaseRepairState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, wantStatus string, wantOwner *string, wantAvailable *time.Time, wantCategory string, wantExhausted bool, wantRetries int64) {
 	t.Helper()
 	var (
-		status      string
-		owner       *string
-		availableAt *time.Time
-		retries     int64
-		deferrals   int
-		firstSeen   *time.Time
-		exhaustedAt *time.Time
-		resultRaw   []byte
+		status          string
+		owner           *string
+		availableAt     *time.Time
+		retries         int64
+		deferrals       int
+		firstSeen       *time.Time
+		budgetDeferrals int
+		budgetFirstAt   *time.Time
+		firstBlockedAt  *time.Time
+		exhaustedAt     *time.Time
+		resultRaw       []byte
 	)
 	if err := pool.QueryRow(ctx, `
 		SELECT status, lease_owner, available_at, expired_lease_retry_count,
-			rate_limit_deferrals, rate_limit_first_seen_at, retry_exhausted_at, result
+			rate_limit_deferrals, rate_limit_first_seen_at,
+			budget_deferrals, budget_first_deferred_at, first_blocked_at,
+			retry_exhausted_at, result
 		FROM public.sync_run_units WHERE id = $1`, id).Scan(
-		&status, &owner, &availableAt, &retries, &deferrals, &firstSeen, &exhaustedAt, &resultRaw,
+		&status, &owner, &availableAt, &retries, &deferrals, &firstSeen,
+		&budgetDeferrals, &budgetFirstAt, &firstBlockedAt, &exhaustedAt, &resultRaw,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -316,6 +326,26 @@ func assertLeaseRepairState(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	}
 	if wantStatus == "retrying" && (deferrals != 0 || firstSeen != nil) {
 		t.Fatalf("retry unit %s retained rate-limit episode: deferrals=%d first_seen=%v", id, deferrals, firstSeen)
+	}
+	// CHAOS-3427: the REACHED STATE, read back from real PostgreSQL, not the
+	// SQL text. The seed deliberately plants budget_deferrals=4 with a
+	// first-deferred stamp, so a repair that forgot the budget pair leaves 4
+	// here and this fails. Asserting only the SQL string would pass with a
+	// statement PostgreSQL never actually applied.
+	if wantStatus == "retrying" && (budgetDeferrals != 0 || budgetFirstAt != nil) {
+		t.Fatalf("retry unit %s retained BUDGET episode: budget_deferrals=%d "+
+			"budget_first_deferred_at=%v -- a later budget deferral would then "+
+			"terminalize on a resolved episode's counters",
+			id, budgetDeferrals, budgetFirstAt)
+	}
+	// The AGGREGATE clock is deliberately NOT reset by lease repair: only
+	// deferral stamps start it, only SUCCESS and the dispatch claim clear it.
+	// The seed plants a value so "did not clear" is an observable fact rather
+	// than an untested assumption.
+	if wantStatus == "retrying" && firstBlockedAt == nil {
+		t.Fatalf("retry unit %s cleared first_blocked_at; lease repair must "+
+			"leave the aggregate blocked clock running or the alternating "+
+			"budget/rate-limit case loses its outer bound", id)
 	}
 	if wantExhausted && exhaustedAt == nil {
 		t.Fatalf("exhausted unit %s lacks retry_exhausted_at", id)

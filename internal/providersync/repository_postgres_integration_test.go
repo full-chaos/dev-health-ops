@@ -252,8 +252,16 @@ INSERT INTO public.sync_dispatch_outbox (
 	); err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-3427: this watermark deliberately overshoots the unit's window end
+	// (the fixture's before_at is 2026-07-23T12:00:00Z, i.e. `now`) by 106
+	// seconds. Before the C10(c) write boundary landed it was persisted
+	// verbatim; it is now clamped to the coverage bound, because a unit that
+	// only fetched up to its window end cannot claim data past it. The
+	// assertion below therefore expects the CLAMPED value -- see
+	// wantWatermark.
 	watermark := now.Add(106 * time.Second)
 	completedAt := now.Add(107 * time.Second)
+	wantWatermark := *second.BeforeAt
 	if err := repository.Complete(
 		ctx, second, map[string]any{"records": 1}, &watermark,
 		now.Add(91*time.Second), completedAt,
@@ -272,8 +280,10 @@ JOIN public.sync_watermarks AS watermark
 WHERE unit.id = $1`, firstUnitID).Scan(&status, &persistedWatermark); err != nil {
 		t.Fatal(err)
 	}
-	if status != "success" || !persistedWatermark.Equal(watermark) {
-		t.Fatalf("status=%s watermark=%s", status, persistedWatermark)
+	if status != "success" || !persistedWatermark.Equal(wantWatermark) {
+		t.Fatalf("status=%s watermark=%s, want %s (the requested %s is past the "+
+			"unit's window end and must be clamped to it)",
+			status, persistedWatermark, wantWatermark, watermark)
 	}
 	var finalizeCount int
 	var persistedClaimToken string
@@ -313,7 +323,13 @@ WHERE sync_run_id = $1 AND kind = 'finalize_sync_run' AND status = 'pending'`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Same CHAOS-3427 clamp as the single-dataset completion above: this
+	// proposed watermark sits past the seeded unit's window end, so every
+	// alias row lands on the coverage bound instead. Fanning out to three
+	// aliases is what is under test here, and the clamp must apply uniformly
+	// to all of them -- a per-alias divergence would be a real defect.
 	familyWatermark := familyClaimedAt.Add(time.Second)
+	wantFamilyWatermark := *familyClaim.BeforeAt
 	if err := repository.Complete(
 		ctx, familyClaim, map[string]any{"records": 7}, &familyWatermark,
 		familyClaimedAt, familyClaimedAt.Add(2*time.Second),
@@ -339,7 +355,7 @@ FROM public.sync_watermarks
 WHERE org_id = 'org-acme'
   AND source_id = 'acme/api'
   AND dataset_key IN ('work-items', 'work-item-labels', 'work-item-comments')
-  AND last_synced_at = $1`, familyWatermark).Scan(&watermarkCount, &watermarkKeys); err != nil {
+  AND last_synced_at = $1`, wantFamilyWatermark).Scan(&watermarkCount, &watermarkKeys); err != nil {
 		t.Fatal(err)
 	}
 	if familyStatus != "success" || familyDataset != "work-items" || !familyAuditMatches ||
@@ -448,6 +464,9 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			lease_expires_at timestamptz, last_heartbeat_at timestamptz,
 			duration_seconds integer, rate_limit_deferrals integer NOT NULL DEFAULT 0,
 			rate_limit_first_seen_at timestamptz,
+			budget_deferrals integer NOT NULL DEFAULT 0,
+			budget_first_deferred_at timestamptz,
+			first_blocked_at timestamptz,
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
 			last_retry_reason text, updated_at timestamptz NOT NULL
 		)`,

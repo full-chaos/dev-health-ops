@@ -729,7 +729,13 @@ def test_corpus_case(
     # receipts in exit run #3 said `resolution_path: null` and a reader could
     # not tell which had happened. Recorded explicitly from here on.
     resolution_path_absence = resolution_path_absence_reason(
-        run_id=run_id, path=resolution_path
+        run_id=run_id,
+        path=resolution_path,
+        # Codex adversarial review (MEDIUM): a ledger that was queried and
+        # could not be CLASSIFIED is not an empty ledger. Without this the
+        # error path below reported `empty-resolution-ledger` -- an honest
+        # absence -- for a measurement that actually broke.
+        classification_failed=ledger_classification_error is not None,
     )
 
     # 2b codex round-1 addition (team-lead direction 2026-08-06): the third

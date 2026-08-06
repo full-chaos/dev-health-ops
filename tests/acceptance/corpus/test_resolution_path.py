@@ -15,6 +15,7 @@ import pytest
 from scripts.acceptance.corpus.resolution_path import (
     ABSENCE_EMPTY_LEDGER,
     ABSENCE_RUN_ID_NOT_OBSERVED,
+    ABSENCE_UNCLASSIFIABLE_LEDGER,
     ResolutionLedgerEntry,
     ResolutionPathError,
     absence_is_a_broken_measurement,
@@ -398,4 +399,21 @@ class TestHonestAbsence:
 
         reason = resolution_path_absence_reason(run_id=None, path=None)
         assert reason == ABSENCE_RUN_ID_NOT_OBSERVED
+        assert absence_is_a_broken_measurement(reason)
+
+    def test_a_classification_error_is_a_BROKEN_measurement_not_an_empty_ledger(
+        self,
+    ) -> None:
+        """Codex adversarial review (MEDIUM, confirmed): when
+        ``derive_resolution_path`` RAISES, the runner sets ``path=None`` while
+        ``run_id`` is still present -- so the absence reason resolved to
+        ``empty-resolution-ledger``, labelling a ledger that was queried and
+        found UNCLASSIFIABLE as an honest absence. The ledger was not empty;
+        it could not be read. That is a broken measurement.
+        """
+
+        reason = resolution_path_absence_reason(
+            run_id="r1", path=None, classification_failed=True
+        )
+        assert reason == ABSENCE_UNCLASSIFIABLE_LEDGER
         assert absence_is_a_broken_measurement(reason)

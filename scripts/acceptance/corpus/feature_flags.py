@@ -42,13 +42,23 @@ class FeatureEnablementError(RuntimeError):
     """Raised when ``ask_dev_wave_3_1`` could not be enabled for an org."""
 
 
-def enable_wave_3_1(api: Any, *, org_id: str) -> None:
-    """Ensure ``ask_dev_wave_3_1`` is ON for ``org_id``. Idempotent.
+def _require_globally_enabled_flag(api: Any) -> dict[str, Any]:
+    """The FeatureFlag catalog row, or raise -- registered AND globally on.
 
-    ``api`` must be an ADMIN-authenticated client: the feature-override
-    endpoints require superuser admin access, which is exactly why the
-    corpus runner passes its ``acceptance_api`` admin session here and not a
-    per-case principal session.
+    Codex adversarial review (HIGH, confirmed): the first version of this
+    module checked only that the flag was REGISTERED, then treated an enabled
+    ORG OVERRIDE as proof the corpus would exercise the Wave 3.1 preflight.
+    Production does not make that decision. ``evaluate_org_feature_async``
+    ALSO fails closed when the FeatureFlag row itself is globally disabled, so
+    a global kill-switch left ``_wave_3_1_enabled`` False while this setup and
+    the per-receipt ``measured_wave_3_1_preflight_path`` check both passed on
+    override membership alone -- reproducing, inside the fix for it, the exact
+    false-confidence class this module exists to eliminate.
+
+    ``prepare_ask_dev_acceptance.py`` already guards this ("required feature
+    flags are globally disabled"); mirroring the SMOKES' override sequence had
+    silently dropped it, because the smokes run after prepare has already
+    checked. The corpus has no such upstream, so it checks here.
     """
 
     flags = api.request("GET", "/api/v1/admin/feature-flags")
@@ -70,6 +80,27 @@ def enable_wave_3_1(api: Any, *, org_id: str) -> None:
             f"feature flag {WAVE_3_1_FEATURE_KEY} is not registered on this "
             "stack -- the corpus cannot measure the CHAOS-3292 preflight path"
         )
+    if flag.get("is_enabled") is not True:
+        raise FeatureEnablementError(
+            f"feature flag {WAVE_3_1_FEATURE_KEY} is globally disabled "
+            f"({flag!r}) -- an org override cannot re-enable it, production's "
+            "evaluate_org_feature_async still resolves it OFF, and the corpus "
+            "would measure the pre-3292 legacy path while every receipt "
+            "claimed otherwise"
+        )
+    return flag
+
+
+def enable_wave_3_1(api: Any, *, org_id: str) -> None:
+    """Ensure ``ask_dev_wave_3_1`` is ON for ``org_id``. Idempotent.
+
+    ``api`` must be an ADMIN-authenticated client: the feature-override
+    endpoints require superuser admin access, which is exactly why the
+    corpus runner passes its ``acceptance_api`` admin session here and not a
+    per-case principal session.
+    """
+
+    flag = _require_globally_enabled_flag(api)
 
     override_path = f"/api/v1/admin/orgs/{org_id}/feature-overrides"
     overrides = api.request("GET", override_path)
@@ -132,8 +163,14 @@ def verify_wave_3_1_enabled(api: Any, *, org_id: str) -> None:
     corpus run whose entire validity rests on this flag verifies it rather
     than trusting the write -- the failure this exists to prevent already
     happened once, silently, for three exit runs.
+
+    Re-checks the GLOBAL flag row too (Codex HIGH), not just the org override:
+    an enabled override on a globally-disabled flag still resolves OFF in
+    production, and verification that cannot see that certifies a legacy-path
+    run as a Wave 3.1 run.
     """
 
+    _require_globally_enabled_flag(api)
     override_path = f"/api/v1/admin/orgs/{org_id}/feature-overrides"
     overrides = api.request("GET", override_path)
     if not isinstance(overrides, list):

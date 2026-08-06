@@ -54,6 +54,7 @@ from scripts.acceptance.corpus.arming import (
     ARMED_RUN_ENV_ALLOW_NAMES,
 )
 from tests._env_isolation import SCRUB_ENV_NAMES
+from tests.conftest import SCRUB_RECORD_ENV
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -88,6 +89,11 @@ def _run_inner_pytest(extra_env: dict[str, str]) -> subprocess.CompletedProcess[
         "PYTEST_XDIST_WORKER_COUNT",
         "PYTEST_XDIST_TESTRUNUID",
         "PYTEST_CURRENT_TEST",
+        # The parent pytest sets this; inheriting it would make the child
+        # believe an ancestor scrubbed the arming variable on its behalf, and
+        # the negative control below would then depend on whatever the
+        # developer's shell happened to be carrying.
+        SCRUB_RECORD_ENV,
     ):
         env.pop(name, None)
     env.update(extra_env)
@@ -199,6 +205,36 @@ class TestArmedButScrubbedRunFailsLoud:
             "the armed-but-scrubbed guard must fire before any compose/HTTP "
             f"work is attempted.\n{combined}"
         )
+
+
+class TestAForgedScrubRecordCannotTurnAnUnarmedRunRed:
+    """The scrub record is an env var, so anything can set it to anything.
+
+    Found by attacking my own fix, and reproduced before it was closed: with
+    ``DEV_HEALTH_TEST_SCRUBBED_ENV_NAMES=ASK_DEV_LIVE_ACCEPTANCE`` present,
+    a genuinely UNARMED run concluded it had been armed-and-scrubbed and
+    went RED. That is a false red on the standing unit gate, triggered by a
+    value any caller can forge -- and a gate that can be turned red by a
+    stray environment variable is a gate people learn to ignore.
+
+    The record is now trusted only inside an xdist worker
+    (``PYTEST_XDIST_WORKER`` present), which is the one boundary it exists
+    to cross. Outside that, it is ignored entirely.
+    """
+
+    @pytest.fixture(scope="class")
+    def result(self) -> subprocess.CompletedProcess[str]:
+        return _run_inner_pytest(
+            {SCRUB_RECORD_ENV: f"{ARM_ENV_VAR},LOG_LEVEL,OPENAI_API_KEY"}
+        )
+
+    def test_still_skips_green(self, result: subprocess.CompletedProcess[str]) -> None:
+        combined = _require_measured(result)
+        assert result.returncode == 0, (
+            "a forged/stale scrub record turned an unarmed run red -- the "
+            f"record must not be trusted outside an xdist worker.\n{combined}"
+        )
+        assert "skipped" in combined
 
 
 class TestUnarmedRunStillSkips:

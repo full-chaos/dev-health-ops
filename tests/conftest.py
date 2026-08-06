@@ -167,6 +167,26 @@ def pytest_configure(config):
 
 
 def _inherited_scrub_record() -> set[str]:
+    """The parent's scrub record -- trusted ONLY inside an xdist worker.
+
+    The record exists to cross exactly one boundary: an xdist controller
+    scrubs, then spawns workers whose environment no longer carries the
+    variables, so a worker cannot otherwise tell "never set" from "the
+    controller ate it". ``PYTEST_XDIST_WORKER`` is present in workers and
+    absent everywhere else, which makes it a precise test for that boundary.
+
+    Trusting the value unconditionally was wrong, and reproducibly so: with
+    ``DEV_HEALTH_TEST_SCRUBBED_ENV_NAMES=ASK_DEV_LIVE_ACCEPTANCE`` exported
+    by anything at all -- a stale value, a nested pytest, a copy-pasted
+    shell line -- an ordinary UNARMED contributor run turned RED, because
+    the corpus runner concluded it had been armed and scrubbed. That is a
+    false red on the standing unit gate, produced by an env var a caller can
+    set to any value they like. Gating on the worker sentinel keeps the
+    xdist recovery path and removes the forgery surface for every other run.
+    """
+
+    if "PYTEST_XDIST_WORKER" not in os.environ:
+        return set()
     raw = os.environ.get(SCRUB_RECORD_ENV, "")
     return {part.strip() for part in raw.split(",") if part.strip()}
 

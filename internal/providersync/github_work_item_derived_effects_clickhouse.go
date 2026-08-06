@@ -121,17 +121,22 @@ func inspectGitHubWorkItemDerivedRows[T any](
 // green integration tests over this exact defect because every fixture used a
 // zero-nanosecond instant.
 //
-// The three tables do NOT share a precision: estimate coverage and team
-// attributions are DateTime64(3) (milliseconds), while state durations is a
-// plain DateTime (SECONDS). Truncating everything to milliseconds would leave
-// the state-durations verdict permanently Absent for any computed_at with a
-// sub-second component.
+// The builder now quantizes at its own stamping sites, so for rows this process
+// built these are NO-OPS. They stay because this boundary must hold for rows it
+// did NOT build: a replayed effect is decoded from a persisted snapshot, and a
+// snapshot written by an older build (or by any future producer that forgets)
+// still has to compare against what the column can store. Truncation is
+// idempotent, so applying it twice costs nothing and removing it would make the
+// adapter trust its input.
+//
+// The precision constants live with the builders, next to the destination whose
+// column decides them, so the two layers cannot drift into disagreeing.
 func githubWorkItemDerivedMillis(value time.Time) time.Time {
-	return value.UTC().Truncate(time.Millisecond)
+	return githubWorkItemDerivedStamp(value, githubEstimateCoverageStampPrecision)
 }
 
 func githubWorkItemDerivedSeconds(value time.Time) time.Time {
-	return value.UTC().Truncate(time.Second)
+	return githubWorkItemDerivedStamp(value, githubStateDurationStampPrecision)
 }
 
 // githubWorkItemDerivedSortingKeyDedupe collapses rows that share a full

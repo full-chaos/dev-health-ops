@@ -51,7 +51,11 @@ oracle. The Go side of the comparison is a hand-written mirror of this
 predicate (``budgetDeferralExhausted`` in
 internal/providersync/syncunit_budget_exhaustion_oracle_test.go), because Go
 owns no budget-admission decision to drive -- its only budget references in
-non-test source are the two SQL clears. Nothing here executes a Go producer
+non-test source are the two SQL clears. (More precisely, no unit-DISPATCH
+admission: internal/scheduler/sync/materializer.go does validate max_sync_units
+at PLAN time, and providerfoundation/budget.go prepares an advisory-lock key
+that nothing outside tests calls. Neither reads a column this predicate
+reads.) Nothing here executes a Go producer
 or reaches a database. The Go stamps' effect on the columns this predicate
 reads is covered by the SQL-string guards and, against real PostgreSQL, by
 internal/providersync/budget_episode_integration_test.go and
@@ -100,12 +104,28 @@ _PLACEHOLDER_MODEL_EXPORTS = (
     "SyncRunUnitStatus",
 )
 
-#: The columns ``_budget_deferral_exhausted`` reads off the unit row. Anything
-#: that writes one of these can move an exhaustion verdict, so the corpus below
-#: is only as valid as the set of writers that leave them alone.
-_EPISODE_COLUMNS_THE_PREDICATE_READS = (
+#: The exhaustion predicates a surplus write must not be able to move. BOTH
+#: are listed, not just the one this pair compares: ``_deferral_total_exhausted``
+#: reads ``first_blocked_at``, the CHAOS-3412 aggregate clock that no episode
+#: reset may move, and a surplus writer that reset it would launder that clock
+#: without touching anything ``_budget_deferral_exhausted`` reads. Guarding one
+#: predicate's columns and calling the row safe was the gap here.
+_EXHAUSTION_PREDICATES = ("_budget_deferral_exhausted", "_deferral_total_exhausted")
+
+#: The columns those predicates read off the unit row. Anything that writes one
+#: of these can move an exhaustion verdict, so the corpus below is only as valid
+#: as the set of writers that leave them alone.
+#:
+#: DERIVED, then checked: ``_assert_declared_columns_match_the_predicates``
+#: reads the live predicates and fails if this tuple drifts from what they
+#: actually read, in either direction. Hand-maintaining it is what let
+#: ``first_blocked_at`` go missing, and a hand-maintained list that falls behind
+#: a predicate does not announce itself -- the probe just stops covering the
+#: column and keeps passing.
+_EPISODE_COLUMNS_THE_PREDICATES_READ = (
     "budget_deferrals",
     "budget_first_deferred_at",
+    "first_blocked_at",
     "result",
 )
 
@@ -253,6 +273,71 @@ def _row_columns_written_by(
     return frozenset(written)
 
 
+def _unit_columns_read_by(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> frozenset[str]:
+    """Every attribute ``function`` reads off its unit argument.
+
+    Keyed on the function's OWN first parameter name rather than a hardcoded
+    ``unit``, so a rename in budget_guard.py cannot silently make this return
+    the empty set -- which would read as "this predicate touches no columns"
+    and pass.
+    """
+    parameters = function.args.posonlyargs + function.args.args
+    if not parameters:
+        raise RuntimeError(
+            f"{function.name} takes no positional unit argument; the column "
+            "derivation below cannot identify what it reads."
+        )
+    unit_name = parameters[0].arg
+    return frozenset(
+        node.attr
+        for node in ast.walk(function)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == unit_name
+    )
+
+
+def _assert_declared_columns_match_the_predicates(module: ast.Module) -> None:
+    """Keep ``_EPISODE_COLUMNS_THE_PREDICATES_READ`` honest against the source.
+
+    A hand-maintained column list is exactly the kind of thing that falls
+    behind and says nothing: the probe simply stops covering the new column
+    and keeps reporting success. So the list is checked against what the live
+    predicates read, and drift in EITHER direction fails -- a column added to
+    a predicate and not to the list leaves it unguarded, and a column in the
+    list that no predicate reads makes the guard look wider than it is.
+    """
+    functions = {
+        node.name: node
+        for node in module.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    read: set[str] = set()
+    for name in _EXHAUSTION_PREDICATES:
+        function = functions.get(name)
+        if function is None:
+            raise RuntimeError(
+                f"{name} no longer exists in {_BUDGET_GUARD_SOURCE}. It is an "
+                "exhaustion predicate whose input columns this probe derives; "
+                "update _EXHAUSTION_PREDICATES rather than letting the "
+                "derivation quietly narrow."
+            )
+        read |= _unit_columns_read_by(function)
+    declared = frozenset(_EPISODE_COLUMNS_THE_PREDICATES_READ)
+    if declared != read:
+        raise RuntimeError(
+            "_EPISODE_COLUMNS_THE_PREDICATES_READ has drifted from the live "
+            f"predicates {list(_EXHAUSTION_PREDICATES)}. Declared "
+            f"{sorted(declared)}, they read {sorted(read)}. Missing entries "
+            f"({sorted(read - declared)}) are columns a surplus write could "
+            "move unobserved; extra entries "
+            f"({sorted(declared - read)}) make this guard look wider than it "
+            "is."
+        )
+
+
 def _assert_surplus_writes_leave_the_episode_alone() -> None:
     """Fail loudly if a CHAOS-3465 surplus write path touches an episode column.
 
@@ -268,9 +353,16 @@ def _assert_surplus_writes_leave_the_episode_alone() -> None:
     cases every case below would keep passing, because the inputs are authored
     snapshots and no case would ever be built from the laundered state.
 
+    A promotion that reset ``first_blocked_at`` is the same defect one level
+    up: that is CHAOS-3412's AGGREGATE clock, the outer bound no per-episode
+    reset may move, and it is read by ``_deferral_total_exhausted`` rather than
+    by the predicate this pair compares. Guarding only the compared predicate's
+    columns left it open -- so the column set is derived from BOTH predicates,
+    not from the one that happens to be differenced here.
+
     So the guarantee is measured against the live source instead of trusted:
-    the two functions must exist, and neither may write any column
-    ``_budget_deferral_exhausted`` reads.
+    the declared column set must still match what the predicates read, the two
+    write paths must exist, and neither may write any of those columns.
 
     An empty ``_SURPLUS_WRITE_PATHS`` is itself a failure. A probe with
     nothing to check reads as a passing one, which is the state this whole
@@ -283,6 +375,7 @@ def _assert_surplus_writes_leave_the_episode_alone() -> None:
             "probe deliberately -- do not leave it vacuous."
         )
     module = ast.parse(_BUDGET_GUARD_SOURCE.read_text())
+    _assert_declared_columns_match_the_predicates(module)
     functions = {
         node.name: node
         for node in module.body
@@ -300,13 +393,13 @@ def _assert_surplus_writes_leave_the_episode_alone() -> None:
             )
         touched = sorted(
             _row_columns_written_by(function).intersection(
-                _EPISODE_COLUMNS_THE_PREDICATE_READS
+                _EPISODE_COLUMNS_THE_PREDICATES_READ
             )
         )
         if touched:
             raise RuntimeError(
                 f"{name} writes {', '.join(touched)} -- column(s) "
-                "_budget_deferral_exhausted reads. A surplus promotion or "
+                f"{list(_EXHAUSTION_PREDICATES)} read. A surplus promotion or "
                 "withdrawal that moves the budget episode changes an "
                 "exhaustion verdict for a row the Go worker also stamps, and "
                 "every case in this pair is authored from states that assume "

@@ -3806,7 +3806,7 @@
       "current_implementation_state": "celery_only",
       "verification_status": "verified",
       "compatibility_dependency": "Celery Beat scheduler process + Redis/Valkey broker.",
-      "deletion_evidence_requirement": "Beat entry `ask-dev-retention-sweep` removed from src/dev_health_ops/workers/config.py; cadence contract comparison (this inventory vs. the checked schedule definition) shows the entry no longer present; the equivalent Go schedule/producer proven to preserve cadence and missed-run policy.",
+      "deletion_evidence_requirement": "producer_version >= 3 for system.retention_cleanup in contracts/jobs/v1/migration-state.json (STATED FIRST because it is the binding precondition: the Go schedule prune_ask_dev_conversations pins ContractVersionV3, so at producer_version 2 it skips every occurrence with consumer_version_incompatible and the scheduler records that as a healthy skip -- deleting the Beat entry on cadence evidence alone would stop Ask Dev retention entirely while every dashboard stayed green); AND the Go drain-completion contract raised to match Python's (a non-locking count_expired equivalent distinguishing a drained backlog from a SKIP LOCKED-contended one, tracked as CHAOS-3481); AND Beat entry `ask-dev-retention-sweep` removed from src/dev_health_ops/workers/config.py; AND cadence contract comparison (this inventory vs. the checked schedule definition) shows the entry no longer present; AND the equivalent Go schedule/producer proven to preserve cadence and missed-run policy.",
       "acceptance_test_id": "tests/workers/test_ask_dev_retention_sweep.py::test_beat_schedule_has_the_retention_sweep_entry",
       "notes": "CHAOS-3404: the only production caller of DevPersistenceService.cleanup_expired."
     }

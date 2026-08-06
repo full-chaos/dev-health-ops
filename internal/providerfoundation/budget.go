@@ -22,9 +22,18 @@ type BudgetKey struct {
 	TTL                              time.Duration
 }
 
-// SyncBudgetKey exactly mirrors Python BudgetGuard's advisory-lock key. Go
-// dispatch code acquires it in its claim transaction before evaluating active
-// units, so Go admission serializes with a concurrent Python admission.
+// SyncBudgetKey exactly mirrors Python BudgetGuard's advisory-lock key, so
+// that WHEN Go dispatch acquires it in a claim transaction before evaluating
+// active units, Go admission will serialize with a concurrent Python
+// admission.
+//
+// NOT YET WIRED, stated in the future tense on purpose. Neither SyncBudgetKey
+// nor PostgresBudgetLocker below has a single caller outside this package's
+// tests -- no Go dispatch path acquires this lock today, because Go performs
+// no unit-dispatch admission at all. The previous present-tense wording read
+// as a live serialization guarantee and was cited as evidence of one during
+// the CHAOS-3465 mirror review. The key derivation is correct and worth
+// keeping ready; it is not in force.
 type SyncBudgetKey struct {
 	Provider, OrgID, Host, CredentialFingerprint, Dimension, RouteFamily string
 }

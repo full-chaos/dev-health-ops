@@ -70,15 +70,22 @@ Both fail loud (``DbVerifyUnavailableError``) if the exec plane itself
 cannot be reached at all (docker/compose missing, non-zero exit, unparseable
 output) -- distinct from :func:`derive_resolution_path`'s own honest
 ``None``, which applies only once the exec plane genuinely reached the
-ledger and found it empty (a non-subject-shaped case). A residual, honestly
-documented limitation: entries the exec plane returns carry no
-``mention_text`` (``DevResolutionEntry`` never persists the original mention
-span -- see ``resolution_path.py``'s module docstring); a single-shot
-``exact_match`` entry with no prior candidate offer therefore cannot be
-classified exact-vs-alias without it, and ``test_corpus_case`` records that
-as a named, failed assertion (never a silent guess) rather than crashing --
-closeable once a corpus case declares its own expected mention text (Lane
-2b schema addition, not decided here).
+ledger and found it empty (a non-subject-shaped case).
+
+CLOSED (CHAOS-3462 B6): entries the exec plane returns still carry no
+``mention_text`` -- ``DevResolutionEntry`` never persists the original span
+-- so a single-shot ``exact_match`` used to be unclassifiable, which made
+``deterministic-exact`` DEAD VOCABULARY for the whole corpus: ~46 cases were
+red on ``resolution_path_classifiable`` no matter what their invariants or
+profile said. The fix is the schema addition ``resolution_path.py``'s own
+docstring anticipated: each case declares ``expected_mention_texts``, and
+``attach_mention_texts`` threads them onto the entries by first-seen mention
+order. The declared spans are DERIVED FROM THE PRODUCER (production's
+``QuestionInterpreter``, whose ``normalized_lookup_text`` is exactly what
+reached the resolver) and pinned against it by a corpus guard test, so a
+question edited by one word fails the unit gate rather than the live run.
+A count mismatch between declared spans and observed mentions raises rather
+than mis-pairing them.
 
 Merge-order note: this repo's Lane 2a merges before Lane 2b, so
 ``tests/acceptance/world/ask-dev-world.v1/corpus/`` may not exist, or may be
@@ -132,6 +139,7 @@ from scripts.acceptance.corpus.db_verify import (
 )
 from scripts.acceptance.corpus.invariants import InvariantContext, evaluate_invariant
 from scripts.acceptance.corpus.principals import (
+    BRIDGE_ENV_VAR,
     PrincipalDirectory,
     PrincipalSession,
     PrincipalSessions,
@@ -143,6 +151,7 @@ from scripts.acceptance.corpus.receipt import (
 )
 from scripts.acceptance.corpus.resolution_path import (
     ResolutionPathError,
+    attach_mention_texts,
     derive_resolution_path,
 )
 from scripts.acceptance.corpus.script_inventory import check_script_inventory
@@ -371,6 +380,12 @@ def principal_sessions(
         admin_password=_superuser_password(),
         api_factory=lambda: AcceptanceApi(_api_base_url()),
         directory=PrincipalDirectory.from_world(_WORLD_DIR / "world.json"),
+        # Team-lead ruling 2026-08-06: credentials belong in the world
+        # generation (CHAOS-3463) and password_hash STAYS digested. Setting
+        # a password at run time mutates a digested column, so it is opt-in
+        # and marks every receipt -- a bridged run must never be mistaken
+        # for a clean one.
+        allow_password_bridge=os.getenv(BRIDGE_ENV_VAR) == "1",
     )
 
 
@@ -614,13 +629,23 @@ def test_corpus_case(
             compose_context, run_id=run_id
         )
         try:
-            resolution_path = derive_resolution_path(ledger_entries)
+            # CHAOS-3462 B6: the exec plane cannot return the mention span
+            # (DevResolutionEntry never persists it), so the CASE supplies
+            # it -- spans derived from production's own QuestionInterpreter
+            # and pinned against it by the corpus guard test. Without this,
+            # every single-shot exact_match was unclassifiable and
+            # `deterministic-exact` was dead vocabulary for the whole
+            # corpus. A count mismatch raises rather than mis-pairing spans.
+            resolution_path = derive_resolution_path(
+                attach_mention_texts(ledger_entries, case.expected_mention_texts)
+                if case.expected_mention_texts
+                else ledger_entries
+            )
         except ResolutionPathError as exc:
-            # See the module docstring's residual-limitation note: a
-            # single-shot exact_match entry with no prior candidate offer
-            # needs mention_text this wire-only case object does not yet
-            # carry (Lane 2b schema addition). Recorded as a named, failed
-            # assertion -- never silently swallowed into a guessed path.
+            # Still recorded as a named, failed assertion rather than
+            # silently swallowed into a guessed path: after B6 this should
+            # only fire on a real drift between the case's declared spans
+            # and what the run actually resolved.
             resolution_path = None
             ledger_classification_error = str(exc)
 
@@ -668,7 +693,8 @@ def test_corpus_case(
         detail=(
             f"org_alias={session.principal.org_alias!r} "
             f"user_alias={session.principal.user_alias!r} "
-            f"email={session.principal.email!r} org_id={org_id!r}"
+            f"email={session.principal.email!r} org_id={org_id!r} "
+            f"provisioning={principal_sessions.provisioning_mode}"
         ),
     )
     if ledger_classification_error is not None:

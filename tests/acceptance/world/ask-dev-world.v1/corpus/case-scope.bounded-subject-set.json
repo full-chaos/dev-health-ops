@@ -6,13 +6,17 @@
   "status": "active",
   "blocked_by": null,
   "proves": [
-    "plan \u00a73 subjects.json class; issue \"bounded project/team subject sets\""
+    "plan §3 subjects.json class; issue \"bounded project/team subject sets\""
   ],
   "question": "What's the status of repo \"meridian/web-app\" and repo \"meridian/api-gateway\"?",
   "org_alias": "primary",
   "user_alias": "primary.ordinary",
   "subject_class": "bounded-set",
   "subject_ref": "subject.bounded-set.web-app-and-api-gateway",
+  "expected_mention_texts": [
+    "meridian/web-app",
+    "meridian/api-gateway"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

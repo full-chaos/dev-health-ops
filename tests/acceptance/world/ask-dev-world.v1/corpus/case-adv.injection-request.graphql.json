@@ -13,6 +13,10 @@
   "user_alias": "primary.ordinary",
   "subject_class": "n/a",
   "subject_ref": null,
+  "expected_mention_texts": [
+    "graphql",
+    "api"
+  ],
   "invariants": [
     {
       "category": "terminal-persists-assistant-row",

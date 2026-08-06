@@ -228,6 +228,7 @@ class TestEveryActiveCaseCanPass:
                     "id": "planted.qua",
                     "question": "q",
                     "subject_class": "n/a",
+                    "expected_mention_texts": ["atlas"],
                     "invariants": [
                         {
                             "category": "resolution-path-matches-profile",
@@ -365,6 +366,90 @@ class TestNoResolutionPathCaseCanProduceZeroLedgerRows:
         )
 
 
+class TestDeclaredMentionTextsMatchTheProducer:
+    """CHAOS-3462 B6: every declared span must be what production really
+    yields for that question.
+
+    ``expected_mention_texts`` exists because the persisted resolution
+    ledger never carries the mention span, so the case has to supply it.
+    That makes it a hand-copyable value in a JSON file -- and a hand-copyable
+    value drifts. A question edited by one word, and the declared span is
+    silently wrong: ``classify_match_kind`` would then either raise for a
+    bogus reason or classify against text that never reached the resolver.
+
+    So the declaration is asserted against the PRODUCER, exactly and in
+    order, not spot-checked for membership. The value was generated from
+    this same interpreter; asserting equality means a future question edit
+    fails the unit gate rather than the live run.
+
+    Two things this deliberately does NOT do: it does not accept
+    ``subjects.json``'s ``mentions`` array as a source (those are
+    human-readable descriptive phrases, not resolver input --
+    ``resolution_path.py``'s CALLER CONTRACT warns about exactly that), and
+    it does not compare against ``extract_mentions``, which is the narrower
+    function and misses the untyped bare-name mentions
+    ``_add_untyped_mentions`` adds.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_declared_span_is_what_the_interpreter_produces(
+        self,
+    ) -> None:
+        from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
+
+        interpreter = QuestionInterpreter()
+        declaring = [case for case in _active_cases() if case.expected_mention_texts]
+        assert declaring, (
+            "no active case declares expected_mention_texts -- this guard "
+            "would report green having measured nothing"
+        )
+
+        mismatches: list[str] = []
+        failures: list[str] = []
+        for case in declaring:
+            request = TestNoResolutionPathCaseCanProduceZeroLedgerRows._request(
+                case.question
+            )
+            try:
+                interpreted = await interpreter.interpret(request)
+            except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+                failures.append(f"{case.id}: {type(exc).__name__}: {exc}")
+                continue
+            produced = tuple(m.normalized_lookup_text for m in interpreted.mentions)
+            if produced != case.expected_mention_texts:
+                mismatches.append(
+                    f"{case.id}: declares {list(case.expected_mention_texts)!r} "
+                    f"but the interpreter produces {list(produced)!r}"
+                )
+
+        assert not failures, (
+            "the interpreter raised for these cases, so their spans were "
+            "never measured:\n  " + "\n  ".join(failures)
+        )
+        assert not mismatches, (
+            "these cases' declared expected_mention_texts have drifted from "
+            "what production's QuestionInterpreter actually yields for their "
+            "question. Regenerate them from the interpreter -- never hand-"
+            "author them, and never copy them from subjects.json's "
+            "descriptive 'mentions' phrases:\n  " + "\n  ".join(mismatches)
+        )
+
+    def test_every_resolution_path_case_declares_spans(self) -> None:
+        """The loader enforces this per file; this asserts it holds across
+        the corpus as a set, which is what the runner actually depends on."""
+
+        missing = [
+            case.id
+            for case in _active_cases()
+            if any(e.get("check") == "resolution_path_in" for e in case.invariants)
+            and not case.expected_mention_texts
+        ]
+        assert not missing, (
+            f"these cases assert a resolution path but declare no spans, so "
+            f"a single-shot exact_match would be unclassifiable: {missing!r}"
+        )
+
+
 class TestGuardActuallyDetectsTheDefect:
     """Rule 2: plant the exact defect and watch the guard catch it.
 
@@ -380,6 +465,7 @@ class TestGuardActuallyDetectsTheDefect:
                     "id": "planted.null-path",
                     "question": "What's the status of Atlas?",
                     "subject_class": "n/a",
+                    "expected_mention_texts": ["atlas"],
                     "resolution_profile_ref": "planted-v1",
                     "invariants": [
                         {
@@ -420,6 +506,7 @@ class TestGuardActuallyDetectsTheDefect:
                     "id": "planted.real-path",
                     "question": 'What\'s the status of the repo "meridian/web-app"?',
                     "subject_class": "exact",
+                    "expected_mention_texts": ["meridian/web-app"],
                     "resolution_profile_ref": "planted-v1",
                     "invariants": [
                         {
@@ -462,6 +549,7 @@ class TestGuardActuallyDetectsTheDefect:
                     "id": "planted.bogus-literal",
                     "question": "q",
                     "subject_class": "n/a",
+                    "expected_mention_texts": ["atlas"],
                     "invariants": [
                         {
                             "category": "resolution-path-matches-profile",
@@ -491,6 +579,7 @@ class TestGuardActuallyDetectsTheDefect:
                     "id": "planted.empty-args",
                     "question": "q",
                     "subject_class": "n/a",
+                    "expected_mention_texts": ["atlas"],
                     "invariants": [
                         {
                             "category": "resolution-path-matches-profile",
@@ -521,6 +610,7 @@ class TestGuardActuallyDetectsTheDefect:
                     "id": "planted.literal",
                     "question": "q",
                     "subject_class": "n/a",
+                    "expected_mention_texts": ["atlas"],
                     "resolution_profile_ref": "planted-v1",
                     "invariants": [
                         {

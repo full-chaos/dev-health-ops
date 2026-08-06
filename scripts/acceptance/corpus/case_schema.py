@@ -97,7 +97,13 @@ class CorpusCase:
     status: str
     blocked_by: str | None
     source_path: Path
-    raw: Mapping[str, Any] = field(repr=False)
+    #: CHAOS-3462 B6: the normalized lookup spans this case's question
+    #: produces, in interpreter order. Needed because the persisted
+    #: resolution ledger never carries the mention span (see
+    #: ``resolution_path.attach_mention_texts``). Empty for a case that does
+    #: not assert a resolution path.
+    expected_mention_texts: tuple[str, ...] = ()
+    raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @property
     def is_declared_blocked(self) -> bool:
@@ -222,6 +228,33 @@ def load_corpus_case(path: Path) -> CorpusCase:
         # naming collision would actually cause silent data loss.
         pass
 
+    # CHAOS-3462 B6. Validated structurally here, but its CORRECTNESS -- that
+    # each span is what production's QuestionInterpreter really yields for
+    # this question -- is asserted by the corpus guard test against the live
+    # interpreter, not restated as a literal anywhere.
+    mention_texts_raw = raw.get("expected_mention_texts", [])
+    if not isinstance(mention_texts_raw, list) or not all(
+        isinstance(text, str) and text.strip() for text in mention_texts_raw
+    ):
+        raise CaseSchemaError(
+            f"{path}: {case_id!r} 'expected_mention_texts' must be a list of "
+            f"non-empty strings, got {mention_texts_raw!r}"
+        )
+    declares_resolution_path = any(
+        isinstance(entry, Mapping) and entry.get("check") == "resolution_path_in"
+        for entry in invariants_raw
+    )
+    if declares_resolution_path and not mention_texts_raw:
+        raise CaseSchemaError(
+            f"{path}: {case_id!r} declares a 'resolution_path_in' invariant but "
+            "no 'expected_mention_texts'. The persisted resolution ledger never "
+            "carries the mention span, so without it a single-shot exact_match "
+            "cannot be classified and the case fails on "
+            "resolution_path_classifiable no matter what the profile says -- "
+            "the CHAOS-3462 B6 defect. Declare the spans production's "
+            "QuestionInterpreter yields for this question, in order."
+        )
+
     return CorpusCase(
         id=case_id,
         question=question,
@@ -231,6 +264,7 @@ def load_corpus_case(path: Path) -> CorpusCase:
         status=status,
         blocked_by=blocked_by,
         source_path=path,
+        expected_mention_texts=tuple(mention_texts_raw),
         raw=raw,
     )
 

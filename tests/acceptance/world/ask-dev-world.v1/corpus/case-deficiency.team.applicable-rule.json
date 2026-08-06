@@ -13,6 +13,9 @@
   "user_alias": "primary.ordinary",
   "subject_class": "acronym-alias",
   "subject_ref": "subject.acronym-alias.ground-control-team",
+  "expected_mention_texts": [
+    "platform reliability (ground control)"
+  ],
   "invariants": [
     {
       "category": "no-internal-error-on-fuzzy-label",

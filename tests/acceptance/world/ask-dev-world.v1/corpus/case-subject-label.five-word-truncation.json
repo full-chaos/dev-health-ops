@@ -6,13 +6,17 @@
   "status": "active",
   "blocked_by": null,
   "proves": [
-    "CHAOS-3389 eval set (\"\u22655-word labels\"); CHAOS-3407 evidence"
+    "CHAOS-3389 eval set (\"≥5-word labels\"); CHAOS-3407 evidence"
   ],
   "question": "What's the status of the Dev Health Agent Context Runtime project?",
   "org_alias": "primary",
   "user_alias": "primary.ordinary",
   "subject_class": "exact",
   "subject_ref": "subject.exact.context-fabric",
+  "expected_mention_texts": [
+    "health agent context runtime",
+    "dev health agent context"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

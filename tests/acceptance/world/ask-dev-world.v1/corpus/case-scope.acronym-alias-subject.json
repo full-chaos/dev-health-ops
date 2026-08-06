@@ -6,13 +6,16 @@
   "status": "active",
   "blocked_by": null,
   "proves": [
-    "plan \u00a73 subjects.json class (CHAOS-3388); recent fix 2eaa59158"
+    "plan §3 subjects.json class (CHAOS-3388); recent fix 2eaa59158"
   ],
   "question": "What's the status of MWA?",
   "org_alias": "primary",
   "user_alias": "primary.ordinary",
   "subject_class": "acronym-alias",
   "subject_ref": "subject.acronym-alias.mwa-project",
+  "expected_mention_texts": [
+    "mwa"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

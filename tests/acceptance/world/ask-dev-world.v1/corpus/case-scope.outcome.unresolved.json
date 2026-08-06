@@ -13,6 +13,9 @@
   "user_alias": "primary.ordinary",
   "subject_class": "no-match",
   "subject_ref": "subject.no-match.ask-dev-project",
+  "expected_mention_texts": [
+    "ask dev"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

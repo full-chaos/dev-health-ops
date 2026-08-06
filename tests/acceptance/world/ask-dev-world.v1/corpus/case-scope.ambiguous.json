@@ -13,6 +13,9 @@
   "user_alias": "primary.ordinary",
   "subject_class": "ambiguous",
   "subject_ref": "subject.ambiguous.atlas",
+  "expected_mention_texts": [
+    "atlas"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

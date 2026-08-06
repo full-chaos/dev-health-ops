@@ -44,7 +44,9 @@ import pytest
 from dev_health_ops.api.utils.password_policy import validate_password
 from scripts.acceptance.corpus.case_schema import load_corpus_case
 from scripts.acceptance.corpus.principals import (
+    BRIDGED_PROVISIONING_MARKER,
     PRINCIPAL_PASSWORD,
+    SEEDED_PROVISIONING_MARKER,
     CasePrincipal,
     PrincipalDirectory,
     PrincipalError,
@@ -288,6 +290,7 @@ class TestPrincipalSessions:
             admin_password="devhealth123",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+            allow_password_bridge=True,
         )
         session = sessions.session_for_alias("primary.ordinary")
 
@@ -327,6 +330,7 @@ class TestPrincipalSessions:
             admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+            allow_password_bridge=True,
         )
         first = sessions.session_for_alias("primary.ordinary")
         second = sessions.session_for_alias("primary.ordinary")
@@ -362,6 +366,7 @@ class TestPrincipalSessions:
             admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+            allow_password_bridge=True,
         )
         with pytest.raises(PrincipalError, match="org"):
             sessions.session_for_alias("primary.ordinary")
@@ -389,6 +394,7 @@ class TestPrincipalSessions:
             admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+            allow_password_bridge=True,
         )
         with pytest.raises(PrincipalError, match="user"):
             sessions.session_for_alias("primary.ordinary")
@@ -408,6 +414,7 @@ class TestPrincipalSessions:
             admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+            allow_password_bridge=True,
         )
         with pytest.raises(PrincipalError, match="access_token"):
             sessions.session_for_alias("primary.ordinary")
@@ -428,6 +435,7 @@ class TestPrincipalSessions:
             admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+            allow_password_bridge=True,
         )
         with pytest.raises(RuntimeError, match="403"):
             sessions.session_for_alias("primary.ordinary")
@@ -463,6 +471,7 @@ class TestPrincipalSessions:
             admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+            allow_password_bridge=True,
         )
         with pytest.raises(PrincipalError, match="no.*'id'"):
             sessions.session_for_alias("primary.ordinary")
@@ -491,6 +500,7 @@ class TestPrincipalSessions:
             admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+            allow_password_bridge=True,
         )
         with pytest.raises(RuntimeError, match="login 503"):
             sessions.session_for_alias("primary.ordinary")
@@ -514,7 +524,95 @@ class TestPrincipalSessions:
             admin_password="pw",
             api_factory=lambda: _FakeApi({}),
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+            allow_password_bridge=True,
         )
         with pytest.raises(PrincipalError, match="nobody"):
             sessions.session_for_alias("primary.nobody")
         assert admin.calls == []
+
+
+class TestPasswordBridgeIsOptIn:
+    """Team-lead ruling 2026-08-06: credentials are seeded at world-generation
+    time and ``password_hash`` STAYS in the world digest.
+
+    Setting a password at run time therefore MUTATES a digest-covered column.
+    That is a real cost, so it is opt-in and it marks the receipts: a bridged
+    run is not a clean run and must not be mistaken for one. The bridge is
+    temporary -- it goes away when CHAOS-3463 lands seeded credentials.
+    """
+
+    def _principal(self) -> CasePrincipal:
+        return PrincipalDirectory.from_world(_REAL_MANIFEST).principal_by_alias(
+            "primary.ordinary"
+        )
+
+    def _sessions(self, *, bridge: bool, admin: Any, api: Any) -> PrincipalSessions:
+        return PrincipalSessions(
+            admin_api=admin,
+            admin_password="pw",
+            api_factory=lambda: api,
+            directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
+            allow_password_bridge=bridge,
+        )
+
+    def test_without_the_opt_in_no_password_is_ever_set(self) -> None:
+        principal = self._principal()
+        admin = _FakeApi({})  # any call raises AssertionError
+        api = _FakeApi(
+            {
+                ("POST", "/api/v1/auth/login"): _login_response(
+                    str(principal.user_id), str(principal.org_id), principal.email
+                )
+            }
+        )
+        session = self._sessions(bridge=False, admin=admin, api=api).session_for_alias(
+            "primary.ordinary"
+        )
+        assert admin.calls == [], "a digest-covered column was mutated without opt-in"
+        assert session.api is api
+
+    def test_with_the_opt_in_the_password_is_set(self) -> None:
+        principal = self._principal()
+        admin = _FakeApi(
+            {
+                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
+                    "ok": True
+                }
+            }
+        )
+        api = _FakeApi(
+            {
+                ("POST", "/api/v1/auth/login"): _login_response(
+                    str(principal.user_id), str(principal.org_id), principal.email
+                )
+            }
+        )
+        self._sessions(bridge=True, admin=admin, api=api).session_for_alias(
+            "primary.ordinary"
+        )
+        assert len(admin.calls) == 1
+
+    def test_the_provisioning_mode_distinguishes_the_two(self) -> None:
+        """The receipt marker is the whole point: without it, artifacts from a
+        bridged run are indistinguishable from artifacts produced against
+        properly seeded credentials."""
+
+        fake = _FakeApi({})
+        assert (
+            self._sessions(bridge=True, admin=fake, api=fake).provisioning_mode
+            == BRIDGED_PROVISIONING_MARKER
+        )
+        assert (
+            self._sessions(bridge=False, admin=fake, api=fake).provisioning_mode
+            == SEEDED_PROVISIONING_MARKER
+        )
+        assert BRIDGED_PROVISIONING_MARKER != SEEDED_PROVISIONING_MARKER
+
+    def test_an_unseeded_credential_without_the_bridge_names_the_remedy(self) -> None:
+        api = _FakeApi({("POST", "/api/v1/auth/login"): {"user": {}}})
+        with pytest.raises(
+            PrincipalError, match="ASK_DEV_ACCEPTANCE_ALLOW_PASSWORD_BRIDGE"
+        ):
+            self._sessions(bridge=False, admin=_FakeApi({}), api=api).session_for_alias(
+                "primary.ordinary"
+            )

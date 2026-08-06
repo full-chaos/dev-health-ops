@@ -6,13 +6,16 @@
   "status": "active",
   "blocked_by": null,
   "proves": [
-    "plan \u00a73 subjects.json class"
+    "plan §3 subjects.json class"
   ],
   "question": "What's the status of the repo \"legacy-billing\"?",
   "org_alias": "primary",
   "user_alias": "primary.ordinary",
   "subject_class": "deleted",
   "subject_ref": "subject.deleted.legacy-billing",
+  "expected_mention_texts": [
+    "legacy-billing"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

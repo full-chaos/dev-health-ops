@@ -91,6 +91,7 @@ __all__ = [
     "ResolutionPath",
     "ResolutionPathError",
     "ResolutionLedgerEntry",
+    "attach_mention_texts",
     "classify_match_kind",
     "derive_resolution_path",
 ]
@@ -231,6 +232,68 @@ def classify_match_kind(
         "language utterance rather than the normalized resolver-input span, "
         "that is the likely cause -- see this module's CALLER CONTRACT."
     )
+
+
+def attach_mention_texts(
+    entries: Sequence[ResolutionLedgerEntry], mention_texts: Sequence[str]
+) -> list[ResolutionLedgerEntry]:
+    """Attach each mention's declared lookup text to its ledger entries.
+
+    CHAOS-3462 B6 closes the gap this module's docstring named as its own
+    residual: ``DevResolutionEntry`` never persists the mention span, so the
+    docker-exec ledger read returns entries with ``mention_text=None`` and
+    every single-shot ``exact_match`` was unclassifiable --
+    ``deterministic-exact`` was dead vocabulary for the whole corpus. The
+    case now DECLARES the spans (``expected_mention_texts``), derived from
+    production's own ``QuestionInterpreter`` rather than hand-authored, and
+    this function threads them onto the entries the exec plane returned.
+
+    ORDERING CONTRACT, and why positional mapping is sound here rather than
+    a guess: ``subject_preflight._build_ledger`` builds entries by
+    ``zip(mentions, resolutions, strict=True)`` and stamps ``entry_ordinal``
+    from that index, and ``_inner_ledger_query`` orders by
+    ``entry_ordinal``. So distinct ``mention_id`` values, in first-seen
+    order, correspond one-to-one with the question's mentions in the order
+    the interpreter produced them -- which is the order
+    ``expected_mention_texts`` is declared in, asserted against the real
+    interpreter by the corpus guard test.
+
+    A count mismatch RAISES rather than truncating or padding. Silently
+    zipping a 3-mention declaration against 2 observed mentions would attach
+    the wrong span to a real mention, and ``classify_match_kind`` would then
+    either raise for a spurious reason or -- worse -- classify against the
+    wrong text. A mismatch means the declaration has drifted from the
+    question, which is a corpus defect to fix, not to absorb.
+    """
+
+    order: list[str] = []
+    for entry in entries:
+        if entry.mention_id not in order:
+            order.append(entry.mention_id)
+    if len(order) != len(mention_texts):
+        raise ResolutionPathError(
+            f"the ledger carries {len(order)} distinct mention(s) "
+            f"({order!r}) but the case declares {len(mention_texts)} "
+            f"expected_mention_texts ({list(mention_texts)!r}) -- refusing "
+            "to guess which span belongs to which mention. The case's "
+            "declaration has drifted from what the interpreter actually "
+            "produced for its question."
+        )
+    text_by_mention = dict(zip(order, mention_texts, strict=True))
+    return [
+        ResolutionLedgerEntry(
+            outcome=entry.outcome,
+            mention_id=entry.mention_id,
+            committed_label=entry.committed_label,
+            committed_canonical_id=entry.committed_canonical_id,
+            mention_text=(
+                entry.mention_text
+                if entry.mention_text is not None
+                else text_by_mention[entry.mention_id]
+            ),
+        )
+        for entry in entries
+    ]
 
 
 def derive_resolution_path(

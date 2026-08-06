@@ -79,6 +79,29 @@ __all__ = [
 #: for a reason unrelated to the case.
 PRINCIPAL_PASSWORD = "ask-dev-world-acceptance-4242"
 
+#: Opt-in for the temporary admin-set-password bridge (team-lead ruling,
+#: 2026-08-06). The DURABLE design is that CHAOS-3463 seeds credentials at
+#: world-generation time and ``password_hash`` STAYS in the world digest:
+#: the snapshot/restore model makes hashes frozen bytes restored identically
+#: per boot, so the "bcrypt cannot reproduce across generations" argument
+#: does not apply, and keeping the column digested means credential
+#: tampering registers as drift -- which is what the digest is for.
+#:
+#: Until that lands, world users have ``password_hash=None`` and cannot log
+#: in at all, so this runner sets one. That MUTATES a digested column, which
+#: is why it is now opt-in rather than automatic: a run that took the bridge
+#: is not a clean run, and must not be mistaken for one. When the seeding
+#: lane lands, the bridge is removed and the runner requires seeded
+#: credentials.
+BRIDGE_ENV_VAR = "ASK_DEV_ACCEPTANCE_ALLOW_PASSWORD_BRIDGE"
+
+#: Stamped into every receipt of a bridged run (see the runner's
+#: ``provisioning_mode`` check) so the artifacts themselves say which mode
+#: produced them -- a receipt is evidence, and evidence that cannot
+#: distinguish a bridged run from a seeded one is weaker than it looks.
+BRIDGED_PROVISIONING_MARKER = "admin-set-password-bridge"
+SEEDED_PROVISIONING_MARKER = "world-seeded-credentials"
+
 _ADMIN_SET_PASSWORD_PATH = "/api/v1/admin/users/{user_id}/password"
 _LOGIN_PATH = "/api/v1/auth/login"
 
@@ -242,11 +265,13 @@ class PrincipalSessions:
         admin_password: str,
         api_factory: Callable[[], Any],
         directory: PrincipalDirectory,
+        allow_password_bridge: bool = False,
     ) -> None:
         self._admin_api = admin_api
         self._admin_password = admin_password
         self._api_factory = api_factory
         self._directory = directory
+        self._allow_password_bridge = allow_password_bridge
         self._sessions: dict[str, PrincipalSession] = {}
         self._failures: dict[str, BaseException] = {}
 
@@ -292,17 +317,30 @@ class PrincipalSessions:
         self._sessions[principal.user_alias] = session
         return session
 
-    def _authenticate(self, principal: CasePrincipal) -> PrincipalSession:
-        # Step 1: give the world-seeded user a password. Any failure here
-        # propagates untouched -- there is deliberately no except/fallback.
-        self._admin_api.request(
-            "POST",
-            _ADMIN_SET_PASSWORD_PATH.format(user_id=principal.user_id),
-            {
-                "admin_password": self._admin_password,
-                "password": PRINCIPAL_PASSWORD,
-            },
+    @property
+    def provisioning_mode(self) -> str:
+        """Which credential path this run used -- stamped into receipts."""
+
+        return (
+            BRIDGED_PROVISIONING_MARKER
+            if self._allow_password_bridge
+            else SEEDED_PROVISIONING_MARKER
         )
+
+    def _authenticate(self, principal: CasePrincipal) -> PrincipalSession:
+        # Step 1: give the world user a password -- ONLY under the explicit
+        # bridge opt-in, because this writes password_hash, a column the
+        # world digest covers. Without the opt-in the runner requires the
+        # credential to already be seeded, which is the durable design.
+        if self._allow_password_bridge:
+            self._admin_api.request(
+                "POST",
+                _ADMIN_SET_PASSWORD_PATH.format(user_id=principal.user_id),
+                {
+                    "admin_password": self._admin_password,
+                    "password": PRINCIPAL_PASSWORD,
+                },
+            )
 
         # Step 2: a genuine login, so the JWT's own sub/org_id/role are the
         # principal's -- which is what /api/v1/dev/** actually reads.
@@ -322,6 +360,17 @@ class PrincipalSessions:
             raise PrincipalError(
                 f"login as {principal.user_alias!r} ({principal.email}) returned "
                 "no access_token"
+                + (
+                    ""
+                    if self._allow_password_bridge
+                    else f". This run did NOT take the password bridge, so it "
+                    f"requires {principal.email} to have a credential seeded at "
+                    f"world-generation time (CHAOS-3463). If the world in this "
+                    f"stack predates seeded credentials, set "
+                    f"{BRIDGE_ENV_VAR}=1 to opt into the temporary "
+                    f"admin-set-password bridge -- which mutates a "
+                    f"digest-covered column and marks every receipt as bridged."
+                )
             )
         user = login.get("user")
         if not isinstance(user, Mapping):

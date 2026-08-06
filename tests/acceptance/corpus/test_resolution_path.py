@@ -15,6 +15,7 @@ import pytest
 from scripts.acceptance.corpus.resolution_path import (
     ResolutionLedgerEntry,
     ResolutionPathError,
+    attach_mention_texts,
     classify_match_kind,
     derive_resolution_path,
 )
@@ -248,3 +249,86 @@ class TestDeriveResolutionPath:
         entries = [_entry("something_new")]
         with pytest.raises(ResolutionPathError):
             derive_resolution_path(entries)
+
+
+class TestAttachMentionTexts:
+    """CHAOS-3462 B6: thread the case-declared spans onto exec-plane entries.
+
+    The exec plane cannot return them -- ``DevResolutionEntry`` never
+    persists the mention span -- so before B6 every single-shot
+    ``exact_match`` was unclassifiable and ``deterministic-exact`` was dead
+    vocabulary for the entire corpus.
+    """
+
+    def test_single_mention_gets_its_span(self) -> None:
+        entries = [
+            ResolutionLedgerEntry(
+                outcome="exact_match",
+                mention_id="m1",
+                committed_label="meridian/web-app",
+            )
+        ]
+        attached = attach_mention_texts(entries, ["meridian/web-app"])
+        assert attached[0].mention_text == "meridian/web-app"
+        # And the whole point: it is now classifiable.
+        assert derive_resolution_path(attached) == "deterministic-exact"
+
+    def test_the_unattached_entry_is_unclassifiable(self) -> None:
+        """The negative control -- this is the B6 defect itself. Without the
+        span the same ledger raises, which is what made ~46 cases red."""
+
+        entries = [
+            ResolutionLedgerEntry(
+                outcome="exact_match",
+                mention_id="m1",
+                committed_label="meridian/web-app",
+            )
+        ]
+        with pytest.raises(ResolutionPathError):
+            derive_resolution_path(entries)
+
+    def test_spans_are_assigned_by_first_seen_mention_order(self) -> None:
+        entries = [
+            ResolutionLedgerEntry(outcome="ambiguous_candidates", mention_id="m1"),
+            ResolutionLedgerEntry(
+                outcome="exact_match", mention_id="m2", committed_label="second"
+            ),
+            ResolutionLedgerEntry(
+                outcome="exact_match", mention_id="m1", committed_label="first"
+            ),
+        ]
+        attached = attach_mention_texts(entries, ["alpha", "beta"])
+        by_id = {(e.mention_id, e.mention_text) for e in attached}
+        assert ("m1", "alpha") in by_id
+        assert ("m2", "beta") in by_id
+
+    def test_a_count_mismatch_raises_rather_than_mispairing(self) -> None:
+        """Zipping a drifted declaration would attach the WRONG span to a
+        real mention, and classify_match_kind would then either raise for a
+        bogus reason or classify against text that never reached the
+        resolver. Both are worse than a loud refusal."""
+
+        entries = [
+            ResolutionLedgerEntry(outcome="exact_match", mention_id="m1"),
+            ResolutionLedgerEntry(outcome="exact_match", mention_id="m2"),
+        ]
+        with pytest.raises(ResolutionPathError, match="drifted"):
+            attach_mention_texts(entries, ["only-one"])
+        with pytest.raises(ResolutionPathError, match="drifted"):
+            attach_mention_texts(entries, ["a", "b", "c"])
+
+    def test_an_already_populated_mention_text_is_not_overwritten(self) -> None:
+        entries = [
+            ResolutionLedgerEntry(
+                outcome="exact_match",
+                mention_id="m1",
+                committed_label="x",
+                mention_text="already-there",
+            )
+        ]
+        assert attach_mention_texts(entries, ["declared"])[0].mention_text == (
+            "already-there"
+        )
+
+    def test_empty_ledger_with_empty_declaration_is_a_no_op(self) -> None:
+        assert attach_mention_texts([], []) == []

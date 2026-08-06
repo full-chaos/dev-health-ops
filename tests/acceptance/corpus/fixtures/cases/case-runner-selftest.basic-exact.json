@@ -6,7 +6,14 @@
     {
       "category": "subject-resolution",
       "check": "resolution_path_in",
-      "args": {"allowed": ["deterministic-exact"]}
+      "args": {
+        "allowed": [
+          "deterministic-exact"
+        ]
+      }
     }
+  ],
+  "expected_mention_texts": [
+    "meridian/web-app"
   ]
 }

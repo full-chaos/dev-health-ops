@@ -13,6 +13,9 @@
   "user_alias": "primary.ordinary",
   "subject_class": "exact",
   "subject_ref": "subject.exact.context-fabric",
+  "expected_mention_texts": [
+    "dev health agent context runtime (context fabric)"
+  ],
   "invariants": [
     {
       "category": "no-internal-error-on-fuzzy-label",

@@ -260,6 +260,71 @@ bare `no_internal_error` floor only when no non-null profile value exists.
 An active case with zero invariants is rejected by the loader, and would be
 a silent coverage hole even if it were not.
 
+## `expected_mention_texts` — schema addition (CHAOS-3462 B6)
+
+```jsonc
+"expected_mention_texts": ["meridian/web-app"],   // REQUIRED iff the case declares resolution_path_in
+```
+
+**Why it exists.** `DevResolutionEntry` never persists the original mention
+span, so the docker-exec ledger read returns entries with
+`mention_text = None`. `derive_resolution_path` raises for any single-shot
+`exact_match` without it, the runner records a failed
+`resolution_path_classifiable` check, and the case goes red. The effect was
+not marginal: **`deterministic-exact` and `deterministic-alias` were
+unproducible by the runner in every case, in every catalog world** — roughly
+46 active cases were red for a reason unrelated to the product, and
+`resolution_path_in` could only pass where the profile said
+`miss-clarification`. This is the schema addition `resolution_path.py`'s own
+docstring anticipated ("closeable once a corpus case declares its own
+expected mention text").
+
+**The loader enforces the pairing:** a case declaring `resolution_path_in`
+with no `expected_mention_texts` is a `CaseSchemaError`, because such a case
+cannot report a real result.
+
+### Deriving the value — binding method
+
+**Generate it from the producer. Never hand-author it.**
+
+* The producer is **`QuestionInterpreter.interpret`**, driven with the
+  runner's real request shape. It is **not** `extract_mentions`: the
+  interpreter additionally mints untyped bare-name mentions
+  (`_add_untyped_mentions`), so `"Update the ticket status to Done"` yields
+  **zero** mentions under `extract_mentions` and **one** under `interpret`.
+  Three case dispositions were made wrong by using the narrower function; do
+  not repeat it.
+* The value is each mention's **`normalized_lookup_text`**, not its surface
+  span. `resolution_path.py`'s CALLER CONTRACT is explicit that it needs
+  "the exact, already-normalized span that reached the resolver", and that a
+  raw natural-language utterance raises rather than silently misclassifying.
+* **Never** source it from `subjects.json`'s `mentions` array. Those are
+  human-readable descriptive phrases ("the web-app repo"), not resolver
+  input — the same CALLER CONTRACT calls this out by name.
+
+### Ordering and multi-mention cases
+
+Declare **every** mention the question produces, in interpreter order — not
+just the one the resolution targets. `attach_mention_texts` maps declared
+spans onto distinct `mention_id`s in first-seen order, which is sound
+because `subject_preflight._build_ledger` builds entries via
+`zip(mentions, resolutions, strict=True)` and `_inner_ledger_query` orders
+by `entry_ordinal`. Ten active cases produce more than one mention; a
+single declared span would leave the others unclassifiable.
+
+A count mismatch between declared spans and observed mentions **raises**. It
+is never truncated or padded: mis-pairing would attach the wrong span to a
+real mention, and `classify_match_kind` would then either raise for a bogus
+reason or — worse — classify against text that never reached the resolver.
+
+### Drift guard
+
+`tests/acceptance/corpus/test_corpus_invariants_are_satisfiable.py` asserts
+every declared list equals, exactly and in order, what the live interpreter
+yields for that question. A question edited by one word therefore fails the
+unit gate rather than the live run. Regenerate from the interpreter; do not
+patch the JSON by hand.
+
 ## `org_alias` / `user_alias` are load-bearing (CHAOS-3462 B5)
 
 These are not documentation. The runner resolves both through `world.json`
@@ -274,13 +339,23 @@ Two consequences for case authoring:
 
 * the pair must agree with `world.json` — the user's own `org_alias` there
   is authoritative, and a case cannot reassign a user to another org;
-* because world users are seeded with `password_hash=None`, the runner sets
-  a password via `POST /api/v1/admin/users/{id}/password` and then performs
-  a real login. Impersonation is deliberately NOT used: the
-  `/api/v1/dev/**` routers read the raw JWT claims and ignore the
-  impersonation context, so an impersonated case would evaluate entitlement
-  and readiness against the superuser's org and go green for the wrong
-  principal.
+* impersonation is deliberately NOT used: the `/api/v1/dev/**` routers read
+  the raw JWT claims and ignore the impersonation context (GraphQL does
+  honor it — the asymmetry is filed as CHAOS-3472), so an impersonated case
+  would evaluate entitlement and readiness against the superuser's org and
+  go green for the wrong principal;
+* credentials are **seeded at world-generation time** (team-lead ruling
+  2026-08-06, CHAOS-3463), and `password_hash` **stays in the world
+  digest** — the snapshot/restore model makes hashes frozen bytes restored
+  identically per boot, so credential tampering registers as drift, which is
+  what the digest is for. Until that lands, world users have
+  `password_hash=None` and cannot log in at all, so the runner offers a
+  TEMPORARY bridge: `ASK_DEV_ACCEPTANCE_ALLOW_PASSWORD_BRIDGE=1` opts into
+  setting a password via `POST /api/v1/admin/users/{id}/password`. It is
+  opt-in because it mutates a digest-covered column, and every receipt from
+  such a run is stamped `provisioning=admin-set-password-bridge` so a
+  bridged run can never be mistaken for one against properly seeded
+  credentials. Remove the bridge when CHAOS-3463 lands.
 
 ## `status: "declared-blocked"` cases
 

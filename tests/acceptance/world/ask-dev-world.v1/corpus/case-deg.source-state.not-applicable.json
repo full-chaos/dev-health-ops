@@ -13,6 +13,10 @@
   "user_alias": "primary.ordinary",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
+  "expected_mention_texts": [
+    "meridian/web-app",
+    "is acr"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

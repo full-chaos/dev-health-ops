@@ -13,6 +13,9 @@
   "user_alias": "primary.ordinary",
   "subject_class": "deleted",
   "subject_ref": "subject.deleted.legacy-billing",
+  "expected_mention_texts": [
+    "legacy-billing"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

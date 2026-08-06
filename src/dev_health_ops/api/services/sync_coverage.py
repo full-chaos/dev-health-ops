@@ -1682,11 +1682,21 @@ def build_coverage_summary_payload(
     lookback_days: int = HISTORY_LOOKBACK_DAYS,
     latest_successful_run_at_override: datetime | None = None,
     is_truncated: bool = False,
+    not_enabled_dataset_keys: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Build the API coverage payload from persisted unit and backfill windows.
 
     Interval math is evaluated per ``(source_id, dataset_key)`` before summaries
     roll up to dataset, source, and overall levels.
+
+    ``not_enabled_dataset_keys`` (CHAOS-3399) are datasets the provider
+    supports but that have no enabled ``IntegrationDataset`` row -- i.e. never
+    planned, in contrast to a dataset that IS in ``scope.dataset_keys`` but
+    produced zero rows. They are appended to the returned ``datasets`` list
+    with a distinct ``"not_enabled"`` status and empty ranges; they never
+    participate in ``scope``/pair interval math or the overall/source
+    rollups above, so passing this is inert for every existing caller that
+    omits it.
     """
 
     now = ensure_utc(generated_at or datetime.now(timezone.utc))
@@ -1965,6 +1975,19 @@ def build_coverage_summary_payload(
                 ],
             }
             for dataset in datasets
+        ]
+        + [
+            {
+                "dataset_key": dataset_key,
+                "status": "not_enabled",
+                "covered_through": None,
+                "requested_ranges": [],
+                "covered_ranges": [],
+                "gaps": [],
+                "stale_ranges": [],
+                "failed_ranges": [],
+            }
+            for dataset_key in sorted(not_enabled_dataset_keys)
         ],
         "sources": source_payloads,
         "backfill_windows": _canonical_backfill_windows(datasets),
@@ -2023,6 +2046,23 @@ async def _has_coverage_before(
         SyncRunUnit.status == SyncRunUnitStatus.SUCCESS.value,
     )
     return (await session.execute(stmt.limit(1))).scalar_one_or_none() is not None
+
+
+def _not_enabled_dataset_keys(
+    config: SyncConfiguration, scope: EffectiveScope
+) -> frozenset[str]:
+    """Datasets the provider supports but that have no enabled row (CHAOS-3399).
+
+    Only computed for integration-level scope (a parent/planner-managed or
+    legacy whole-integration config): a source-scoped child config's
+    ``dataset_keys`` is an intentional subset of the integration's, not "every
+    dataset that could be enabled", so flagging the rest as not-enabled there
+    would be noise -- the parent config already surfaces it.
+    """
+    if scope.integration_id is None or config.source_id is not None:
+        return frozenset()
+    supported_keys = {spec.dataset_key for spec in supported_datasets(config.provider)}
+    return frozenset(supported_keys - set(scope.dataset_keys))
 
 
 async def rebuild_sync_coverage_projection(
@@ -2087,6 +2127,7 @@ async def rebuild_sync_coverage_projection(
         is_truncated=await _has_coverage_before(
             session, org_id, effective_scope, truncated_before
         ),
+        not_enabled_dataset_keys=_not_enabled_dataset_keys(config, effective_scope),
     )
     projection = (
         await session.execute(

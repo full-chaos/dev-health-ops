@@ -57,6 +57,12 @@ Rotate, replace, revoke, or disconnect provider credentials without losing the e
 - a bounded initial synchronization or backfill completes;
 - the latest successful synchronization and product freshness advance.
 
+## Dataset selection
+
+Every dataset a connection can produce — commits, pull requests, deployments, security alerts, and the rest — is opt-in. A dataset synchronizes only after an administrator selects it for that connection; no dataset is enabled as a side effect of connecting a provider or of a scheduled synchronization running.
+
+GitHub and GitLab connections created before this rule was enforced may already have security-alert synchronization enabled without it ever being explicitly selected. That existing setting is not changed automatically — synchronization continues so no organization loses security-alert data without acting — but it remains visible and disableable like any other dataset from the connection's dataset list. Disable it there if the workspace should not collect security-alert data.
+
 ## Availability boundaries
 
 PagerDuty canonical incident ingestion is a supported current path. Jira Service Management incident ingestion is not yet a supported administrator workflow: its code and unit contracts exist, but live tenant proof and release readiness remain blocked. Do not configure broad Jira queries or infer incidents from ordinary issues, alerts, labels, timestamps, or text similarity as a substitute.

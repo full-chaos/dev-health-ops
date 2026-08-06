@@ -13,14 +13,12 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "License :: Other/Proprietary License",
   "Operating System :: OS Independent",
 ]
 keywords = ["metrics", "git", "analytics", "developer-experience"]
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
   "tqdm>=4.67.3",
   "sqlalchemy[asyncio]>=2.0.49",
@@ -162,6 +160,14 @@ include-package-data = true
 
 [tool.ruff]
 line-length = 88
+# Intentionally lagging the shipped interpreter (3.14, see requires-python
+# below and docker/Dockerfile). Bumping this to py314 surfaces ~2880
+# pyupgrade findings across 624 files (2793 auto-fixable; the format check
+# also reformats 94 files for PEP 758) plus 87 non-mechanical UP042/046/047/
+# 040 modernizations that need per-site review (UP042 str-enum in particular
+# changes __str__ semantics, not just syntax). That's a codebase change, not
+# a CI-config change — tracked separately as CHAOS-3420. Do not bump this
+# without landing that cleanup first, or lint.yml breaks repo-wide.
 target-version = "py310"
 exclude = [
   ".git",
@@ -200,7 +206,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 files = ["src", "tests", "scripts"]
 plugins = ["pydantic.mypy"]
 mypy_path = "$MYPY_CONFIG_FILE_DIR/src"

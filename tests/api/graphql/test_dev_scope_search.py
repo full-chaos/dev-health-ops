@@ -41,6 +41,7 @@ class FakeCatalog:
         kinds: tuple[EntityKind, ...],
         *,
         limit: int,
+        include_alias_matches: bool = False,
     ) -> list[AuthorizedEntity]:
         type(self).calls += 1
         assert org_id == ORG_ID

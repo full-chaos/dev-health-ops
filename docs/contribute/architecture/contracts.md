@@ -33,7 +33,7 @@ Jira Service Management incident code is not a supported public capability until
 
 - Public REST, GraphQL, CLI, webhook, and Customer Push schemas are generated or verified from code.
 - Incompatible public changes require an explicit version, compatibility bridge, or deprecation path.
-- Nullability, pagination, rate limits, errors, and authorization are part of the contract—not implementation details.
+- Nullability, pagination, rate limits, errors, and authorization are part of the contract, not implementation details.
 - A frontend label is not a backend enum unless the public mapping says so.
 
 Ask Dev v1 follows a cross-repository generated-contract chain: canonical
@@ -169,6 +169,56 @@ Do not infer route ownership from deployed replicas, health endpoints, queue nam
 - Runtime roles cannot inherit migration or cross-domain authority.
 - Outbox and replay identifiers preserve tenant and source scope.
 - An ambiguous commit outcome is not safe to retry without inspection.
+
+## Deferral-episode contracts
+
+A synchronization unit carries per-episode deferral bookkeeping — a count and
+a first-seen timestamp — for each independent reason it can be held back:
+provider rate limiting, and provider-budget admission. Each pair is the sole
+input to that episode's exhaustion decision, which turns an endless deferral
+loop into a visible, terminal failure.
+
+The contract is **keep or clear**, and it is symmetric:
+
+- A stamp that ends an episode clears that episode's pair. Success ends every
+  episode.
+- A stamp that begins or continues an episode writes that episode's pair and
+  clears every other episode's pair. A budget deferral is not a rate-limit
+  event, and a rate-limit deferral is not a budget event.
+- A non-terminal stamp never leaves an episode pair untouched. Leaving stale
+  counters behind is what allows an exhaustion decision to fail a healthy unit
+  against an episode that already ended.
+- An exhaustion decision reads only its own episode's columns, and also
+  requires the unit's own last recorded error category to belong to that
+  episode. The second check is defence in depth against a missed clear site.
+
+Per-episode bookkeeping alone is not sufficient, and treating it as sufficient
+is a recurring trap. Because each episode resets the others, a unit whose
+blocking *reason* keeps changing is never measured by any of them, and sits
+blocked indefinitely — the same outcome the exhaustion decisions exist to
+prevent, reached by a different route. A separate aggregate clock therefore
+records when a unit first became blocked for any reason at all. It survives
+every episode change and is cleared only when the unit is actually dispatched
+or succeeds, and it bounds the total blocked time independently of cause.
+
+Two further rules apply to every exhaustion decision:
+
+- It is evaluated only for a unit confirmed to be blocked on the current pass,
+  under the same locks and from the same evaluation that established the block.
+  History alone never terminates a unit: one that has become admissible is
+  admitted, however long it was previously held back.
+- The failure it records is built from that same current evaluation, so the
+  reason an operator reads is the reason the decision was made on — not
+  whatever an earlier pass happened to persist.
+
+Deferral admission itself is currently implemented only in the Python
+dispatcher, but the stamps that end an episode exist in both runtimes. Where a
+runtime writes a non-terminal stamp without resetting an episode pair it does
+not know about, the exhaustion decision's error-category check is what keeps a
+stale counter from being acted on: a stamp written for an unrelated reason
+records that reason, and an exhaustion decision only accepts its own. That
+check is a backstop, not the contract. A new episode pair is not complete until
+every non-terminal stamp in every runtime accounts for it.
 
 ## Metric and taxonomy contracts
 

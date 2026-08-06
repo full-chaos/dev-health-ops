@@ -9,9 +9,10 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from typing import Any
 
-from sqlalchemy import or_, text, update
+from sqlalchemy import func, or_, text, update
 
 from dev_health_ops.models import (
     ProviderRateLimitObservation,
@@ -51,6 +52,68 @@ _RATE_LIMIT_COOLDOWN_EXHAUSTED_CATEGORY = "rate_limit_cooldown_exhausted"
 _RATE_LIMIT_EPISODE_ERROR_CATEGORIES = frozenset(
     {"rate_limit", _RATE_LIMIT_COOLDOWN_DEFERRED_CATEGORY}
 )
+
+# --- Budget-deferral episode (CHAOS-3412) ---------------------------------
+# A unit whose estimate can never fit its bucket (a HEAVY dataset planned
+# over a wide initial_sync_depth) was re-deferred forever: _defer_unit_for_
+# budget re-stamps RETRYING with a fresh available_at, does NOT increment
+# ``attempts``, and nothing tracked the budget episode, so no exhaustion
+# predicate could ever become true. That is a CONFIGURATION error, and
+# configuration errors must be visible -- these caps give the budget episode
+# the same count-plus-wall-clock exit the rate-limit episode has.
+_BUDGET_DEFERRED_CATEGORY = "budget_deferred"
+_BUDGET_DEFERRAL_EXHAUSTED_CATEGORY = "budget_deferral_exhausted"
+
+#: Count cap: how many consecutive budget deferrals a unit may accumulate
+#: before it fails loudly (``SYNC_BUDGET_MAX_DEFERRALS``).
+BUDGET_MAX_DEFERRALS_DEFAULT = 10
+#: Wall-clock cap measured from ``budget_first_deferred_at``
+#: (``SYNC_BUDGET_DEFERRAL_WALL_CLOCK_SECONDS``). Deliberately longer than
+#: the count cap times the default 60s deferral: a run whose budget frees up
+#: (a sibling finishing, an hourly bucket rolling over) should be admitted,
+#: not terminalized, so only a unit that is STILL blocked after hours of
+#: real elapsed time is judged permanently oversized.
+BUDGET_DEFERRAL_WALL_CLOCK_SECONDS_DEFAULT = 6 * 60 * 60  # 6 hours
+
+# Defence in depth for _budget_deferral_exhausted, mirroring
+# _RATE_LIMIT_EPISODE_ERROR_CATEGORIES: the unit's own last-recorded
+# result.error_category must ALSO show a budget-deferral cause before the
+# exhaustion check can fire, so a row surviving a missed clear site (whose
+# last real cause was 'rate_limit', 'worker_lost', 'soft_timeout', ...) is
+# refused here regardless of what the counters say.
+_BUDGET_EPISODE_ERROR_CATEGORIES = frozenset({_BUDGET_DEFERRED_CATEGORY})
+
+# --- Aggregate blocked clock (CHAOS-3412 review round 2, F2) --------------
+# Both per-episode budgets are, by design, reset when the OTHER episode kind
+# begins. That makes them unreachable for a unit whose blocking reason keeps
+# alternating -- an oversized estimate (this ticket's configuration error)
+# plus recurring sibling 429 cooldowns ping-pongs the category forever, each
+# stamp clearing the other's counters, and the unit sits in RETRYING exactly
+# as this ticket's acceptance forbids. ``first_blocked_at`` is the outer
+# bound that no episode reset can move: set once when a unit first becomes
+# blocked for ANY reason, cleared only when it actually gets dispatched or
+# succeeds.
+_DEFERRAL_TOTAL_EXHAUSTED_CATEGORY = "deferral_exhausted"
+
+#: Sentinel: the verdict was refused, so THIS pass still owns the unit.
+_CARRY_ON = object()
+
+#: Aggregate wall-clock cap measured from ``first_blocked_at``
+#: (``SYNC_DEFERRAL_TOTAL_WALL_CLOCK_SECONDS``). Deliberately much larger
+#: than either per-episode cap: this is the backstop for "blocked for a
+#: reason that keeps changing", not the primary diagnosis, so a unit with a
+#: single identifiable cause still fails with that cause's specific category
+#: and error text long before this fires.
+DEFERRAL_TOTAL_WALL_CLOCK_SECONDS_DEFAULT = 24 * 60 * 60  # 24 hours
+
+#: Human-readable names for the episode a unit was LAST blocked by, used in
+#: the aggregate-exhaustion error text so an operator is not left guessing
+#: which of the two causes was most recent.
+_EPISODE_KIND_BY_ERROR_CATEGORY = {
+    _BUDGET_DEFERRED_CATEGORY: "sync budget admission",
+    _RATE_LIMIT_COOLDOWN_DEFERRED_CATEGORY: "provider rate-limit cooldown",
+    "rate_limit": "provider rate limit (in-worker 429)",
+}
 
 
 @dataclass(frozen=True)
@@ -220,7 +283,7 @@ class BudgetGuard:
                 )
             log_ctx = _unit_log_context(sync_run_id, unit)
             if cooldown_expiry is not None:
-                outcome = _apply_cooldown_deferral(
+                outcome = _resolve_cooldown_blocked_unit(
                     session,
                     unit,
                     cooldown_expiry=cooldown_expiry,
@@ -237,8 +300,14 @@ class BudgetGuard:
                 # persisted rate_limit_deferrals/rate_limit_first_seen_at
                 # state instead of letting it dispatch and burn a worker
                 # slot only to rediscover the same exhaustion in-worker.
-                outcome = _terminalize_rate_limit_exhausted(
-                    session, unit, now=enforced_at, log_ctx=log_ctx
+                # No cooldown gates this unit, so a REFUSED verdict simply
+                # means "not terminalizable on this evidence" -- it falls
+                # through to normal budget admission, not to a claim into an
+                # active cooldown.
+                outcome = _settle_or_skip(
+                    _terminalize_rate_limit_exhausted(
+                        session, unit, now=enforced_at, log_ctx=log_ctx
+                    )
                 )
             else:
                 continue
@@ -260,6 +329,13 @@ class BudgetGuard:
             now=enforced_at,
             budget_keys=budget_keys,
         )
+        # The DURABLE baseline (review round 2, R2-F1): consumption from work
+        # already dispatching/running, captured BEFORE the admission loop
+        # starts adding this pass's own admissions to consumed_by_bucket. Any
+        # terminal verdict below is measured against this snapshot, so it is
+        # a fact about the unit and the world rather than about the order the
+        # candidate loop happened to visit siblings in.
+        baseline_consumption: dict[str, int] = dict(consumed_by_bucket)
 
         for unit in units:
             if str(unit.id) in cooldown_handled_unit_ids:
@@ -286,6 +362,59 @@ class BudgetGuard:
                     would_defer = True
 
             if would_defer:
+                # Exhaustion is evaluated HERE, not before admission (review
+                # round 2, F1): the question is never "has this unit been
+                # deferred a lot", it is "has this unit been deferred a lot
+                # AND does it still not fit RIGHT NOW". A sibling finishing or
+                # a bucket rolling over between passes frees capacity, and a
+                # unit that would be admitted on this pass must be admitted,
+                # not killed on last pass's evidence. Every observation above
+                # was computed under the advisory locks this pass holds, so
+                # ``would_defer`` is the current, authoritative answer.
+                terminal_outcome: tuple[datetime, bool] | None = None
+                unfitness = _baseline_unfitness(
+                    estimates,
+                    baseline_consumption=baseline_consumption,
+                    limits=limits,
+                    default_limit=default_limit,
+                )
+                if unfitness is not None and _budget_deferral_exhausted(
+                    unit, now=enforced_at
+                ):
+                    # The episode cap may only end a unit whose misfit is
+                    # real independent of this pass's optional admissions
+                    # (R2-F1). A unit deferred purely because a sibling was
+                    # admitted first keeps deferring -- its counter still
+                    # advances, and if the contention genuinely never clears
+                    # the aggregate clock below is the loud backstop.
+                    terminal_outcome = _settle_or_skip(
+                        _terminalize_budget_exhausted(
+                            session,
+                            unit,
+                            now=enforced_at,
+                            log_ctx=log_ctx,
+                            observations=unit_observations,
+                            unfitness=unfitness,
+                        )
+                    )
+                elif _deferral_total_exhausted(unit, now=enforced_at):
+                    # Checked second: a unit with one identifiable cause fails
+                    # with that cause's specific category and error text; the
+                    # aggregate clock is the backstop for the alternating case
+                    # no single-cause cap can reach.
+                    terminal_outcome = _settle_or_skip(
+                        _terminalize_deferral_total_exhausted(
+                            session, unit, now=enforced_at, log_ctx=log_ctx
+                        )
+                    )
+                if terminal_outcome is not None:
+                    for observation in unit_observations:
+                        observation["decision"] = "exhausted"
+                    observations.extend(unit_observations)
+                    continue
+                # Either not exhausted, or the CAS lost the race (the unit
+                # moved on concurrently) — fall through and defer normally,
+                # exactly as a lost _defer_unit_for_budget race does.
                 available_at = enforced_at + timedelta(
                     seconds=deferral_seconds + random.uniform(0, float(jitter_seconds))  # noqa: S311
                 )
@@ -372,10 +501,9 @@ class BudgetGuard:
         same exclusion indefinitely without ever accumulating enough
         deferrals to terminalize). Every match here goes through the exact
         same write path ``enforce_run``'s own cooldown loop uses
-        (``_apply_cooldown_deferral`` / ``_terminalize_rate_limit_exhausted``
-        for the wall-clock-exhausted-without-a-visible-observation case) --
-        one deferral semantics, reused by both call sites, not a second,
-        weaker one.
+        (``_resolve_cooldown_blocked_unit``, which owns cap ordering and the
+        deferral write for both call sites) -- one deferral semantics,
+        reused, not a second, weaker one.
 
         Returns the unit ids to additionally exclude from this pass's claim
         (deferred AND terminalized -- terminalized units are already
@@ -424,7 +552,11 @@ class BudgetGuard:
                 )
             log_ctx = _unit_log_context(sync_run_id, unit)
             if cooldown_expiry is not None:
-                outcome = _apply_cooldown_deferral(
+                # Same helper enforce_run uses (review round 2, R2-F2): this
+                # path previously had its own copy of the ordering that also
+                # omitted the aggregate check entirely, so a unit past the
+                # aggregate cap could be deferred here indefinitely.
+                outcome = _resolve_cooldown_blocked_unit(
                     session,
                     unit,
                     cooldown_expiry=cooldown_expiry,
@@ -433,8 +565,10 @@ class BudgetGuard:
                     log_ctx=log_ctx,
                 )
             elif _rate_limit_deferral_exhausted(unit, now=checked_at):
-                outcome = _terminalize_rate_limit_exhausted(
-                    session, unit, now=checked_at, log_ctx=log_ctx
+                outcome = _settle_or_skip(
+                    _terminalize_rate_limit_exhausted(
+                        session, unit, now=checked_at, log_ctx=log_ctx
+                    )
                 )
             else:
                 continue
@@ -581,10 +715,25 @@ def _defer_unit_for_budget(
             available_at=available_at,
             error="deferred by sync budget guard",
             result={
-                "error_category": "budget_deferred",
+                "error_category": _BUDGET_DEFERRED_CATEGORY,
                 "not_before": available_at.isoformat(),
                 "budget_guard": observations,
             },
+            # CHAOS-3412: the budget episode's own bookkeeping. Incremented
+            # in SQL (not from the stale in-memory value) so concurrent
+            # dispatch passes cannot both write the same count; first-seen
+            # is COALESCEd so it keeps the FIRST deferral of the episode and
+            # the wall-clock cap measures the whole episode, not the last lap.
+            budget_deferrals=SyncRunUnit.budget_deferrals + 1,
+            budget_first_deferred_at=func.coalesce(
+                SyncRunUnit.budget_first_deferred_at, now
+            ),
+            # AGGREGATE blocked clock (F2): set-if-null, so it marks when this
+            # unit FIRST went nowhere and survives every episode change after
+            # that. COALESCE, not an overwrite -- an overwrite here would let
+            # the alternation reset the outer bound too, which is the whole
+            # defect.
+            first_blocked_at=func.coalesce(SyncRunUnit.first_blocked_at, now),
             # Review finding (round 3): a budget deferral is NOT a rate-limit
             # episode -- clear any stale rate_limit_deferrals/first_seen_at
             # this unit is carrying from an EARLIER, since-resolved
@@ -605,6 +754,14 @@ def _defer_unit_for_budget(
         unit.available_at = available_at
         unit.rate_limit_deferrals = 0
         unit.rate_limit_first_seen_at = None
+        # Mirror the SQL-side increment/coalesce onto the in-memory row so a
+        # caller reading the ORM object in the same pass sees the same state
+        # the database now holds (the other columns above do this already).
+        unit.budget_deferrals = int(unit.budget_deferrals or 0) + 1
+        if unit.budget_first_deferred_at is None:
+            unit.budget_first_deferred_at = now
+        if unit.first_blocked_at is None:
+            unit.first_blocked_at = now
         return True
     return False
 
@@ -808,6 +965,256 @@ def _cooldown_claim_predicate(now: datetime) -> Any:
     )
 
 
+# ---------------------------------------------------------------------------
+# Terminalization chokepoint (CHAOS-3412 closure)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TerminalVerdict:
+    """A proposal to terminally fail a unit, carrying the evidence it rests on.
+
+    ``episode`` names the episode the verdict ASSERTS as the cause, or
+    ``None`` for the aggregate backstop which asserts no single cause.
+    ``evidence`` becomes the persisted ``result`` payload, so what an operator
+    reads and what the decision was made on are the same object.
+    ``fitness`` is required for fitness-based categories.
+    """
+
+    error_category: str
+    error_text: str
+    evidence: Mapping[str, Any]
+    episode: str | None = None
+    fitness: BudgetUnfitness | None = None
+
+
+#: Episode name -> the ``result.error_category`` values that evidence it. A
+#: verdict asserting an episode may only be issued for a unit whose OWN last
+#: recorded cause is in that episode's set.
+_EPISODE_EVIDENCE: dict[str, frozenset[str]] = {
+    "rate_limit": _RATE_LIMIT_EPISODE_ERROR_CATEGORIES,
+    "budget": _BUDGET_EPISODE_ERROR_CATEGORIES,
+}
+
+#: Categories whose claim is about FITNESS, and therefore may only be issued
+#: with a durable-world verdict attached.
+_FITNESS_BASED_CATEGORIES = frozenset({_BUDGET_DEFERRAL_EXHAUSTED_CATEGORY})
+
+#: Phrases an error text may use only when its own evidence licenses them.
+#: This is what "the text may only assert what the evidence supports" means
+#: mechanically -- instances 3 and 5 below were both this failure.
+_CLAIM_LICENCES: dict[str, str] = {
+    "can never be admitted": "permanently_oversized",
+    "alternated": "episodes_alternated",
+    "kept changing": "episodes_alternated",
+}
+
+
+class TerminalOutcome(str, Enum):
+    """What a terminalization attempt actually did.
+
+    REFUSED and CAS_LOST were previously both ``None``, and callers read that
+    single value as "lost a race, skip this unit" -- so an evidence refusal
+    left a cooldown-blocked unit unstamped, ``_claim_units`` dispatched it
+    despite the active cooldown, and the claim cleared ``first_blocked_at``.
+    A refusal silently resetting the aggregate clock is a direct violation of
+    the invariant this module exists to enforce, so the two outcomes are now
+    distinct in the type, not merely in intent.
+    """
+
+    TERMINALIZED = "terminalized"
+    REFUSED = "refused"
+    CAS_LOST = "cas_lost"
+
+
+@dataclass(frozen=True)
+class TerminalDecision:
+    outcome: TerminalOutcome
+    at: datetime | None = None
+
+
+class TerminalVerdictError(AssertionError):
+    """A malformed verdict -- a defect in this module, not in the data."""
+
+
+def _unit_last_error_category(unit: SyncRunUnit) -> str | None:
+    result = unit.result
+    if not isinstance(result, Mapping):
+        return None
+    category = result.get("error_category")
+    return str(category) if category is not None else None
+
+
+def _terminalize_unit(
+    session: Any,
+    unit: SyncRunUnit,
+    *,
+    verdict: TerminalVerdict,
+    now: datetime,
+    log_ctx: dict[str, Any],
+) -> TerminalDecision:
+    """THE single place a sync unit is terminally failed by a deferral
+    exhaustion decision, and the closure of a five-instance defect class.
+
+    THE INVARIANT
+    -------------
+    A unit may only be terminalized on a fact that is true of the unit and the
+    DURABLE world, and its error text may only assert what its own recorded
+    evidence supports.
+
+    Three checks enforce it, and every terminal deferral stamp routes through
+    them:
+
+    (a) EPISODE-VALIDATED EVIDENCE. A verdict naming an episode is refused
+        unless the unit's own last recorded cause belongs to that episode.
+        Counters alone are not evidence: they outlive the episode that wrote
+        them. A refusal is NOT an error -- it means "this unit's state does
+        not support this claim", and the caller defers instead.
+    (b) DURABLE-WORLD FITNESS. A fitness-based category must carry a
+        ``BudgetUnfitness`` measured against durable consumption only, never
+        against capacity taken by this pass's own optional admissions.
+    (c) LICENSED CLAIMS. An error text may contain a claim phrase only when
+        the evidence licenses it. Asserting "can never be admitted" about a
+        unit that fits, or "the reason kept changing" about a unit with one
+        cause, is a false diagnosis that costs an operator the true one.
+
+    (b) and (c) are invariants over code this module writes, so violating them
+    raises: it is a bug here, and a silent one would be indistinguishable from
+    a correct verdict. (a) is a statement about run-time data and so refuses.
+
+    THE FIVE INSTANCES THIS SUBSUMES
+    --------------------------------
+    Every finding across three review rounds was the same shape -- a terminal
+    verdict resting on evidence weaker than the claim it made:
+
+    1. R1-F1: exhaustion decided from deferral HISTORY before checking whether
+       the unit still failed to fit, killing units on a pass where freed
+       capacity would have admitted them. -> (b).
+    2. R1-F2: a per-episode counter treated as evidence of "stuck", when each
+       episode resets the others, so an alternating unit was never measured at
+       all. -> the aggregate clock, whose verdict carries no episode and
+       therefore asserts none.
+    3. R1-F1 (second order): the failure text rebuilt from the PREVIOUS pass's
+       persisted observation, so it named a bucket state that no longer
+       existed. -> (c), plus evidence and text now coming from one object.
+    4. R2-F1: fitness measured against capacity consumed by this pass's own
+       earlier admissions, making a terminal verdict depend on candidate
+       ORDER. -> (b).
+    5. R2-F2 / R3: an episode's counters re-read WITHOUT the category guard,
+       so stale capped counters from a resolved episode produced a
+       wrong-category irreversible failure; and a generic explanation asserted
+       over specific evidence. -> (a) and (c).
+
+    WHY A SIXTH CANNOT SLIP IN QUIETLY
+    ----------------------------------
+    ``test_every_terminal_deferral_stamp_routes_through_the_chokepoint``
+    derives, by AST over this module and the two worker modules, every
+    ``status=FAILED`` stamp whose recorded category is a registered deferral
+    exhaustion, and asserts each one is lexically inside this function. A new
+    terminal path either routes through here -- and is checked -- or fails
+    that test. It cannot be added quietly, which is the only property that
+    makes "the class is closed" a claim rather than a hope.
+    """
+    _assert_verdict_wellformed(verdict)
+    if verdict.episode is not None:
+        licensed = _EPISODE_EVIDENCE[verdict.episode]
+        last_category = _unit_last_error_category(unit)
+        if last_category not in licensed:
+            # (a) Refusal, not an error: the unit's own state does not
+            # evidence the episode this verdict names.
+            logger.warning(
+                "dispatch_sync_run.terminal_verdict_refused",
+                extra={
+                    **log_ctx,
+                    "error_category": verdict.error_category,
+                    "asserted_episode": verdict.episode,
+                    "unit_last_error_category": last_category,
+                },
+            )
+            return TerminalDecision(TerminalOutcome.REFUSED)
+    result: Any = session.execute(
+        update(SyncRunUnit)
+        .where(SyncRunUnit.id == unit.id, _cooldown_claim_predicate(now))
+        .values(
+            status=SyncRunUnitStatus.FAILED.value,
+            error=verdict.error_text,
+            result={**verdict.evidence, "error_category": verdict.error_category},
+            lease_owner=None,
+            lease_expires_at=None,
+            last_heartbeat_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(result.rowcount or 0) == 0:
+        return TerminalDecision(TerminalOutcome.CAS_LOST)
+    unit.status = SyncRunUnitStatus.FAILED.value
+    logger.warning(
+        "dispatch_sync_run.unit_terminalized",
+        extra={
+            **log_ctx,
+            "error_category": verdict.error_category,
+            "error": verdict.error_text,
+            **{f"evidence_{k}": v for k, v in verdict.evidence.items()},
+        },
+    )
+    return TerminalDecision(TerminalOutcome.TERMINALIZED, now)
+
+
+def _assert_verdict_wellformed(verdict: TerminalVerdict) -> None:
+    """Checks (b) and (c) -- invariants over verdicts this module builds."""
+    if verdict.episode is not None and verdict.episode not in _EPISODE_EVIDENCE:
+        raise TerminalVerdictError(
+            f"verdict {verdict.error_category!r} names unknown episode "
+            f"{verdict.episode!r}; register it in _EPISODE_EVIDENCE so the "
+            "evidence check can be applied to it"
+        )
+    if verdict.error_category in _FITNESS_BASED_CATEGORIES and verdict.fitness is None:
+        raise TerminalVerdictError(
+            f"verdict {verdict.error_category!r} makes a fitness claim but "
+            "carries no BudgetUnfitness measured against the durable baseline"
+        )
+    if not verdict.error_text.strip():
+        raise TerminalVerdictError(
+            f"verdict {verdict.error_category!r} has no error text; an "
+            "unexplained terminal failure is the state this ticket exists to "
+            "remove"
+        )
+    for phrase, evidence_key in _CLAIM_LICENCES.items():
+        if (
+            phrase in verdict.error_text
+            and verdict.evidence.get(evidence_key) is not True
+        ):
+            raise TerminalVerdictError(
+                f"verdict {verdict.error_category!r} claims {phrase!r} but its "
+                f"evidence does not license it ({evidence_key}="
+                f"{verdict.evidence.get(evidence_key)!r}). An error text may "
+                "only assert what its own evidence supports."
+            )
+
+
+def _live_rate_limit_episode(unit: SyncRunUnit) -> tuple[int, datetime | None]:
+    """This unit's rate-limit episode counters IF its own last recorded cause
+    evidences that the episode is live -- otherwise ``(0, None)``, a FRESH
+    episode.
+
+    THE single place that decides whether persisted rate-limit counters are
+    evidence (CHAOS-3412 closure, instance 5). Counters outlive the episode
+    that wrote them: every production stamp that sets a non-zero
+    ``rate_limit_deferrals`` co-writes a rate-limit ``error_category``, so a
+    unit whose last cause is ``worker_lost`` or ``budget_deferred`` is
+    carrying bookkeeping from an episode that already resolved. Reading those
+    numbers as if they described the present is what let a stale capped
+    counter produce an irreversible wrong-category failure.
+
+    Every reader goes through here, so there is no second interpretation of
+    the same columns to drift from this one.
+    """
+    if _unit_last_error_category(unit) in _RATE_LIMIT_EPISODE_ERROR_CATEGORIES:
+        return int(unit.rate_limit_deferrals or 0), unit.rate_limit_first_seen_at
+    return 0, None
+
+
 def _rate_limit_deferral_exhausted(unit: SyncRunUnit, *, now: datetime) -> bool:
     """True when this unit's SHARED rate-limit-deferral budget
     (``RATE_LIMIT_MAX_DEFERRALS`` / ``RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS``) is
@@ -837,21 +1244,14 @@ def _rate_limit_deferral_exhausted(unit: SyncRunUnit, *, now: datetime) -> bool:
     still show its last real cause (``budget_deferred``, ``worker_lost``,
     ``soft_timeout``, ...) and be refused here regardless.
     """
-    if unit.rate_limit_deferrals <= 0 and unit.rate_limit_first_seen_at is None:
-        return False
-    result = unit.result
-    error_category = (
-        result.get("error_category") if isinstance(result, Mapping) else None
-    )
-    if error_category not in _RATE_LIMIT_EPISODE_ERROR_CATEGORIES:
+    attempts, first_seen_at = _live_rate_limit_episode(unit)
+    if attempts <= 0 and first_seen_at is None:
         return False
     return (
         plan_rate_limit_deferral(
             retry_after_seconds=None,
-            attempts=unit.rate_limit_deferrals,
-            first_seen_at=unit.rate_limit_first_seen_at.isoformat()
-            if unit.rate_limit_first_seen_at
-            else None,
+            attempts=attempts,
+            first_seen_at=first_seen_at.isoformat() if first_seen_at else None,
             now=now,
         )
         is None
@@ -864,48 +1264,484 @@ def _terminalize_rate_limit_exhausted(
     *,
     now: datetime,
     log_ctx: dict[str, Any],
-) -> tuple[datetime, bool] | None:
-    """Terminally fail a unit whose shared rate-limit-deferral budget is
-    spent (CHAOS-2742 binding decision: run-liveness beats optimism).
+) -> TerminalDecision:
+    """Propose terminal failure for a spent RATE-LIMIT episode (CHAOS-2742).
 
-    Shared by :func:`_apply_cooldown_deferral` (when
-    ``plan_rate_limit_deferral`` returns ``None`` for a unit matched by a
-    currently-visible cooldown) and the wall-clock-exhaustion-without-a-
-    visible-observation path in ``enforce_run`` / ``reconfirm_cooldowns``
-    (review finding) -- one CAS, one code path, for both triggers.
-
-    Returns ``(now, True)`` on a successful CAS transition, or ``None`` if
-    the CAS lost the race (the unit moved on concurrently).
+    Builds the verdict; :func:`_terminalize_unit` decides. Because the verdict
+    names the ``rate_limit`` episode, the chokepoint refuses it for a unit
+    whose own last cause is something else -- which is what closes instance 5,
+    where this function was reachable from a counter re-read that skipped the
+    category guard. Returns ``None`` on refusal or a lost CAS; the caller
+    defers instead.
     """
-    claim_predicate = _cooldown_claim_predicate(now)
-    result: Any = session.execute(
-        update(SyncRunUnit)
-        .where(SyncRunUnit.id == unit.id, claim_predicate)
-        .values(
-            status=SyncRunUnitStatus.FAILED.value,
-            error="rate limit cooldown deferral budget exhausted",
-            result={
-                "error_category": _RATE_LIMIT_COOLDOWN_EXHAUSTED_CATEGORY,
-                "rate_limit_deferrals": unit.rate_limit_deferrals,
-            },
-            lease_owner=None,
-            lease_expires_at=None,
-            last_heartbeat_at=now,
-            updated_at=now,
+    deferrals = int(unit.rate_limit_deferrals or 0)
+    return _terminalize_unit(
+        session,
+        unit,
+        verdict=TerminalVerdict(
+            error_category=_RATE_LIMIT_COOLDOWN_EXHAUSTED_CATEGORY,
+            error_text="rate limit cooldown deferral budget exhausted",
+            evidence={"rate_limit_deferrals": deferrals},
+            episode="rate_limit",
+        ),
+        now=now,
+        log_ctx=log_ctx,
+    )
+
+
+@dataclass(frozen=True)
+class BudgetUnfitness:
+    """Why a unit does not fit its bucket, measured against a STABLE
+    baseline (review round 2, R2-F1).
+
+    ``durable_units`` is consumption from work already DISPATCHING/RUNNING --
+    it exists whether or not this dispatch pass admits anything. It
+    deliberately EXCLUDES capacity taken by siblings admitted earlier in this
+    same pass, because that is an artefact of candidate ordering: the same
+    unit, in the same world, is fit or unfit depending on which sibling the
+    loop happened to reach first. A terminal verdict may not rest on that.
+
+    ``permanent`` is the strong case -- the unit's own estimate exceeds the
+    whole bucket limit, so no amount of other work finishing can ever make
+    room. Only that case may claim "can never be admitted".
+    """
+
+    budget_key: str
+    estimated_units: int
+    budget_limit: int
+    durable_units: int
+    permanent: bool
+
+
+def _baseline_unfitness(
+    estimates: Iterable[BudgetEstimate],
+    *,
+    baseline_consumption: Mapping[str, int],
+    limits: Mapping[str, int],
+    default_limit: int,
+) -> BudgetUnfitness | None:
+    """The worst way this unit fails to fit against the durable baseline, or
+    ``None`` if it fits -- meaning any deferral it just took was caused by
+    contention with THIS pass's own optional admissions and must never be
+    grounds for terminalizing it.
+
+    Worst = a permanent misfit ahead of a contention misfit, then the largest
+    estimate, so the reported cause is the one an operator most needs.
+    """
+    worst: BudgetUnfitness | None = None
+    for estimate in estimates:
+        bucket = estimate.bucket.to_dict()
+        budget_key = _budget_key(bucket, route_family=estimate.route_family)
+        limit = _limit_for_bucket(
+            bucket,
+            route_family=estimate.route_family,
+            limits=limits,
+            default_limit=default_limit,
         )
-        .execution_options(synchronize_session=False)
+        durable = int(baseline_consumption.get(budget_key, 0))
+        if durable + estimate.estimated_units <= limit:
+            continue
+        candidate = BudgetUnfitness(
+            budget_key=budget_key,
+            estimated_units=estimate.estimated_units,
+            budget_limit=limit,
+            durable_units=durable,
+            permanent=estimate.estimated_units > limit,
+        )
+        rank = (candidate.permanent, candidate.estimated_units)
+        if worst is None or rank > (worst.permanent, worst.estimated_units):
+            worst = candidate
+    return worst
+
+
+def _budget_deferral_exhausted(unit: SyncRunUnit, *, now: datetime) -> bool:
+    """True when this unit's BUDGET-deferral episode is spent -- it has been
+    deferred by the budget guard more than ``SYNC_BUDGET_MAX_DEFERRALS``
+    times, or has been stuck in one continuous budget episode for longer
+    than ``SYNC_BUDGET_DEFERRAL_WALL_CLOCK_SECONDS`` (CHAOS-3412).
+
+    Structured exactly like :func:`_rate_limit_deferral_exhausted`, but it
+    reads ONLY the budget columns (``budget_deferrals`` /
+    ``budget_first_deferred_at``). That separation is load-bearing: the
+    invariants pinned in ``tests/test_budget_guard_cooldown.py`` require a
+    budget-deferred unit NOT to be terminalized off stale rate-limit
+    columns, and the converse holds here too.
+
+    A fresh unit (``budget_deferrals == 0`` and
+    ``budget_first_deferred_at is None``) is never "exhausted" -- this only
+    fires for a unit with genuine prior budget-deferral history.
+
+    Defence in depth (mirroring the rate-limit predicate's round-3 finding):
+    the budget pair is cleared at every SUCCESS stamp and every
+    non-budget RETRYING stamp -- see the "keep or clear" contract in
+    ``docs/contribute/architecture/contracts.md`` -- so an unrelated retry reason
+    should never reach here with stale nonzero columns. This is a SECOND,
+    independent check in case a clear site is ever missed: the unit's own
+    MOST RECENTLY recorded ``result.error_category`` must also be the budget
+    guard's own deferral category.
+
+    Go-side gap this check currently covers (CHAOS-3412 landed Python-only):
+    the Go sync runtime writes non-terminal stamps of its own --
+    ``lease_repair.go``'s expired-lease retry and ``repository_postgres.go``'s
+    release-for-retry -- and neither resets the budget pair, because Go does
+    not do budget admission and did not know the pair existed. A unit that was
+    budget-deferred here and then re-stamped by Go therefore comes back with
+    stale nonzero columns. It is refused anyway: both Go stamps OVERWRITE
+    ``result.error_category`` with their own cause (``worker_lost``,
+    ``provider_unit_retryable``), so the check above rejects it. That is this
+    defence-in-depth gate doing exactly the job it was added for, not a reason
+    to consider the contract complete -- the Go clears are still owed, and are
+    tracked with the rest of the Go parity work.
+
+    Known, accepted consequence of that symmetry: a unit that ALTERNATES
+    between a budget deferral and a rate-limit deferral resets each episode
+    as the other begins, so neither episode's caps accumulate. That is the
+    correct reading of the state (the reason it is being held back genuinely
+    keeps changing, and neither cause is by itself permanent), and it is the
+    same property the rate-limit predicate already has. The loop CHAOS-3412
+    closes is the one this ticket observed and the one that is reachable by
+    configuration: an estimate that can never fit, re-deferred for the same
+    reason every pass.
+    """
+    deferrals = int(unit.budget_deferrals or 0)
+    first_deferred_at = unit.budget_first_deferred_at
+    if deferrals <= 0 and first_deferred_at is None:
+        return False
+    result = unit.result
+    error_category = (
+        result.get("error_category") if isinstance(result, Mapping) else None
     )
-    if int(result.rowcount or 0) == 0:
+    if error_category not in _BUDGET_EPISODE_ERROR_CATEGORIES:
+        return False
+    if deferrals >= _budget_max_deferrals():
+        return True
+    if first_deferred_at is None:
+        return False
+    elapsed = (now - _as_aware(first_deferred_at)).total_seconds()
+    return elapsed >= _budget_deferral_wall_clock_seconds()
+
+
+def _deferral_total_exhausted(unit: SyncRunUnit, *, now: datetime) -> bool:
+    """True when this unit has been continuously blocked -- for ANY mix of
+    reasons -- for longer than ``SYNC_DEFERRAL_TOTAL_WALL_CLOCK_SECONDS``
+    (CHAOS-3412 review round 2, F2).
+
+    Reads ONLY ``first_blocked_at``. It deliberately does not look at any
+    per-episode column, and does not gate on ``result.error_category``: the
+    whole point is that the category KEEPS CHANGING, so cross-reading episode
+    state is exactly what makes the alternating case unreachable. The pinned
+    invariants in ``tests/test_budget_guard_cooldown.py`` (a budget-deferred
+    unit must not be terminalized off stale rate-limit columns, and the
+    converse) are unaffected, because this predicate reads neither pair.
+
+    What replaces the error-category gate is WHERE this is evaluated: only at
+    the moment the guard is about to defer the unit AGAIN, on this pass, for a
+    reason it has just re-established. A unit that would be admitted now is
+    never asked this question (F1), so a stale timestamp cannot terminalize a
+    unit that is no longer blocked.
+
+    A unit that has never been blocked (``first_blocked_at is None``) is never
+    exhausted.
+    """
+    first_blocked_at = unit.first_blocked_at
+    if first_blocked_at is None:
+        return False
+    elapsed = (now - _as_aware(first_blocked_at)).total_seconds()
+    return elapsed >= _deferral_total_wall_clock_seconds()
+
+
+def _deferral_total_wall_clock_seconds() -> int:
+    return max(
+        1,
+        _env_int(
+            "SYNC_DEFERRAL_TOTAL_WALL_CLOCK_SECONDS",
+            DEFERRAL_TOTAL_WALL_CLOCK_SECONDS_DEFAULT,
+        ),
+    )
+
+
+def _last_episode_kind(unit: SyncRunUnit) -> str:
+    result = unit.result
+    error_category = (
+        result.get("error_category") if isinstance(result, Mapping) else None
+    )
+    return _EPISODE_KIND_BY_ERROR_CATEGORY.get(
+        str(error_category), f"unknown ({error_category!r})"
+    )
+
+
+def _terminalize_deferral_total_exhausted(
+    session: Any,
+    unit: SyncRunUnit,
+    *,
+    now: datetime,
+    log_ctx: dict[str, Any],
+) -> TerminalDecision:
+    """Propose terminal failure for a unit past the AGGREGATE clock, whatever
+    mix of reasons kept it there (CHAOS-3412 F2).
+
+    The verdict names NO episode: this decision deliberately asserts that no
+    single cause explains the block, so it must not be validated against one.
+    Its text is built from the counters it carries -- it claims alternation
+    only when both are non-zero, which the chokepoint's licence check then
+    enforces independently.
+    """
+    budget_deferrals = int(unit.budget_deferrals or 0)
+    rate_limit_deferrals = int(unit.rate_limit_deferrals or 0)
+    first_blocked_at = unit.first_blocked_at
+    blocked_seconds = (
+        int((now - _as_aware(first_blocked_at)).total_seconds())
+        if first_blocked_at is not None
+        else 0
+    )
+    alternated = budget_deferrals > 0 and rate_limit_deferrals > 0
+    cause = (
+        "The blocking reason alternated between sync budget admission and "
+        "provider rate limiting, so no single-cause cap applied"
+        if alternated
+        else "It stayed blocked without any single-cause cap being reached"
+    )
+    error_text = (
+        f"sync unit blocked for {blocked_seconds // 3600}h without ever "
+        f"running; last blocked by {_last_episode_kind(unit)} "
+        f"(budget deferrals: {budget_deferrals}, rate-limit deferrals: "
+        f"{rate_limit_deferrals}). {cause}. Remedies: run a scoped backfill "
+        "over a narrower window, raise this bucket's cap via "
+        "SYNC_BUDGET_BUCKET_LIMITS, or reduce concurrent load on the provider "
+        "so cooldowns stop recurring."
+    )
+    return _terminalize_unit(
+        session,
+        unit,
+        verdict=TerminalVerdict(
+            error_category=_DEFERRAL_TOTAL_EXHAUSTED_CATEGORY,
+            error_text=error_text,
+            evidence={
+                "budget_deferrals": budget_deferrals,
+                "rate_limit_deferrals": rate_limit_deferrals,
+                "first_blocked_at": (
+                    _as_aware(first_blocked_at).isoformat()
+                    if first_blocked_at is not None
+                    else None
+                ),
+                "blocked_seconds": blocked_seconds,
+                "last_episode": _last_episode_kind(unit),
+                "episodes_alternated": alternated,
+            },
+            episode=None,
+        ),
+        now=now,
+        log_ctx=log_ctx,
+    )
+
+
+def _budget_max_deferrals() -> int:
+    return max(1, _env_int("SYNC_BUDGET_MAX_DEFERRALS", BUDGET_MAX_DEFERRALS_DEFAULT))
+
+
+def _budget_deferral_wall_clock_seconds() -> int:
+    return max(
+        1,
+        _env_int(
+            "SYNC_BUDGET_DEFERRAL_WALL_CLOCK_SECONDS",
+            BUDGET_DEFERRAL_WALL_CLOCK_SECONDS_DEFAULT,
+        ),
+    )
+
+
+def _blocking_budget_observation(
+    observations: Iterable[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    """The observation from THIS pass that actually blocked the unit -- the
+    one whose projected units exceeded its bucket limit.
+
+    Takes the current pass's observations rather than reading the unit's
+    persisted ``result['budget_guard']`` (review round 2, F1): now that
+    exhaustion is decided after the live fit check, the explanation must come
+    from the same evaluation that made the decision, not from whatever the
+    previous pass happened to record. Falls back to the largest estimate when
+    no entry carries an explicit would-defer decision.
+    """
+    entries = [entry for entry in observations if isinstance(entry, Mapping)]
+    if not entries:
         return None
-    unit.status = SyncRunUnitStatus.FAILED.value
-    logger.warning(
-        "dispatch_sync_run.rate_limit_cooldown_exhausted",
-        extra={**log_ctx, "rate_limit_deferrals": unit.rate_limit_deferrals},
+    blocking = [
+        entry
+        for entry in entries
+        if entry.get("decision") in {"would_defer", "deferred", "exhausted"}
+    ]
+    candidates = blocking or entries
+    return max(candidates, key=lambda entry: int(entry.get("estimated_units") or 0))
+
+
+def _budget_exhaustion_error_text(
+    unit: SyncRunUnit,
+    *,
+    deferrals: int,
+    unfitness: BudgetUnfitness,
+) -> str:
+    """Operator-actionable failure text: WHAT could not fit, BY HOW MUCH,
+    over WHAT window, and what an operator can actually do.
+
+    The "can never be admitted" claim is emitted ONLY when it is literally
+    true -- the estimate alone exceeds the whole bucket cap (review round 2,
+    R2-F1). When the unit is instead blocked by sustained consumption from
+    work already running, the text says exactly that, because telling an
+    operator a unit can never run when raising nothing and waiting would let
+    it run is a false diagnosis that costs them the real one.
+    """
+    span_days = _window_span_days(unit)
+    head = (
+        f"sync budget deferral exhausted after {deferrals} deferrals: dataset "
+        f"'{unit.dataset_key}' estimates {unfitness.estimated_units} units "
+        f"against bucket '{unfitness.budget_key}' whose cap is "
+        f"{unfitness.budget_limit}, over a {span_days}-day window"
     )
-    return now, True
+    if unfitness.permanent:
+        middle = ", so it can never be admitted and was re-deferred instead of running"
+    else:
+        middle = (
+            f", and {unfitness.durable_units} units of that cap are held by sync "
+            "work already running. The contention has not cleared for the whole "
+            "deferral budget, so the unit was re-deferred instead of running"
+        )
+    return (
+        f"{head}{middle}. Remedies: run a scoped backfill over a narrower "
+        "window, or raise this bucket's cap via SYNC_BUDGET_BUCKET_LIMITS."
+    )
 
 
-def _apply_cooldown_deferral(
+def _window_span_days(unit: SyncRunUnit) -> int:
+    since_at = unit.since_at
+    before_at = unit.before_at
+    if since_at is None or before_at is None:
+        return 0
+    return max(0, (_as_aware(before_at) - _as_aware(since_at)).days)
+
+
+def _terminalize_budget_exhausted(
+    session: Any,
+    unit: SyncRunUnit,
+    *,
+    now: datetime,
+    log_ctx: dict[str, Any],
+    observations: Iterable[Mapping[str, Any]],
+    unfitness: BudgetUnfitness,
+) -> TerminalDecision:
+    """Propose terminal failure for a spent BUDGET episode whose misfit holds
+    against the durable baseline (CHAOS-3412).
+
+    Names the ``budget`` episode, so the chokepoint refuses it for a unit
+    whose own last cause is not a budget deferral; and carries ``unfitness``,
+    without which the chokepoint rejects the fitness claim outright.
+    """
+    unit_observations = list(observations)
+    deferrals = int(unit.budget_deferrals or 0)
+    return _terminalize_unit(
+        session,
+        unit,
+        verdict=TerminalVerdict(
+            error_category=_BUDGET_DEFERRAL_EXHAUSTED_CATEGORY,
+            error_text=_budget_exhaustion_error_text(
+                unit, deferrals=deferrals, unfitness=unfitness
+            ),
+            evidence={
+                "budget_deferrals": deferrals,
+                "budget_key": unfitness.budget_key,
+                "estimated_units": unfitness.estimated_units,
+                "budget_limit": unfitness.budget_limit,
+                "durable_units": unfitness.durable_units,
+                "permanently_oversized": unfitness.permanent,
+                "budget_first_deferred_at": (
+                    _as_aware(unit.budget_first_deferred_at).isoformat()
+                    if unit.budget_first_deferred_at is not None
+                    else None
+                ),
+                "budget_guard": [
+                    dict(observation)
+                    for observation in [_blocking_budget_observation(unit_observations)]
+                    if observation
+                ],
+            },
+            episode="budget",
+            fitness=unfitness,
+        ),
+        now=now,
+        log_ctx=log_ctx,
+    )
+
+
+def _plan_cooldown_deferral(
+    unit: SyncRunUnit, *, cooldown_expiry: datetime, now: datetime
+) -> Any:
+    """The rate-limit deferral plan for a cooldown-gated unit, or ``None``
+    when the shared rate-limit deferral budget is spent.
+
+    Extracted from :func:`_apply_cooldown_deferral` (review round 2, R2-F2)
+    so that exactly ONE place computes it and
+    :func:`_resolve_cooldown_blocked_unit` can consult the episode-specific
+    verdict BEFORE the aggregate backstop, without a second copy of the
+    planning call drifting from this one.
+
+    Reads the counters through :func:`_live_rate_limit_episode` (closure,
+    instance 5): this function previously re-read them raw, so stale capped
+    counters from a RESOLVED episode made it return ``None`` and terminalize
+    the unit under a category its own state did not evidence. With the
+    normalizer, an unevidenced episode plans as a FRESH one and the unit
+    defers instead -- counters restarting from this genuine block.
+    """
+    attempts, first_seen_at = _live_rate_limit_episode(unit)
+    return plan_rate_limit_deferral(
+        retry_after_seconds=max(0.0, (cooldown_expiry - now).total_seconds()),
+        attempts=attempts,
+        first_seen_at=first_seen_at.isoformat() if first_seen_at else None,
+        now=now,
+    )
+
+
+def _settle_or_skip(decision: TerminalDecision) -> tuple[datetime, bool] | None:
+    """For call sites where the unit is NOT held by an active cooldown, so a
+    refusal and a lost race have the same safe consequence: leave the unit to
+    the pass's normal handling (budget admission / the claim), which stamps it
+    either way. Distinct from :func:`_settle_terminal_decision`, which the
+    cooldown path needs because there a refusal must NOT fall through to a
+    claim."""
+    if decision.outcome is TerminalOutcome.TERMINALIZED:
+        return _terminalized_at(decision), True
+    return None
+
+
+def _terminalized_at(decision: TerminalDecision) -> datetime:
+    """The timestamp a TERMINALIZED decision must carry. Missing it means the
+    chokepoint wrote a row without recording when -- fail loudly rather than
+    coercing, since a silently-None stamp reads as a successful write."""
+    if decision.at is None:
+        raise TerminalVerdictError(
+            "TERMINALIZED decision carries no timestamp; the write happened "
+            "but the caller cannot report when"
+        )
+    return decision.at
+
+
+def _settle_terminal_decision(
+    decision: TerminalDecision,
+) -> tuple[datetime, bool] | None | object:
+    """Map a chokepoint decision onto the caller contract, keeping REFUSED
+    distinct from CAS_LOST.
+
+    Returns ``(at, True)`` when written, ``None`` on a genuine lost race (the
+    unit moved on, so another pass owns it), or :data:`_CARRY_ON` when the
+    verdict was refused -- meaning THIS pass still owns the unit and must
+    stamp it some other way rather than leaving it for ``_claim_units``.
+    """
+    if decision.outcome is TerminalOutcome.TERMINALIZED:
+        return _terminalized_at(decision), True
+    if decision.outcome is TerminalOutcome.CAS_LOST:
+        return None
+    return _CARRY_ON
+
+
+def _resolve_cooldown_blocked_unit(
     session: Any,
     unit: SyncRunUnit,
     *,
@@ -914,8 +1750,105 @@ def _apply_cooldown_deferral(
     now: datetime,
     log_ctx: dict[str, Any],
 ) -> tuple[datetime, bool] | None:
-    """Defer (or, on rate-limit-deferral-budget exhaustion, terminally fail)
-    a unit gated by an active shared cooldown (CHAOS-2760).
+    """THE decision for a unit gated by an active shared cooldown -- one
+    implementation, called by BOTH ``enforce_run`` and
+    ``reconfirm_cooldowns`` (review round 2, R2-F2).
+
+    Those two paths previously each carried their own hand-kept copy of this
+    ordering, and had already drifted in both directions: ``enforce_run``
+    checked the aggregate cap before the episode cap, and
+    ``reconfirm_cooldowns`` did not check the aggregate cap at all. Two copies
+    of an ordering rule is the same disease as any other duplicated invariant.
+
+    The ordering, which is the actual contract:
+
+    1. EPISODE-SPECIFIC caps first, always. A unit with one identifiable cause
+       must fail with THAT cause's category and error text.
+    2. The AGGREGATE clock second, as the backstop for the case no
+       single-cause cap can see.
+    3. Otherwise defer.
+
+    A REFUSED verdict never falls out of this function as ``None``. The unit
+    is blocked by a live cooldown right now, so it must leave here stamped:
+    refusal drops through to a FRESH deferral, which is what the closure
+    promises for unevidenced counters and what keeps ``first_blocked_at``
+    intact. Returning ``None`` would let ``_claim_units`` dispatch it straight
+    into the cooldown and reset the aggregate clock on the way.
+    """
+    refused = False
+
+    # 1a. Episode cap from the unit's own persisted state.
+    if _rate_limit_deferral_exhausted(unit, now=now):
+        settled = _settle_terminal_decision(
+            _terminalize_rate_limit_exhausted(session, unit, now=now, log_ctx=log_ctx)
+        )
+        if settled is not _CARRY_ON:
+            return settled  # type: ignore[return-value]
+        refused = True
+
+    # 1b. Episode cap as the shared planner sees it. Skipped after a refusal:
+    # the planner reads the same counters the refusal just rejected.
+    deferral = (
+        None
+        if refused
+        else _plan_cooldown_deferral(unit, cooldown_expiry=cooldown_expiry, now=now)
+    )
+    if not refused and deferral is None:
+        settled = _settle_terminal_decision(
+            _terminalize_rate_limit_exhausted(session, unit, now=now, log_ctx=log_ctx)
+        )
+        if settled is not _CARRY_ON:
+            return settled  # type: ignore[return-value]
+        refused = True
+
+    # 2. Aggregate backstop.
+    if _deferral_total_exhausted(unit, now=now):
+        settled = _settle_terminal_decision(
+            _terminalize_deferral_total_exhausted(
+                session, unit, now=now, log_ctx=log_ctx
+            )
+        )
+        if settled is not _CARRY_ON:
+            return settled  # type: ignore[return-value]
+
+    # 3. Defer. After a refusal this is a FRESH episode: the counters that
+    # were refused as evidence are not reused as a starting point either.
+    if deferral is None:
+        deferral = plan_rate_limit_deferral(
+            retry_after_seconds=max(0.0, (cooldown_expiry - now).total_seconds()),
+            attempts=0,
+            first_seen_at=None,
+            now=now,
+        )
+    if deferral is None:
+        # A fresh plan is never exhausted; if that ever changes, fail loudly
+        # rather than silently leaving a cooldown-blocked unit claimable.
+        raise TerminalVerdictError(
+            "fresh rate-limit deferral plan came back exhausted; a "
+            "cooldown-blocked unit would be left unstamped"
+        )
+    return _apply_cooldown_deferral(
+        session,
+        unit,
+        deferral=deferral,
+        jitter_seconds=jitter_seconds,
+        now=now,
+        log_ctx=log_ctx,
+    )
+
+
+def _apply_cooldown_deferral(
+    session: Any,
+    unit: SyncRunUnit,
+    *,
+    deferral: Any,
+    jitter_seconds: int,
+    now: datetime,
+    log_ctx: dict[str, Any],
+) -> tuple[datetime, bool] | None:
+    """Write the cooldown deferral stamp for a unit whose plan is already
+    known to be live (CHAOS-2760). Callers reach this only through
+    :func:`_resolve_cooldown_blocked_unit`, which owns the cap ordering.
 
     Cooldown deferrals COUNT against the SAME
     ``rate_limit_deferrals`` / ``rate_limit_first_seen_at`` budget the
@@ -930,21 +1863,6 @@ def _apply_cooldown_deferral(
     e.g. another dispatcher pass claimed/reconciled it first -- the caller
     simply skips it, mirroring ``_defer_unit_for_budget``).
     """
-    retry_after_seconds = max(0.0, (cooldown_expiry - now).total_seconds())
-    deferral = plan_rate_limit_deferral(
-        retry_after_seconds=retry_after_seconds,
-        attempts=unit.rate_limit_deferrals,
-        first_seen_at=unit.rate_limit_first_seen_at.isoformat()
-        if unit.rate_limit_first_seen_at
-        else None,
-        now=now,
-    )
-
-    if deferral is None:
-        return _terminalize_rate_limit_exhausted(
-            session, unit, now=now, log_ctx=log_ctx
-        )
-
     claim_predicate = _cooldown_claim_predicate(now)
     # Use plan_rate_limit_deferral's OWN not_before, not cooldown_expiry
     # directly: not_before already clamps to the remaining
@@ -972,6 +1890,17 @@ def _apply_cooldown_deferral(
             available_at=available_at,
             rate_limit_deferrals=deferral.attempts,
             rate_limit_first_seen_at=first_seen_at,
+            # CHAOS-3412 episode symmetry: a cooldown deferral is a
+            # RATE-LIMIT episode, not a budget one -- clear the budget pair,
+            # exactly as _defer_unit_for_budget clears this pair.
+            budget_deferrals=0,
+            budget_first_deferred_at=None,
+            # AGGREGATE blocked clock (F2): set-if-null, so it marks when this
+            # unit FIRST went nowhere and survives every episode change after
+            # that. COALESCE, not an overwrite -- an overwrite here would let
+            # the alternation reset the outer bound too, which is the whole
+            # defect.
+            first_blocked_at=func.coalesce(SyncRunUnit.first_blocked_at, now),
             error="deferred by sync cooldown guard",
             result={
                 "error_category": _RATE_LIMIT_COOLDOWN_DEFERRED_CATEGORY,
@@ -991,6 +1920,10 @@ def _apply_cooldown_deferral(
     unit.available_at = available_at
     unit.rate_limit_deferrals = deferral.attempts
     unit.rate_limit_first_seen_at = first_seen_at
+    unit.budget_deferrals = 0
+    unit.budget_first_deferred_at = None
+    if unit.first_blocked_at is None:
+        unit.first_blocked_at = now
     logger.info(
         "dispatch_sync_run.rate_limit_cooldown_deferred",
         extra={

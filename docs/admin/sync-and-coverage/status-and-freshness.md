@@ -20,9 +20,10 @@ Use this procedure after a product user has preserved the failing workspace, sco
 
 1. Confirm the expected provider connection exists for the Dev Health organization.
 2. Confirm the provider account, host, region, subdomain, installation, or namespace identity is the intended one.
-3. Confirm the credential is active and permission preflight passes for the selected datasets.
-4. Refresh source discovery and verify that the expected repositories, projects, services, or teams are visible.
-5. Confirm each discovered source is mapped to the intended Dev Health repository, team, or workspace scope.
+3. Confirm the missing dataset is selected for this connection. An unselected dataset produces no data — that is expected behavior, not a failure, and datasets are opt-in for every provider.
+4. Confirm the credential is active and permission preflight passes for the selected datasets.
+5. Refresh source discovery and verify that the expected repositories, projects, services, or teams are visible.
+6. Confirm each discovered source is mapped to the intended Dev Health repository, team, or workspace scope.
 
 For PagerDuty, verify the expected services are discoverable before diagnosing incident data. A connection with valid OAuth but no access to the relevant service cannot produce complete incident coverage.
 
@@ -39,6 +40,79 @@ Read the administrative activity and execution records together:
 - latest successful source and processing timestamps.
 
 Manual, scheduled, and backfill synchronization share the same canonical run model. The timing trigger differs; the execution truth should still identify the planned units and final outcome.
+
+### Budget-deferred and budget-exhausted units
+
+A unit whose estimated provider cost does not fit its budget bucket is
+*deferred*, not failed: it returns to `retrying` with a later availability
+time and the reason `budget_deferred`. This is normal when a bucket is
+temporarily full. It is **not** normal for the same unit to stay there.
+
+Read the two states separately:
+
+- **Blocked.** The run's unit rollup reports a budget-blocked count, and each
+  unit reports how many times it has been deferred. A dataset that is enabled,
+  shows as enabled, and produces nothing is visible here rather than looking
+  idle.
+- **Exhausted.** A unit that cannot ever fit its bucket — typically the first
+  incremental synchronization of a high-cost dataset over a wide initial
+  depth — stops being deferred once its deferral count or its elapsed
+  deferral time passes the configured caps. It then fails with the reason
+  `budget_deferral_exhausted`, and the failure text names the bucket, the
+  estimate, the cap it could not fit, and the window span that produced the
+  estimate.
+
+An exhausted unit is a configuration outcome, not a provider fault. The two
+remedies are to synchronize a narrower window with a bounded backfill, or to
+raise that bucket's cap. Raising per-synchronization ingest caps is not a
+remedy — it changes what is fetched, not whether the unit is admitted.
+
+### Datasets still catching up
+
+A successful run does not mean a dataset has reached the current time. High-cost
+record families synchronize through capped incremental windows, one window per
+scheduled tick, and each capped tick finalizes as an ordinary successful run.
+Run status alone therefore reads "complete" for a dataset whose coverage may
+still be weeks behind.
+
+The run's unit rollup reports, for every (source, dataset) pair it planned that
+carries a watermark:
+
+- the stored watermark, and how far behind the current time it is;
+- whether that pair is **catching up** — a high-cost dataset trailing by
+  strictly more than the configured window cap; and
+- roughly how many further scheduled ticks the pair needs to reach the current
+  time, at one capped window per tick.
+
+Read these separately from run status:
+
+- **Catching up** is a healthy in-progress state, not a fault. The remedy, if
+  the pace is unacceptable, is a bounded backfill over the outstanding period —
+  catch-up itself does not accelerate.
+- A pair trailing by no more than one window is the steady state of a healthy
+  ratchet mid-flight and is not flagged.
+- Only high-cost families are capped, so only they are flagged. A lag is still
+  reported for every other dataset; interpret a large one there as a different
+  problem — a stalled schedule, a failing unit, or a provider gap — and diagnose
+  it through the run boundary above.
+- A dataset with no watermark at all has never recorded a successful read. It
+  reports no lag, because there is no coverage to measure from; that is a
+  cold-start or a never-succeeding dataset, not a dataset that is behind.
+- A collapsed record family reports one entry per child dataset, not one for the
+  family as a whole. Each child carries its own watermark, so a family that
+  looks current overall can still hold a badly stale child.
+- The estimate of remaining ticks accounts for the configured watermark overlap.
+  Each window re-reads that overlap, so one tick's forward progress is the
+  window span minus the overlap; a large overlap means many more ticks than the
+  window span alone would suggest.
+
+This report is scoped to the run you are reading, and declares that scope
+explicitly. It covers only the source-and-dataset pairs that run planned. A run
+restricted to one source, or to a subset of datasets, that reports nothing
+catching up is not telling you the workspace is current — it is telling you
+nothing was behind *among the pairs it touched*. To ask the workspace-wide
+question, read freshness per dataset across every configured source rather than
+inferring it from a single run.
 
 ## Check freshness against the product question
 
@@ -102,4 +176,4 @@ Do not interpret a generic Jira issue sync as JSM incident coverage. The JSM inc
 - If source identity, permission, discovery, mapping, run completion, and freshness are healthy, return to the product workflow and reproduce with the same context.
 - If the run is active or deferred, communicate the visible waiting state and expected ownership rather than representing it as zero.
 - If the provider connection or mapping is incomplete, correct the administrator boundary and run one bounded verification.
-- If workers, queues, migrations, or storage are failing, escalate to [Recover from ingestion failure](../../operate/runbooks/ingestion-failure.md) with run, source, dataset, and timestamps—but no credentials.
+- If workers, queues, migrations, or storage are failing, escalate to [Recover from ingestion failure](../../operate/runbooks/ingestion-failure.md) with run, source, dataset, and timestamps but no credentials.

@@ -1,0 +1,28 @@
+{
+  "completion_states": [
+    "not_ready"
+  ],
+  "evidence_handle_pattern": "^ev1_[0-9a-f]{40}$",
+  "extra_tokens": [
+    "actual_completion"
+  ],
+  "reason_codes": [
+    "active_blocking_incident",
+    "assessment_source_limit_reached",
+    "child_requirement_unknown",
+    "ci_requirement_unknown",
+    "declared_status_missing",
+    "open_blocker",
+    "required_child_incomplete",
+    "required_ci_not_passing",
+    "required_ci_skip_state_unknown",
+    "required_ci_work_skipped",
+    "required_deployment_not_succeeded",
+    "required_pull_request_unmerged",
+    "required_release_evidence_missing",
+    "required_review_unresolved",
+    "required_source_not_fresh",
+    "review_changes_requested"
+  ],
+  "schema_version": "ask_dev_internal_prose_denylist.v1"
+}

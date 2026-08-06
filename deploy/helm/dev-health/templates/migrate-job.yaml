@@ -1,13 +1,25 @@
 {{- if .Values.migrations.hook.enabled }}
+{{- $hookEvents := .Values.migrations.hook.events }}
+{{- $localBundledPostgres := .Values.migrations.hook.localBundledPostgres }}
+{{- if and (has "post-install" $hookEvents) (not $localBundledPostgres) }}
+{{- fail "migrations.hook.events may use post-install only when migrations.hook.localBundledPostgres=true" }}
+{{- end }}
+{{- if and $localBundledPostgres (not .Values.postgresql.enabled) }}
+{{- fail "migrations.hook.localBundledPostgres=true requires postgresql.enabled=true" }}
+{{- end }}
+{{- if and $localBundledPostgres (not (has "post-install" $hookEvents)) }}
+{{- fail "migrations.hook.localBundledPostgres=true requires migrations.hook.events to include post-install" }}
+{{- end }}
 {{- /*
 Database migration hook (CHAOS-2304).
 
-Runs PostgreSQL (Alembic plus opt-in River) + ClickHouse migrations as a
-pre-install/pre-upgrade hook so schema changes complete before any workload
-from the release is
-(re)deployed. App pods run with AUTO_RUN_MIGRATIONS=false (see configmap.yaml)
-and never ambient-migrate — shadow-table rebuild migrations are not safe to
-run concurrently from workers.
+Runs PostgreSQL (Alembic plus opt-in River) + ClickHouse migrations as configured
+by migrations.hook.events. Production defaults remain pre-install/pre-upgrade so
+schema changes complete before workloads deploy. The explicit local bundled
+PostgreSQL mode uses post-install/pre-upgrade and waits for the bundled database.
+App pods run with AUTO_RUN_MIGRATIONS=false (see configmap.yaml) and never
+ambient-migrate — shadow-table rebuild migrations are not safe to run concurrently
+from workers.
 
 The hook ships its own ConfigMap/Secret copies: pre-install hooks run before
 the chart's regular resources exist, so the Job cannot reference them on a
@@ -22,7 +34,7 @@ metadata:
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "migrate" "context" $) | nindent 4 }}
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook: {{ join "," $hookEvents }}
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 data:
@@ -37,7 +49,7 @@ metadata:
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "migrate" "context" $) | nindent 4 }}
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook: {{ join "," $hookEvents }}
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 type: Opaque
@@ -53,7 +65,7 @@ metadata:
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "migrate" "context" $) | nindent 4 }}
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook: {{ join "," $hookEvents }}
     helm.sh/hook-weight: "0"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
@@ -68,6 +80,27 @@ spec:
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
+      {{- if $localBundledPostgres }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
+          # The PostgreSQL image's own policy, never image.pullPolicy: this
+          # container runs a registry image, not the application image a local
+          # profile side-loads and marks Never.
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 70
+            runAsGroup: 70
+          command:
+            - sh
+            - -ec
+            - >-
+              until pg_isready --host {{ include "dev-health.fullname" . }}-postgresql
+              --port 5432 --username {{ .Values.postgresql.credentials.user | quote }}
+              --dbname {{ .Values.postgresql.credentials.database | quote }};
+              do sleep 2; done
+      {{- end }}
       containers:
         - name: migrate
           image: {{ include "dev-health.image" . }}

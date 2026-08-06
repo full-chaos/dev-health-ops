@@ -317,7 +317,9 @@ async def test_m3c_with_every_server_guardrail_disabled_a8_is_the_net(
         validators_module, "validate_no_internal_leakage", lambda _frame: None
     )
     monkeypatch.setattr(
-        orchestrator_module, "internal_token_leak", lambda _values, **_kwargs: None
+        orchestrator_module,
+        "internal_token_leak_field",
+        lambda _values, **_kwargs: None,
     )
     mutated = await case_a8()
 

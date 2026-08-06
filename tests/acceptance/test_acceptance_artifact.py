@@ -69,6 +69,7 @@ _EXPECTED_RUNTIME_DEPENDENCIES = (
     "scripts/acceptance/prepare_ask_dev_acceptance.py",
     "scripts/acceptance/run_ask_dev_compose.sh",
     "src/dev_health_ops/llm/agent/scripted_openai_service.py",
+    "tests/acceptance/compose.ask-dev-acr.yml",
     "tests/acceptance/compose.ask-dev-provider-profile.yml",
     "tests/acceptance/compose.ask-dev.yml",
 )
@@ -182,6 +183,50 @@ def test_write_refuses_when_the_fixture_surface_moved_mid_run(
     with pytest.raises(AcceptanceFailure) as excinfo:
         recorder.write(tmp_path / "artifacts" / "throwaway.json")
     assert "changed while this scenario was running" in str(excinfo.value)
+
+
+# --- acr_armed: codex finding (MEDIUM, 2026-08-05) -- an ACR-backed case's
+# evidence must be provably from a run where ACR was actually armed ---
+
+
+def test_write_records_acr_armed_true_when_the_env_var_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASK_DEV_ACCEPTANCE_ACR", "1")
+    _init_throwaway_git_repo(tmp_path)
+    script_path = tmp_path / "smoke_throwaway.py"
+    script_path.write_text("# throwaway\n")
+    recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
+    artifact = recorder.write(tmp_path / "artifacts" / "throwaway.json")
+    assert artifact["acr_armed"] is True
+
+
+def test_write_records_acr_armed_false_when_the_env_var_is_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ASK_DEV_ACCEPTANCE_ACR", raising=False)
+    _init_throwaway_git_repo(tmp_path)
+    script_path = tmp_path / "smoke_throwaway.py"
+    script_path.write_text("# throwaway\n")
+    recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
+    artifact = recorder.write(tmp_path / "artifacts" / "throwaway.json")
+    assert artifact["acr_armed"] is False
+
+
+def test_write_records_acr_armed_false_for_any_non_1_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the exact string "1" arms it -- same convention as
+    ASK_DEV_ACCEPTANCE_ACR everywhere else in the launcher, so "true"/"yes"/
+    a stray leftover value from a previous run cannot silently arm it."""
+
+    monkeypatch.setenv("ASK_DEV_ACCEPTANCE_ACR", "0")
+    _init_throwaway_git_repo(tmp_path)
+    script_path = tmp_path / "smoke_throwaway.py"
+    script_path.write_text("# throwaway\n")
+    recorder = ScenarioRecorder(scenario_id="throwaway", script_path=script_path)
+    artifact = recorder.write(tmp_path / "artifacts" / "throwaway.json")
+    assert artifact["acr_armed"] is False
 
 
 def test_write_records_the_start_digest_not_a_later_one(tmp_path: Path) -> None:

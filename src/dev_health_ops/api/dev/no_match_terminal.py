@@ -48,8 +48,10 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import get_args
 
+from .answer_validator import answer_has_material_grounding
 from .contracts import (
     AnswerStatus,
+    DevActualCompletion,
     DevAnswer,
     DevContractVersions,
     DevCoverage,
@@ -60,26 +62,50 @@ from .contracts import (
 )
 from .contracts_v2 import PublicOutcome, ResolutionOutcome
 from .orchestrator_states import RunState
+from .status_change_service import STATUS_REASON_CODES
 
 __all__ = [
     "INTERNAL_TOKEN_DENYLIST",
     "NEVER_ATTESTABLE_TOKENS",
+    "REFUSED_WITH_GROUNDING_SUMMARY",
     "WITHHELD_COPY",
     "attested_strings",
     "internal_token_leak",
+    "internal_token_leak_field",
     "named_subject_not_found_answer",
     "no_match_summary",
     "redact_persisted_answer",
     "redact_persisted_error",
+    "scrub_auxiliary_leaks",
     "user_supplied_subject_kind",
     "user_supplied_subject_label",
     "user_visible_strings",
+    "user_visible_strings_by_field",
 ]
 
 
 def _underscore_members(values: Iterable[str]) -> frozenset[str]:
     return frozenset(value for value in values if "_" in value)
 
+
+#: CHAOS-3377 defect 2: the CHAOS-3367 denylist covered only scope-resolution
+#: and run/outcome vocabulary -- a live run showed the §10 completion
+#: assessment's own internal tokens (``not_ready``, ``open_blocker``,
+#: ``required_child_incomplete``, ...) and evidence-handle ids (``ev1_...``)
+#: leaking into user-visible prose instead. Widened here rather than only in
+#: ``status_answer_render.py``'s translation tables, because those tables
+#: only cover the module's OWN server-rendered copy; this denylist is the
+#: fail-closed backstop ``orchestrator.finish()`` runs over EVERY terminal
+#: (including any model-authored prose that still reaches a field this
+#: module scans), so a leak survives here even if a future producer forgets
+#: to route through the deterministic renderer at all.
+#:
+#: ``STATUS_REASON_CODES`` is ``status_change_service``'s own derived,
+#: pinned-total set (see that module), so this cannot silently fall behind a
+#: reason code added there. ``DevActualCompletion.state`` is a 3-member
+#: ``Literal`` on the wire, so its members are pulled the same way
+#: ``DevError.code`` already is below.
+_EXTRA_INTERNAL_TOKENS: frozenset[str] = frozenset({"actual_completion", "ev1_"})
 
 #: Every internal vocabulary token that must never reach a user-visible
 #: string, derived from the live enums. See the module docstring for why only
@@ -91,6 +117,11 @@ INTERNAL_TOKEN_DENYLIST: frozenset[str] = (
     | _underscore_members(member.value for member in PublicOutcome)
     | _underscore_members(member.value for member in ResolutionOutcome)
     | _underscore_members(get_args(DevError.model_fields["code"].annotation))
+    | _underscore_members(STATUS_REASON_CODES)
+    | _underscore_members(
+        get_args(DevActualCompletion.model_fields["state"].annotation)
+    )
+    | _EXTRA_INTERNAL_TOKENS
 )
 
 # NOT included, deliberately: ``ToolID``. A round-2 review argued that a
@@ -211,6 +242,41 @@ _SUBJECT_KIND_BY_NOUN: Mapping[str, str] = {
 _MAX_SUBJECT_LABEL_CHARS = 120
 
 
+def internal_token_leak_field(
+    values: Iterable[tuple[str, str | None]], *, attested: Iterable[str | None] = ()
+) -> tuple[str, str] | None:
+    """Like ``internal_token_leak``, but over ``(field, value)`` pairs and
+    returning ``(field, token)`` -- the field-labeled counterpart used at the
+    write-time boundary (``orchestrator.finish()``) so a leak's log line can
+    name WHERE the token was found, not only what it was.
+
+    CHAOS-3377 leak-hardening: a prior incident's log line carried only the
+    literal string ``"ask_dev.orchestrator.internal_token_leak"`` with no
+    detail of which field leaked -- this dev stack runs with ``LOG_JSON=0``,
+    under which a bare-message ``logging.StreamHandler`` silently drops
+    anything passed via ``extra=``, so the token/run_id/field were captured
+    by the log call but never actually reached the log line. Returning the
+    field here lets the caller embed it directly in the message string,
+    which survives regardless of formatter configuration.
+
+    See ``internal_token_leak`` for the matching/attestation semantics this
+    shares in full; this is the single implementation, with
+    ``internal_token_leak`` now a thin field-blind wrapper around it.
+    """
+
+    attested_text = " ".join(text.casefold() for text in attested if text)
+    for field, value in values:
+        if not value:
+            continue
+        lowered = value.casefold()
+        for token in sorted(INTERNAL_TOKEN_DENYLIST):
+            if token not in lowered:
+                continue
+            if token in NEVER_ATTESTABLE_TOKENS or token not in attested_text:
+                return field, token
+    return None
+
+
 def internal_token_leak(
     values: Iterable[str | None], *, attested: Iterable[str | None] = ()
 ) -> str | None:
@@ -237,17 +303,11 @@ def internal_token_leak(
     fails on the leaked one.
     """
 
-    attested_text = " ".join(text.casefold() for text in attested if text)
-    for value in values:
-        if not value:
-            continue
-        lowered = value.casefold()
-        for token in sorted(INTERNAL_TOKEN_DENYLIST):
-            if token not in lowered:
-                continue
-            if token in NEVER_ATTESTABLE_TOKENS or token not in attested_text:
-                return token
-    return None
+    found = internal_token_leak_field(
+        ((str(index), value) for index, value in enumerate(values)),
+        attested=attested,
+    )
+    return found[1] if found is not None else None
 
 
 def attested_strings(
@@ -277,6 +337,49 @@ def attested_strings(
     return tuple(text for text in texts if text)
 
 
+def user_visible_strings_by_field(
+    *, answer: DevAnswer | None = None, error: DevError | None = None
+) -> tuple[tuple[str, str], ...]:
+    """``user_visible_strings``, paired with the field each string came from.
+
+    CHAOS-3377 leak-hardening (operability): a leak log line naming only the
+    bare token forces an operator to grep the whole answer shape by hand to
+    find which field carried it; naming the field turns that into a one-line
+    diagnosis. List-valued fields are indexed (``warnings[0]``) so a specific
+    offending entry, not just its field name, is identifiable. This is the
+    single source of the string content ``user_visible_strings`` returns --
+    see that function for why each field is included.
+    """
+
+    pairs: list[tuple[str, str]] = []
+    if answer is not None:
+        pairs.append(("direct_summary", answer.direct_summary))
+        pairs.extend(
+            (f"warnings[{i}]", value) for i, value in enumerate(answer.warnings)
+        )
+        pairs.extend(
+            (f"claims[{i}].text", claim.text) for i, claim in enumerate(answer.claims)
+        )
+        pairs.extend(
+            (f"conflicts[{i}].summary", conflict.summary)
+            for i, conflict in enumerate(answer.conflicts)
+        )
+        pairs.extend(
+            (f"suggested_follow_up_questions[{i}]", value)
+            for i, value in enumerate(answer.suggested_follow_up_questions)
+        )
+        pairs.extend(
+            (f"resolved_scope.warnings[{i}]", value)
+            for i, value in enumerate(answer.resolved_scope.warnings)
+        )
+    if error is not None:
+        pairs.append(("safe_message", error.safe_message))
+        pairs.extend(
+            (f"remediation[{i}]", value) for i, value in enumerate(error.remediation)
+        )
+    return tuple(pairs)
+
+
 def user_visible_strings(
     *, answer: DevAnswer | None = None, error: DevError | None = None
 ) -> tuple[str, ...]:
@@ -289,18 +392,9 @@ def user_visible_strings(
     already governed by the evidence contract's own safe-excerpt handling.
     """
 
-    strings: list[str] = []
-    if answer is not None:
-        strings.append(answer.direct_summary)
-        strings.extend(answer.warnings)
-        strings.extend(claim.text for claim in answer.claims)
-        strings.extend(conflict.summary for conflict in answer.conflicts)
-        strings.extend(answer.suggested_follow_up_questions)
-        strings.extend(answer.resolved_scope.warnings)
-    if error is not None:
-        strings.append(error.safe_message)
-        strings.extend(error.remediation)
-    return tuple(strings)
+    return tuple(
+        text for _, text in user_visible_strings_by_field(answer=answer, error=error)
+    )
 
 
 def user_supplied_subject_label(question: str, query: str | None) -> str | None:
@@ -454,6 +548,175 @@ def named_subject_not_found_answer(
 #: not read as a claim the server made.
 WITHHELD_COPY = "This part of the answer could not be shown."
 
+#: CHAOS-3377 HIGH (codex adversarial web review, round 2): the read-time
+#: counterpart of ``answer_validator``'s "a refused answer cannot carry
+#: material grounding" write-time check. A row persisted before that check
+#: existed can still have ``status=refused`` alongside real claim/metric/
+#: evidence content. The web client's own defense-in-depth backstop
+#: (``AskDevAnswer.refusedDespiteMaterialGrounding``) was found relabeling
+#: that contradiction "Answered" while STILL rendering the model's original
+#: (rejected-shaped) prose underneath -- exactly the leak this server-side
+#: normalization now closes upstream, so the client never receives it in
+#: the first place. A neutral statement, not a redaction of the model's
+#: words: the original claim/direct_summary text is discarded entirely,
+#: never partially edited into something that could still read as a claim
+#: the server verified.
+REFUSED_WITH_GROUNDING_SUMMARY = (
+    "This answer's recorded status could not be reconciled with its own "
+    "content. The original narrative has been withheld; the structured "
+    "metrics and evidence below are unaffected."
+)
+
+
+def _normalize_refused_with_grounding(answer: DevAnswer) -> DevAnswer:
+    """The read-time mirror of ``answer_validator``'s "refused answer cannot
+    carry material grounding" check (CHAOS-3377 HIGH, web adversarial
+    review round 2).
+
+    A NEW run can no longer persist this contradiction (the write-time
+    check rejects it, repairable, and demotes through
+    ``Orchestrator._server_grounded_answer`` if the model still won't
+    self-correct -- see ``orchestrator.py``). A row written before that
+    check existed can still have it. This is the single read-time seam
+    both ``router.py`` call sites that hand a persisted answer back to a
+    client already go through (``redact_persisted_answer``, below) --
+    exactly one place, mirroring the write path's single seam
+    (``Orchestrator._deterministic_status_render``) rather than requiring
+    every future replay call site to remember to check.
+
+    The model's own ``claims``/``direct_summary`` are discarded outright --
+    the same "narrative loses when it disagrees with the frame" rule the
+    write-time demotion already applies -- while ``metrics``/``evidence``
+    (server-issued, unaffected by the contradiction) are kept.
+    ``status`` is recomputed from the answer's own persisted ``coverage``
+    (the same fully-covered test ``deterministic_answer_status`` uses),
+    never left as the self-contradicted ``REFUSED``.
+    """
+
+    if answer.status is not AnswerStatus.REFUSED or not answer_has_material_grounding(
+        answer
+    ):
+        return answer
+    coverage = answer.coverage
+    fully_covered = (
+        coverage.available_source_count == coverage.required_source_count
+        and not coverage.unavailable_required_sources
+        and not coverage.stale_required_sources
+        and not coverage.degraded_required_sources
+    )
+    return answer.model_copy(
+        update={
+            "status": AnswerStatus.COMPLETE if fully_covered else AnswerStatus.PARTIAL,
+            "direct_summary": REFUSED_WITH_GROUNDING_SUMMARY,
+            "claims": [],
+        }
+    )
+
+
+def _clean_or_withhold(value: str, *, attested: Iterable[str | None]) -> str:
+    """``value``, or ``WITHHELD_COPY`` if it carries a leaked token.
+
+    The single per-string cleaning rule both ``redact_persisted_answer``
+    (read-time, every prose field) and ``scrub_auxiliary_leaks`` (write-time,
+    model-authored auxiliary fields only) apply, so the two seams cannot
+    silently diverge on what "cleaned" means for one string.
+    """
+
+    return (
+        value
+        if internal_token_leak([value], attested=attested) is None
+        else WITHHELD_COPY
+    )
+
+
+def scrub_auxiliary_leaks(
+    answer: DevAnswer, *, attested: Iterable[str | None] = ()
+) -> tuple[DevAnswer, tuple[str, ...]]:
+    """Remove a leaked token found ONLY in a model-authored auxiliary field,
+    never in ``direct_summary``/``claims``.
+
+    CHAOS-3377 leak-hardening: ``Orchestrator._deterministic_status_render``
+    overwrites ``status``/``direct_summary``/``claims`` with server-rendered
+    content once a bound ``status_snapshot.v1`` result exists, but
+    ``warnings``, ``conflicts[].summary``, ``suggested_follow_up_questions``,
+    and ``resolved_scope.warnings`` stay fully model-authored -- the model has
+    seen the raw tool-result JSON (``actual_completion.reason_codes`` and
+    friends) and can echo one of those tokens into any of the four, none of
+    which the deterministic override ever touches. ``orchestrator.finish()``'s
+    fail-closed scan then destroys the ENTIRE terminal -- including the safe
+    deterministic core -- over one leaked auxiliary sentence (a live incident:
+    run ``22f97bee-0b8b-44a5-979f-78d7d7a80a82``).
+
+    This runs at the SAME write-time seam, immediately before that scan, and
+    is deliberately narrower than it: only these four fields are eligible for
+    scrubbing. ``direct_summary``/``claims`` are the answer's load-bearing
+    deterministic content (or, absent a bound status_snapshot, the model's
+    only substantive content) -- a leak reaching either of those is a
+    genuine defect the whole-terminal fail-closed check in
+    ``orchestrator.finish()`` must still catch, exactly as before this
+    function existed. Scrubbing them here would silently rescue that case
+    instead of surfacing it.
+
+    Mirrors ``redact_persisted_answer``'s per-field treatment exactly
+    (``warnings``/``conflicts``/``resolved_scope.warnings`` replaced with
+    ``WITHHELD_COPY``, individual ``suggested_follow_up_questions`` entries
+    dropped outright) via the shared ``_clean_or_withhold`` helper, so the
+    write-time and read-time seams cannot describe "cleaned" two different
+    ways. Returns the (possibly updated) answer and the field labels that
+    were touched, empty if none were, so the caller can log what happened
+    without re-deriving it.
+    """
+
+    attested_tuple = tuple(attested)
+    touched: list[str] = []
+
+    def field_leaked(field: str, value: str) -> bool:
+        if internal_token_leak([value], attested=attested_tuple) is None:
+            return False
+        touched.append(field)
+        return True
+
+    warnings = [
+        _clean_or_withhold(value, attested=attested_tuple)
+        if field_leaked(f"warnings[{i}]", value)
+        else value
+        for i, value in enumerate(answer.warnings)
+    ]
+    conflicts = [
+        conflict.model_copy(
+            update={
+                "summary": _clean_or_withhold(conflict.summary, attested=attested_tuple)
+            }
+        )
+        if field_leaked(f"conflicts[{i}].summary", conflict.summary)
+        else conflict
+        for i, conflict in enumerate(answer.conflicts)
+    ]
+    follow_ups = [
+        value
+        for i, value in enumerate(answer.suggested_follow_up_questions)
+        if not field_leaked(f"suggested_follow_up_questions[{i}]", value)
+    ]
+    scope_warnings = [
+        _clean_or_withhold(value, attested=attested_tuple)
+        if field_leaked(f"resolved_scope.warnings[{i}]", value)
+        else value
+        for i, value in enumerate(answer.resolved_scope.warnings)
+    ]
+    if not touched:
+        return answer, ()
+    updated = answer.model_copy(
+        update={
+            "warnings": warnings,
+            "conflicts": conflicts,
+            "suggested_follow_up_questions": follow_ups,
+            "resolved_scope": answer.resolved_scope.model_copy(
+                update={"warnings": scope_warnings}
+            ),
+        }
+    )
+    return updated, tuple(touched)
+
 
 def redact_persisted_answer(
     answer: DevAnswer, *, question: str | None = None
@@ -477,8 +740,16 @@ def redact_persisted_answer(
     This redacts; it does not repair the stored row. Backfilling or
     quarantining already-persisted violating rows is a separate operational
     task, deliberately not done implicitly on a read path.
+
+    CHAOS-3377 HIGH (round 2): the refused-with-grounding normalization
+    (``_normalize_refused_with_grounding``) runs FIRST, unconditionally --
+    it is not an internal-token leak, so it is not gated behind the
+    ``internal_token_leak`` check below, which would otherwise skip it
+    entirely for a contradictory row whose prose happens not to contain a
+    denylisted token.
     """
 
+    answer = _normalize_refused_with_grounding(answer)
     attested = attested_strings(answer, question)
     if (
         internal_token_leak(user_visible_strings(answer=answer), attested=attested)
@@ -487,11 +758,7 @@ def redact_persisted_answer(
         return answer
 
     def clean(value: str) -> str:
-        return (
-            value
-            if internal_token_leak([value], attested=attested) is None
-            else WITHHELD_COPY
-        )
+        return _clean_or_withhold(value, attested=attested)
 
     return answer.model_copy(
         update={

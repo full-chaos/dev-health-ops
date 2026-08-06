@@ -9,6 +9,7 @@ STYLESHEETS = ROOT / "docs" / "stylesheets"
 PALETTE_PATH = STYLESHEETS / "logo-palette.css"
 EXTRA_CSS_PATH = STYLESHEETS / "extra.css"
 HOME_CSS_PATH = STYLESHEETS / "home.css"
+CONTEXT_FABRIC_CSS_PATH = STYLESHEETS / "context-fabric.css"
 # Review-only primitive/showcase and design-QA material must never be publicly
 # navigated or built. These paths must NOT exist in the canonical public tree.
 PUBLIC_DESIGN_DIRECTIONS_PATH = ROOT / "docs" / "design-directions.md"
@@ -67,15 +68,23 @@ def test_canonical_uses_the_supplied_full_chaos_palette() -> None:
 def test_canonical_css_imports_palette_and_protects_accessibility_states() -> None:
     assert EXTRA_CSS_PATH.is_file(), f"missing canonical CSS: {EXTRA_CSS_PATH}"
     assert HOME_CSS_PATH.is_file(), f"missing canonical home CSS: {HOME_CSS_PATH}"
+    assert CONTEXT_FABRIC_CSS_PATH.is_file(), (
+        f"missing Context Fabric CSS: {CONTEXT_FABRIC_CSS_PATH}"
+    )
 
     extra_css = EXTRA_CSS_PATH.read_text(encoding="utf-8")
     home_css = HOME_CSS_PATH.read_text(encoding="utf-8")
+    context_fabric_css = CONTEXT_FABRIC_CSS_PATH.read_text(encoding="utf-8")
 
     assert '@import url("logo-palette.css");' in extra_css
     assert ":focus-visible" in extra_css
     assert "prefers-reduced-motion" in extra_css
     assert "fc-home-hero" in home_css
     assert "fc-home-card" in home_css
+    assert "fc-cf-hero" in context_fabric_css
+    assert "fc-cf-use-card" in context_fabric_css
+    assert "prefers-reduced-motion" in context_fabric_css
+    _assert_no_undeclared_raw_css_value(CONTEXT_FABRIC_CSS_PATH)
 
 
 def test_review_only_design_pages_are_not_publicly_built() -> None:

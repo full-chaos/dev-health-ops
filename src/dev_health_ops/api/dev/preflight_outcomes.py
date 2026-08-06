@@ -324,6 +324,53 @@ def build_preflight_answer(
     )
 
 
+#: CHAOS-3388. How many named candidates the v1 clarification message will
+#: enumerate, and how long each one may be. Small on purpose: this is a
+#: sentence a person reads, not a data dump, and the frame's own
+#: ``clarification_candidates`` (bounded separately, at up to
+#: ``MAX_CANDIDATES``/``NOT_FOUND_FALLBACK_LIMIT``) remains the authoritative
+#: full list for any future structured surface.
+_MAX_NAMED_CANDIDATES = 5
+_MAX_CANDIDATE_LABEL_CHARS = 120
+
+
+def _candidate_names(
+    candidates: tuple[DevResolutionCandidate, ...],
+) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates[:_MAX_NAMED_CANDIDATES]:
+        label = candidate.entity_ref.display_label.strip()[:_MAX_CANDIDATE_LABEL_CHARS]
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        names.append(label)
+    return tuple(names)
+
+
+def _name_candidates(
+    base_message: str, candidates: tuple[DevResolutionCandidate, ...]
+) -> str:
+    """Append real candidate display names to a closed-vocab base sentence.
+
+    CHAOS-3388. ``candidates`` are the resolution ledger's own authorized,
+    catalog-confirmed entities (``DevResolutionCandidate.entity_ref.
+    display_label``) — never model- or user-authored text — so naming them
+    here is the same trust tier as ``base_message`` itself, not a new
+    disclosure channel: the copy-contract rule (CHAOS-3367) is that
+    user-visible copy comes from closed tables plus, at most, data the
+    server itself already confirmed, and a catalog display label is exactly
+    that. An empty ``candidates`` tuple (the four no-answer outcomes, or a
+    genuine ambiguity/close-matches search that found nothing to enrich)
+    returns ``base_message`` unchanged.
+    """
+
+    names = _candidate_names(candidates)
+    if not names:
+        return base_message
+    return f"{base_message} Candidates: {', '.join(names)}."
+
+
 def project_preflight_error(answer: DevAnswerV2, *, request_id: str) -> DevError:
     """Project one preflight v2 answer to the v1 ``DevError`` the router streams.
 
@@ -336,32 +383,44 @@ def project_preflight_error(answer: DevAnswerV2, *, request_id: str) -> DevError
     ``needs_clarification`` is handled separately and deliberately, on both
     the live path (``orchestrator.run``) and the replay path (``router``'s
     terminal-payload reconstruction): both call this function, not
-    ``compat.project_answer_v2_to_v1``, for a preflight ambiguity, and it
-    always returns the fixed ``scope_ambiguous`` ``DevError`` above — never a
-    v1 ``DevAnswer``, so it never carries candidates at all, whatever the
-    frame's own ``clarification_candidates`` holds. That is deliberate and
-    unchanged by CHAOS-3325: it is both the more faithful terminal-state
-    statement (the run genuinely produced no answer) and the shape the router
-    and web client already handle.
+    ``compat.project_answer_v2_to_v1``, for a preflight ambiguity. It always
+    returns a v1 ``DevError`` — never a v1 ``DevAnswer`` — with the fixed
+    ``scope_ambiguous`` *code*: that part is unchanged by CHAOS-3388, and
+    still deliberate for the reason CHAOS-3325 gave it (a preflight
+    ambiguity is the more faithful terminal-state statement — the run
+    genuinely produced no answer — and ``scope_ambiguous`` is the shape the
+    router and web client already handle for every terminal in this
+    family).
 
-    The real candidate list is carried one level up instead. CHAOS-3325 gave
-    ``dev_answer_frame.v1`` a typed ``clarification_candidates`` block — the
-    resolution ledger's own ``DevResolutionCandidate`` entries for the
-    mention that went ambiguous, passed straight through by
-    ``build_preflight_answer`` rather than invented — and
-    ``contracts_v2.compat``'s ``_project_needs_clarification`` now projects
-    those real candidates (or, when there are none, an honest
-    ``ScopeResolutionOutcome.UNRESOLVED`` rather than a fabricated
-    placeholder) for whichever *other* caller runs a ``needs_clarification``
-    answer through the general ``project_answer_v2_to_v1`` projector — this
-    function's own preflight-ambiguity path does not, and still routes
-    through ``scope_ambiguous`` as above. Actually serving the candidate
-    block to a v1/v2 client still additionally needs the v2 rendering
-    surface (CHAOS-3298) and persisted clarification state (CHAOS-3299).
+    The *message* is no longer the one fixed sentence, though (CHAOS-3388).
+    Before this, the real candidate list computed onto ``answer.frame.
+    clarification_candidates`` (CHAOS-3325) never reached a v1 client at
+    all here: an unresolved named subject with real, catalog-confirmed
+    close matches available produced the exact same generic "the requested
+    scope is ambiguous" text as a genuine same-name ambiguity with none —
+    the acceptance-oracle-visible half of the CHAOS-3388 defect, since the
+    v1 wire has no separate structured field for a candidate list and
+    inventing one is out of scope. ``_name_candidates`` starts from
+    ``answer.frame.direct_answer`` — already the differentiated,
+    closed-vocab ``CLARIFICATION_COPY`` sentence for whichever
+    ``clarification_key`` produced this termination, "ambiguous" or
+    CHAOS-3366's "here are the closest matches" — and appends the real
+    candidates' own catalog display labels, never invented, never
+    model-authored: the same ``DevResolutionCandidate`` entries
+    ``contracts_v2.compat``'s ``_project_needs_clarification`` already
+    projects for whichever *other* caller runs a ``needs_clarification``
+    answer through the general ``project_answer_v2_to_v1`` projector. This
+    function's own preflight-ambiguity path still does not use that
+    projector (the ``DevAnswer`` shape it builds remains out of scope here
+    — see above), but it no longer discards the same candidates that
+    projector already trusted.
     """
 
     if answer.public_outcome is PublicOutcome.NEEDS_CLARIFICATION:
-        code, message = _AMBIGUOUS_V1_ERROR
+        code, _ = _AMBIGUOUS_V1_ERROR
+        message = _name_candidates(
+            answer.frame.direct_answer, answer.frame.clarification_candidates
+        )
         return DevError(
             schema_version="dev_error.v1",
             request_id=request_id,

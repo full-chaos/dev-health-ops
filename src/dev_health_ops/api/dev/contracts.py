@@ -8,6 +8,7 @@ objects into these models, but must not redeclare their wire shape.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 
@@ -953,6 +954,30 @@ class DevActualCompletion(ContractModel):
     display_truncated: bool = False
     conflicts: list[DevStatusConflict] = Field(default_factory=list, max_length=20)
     evidence_ref_ids: list[OpaqueID] = Field(default_factory=list, max_length=25)
+    # CHAOS-3377 HIGH 3: blockers (``open_blocker``) previously had no typed
+    # wire representation distinct from ``required_children`` -- a NOT_READY
+    # verdict caused solely by an open blocker rendered no blocker detail at
+    # all. Reuses ``DevRequiredChildFact``'s shape (structurally identical:
+    # fact_id/text/status/evidence_ref_ids); mirrors ``required_children``
+    # by carrying ALL blockers, not a pre-filtered "open" subset, so a
+    # consumer applies its own openness predicate rather than trusting one
+    # it cannot verify.
+    blockers: list[DevRequiredChildFact] = Field(default_factory=list, max_length=100)
+    # CHAOS-3409 codex adversarial review (HIGH): a withheld
+    # (``required_child_total is None``) denominator has two structurally
+    # distinct causes -- a genuine source truncation (real required items
+    # exist, not all were fetched) and CHAOS-3408's structural non-
+    # applicability (ORGANIZATION/TEAM scope has no required-child concept
+    # at all) -- and reason_codes cannot safely carry that distinction: any
+    # new code added there becomes an "unknown reason" that forces
+    # ``state`` to INDETERMINATE (status_change_service._assess), which is
+    # correct for a real truncation but WRONG for a structural absence
+    # (the state/reason codes ARE fully real there; only the required-
+    # child count is inapplicable). This is therefore its own, inert
+    # field: never read by ``_assess``'s state computation, only by
+    # ``is_completion_assessment_untrustworthy``/``render_verdict_summary``
+    # to choose the correct copy without conflating the two.
+    required_children_not_applicable: bool = False
 
     @model_validator(mode="after")
     def validate_required_child_counts(self) -> Self:
@@ -1042,6 +1067,24 @@ class DevToolResult(ContractModel):
     warnings: list[ShortText] = Field(default_factory=list, max_length=20)
     error: DevError | None = None
     serialized_bytes: int = Field(ge=0, le=65_536)
+    # CHAOS-3368 step 2: the project's own DECLARED lifecycle state / target
+    # date (projects.state/target_date, migration 073), typed -- NEVER
+    # pre-joined display prose -- so the CHAOS-3377 deterministic §10
+    # renderer (status_answer_render.py) can consume it directly instead of
+    # parsing the interim status_facts display text back apart.
+    # ``declared_project_state`` is the RAW provider token (e.g. Linear's
+    # own "started"/"paused"/"completed"), exactly like ``DevCIFact.
+    # conclusion``/``DevPullRequestFact.state`` elsewhere in this contract --
+    # translation through a closed-vocabulary table happens at render time,
+    # never here, so a future provider's own vocabulary needs no wire change.
+    # ``None``/``None`` when the scope is not PROJECT, the catalog row could
+    # not be resolved unambiguously, or the provider populated neither
+    # column.
+    declared_project_state: OpaqueID | None = None
+    declared_project_target_date: date | None = None
+    declared_project_evidence_ref_ids: list[OpaqueID] = Field(
+        default_factory=list, max_length=25
+    )
 
     @model_validator(mode="after")
     def validate_error_state(self) -> Self:
@@ -1078,8 +1121,11 @@ class DevToolResult(ContractModel):
             referenced.update(self.actual_completion.evidence_ref_ids)
             for child in self.actual_completion.required_children:
                 referenced.update(child.evidence_ref_ids)
+            for blocker in self.actual_completion.blockers:
+                referenced.update(blocker.evidence_ref_ids)
             for conflict in self.actual_completion.conflicts:
                 referenced.update(conflict.evidence_ref_ids)
+        referenced.update(self.declared_project_evidence_ref_ids)
         if not referenced <= known:
             raise ValueError(
                 "tool result references evidence IDs missing from its evidence array"

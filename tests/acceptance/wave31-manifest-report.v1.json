@@ -1,11 +1,11 @@
 {
   "schema_version": "wave_3_1_proof_gate_manifest.v1",
-  "item_count": 64,
+  "item_count": 67,
   "status_counts": {
-    "blocked": 4,
+    "blocked": 3,
     "deferred": 7,
     "proven_e2e": 14,
-    "proven_unit": 39
+    "proven_unit": 43
   },
   "category_counts": {
     "attack": 7,
@@ -13,52 +13,81 @@
     "gate": 7,
     "mutation_proof": 12,
     "original_defect_reproduction": 5,
+    "readiness_and_resolution_safety_defect_reproduction": 3,
     "real_project_positive_control": 1
   },
   "proven_e2e_claim_limits": "A proven_e2e row means: a live scenario was run by an operator, its per-assertion results were recorded by the scenario itself, and the script and shared fixture surface it ran against still match this tree. It does NOT mean the validator has established that the run happened. Execution artifacts are unsigned JSON and the validator recomputes exactly the values a forger would compute, so a fabricated artifact validates clean; occurrence rests on operator-recorded evidence and on re-running scenarios, not on this check. commit_sha is metadata only -- shape-checked, never resolved, so a well-formed id naming no commit is accepted. Product code under src/ is outside the digested surface, so for product changes these rows are historical records of a past run rather than statements about the current tree.",
   "stale_row_count": 14,
   "stale_rows": {
     "attack.team-attribution.e2e-blocked-by-live-defect": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "attack.unrelated-evidence.e2e-live-validated": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "defect.ask-dev-exact-commit.e2e-live-validated": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "defect.ask-dev-not-found.e2e-live-validated": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "gate.plan-registry-gap-is-loud.e2e-live-validated": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.data-trust-organization-wide": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.exact-project-complete": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.multi-metric-comparison-organization-wide": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.operational-deficiency.e2e-live-validated": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.registered-metric-catalog": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.remaining-work-exact-project": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.team-health.e2e-live-validated": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "matrix.team-workload-balance.e2e-live-validated": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ],
     "positive-control.real-project-status": [
-      "compose.yml"
+      "compose.yml",
+      "scripts/acceptance/acceptance_artifact.py",
+      "scripts/acceptance/run_ask_dev_compose.sh"
     ]
   },
   "items": [
@@ -134,7 +163,9 @@
         "limitation_names_unavailable_metric_source"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -175,7 +206,9 @@
         "unrelated_repo_excluded_from_named_answer"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -248,7 +281,9 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -270,7 +305,9 @@
         "answer_status_not_error"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -340,7 +377,9 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -431,17 +470,28 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
       "id": "matrix.organization-portfolio-status",
       "category": "blocking_matrix",
       "description": "Organization portfolio status.",
-      "status": "blocked",
-      "evidence": [],
-      "blocked_reason": "PORTFOLIO_STATUS is deliberately, not accidentally, unwired this wave -- wave_3_1_plans.py's own module docstring: PlanExecutor's StepContext carries exactly one DevScope, but PortfolioStatusService.evaluate_portfolio needs several project scopes at once, a real gap that needs a StepContext-widening decision before this can be wired (tracked on the CHAOS-3297 Linear issue). The closest existing test, test_chaos_3303_portfolio_status_service.py::test_evaluate_portfolio_all_provisional_registry_reports_no_elevated_state, is service-layer only and does not exercise the plan/orchestrator path this row's claim needs -- not cited as proof it would be overclaiming. The GAP itself being handled honestly (loud, non-terminal fallback) is a separate, already-proven claim -- see gate.plan-registry-gap-is-loud and its e2e-live-validated sibling.",
-      "test_nodeids": [],
+      "status": "proven_unit",
+      "evidence": [
+        "tests/api/dev/test_chaos_3393_portfolio_orchestrator.py",
+        "tests/api/dev/test_chaos_3393_portfolio_preflight.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3393_portfolio_orchestrator.py::test_named_project_cohort_batches_both_projects_through_the_portfolio_step",
+        "tests/api/dev/test_chaos_3393_portfolio_orchestrator.py::test_partial_failure_is_disclosed_never_fabricated_or_refused",
+        "tests/api/dev/test_chaos_3393_portfolio_preflight.py::test_organization_wide_portfolio_commits_a_bounded_project_set",
+        "tests/api/dev/test_chaos_3393_portfolio_preflight.py::test_organization_wide_portfolio_with_no_projects_falls_back_cleanly",
+        "tests/api/dev/test_chaos_3393_portfolio_preflight.py::test_organization_wide_portfolio_discloses_truncation_past_the_cap"
+      ],
       "requires_live_infra": false,
       "execution_artifact": null,
       "required_assertion_names": [],
@@ -617,7 +667,9 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -639,7 +691,9 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -733,7 +787,9 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -759,7 +815,9 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -862,7 +920,9 @@
         "warnings_present_but_not_a_plan_registry_gap_signal"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -1129,7 +1189,9 @@
         "stream_terminated_as_answer"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -1171,7 +1233,9 @@
         "safe_message_does_not_name_subject"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     },
     {
@@ -1187,6 +1251,85 @@
       "test_nodeids": [
         "tests/api/dev/test_chaos_3292_mutations.py::test_m2_no_authorized_match_must_not_fall_through_to_organization_scope",
         "tests/api/dev/test_chaos_3292_mutations.py::test_m3a_leaky_canonical_copy_cannot_be_constructed_at_all"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "defect.bare-name-leak-graceful-terminal",
+      "category": "readiness_and_resolution_safety_defect_reproduction",
+      "description": "CHAOS-3421: a model that leaks the raw forbidden_or_not_found outcome token (what resolve_scope.v1 returns for a named subject the catalog cannot confirm) on the organization-wide-fallback path must never fail the run closed to a generic internal_error -- the leak scan reroutes to the SAME graceful scope_not_found terminal the legacy narration guard already ships for this exact scenario class, reusing its copy verbatim rather than forcing the stricter FORBIDDEN_OR_NOT_FOUND no-match terminal open. Replicated directly against the real live-incident question shape and the real CHAOS-3388 fixture entity, with subject matching (CHAOS-3407) deliberately left unfixed -- the run still misses, but never crashes.",
+      "status": "proven_unit",
+      "evidence": [
+        "src/dev_health_ops/api/dev/orchestrator.py",
+        "src/dev_health_ops/api/dev/subject_preflight.py",
+        "src/dev_health_ops/api/dev/no_match_terminal.py",
+        "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py::test_a_leaked_resolution_outcome_on_a_bare_name_fallback_is_graceful",
+        "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py::test_an_unrelated_leak_off_this_branch_still_fails_closed",
+        "tests/api/dev/test_chaos_3421_leak_graceful_terminal.py::test_the_live_incident_question_never_crashes_even_though_it_still_misses"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "defect.bare-name-prompt-allowlist-consistency",
+      "category": "readiness_and_resolution_safety_defect_reproduction",
+      "description": "CHAOS-3421 MED-1: the unresolved-bare-name organization-wide-fallback preflight branch withholds resolve_scope.v1 from allowed_tools, so the composed prompt must never instruct the model to call it -- a dedicated prompt section states resolution is unavailable and names the permitted (organization-wide) fallback instead, and the advertised tool registry and the prompt copy are proven to agree, not merely asserted to.",
+      "status": "proven_unit",
+      "evidence": [
+        "src/dev_health_ops/api/dev/prompts/composer.py",
+        "src/dev_health_ops/api/dev/subject_preflight.py",
+        "src/dev_health_ops/api/dev/orchestrator.py",
+        "tests/api/dev/test_prompt_composer.py",
+        "tests/api/dev/test_chaos_3292_review_findings.py",
+        "tests/api/dev/test_subject_preflight.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_prompt_composer.py::test_resolution_unavailable_never_instructs_calling_the_withheld_tool",
+        "tests/api/dev/test_prompt_composer.py::test_resolution_unavailable_false_is_the_ordinary_uncommitted_section",
+        "tests/api/dev/test_prompt_composer.py::test_subject_committed_wins_over_resolution_unavailable",
+        "tests/api/dev/test_chaos_3292_review_findings.py::test_an_unresolved_bare_name_run_keeps_the_v1_prompt",
+        "tests/api/dev/test_chaos_3292_review_findings.py::test_an_unresolved_bare_name_run_gets_a_dedicated_unavailable_section",
+        "tests/api/dev/test_subject_preflight.py::test_an_unresolved_bare_name_withholds_resolve_scope"
+      ],
+      "requires_live_infra": false,
+      "execution_artifact": null,
+      "required_assertion_names": [],
+      "stale_dependencies": []
+    },
+    {
+      "id": "defect.organization-readiness-honest-denominator",
+      "category": "readiness_and_resolution_safety_defect_reproduction",
+      "description": "CHAOS-3408/3409: an ORGANIZATION/TEAM-scoped readiness question must never report a fabricated '0 of 0 required items are complete' -- the denominator is withheld via an explicit, non-inferred signal (never conflated with a genuine source truncation), and the real production render/validation wiring (not just an isolated renderer call) must render the distinct structural copy without pairing it with the truncation disclosure.",
+      "status": "proven_unit",
+      "evidence": [
+        "src/dev_health_ops/api/dev/status_change_service.py",
+        "src/dev_health_ops/api/dev/status_completion_copy.py",
+        "src/dev_health_ops/api/dev/status_answer_render.py",
+        "src/dev_health_ops/api/dev/contracts.py",
+        "src/dev_health_ops/api/dev/production_runtime.py",
+        "tests/api/dev/test_status_change_service.py",
+        "tests/api/dev/test_status_completion_copy.py",
+        "tests/api/dev/test_chaos_3377_status_answer_render.py"
+      ],
+      "blocked_reason": null,
+      "test_nodeids": [
+        "tests/api/dev/test_status_change_service.py::test_organization_and_team_scope_withhold_the_required_child_denominator[_org_scope]",
+        "tests/api/dev/test_status_change_service.py::test_organization_and_team_scope_withhold_the_required_child_denominator[_team_scope]",
+        "tests/api/dev/test_status_change_service.py::test_project_scope_with_genuinely_zero_required_children_is_a_real_zero",
+        "tests/api/dev/test_status_completion_copy.py::test_structural_non_applicability_is_trustworthy_not_untrustworthy",
+        "tests/api/dev/test_status_completion_copy.py::test_a_genuine_source_truncation_is_untrustworthy",
+        "tests/api/dev/test_chaos_3377_status_answer_render.py::test_production_wiring_never_pairs_the_scope_copy_with_the_truncation_disclosure",
+        "tests/api/dev/test_chaos_3377_status_answer_render.py::test_production_wiring_still_discloses_a_genuine_truncation"
       ],
       "requires_live_infra": false,
       "execution_artifact": null,
@@ -1213,7 +1356,9 @@
         "answer_summary_not_empty"
       ],
       "stale_dependencies": [
-        "compose.yml"
+        "compose.yml",
+        "scripts/acceptance/acceptance_artifact.py",
+        "scripts/acceptance/run_ask_dev_compose.sh"
       ]
     }
   ]

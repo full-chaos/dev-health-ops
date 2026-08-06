@@ -956,6 +956,289 @@ async def test_update_sync_config_changes_is_active(client):
     assert data["id"] == config_id
 
 
+async def _tests_dataset_row(session_maker, integration_id: uuid.UUID):
+    async with session_maker() as session:
+        return (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == integration_id,
+                    IntegrationDataset.dataset_key == "tests",
+                )
+            )
+        ).scalar_one_or_none()
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_adding_tests_target_repairs_dataset_row(
+    client, session_maker
+):
+    """CHAOS-3399: IntegrationDataset rows are seeded once at integration-create
+    time from sync_targets; the planner (`_load_enabled_datasets`) plans strictly
+    from that row, never from sync_targets directly. Before this fix, editing an
+    EXISTING integration's sync_targets to add "tests" updated the Postgres
+    sync_targets column with zero effect on what the planner would ever plan --
+    exactly the CHAOS-3398 root cause. Editing the config now must retro-create
+    (repair) the row, mirroring the admin batch-update endpoint.
+    """
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="repair-path-tests")
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        integration_id = config.integration_id
+
+    # Given: sync_targets=[] at create time (see _create_sync_config) means no
+    # dataset row exists at all yet -- this integration predates "tests".
+    assert await _tests_dataset_row(session_maker, integration_id) is None
+
+    # When: the operator edits sync_targets to add "tests".
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git", "tests"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Then: the row now exists and is enabled -- the planner can plan it.
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None
+    assert dataset.is_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_without_tests_target_leaves_dataset_row_absent(
+    client, session_maker
+):
+    """Negative control for the repair-path test above: editing sync_targets
+    to add unrelated targets must NOT materialize a "tests" row -- the repair
+    is scoped to what was actually requested, not a blanket enable-everything.
+    """
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="repair-path-negative-control")
+    config_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        integration_id = config.integration_id
+
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git", "prs"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert await _tests_dataset_row(session_maker, integration_id) is None
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_re_enables_previously_disabled_tests_dataset(
+    client, session_maker
+):
+    """An operator who disabled "tests" via the batch endpoint and later
+    re-checks it in the edit form must have the existing row flipped back on,
+    not left disabled while sync_targets claims it's selected.
+    """
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="repair-path-reenable")
+    config_id = uuid.UUID(create_resp.json()["id"])
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        integration_id = config.integration_id
+
+    disable_resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/datasets",
+        json={"datasets": [{"dataset_key": "tests", "is_enabled": False}]},
+    )
+    assert disable_resp.status_code == 200, disable_resp.text
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None and dataset.is_enabled is False
+
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git", "tests"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None and dataset.is_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_removing_tests_target_disables_dataset_row(
+    client, session_maker
+):
+    """Codex adversarial-review finding (round 1): the enable-only version of
+    this reconciliation left a broken promise -- the web edit form's own copy
+    (formDiff.ts::getDatasetWarnings) tells the operator that unchecking a
+    dataset "will stop syncing" it, but the row stayed enabled and the
+    planner kept running it. Selecting "tests" then deselecting it via
+    sync_targets must disable the row, not just leave the checkbox unchecked
+    while the backend keeps planning it.
+    """
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="repair-path-disable-on-removal")
+    config_id = uuid.UUID(create_resp.json()["id"])
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        integration_id = config.integration_id
+
+    # Given: tests was selected and the row is enabled.
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git", "tests"]},
+    )
+    assert resp.status_code == 200, resp.text
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None and dataset.is_enabled is True
+
+    # When: the operator unchecks tests (removes it from sync_targets).
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Then: the row is disabled -- the planner will not plan it, matching
+    # what the UI told the operator would happen.
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None
+    assert dataset.is_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_removing_git_symmetrically_disables_blame(
+    client, session_maker
+):
+    """The git-implies-blame expansion in _planner_dataset_keys must apply
+    symmetrically on removal too -- blame was auto-added alongside git at
+    create time (sync.py's own _planner_dataset_keys rule), so removing git
+    must drop blame the same way, with no special-casing in the reconcile
+    logic (it reuses _planner_dataset_keys for both the old and new sets).
+    """
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="repair-path-blame-symmetry")
+    config_id = uuid.UUID(create_resp.json()["id"])
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        integration_id = config.integration_id
+
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["git"]},
+    )
+    assert resp.status_code == 200, resp.text
+    async with session_maker() as session:
+        blame = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == integration_id,
+                    IntegrationDataset.dataset_key == "blame",
+                )
+            )
+        ).scalar_one_or_none()
+        assert blame is not None and blame.is_enabled is True
+
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_targets": ["prs"]},
+    )
+    assert resp.status_code == 200, resp.text
+    async with session_maker() as session:
+        blame = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == integration_id,
+                    IntegrationDataset.dataset_key == "blame",
+                )
+            )
+        ).scalar_one_or_none()
+        assert blame is not None and blame.is_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_update_source_scoped_child_sync_config_does_not_touch_shared_datasets(
+    client, session_maker
+):
+    """Codex adversarial-review finding (round 2, HIGH): IntegrationDataset
+    rows are shared across every SyncConfiguration pointing at the same
+    integration_id (CHAOS-2762 -- a planner parent plus its per-repo
+    children). The planner (sync/planner.py::_load_enabled_datasets) always
+    reads that SHARED row set for the whole integration; only a
+    source_id-scoped CHILD config additionally narrows which dataset_keys IT
+    requests (trigger_routing.py::_dataset_keys_for_config). So editing one
+    child's sync_targets must NEVER disable (or enable) the shared row --
+    that would silently change what the parent and every sibling child
+    plans too. Only the config with no source_id (the whole-integration
+    view) may reconcile the shared rows.
+    """
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    create_resp = await _create_sync_config(ac, name="shared-integration-parent-2")
+    assert create_resp.status_code == 201, create_resp.text
+    parent_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        parent = await session.get(SyncConfiguration, parent_id)
+        integration_id = parent.integration_id
+
+        source = IntegrationSource(
+            org_id=org_id,
+            integration_id=integration_id,
+            provider="github",
+            source_type="repository",
+            external_id="full-chaos/child-repo",
+            name="child-repo",
+            full_name="full-chaos/child-repo",
+            metadata_={},
+            is_enabled=True,
+        )
+        session.add(source)
+        await session.flush()
+        child = SyncConfiguration(
+            org_id=org_id,
+            name="shared-integration-child-2",
+            provider="github",
+            sync_targets=["tests"],
+            sync_options={},
+            parent_id=parent_id,
+            integration_id=integration_id,
+            source_id=source.id,
+        )
+        session.add(child)
+        await session.commit()
+        child_id = str(child.id)
+
+    # Given: the whole-integration parent enables "tests" for the shared row.
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{parent_id}",
+        json={"sync_targets": ["git", "tests"]},
+    )
+    assert resp.status_code == 200, resp.text
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None and dataset.is_enabled is True
+
+    # When: the source-scoped CHILD is edited to remove "tests" from ITS OWN
+    # sync_targets.
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{child_id}",
+        json={"sync_targets": ["git"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Then: the SHARED "tests" row is untouched -- still enabled, so the
+    # parent and any other sibling sharing this integration keep planning
+    # it. A child's private view must never mutate the shared switch.
+    dataset = await _tests_dataset_row(session_maker, integration_id)
+    assert dataset is not None
+    assert dataset.is_enabled is True, (
+        "a source-scoped child's sync_targets edit must not disable a "
+        "dataset shared by the whole integration"
+    )
+
+
 @pytest.mark.asyncio
 async def test_github_work_item_defaults_and_patch_controls_reach_stale_planned_claim(
     client, session_maker, monkeypatch

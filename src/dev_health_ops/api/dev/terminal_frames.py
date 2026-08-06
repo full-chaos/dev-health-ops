@@ -97,12 +97,13 @@ from .contracts_v2.frame import (
     DevFrameConflict,
     DevFrameVersions,
 )
-from .contracts_v2.health_rules import HealthRuleFinding
+from .contracts_v2.health_rules import DevPortfolioProjectStatusV2, HealthRuleFinding
 from .contracts_v2.no_answer_policy import CANONICAL_NO_ANSWER_COPY, NO_ANSWER_OUTCOMES
 from .contracts_v2.result import DevInvestigationResult, DevSourceContent
 from .investigation_plans.wave_3_1_plans import (
     capped_deficiency_findings,
     capped_health_findings,
+    capped_portfolio_project_statuses,
 )
 
 __all__ = [
@@ -606,25 +607,29 @@ def _findings_from_investigation_result(
     tuple[DeficiencyFinding, ...],
     bool,
     tuple[DeficiencyCategoryStatus, ...],
+    tuple[DevPortfolioProjectStatusV2, ...],
+    bool,
 ]:
     """Flatten every observation's ``content.health_findings``/
-    ``deficiency_findings`` across ``investigation_result``, then re-sort
-    and cap at the frame's own bound via the SAME
-    ``capped_health_findings``/``capped_deficiency_findings`` functions
+    ``deficiency_findings``/``portfolio_project_statuses`` across
+    ``investigation_result``, then re-sort and cap at the frame's own bound
+    via the SAME ``capped_health_findings``/``capped_deficiency_findings``/
+    ``capped_portfolio_project_statuses`` functions
     ``investigation_plans.wave_3_1_plans``'s own step wiring uses -- one
-    capping function, never a second copy that could disagree on which 50
-    survive.
+    capping function per slot, never a second copy that could disagree on
+    which survive.
 
     A per-observation ``content.health_findings_truncated``/
-    ``deficiency_findings_truncated`` is preserved by ORing it into the
-    frame-level flag, never discarded: a source that already dropped
-    findings before this function ever saw them must still disclose that,
-    even if the flattened-and-recapped total this function computes
-    happens to land back under 50 (Codex-anticipated finding: re-deriving
-    truncation only from ``len(flattened) > 50`` would silently lose a
-    truncation signal from any single observation whose OWN pre-cap set
-    exceeded 50 but whose surviving 50 combine with few enough others to
-    read as untruncated overall).
+    ``deficiency_findings_truncated``/``portfolio_project_statuses_
+    truncated`` is preserved by ORing it into the frame-level flag, never
+    discarded: a source that already dropped rows before this function ever
+    saw them must still disclose that, even if the flattened-and-recapped
+    total this function computes happens to land back under the cap
+    (Codex-anticipated finding: re-deriving truncation only from
+    ``len(flattened) > cap`` would silently lose a truncation signal from
+    any single observation whose OWN pre-cap set exceeded it but whose
+    surviving rows combine with few enough others to read as untruncated
+    overall).
 
     ``deficiency_category_statuses`` (CHAOS-3297 s3 codex full-branch
     review round 1, FINDING 2, 2026-08-02) rides alongside via
@@ -634,7 +639,7 @@ def _findings_from_investigation_result(
     """
 
     if investigation_result is None:
-        return (), False, (), False, ()
+        return (), False, (), False, (), (), False
     contents = [
         obs.content
         for obs in investigation_result.observations
@@ -646,13 +651,20 @@ def _findings_from_investigation_result(
     all_deficiency = tuple(
         finding for content in contents for finding in content.deficiency_findings
     )
+    all_portfolio = tuple(
+        status for content in contents for status in content.portfolio_project_statuses
+    )
     health, health_truncated = capped_health_findings(all_health)
     deficiency, deficiency_truncated = capped_deficiency_findings(all_deficiency)
+    portfolio, portfolio_truncated = capped_portfolio_project_statuses(all_portfolio)
     health_truncated = health_truncated or any(
         content.health_findings_truncated for content in contents
     )
     deficiency_truncated = deficiency_truncated or any(
         content.deficiency_findings_truncated for content in contents
+    )
+    portfolio_truncated = portfolio_truncated or any(
+        content.portfolio_project_statuses_truncated for content in contents
     )
     deficiency_category_statuses = _deficiency_category_statuses_from_contents(contents)
     return (
@@ -661,6 +673,8 @@ def _findings_from_investigation_result(
         deficiency,
         deficiency_truncated,
         deficiency_category_statuses,
+        portfolio,
+        portfolio_truncated,
     )
 
 
@@ -669,6 +683,7 @@ def wrap_legacy_answer_as_frame(
     *,
     run_id: str,
     investigation_result: DevInvestigationResult | None = None,
+    subject_set_ref: str | None = None,
 ) -> DevAnswerFrame:
     """Mirror a fully-validated legacy v1 ``DevAnswer`` into a real frame.
 
@@ -700,6 +715,14 @@ def wrap_legacy_answer_as_frame(
     of ``direct_answer``, which the plan never authored, not of every
     field on the frame. Collapsing this divergence (the frame becoming
     authoritative end to end) is explicitly stack #4/#5 territory.
+
+    ``subject_set_ref`` (CHAOS-3393): the committed ``dev_subject_set.v1``'s
+    own ``set_id``, passed by the orchestrator ONLY for a PLURAL_COHORT/
+    ORGANIZATION_WIDE ``status.portfolio.v1`` run that actually executed
+    against it -- ``None`` for every other run (a SINGULAR commit's own
+    audit-only subject set is deliberately excluded by the caller; see
+    ``orchestrator.run()``'s own comment). Never set alongside a
+    ``subject_ref`` -- this function never sets that field at all.
     """
 
     (
@@ -708,6 +731,8 @@ def wrap_legacy_answer_as_frame(
         deficiency_findings,
         deficiency_findings_truncated,
         deficiency_category_statuses,
+        portfolio_project_statuses,
+        portfolio_project_statuses_truncated,
     ) = _findings_from_investigation_result(investigation_result)
 
     facts = tuple(
@@ -740,6 +765,7 @@ def wrap_legacy_answer_as_frame(
         run_id=_canonical_run_id(run_id),
         generated_at=answer.generated_at,
         public_outcome=PublicOutcome.ANSWERED_WITH_GAPS,
+        subject_set_ref=subject_set_ref,
         direct_answer=answer.direct_summary,
         # The legacy model-tool-choice loop never computes a completion
         # block at all -- `calculable=False` states that honestly (P8:
@@ -755,6 +781,8 @@ def wrap_legacy_answer_as_frame(
         deficiency_findings=deficiency_findings,
         deficiency_findings_truncated=deficiency_findings_truncated,
         deficiency_category_statuses=deficiency_category_statuses,
+        portfolio_project_statuses=portfolio_project_statuses,
+        portfolio_project_statuses_truncated=portfolio_project_statuses_truncated,
         metrics=tuple(_wrap_legacy_metric(metric) for metric in answer.metrics),
         evidence=tuple(
             DevEvidenceRefV2.model_validate(item.model_dump())

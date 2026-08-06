@@ -11,7 +11,6 @@ from pydantic import ValidationError
 
 from .contracts import (
     AnswerStatus,
-    DevActualCompletion,
     DevAnswer,
     DevClaim,
     DevContractVersions,
@@ -21,6 +20,17 @@ from .contracts import (
     DevModelMetadata,
     DevScopeResolution,
     DevToolResult,
+)
+from .status_completion_copy import (
+    INCOMPLETE_DENOMINATOR_DISCLOSURE,
+    any_tool_result_withheld_its_completion_denominator,
+    translate_reason_codes,
+)
+from .status_completion_copy import (
+    has_incomplete_denominator_disclosure as _has_incomplete_denominator_disclosure,
+)
+from .status_completion_copy import (
+    is_completion_assessment_untrustworthy as _completion_assessment_is_untrustworthy,
 )
 
 _NUMBER = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:[.,]\d+)*(?:%|\b)")
@@ -64,14 +74,15 @@ _NUMBER = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:[.,]\d+)*(?:%|\b)")
 # reader always sees the caveat verbatim alongside whatever else the
 # text says, which is a materially different risk than the caveat being
 # silently absent.
-INCOMPLETE_DENOMINATOR_DISCLOSURE = (
-    "the required-work completion total could not be fully verified"
-)
-
-
-def _has_incomplete_denominator_disclosure(text: str) -> bool:
-    return INCOMPLETE_DENOMINATOR_DISCLOSURE.casefold() in text.casefold()
-
+#
+# CHAOS-3377: this constant and the two predicates below (``_completion_
+# assessment_is_untrustworthy``/``any_tool_result_withheld_its_completion_
+# denominator``) now live in ``status_completion_copy.py`` -- imported above
+# -- so ``status_answer_render.py``'s deterministic §10 renderer can use the
+# identical disclosure obligation without importing this module (which now
+# also imports THAT module's reason-code translation table below, for
+# ``completion_truncation_detail``; the shared module exists specifically to
+# break that cycle).
 
 _NON_REPAIRABLE_VALIDATION_MARKERS = (
     "unknown evidence",
@@ -170,31 +181,9 @@ def _claim_has_grounding_reference(claim: DevClaim) -> bool:
 # denominator makes the count itself unknown; the general reason code
 # makes the REST of the evidence (blockers/PRs/CI/deployments/incidents)
 # behind that "complete" claim unknown, which is exactly as untrustworthy.
-_ASSESSMENT_SOURCE_LIMIT_REACHED = "assessment_source_limit_reached"
-
-
-def _completion_assessment_is_untrustworthy(actual: DevActualCompletion) -> bool:
-    return (
-        actual.required_child_total is None
-        or _ASSESSMENT_SOURCE_LIMIT_REACHED in actual.reason_codes
-    )
-
-
-def _any_tool_result_withheld_its_completion_denominator(
-    tool_results: tuple[DevToolResult, ...],
-) -> bool:
-    """Whether any executed tool in this run reported a completion
-    assessment that cannot be trusted to ground a completion claim
-    (CHAOS-3297 s2): either the denominator itself is withheld
-    (required_child_total is None, whenever the required-child source
-    was truncated), or assessment_source_limit_reached fired for any
-    other reason (round 9) -- see the module-level comment above.
-    """
-    return any(
-        result.actual_completion is not None
-        and _completion_assessment_is_untrustworthy(result.actual_completion)
-        for result in tool_results
-    )
+# See ``status_completion_copy.py`` for ``_completion_assessment_is_
+# untrustworthy``/``any_tool_result_withheld_its_completion_denominator``,
+# imported above.
 
 
 def completion_truncation_detail(tool_results: tuple[DevToolResult, ...]) -> str:
@@ -207,11 +196,20 @@ def completion_truncation_detail(tool_results: tuple[DevToolResult, ...]) -> str
     count -- never raw evidence/child content, so it stays safe to show
     verbatim in a terminal error message. Selection matches the trigger
     predicate above (round 9): either signal, not just a null total.
+
+    CHAOS-3377 defect 2: the reason codes are translated through the same
+    closed-vocabulary table ``status_answer_render.py`` uses, not rendered
+    raw -- this message is a ``DevError.safe_message``, which
+    ``no_match_terminal.user_visible_strings`` scans exactly like answer
+    prose, and the widened internal-token denylist (CHAOS-3377) would
+    otherwise fail this terminal closed on its own error message.
     """
     for result in tool_results:
         actual = result.actual_completion
         if actual is not None and _completion_assessment_is_untrustworthy(actual):
-            reasons = ", ".join(actual.reason_codes) or "unknown reason"
+            reasons = "; ".join(translate_reason_codes(actual.reason_codes)) or (
+                "an unknown reason"
+            )
             displayed = len(actual.required_children)
             return (
                 f"The required-work assessment could not verify a "
@@ -222,7 +220,7 @@ def completion_truncation_detail(tool_results: tuple[DevToolResult, ...]) -> str
     return "The required-work assessment could not verify a complete total."
 
 
-def _answer_has_material_grounding(answer: DevAnswer) -> bool:
+def answer_has_material_grounding(answer: DevAnswer) -> bool:
     """Whether the answer carries anything an evidence-linked reader could
     actually check: a metric, an evidence entry, or a claim that references
     at least one of either. A claim with no reference at all (an
@@ -475,7 +473,7 @@ def validate_answer_candidate(
             repairable=False,
         )
     completion_denominator_withheld = (
-        _any_tool_result_withheld_its_completion_denominator(context.tool_results)
+        any_tool_result_withheld_its_completion_denominator(context.tool_results)
     )
     for claim in answer.claims:
         if resolved_scope is not None and claim.validity_scope != resolved_scope:
@@ -533,12 +531,36 @@ def validate_answer_candidate(
             repairable=True,
         )
 
+    # CHAOS-3377 defect 1 (refusal ceiling): the mirror image of the
+    # CHAOS-3290 floor below. A model can self-declare
+    # ``AnswerStatus.REFUSED`` in the same free-form JSON it authors
+    # ``direct_summary``/``claims`` in, and nothing previously stopped it
+    # from doing so alongside real claim/metric/evidence grounding -- the
+    # live defect this ticket reports (a "Refused" chip over a fully
+    # substantive body). PRD §12's "a result with content is not a refusal"
+    # applies here exactly as it does to CHAOS-3367's no-match path: a
+    # refusal that carries material grounding is not an honest refusal, it
+    # is a mislabeled answer. ``repairable=True`` (not one of
+    # ``_NON_REPAIRABLE_VALIDATION_MARKERS``): this is a one-field labeling
+    # mistake the model can correct in the same bounded repair pass
+    # CHAOS-3257 already gives a status/coverage mismatch, by reissuing the
+    # same grounded content under an accurate status.
+    if answer.status is AnswerStatus.REFUSED and answer_has_material_grounding(answer):
+        raise AnswerValidationError(
+            "a refused answer cannot carry claim, metric, or evidence "
+            "grounding -- reissue with an accurate status (complete, "
+            "partial, degraded, or insufficient_evidence) for the evidence "
+            "already retrieved",
+            code="refused_with_material_grounding",
+            repairable=True,
+        )
+
     # CHAOS-3290 grounding floor -- see the constants above for the full
     # reasoning. Only reachable once every other invariant already passed,
     # so this never overrides a real rejection; it only catches the shape
     # those checks vacuously allow through: nothing to check because there
     # is nothing there.
-    if not _answer_has_material_grounding(answer):
+    if not answer_has_material_grounding(answer):
         summary = answer.direct_summary.strip()
         if answer.status is AnswerStatus.COMPLETE:
             if _tool_results_offer_groundable_material(context.tool_results):
@@ -586,6 +608,8 @@ __all__ = [
     "INCOMPLETE_DENOMINATOR_DISCLOSURE",
     "AnswerValidationContext",
     "AnswerValidationError",
+    "answer_has_material_grounding",
+    "any_tool_result_withheld_its_completion_denominator",
     "completion_truncation_detail",
     "validate_answer_candidate",
 ]

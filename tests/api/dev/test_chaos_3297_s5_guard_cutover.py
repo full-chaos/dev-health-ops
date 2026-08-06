@@ -641,7 +641,7 @@ def test_c4b_the_grounding_floor_can_never_reach_the_demotion_seam() -> None:
 
     from dev_health_ops.api.dev import answer_validator
 
-    source = inspect.getsource(answer_validator._answer_has_material_grounding)
+    source = inspect.getsource(answer_validator.answer_has_material_grounding)
     assert "answer.metrics" in source and "answer.evidence" in source, (
         "the floor no longer keys on answer.metrics/answer.evidence; the "
         "orchestrator's 'this branch cannot fire' reasoning must be re-derived"

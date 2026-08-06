@@ -36,6 +36,7 @@ from tests._chaos_3292_preflight import (
     ASK_DEV_PROJECT,
     ATLAS_PROJECT_ONE,
     ATLAS_PROJECT_TWO,
+    CHAOS_3388_ACR_PROJECT,
     NIGHTFALL_PROJECT,
     ORG_ID,
     OTHER_ORG_ID,
@@ -53,6 +54,7 @@ from tests._chaos_3292_preflight import (
     case_a9,
     case_a10,
     case_a11,
+    case_chaos_3388_acr_close_match,
     run_preflight_orchestrator,
 )
 
@@ -214,6 +216,47 @@ async def test_a3_ledger_records_both_authorized_candidates() -> None:
     assert result.terminating_resolution_entry == entry
     assert result.answer is not None
     assert result.answer.frame.clarification_candidates == entry.candidates
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3388 -- an acronym-named subject with no literal catalog match
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chaos_3388_acronym_named_subject_never_reaches_the_grounding_floor() -> (
+    None
+):
+    """Orchestrator-level repro of the wrong-terminal defect (CHAOS-3388).
+
+    "What's the status of the ACR Project ...?" against a catalog holding
+    "Dev Health Agent Context Runtime (Context Fabric)" must terminate at
+    the preflight, deterministically, before a single provider token is
+    spent -- never fall through to the model loop and never surface the
+    generic ``insufficient_evidence`` grounding-floor error the live
+    incident actually reported.
+    """
+
+    output = await case_chaos_3388_acr_close_match()
+
+    assert output.result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert output.result.error is not None
+    # The live incident's actual symptom -- never again for this shape.
+    assert output.result.error.code != "insufficient_evidence"
+    assert output.result.error.code == "scope_ambiguous"
+    assert CHAOS_3388_ACR_PROJECT.label in output.result.error.safe_message
+
+    # The deterministic preflight decided this alone -- the model never ran.
+    assert _subject_bearing_calls(output) == []
+    assert output.calls == []
+    assert output.provider is not None
+    assert output.provider.tool_ids == []
+
+
+@pytest.mark.asyncio
+async def test_chaos_3388_is_deterministic_across_twenty_runs() -> None:
+    results = await _twenty(case_chaos_3388_acr_close_match)
+    assert len(set(results)) == 1
 
 
 @pytest.mark.asyncio

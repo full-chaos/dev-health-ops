@@ -247,7 +247,7 @@ ci_tests() {
   local cov_args=(tests -v --tb=short -m "not benchmark and not clickhouse"
     --ignore=tests/test_connectors_integration.py
     --ignore=tests/test_private_repo_access.py
-    --cov=. --cov-report=xml --cov-report=term-missing
+    --cov=. --cov-report=xml:coverage.xml --cov-report=term-missing
     --cov-fail-under="${coverage_threshold}")
   # pytest-cov aggregates per-worker coverage automatically under xdist, so the
   # --cov-fail-under gate still evaluates the combined total across workers.

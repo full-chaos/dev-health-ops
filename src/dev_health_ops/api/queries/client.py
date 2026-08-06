@@ -12,6 +12,10 @@ import clickhouse_connect
 from dev_health_ops.api.services.auth import get_current_org_id
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.metrics.sinks.clickhouse.connection import (
+    clickhouse_client_kwargs,
+    redact_clickhouse_uri,
+)
 from dev_health_ops.metrics.sinks.factory import create_sink
 
 logger = logging.getLogger(__name__)
@@ -30,7 +34,9 @@ async def get_global_sink(dsn: str) -> BaseMetricsSink:
         _SHARED_SINK = None
 
     if _SHARED_SINK is None:
-        logger.info("Initializing global metrics sink for %s", dsn)
+        logger.info(
+            "Initializing global metrics sink for %s", redact_clickhouse_uri(dsn)
+        )
         _SHARED_SINK = create_sink(dsn)
         _SHARED_DSN = dsn
         logger.info("Metrics sink initialized")
@@ -155,7 +161,9 @@ async def query_dicts(
 
         def _thread_query() -> list[dict[str, Any]]:
             client = clickhouse_connect.get_client(
-                dsn=dsn, settings={"max_query_size": 1 * 1024 * 1024}
+                **clickhouse_client_kwargs(
+                    dsn, settings={"max_query_size": 1 * 1024 * 1024}
+                )
             )
             try:
                 result = client.query(query, parameters=params)

@@ -220,6 +220,11 @@ def test_every_blocking_matrix_category_is_represented() -> None:
         "blocking_matrix",
         "gate",
         "mutation_proof",
+        # CHAOS-3408/3409/3421: the later "org-pinned wrong-subject +
+        # 0-of-0 readiness answer" investigation's own defect set --
+        # deliberately a distinct category from original_defect_
+        # reproduction (CHAOS-3292's), not folded into it.
+        "readiness_and_resolution_safety_defect_reproduction",
     }
 
 
@@ -266,16 +271,19 @@ def test_health_workload_deficiency_portfolio_flip_after_stack3_wiring() -> None
 
 
 def test_health_workload_deficiency_portfolio_items_still_honestly_blocked() -> None:
-    """The three rows the 2026-08-03 map found no adequate citation for --
-    or that are deliberately, permanently out of scope this wave -- must
-    stay ``blocked`` rather than force-fit to a weak analogue. A future
-    change that flips one of these without a genuinely matching test (or,
-    for the portfolio row, an actual StepContext-widening fix) would be a
+    """The rows the 2026-08-03 map found no adequate citation for must stay
+    ``blocked`` rather than force-fit to a weak analogue. A future change
+    that flips one of these without a genuinely matching test would be a
     false-green regression this test exists to catch.
+
+    CHAOS-3393: ``matrix.organization-portfolio-status`` is no longer one
+    of these -- it flipped to ``proven_unit`` (a real StepContext-widening
+    fix landed, with matching orchestrator-level tests); see
+    ``test_plan_registry_gap_gates_are_proven_at_unit_and_e2e_level``'s
+    neighbors for its own coverage.
     """
 
     blocked_ids = {
-        "matrix.organization-portfolio-status",
         "matrix.project-health-unknown-not-applicable",
         "matrix.light-on-feature-work",
     }
@@ -504,15 +512,26 @@ def test_every_blocked_item_reason_matches_independent_snapshot() -> None:
         assert by_id[item_id].blocked_reason == blocked_snapshot[item_id], item_id
 
 
-def test_blocked_reason_mutation_is_actually_caught() -> None:
+def test_blocked_reason_mutation_is_actually_caught(monkeypatch) -> None:
     """RED-then-GREEN proof for the fix above: plant codex's exact
     demonstrated bypass (a reason that is 'fabricated but nonempty') on a
     real blocked item and confirm the independent-snapshot check -- not
     validate_manifest's non-empty check -- is what catches it.
+
+    The declaration set is emptied because this validates a SYNTHETIC
+    one-item manifest: every real ``DECLARED_STALE_ARTIFACTS`` entry names a
+    row that manifest does not contain, and the cross-check would rightly
+    report each as acknowledging nothing. That is a different assertion than
+    the one this test makes, and letting it fire here would turn a targeted
+    RED-then-GREEN proof into a test that fails for an unrelated reason.
     """
 
+    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
+    # CHAOS-3393: matrix.organization-portfolio-status flipped to
+    # proven_unit (status.portfolio.v1 is wired now), so this RED-then-
+    # GREEN proof uses a different item that is still genuinely blocked.
     fabricated = ManifestItem(
-        id="matrix.organization-portfolio-status",
+        id="matrix.project-health-unknown-not-applicable",
         category="blocking_matrix",
         description="mutated",
         status="blocked",
@@ -630,7 +649,13 @@ def test_validate_manifest_catches_unknown_status() -> None:
 
 def test_validate_manifest_is_clean_over_a_single_well_formed_item(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    # Synthetic one-item manifest: see the note on the same monkeypatch in
+    # test_blocked_reason_mutation_is_actually_caught. "Clean" here means
+    # this item is well formed, not that the repository's real declaration
+    # set happens to be empty.
+    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
     commit_sha = _init_throwaway_git_repo(tmp_path)
     artifact_path = _write_valid_artifact(
         tmp_path,

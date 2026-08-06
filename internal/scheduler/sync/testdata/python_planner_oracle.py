@@ -105,6 +105,15 @@ _module(
 _module(
     "dev_health_ops.sync.watermarks",
     get_watermark_with_overlap=lambda *_args: None,
+    # CHAOS-3412 gave planner.py a second dependency on this module:
+    # ``_effective_heavy_max_window_days`` and ``_watermark_stamping_window``
+    # both read the configured watermark overlap. The stub must expose the name
+    # or planner.py fails to IMPORT (verified: the oracle died with
+    # ImportError until this was added). ``_planned`` re-binds it per case to
+    # that case's own overlap, so the Python side clamps against exactly the
+    # overlap the Go side is handed in PlannerInput.WatermarkOverlap rather
+    # than against this process's ambient environment.
+    _watermark_overlap_seconds=lambda: 0,
 )
 planner = _load("dev_health_ops.sync.planner", SOURCE / "sync/planner.py")
 trigger_routing = _load(
@@ -176,8 +185,20 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
         (str(row["source_id"]), str(row["dataset_key"])): _instant(str(row["at"]))
         for row in _rows(case.get("watermarks"), "watermarks", allow_none=True)
     }
-    overlap = _integer(
-        case.get("watermark_overlap_seconds", 0), "watermark_overlap_seconds"
+    # max(0, ...) is production behaviour, not oracle convenience: the real
+    # _watermark_overlap_seconds clamps to zero
+    # (src/dev_health_ops/sync/watermarks.py:120,
+    # `max(0, int(os.getenv("SYNC_WATERMARK_OVERLAP", "0")))`), and the Go
+    # planner clamps identically at every use site
+    # (resolveWindowStart's `max(input.WatermarkOverlap, 0)`). An oracle that
+    # subtracted a NEGATIVE overlap directly would push the window start
+    # FORWARD -- behaviour neither implementation has -- so a negative fixture
+    # would measure the oracle against itself and report a divergence that does
+    # not exist in production. Clamp here so a negative case exercises the real
+    # clamp on both sides instead.
+    overlap = max(
+        0,
+        _integer(case.get("watermark_overlap_seconds", 0), "watermark_overlap_seconds"),
     )
 
     def watermark(
@@ -187,7 +208,18 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
         return value - timedelta(seconds=overlap) if value is not None else None
 
     setattr(planner, "get_watermark_with_overlap", watermark)
+    # The case's overlap, not the process environment: the same value the Go
+    # planner receives as PlannerInput.WatermarkOverlap, so the C8 cap clamp and
+    # the C10(a) recovery window are computed from identical inputs on both
+    # sides. planner.py imported this name into its own namespace, so rebinding
+    # it on the module object is what _effective_heavy_max_window_days and
+    # _watermark_stamping_window actually call.
+    setattr(planner, "_watermark_overlap_seconds", lambda: overlap)
     setattr(planner, "_get_tier_backfill_days_cap", lambda *_args: case.get("tier_cap"))
+    # Each case is an independent process-wide configuration; without this a
+    # clamp warned about in an earlier case would be suppressed in a later one,
+    # making the "warn once" guard order-dependent across the batch.
+    planner._WARNED_CAP_CLAMPS.clear()
     integration = SimpleNamespace(
         id=case["integration_id"],
         org_id=case["org_id"],

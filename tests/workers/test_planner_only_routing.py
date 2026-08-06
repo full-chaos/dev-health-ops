@@ -298,7 +298,12 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
         unit.dataset_key
         for unit in db_session.query(SyncRunUnit).order_by(SyncRunUnit.dataset_key)
     }
-    assert dataset_keys == {"commits", "security"}
+    # CHAOS-3400: `security` is opt-in like every other dataset -- only
+    # `commits` was seeded/enabled, so only `commits` plans. Prior to that
+    # fix, a scheduled code-host sync silently auto-enabled `security` even
+    # though it was never selected; this assertion used to read
+    # {"commits", "security"}, encoding that bug as expected behaviour.
+    assert dataset_keys == {"commits"}
 
 
 # ---------------------------------------------------------------------------

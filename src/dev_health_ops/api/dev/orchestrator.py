@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
@@ -50,17 +50,21 @@ from dev_health_ops.metrics.prometheus import (
 
 from . import terminal_frames
 from .answer_frames import narrative_fallback
+from .answer_text_sanitizer import sanitize_model_text
 from .answer_validator import (
     AnswerValidationContext,
     AnswerValidationError,
+    any_tool_result_withheld_its_completion_denominator,
     completion_truncation_detail,
     validate_answer_candidate,
 )
 from .contracts import (
     AnswerStatus,
     DevAnswer,
+    DevClaim,
     DevContractVersions,
     DevCoverage,
+    DevEntityRef,
     DevError,
     DevEvidenceRef,
     DevMessageRequest,
@@ -71,6 +75,7 @@ from .contracts import (
     DevToolRequest,
     DevToolResult,
     DirectScope,
+    EntityType,
     FreshnessState,
     MetricID,
     QuestionClass,
@@ -90,14 +95,16 @@ from .contracts_v2.base import SourceRequirementState
 from .contracts_v2.frame import DevAnswerFrame
 from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
+from .contracts_v2.subject import DevEntityRefV2
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .no_match_terminal import (
     attested_strings,
-    internal_token_leak,
+    internal_token_leak_field,
     named_subject_not_found_answer,
+    scrub_auxiliary_leaks,
     user_supplied_subject_label,
-    user_visible_strings,
+    user_visible_strings_by_field,
 )
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
@@ -107,6 +114,14 @@ from .preflight_outcomes import (
     project_preflight_error,
 )
 from .prompts import PromptComposer, PromptConversationTurn
+from .status_answer_render import (
+    build_deterministic_status_claims,
+    deterministic_answer_status,
+    render_declared_project_summary,
+    render_portfolio_summary,
+    render_verdict_summary,
+    status_snapshot_result,
+)
 from .subject_preflight import (
     SUBJECT_BEARING_TOOLS,
     PreflightDecision,
@@ -179,6 +194,40 @@ _ENTITY_NOUN_LEADING = re.compile(
 )
 
 
+def _project_scope_from_ref(
+    ref: DevEntityRefV2, *, org_id: str, base_scope: DevScope
+) -> DevScope:
+    """CHAOS-3393: one committed cohort/org-wide subject-set entry -> a
+    real, single-project ``DevScope`` -- the same ``DirectScope.PROJECT``
+    shape ``ScopeResolutionService.committed_resolution_for`` builds for a
+    SINGULAR commit, adapted for a v2 ``DevEntityRefV2`` input (a subject
+    set entry has no ``AuthorizedEntity`` to reuse that constructor with).
+    Inherits the run's own ``time_range``/``comparison_range`` from
+    ``base_scope`` -- exactly like every other committed scope construction
+    in this module. Callers restrict ``ref.entity_kind`` to PROJECT before
+    reaching here (the only kind ``status.portfolio.v1`` supports today).
+    """
+
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id=org_id,
+        direct_scope=DirectScope.PROJECT,
+        repositories=[],
+        entity_refs=[
+            DevEntityRef(
+                entity_type=EntityType.PROJECT,
+                entity_id=ref.entity_id,
+                display_label=ref.display_label,
+                repository_id=ref.repository_id,
+            )
+        ],
+        team_ids=[],
+        time_range=base_scope.time_range,
+        comparison_range=base_scope.comparison_range,
+        surface_context=None,
+    )
+
+
 def _named_entity_phrases(text: str) -> frozenset[str]:
     phrases = set(_NAMED_ENTITY_REFERENCE.findall(text))
     phrases.update(_NAMED_ENTITY_NOUN_STATUS.findall(text))
@@ -233,6 +282,11 @@ SERVER_GROUNDED_WARNING = (
 #: says what the verdict was.
 GUARD_DEMOTED_NAMED_ENTITY_STATUS = "advisory_named_entity"
 GUARD_DEMOTED_GROUNDING_FLOOR_STATUS = "advisory_grounding_floor"
+#: CHAOS-3377 defect 1: a model that still self-declared ``status=refused``
+#: over material grounding after its one repair attempt is demoted the same
+#: way a grounding-floor violation is -- never a hard FAILED, which would
+#: throw away real evidence the run already retrieved.
+GUARD_DEMOTED_REFUSAL_STATUS = "advisory_refused_with_grounding"
 
 _LEGACY_GUARD_TERMINALS: dict[str, tuple[str, str]] = {
     "resolve_scope_ambiguous": (
@@ -360,6 +414,19 @@ class RunRecorder(Protocol):
 
     async def record_answer(self, answer: DevAnswer) -> None: ...
 
+    async def record_error_message(
+        self, error: DevError, *, scope_snapshot: Mapping[str, Any]
+    ) -> None:
+        """Persist one assistant ``dev_messages`` row for a no-answer terminal (CHAOS-3423).
+
+        Called from ``finish()`` for every terminal that carries an ``error``
+        and no ``answer`` -- a clarification or any other orchestrator/
+        preflight error code -- so the conversation transcript always has a
+        row for the turn, mirroring what ``record_answer`` already does for
+        a genuine answer.
+        """
+        ...
+
     async def record_preflight(
         self,
         *,
@@ -483,6 +550,11 @@ class NullRunRecorder:
 
     async def record_answer(self, answer: DevAnswer) -> None:
         del answer
+
+    async def record_error_message(
+        self, error: DevError, *, scope_snapshot: Mapping[str, Any]
+    ) -> None:
+        del error, scope_snapshot
 
     async def record_preflight(
         self,
@@ -737,6 +809,27 @@ class DevOrchestrator:
         # it, without threading a new parameter through every one of
         # `finish()`'s ~35 call sites.
         investigation_result: DevInvestigationResult | None = None
+        # CHAOS-3393: mirrors investigation_result's own free-variable
+        # posture -- set below when a PLURAL_COHORT/ORGANIZATION_WIDE
+        # status.portfolio.v1 run actually executes against a committed
+        # DevSubjectSet, read by `finish()`'s closure so the frame it builds
+        # can carry `subject_set_ref` (never alongside `subject_ref`, which
+        # `wrap_legacy_answer_as_frame` never sets today).
+        portfolio_subject_set_ref: str | None = None
+        #: CHAOS-3393: the committed DevSubjectSet's own disclosure strings
+        #: (an omitted named mention, or an ORGANIZATION_WIDE enumeration
+        #: truncated at the batch cap) -- folded into render_portfolio_
+        #: summary's direct_summary below, since wrap_legacy_answer_as_
+        #: frame's own `limitations` never reads DevSubjectSet.warnings.
+        portfolio_subject_set_warnings: tuple[str, ...] = ()
+        #: CHAOS-3393 codex MED-2: the committed DevSubjectSet's own,
+        #: catalog-confirmed project display labels -- attested at the
+        #: finish() leak-scan seam (the same trust tier attested_strings
+        #: already grants evidence/candidate display labels) so a
+        #: legitimate project whose real name coincidentally matches an
+        #: internal denylisted token is never fail-closed over that
+        #: collision.
+        portfolio_attested_labels: tuple[str, ...] = ()
 
         async def transition(state: RunState, safe_code: str | None = None) -> None:
             event = OrchestratorEvent(state=state, safe_code=safe_code)
@@ -752,6 +845,7 @@ class DevOrchestrator:
             error: DevError | None = None,
             frame_already_recorded: bool = False,
             grounding_validation_status: str | None = None,
+            extra_attested: tuple[str, ...] = (),
         ) -> OrchestratorResult:
             nonlocal terminal_written
             if terminal_written:
@@ -772,35 +866,118 @@ class DevOrchestrator:
             # legitimately appears in copy (pinned by
             # test_no_match_terminal.py), so this must never fire on a
             # healthy run.
-            leaked_token = internal_token_leak(
-                user_visible_strings(answer=answer, error=error),
+            #
+            # CHAOS-3388 codex re-review (HIGH, confirmed): ``extra_attested``
+            # is the narrowly-scoped escape hatch for a caller that built its
+            # `error` from server-authorized data ``attested_strings`` cannot
+            # see (it reads only off ``answer``, which is ``None`` on an
+            # error-only path). The preflight TERMINATE branch is the one
+            # caller that passes it today: ``project_preflight_error``
+            # interpolates the same catalog-confirmed candidate display
+            # labels the persisted frame already carries
+            # (``clarification_candidates`` -- CHAOS-3325) into
+            # ``safe_message``, so those exact labels are attested here too,
+            # the same trust tier as everything else this scan already
+            # exempts.
+            attested = attested_strings(answer, request.question) + extra_attested
+            # CHAOS-3377 leak-hardening: scrub model-authored AUXILIARY
+            # fields (warnings/conflicts/suggested_follow_up_questions/
+            # resolved_scope.warnings) BEFORE the fail-closed scan below --
+            # not after. `_deterministic_status_render` overwrites status/
+            # direct_summary/claims once a bound status_snapshot.v1 result
+            # exists, but leaves those four fully model-authored; a model
+            # that has seen a tool result's raw actual_completion.
+            # reason_codes can echo one into any of them, and without this
+            # the scan below would destroy the entire safe, deterministic
+            # answer over one leaked auxiliary sentence (live incident: run
+            # 22f97bee-0b8b-44a5-979f-78d7d7a80a82). direct_summary/claims
+            # are deliberately NOT touched here -- see
+            # `no_match_terminal.scrub_auxiliary_leaks`'s docstring for why
+            # a leak reaching those must still fail the whole terminal
+            # closed, exactly as before this scrub existed.
+            if answer is not None:
+                answer, scrubbed_fields = scrub_auxiliary_leaks(
+                    answer, attested=attested
+                )
+                if scrubbed_fields:
+                    logger.warning(
+                        "ask_dev.orchestrator.internal_token_leak_scrubbed "
+                        f"run_id={run_id} fields={','.join(scrubbed_fields)}",
+                        extra={"run_id": run_id, "fields": scrubbed_fields},
+                    )
+            leaked = internal_token_leak_field(
+                user_visible_strings_by_field(answer=answer, error=error),
                 # Provenance, so an authorized entity whose real name looks
                 # like an enum member does not fail its own answer. See
                 # `no_match_terminal.internal_token_leak`.
-                attested=attested_strings(answer, request.question),
+                attested=attested,
             )
-            if leaked_token is not None:
+            if leaked is not None:
+                leaked_field, leaked_token = leaked
+                terminal_kind = "answer" if answer is not None else "error"
+                # The token AND the field it was found in, embedded directly
+                # in the message string -- not only `extra=`. This dev
+                # stack's own LOG_JSON=0 configuration proved `extra=` keys
+                # are silently dropped by a bare-message StreamHandler (no
+                # formatter references them), which is exactly why the live
+                # incident's log line carried no diagnostic detail at all.
+                # Internal log only: never in `safe_message` or any
+                # persisted user-visible field.
                 logger.error(
-                    "ask_dev.orchestrator.internal_token_leak",
+                    "ask_dev.orchestrator.internal_token_leak "
+                    f"run_id={run_id} field={leaked_field} token={leaked_token} "
+                    f"terminal_kind={terminal_kind}",
                     extra={
                         "run_id": run_id,
                         "token": leaked_token,
-                        "terminal_kind": "answer" if answer is not None else "error",
+                        "field": leaked_field,
+                        "terminal_kind": terminal_kind,
                     },
                 )
                 ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL.labels(
                     token=leaked_token,
-                    terminal_kind="answer" if answer is not None else "error",
+                    terminal_kind=terminal_kind,
                 ).inc()
-                state = RunState.FAILED
                 answer = None
-                error = DevError(
-                    schema_version="dev_error.v1",
-                    request_id=request.request_id,
-                    code="internal_error",
-                    safe_message="The request could not be completed.",
-                    retryable=False,
-                )
+                # CHAOS-3421: a leak on the ONE preflight branch that sets
+                # `legacy_guard_required` (subject_preflight's
+                # `unresolved_untyped` -> `proceeded_unresolved_bare_name`,
+                # an intentional, disclosed organization-wide fallback for a
+                # named subject the catalog could not confirm) is not a
+                # producer defect to hide behind a generic, opaque
+                # `internal_error` -- it is very often exactly the model
+                # echoing the raw `forbidden_or_not_found` outcome
+                # `resolve_scope.v1` returned for that same unresolved name
+                # (live incident). That run was always heading toward the
+                # legacy guard's own `resolve_scope_not_found` terminal
+                # (`_LEGACY_GUARD_TERMINALS`) -- reachable today only when
+                # the model's prose happens to NARRATE the unresolved name
+                # (`_legacy_named_entity_guard_reason`'s own text-similarity
+                # check), not when it leaks the raw outcome token instead.
+                # This closes that gap at the one shared choke-point every
+                # terminal passes through, rather than trying to anticipate
+                # every shape a leak on this branch could take.
+                if (
+                    preflight_result is not None
+                    and preflight_result.legacy_guard_required
+                ):
+                    state = RunState.INSUFFICIENT_EVIDENCE
+                    error = DevError(
+                        schema_version="dev_error.v1",
+                        request_id=request.request_id,
+                        code="scope_not_found",
+                        safe_message="The requested scope was not found.",
+                        retryable=False,
+                    )
+                else:
+                    state = RunState.FAILED
+                    error = DevError(
+                        schema_version="dev_error.v1",
+                        request_id=request.request_id,
+                        code="internal_error",
+                        safe_message="The request could not be completed.",
+                        retryable=False,
+                    )
             # CHAOS-3297 Codex review round 3 Finding 2: materialize and
             # validate the terminal error input before any record_*() write
             # is attempted -- not after answer/frame are already flushed on
@@ -885,6 +1062,54 @@ class DevOrchestrator:
                         safe_message="The validated answer could not be stored.",
                         retryable=True,
                     )
+            error_message_written = False
+            if answer is None and error is not None:
+                # CHAOS-3423: a deliberate second check, not `elif` chained
+                # to the block above -- the answer-write-failure branch just
+                # above can itself rewrite `answer` to None and mint a fresh
+                # `error`, and that terminal needs a transcript row exactly
+                # as much as one that started life as an error. Every
+                # no-answer terminal in this module reaches here with a
+                # non-None `error` (every `finish()` call site either passes
+                # one or the outer catch-all builds one), so this is
+                # effectively unconditional for that whole class of run --
+                # never only the clarification/preflight shape.
+                try:
+                    await self._recorder.record_error_message(
+                        error, scope_snapshot=request.scope.model_dump(mode="json")
+                    )
+                    # CHAOS-3423 Codex adversarial review (HIGH, confirmed):
+                    # tracked so the frame-write-failure rollback below can
+                    # tell "nothing written in this flush yet" (the
+                    # pre-existing case its own `if answer is None: rollback()`
+                    # was written for) apart from "the no-answer transcript
+                    # row already flushed" -- a plain session.rollback() here
+                    # is NOT commit-scoped (this row isn't durable until the
+                    # caller's own session.commit() at the very end of the
+                    # request), so it would silently discard this row on a
+                    # frame-construction/write failure, reintroducing the
+                    # exact "no transcript row for a no-answer terminal" gap
+                    # this method exists to close.
+                    error_message_written = True
+                except Exception as error_message_write_fault:
+                    # Best-effort, mirroring record_frame's own failure
+                    # handling below: a transcript-row write failure must
+                    # never crash or further degrade an otherwise-terminal
+                    # run. `error` is already authoritative for replay via
+                    # `terminal_error_payload` (persisted by `terminal()`
+                    # below, which reads that column directly, never this
+                    # row) -- only this turn's transcript/prompt-history
+                    # rendering is degraded.
+                    logger.exception(
+                        "ask_dev.orchestrator.error_message_write_fault",
+                        extra={
+                            "run_id": run_id,
+                            "exception_type": type(error_message_write_fault).__name__,
+                        },
+                    )
+                    ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                        exception_type=type(error_message_write_fault).__name__
+                    ).inc()
             # CHAOS-3297 stack #4: populated only inside the frame-construction
             # branch below (frame_already_recorded=True has no local `frame`
             # to synthesize a narrative from -- the preflight TERMINATE branch
@@ -910,6 +1135,7 @@ class DevOrchestrator:
                             answer,
                             run_id=run_id,
                             investigation_result=investigation_result,
+                            subject_set_ref=portfolio_subject_set_ref,
                         )
                         if answer is not None
                         else terminal_frames.build_error_frame(
@@ -979,19 +1205,40 @@ class DevOrchestrator:
                     # never strand or crash an otherwise-successful run -- the
                     # v1 answer/error above is authoritative and safe to
                     # terminate on alone.
-                    if answer is None:
+                    if answer is None and not error_message_written:
                         # No prior write in this flush to protect, so it is
                         # safe to roll back a poisoned session -- otherwise
                         # the terminal() write below could raise
                         # PendingRollbackError (mirrors the preflight
                         # TERMINATE branch, CHAOS-3297 Codex review).
                         await self._recorder.rollback()
-                    # else: record_answer already succeeded in this flush.
-                    # Rolling back here would discard that write over an
-                    # unrelated frame failure -- a dropped frame is
-                    # recoverable, a dropped answer is not, so this path
-                    # deliberately leaves the session as-is and proceeds
-                    # frame-less.
+                    # else: record_answer (answer is not None) or
+                    # record_error_message (CHAOS-3423 Codex adversarial
+                    # review, HIGH: error_message_written) already succeeded
+                    # in this flush. Rolling back here would discard that
+                    # write over an unrelated frame failure -- a dropped
+                    # frame is recoverable, a dropped answer/transcript row
+                    # is not, so this path deliberately leaves the session
+                    # as-is and proceeds frame-less.
+                    #
+                    # Codex adversarial review round 2 (honest residual, not
+                    # closed here): if `record_frame`'s failure was a real
+                    # mid-flush database error (not a pre-flush/construction
+                    # exception), the session may already be rollback-only,
+                    # and the `terminal()` write further below could still
+                    # raise `PendingRollbackError` regardless of this
+                    # branch -- a pre-existing risk this codebase already
+                    # accepts for a real `DevAnswer` (see
+                    # `DevPersistenceService.force_terminal_fallback`'s own
+                    # docstring, CHAOS-3297 round 3 Finding 2: the system
+                    # still reaches a coherent terminal state via that
+                    # fresh-session fallback, but the just-flushed row can
+                    # rarely be lost in that narrow correlated-failure
+                    # window). This makes the no-answer path symmetric with
+                    # that existing tradeoff, not worse than it -- closing
+                    # it for both would mean SAVEPOINT-wrapping
+                    # `record_frame`/`record_narrative` generally, out of
+                    # this ticket's scope.
                 else:
                     # CHAOS-3297 stack #4: narrative synthesis only runs for
                     # a frame that actually persisted -- record_narrative's
@@ -1190,9 +1437,142 @@ class DevOrchestrator:
                     await self._recorder.record_subject_set(
                         preflight_result.subject_set
                     )
+                if (
+                    preflight_result.decision is PreflightDecision.PROCEED
+                    and preflight_result.ledger is not None
+                ):
+                    # CHAOS-3424: until this, dev_run_resolutions was only
+                    # ever appended from the TERMINATE branch below (one
+                    # entry, the ambiguous mention that produced the
+                    # frame's own clarification_candidates) -- every PROCEED
+                    # decision left the ledger this preflight already built
+                    # entirely unpersisted, including the organization-wide
+                    # widening fallback for an unresolved bare name
+                    # (`proceeded_unresolved_bare_name`). That is exactly
+                    # the run shape a widening/wrong-subject incident needs
+                    # to be auditable from data instead of a container log
+                    # line (live 2026-08-05 diagnosis, CHAOS-3421). Every
+                    # entry, in the ledger's own ordinal order -- not just
+                    # the mention(s) that ended up unresolved -- so a
+                    # cohort question's exact_match entries stay alongside
+                    # the ones that widened, exactly as the ledger recorded
+                    # them. Scoped to PROCEED only: TERMINATE's own single
+                    # terminating-entry write below already covers that
+                    # branch (and shares its `entry_ordinal` with this same
+                    # ledger), so persisting the whole ledger there too
+                    # would double-insert into the same
+                    # (run_id, entry_ordinal) unique constraint.
+                    try:
+                        for resolution_entry in preflight_result.ledger.entries:
+                            await self._recorder.append_resolution(resolution_entry)
+                    except Exception as ledger_write_fault:
+                        # CHAOS-3424 Codex adversarial review (HIGH,
+                        # confirmed): a database-layer failure on ANY entry
+                        # here marks the session rollback-only -- every
+                        # later write in finish() (record_answer/
+                        # record_error_message/terminal) would then raise
+                        # PendingRollbackError on its own next flush,
+                        # degrading an ordinary PROCEED into an
+                        # unrecoverable run over what should be best-effort
+                        # forensic telemetry. Mirrors the TERMINATE branch's
+                        # own rollback + re-persist pattern immediately
+                        # below: a dropped ledger (whole, never partial --
+                        # rollback discards every entry this loop already
+                        # flushed, not just the one that failed) is
+                        # recoverable, a stranded run is not. Re-persists
+                        # the preflight diagnostics this same rollback also
+                        # discards, for the identical reason the TERMINATE
+                        # branch's own comment gives.
+                        #
+                        # Codex adversarial review round 3 (HIGH, confirmed):
+                        # the rollback above was previously silent -- unlike
+                        # every sibling failure handler in this module
+                        # (answer_write_fault, frame_construction_failed,
+                        # error_message_write_fault, ...), a lost ledger
+                        # left no log line and no metric, so the exact
+                        # forensic gap CHAOS-3424 exists to close could
+                        # itself go unnoticed. Logged and counted the same
+                        # way every other one of those does.
+                        logger.exception(
+                            "ask_dev.orchestrator.resolution_ledger_write_fault",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(ledger_write_fault).__name__,
+                            },
+                        )
+                        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                            exception_type=type(ledger_write_fault).__name__
+                        ).inc()
+                        await self._recorder.rollback()
+                        await self._recorder.record_preflight(
+                            preflight_outcome=preflight_result.diagnostic,
+                            legacy_guard_reason=None,
+                        )
+                        if preflight_result.subject_set is not None:
+                            await self._recorder.record_subject_set(
+                                preflight_result.subject_set
+                            )
                 if preflight_result.decision is PreflightDecision.TERMINATE:
                     assert preflight_result.answer is not None
                     assert preflight_result.outcome is not None
+                    preflight_error = project_preflight_error(
+                        preflight_result.answer, request_id=request.request_id
+                    )
+                    # CHAOS-3388 codex re-review (HIGH, confirmed): the
+                    # candidate display labels this error's ``safe_message``
+                    # may interpolate (``project_preflight_error`` /
+                    # ``_name_candidates``) are the SAME catalog-confirmed
+                    # entities the frame below persists as
+                    # ``clarification_candidates`` -- authorized data, the
+                    # same trust tier ``finish()``'s own ``attested_strings``
+                    # already exempts off ``DevAnswer``. This path builds no
+                    # ``DevAnswer`` (it is error-only), so without this the
+                    # exemption never applied and a candidate label that
+                    # happened to contain a denylisted token (a real live
+                    # shape -- see ``no_match_terminal.internal_token_leak``'s
+                    # own docstring example) fail-closed rewrote the terminal
+                    # to a bare ``internal_error`` *after* the richer frame
+                    # below was already recorded, leaving the two
+                    # permanently inconsistent.
+                    #
+                    # The fix decides frame persistence and the terminal
+                    # error from the SAME leak scan ``finish()`` will run, so
+                    # the two can never disagree: attest the candidate labels
+                    # up front, and if the scan still flags something despite
+                    # that (a genuine leak, not a candidate-label collision),
+                    # skip the richer frame entirely rather than persist one
+                    # the terminal below will contradict.
+                    candidate_attestation = tuple(
+                        candidate.entity_ref.display_label
+                        for candidate in preflight_result.answer.frame.clarification_candidates
+                    )
+                    preflight_leak = internal_token_leak_field(
+                        user_visible_strings_by_field(error=preflight_error),
+                        attested=attested_strings(None, request.question)
+                        + candidate_attestation,
+                    )
+                    if preflight_leak is not None:
+                        leaked_field, leaked_token = preflight_leak
+                        logger.error(
+                            "ask_dev.orchestrator.preflight_frame_leak_guard "
+                            f"run_id={run_id} field={leaked_field} "
+                            f"token={leaked_token}",
+                            extra={
+                                "run_id": run_id,
+                                "token": leaked_token,
+                                "field": leaked_field,
+                            },
+                        )
+                        ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL.labels(
+                            token=leaked_token, terminal_kind="error"
+                        ).inc()
+                        return await finish(
+                            RunState.FAILED,
+                            error=error(
+                                "internal_error",
+                                "The request could not be completed.",
+                            ),
+                        )
                     # CHAOS-3297: persist the frame the preflight already
                     # built *before* finishing the run, so the terminal
                     # state and the frame's contract_generation='v2' tag
@@ -1239,10 +1619,9 @@ class DevOrchestrator:
                         )
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
-                        error=project_preflight_error(
-                            preflight_result.answer, request_id=request.request_id
-                        ),
+                        error=preflight_error,
                         frame_already_recorded=True,
+                        extra_attested=candidate_attestation,
                     )
                 if preflight_result.committed_resolution is not None:
                     committed = preflight_result.committed_resolution
@@ -1320,6 +1699,19 @@ class DevOrchestrator:
                     plan_eligible = (
                         plan_eligible and preflight_result.has_committed_subject
                     )
+                elif cardinality in (
+                    Cardinality.PLURAL_COHORT,
+                    Cardinality.ORGANIZATION_WIDE,
+                ):
+                    # CHAOS-3393: a cohort/org-wide plan step (status.
+                    # portfolio.v1) needs the several committed per-subject
+                    # scopes StepContext.subject_set_scopes carries -- there
+                    # is nothing to batch over without a committed
+                    # DevSubjectSet, mirroring the SINGULAR branch's
+                    # has_committed_subject gate one line up.
+                    plan_eligible = (
+                        plan_eligible and preflight_result.subject_set is not None
+                    )
                 if plan_eligible:
                     assert plan is not None
                     await transition(RunState.TOOL_EXECUTION)
@@ -1328,6 +1720,29 @@ class DevOrchestrator:
                         if cardinality is Cardinality.SINGULAR
                         and authorized_scope.entity_refs
                         else None
+                    )
+                    # CHAOS-3393: a subject_set only drives batched execution
+                    # for a cohort/org-wide run -- a SINGULAR commit can
+                    # still carry an AUDIT-ONLY subject_set (duplicate
+                    # aliases of the one committed entity; see
+                    # CommittedSubjects's own docstring), which must never
+                    # also populate subject_set_scopes/subject_set_fingerprint
+                    # alongside subject_entity_id (DevInvestigationResult.
+                    # validate_result_invariants forbids both being set).
+                    portfolio_subject_set = (
+                        preflight_result.subject_set
+                        if cardinality is not Cardinality.SINGULAR
+                        else None
+                    )
+                    subject_set_scopes = (
+                        tuple(
+                            _project_scope_from_ref(
+                                ref, org_id=org_id, base_scope=authorized_scope
+                            )
+                            for ref in portfolio_subject_set.committed_entity_refs
+                        )
+                        if portfolio_subject_set is not None
+                        else ()
                     )
                     investigation_result = await self._plan_executor.run(
                         plan=plan,
@@ -1338,13 +1753,26 @@ class DevOrchestrator:
                             run_id=run_id,
                             now=datetime.now(UTC),
                             requested_metric_ids=tuple(intent.requested_metric_ids),
+                            subject_set_scopes=subject_set_scopes,
                         ),
                         run_id=run_id,
                         subject_entity_id=subject_entity_id,
+                        subject_set_fingerprint=(
+                            portfolio_subject_set.fingerprint
+                            if portfolio_subject_set is not None
+                            else None
+                        ),
                     )
                     await self._recorder.record_investigation_result(
                         investigation_result
                     )
+                    if portfolio_subject_set is not None:
+                        portfolio_subject_set_ref = portfolio_subject_set.set_id
+                        portfolio_subject_set_warnings = portfolio_subject_set.warnings
+                        portfolio_attested_labels = tuple(
+                            ref.display_label
+                            for ref in portfolio_subject_set.committed_entity_refs
+                        )
 
             for round_index in range(self._limits.model_rounds):
                 del round_index
@@ -1372,6 +1800,16 @@ class DevOrchestrator:
                         subject_committed=(
                             preflight_result is not None
                             and preflight_result.has_committed_subject
+                        ),
+                        # CHAOS-3421 codex adversarial review (MED-1): the
+                        # ONE preflight branch that sets legacy_guard_required
+                        # (subject_preflight's proceeded_unresolved_bare_name)
+                        # withholds resolve_scope.v1 from allowed_tools -- the
+                        # prompt must say so, never instruct the model to
+                        # call a tool the registry will reject.
+                        resolution_unavailable=(
+                            preflight_result is not None
+                            and preflight_result.legacy_guard_required
                         ),
                     )
                 except ValueError as exc:
@@ -1912,6 +2350,105 @@ class DevOrchestrator:
                             "model": model.model_dump(mode="json"),
                         }
                     )
+                    # CHAOS-3377 defect 3: strip a trailing JSON-structural
+                    # artifact from every model-authored free-text field at
+                    # this seam -- before anything else reads or validates
+                    # them -- rather than special-casing the one reported
+                    # string later.
+                    if isinstance(candidate.get("direct_summary"), str):
+                        candidate["direct_summary"] = sanitize_model_text(
+                            candidate["direct_summary"]
+                        )
+                    if isinstance(candidate.get("claims"), list):
+                        candidate["claims"] = [
+                            {**claim, "text": sanitize_model_text(claim["text"])}
+                            if isinstance(claim, dict)
+                            and isinstance(claim.get("text"), str)
+                            else claim
+                            for claim in candidate["claims"]
+                        ]
+                    if isinstance(candidate.get("warnings"), list):
+                        candidate["warnings"] = [
+                            sanitize_model_text(warning)
+                            if isinstance(warning, str)
+                            else warning
+                            for warning in candidate["warnings"]
+                        ]
+                    # CHAOS-3377 defects 1/2/5 -- the §10 deterministic
+                    # renderer. When this run executed status_snapshot.v1
+                    # for the CURRENT resolved scope, the server already
+                    # computed a real completion verdict (`actual_completion`
+                    # bound to that scope -- see `_deterministic_status_
+                    # render`/`status_snapshot_result`); the direct verdict/
+                    # completion/blockers are rendered from THAT here,
+                    # overwriting whatever the model proposed for status/
+                    # direct_summary/claims -- exactly the same
+                    # "server-derived fields overwrite the model's" pattern
+                    # `metrics`/`evidence`/`coverage` already follow above.
+                    # The model cannot mislabel a substantive answer as
+                    # refused, narrate a raw internal token, or contradict
+                    # the frame's own blocker list, because none of its own
+                    # text for this content reaches the candidate at all.
+                    rendered_status = self._deterministic_status_render(
+                        resolution=resolution,
+                        tool_requests=tuple(tool_requests),
+                        tool_results=tuple(tool_results),
+                        server_coverage=server_coverage,
+                        canonical_evidence=canonical_evidence,
+                    )
+                    if (
+                        rendered_status is None
+                        and resolution.resolved_scope is not None
+                    ):
+                        # CHAOS-3393: a status.portfolio.v1 batch has no
+                        # status_snapshot.v1 tool call to bind to (the plan
+                        # executor evaluated it directly), so it rides this
+                        # same §10 seam via investigation_result instead --
+                        # the model's own narrative for the batch is
+                        # likewise never what reaches the wire.
+                        rendered_status = render_portfolio_summary(
+                            investigation_result,
+                            validity_scope=resolution.resolved_scope,
+                            subject_set_warnings=portfolio_subject_set_warnings,
+                        )
+                    if (
+                        portfolio_subject_set_ref is not None
+                        and rendered_status is None
+                    ):
+                        # CHAOS-3393 codex HIGH-2: a committed portfolio
+                        # subject set ran the plan executor (subject_set_
+                        # scopes was passed in), but the resulting
+                        # investigation_result carries no usable rows at
+                        # all -- the evaluator raised, the whole step hit
+                        # the plan's own per_step_timeout_seconds ceiling,
+                        # or some other TOTAL failure the isolated
+                        # per-project PortfolioProjectFailure path never
+                        # reaches (that path always still produces rows).
+                        # render_portfolio_summary returning None here must
+                        # NEVER be read as "nothing to override" -- the
+                        # model's own unconstrained prose about a
+                        # portfolio it may never have actually seen must
+                        # not reach the wire. A deterministic, zero-claim
+                        # DEGRADED result always wins in this case,
+                        # regardless of what the model wrote, closing the
+                        # gap the validator's own PARTIAL-with-a-coverage-
+                        # gap allowance would otherwise leave open.
+                        rendered_status = (
+                            AnswerStatus.DEGRADED,
+                            (
+                                "Portfolio status could not be determined: "
+                                "the evaluation did not complete for any "
+                                "project in this batch."
+                            ),
+                            [],
+                        )
+                    if rendered_status is not None:
+                        det_status, det_direct_summary, det_claims = rendered_status
+                        candidate["status"] = det_status.value
+                        candidate["direct_summary"] = det_direct_summary
+                        candidate["claims"] = [
+                            claim.model_dump(mode="json") for claim in det_claims
+                        ]
                     try:
                         answer = validate_answer_candidate(
                             candidate, validation_context
@@ -2017,6 +2554,47 @@ class DevOrchestrator:
                                     answer=demoted,
                                     grounding_validation_status=(
                                         GUARD_DEMOTED_GROUNDING_FLOOR_STATUS
+                                    ),
+                                )
+                            return await finish(
+                                RunState.INSUFFICIENT_EVIDENCE,
+                                error=error(
+                                    "insufficient_evidence",
+                                    "The answer did not include enough "
+                                    "grounded detail to present as a "
+                                    "result.",
+                                ),
+                            )
+                        if exc.code == "refused_with_material_grounding":
+                            # CHAOS-3377 defect 1: the model kept self-
+                            # declaring REFUSED over real grounding even
+                            # after the bounded repair pass. Same demotion
+                            # seam as the grounding floor above -- the run
+                            # has genuine server-verified material
+                            # (`_server_grounded_answer`'s own third guard
+                            # refuses to build on nothing), so it terminates
+                            # COMPLETED with that material rather than a
+                            # hard FAILED that would discard evidence the
+                            # run already retrieved.
+                            demoted = self._server_grounded_answer(
+                                answer_id=answer_id,
+                                conversation_id=conversation_id,
+                                resolution=resolution,
+                                coverage=server_coverage,
+                                tool_results=tuple(tool_results),
+                                investigation_result=investigation_result,
+                                model=model,
+                                now=now,
+                                cutover_active=self._frame_cutover_active(
+                                    preflight_result
+                                ),
+                            )
+                            if demoted is not None:
+                                return await finish(
+                                    RunState.COMPLETED,
+                                    answer=demoted,
+                                    grounding_validation_status=(
+                                        GUARD_DEMOTED_REFUSAL_STATUS
                                     ),
                                 )
                             return await finish(
@@ -2143,7 +2721,11 @@ class DevOrchestrator:
                                     GUARD_DEMOTED_NAMED_ENTITY_STATUS
                                 ),
                             )
-                    return await finish(RunState.COMPLETED, answer=answer)
+                    return await finish(
+                        RunState.COMPLETED,
+                        answer=answer,
+                        extra_attested=portfolio_attested_labels,
+                    )
 
                 if isinstance(decision, AgentDisambiguation):
                     return await finish(
@@ -2154,6 +2736,31 @@ class DevOrchestrator:
                         ),
                     )
                 if isinstance(decision, AgentRefusal):
+                    # CHAOS-3377 HIGH 2 (codex adversarial review): a
+                    # refusal reached AFTER a real status_snapshot.v1 result
+                    # already exists for the run's current resolved scope is
+                    # the same defect class the §10 deterministic renderer
+                    # exists to close -- the model declined to answer over
+                    # material the server already retrieved and can report
+                    # honestly. Checked before the unconditional REFUSED
+                    # terminal below, never after.
+                    deterministic_refusal_answer = self._deterministic_status_answer(
+                        answer_id=answer_id,
+                        conversation_id=conversation_id,
+                        resolution=resolution,
+                        tool_requests=tuple(tool_requests),
+                        tool_results=tuple(tool_results),
+                        now=datetime.now(UTC),
+                        model=DevModelMetadata(
+                            provider_source=self._provider_source,
+                            provider_family=self._provider_family,
+                            model_fingerprint=decision_result.model_fingerprint,
+                        ),
+                    )
+                    if deterministic_refusal_answer is not None:
+                        return await finish(
+                            RunState.COMPLETED, answer=deterministic_refusal_answer
+                        )
                     return await finish(
                         RunState.REFUSED,
                         error=error(
@@ -2190,6 +2797,7 @@ class DevOrchestrator:
                     answer_id=answer_id,
                     conversation_id=conversation_id,
                     resolution=resolution,
+                    tool_requests=tuple(tool_requests),
                     tool_results=tuple(tool_results),
                     model_fingerprint=model_fingerprint,
                 )
@@ -2393,16 +3001,173 @@ class DevOrchestrator:
             "required": sorted(properties),
         }
 
+    @staticmethod
+    def _deterministic_status_render(
+        *,
+        resolution: DevScopeResolution,
+        tool_requests: tuple[DevToolRequest, ...],
+        tool_results: tuple[DevToolResult, ...],
+        server_coverage: DevCoverage,
+        canonical_evidence: Sequence[DevEvidenceRef],
+    ) -> tuple[AnswerStatus, str, list[DevClaim]] | None:
+        """The §10 deterministic (status, direct_summary, claims), or
+        ``None`` if this run has no ``status_snapshot.v1`` result bound to
+        the CURRENT resolved scope.
+
+        The one seam every terminal that can carry an answer -- a validated
+        ``AgentFinalAnswer``, an ``AgentRefusal``, or a budget-exhaustion
+        partial -- renders §10 content through (CHAOS-3377 HIGH 2, codex
+        adversarial review: a prior revision only applied the override
+        inside the ``AgentFinalAnswer`` branch, so a provider that emitted
+        ``AgentRefusal`` -- or a run that hit ``BudgetExceeded`` -- AFTER a
+        real ``status_snapshot.v1`` result already existed could still
+        terminate REFUSED, or with generic budget boilerplate, without ever
+        inspecting the retrieved material. The reported defect class stayed
+        reachable from those two paths).
+        """
+
+        if resolution.resolved_scope is None:
+            return None
+        status_result = status_snapshot_result(
+            tool_requests, tool_results, authorized_scope=resolution.resolved_scope
+        )
+        if status_result is None or status_result.actual_completion is None:
+            return None
+        actual = status_result.actual_completion
+        canonical_evidence_ids = frozenset(
+            item.evidence_ref_id for item in canonical_evidence
+        )
+        claims = build_deterministic_status_claims(
+            actual=actual,
+            status_result=status_result,
+            validity_scope=resolution.resolved_scope,
+            canonical_evidence_ids=canonical_evidence_ids,
+            tool_results=tool_results,
+        )
+        status = deterministic_answer_status(
+            coverage=server_coverage, tool_results=tool_results
+        )
+        direct_summary = render_verdict_summary(
+            actual,
+            denominator_withheld=any_tool_result_withheld_its_completion_denominator(
+                tool_results
+            ),
+        )
+        # CHAOS-3368 step 2: the project's own declared state/target date,
+        # appended to the same verdict/summary section -- ``status_result``
+        # is the identical scope-verified DevToolResult
+        # ``status_snapshot_result`` already selected above, so this rides
+        # that binding for free (no extra scope check needed: a
+        # declared_project_state set on a DIFFERENT tool result could never
+        # reach here, since only THIS result's fields are read).
+        #
+        # ``canonical_evidence_ids`` -- the SAME frozenset already passed to
+        # ``build_deterministic_status_claims`` above -- gates this exactly
+        # like it gates the claim (Codex HIGH, delta review, 2026-08-04):
+        # this run's OWN 25-entry canonical evidence cap
+        # (``Orchestrator._canonical_answer_data``) can truncate the
+        # declared-state evidence out even when its per-tool-call priority
+        # reservation let it survive onto the wire -- without this gate the
+        # summary sentence could assert a declared state with no claim and
+        # no evidence behind it anywhere in the answer.
+        declared_project_summary = render_declared_project_summary(
+            status_result, canonical_evidence_ids
+        )
+        if declared_project_summary is not None:
+            direct_summary = f"{direct_summary} {declared_project_summary}"
+        return status, direct_summary, claims
+
+    def _deterministic_status_answer(
+        self,
+        *,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        tool_requests: tuple[DevToolRequest, ...],
+        tool_results: tuple[DevToolResult, ...],
+        now: datetime,
+        model: DevModelMetadata,
+    ) -> DevAnswer | None:
+        """A full, server-rendered §10 ``DevAnswer`` for this run, or
+        ``None`` if there is nothing to render (no bound status_snapshot
+        result, or no canonical grounding to attach it to). Used by the
+        ``AgentRefusal`` and ``BudgetExceeded`` terminals -- see
+        ``_deterministic_status_render`` for why those need this too, not
+        only the ``AgentFinalAnswer`` branch (which merges the same render
+        into an existing candidate instead of building a fresh answer).
+        """
+
+        canonical_data = self._canonical_answer_data(tool_results)
+        if canonical_data is None:
+            return None
+        canonical_metrics, canonical_evidence = canonical_data
+        server_coverage = self._coverage_with_plan_sources(
+            self._coverage_from_tool_results(tool_requests, tool_results, now),
+            None,
+        )
+        rendered = self._deterministic_status_render(
+            resolution=resolution,
+            tool_requests=tool_requests,
+            tool_results=tool_results,
+            server_coverage=server_coverage,
+            canonical_evidence=canonical_evidence,
+        )
+        if rendered is None:
+            return None
+        status, direct_summary, claims = rendered
+        return DevAnswer(
+            schema_version="dev_answer.v1",
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            generated_at=now,
+            resolved_scope=resolution,
+            as_of=now,
+            status=status,
+            direct_summary=direct_summary,
+            claims=claims,
+            metrics=canonical_metrics,
+            evidence=canonical_evidence,
+            conflicts=[],
+            coverage=server_coverage,
+            warnings=[],
+            suggested_follow_up_questions=[],
+            versions=self._versions,
+            model=model,
+        )
+
     def _budget_answer(
         self,
         *,
         answer_id: str,
         conversation_id: str,
         resolution: DevScopeResolution,
+        tool_requests: tuple[DevToolRequest, ...],
         tool_results: tuple[DevToolResult, ...],
         model_fingerprint: str,
     ) -> DevAnswer | None:
-        """Return only canonical retrieved data when a later model call is blocked."""
+        """Return canonical retrieved data when a later model call is
+        blocked -- the §10 deterministic render if this run has a
+        status_snapshot.v1 result bound to the current resolved scope
+        (CHAOS-3377 HIGH 2: budget exhaustion after a real completion
+        assessment must not discard it for generic boilerplate), otherwise
+        the prior generic "budget reached" summary.
+        """
+
+        deterministic = self._deterministic_status_answer(
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            resolution=resolution,
+            tool_requests=tool_requests,
+            tool_results=tool_results,
+            now=datetime.now(UTC),
+            model=DevModelMetadata(
+                provider_source=self._provider_source,
+                provider_family=self._provider_family,
+                model_fingerprint=model_fingerprint,
+            ),
+        )
+        if deterministic is not None:
+            return deterministic
 
         canonical_data = self._canonical_answer_data(tool_results)
         if canonical_data is None:

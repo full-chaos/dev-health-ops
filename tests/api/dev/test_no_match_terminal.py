@@ -27,11 +27,14 @@ from dev_health_ops.api.dev.no_match_terminal import (
     WITHHELD_COPY,
     attested_strings,
     internal_token_leak,
+    internal_token_leak_field,
     named_subject_not_found_answer,
     no_match_summary,
     redact_persisted_answer,
+    scrub_auxiliary_leaks,
     user_supplied_subject_label,
     user_visible_strings,
+    user_visible_strings_by_field,
 )
 
 NOW = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
@@ -125,17 +128,27 @@ def test_denylist_derives_every_token_the_prd_names(token: str) -> None:
     assert token in INTERNAL_TOKEN_DENYLIST
 
 
-def test_denylist_is_disjoint_from_the_completion_reason_vocabulary() -> None:
-    """``completion_truncation_detail`` renders ``ActualCompletion``'s reason
-    codes verbatim into a user-visible ``DevError.safe_message``, by design
-    (CHAOS-3297 s2: rejecting a fabricated total without saying why leaves the
-    user with nothing). Those codes are snake_case too, so a collision with an
-    internal enum member would make ``orchestrator.finish()``'s fail-closed
-    check destroy a legitimate terminal.
+def test_denylist_now_includes_the_completion_reason_vocabulary() -> None:
+    """CHAOS-3377 defect 2 REVERSES this file's prior invariant, so the
+    reversal is pinned explicitly rather than just deleting the old test.
 
-    Pinned here so a future reason code that collides is a build failure, not
-    a production incident. If this fails, rename the reason code -- do not
-    widen the denylist's exclusions.
+    Before CHAOS-3377, ``completion_truncation_detail`` rendered
+    ``ActualCompletion``'s reason codes VERBATIM into a user-visible
+    ``DevError.safe_message`` by design, so the denylist deliberately
+    excluded them (a collision would have made ``orchestrator.finish()``'s
+    fail-closed check destroy that legitimate terminal). A live run then
+    showed those same raw codes (``not_ready``, ``open_blocker``,
+    ``required_child_incomplete``, ...) leaking into ordinary answer prose --
+    a path this file's denylist was never watching, because the exclusion
+    covered the whole vocabulary rather than just the one sanctioned surface.
+
+    The fix (CHAOS-3377) is symmetric: ``completion_truncation_detail`` (see
+    ``status_completion_copy.translate_reason_codes``) now renders translated
+    copy instead of the raw codes, so nothing legitimate needs the exclusion
+    any more, and the denylist can cover the whole reason-code vocabulary
+    like every other internal enum it already derives from.
+    ``status_change_service.STATUS_REASON_CODES`` is the single source of
+    truth both this denylist and the translation table derive from.
     """
 
     completion_reason_codes = frozenset(
@@ -158,7 +171,37 @@ def test_denylist_is_disjoint_from_the_completion_reason_vocabulary() -> None:
             "active_blocking_incident",
         }
     )
-    assert not (completion_reason_codes & INTERNAL_TOKEN_DENYLIST)
+    assert completion_reason_codes <= INTERNAL_TOKEN_DENYLIST
+
+
+def test_completion_truncation_detail_never_renders_a_raw_reason_code() -> None:
+    """The other half of the reversal above: with the codes now denylisted,
+    ``completion_truncation_detail`` (the one sanctioned pre-CHAOS-3377
+    renderer of this vocabulary) MUST NOT emit them raw any more, or its own
+    output would fail ``orchestrator.finish()``'s fail-closed scan.
+    """
+
+    from dev_health_ops.api.dev.answer_validator import completion_truncation_detail
+    from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
+    from dev_health_ops.api.dev.contracts import DevToolResult
+
+    payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+    payload["actual_completion"] = {
+        "state": "not_ready",
+        "rule_id": "actual-completion",
+        "rule_version": "actual-completion.v4",
+        "reason_codes": ["open_blocker", "required_child_incomplete"],
+        "required_children": [],
+        "required_child_total": None,
+        "required_child_complete": None,
+        "display_truncated": False,
+        "conflicts": [],
+        "evidence_ref_ids": [],
+    }
+    detail = completion_truncation_detail((DevToolResult.model_validate(payload),))
+    assert internal_token_leak([detail]) is None
+    for raw_token in ("open_blocker", "required_child_incomplete"):
+        assert raw_token not in detail
 
 
 def test_internal_token_leak_finds_a_token_inside_a_sentence() -> None:
@@ -190,6 +233,119 @@ def test_internal_token_leak_ignores_ordinary_prose() -> None:
         )
         is None
     )
+
+
+def test_internal_token_leak_field_names_the_field_the_token_was_found_in() -> None:
+    """CHAOS-3377 leak-hardening (operability): the field-labeled scan
+    ``orchestrator.finish()`` now uses, so a leak's log line can say WHERE
+    the token was found, not only what it was."""
+
+    found = internal_token_leak_field(
+        [
+            ("direct_summary", "Everything here is fine."),
+            ("warnings[0]", "Rejected with scope_forbidden."),
+        ]
+    )
+    assert found == ("warnings[0]", "scope_forbidden")
+
+
+def test_internal_token_leak_field_is_none_for_clean_input() -> None:
+    assert (
+        internal_token_leak_field([("direct_summary", "Everything here is fine.")])
+        is None
+    )
+
+
+def test_user_visible_strings_by_field_indexes_list_valued_fields() -> None:
+    answer = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={"warnings": ["first warning", "second warning"]}
+    )
+    pairs = dict(user_visible_strings_by_field(answer=answer))
+    assert pairs["warnings[0]"] == "first warning"
+    assert pairs["warnings[1]"] == "second warning"
+    # And the two functions agree on content -- one is derived from the other.
+    assert user_visible_strings(answer=answer) == tuple(
+        text for _, text in user_visible_strings_by_field(answer=answer)
+    )
+
+
+# --- scrub_auxiliary_leaks (CHAOS-3377 leak-hardening) ---------------------
+#
+# The write-time counterpart of ``redact_persisted_answer``'s per-field
+# cleaning, run at the SAME seam ``orchestrator.finish()`` applies the
+# fail-closed whole-answer scan -- but deliberately narrower: only the four
+# model-authored auxiliary fields (warnings/conflicts/
+# suggested_follow_up_questions/resolved_scope.warnings) are eligible. A
+# leak in direct_summary or claims -- the answer's load-bearing deterministic
+# content -- must still fail the whole terminal closed.
+
+
+def test_scrub_auxiliary_leaks_withholds_a_leaked_warning() -> None:
+    answer = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={"warnings": ["Rejected with scope_forbidden for this repository."]}
+    )
+    scrubbed, touched = scrub_auxiliary_leaks(answer)
+    assert touched == ("warnings[0]",)
+    assert scrubbed.warnings == [WITHHELD_COPY]
+    assert internal_token_leak(user_visible_strings(answer=scrubbed)) is None
+
+
+def test_scrub_auxiliary_leaks_drops_a_leaked_follow_up_question_outright() -> None:
+    """Unlike warnings/conflicts, a leaked follow-up question is removed from
+    the list entirely rather than replaced with a placeholder -- a suggested
+    question with no real content left is worse than one fewer suggestion,
+    mirroring ``redact_persisted_answer``'s existing treatment of the same
+    field."""
+
+    answer = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={
+            "suggested_follow_up_questions": [
+                "Why is this required_child_incomplete?",
+                "What repositories are in scope?",
+            ]
+        }
+    )
+    scrubbed, touched = scrub_auxiliary_leaks(answer)
+    assert touched == ("suggested_follow_up_questions[0]",)
+    assert scrubbed.suggested_follow_up_questions == ["What repositories are in scope?"]
+
+
+def test_scrub_auxiliary_leaks_never_touches_direct_summary_or_claims() -> None:
+    """The negative control at the unit level: a leak in direct_summary (the
+    deterministic core, or -- absent a bound status_snapshot -- the model's
+    only substantive content) is NOT this function's job. It must survive
+    scrubbing untouched, so ``orchestrator.finish()``'s whole-terminal
+    fail-closed scan still catches it afterward."""
+
+    leaky_summary = "Scope resolution returned forbidden_or_not_found."
+    answer = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={"direct_summary": leaky_summary}
+    )
+    scrubbed, touched = scrub_auxiliary_leaks(answer)
+    assert touched == ()
+    assert scrubbed is answer
+    assert scrubbed.direct_summary == leaky_summary
+    assert internal_token_leak([scrubbed.direct_summary]) == "forbidden_or_not_found"
+
+
+def test_scrub_auxiliary_leaks_is_a_noop_on_a_clean_answer() -> None:
+    answer = _answer("What is the status of the Falcon project?", "Falcon")
+    scrubbed, touched = scrub_auxiliary_leaks(answer)
+    assert touched == ()
+    assert scrubbed is answer
+
+
+def test_scrub_auxiliary_leaks_respects_attestation() -> None:
+    """The same provenance escape hatch ``internal_token_leak`` applies
+    elsewhere: an authorized entity genuinely named like a denylisted token
+    is not scrubbed out of a warning that mentions it."""
+
+    answer = _answer("What is the status of the Falcon project?", "Falcon").model_copy(
+        update={"warnings": ["The authorized project not_found has stale data."]}
+    )
+    scrubbed, touched = scrub_auxiliary_leaks(answer, attested=["not_found"])
+    assert touched == ()
+    assert scrubbed is answer
 
 
 # --- the PRD's own sentence ------------------------------------------------
@@ -462,6 +618,82 @@ def test_a_clean_persisted_answer_is_returned_untouched() -> None:
 
     stored = _answer("What is the status of the Falcon project?", "Falcon")
     assert redact_persisted_answer(stored) is stored
+
+
+# --- CHAOS-3377 HIGH (codex adversarial web review, round 2): a persisted
+# refused-with-grounding row must be normalized on read, not handed back
+# verbatim for the client to relabel around.
+
+
+def _refused_with_grounding_answer():
+    from dev_health_ops.api.dev.contracts import DevAnswer
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["status"] = "refused"
+    payload["direct_summary"] = "I can't help with that request."
+    return DevAnswer.model_validate(payload)
+
+
+def test_a_persisted_refused_with_grounding_row_is_normalized_on_read() -> None:
+    """Fail->pass: a row written before ``answer_validator``'s write-time
+    check existed can still say status=refused while carrying real
+    claim/metric/evidence content. The read boundary must not hand this
+    back verbatim -- the client backstop that used to relabel it 'Answered'
+    while still rendering the rejected-shaped prose underneath is exactly
+    the leak this closes upstream.
+    """
+
+    stored = _refused_with_grounding_answer()
+    assert stored.claims  # the fixture answer has real, grounded claims
+
+    normalized = redact_persisted_answer(stored)
+
+    assert normalized.status.value != "refused"
+    assert normalized.direct_summary != "I can't help with that request."
+    assert normalized.claims == []
+    # Structured, server-issued content survives -- only the model's own
+    # prose (the part that disagreed with its own status) is discarded.
+    assert normalized.metrics == stored.metrics
+    assert normalized.evidence == stored.evidence
+
+
+def test_normalization_runs_even_when_the_prose_has_no_denylisted_token() -> None:
+    """The refused-with-grounding contradiction is not itself an
+    internal-token leak (its direct_summary here is ordinary English) -- it
+    must not be gated behind the ``internal_token_leak`` check, which would
+    silently skip a clean-looking but self-contradictory row.
+    """
+
+    stored = _refused_with_grounding_answer()
+    assert internal_token_leak(user_visible_strings(answer=stored)) is None
+
+    normalized = redact_persisted_answer(stored)
+    assert normalized.status.value != "refused"
+    assert normalized.claims == []
+
+
+def test_a_genuine_refusal_with_no_grounding_is_not_normalized() -> None:
+    """Negative control: a row that is REFUSED with no material grounding at
+    all is a genuine refusal, not a contradiction -- normalization must
+    leave it untouched.
+    """
+
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload.update(
+        {
+            "status": "refused",
+            "direct_summary": "I can't help with that request.",
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+        }
+    )
+    from dev_health_ops.api.dev.contracts import DevAnswer
+
+    stored = DevAnswer.model_validate(payload)
+    normalized = redact_persisted_answer(stored)
+    assert normalized.status.value == "refused"
+    assert normalized.direct_summary == "I can't help with that request."
 
 
 # --- round 3: the codex web-review findings that apply to the server --------

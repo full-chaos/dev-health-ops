@@ -29,6 +29,8 @@ from ..contracts_v2.result import (
     DevSourceObservation,
 )
 from ..evidence_service import EvidenceReferenceSigner
+from ..scope_service import EntityKind as _ScopeEntityKind
+from ..scope_service import subject_set_fingerprint as _compute_subject_set_fingerprint
 from .builtin_steps import (
     _authorization_scope_digest,
     _AuthorizationScope,
@@ -558,6 +560,48 @@ class PlanExecutor:
         # fresh read of context.scope taken later, after a step has already
         # had the chance to mutate it.
         authorization_scope = _snapshot_authorization_scope(context.scope)
+        # CHAOS-3393 codex HIGH-1: context.subject_set_scopes (a
+        # PLURAL_COHORT/ORGANIZATION_WIDE plan step's batch) rides on
+        # StepContext OUTSIDE the single-DevScope authorization_scope
+        # snapshot above -- context.scope stays org-level for these runs,
+        # so nothing previously verified that the batch a step is about
+        # to execute over is the SAME committed, catalog-authorized set
+        # the caller (SubjectPreflight -> orchestrator's plan_eligible
+        # gate) actually minted, before any step could see it. This
+        # recomputes the caller's own fingerprint formula
+        # (scope_service.subject_set_fingerprint, imported by reference --
+        # never a second, divergent copy of the hash) from
+        # context.subject_set_scopes' own entity ids and cross-checks it
+        # against subject_set_fingerprint, the immutable receipt minted
+        # AT COMMIT time (ScopeResolutionService.committed_subject_set_for)
+        # before this run ever started. Any discrepancy -- a missing
+        # fingerprint, a mismatched one, or a non-homogeneous kind --
+        # fails the WHOLE run closed here, before any step (this
+        # executor's threat model's adversary) gets to run at all, rather
+        # than silently trusting an unverified batch.
+        if context.subject_set_scopes:
+            kinds = {scope.direct_scope.value for scope in context.subject_set_scopes}
+            if len(kinds) != 1:
+                raise PlanRegistryError(
+                    "subject_set_scopes must be homogeneous in direct_scope kind"
+                )
+            subject_set_ids = [
+                ref.entity_id
+                for scope in context.subject_set_scopes
+                for ref in scope.entity_refs
+            ]
+            recomputed_fingerprint = _compute_subject_set_fingerprint(
+                _ScopeEntityKind(next(iter(kinds))), subject_set_ids
+            )
+            if (
+                subject_set_fingerprint is None
+                or recomputed_fingerprint != subject_set_fingerprint
+            ):
+                raise PlanRegistryError(
+                    "subject_set_scopes do not match the caller's authorized "
+                    "subject_set_fingerprint -- refusing to execute an "
+                    "unverified batch"
+                )
         registered = self._registry.for_plan(plan.plan_id)
         known_steps = set(plan.mandatory_steps) | set(plan.conditional_steps)
         missing = known_steps - registered.keys()

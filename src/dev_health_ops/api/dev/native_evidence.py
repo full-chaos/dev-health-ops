@@ -14,6 +14,7 @@ from typing import Any
 from dev_health_ops.api.queries.client import query_dicts
 from dev_health_ops.api.services.sync_coverage import STALE_FALLBACK_GRACE
 
+from ._project_identity import project_identity_cte, project_identity_match
 from .contracts import DevEvidenceRef, FreshnessState
 from .evidence_service import (
     EvidenceAvailability,
@@ -70,6 +71,13 @@ def default_native_freshness_policies() -> dict[str, SourceFreshnessPolicy]:
             "deployments",
             "incidents",
             "work_graph",
+            # CHAOS-3368: native_status_change._PROJECT_DECLARED_FACTS_SQL
+            # reads the projects catalog under this source name -- without
+            # a policy entry, ``_source_ref`` falls back to
+            # ``FreshnessState.UNKNOWN`` for every project declared-state
+            # read, which is a worse default than the same fallback-grace
+            # policy every other native source here already gets.
+            "projects",
         )
     }
 
@@ -136,34 +144,91 @@ _SPECS: dict[str, _SourceSpec] = {
     "work_items": _SourceSpec(
         "work_items",
         _COMMON_KINDS | {EntityKind.PROJECT, EntityKind.ISSUE},
+        # CHAOS-3380 round 3 (Codex HIGH): the project match below joins
+        # through the SAME provider-aware identity CTE
+        # native_status_change.py uses (dev_health_ops.api.dev.
+        # _project_identity), rather than comparing work_items.project_id/
+        # project_key directly against the resolved entity id -- which can
+        # never match for any provider whose catalog id isn't the raw value
+        # work_items carries (Jira since CHAOS-3374, GitLab since CHAOS-3380).
+        # ``LEFT JOIN`` (not INNER): a project-identity miss must not blank
+        # out ISSUE/ORGANIZATION/REPOSITORY-scoped results this same spec
+        # also serves -- only the project arm's own predicate is gated
+        # (``ifNull(catalog_provider, '') != ''`` inside project_identity_match).
         f"""
+        WITH {project_identity_cte()}
         SELECT work_item_id AS entity_id, title AS display_label,
                concat('Status: ', status, '. ', ifNull(description, '')) AS excerpt,
                provider AS provenance, updated_at AS observed_at,
                last_synced, toString(repo_id) AS repository_id,
                url AS source_url, 0 AS deleted, 1.0 AS confidence
         FROM work_items FINAL
+        LEFT JOIN project ON 1 = 1
         WHERE org_id = {{org_id:String}}
           AND updated_at >= {{start:DateTime64(3, 'UTC')}}
           AND updated_at < {{end:DateTime64(3, 'UTC')}}
           AND ({_search_predicate(("work_item_id", "title", "description", "status"))})
           AND (empty({{repository_ids:Array(String)}}) OR toString(repo_id) IN {{repository_ids:Array(String)}})
           AND ({{entity_id:String}} = '' OR work_item_id = {{entity_id:String}}
-               OR project_id = {{entity_id:String}} OR project_key = {{entity_id:String}})
+               OR ({project_identity_match()}))
         ORDER BY updated_at DESC, work_item_id
         LIMIT {{limit:UInt32}}
         """,
-        """
+        f"""
+        WITH {project_identity_cte("scope_entity_id")}
         SELECT work_item_id AS entity_id, title AS display_label,
                concat('Status: ', status, '. ', ifNull(description, '')) AS excerpt,
                provider AS provenance, updated_at AS observed_at,
                last_synced, toString(repo_id) AS repository_id,
                url AS source_url, 0 AS deleted, 1.0 AS confidence
         FROM work_items FINAL
-        WHERE org_id = {org_id:String} AND work_item_id = {entity_id:String}
-          AND (empty({repository_ids:Array(String)}) OR toString(repo_id) IN {repository_ids:Array(String)})
-          AND ({scope_entity_id:String} = '' OR work_item_id = {scope_entity_id:String}
-               OR project_id = {scope_entity_id:String} OR project_key = {scope_entity_id:String})
+        LEFT JOIN project ON 1 = 1
+        WHERE org_id = {{org_id:String}} AND work_item_id = {{entity_id:String}}
+          AND (empty({{repository_ids:Array(String)}}) OR toString(repo_id) IN {{repository_ids:Array(String)}})
+          AND ({{scope_entity_id:String}} = '' OR work_item_id = {{scope_entity_id:String}}
+               OR ({project_identity_match(entity_param="scope_entity_id")}))
+        ORDER BY last_synced DESC LIMIT 1
+        """,
+    ),
+    # CHAOS-3368 (Codex HIGH fix): declared-state facts must expand through a
+    # real ``projects`` read, not the ``work_items`` adapter's ``work_item_id
+    # = {entity_id}`` identity match -- a project's own catalog id is never a
+    # work_item_id, so that adapter always returned NO_MATCHES for it. This
+    # adapter reads the SAME table CHAOS-3368's declared-state query does.
+    "projects": _SourceSpec(
+        "projects",
+        _COMMON_KINDS | {EntityKind.PROJECT},
+        f"""
+        SELECT id AS entity_id,
+               ifNull(nullIf(name, ''), concat('Project ', id)) AS display_label,
+               concat('Declared state: ', ifNull(nullIf(state, ''), 'unknown'),
+                      '. Target date: ', ifNull(toString(target_date), 'none')) AS excerpt,
+               ifNull(nullIf(provider, ''), 'native') AS provenance,
+               updated_at AS observed_at, last_synced,
+               '' AS repository_id,
+               ifNull(url, '') AS source_url, 0 AS deleted, 1.0 AS confidence
+        FROM projects FINAL
+        WHERE org_id = {{org_id:String}}
+          AND updated_at >= {{start:DateTime64(3, 'UTC')}}
+          AND updated_at < {{end:DateTime64(3, 'UTC')}}
+          AND is_active = 1
+          AND ({_search_predicate(("id", "name", "state"))})
+          AND ({{entity_id:String}} = '' OR id = {{entity_id:String}})
+        ORDER BY updated_at DESC, id
+        LIMIT {{limit:UInt32}}
+        """,
+        """
+        SELECT id AS entity_id,
+               ifNull(nullIf(name, ''), concat('Project ', id)) AS display_label,
+               concat('Declared state: ', ifNull(nullIf(state, ''), 'unknown'),
+                      '. Target date: ', ifNull(toString(target_date), 'none')) AS excerpt,
+               ifNull(nullIf(provider, ''), 'native') AS provenance,
+               updated_at AS observed_at, last_synced,
+               '' AS repository_id,
+               ifNull(url, '') AS source_url, 0 AS deleted, 1.0 AS confidence
+        FROM projects FINAL
+        WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
+          AND ({scope_entity_id:String} = '' OR id = {scope_entity_id:String})
         ORDER BY last_synced DESC LIMIT 1
         """,
     ),
@@ -600,6 +665,7 @@ def _pr_number(entity_id: str) -> int:
 def _entity_type(source_system: str) -> str:
     return {
         "work_items": "issue",
+        "projects": "project",
         "work_units": "work_unit",
         "pull_requests": "pull_request",
         "reviews": "review",

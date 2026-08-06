@@ -15,10 +15,25 @@ runs, not that the assertion could ever have failed.
 Seeded shapes, one per rule the derivation has to get right:
 
 * Linear (repository-less, zero-UUID ``repo_id``) — must be admitted;
-* attribution by ``project_key`` rather than ``project_id`` — must be admitted;
+* Linear, a nonzero AUTHORIZED repository — must be admitted;
 * a nonzero repository absent from ``repos`` — must be excluded;
 * a second tenant's rows for the same project id — must be excluded;
 * a row updated after ``as_of`` — must be excluded.
+
+CHAOS-3374 adds a second project, Jira-shaped exactly like production
+(``team_autoimport_jira._project_id`` mints the catalog id as
+``f"{org_id}:jira:{project_key}"``; ``providers/jira/normalize`` writes the
+RAW key onto ``work_items.project_key`` via the real
+``canonical_jira_issue_to_work_item`` producer), plus a cross-provider
+collision row that shares the Jira project's raw key under a DIFFERENT
+provider:
+
+* Jira, attributed by the raw ``project_key`` (not ``project_id``) — must be
+  admitted only under the Jira scope, proving the provider-scoped identity
+  join added by CHAOS-3374 against a real engine, not a predicate fake;
+* a Linear-provider row carrying that SAME raw key — must be excluded from
+  the Jira scope (and was never admissible to the Linear scope either, since
+  a real Linear catalog row's own ``project_key`` is always empty).
 
 Opt-in (filtered from unit/CI by ``ci/run_tests.sh``'s
 ``-m "not benchmark and not clickhouse"``): ``pytest -m clickhouse`` with
@@ -35,6 +50,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from atlassian import JiraIssue
 
 from dev_health_ops.api.dev.native_status_change import (
     PROJECT_REPOSITORIES_SQL,
@@ -54,6 +70,7 @@ from dev_health_ops.api.dev.status_change_service import (
 from dev_health_ops.api.queries.client import query_dicts
 from dev_health_ops.metrics.schemas import ProjectRecord
 from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.jira.normalize import canonical_jira_issue_to_work_item
 from dev_health_ops.providers.linear.normalize import linear_issue_to_work_item
 from dev_health_ops.providers.status_mapping import StatusMapping
 
@@ -188,6 +205,51 @@ def _work_item(
     )
 
 
+def _jira_work_item(
+    key: str,
+    *,
+    org_id: str,
+    project_key: str,
+    repo_id: uuid.UUID | None,
+    updated_at: datetime | None = None,
+) -> Any:
+    """One work item through the production Jira canonical normalizer.
+
+    ``canonical_jira_issue_to_work_item`` is the real producer that sets
+    ``project_id=None`` and ``project_key=issue.project_key`` (see
+    ``providers/jira/normalize.py``) -- the exact identity mismatch
+    CHAOS-3374 fixes: the catalog id is ``f"{org_id}:jira:{project_key}"``
+    (provider-prefixed) but ``work_items.project_key`` carries the RAW key.
+    """
+
+    identity = MagicMock(spec=IdentityResolver)
+    identity.resolve.side_effect = lambda **kwargs: "user:dev@example.com"
+    status_mapping = MagicMock(spec=StatusMapping)
+    status_mapping.normalize_status.return_value = "in_progress"
+    status_mapping.normalize_type.return_value = "task"
+
+    issue = JiraIssue(
+        cloud_id="cloud-live",
+        key=key,
+        project_key=project_key,
+        issue_type="Task",
+        status="In Progress",
+        created_at=(NOW - timedelta(days=10)).isoformat(),
+        updated_at=(NOW - timedelta(days=1)).isoformat(),
+    )
+    item = canonical_jira_issue_to_work_item(
+        issue=issue,
+        status_mapping=status_mapping,
+        identity=identity,
+        repo_id=repo_id,
+    )
+    return replace(
+        item,
+        org_id=org_id,
+        updated_at=updated_at or (NOW - timedelta(days=1)),
+    )
+
+
 def _insert_repo(client: Any, *, org_id: str, repo_id: str, name: str) -> None:
     client.command(
         "INSERT INTO repos (id, repo, created_at, last_synced, org_id) VALUES "
@@ -201,18 +263,40 @@ class _Seeded:
         self.org_id = f"proj-scope-{uuid.uuid4().hex[:16]}"
         self.other_org_id = f"proj-scope-other-{uuid.uuid4().hex[:16]}"
         self.project_id = str(uuid.uuid4())
-        #: Referenced only by the *other* tenant. This org must derive nothing
-        #: for it -- the probe that makes ``work_items.org_id`` observable at
-        #: all (see test_every_derivation_clause_changes_the_real_result).
+        #: Referenced only by the *other* tenant, but WITH its own catalog row
+        #: under that tenant -- so a mutant that drops the ``work_items``-level
+        #: ``org_id`` bound (rather than merely the identity CTE's own) is what
+        #: this org's probe against it exercises (see
+        #: test_every_derivation_clause_changes_the_real_result's docstring).
         self.other_only_project_id = str(uuid.uuid4())
         self.authorized_repo = uuid.uuid4()
         self.stale_window_repo = uuid.uuid4()
         self.revoked_repo = uuid.uuid4()
         self.foreign_repo = uuid.uuid4()
+        # CHAOS-3374: a Jira-shaped project. The catalog id is
+        # provider-prefixed exactly like production; the raw key is what
+        # actually lands on work_items.project_key.
+        self.jira_project_key = f"ASK{uuid.uuid4().hex[:6].upper()}"
+        self.jira_project_id = f"{self.org_id}:jira:{self.jira_project_key}"
+        self.jira_repo = uuid.uuid4()
+        #: A DIFFERENT provider's repository, holding a row that shares the
+        #: Jira project's raw key -- must never be admitted by either scope.
+        self.collision_repo = uuid.uuid4()
+        # CHAOS-3374 round 2 (Codex MEDIUM): projects' ReplacingMergeTree key
+        # is (org_id, provider, id), NOT (org_id, id) -- two providers can
+        # legitimately mint the SAME id in the SAME org and both survive
+        # FINAL. A bare LIMIT 1 (no ORDER BY) would pick one nondeterministically.
+        self.colliding_project_id = str(uuid.uuid4())
+        self.colliding_project_key = f"COLLIDE{uuid.uuid4().hex[:6].upper()}"
+        self.colliding_repo = uuid.uuid4()
 
     @property
     def expected(self) -> list[str]:
         return sorted({ZERO_REPOSITORY_ID, str(self.authorized_repo)})
+
+    @property
+    def jira_expected(self) -> list[str]:
+        return sorted({str(self.jira_repo)})
 
 
 @pytest.fixture
@@ -239,6 +323,24 @@ def seeded(sink: Any, raw_client: Any) -> Any:
             repo_id=str(data.foreign_repo),
             name="other/repo",
         )
+        _insert_repo(
+            raw_client,
+            org_id=data.org_id,
+            repo_id=str(data.jira_repo),
+            name="org/jira-project",
+        )
+        _insert_repo(
+            raw_client,
+            org_id=data.org_id,
+            repo_id=str(data.collision_repo),
+            name="org/collision",
+        )
+        _insert_repo(
+            raw_client,
+            org_id=data.org_id,
+            repo_id=str(data.colliding_repo),
+            name="org/colliding",
+        )
 
         sink.org_id = data.org_id
         sink.write_projects(
@@ -251,7 +353,60 @@ def seeded(sink: Any, raw_client: Any) -> Any:
                     is_active=1,
                     updated_at=NOW,
                     last_synced=NOW,
-                )
+                ),
+                ProjectRecord(
+                    id=data.jira_project_id,
+                    org_id=data.org_id,
+                    provider="jira",
+                    project_key=data.jira_project_key,
+                    name=PROJECT_NAME + " (Jira)",
+                    is_active=1,
+                    updated_at=NOW,
+                    last_synced=NOW,
+                ),
+                # CHAOS-3374: deliberately scoped to THIS org's catalog even
+                # though the only matching work_items row (LIVE-7, below) is
+                # written under other_org_id -- isolates the work_items-level
+                # org_id bound as the ONLY thing standing between "excluded"
+                # and "leaked" for the repository-less sentinel bucket, which
+                # the ``repos`` authorization arm cannot gate (see
+                # test_every_derivation_clause_changes_the_real_result's own
+                # "org_id tenant bound" mutant). Scoping this row under
+                # other_org_id instead would let the identity join's OWN
+                # (unmutated) org_id check mask the work_items-level mutant
+                # entirely, making it undetectable by either probe.
+                ProjectRecord(
+                    id=data.other_only_project_id,
+                    org_id=data.org_id,
+                    provider="linear",
+                    name=PROJECT_NAME + " (other tenant's reference)",
+                    is_active=1,
+                    updated_at=NOW,
+                    last_synced=NOW,
+                ),
+                # CHAOS-3374 round 2: two DIFFERENT providers minting the SAME
+                # catalog id in the SAME org. projects' ReplacingMergeTree key
+                # is (org_id, provider, id), so BOTH survive FINAL -- proving
+                # this is a real, not merely theoretical, engine shape.
+                ProjectRecord(
+                    id=data.colliding_project_id,
+                    org_id=data.org_id,
+                    provider="jira",
+                    project_key=data.colliding_project_key,
+                    name=PROJECT_NAME + " (colliding, jira)",
+                    is_active=1,
+                    updated_at=NOW,
+                    last_synced=NOW,
+                ),
+                ProjectRecord(
+                    id=data.colliding_project_id,
+                    org_id=data.org_id,
+                    provider="linear",
+                    name=PROJECT_NAME + " (colliding, linear)",
+                    is_active=1,
+                    updated_at=NOW,
+                    last_synced=NOW,
+                ),
             ]
         )
         sink.write_work_items(
@@ -269,12 +424,12 @@ def seeded(sink: Any, raw_client: Any) -> Any:
                     project_id=data.project_id,
                     repo_id=None,
                 ),
-                # Attributed by project_key, on an authorized repository.
+                # A nonzero, AUTHORIZED repository -- proves the derivation
+                # isn't reachable only through the zero-UUID sentinel.
                 _work_item(
                     "LIVE-3",
                     org_id=data.org_id,
-                    project_id="",
-                    project_key=data.project_id,
+                    project_id=data.project_id,
                     repo_id=data.authorized_repo,
                 ),
                 # Authorized repository, but outside the as_of bound.
@@ -291,6 +446,37 @@ def seeded(sink: Any, raw_client: Any) -> Any:
                     org_id=data.org_id,
                     project_id=data.project_id,
                     repo_id=data.revoked_repo,
+                ),
+                # CHAOS-3374: the Jira project's own work item, attributed
+                # ONLY via the raw project_key arm (project_id is None, from
+                # the real canonical_jira_issue_to_work_item producer).
+                _jira_work_item(
+                    "ASK-9",
+                    org_id=data.org_id,
+                    project_key=data.jira_project_key,
+                    repo_id=data.jira_repo,
+                ),
+                # CHAOS-3374 cross-provider collision: a Linear-provider row
+                # (adversarially) carrying the Jira project's raw key. Without
+                # the provider guard on the identity join this would leak
+                # into the Jira scope via the project_key arm.
+                _work_item(
+                    "COLLIDE-1",
+                    org_id=data.org_id,
+                    project_id="",
+                    project_key=data.jira_project_key,
+                    repo_id=data.collision_repo,
+                ),
+                # CHAOS-3374 round 2: the would-be member of the AMBIGUOUS
+                # (two-provider) colliding project. Must never be admitted --
+                # present so a regression back to a bare LIMIT 1 has something
+                # real to (nondeterministically) admit, rather than the test
+                # passing vacuously because nothing matches either way.
+                _jira_work_item(
+                    "COLLIDE-9",
+                    org_id=data.org_id,
+                    project_key=data.colliding_project_key,
+                    repo_id=data.colliding_repo,
                 ),
             ]
         )
@@ -369,6 +555,136 @@ async def test_derivation_returns_exactly_the_authorized_project_repositories(
 
 
 @pytest.mark.asyncio
+async def test_jira_shaped_project_derivation_resolves_live(
+    sink: Any, seeded: Any
+) -> None:
+    """CHAOS-3374: the provider-scoped identity join, against a real engine.
+
+    Before the fix, ``PROJECT_REPOSITORIES_SQL`` compared
+    ``work_items.project_id``/``project_key`` against the catalog's
+    (provider-prefixed) id directly -- ``project_id = {entity_id:String} OR
+    project_key = {entity_id:String}`` -- which a raw Jira key never matches.
+    This probe is the RED/GREEN pair for that: it would have returned ``[]``
+    on main.
+    """
+
+    own = await _derive(
+        sink, PROJECT_REPOSITORIES_SQL, seeded, project_id=seeded.jira_project_id
+    )
+    assert own == seeded.jira_expected
+    # The cross-provider collision row must not leak in via the key arm.
+    assert str(seeded.collision_repo) not in own
+
+
+@pytest.mark.asyncio
+async def test_cross_provider_id_collision_derivation_stays_fail_closed_live(
+    sink: Any, seeded: Any
+) -> None:
+    """Codex adversarial review (MEDIUM, 2026-08-04), round 2 -- real engine.
+
+    ``projects``' ReplacingMergeTree key is ``(org_id, provider, id)``, not
+    ``(org_id, id)``. Two rows sharing ``colliding_project_id`` under
+    different providers were both written above and BOTH survive ``FINAL``
+    (proven by the raw-row assertion below) -- a real, not merely
+    theoretical, collision. The original ``project AS (... LIMIT 1)`` CTE (no
+    ``ORDER BY``) would pick one of the two nondeterministically and answer
+    with ITS provider's repositories; the fix (``HAVING count() = 1``) must
+    instead derive nothing.
+    """
+
+    rows = await query_dicts(
+        sink,
+        "SELECT provider FROM projects FINAL WHERE org_id = {org_id:String} "
+        "AND id = {id:String} ORDER BY provider",
+        {"org_id": seeded.org_id, "id": seeded.colliding_project_id},
+    )
+    assert sorted(str(row["provider"]) for row in rows) == ["jira", "linear"], (
+        "both colliding rows must survive FINAL for this to be a real test "
+        f"of the collision guard, got {rows}"
+    )
+
+    own = await _derive(
+        sink, PROJECT_REPOSITORIES_SQL, seeded, project_id=seeded.colliding_project_id
+    )
+    assert own == [], (
+        f"an ambiguous (multi-provider) catalog id must derive nothing, got {own}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cross_provider_id_collision_snapshot_stays_fail_closed_live(
+    sink: Any, seeded: Any
+) -> None:
+    """The whole path, for the collision scenario: real catalog, real resolver,
+    real SQL, real engine -- must refuse rather than guess a provider."""
+
+    service = ScopeResolutionService(ClickHouseAuthorizedEntityCatalog(sink))
+    resolution = await service.resolve_contract(
+        seeded.org_id,
+        "permission-live",
+        ScopeResolveRequest(
+            explicit_refs=(ScopeRef(EntityKind.PROJECT, seeded.colliding_project_id),)
+        ),
+    )
+    scope = resolution.resolved_scope
+    assert scope is not None
+
+    snapshot = await StatusChangeService(
+        ClickHouseStatusChangeSource(sink)
+    ).status_snapshot(seeded.org_id, "permission-live", StatusSnapshotRequest(scope))
+
+    assert NO_REPOSITORY_SET_WARNING in snapshot.warnings
+    assert snapshot.children == ()
+
+
+@pytest.mark.asyncio
+async def test_retired_project_derivation_stays_fail_closed_live(
+    sink: Any, seeded: Any
+) -> None:
+    """Codex adversarial review (MEDIUM, 2026-08-04), round 2 -- real engine.
+
+    The Jira project resolves live (see
+    ``test_jira_shaped_project_derivation_resolves_live``). This writes a
+    NEWER row for the exact same ``(org_id, provider, id)`` with
+    ``is_active = 0`` -- the real ReplacingMergeTree retirement mechanism,
+    not a physically absent row -- and re-derives: it must now return
+    nothing, even though the SAME entity answered a moment ago.
+
+    Written through the SAME ``sink.write_projects`` path as the original row
+    (rather than a raw ``now64(3)`` INSERT): ``ClickHouseMetricsSink``'s own
+    datetime serialization is not wall-clock-comparable to the server's
+    ``now64(3)`` (a fixed offset apart), so only a version strictly LATER by
+    that same serialization path is guaranteed to win under ``FINAL`` --
+    exactly what real retirement writes (also through this sink) look like.
+    """
+
+    before = await _derive(
+        sink, PROJECT_REPOSITORIES_SQL, seeded, project_id=seeded.jira_project_id
+    )
+    assert before == seeded.jira_expected
+
+    sink.write_projects(
+        [
+            ProjectRecord(
+                id=seeded.jira_project_id,
+                org_id=seeded.org_id,
+                provider="jira",
+                project_key=seeded.jira_project_key,
+                name=PROJECT_NAME + " (Jira, retired)",
+                is_active=0,
+                updated_at=NOW + timedelta(seconds=1),
+                last_synced=NOW + timedelta(seconds=1),
+            )
+        ]
+    )
+
+    after = await _derive(
+        sink, PROJECT_REPOSITORIES_SQL, seeded, project_id=seeded.jira_project_id
+    )
+    assert after == [], f"a retired project must derive nothing, got {after}"
+
+
+@pytest.mark.asyncio
 async def test_every_derivation_clause_changes_the_real_result(
     sink: Any, seeded: Any
 ) -> None:
@@ -377,28 +693,31 @@ async def test_every_derivation_clause_changes_the_real_result(
     Each mutant is executed on the same seeded data. A mutant that returns the
     correct set is a clause the assertion above could never have caught -- so
     the failure message names the clause rather than just reporting inequality.
+
+    Scoped to the clauses shared by every provider (tenant/time bounds, the
+    ``project_id`` arm, and the ``repos`` authorization arms), probed against
+    the LINEAR-shaped project -- a real Linear catalog row's own
+    ``project_key`` is always empty, so the native-key arm and the provider
+    guard are dead code for this project and belong in
+    ``test_every_jira_identity_clause_changes_the_real_result`` instead, where
+    they are load-bearing.
     """
 
     mutants = {
         "org_id tenant bound on work_items": (
-            "FROM work_items FINAL\nWHERE org_id = {org_id:String}\n",
-            "FROM work_items FINAL\nWHERE 1 = 1\n",
+            "FROM work_items FINAL\nINNER JOIN project ON 1 = 1\nWHERE org_id = {org_id:String}\n",
+            "FROM work_items FINAL\nINNER JOIN project ON 1 = 1\nWHERE 1 = 1\n",
         ),
         "as_of bound": (
             "  AND updated_at <= {as_of:DateTime64(3, 'UTC')}\n",
             "",
         ),
-        "project_key arm": (
-            "(project_id = {entity_id:String} OR project_key = {entity_id:String})",
-            "(project_id = {entity_id:String})",
-        ),
         "project_id arm": (
-            "(project_id = {entity_id:String} OR project_key = {entity_id:String})",
-            "(project_key = {entity_id:String})",
-        ),
-        "project disjunction (OR -> AND)": (
-            "(project_id = {entity_id:String} OR project_key = {entity_id:String})",
-            "(project_id = {entity_id:String} AND project_key = {entity_id:String})",
+            "(project_id = {entity_id:String}"
+            " OR (catalog_project_key != '' AND project_key = catalog_project_key)"
+            " OR (catalog_project_key != '' AND project_id = catalog_project_key))",
+            "(catalog_project_key != '' AND project_key = catalog_project_key"
+            " OR (catalog_project_key != '' AND project_id = catalog_project_key))",
         ),
         "repos authorization arm": (
             "    toString(repo_id) = '00000000-0000-0000-0000-000000000000'\n"
@@ -423,6 +742,67 @@ async def test_every_derivation_clause_changes_the_real_result(
     assert not survived, (
         "these clauses do not affect the real result, so the assertion above "
         f"cannot be catching them: {sorted(survived)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_every_jira_identity_clause_changes_the_real_result(
+    sink: Any, seeded: Any
+) -> None:
+    """CHAOS-3374: mutation-check the identity-join clauses, against a real engine.
+
+    Probed against the Jira-shaped project, where the native-key arm and the
+    provider guard are the ONLY thing standing between "resolves correctly"
+    and "leaks the cross-provider collision row" (``COLLIDE-1``, seeded with
+    the identical raw key under ``provider="linear"``).
+    """
+
+    async def probe(sql: str) -> list[str]:
+        return await _derive(sink, sql, seeded, project_id=seeded.jira_project_id)
+
+    mutants = {
+        "provider identity guard": (
+            "ifNull(catalog_provider, '') != '' AND provider = catalog_provider AND ",
+            "",
+        ),
+        "native project_key arm": (
+            "(project_id = {entity_id:String}"
+            " OR (catalog_project_key != '' AND project_key = catalog_project_key)"
+            " OR (catalog_project_key != '' AND project_id = catalog_project_key))",
+            "(project_id = {entity_id:String})",
+        ),
+        "project disjunction (OR -> AND)": (
+            "(project_id = {entity_id:String}"
+            " OR (catalog_project_key != '' AND project_key = catalog_project_key)"
+            " OR (catalog_project_key != '' AND project_id = catalog_project_key))",
+            "(project_id = {entity_id:String}"
+            " AND (catalog_project_key != '' AND project_key = catalog_project_key)"
+            " AND (catalog_project_key != '' AND project_id = catalog_project_key))",
+        ),
+    }
+
+    correct = seeded.jira_expected
+    survived: list[str] = []
+    for label, (original, mutated) in mutants.items():
+        assert original in PROJECT_REPOSITORIES_SQL, f"stale mutant anchor: {label}"
+        sql = PROJECT_REPOSITORIES_SQL.replace(original, mutated, 1)
+        if await probe(sql) == correct:
+            survived.append(label)
+    assert not survived, (
+        "these identity-join clauses do not affect the Jira-shaped result, so "
+        f"the collision guard cannot be catching them: {sorted(survived)}"
+    )
+    # And the specific claim the "provider identity guard" mutant proves:
+    # without it, the collision row's repository leaks in.
+    unguarded = PROJECT_REPOSITORIES_SQL.replace(
+        "ifNull(catalog_provider, '') != '' AND provider = catalog_provider AND ",
+        "",
+        1,
+    )
+    leaked = await probe(unguarded)
+    assert str(seeded.collision_repo) in leaked, (
+        "expected the provider-unguarded mutant to admit the colliding "
+        f"cross-provider repository, got {leaked}"
     )
 
 
@@ -462,6 +842,61 @@ async def test_committed_project_scope_snapshot_reads_its_work_items_live(
         "another tenant's work item reached the read",
         seen,
     )
+    # CHAOS-3374: the Jira project's own item, and the cross-provider
+    # collision row, must never surface under the LINEAR scope either.
+    assert not any(child.endswith("ASK-9") for child in seen), (
+        "the Jira-shaped project's own item leaked into the Linear scope",
+        seen,
+    )
+    assert not any(child.endswith("COLLIDE-1") for child in seen), (
+        "the cross-provider collision row leaked into the Linear scope",
+        seen,
+    )
+
+
+@pytest.mark.asyncio
+async def test_jira_shaped_project_snapshot_reads_its_work_items_live(
+    sink: Any, seeded: Any
+) -> None:
+    """CHAOS-3374 end to end: real catalog, real resolver, real SQL, real engine.
+
+    RED before the fix: this scenario (a Jira project resolved through the
+    real ``ScopeResolutionService``, then read through the real
+    ``ClickHouseStatusChangeSource``) returned ``NO_REPOSITORY_SET_WARNING``
+    and an empty ``snapshot.children`` on main -- the disclosed fail-closed
+    refusal ``test_jira_shaped_project_keeps_todays_fail_closed_behaviour``
+    (unit suite) pinned. GREEN after the fix: the project resolves its own
+    work item, and the cross-provider collision row stays excluded.
+    """
+
+    service = ScopeResolutionService(ClickHouseAuthorizedEntityCatalog(sink))
+    resolution = await service.resolve_contract(
+        seeded.org_id,
+        "permission-live",
+        ScopeResolveRequest(
+            explicit_refs=(ScopeRef(EntityKind.PROJECT, seeded.jira_project_id),)
+        ),
+    )
+    assert resolution.outcome.value == "exact"
+    scope = resolution.resolved_scope
+    assert scope is not None
+    assert scope.repositories == []
+
+    snapshot = await StatusChangeService(
+        ClickHouseStatusChangeSource(sink)
+    ).status_snapshot(seeded.org_id, "permission-live", StatusSnapshotRequest(scope))
+
+    assert NO_REPOSITORY_SET_WARNING not in snapshot.warnings
+    seen = {child.entity_id for child in snapshot.children}
+    assert any(child.endswith("ASK-9") for child in seen), seen
+    assert not any(child.endswith("COLLIDE-1") for child in seen), (
+        "a Linear-provider row sharing Jira's raw project key leaked into "
+        "the Jira scope",
+        seen,
+    )
+    assert not any(
+        child.endswith("LIVE-1") or child.endswith("LIVE-3") for child in seen
+    ), ("the Linear project's own items leaked into the Jira scope", seen)
 
 
 @pytest.mark.asyncio

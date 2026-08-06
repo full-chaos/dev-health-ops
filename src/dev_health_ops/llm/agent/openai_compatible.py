@@ -97,8 +97,28 @@ _STRUCTURAL_SCHEMA_KEYS = frozenset(
 # is intentionally charged at the full input rate because the normalized usage
 # contract does not expose cached-token detail.
 # Source snapshot: https://developers.openai.com/api/docs/models/gpt-5-mini
+#
+# CHAOS-3219 Wave 4 (Codex finding, HIGH, 2026-08-05): "ask-dev-scripted-v1"
+# (dev_health_ops.llm.agent.scripted_openai_service.SCRIPTED_OPENAI_MODEL,
+# the deterministic acceptance provider, wired in as source=PLATFORM by
+# production_runtime.py) previously had NO entry here, so
+# _estimated_cost_microusd returned None for every call. ProviderBudget.add
+# (orchestrator.py) never reconciles a None-cost call down from its
+# admission-time reservation (ProviderBudget.require's
+# estimated_cost_per_call_microusd, currently 1_000_000) -- it stays stuck
+# at the reservation, unbounded by what actually happened. Over a run's
+# model rounds that meant every acceptance run charged the org's monthly
+# allowance ~1M-4M microusd regardless of real usage, exhausting the
+# default 100_000_000-microusd org allowance in a few dozen runs -- far
+# short of the ~134-case corpus this environment exists to run. Pricing it
+# here (deliberately tiny -- it is a fixed, deterministic test double, not
+# a real model with real inference cost) lets every call report a real,
+# small, non-None cost, so ProviderBudget.add's reconciliation branch
+# replaces the reservation with the true (near-zero) figure instead of
+# leaving it stuck.
 _PLATFORM_MODEL_PRICES: dict[str, tuple[int, int]] = {
     "gpt-5-mini": (250_000, 2_000_000),
+    "ask-dev-scripted-v1": (1_000, 1_000),
 }
 
 

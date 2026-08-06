@@ -176,6 +176,35 @@ def test_pronouns_and_interrogatives_are_never_subjects(question: str) -> None:
     assert extract_mentions(question, mint_id=sequential_ids()) == ()
 
 
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        # CHAOS-3388: a capitalized kind noun immediately after an acronym-
+        # shaped name reads exactly like the lowercase form -- "the ACR
+        # Project" is as much a named mention as "the ACR project" is. Before
+        # the fix, `_NOUN_TRAILING`'s alternation was matched case-
+        # sensitively against a lowercase-only noun list, so this question
+        # produced zero typed mentions and fell to the untyped bare-name
+        # path, which never terminates the run on an unresolved name.
+        (
+            "What's the status of the ACR Project and what drivers are "
+            "blocking it? What's left to complete?",
+            [("ACR", "project")],
+        ),
+        ("PROJECT Nightfall is behind schedule", [("Nightfall", "project")]),
+        ("Is the ACR Team overloaded?", [("ACR", "team")]),
+    ],
+)
+def test_a_capitalized_kind_noun_is_recognized_case_insensitively(
+    question: str, expected: list[tuple[str, str]]
+) -> None:
+    mentions = extract_mentions(question, mint_id=sequential_ids())
+    assert [
+        (mention.original_text_span, mention.requested_entity_kind.value)
+        for mention in mentions
+    ] == expected
+
+
 def test_a_noun_bound_to_a_following_name_is_not_also_read_backwards() -> None:
     """ "Compare project Ask Dev" must not mint a project called "Compare"."""
 

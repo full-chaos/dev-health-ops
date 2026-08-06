@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models.git import Base  # noqa: E402
@@ -904,3 +906,478 @@ class TestLegacyWriteMonotonicAtDBLevel:
             assert stored.replace(tzinfo=timezone.utc) == t_high, (
                 f"Sibling {dataset_key!r} got wrong timestamp: {stored}, expected {t_high}"
             )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412: the ONE exception to monotonic advance.
+# ---------------------------------------------------------------------------
+
+
+def _seed_corrupt_future_watermark(session, org_id, source_id, dataset_key, when):
+    """Write a FUTURE watermark directly, bypassing set_watermark's clamp.
+
+    CHAOS-3412 round 3 added a write-boundary invariant: ``set_watermark`` never
+    persists a future value, from any caller. That is correct, and it means the
+    corrupt state can no longer be created through the public API — so a test
+    that seeds via ``set_watermark`` silently STOPS exercising the repair path
+    while still passing. This writes the row directly, which is also how the
+    state genuinely arises: rows persisted by pre-fix code, sitting in a live
+    database.
+    """
+    row = (
+        session.query(SyncWatermark)
+        .filter(
+            SyncWatermark.org_id == org_id,
+            SyncWatermark.source_id == source_id,
+            SyncWatermark.dataset_key == dataset_key,
+        )
+        .one_or_none()
+    )
+    if row is None:
+        row = SyncWatermark(
+            repo_id=source_id,
+            target=dataset_key,
+            org_id=org_id,
+            source_id=source_id,
+            dataset_key=dataset_key,
+            last_synced_at=when,
+        )
+        session.add(row)
+    else:
+        row.last_synced_at = when
+    session.flush()
+    return row
+
+
+def test_future_watermark_is_corrected_downward(db_session):
+    """A stored value AHEAD of now is corrupt and must be correctable.
+
+    Nothing else can repair it: the planner would resolve a window starting in
+    the future, plan no unit, and the run would finalize FAILED forever.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+
+    org, source, dataset = "wm-org", "full-chaos/dev-health", "commits"
+    now = datetime.now(timezone.utc)
+    _seed_corrupt_future_watermark(
+        db_session, org, source, dataset, now + timedelta(days=30)
+    )
+
+    sane = now - timedelta(hours=1)
+    set_watermark(db_session, org, source, dataset, sane)
+
+    stored = get_watermark(db_session, org, source, dataset)
+    assert stored is not None
+    stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
+    assert abs((stored - sane).total_seconds()) < 2, (
+        f"a future watermark must be corrected downward; stored {stored}"
+    )
+
+
+def test_legitimate_watermark_is_still_never_rolled_backwards(db_session):
+    """The CHAOS-2578 guarantee is intact for every legitimate (past) value.
+
+    This is the guard that keeps the future-correction exception narrow: a late
+    or out-of-order unit result must still never lower a valid watermark.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+
+    org, source, dataset = "wm-org", "full-chaos/dev-health", "prs"
+    now = datetime.now(timezone.utc)
+    recent = now - timedelta(hours=1)
+    set_watermark(db_session, org, source, dataset, recent)
+
+    # A late-arriving older result — both values are in the past, so the
+    # correction exception must NOT apply.
+    set_watermark(db_session, org, source, dataset, now - timedelta(days=5))
+
+    stored = get_watermark(db_session, org, source, dataset)
+    assert stored is not None
+    stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
+    assert abs((stored - recent).total_seconds()) < 2, (
+        "an out-of-order PAST result must not roll the watermark backwards — "
+        "the future-correction exception must stay gated on a future stored value"
+    )
+
+
+def test_future_incoming_value_is_clamped_and_repairs_the_stored_one(db_session):
+    """SUPERSEDED BEHAVIOR — recorded deliberately, not quietly rewritten.
+
+    This test previously asserted that an incoming FUTURE value does not lower a
+    stored future value. That pinned the leak CHAOS-3412 round 3 closed: it
+    accepted a future value being persisted at all, which is exactly how a
+    provider-supplied ``watermark_at`` re-poisoned a repaired watermark.
+
+    Under the write-boundary invariant the incoming value is clamped to ``now``
+    FIRST. The stored value is then in the future while the incoming one is sane,
+    so the repair applies and the corruption is fixed rather than preserved. The
+    new expectation is strictly stronger: a future write cannot persist, and it
+    now HEALS instead of entrenching.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+
+    org, source, dataset = "wm-org", "full-chaos/dev-health", "commit-stats"
+    now = datetime.now(timezone.utc)
+    _seed_corrupt_future_watermark(
+        db_session, org, source, dataset, now + timedelta(days=30)
+    )
+
+    set_watermark(db_session, org, source, dataset, now + timedelta(days=10))
+
+    stored = get_watermark(db_session, org, source, dataset)
+    assert stored is not None
+    stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
+    assert stored <= datetime.now(timezone.utc) + timedelta(seconds=61), (
+        f"a future write must be clamped, not persisted: {stored}"
+    )
+    assert stored < now + timedelta(days=1), (
+        "the stored future value must have been repaired, not preserved"
+    )
+
+
+def test_future_correction_sql_compiles_for_postgresql():
+    """The PostgreSQL branch of the correction is otherwise UNTESTED.
+
+    The unit suite runs on SQLite, which takes the Python-level branch, so the
+    ``CASE ... GREATEST`` statement the real deployment executes never runs here.
+    Compiling it against the postgresql dialect is not equivalent to executing
+    it, but it does catch the failure this construct is most likely to have —
+    an invalid/untypeable clause — instead of leaving the branch entirely
+    unmeasured. Behavior on a live PostgreSQL remains unverified by this suite.
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import case, func, update
+    from sqlalchemy.dialects import postgresql
+
+    from dev_health_ops.models.settings import SyncWatermark
+
+    now = datetime.now(timezone.utc)
+    ts = now
+    stmt = (
+        update(SyncWatermark)
+        .where(SyncWatermark.id == "x")
+        .values(
+            last_synced_at=case(
+                (SyncWatermark.last_synced_at > now, ts),
+                else_=func.greatest(
+                    func.coalesce(SyncWatermark.last_synced_at, ts), ts
+                ),
+            ),
+            updated_at=now,
+        )
+    )
+    sql = str(stmt.compile(dialect=postgresql.dialect()))
+    assert "CASE" in sql.upper()
+    assert "greatest" in sql.lower()
+
+
+def _sync_engine_url() -> URL:
+    """DEV_HEALTH_POSTGRES_TEST_URI names the ASYNC driver (+asyncpg), which a
+    blocking ``create_engine``/``Session`` cannot drive -- it raises
+    ``MissingGreenlet`` the moment it touches IO.
+
+    These two CHAOS-3412 tests had never actually executed: the variable is set
+    only in CI steps that do not collect this file, so they always skipped and
+    the driver mismatch stayed invisible. The Go migration branch sets
+    DEV_HEALTH_POSTGRES_TEST_URI on the unit step, which is what finally ran
+    them. Coerce to psycopg2 the same way
+    test_ask_dev_v2_persistence_startup_gate.py and
+    test_canonical_incident_feature_flag_postgres_migration.py already do.
+
+    Returns the URL OBJECT, never ``str(url)``: SQLAlchemy's ``__str__`` masks
+    the password as ``***``, which turns this into a "password authentication
+    failed" that reads like broken CI credentials rather than a broken helper.
+    """
+    return make_url(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"]).set(
+        drivername="postgresql+psycopg2"
+    )
+
+
+@pytest.mark.skipif(
+    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
+    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
+)
+def test_real_postgres_future_watermark_correction():
+    """EXECUTE the CHAOS-3412 correction against live PostgreSQL.
+
+    The rest of the suite runs SQLite, which takes the Python branch of
+    ``_monotonic_update``. The statement a real deployment executes is the
+    ``CASE ... GREATEST`` update, and a dialect-compile check proves only that it
+    parses. This runs it: it asserts the stored row is genuinely lowered, and — on
+    the same branch — that a legitimate lower value is still discarded, so the
+    narrowness of the exception is verified where it actually runs.
+    """
+    import uuid as _uuid
+    from datetime import timedelta
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+
+    engine = create_engine(_sync_engine_url())
+    Base.metadata.create_all(engine)
+    SyncWatermark.metadata.create_all(engine)
+
+    org = f"pg-wm-{_uuid.uuid4()}"
+    source = "full-chaos/dev-health"
+    try:
+        with Session(engine) as session:
+            now = datetime.now(timezone.utc)
+
+            # --- the correction: stored future value must be lowered ---------
+            # Seed DIRECTLY: set_watermark now clamps future writes at the
+            # boundary (CHAOS-3412 round 3), so seeding through it would store
+            # `now` and this test would silently stop exercising the repair.
+            corrupt = now + timedelta(days=30)
+            _seed_corrupt_future_watermark(session, org, source, "commits", corrupt)
+            session.commit()
+            stored = get_watermark(session, org, source, "commits")
+            assert stored is not None
+            assert _aware(stored) > now + timedelta(days=1), (
+                f"precondition: a MEANINGFULLY future value must be stored, got "
+                f"{_aware(stored)} — otherwise the repair below is not exercised"
+            )
+
+            sane = now - timedelta(hours=1)
+            set_watermark(session, org, source, "commits", sane)
+            session.commit()
+            session.expire_all()
+            corrected = get_watermark(session, org, source, "commits")
+            assert corrected is not None
+            assert abs((_aware(corrected) - sane).total_seconds()) < 2, (
+                "live PostgreSQL did not lower the corrupt future watermark: "
+                f"{_aware(corrected)} (expected ~{sane}). The CASE branch is "
+                "what production executes; SQLite passing proves nothing here."
+            )
+
+            # --- narrowness, on the SAME branch ------------------------------
+            set_watermark(session, org, source, "prs", now - timedelta(hours=1))
+            session.commit()
+            set_watermark(session, org, source, "prs", now - timedelta(days=5))
+            session.commit()
+            session.expire_all()
+            kept = get_watermark(session, org, source, "prs")
+            assert kept is not None
+            assert (
+                abs((_aware(kept) - (now - timedelta(hours=1))).total_seconds()) < 2
+            ), (
+                "live PostgreSQL rolled a LEGITIMATE watermark backwards — the "
+                "GREATEST path must still win when the stored value is in the past"
+            )
+    finally:
+        with Session(engine) as cleanup:
+            cleanup.query(SyncWatermark).filter(SyncWatermark.org_id == org).delete(
+                synchronize_session=False
+            )
+            cleanup.commit()
+        engine.dispose()
+
+
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+@pytest.mark.skipif(
+    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
+    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
+)
+def test_real_postgres_future_write_is_clamped_at_the_boundary():
+    """EXECUTE the write-boundary clamp against live PostgreSQL.
+
+    Covers both the INSERT path (first-ever row, previously written unclamped)
+    and the UPDATE path (re-poisoning a repaired value), on the dialect that
+    actually ships.
+    """
+    import uuid as _uuid
+    from datetime import timedelta
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+
+    engine = create_engine(_sync_engine_url())
+    Base.metadata.create_all(engine)
+    SyncWatermark.metadata.create_all(engine)
+
+    org = f"pg-wb-{_uuid.uuid4()}"
+    source = "full-chaos/dev-health"
+    try:
+        with Session(engine) as session:
+            now = datetime.now(timezone.utc)
+
+            # INSERT path: first-ever write carrying a future value.
+            set_watermark(session, org, source, "commits", now + timedelta(days=30))
+            session.commit()
+            session.expire_all()
+            inserted = get_watermark(session, org, source, "commits")
+            assert inserted is not None
+            assert _aware(inserted) <= datetime.now(timezone.utc) + timedelta(
+                seconds=61
+            ), (
+                f"live PostgreSQL persisted a future watermark on INSERT: "
+                f"{_aware(inserted)}"
+            )
+
+            # UPDATE path: a repaired value must not be re-poisoned.
+            set_watermark(session, org, source, "prs", now - timedelta(hours=2))
+            session.commit()
+            set_watermark(session, org, source, "prs", now + timedelta(days=30))
+            session.commit()
+            session.expire_all()
+            updated = get_watermark(session, org, source, "prs")
+            assert updated is not None
+            assert _aware(updated) <= datetime.now(timezone.utc) + timedelta(
+                seconds=61
+            ), (
+                f"live PostgreSQL re-poisoned a sane watermark on UPDATE: "
+                f"{_aware(updated)}"
+            )
+    finally:
+        with Session(engine) as cleanup:
+            cleanup.query(SyncWatermark).filter(SyncWatermark.org_id == org).delete(
+                synchronize_session=False
+            )
+            cleanup.commit()
+        engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3412 closure repair: the write boundary must cover EVERY write API.
+#
+# set_watermark was not the only writer. set_legacy_repo_watermark writes the
+# raw legacy row directly — unclamped on insert, and handing the raw value to
+# _monotonic_update on update. That row is the D4 bridge that get_watermark's
+# reverse-legacy fallback serves to ALL of a target's sibling datasets, so one
+# poisoned legacy row poisons commits, commit-stats and files at once.
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_write_api_clamps_future_on_insert(db_session):
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import (
+        get_legacy_repo_watermark,
+        set_legacy_repo_watermark,
+    )
+
+    now = datetime.now(timezone.utc)
+    set_legacy_repo_watermark(
+        db_session, "lg-org", "repo-1", "git", now + timedelta(days=30)
+    )
+    stored = get_legacy_repo_watermark(db_session, "lg-org", "repo-1", "git")
+    assert stored is not None
+    stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
+    assert stored <= datetime.now(timezone.utc) + timedelta(seconds=61), (
+        f"the legacy write API persisted a future watermark on INSERT ({stored}) "
+        "— it bypasses set_watermark's boundary clamp entirely"
+    )
+
+
+def test_legacy_write_api_clamps_future_on_update(db_session):
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import (
+        get_legacy_repo_watermark,
+        set_legacy_repo_watermark,
+    )
+
+    now = datetime.now(timezone.utc)
+    set_legacy_repo_watermark(
+        db_session, "lg-org", "repo-2", "git", now - timedelta(hours=2)
+    )
+    set_legacy_repo_watermark(
+        db_session, "lg-org", "repo-2", "git", now + timedelta(days=30)
+    )
+    stored = get_legacy_repo_watermark(db_session, "lg-org", "repo-2", "git")
+    assert stored is not None
+    stored = stored.replace(tzinfo=timezone.utc) if stored.tzinfo is None else stored
+    assert stored <= datetime.now(timezone.utc) + timedelta(seconds=61), (
+        f"the legacy write API persisted a future watermark on UPDATE ({stored})"
+    )
+
+
+def test_poisoned_legacy_row_cannot_leak_to_sibling_datasets(db_session):
+    """The amplification: one legacy row backs every sibling dataset.
+
+    get_watermark falls back to the raw legacy row for a canonical dataset with
+    no exact row of its own, so a future value written through the legacy API
+    would surface as a future watermark for commits, commit-stats AND files.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.sync.watermarks import get_watermark, set_legacy_repo_watermark
+
+    now = datetime.now(timezone.utc)
+    set_legacy_repo_watermark(
+        db_session, "lg-org", "repo-3", "git", now + timedelta(days=30)
+    )
+    for sibling in ("commits", "commit-stats", "files"):
+        seen = get_watermark(db_session, "lg-org", "repo-3", sibling)
+        if seen is None:
+            continue
+        seen = seen.replace(tzinfo=timezone.utc) if seen.tzinfo is None else seen
+        assert seen <= datetime.now(timezone.utc) + timedelta(seconds=61), (
+            f"sibling dataset {sibling!r} reads a FUTURE watermark ({seen}) via "
+            "the reverse-legacy fallback — one poisoned legacy row stalls them all"
+        )
+
+
+def test_every_watermark_write_api_routes_through_the_normalizer():
+    """DERIVED, not listed: a new write API fails this until it is wired.
+
+    The round-3 closure claimed the write boundary was closed while a second
+    write API bypassed it. Enumerating writers by hand is what let that stand,
+    so this derives them from the module's AST: any module-level function that
+    persists ``last_synced_at`` — by constructing a SyncWatermark with it, by
+    assigning to it, or by delegating to a helper that does — must call the
+    normalizer. Add a third writer and this test fails until it complies.
+    """
+    import ast
+    import inspect
+
+    from dev_health_ops.sync import watermarks as wm
+
+    NORMALIZER = "_normalize_watermark_write"
+    tree = ast.parse(inspect.getsource(wm))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def _persists_last_synced_at(node) -> bool:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.keyword) and sub.arg == "last_synced_at":
+                return True
+            if isinstance(sub, ast.Attribute) and sub.attr == "last_synced_at":
+                if isinstance(getattr(sub, "ctx", None), ast.Store):
+                    return True
+        return False
+
+    def _calls(node, name: str) -> bool:
+        return any(
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id == name
+            for sub in ast.walk(node)
+        )
+
+    # Writers = functions that persist last_synced_at, or delegate to one that
+    # does (_monotonic_update). Exclude the low-level helper and the normalizer.
+    writers = {
+        name
+        for name, node in functions.items()
+        if (_persists_last_synced_at(node) or _calls(node, "_monotonic_update"))
+        and name not in {"_monotonic_update", NORMALIZER}
+    }
+    assert writers, "derivation found no write APIs at all — the test is vacuous"
+
+    unnormalized = sorted(n for n in writers if not _calls(functions[n], NORMALIZER))
+    assert not unnormalized, (
+        f"these watermark write APIs bypass {NORMALIZER}(): {unnormalized}. "
+        "Every writer must route through the boundary — enforcing it at some "
+        "call sites is what CHAOS-3412 round 3 got wrong."
+    )

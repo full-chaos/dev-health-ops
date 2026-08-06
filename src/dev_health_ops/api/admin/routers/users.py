@@ -128,6 +128,13 @@ async def create_user(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # Commit before responding (CHAOS-3411): get_postgres_session()'s
+    # post-response commit runs *after* FastAPI has already sent this
+    # response to the client (fastapi.routing's AsyncExitStack unwinds
+    # after `await response(...)`, not before), so a second request that
+    # references this user id -- e.g. POST /orgs/{id}/members -- can land
+    # before that deferred commit lands and see no such user.
+    await session.commit()
     return _user_response(user)
 
 

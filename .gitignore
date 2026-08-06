@@ -45,3 +45,8 @@ index.txt
 # report. Never commit these -- a committed applied-record would make every
 # clone refuse to run the harness.
 .mutation-harness/
+
+# Agent tool scratch output (browser automation, session memory). These are
+# per-run artifacts and must never enter a commit.
+.playwright-mcp/
+.remember/

@@ -23,6 +23,14 @@
       "additionalProperties": false,
       "description": "Server-computed ``actual-completion`` rule result; the LLM explains, never derives, it.",
       "properties": {
+        "blockers": {
+          "items": {
+            "$ref": "#/$defs/DevRequiredChildFact"
+          },
+          "maxItems": 100,
+          "title": "Blockers",
+          "type": "array"
+        },
         "conflicts": {
           "items": {
             "$ref": "#/$defs/DevStatusConflict"
@@ -93,6 +101,11 @@
           "maxItems": 100,
           "title": "Required Children",
           "type": "array"
+        },
+        "required_children_not_applicable": {
+          "default": false,
+          "title": "Required Children Not Applicable",
+          "type": "boolean"
         },
         "rule_id": {
           "maxLength": 128,
@@ -1680,6 +1693,45 @@
       "maxItems": 25,
       "title": "Data Health",
       "type": "array"
+    },
+    "declared_project_evidence_ref_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 25,
+      "title": "Declared Project Evidence Ref Ids",
+      "type": "array"
+    },
+    "declared_project_state": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Declared Project State"
+    },
+    "declared_project_target_date": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Declared Project Target Date"
     },
     "deployments": {
       "items": {

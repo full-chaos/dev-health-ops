@@ -30,12 +30,24 @@ spec:
               value: {{ .Values.postgresql.credentials.password | quote }}
             - name: POSTGRES_DB
               value: {{ .Values.postgresql.credentials.database | quote }}
+            # Must match the compose stack exactly: the volume is mounted at the
+            # parent /var/lib/postgresql and PGDATA is a subdirectory of it,
+            # never the mount root (which holds lost+found and other reserved
+            # entries) and never the image's own default (which moves between
+            # majors). Leaving PGDATA unset only ever worked by coincidence:
+            # through 17 the image default was /var/lib/postgresql/data, which
+            # happened to equal the old mount path, and 18 relocated it to
+            # /var/lib/postgresql/<major>/docker, at which point the entrypoint
+            # refuses to start against an "unused" mount. See
+            # https://github.com/docker-library/postgres/pull/1259.
+            - name: PGDATA
+              value: /var/lib/postgresql/pgdata
           resources:
             {{- toYaml .Values.postgresql.resources | nindent 12 }}
           {{- if .Values.postgresql.persistence.enabled }}
           volumeMounts:
             - name: postgres-data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /var/lib/postgresql
           {{- end }}
           livenessProbe:
             exec:

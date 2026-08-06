@@ -35,6 +35,7 @@ from dev_health_ops.api.services.integrations import (
 from dev_health_ops.sync.canonical_incident_gate import (
     CanonicalIncidentFeatureDisabledError,
 )
+from dev_health_ops.sync.datasets import get_dataset_spec
 from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.trigger_routing import map_sync_mode
@@ -164,6 +165,7 @@ def _unit_to_response(unit: object) -> SyncRunUnitResponse:
             "attempts": int(getattr(unit, "attempts")),
             "available_at": getattr(unit, "available_at"),
             "rate_limit_deferrals": int(getattr(unit, "rate_limit_deferrals")),
+            "budget_deferrals": int(getattr(unit, "budget_deferrals", 0) or 0),
             "duration_seconds": getattr(unit, "duration_seconds"),
             "error": getattr(unit, "error"),
             "error_category": error_category,
@@ -390,7 +392,8 @@ async def update_integration_datasets(
 ) -> list[IntegrationDatasetResponse]:
     """Enable or disable dataset rows by dataset_key."""
     int_svc = IntegrationService(session, org_id)
-    if await int_svc.get_by_id(integration_id) is None:
+    integration = await int_svc.get_by_id(integration_id)
+    if integration is None:
         raise HTTPException(status_code=404, detail="Integration not found")
 
     svc = IntegrationDatasetService(session, org_id)
@@ -398,11 +401,19 @@ async def update_integration_datasets(
     for item in payload.datasets:
         dataset = await svc.get_by_key(integration_id, item.dataset_key)
         if dataset is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Dataset '{item.dataset_key}' not found",
+            if get_dataset_spec(str(integration.provider), item.dataset_key) is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Dataset '{item.dataset_key}' not found",
+                )
+            dataset = await svc.create(
+                integration.id,
+                item.dataset_key,
+                item.is_enabled,
             )
-        updated.append(await svc.set_enabled(dataset, item.is_enabled))
+        else:
+            dataset = await svc.set_enabled(dataset, item.is_enabled)
+        updated.append(dataset)
     return [_dataset_to_response(d) for d in updated]
 
 
@@ -603,6 +614,25 @@ async def get_sync_run_units(
         )
     )
 
+    # CHAOS-3412: a unit the budget guard is holding back is 'retrying'
+    # with the guard's own error_category -- derived here rather than
+    # stored, so it stays true the moment the unit is admitted or fails.
+    budget_blocked_unit_count = sum(
+        1
+        for unit in units
+        if unit.status == "retrying"
+        and isinstance(unit.result, dict)
+        and unit.result.get("error_category") == "budget_deferred"
+    )
+
+    # CHAOS-3430: watermark-vs-now lag per (source, dataset). A capped HEAVY
+    # tick finalizes as an ordinary SUCCESS, so run status alone cannot show
+    # that the dataset is still ratcheting toward the current time.
+    dataset_freshness = await svc.build_dataset_freshness(units)
+    catching_up_dataset_count = sum(
+        1 for entry in dataset_freshness if entry["catching_up"]
+    )
+
     return SyncRunUnitSummary(
         by_status=rollups["by_status"],
         by_source=rollups["by_source"],
@@ -615,6 +645,11 @@ async def get_sync_run_units(
         unit_count=total_units,
         next_retry_at=min(retry_times) if retry_times else None,
         retry_exhausted_unit_count=retry_exhausted_unit_count,
+        budget_blocked_unit_count=budget_blocked_unit_count,
+        dataset_freshness=dataset_freshness,
+        catching_up_dataset_count=catching_up_dataset_count,
+        # Declared, not implied: these describe only what THIS run planned.
+        dataset_freshness_scope="run",
         units=[
             _unit_to_response(u) for u in (units if limit is None else units[:limit])
         ],

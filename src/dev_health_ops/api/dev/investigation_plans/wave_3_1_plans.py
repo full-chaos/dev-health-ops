@@ -1,38 +1,43 @@
-"""CHAOS-3297 stack #3: plan wiring for the CHAOS-3303/3304/3305 services.
+"""CHAOS-3297 stack #3 / CHAOS-3393: plan wiring for the CHAOS-3303/3304/
+3305/3393 services.
 
 ``health.project.v1`` / ``health.team.v1`` / ``balance.team_workload.v1`` /
-``deficiency.operational.v1`` -- registered against the SAME
-:class:`~.steps.StepRegistry` ``plan_documents.py``'s six core plans use,
-per that module's own docstring promise ("CHAOS-3303/3304/3305 register
-those plans and their steps against the same StepRegistry this module
-uses, without needing to change this module or the orchestrator").
+``deficiency.operational.v1`` / ``status.portfolio.v1`` -- registered
+against the SAME :class:`~.steps.StepRegistry` ``plan_documents.py``'s six
+core plans use, per that module's own docstring promise ("CHAOS-3303/3304/
+3305 register those plans and their steps against the same StepRegistry
+this module uses, without needing to change this module or the
+orchestrator").
 
-``status.portfolio.v1`` is deliberately NOT registered here. Wiring it
-found a real gap: :class:`~.steps.StepContext` carries exactly one
-:class:`~..contracts.DevScope` (``DevScope.validate_direct_scope``
-requires exactly one ``entity_ref`` for every non-``ORGANIZATION`` direct
-scope), and :meth:`~.executor.PlanExecutor.run`'s own
-``subject_set_fingerprint`` parameter is result metadata, not a channel
-for handing a step the several project scopes
-``PortfolioStatusService.evaluate_portfolio`` needs. That gap needs a
-decision before ``status.portfolio.v1`` can be wired without widening
-``StepContext`` (and therefore the orchestrator contract CHAOS-3295's own
-scope-expansion comment promised CHAOS-3303/3304/3305 would not need to
-touch) -- see the CHAOS-3297 Linear issue.
+``status.portfolio.v1`` was deliberately NOT registered here through
+CHAOS-3297: wiring it found a real gap -- :class:`~.steps.StepContext`
+carried exactly one :class:`~..contracts.DevScope`
+(``DevScope.validate_direct_scope`` requires exactly one ``entity_ref`` for
+every non-``ORGANIZATION`` direct scope), and
+:meth:`~.executor.PlanExecutor.run`'s own ``subject_set_fingerprint``
+parameter was result metadata only, not a channel for handing a step the
+several project scopes ``PortfolioStatusService.evaluate_portfolio`` needs.
+CHAOS-3393 closes that gap additively: ``StepContext.subject_set_scopes``
+(a new, empty-by-default tuple field every other plan ignores) carries the
+committed batch, built by the orchestrator from the preflight-committed
+``DevSubjectSet`` -- see ``orchestrator.run()``'s own PLURAL_COHORT/
+ORGANIZATION_WIDE gate.
 
-Every step here calls exactly one CHAOS-3303/3304/3305 service, over the
-SAME :class:`~.builtin_steps.PlanExecutorRuntime` port the six core plans'
-steps already use -- ``ProjectHealthService``/``TeamHealthService``/
-``TeamWorkloadService``/``OperationalDeficiencyService`` all take that
-runtime directly in their own constructors, so
-``production_runtime.py`` constructs ONE runtime instance and threads it
-into both ``builtin_steps.register_builtin_steps`` and this module's
+Every step here calls exactly one CHAOS-3303/3304/3305/3393 service, over
+the SAME :class:`~.builtin_steps.PlanExecutorRuntime` port the six core
+plans' steps already use -- ``ProjectHealthService``/``TeamHealthService``/
+``TeamWorkloadService``/``OperationalDeficiencyService``/
+``PortfolioStatusService`` all take that runtime (or, for
+``PortfolioStatusService``, a ``ProjectHealthService`` built over it)
+directly in their own constructors, so ``production_runtime.py``
+constructs ONE runtime instance and threads it into both
+``builtin_steps.register_builtin_steps`` and this module's
 :func:`register_wave_3_1_steps` -- never a second, parallel query path.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Protocol
 
@@ -49,11 +54,20 @@ from ..contracts_v2.deficiency import (
     OperationalDeficiencyInventory,
     finding_sort_key,
 )
-from ..contracts_v2.health_rules import HealthRuleFinding
+from ..contracts_v2.health_rules import (
+    DevPortfolioProjectStatusV2,
+    DimensionState,
+    HealthRuleFinding,
+)
 from ..contracts_v2.plan import DevInvestigationPlan, DevSourceRequirement
 from ..contracts_v2.result import HEALTH_FINDING_SEVERITY_RANK, DevSourceContent
 from ..health_profile_synthesis import HealthProfileResult
 from ..persistence.service import _SOURCE_CLASSES as _PERSISTENCE_SOURCE_CLASSES
+from ..portfolio_status_service import (
+    PortfolioProjectScope,
+    PortfolioStatusResult,
+    worst_project_state,
+)
 from ..preflight_outcomes import PLAN_ID_BY_INTENT
 from .builtin_steps import PlanExecutorRuntime, register_builtin_steps
 from .plan_documents import CORE_PLANS_BY_INTENT, CORE_QUESTION_INTENT_IDS
@@ -62,11 +76,16 @@ from .state_mapping import queried_semantics
 from .steps import PlanStepDefinition, StepContext, StepOutcome, StepRegistry
 
 __all__ = [
+    "PORTFOLIO_BATCH_DEADLINE_RESERVE_SECONDS",
+    "PORTFOLIO_BATCH_DEADLINE_SECONDS",
+    "PORTFOLIO_PROJECT_TIMEOUT_CEILING_SECONDS",
+    "PORTFOLIO_PLAN_TIMEOUT_SECONDS",
     "WAVE_3_1_PLANS_BY_INTENT",
     "WAVE_3_1_QUESTION_INTENT_IDS",
     "build_registry_with_wave_3_1",
     "capped_deficiency_findings",
     "capped_health_findings",
+    "capped_portfolio_project_statuses",
     "register_wave_3_1_steps",
 ]
 
@@ -166,6 +185,22 @@ class _OperationalDeficiencyEvaluator(Protocol):
         team_id: str,
         now: datetime,
     ) -> OperationalDeficiencyInventory: ...
+
+
+class _PortfolioStatusEvaluator(Protocol):
+    async def evaluate_portfolio(
+        self,
+        *,
+        org_id: str,
+        permission_fingerprint: str,
+        projects: Sequence[PortfolioProjectScope],
+        now: datetime,
+        unresolved_mention_ids: Sequence[str] = (),
+        ambiguous_mention_ids: Sequence[str] = (),
+        warnings: Sequence[str] = (),
+        per_project_timeout_seconds: float | None = None,
+        batch_deadline_seconds: float | None = None,
+    ) -> PortfolioStatusResult: ...
 
 
 _MAX_FINDINGS = 50
@@ -339,6 +374,174 @@ def _deficiency_inventory_outcome(
     )
 
 
+#: CHAOS-3393. ``status.portfolio.v1``'s own ``per_step_timeout_seconds``
+#: (the plan document's contract ceiling, ``DevInvestigationPlan.
+#: per_step_timeout_seconds`` admits at most 120 -- ``Field(ge=1, le=120)``).
+#: A single source of truth for both the plan document field below and the
+#: per-project timeout slice, so the two can never drift apart.
+PORTFOLIO_PLAN_TIMEOUT_SECONDS = 120
+
+#: The most one project's evaluation may take within a portfolio batch,
+#: regardless of how few projects are in it -- a 1-project "portfolio"
+#: still may not consume the whole 120s step budget on one slow project.
+PORTFOLIO_PROJECT_TIMEOUT_CEILING_SECONDS = 15.0
+
+#: CHAOS-3393 codex MED-4: margin reserved BELOW the step's own
+#: ``per_step_timeout_seconds`` ceiling for everything that happens between
+#: ``PortfolioStatusService.evaluate_portfolio`` returning and the
+#: executor's own outer ``asyncio.wait_for`` actually observing the step as
+#: complete (content assembly, StepOutcome construction, event-loop
+#: scheduling) -- never zero. The original ``min(120/N, 15)`` per-project
+#: division had NO such margin: at N=25 each slice was exactly 4.8s, so the
+#: 25 slices summed to exactly the step's own 120s ceiling, and any real
+#: per-project latency at all raced the outer timeout and lost (a total,
+#: undisclosed "did not complete" failure -- see HIGH-2 -- instead of a
+#: partial, disclosed one).
+PORTFOLIO_BATCH_DEADLINE_RESERVE_SECONDS = 10.0
+
+#: The batch's own monotonic deadline (see ``portfolio_status_service.
+#: PortfolioStatusService.evaluate_portfolio``'s ``batch_deadline_seconds``)
+#: -- strictly less than ``PORTFOLIO_PLAN_TIMEOUT_SECONDS`` so the batch
+#: always finishes (real results plus bounded timeout rows for whatever did
+#: not fit) comfortably before the step's own outer ceiling would cancel
+#: the whole step wholesale.
+PORTFOLIO_BATCH_DEADLINE_SECONDS = (
+    PORTFOLIO_PLAN_TIMEOUT_SECONDS - PORTFOLIO_BATCH_DEADLINE_RESERVE_SECONDS
+)
+
+
+def capped_portfolio_project_statuses(
+    statuses: tuple[DevPortfolioProjectStatusV2, ...],
+) -> tuple[tuple[DevPortfolioProjectStatusV2, ...], bool]:
+    """Sort ``statuses`` into the canonical worst-state-first-then-
+    ``project_id`` order ``DevSourceContent``/``DevAnswerFrame`` require,
+    then cap at :data:`_MAX_FINDINGS` (mirrors ``capped_health_findings``
+    exactly; a portfolio batch is already bounded at
+    ``portfolio_status_service.MAX_PORTFOLIO_PROJECTS`` (25), well under
+    this cap, but the same disclosed-truncation discipline applies
+    regardless of which bound would bite first).
+    """
+
+    ordered = tuple(
+        sorted(
+            statuses,
+            key=lambda status: (
+                HEALTH_FINDING_SEVERITY_RANK[status.worst_state],
+                status.project_id,
+            ),
+        )
+    )
+    truncated = len(ordered) > _MAX_FINDINGS
+    return ordered[:_MAX_FINDINGS], truncated
+
+
+def _bounded_portfolio_failure_reason(error: str) -> str:
+    """A bounded, closed-vocabulary failure classification for one failed
+    project's ``DevPortfolioProjectStatusV2.failure_reason`` -- never the
+    raw ``PortfolioProjectFailure.error`` (an exception ``repr()``), which
+    can carry provider/internal detail this wire contract must never
+    disclose (mirrors ``no_match_terminal``'s internal-token-leak
+    discipline one layer up)."""
+
+    return "evaluation_timeout" if error == "timeout" else "evaluation_error"
+
+
+def _portfolio_status_content(
+    result: PortfolioStatusResult, *, labels_by_project_id: Mapping[str, str]
+) -> DevSourceContent:
+    """Wire a :class:`PortfolioStatusResult` into ``content.health_findings``
+    (every evaluated project's own launch-eligible findings, flattened and
+    re-capped -- mirrors ``_health_profile_content`` exactly, so a portfolio
+    finding is indistinguishable in shape from a single-project one) PLUS
+    ``content.portfolio_project_statuses`` -- the per-project rollup
+    (worst state, finding count, evaluated/failed) that carries the batch's
+    own per-project attribution, including a disclosed row for every
+    project ``PortfolioStatusService`` could not evaluate at all (never
+    silently dropped -- see ``PortfolioProjectFailure``'s own docstring).
+    """
+
+    all_findings = tuple(
+        finding for project in result.projects for finding in project.launch_findings
+    )
+    capped_findings, health_truncated = capped_health_findings(all_findings)
+    evaluated_rows = tuple(
+        DevPortfolioProjectStatusV2(
+            schema_version="dev_portfolio_project_status.v1",
+            project_id=project.subject_id,
+            display_label=labels_by_project_id.get(
+                project.subject_id, project.subject_id
+            ),
+            worst_state=worst_project_state(project),
+            finding_count=len(project.launch_findings),
+            evaluated=True,
+            failure_reason=None,
+        )
+        for project in result.projects
+    )
+    failed_rows = tuple(
+        DevPortfolioProjectStatusV2(
+            schema_version="dev_portfolio_project_status.v1",
+            project_id=failure.project_id,
+            display_label=labels_by_project_id.get(
+                failure.project_id, failure.project_id
+            ),
+            worst_state=DimensionState.UNKNOWN,
+            finding_count=0,
+            evaluated=False,
+            failure_reason=_bounded_portfolio_failure_reason(failure.error),
+        )
+        for failure in result.failures
+    )
+    portfolio_statuses, portfolio_truncated = capped_portfolio_project_statuses(
+        evaluated_rows + failed_rows
+    )
+    return DevSourceContent(
+        schema_version="dev_source_content.v1",
+        health_findings=capped_findings,
+        health_findings_truncated=health_truncated,
+        portfolio_project_statuses=portfolio_statuses,
+        portfolio_project_statuses_truncated=portfolio_truncated,
+    )
+
+
+def _portfolio_status_outcome(
+    result: PortfolioStatusResult, *, labels_by_project_id: Mapping[str, str]
+) -> StepOutcome:
+    """Mirrors ``_deficiency_inventory_outcome``'s "did this step run at
+    all" reasoning: ``PortfolioStatusService.evaluate_portfolio`` never
+    raises for an individual project failure (isolated as a
+    ``PortfolioProjectFailure``, see that service's own comment on why
+    concurrent fan-out is unsafe), so this step is always QUERIED --
+    AVAILABLE_CURRENT when every project in the batch evaluated, or
+    AVAILABLE_STALE (never an UNMEASURED-family state) with a disclosed,
+    bounded limitation naming which projects failed, when one or more did.
+    Never fabricates a status for a failed project and never refuses the
+    whole batch over a partial failure (CHAOS-3393 semantics).
+    """
+
+    content = _portfolio_status_content(
+        result, labels_by_project_id=labels_by_project_id
+    )
+    usable = len(content.health_findings)
+    if not result.failures:
+        return StepOutcome(
+            observed_state=SourceRequirementState.AVAILABLE_CURRENT,
+            data_semantics=queried_semantics(usable),
+            usable_fact_count=usable,
+            query_version="portfolio-status-evaluation.v1",
+            content=content,
+        )
+    failed_ids = ",".join(sorted(failure.project_id for failure in result.failures))
+    return StepOutcome(
+        observed_state=SourceRequirementState.AVAILABLE_STALE,
+        data_semantics=queried_semantics(usable),
+        usable_fact_count=usable,
+        query_version="portfolio-status-evaluation.v1",
+        limitation="portfolio_projects_failed:" + failed_ids,
+        content=content,
+    )
+
+
 def register_wave_3_1_steps(
     registry: StepRegistry,
     *,
@@ -346,6 +549,7 @@ def register_wave_3_1_steps(
     team_health: _TeamHealthEvaluator,
     team_workload: _TeamWorkloadEvaluator,
     operational_deficiency: _OperationalDeficiencyEvaluator,
+    portfolio_status: _PortfolioStatusEvaluator,
 ) -> None:
     """Populate ``registry`` with every step :data:`WAVE_3_1_PLANS_BY_INTENT`
     declares. Called alongside (never instead of)
@@ -412,6 +616,34 @@ def register_wave_3_1_steps(
             )
         return _deficiency_inventory_outcome(inventory)
 
+    async def portfolio_status_evaluation_run(ctx: StepContext) -> StepOutcome:
+        # CHAOS-3393: batches over ctx.subject_set_scopes -- the several
+        # committed per-project scopes the orchestrator's PLURAL_COHORT/
+        # ORGANIZATION_WIDE gate built from the preflight-committed
+        # DevSubjectSet, never ctx.scope itself (which stays the single
+        # org-level authorized scope for the whole run -- see StepContext's
+        # own docstring). registry_validation/orchestrator gating both
+        # guarantee this is non-empty by the time a step actually runs
+        # (plan_eligible requires a committed, >=1-entry subject_set).
+        scopes = ctx.subject_set_scopes
+        labels_by_project_id = {
+            scope.entity_refs[0].entity_id: scope.entity_refs[0].display_label
+            for scope in scopes
+            if scope.entity_refs
+        }
+        projects = tuple(PortfolioProjectScope(scope=scope) for scope in scopes)
+        result = await portfolio_status.evaluate_portfolio(
+            org_id=ctx.org_id,
+            permission_fingerprint=ctx.permission_fingerprint,
+            projects=projects,
+            now=ctx.now,
+            per_project_timeout_seconds=PORTFOLIO_PROJECT_TIMEOUT_CEILING_SECONDS,
+            batch_deadline_seconds=PORTFOLIO_BATCH_DEADLINE_SECONDS,
+        )
+        return _portfolio_status_outcome(
+            result, labels_by_project_id=labels_by_project_id
+        )
+
     registry.register(
         PlanStepDefinition(
             step_id="health_evaluation",
@@ -450,6 +682,16 @@ def register_wave_3_1_steps(
             adapter_id="operational_deficiency_service.evaluate.v1",
             requirement_level="mandatory",
             run=deficiency_evaluation_run,
+        )
+    )
+    registry.register(
+        PlanStepDefinition(
+            step_id="portfolio_status_evaluation",
+            plan_id="status.portfolio.v1",
+            source_class=SourceClass.HEALTH_PROFILE,
+            adapter_id="portfolio_status_service.evaluate_portfolio.v1",
+            requirement_level="mandatory",
+            run=portfolio_status_evaluation_run,
         )
     )
 
@@ -570,6 +812,47 @@ _DEFICIENCY_OPERATIONAL = DevInvestigationPlan(
     completion_rule_version="1",
 )
 
+#: CHAOS-3393. A cohort/org-wide batch of ``ProjectHealthService.
+#: evaluate_project`` calls, never a per-project SINGULAR commit --
+#: ``PROJECT`` only (the preflight gate this plan relies on -- see
+#: ``subject_preflight.py``'s homogeneous-cohort branch -- only PROCEEDs a
+#: PROJECT-kind cohort for this intent; every other kind still terminates
+#: UNSUPPORTED). ``batched_fan_out`` names the plan's own batching
+#: strategy; the executor still runs this ONE mandatory step exactly like
+#: any SINGULAR plan's -- ``PortfolioStatusService.evaluate_portfolio``
+#: does the actual per-project batching, sequentially, over the several
+#: scopes ``StepContext.subject_set_scopes`` carries (see that service's
+#: own docstring for why concurrent fan-out over the shared production
+#: runtime is unsafe).
+_STATUS_PORTFOLIO = DevInvestigationPlan(
+    schema_version="dev_investigation_plan.v1",
+    plan_id="status.portfolio.v1",
+    plan_version="status.portfolio.v1.0",
+    intent_id=QuestionIntentID.PORTFOLIO_STATUS,
+    supported_subject_kinds=(EntityKind.PROJECT,),
+    supported_cardinalities=(Cardinality.PLURAL_COHORT, Cardinality.ORGANIZATION_WIDE),
+    mandatory_steps=("portfolio_status_evaluation",),
+    conditional_steps=(),
+    step_dependencies=(),
+    source_requirements=(
+        DevSourceRequirement(
+            schema_version="dev_source_requirement.v1",
+            source_class=SourceClass.HEALTH_PROFILE,
+            adapter_id="portfolio_status_service.evaluate_portfolio.v1",
+            requirement_level="mandatory",
+            freshness_policy="health_profile_freshness.v1",
+            minimum_usable_facts=0,
+        ),
+    ),
+    batch_strategy="batched_fan_out",
+    per_step_timeout_seconds=PORTFOLIO_PLAN_TIMEOUT_SECONDS,
+    max_rows_per_step=200,
+    max_bytes_per_step=131_072,
+    enrichment_allowed=True,
+    completion_rule_id="portfolio_status_service.no_completion_concept",
+    completion_rule_version="1",
+)
+
 #: Every wave-3.1-extension plan document this module defines, keyed by
 #: the intent it governs. Mirrors ``plan_documents.CORE_PLANS_BY_INTENT``'s
 #: own shape exactly, including the PLAN_ID_BY_INTENT cross-check below.
@@ -580,6 +863,7 @@ WAVE_3_1_PLANS_BY_INTENT: dict[QuestionIntentID, DevInvestigationPlan] = {
         _HEALTH_TEAM,
         _BALANCE_TEAM_WORKLOAD,
         _DEFICIENCY_OPERATIONAL,
+        _STATUS_PORTFOLIO,
     )
 }
 
@@ -616,8 +900,9 @@ if _missing_from_persistence_allowlist:
         "(CHAOS-3337)"
     )
 
-#: The four question classes this module wires. ``PORTFOLIO_STATUS`` is
-#: deliberately excluded -- see the module docstring.
+#: The five question classes this module wires (CHAOS-3393 adds
+#: ``PORTFOLIO_STATUS`` -- previously deliberately excluded, see the
+#: module docstring).
 WAVE_3_1_QUESTION_INTENT_IDS: frozenset[QuestionIntentID] = frozenset(
     WAVE_3_1_PLANS_BY_INTENT.keys()
 )
@@ -630,9 +915,10 @@ def build_registry_with_wave_3_1(
     team_health: _TeamHealthEvaluator,
     team_workload: _TeamWorkloadEvaluator,
     operational_deficiency: _OperationalDeficiencyEvaluator,
+    portfolio_status: _PortfolioStatusEvaluator,
 ) -> StepRegistry:
     """The registry-construction entry point ``production_runtime.py``
-    calls: the six CHAOS-3295 core plans' steps PLUS this module's four,
+    calls: the six CHAOS-3295 core plans' steps PLUS this module's five,
     registered into ONE shared :class:`StepRegistry` and validated
     TOGETHER -- never two separate registries, so a plan_id collision or a
     step registered under the wrong plan between the two groups fails
@@ -654,6 +940,7 @@ def build_registry_with_wave_3_1(
         team_health=team_health,
         team_workload=team_workload,
         operational_deficiency=operational_deficiency,
+        portfolio_status=portfolio_status,
     )
     validate_registry(
         plans_by_intent={**CORE_PLANS_BY_INTENT, **WAVE_3_1_PLANS_BY_INTENT},

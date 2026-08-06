@@ -1,0 +1,94 @@
+{
+  "schema_version": "ask_dev_world.v1",
+  "$comment": "CHAOS-3219 Wave 4 Phase 1 Lane 1a. Per-source-class terminal-state matrix. Grounded directly in the real production reader (src/dev_health_ops/api/dev/data_health_service.py: DataHealthState, NativeDataHealthReader) rather than invented vocabulary -- DataHealthState has exactly 6 members (complete/no_data/unavailable/unconfigured/stale/unauthorized); the corpus registry's 9-state list is realized by mapping onto that vocabulary plus two cross-cutting fixtures (conflicting, truncated) that surface one level up the stack (evidence-conflict detection and WorkGraphNeighborsResult.truncated respectively), and one org-wide-hardcoded case (not_applicable, via the reader's own unconditional acr handling).",
+
+  "source_classes": [
+    "commits", "pull_requests", "reviews", "work_items", "work_units",
+    "deployments", "ci_runs", "incidents", "acr"
+  ],
+  "$comment_source_classes": "== data_health_service.NATIVE_EVIDENCE_SOURCES plus the optional 'acr' key the reader special-cases. ci_runs is realized through the same 'local'/'git' SyncConfiguration as commits/deployments but is read from ci_pipeline_runs, not one of the 8 NATIVE_EVIDENCE_SOURCES table keys -- included here because deg.source-state.conflicting needs it.",
+
+  "matrix": [
+    {
+      "state": "current",
+      "data_health_state": "DataHealthState.COMPLETE",
+      "realized_by": {"org_alias": "primary", "repo_full_name": "probe/source-current"},
+      "mechanism": "SyncConfiguration(provider='local', is_active=True, last_sync_success=True) + SyncConfiguration(provider='jira', ...) present for the org; the repo's git_commits/git_pull_requests/git_pull_request_reviews/deployments/work_items rows carry last_synced within the STALE_FALLBACK_GRACE window (<=48h) of pinned_now.",
+      "source_classes": ["commits", "pull_requests", "reviews", "work_items", "deployments"]
+    },
+    {
+      "state": "stale",
+      "data_health_state": "DataHealthState.STALE",
+      "realized_by": {"org_alias": "primary", "repo_full_name": "probe/source-stale"},
+      "mechanism": "Same repo/org shape as source-current, but every row's last_synced is aged via an explicit ClickHouse `ALTER TABLE ... UPDATE last_synced = <pinned_now - 96h> ... SETTINGS mutations_sync=1` mutation issued by dev_health_ops.fixtures.world AFTER generation -- 96h exceeds STALE_FALLBACK_GRACE (48h, no ScheduledJob row is seeded so no schedule-derived grace applies). Deliberately a post-generation mutation, not a differently-dated commit history: SourceFreshnessPolicy.classify reads last_synced (the sync watermark), never the commit's authored_date.",
+      "source_classes": ["commits", "pull_requests", "reviews", "work_items", "deployments"]
+    },
+    {
+      "state": "no-data",
+      "data_health_state": "DataHealthState.NO_DATA",
+      "realized_by": {"org_alias": "primary", "repo_full_name": "probe/source-no-data"},
+      "mechanism": "Repo entity exists (repos row inserted) but is generated with zero commits/PRs/reviews/deployments/work items -- watermark is genuinely NULL for every source, not merely old. deployments and work_items are the two sources the world explicitly asserts NO_DATA on; ci_runs/incidents follow the same shape.",
+      "source_classes": ["deployments", "work_items", "ci_runs"]
+    },
+    {
+      "state": "measured-zero",
+      "data_health_state": "n/a (this is a metrics-layer distinction, not a DataHealthState member)",
+      "realized_by": {"org_alias": "primary", "repo_full_name": "probe/source-measured-zero"},
+      "mechanism": "Same zero-raw-deployments shape as no-data (deployments table has zero rows for this repo -> DataHealthState.NO_DATA at the source-freshness layer, honestly not distinguishable from no-data at THAT layer), but dev_health_ops.fixtures.generators.pipelines.generate_dora_metrics's deployment_frequency output is overridden for this repo/window to an explicit value=0.0 DORAMetricsRecord row rather than omitted. The dev_metric query layer (api/dev/production_runtime.py query_metric) reads investment/dora metric rows directly, NOT data_health's per-source watermark -- so a metric answer over this repo can report 'deployment_frequency measured, value 0' while a data-health answer over the same repo reports 'deployments: no_data'. Both are true and distinct; this pair is the fixture-world's realization of the corpus registry's explicit 'measured-zero versus no-data' requirement (deg.source-state.no-data doc string).",
+      "source_classes": ["deployments (metric layer)"]
+    },
+    {
+      "state": "unavailable",
+      "data_health_state": "DataHealthState.UNAVAILABLE",
+      "realized_by": {"org_alias": "sibling", "repo_full_name": "sibling-only/private-repo"},
+      "mechanism": "world.json sibling org sync_providers.local.state='active_failure' -> SyncConfiguration(provider='local', is_active=True, last_sync_success=False) org-wide. NativeDataHealthReader's `failure = any(config.last_sync_success is False and _provider_supports(source, config.provider) ...)` -> active_failure=True -> DataHealthState.UNAVAILABLE for every git-backed source in the sibling tenant.",
+      "$comment_source_classes": "Live-verification correction (2026-08-05, first live fixtures-world run to exercise world_verify.verify_sources_against_production_data_health end to end): 'work_units' was listed here but does NOT belong -- source_health.PROVIDER_SUPPORTS_SOURCE['work_units'] is ('jira', 'linear', 'github', 'gitlab'), which does not include 'local'/'git' at all, so the sibling org's local-provider active_failure has no effect on it. Sibling's OTHER configured provider, jira, is active_success, so work_units correctly reads DataHealthState.COMPLETE for this org -- which is exactly what the real DataHealthService.inspect observed and world_verify caught the stale claim against. Removed from this list rather than leaving a false claim for a live check to keep failing on.",
+      "source_classes": ["commits", "pull_requests", "reviews", "deployments"]
+    },
+    {
+      "state": "unconfigured",
+      "data_health_state": "DataHealthState.UNCONFIGURED",
+      "realized_by": {"org_alias": "primary", "repo_full_name": "probe/source-current"},
+      "mechanism": "world.json primary org sync_providers deliberately omits 'pagerduty'/'opsgenie'/'incident' -> _source_configured('incidents', configs) is False org-wide for primary -> DataHealthState.UNCONFIGURED for 'incidents' regardless of which repo is asked about (incidents carries no repo_id column -- see data_health_service.py's own repo_column=None comment for 'incidents' in _SOURCE_TABLES). Attached to probe/source-current (an org-wide effect, reusing an already-realized repo rather than minting a new one) -- this state does not need a dedicated repo of its own.",
+      "source_classes": ["incidents"]
+    },
+    {
+      "state": "unauthorized",
+      "data_health_state": "DataHealthState.UNAUTHORIZED",
+      "realized_by": {"org_alias": "sibling", "repo_full_name": "sibling-only/private-repo", "asked_from_org_alias": "primary"},
+      "mechanism": "DataHealthService.inspect's own guard: any ScopeResolution.outcome not in {EXACT, FILTERED, INHERITED, ORGANIZATION_FALLBACK} (a cross-tenant id can never resolve to one of those for the wrong org) short-circuits every requested source straight to DataHealthState.UNAUTHORIZED before the reader is even invoked. Same underlying fixture row as subjects.json subject.tenant.sibling-only-private-repo and the deg.source-state.unavailable row above -- three distinct, individually true observations of one fixture row from three different vantage points, intentionally not tripled into three repos.",
+      "source_classes": ["commits", "pull_requests", "reviews", "work_items", "deployments", "incidents"]
+    },
+    {
+      "state": "truncated",
+      "data_health_state": "n/a (SourceRequirementState.TRUNCATED / WorkGraphNeighborsResult.truncated, not a DataHealthState member)",
+      "realized_by": {"org_alias": "primary", "repo_full_name": "probe/source-truncated-workgraph"},
+      "mechanism": "Generated with elevated pr_count/commits_per_day and --with-work-graph, intending the work-graph neighbor fan-out for at least one committed issue/PR node to exceed work_graph_neighbors_service.MAX_NEIGHBORS (25) so work_graph_expansion_run reports SourceRequirementState.TRUNCATED (result.truncated wins unconditionally per builtin_steps.py). CORRECTED 2026-08-05: the prior text here claimed this was 'verified empirically against a live scratch generation' -- that claim was never actually true; this is the FIRST time verify_truncated_work_graph (new HIGH-2 code) has run end to end, and it found the claim false (see status/blocked_by below). The elevated volume knobs (days/commits_per_day/pr_count) only control how much data is generated, not how issue<->PR linking clusters -- SyntheticDataGenerator's work-item count scales with `days` at roughly the same rate PRs are generated, so linking comes out close to 1:1 (observed live: 43 work items, 42 PRs, max fan-out 2 for this repo) -- there is currently no generator mechanism that concentrates many PRs onto one work item. Reaching fan-out > 25 requires generator work (a many-PRs-per-item clustering mechanism), not a fixture-world volume tuning change, and is out of Lane 1a's fixtures/** territory.",
+      "source_classes": ["work_graph"],
+      "status": "declared-blocked",
+      "blocked_by": "CHAOS-3428 generator fan-out clustering"
+    },
+    {
+      "state": "conflicting",
+      "data_health_state": "n/a (surfaces as an evidence-conflict finding one layer above DataHealthState, not a per-source freshness state)",
+      "realized_by": {"org_alias": "primary", "repo_full_name": "probe/source-conflicting-ci"},
+      "mechanism": "dev_health_ops.fixtures.generators.conflicts.build_conflicting_ci_runs writes two ci_pipeline_runs rows for the SAME repo_id, queued minutes apart in the same window, with opposite conclusions ('success' and 'failed'). Honesty note: models.git.CiPipelineRun (ci_pipeline_runs) has no commit_sha/ref column at all -- a run is keyed by (repo_id, run_id) only, so 'same commit' cannot be expressed at this table's grain. This is the closest schema-faithful realization: two contemporaneous CI signals for the same repository that disagree, matching the actual question shape ('Is meridian/web-app's CI passing?') trust.conflicting-evidence asks.",
+      "source_classes": ["ci_runs"]
+    },
+    {
+      "state": "not-applicable",
+      "data_health_state": "n/a (NativeDataHealthReader special-cases 'acr' before DataHealthState classification runs at all)",
+      "realized_by": {"org_alias": null, "repo_full_name": null},
+      "mechanism": "NativeDataHealthReader.read hardcodes `if source == 'acr': SourceHealthObservation(source, False, False, warning='acr_optional')` for every org unconditionally -- required=False means DataHealthService.inspect's `complete_eligible` never gates on it, the closest production analog to NOT_APPLICABLE this world can realize without new production code. No fixture rows are needed (realized_by is deliberately null -- the world generator creates nothing for this row); documented here so sources.json does not silently omit the state. The PROJECT-scope change_failure_rate NOT_APPLICABLE reachability gap corpus-registry-v1.md's health.project.unknown-and-not-applicable-abstract family already flags as structurally unreachable today (no ticket filed) is NOT re-claimed as realized here -- see this lane's report 'could not realize' list.",
+      "source_classes": ["acr"]
+    }
+  ],
+
+  "state_coverage_check": {
+    "$comment": "Cross-checked by the world_manifest_guard test against the literal `state` values present above.",
+    "required_states": [
+      "current", "stale", "unavailable", "unconfigured", "no-data",
+      "unauthorized", "truncated", "conflicting", "not-applicable"
+    ]
+  }
+}

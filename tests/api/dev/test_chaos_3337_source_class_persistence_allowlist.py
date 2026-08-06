@@ -58,6 +58,10 @@ from dev_health_ops.api.dev.persistence import DevPersistenceService
 from dev_health_ops.api.dev.persistence.service import (
     _SOURCE_CLASSES as _PERSISTENCE_SOURCE_CLASSES,
 )
+from dev_health_ops.api.dev.scope_service import EntityKind
+from dev_health_ops.api.dev.scope_service import (
+    subject_set_fingerprint as _compute_subject_set_fingerprint,
+)
 from dev_health_ops.llm.agent.contracts import AgentUsage
 from dev_health_ops.models.dev_persistence import (
     DevAnswerFrame,
@@ -176,13 +180,30 @@ def _team_scope() -> DevScope:
     )
 
 
-def _step_context(scope: DevScope) -> StepContext:
+def _org_scope() -> DevScope:
+    # CHAOS-3393: status.portfolio.v1's ctx.scope stays the single
+    # org-level authorized scope for the whole run -- the several project
+    # scopes it batches over ride StepContext.subject_set_scopes instead
+    # (see _step_context's own subject_set_scopes param below).
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id=_ORG_ID,
+        direct_scope=DirectScope.ORGANIZATION,
+        entity_refs=[],
+        time_range=_time_range(),
+    )
+
+
+def _step_context(
+    scope: DevScope, *, subject_set_scopes: tuple[DevScope, ...] = ()
+) -> StepContext:
     return StepContext(
         org_id=_ORG_ID,
         permission_fingerprint="fingerprint",
         scope=scope,
         run_id="run-1",
         now=_NOW,
+        subject_set_scopes=subject_set_scopes,
     )
 
 
@@ -249,6 +270,39 @@ class _FakeOperationalDeficiency:
         return _deficiency_inventory()
 
 
+class _FakePortfolioStatus:
+    """CHAOS-3393: real ``PortfolioStatusResult`` shape, one evaluated
+    project, so the portfolio step's real content-wiring path (not just
+    an empty-batch no-op) is what reaches the real persistence layer."""
+
+    async def evaluate_portfolio(
+        self,
+        *,
+        org_id,
+        permission_fingerprint,
+        projects,
+        now,
+        unresolved_mention_ids=(),
+        ambiguous_mention_ids=(),
+        warnings=(),
+        per_project_timeout_seconds=None,
+        batch_deadline_seconds=None,
+    ):
+        from dev_health_ops.api.dev.portfolio_status_service import (
+            PortfolioStatusResult,
+        )
+
+        return PortfolioStatusResult(
+            projects=(_health_profile_result(),),
+            counts_by_worst_state={},
+            failures=(),
+            unresolved_mention_ids=tuple(unresolved_mention_ids),
+            ambiguous_mention_ids=tuple(ambiguous_mention_ids),
+            warnings=tuple(warnings),
+            evaluated_at=now,
+        )
+
+
 def _registry():
     from tests._chaos_3295_plan_executor import FakePlanExecutorRuntime
 
@@ -259,13 +313,27 @@ def _registry():
         team_health=fake,
         team_workload=fake,
         operational_deficiency=_FakeOperationalDeficiency(),
+        portfolio_status=_FakePortfolioStatus(),
     )
 
 
-async def _run_real_plan(intent_id: QuestionIntentID, scope: DevScope):
+async def _run_real_plan(
+    intent_id: QuestionIntentID,
+    scope: DevScope,
+    *,
+    subject_set_scopes: tuple[DevScope, ...] = (),
+    subject_set_fingerprint: str | None = None,
+):
     """Run a REAL PlanExecutor over a REAL registered plan (production
-    wiring end to end, fake CHAOS-3303/3304/3305 services only), producing
-    a genuine ``DevInvestigationResult`` -- never a hand-authored fixture.
+    wiring end to end, fake CHAOS-3303/3304/3305/3393 services only),
+    producing a genuine ``DevInvestigationResult`` -- never a hand-authored
+    fixture.
+
+    CHAOS-3393 codex HIGH-1: a non-empty ``subject_set_scopes`` (the
+    portfolio batch) must be accompanied by the matching
+    ``subject_set_fingerprint`` -- the executor's own caller-authorization
+    receipt check (``executor.PlanExecutor.run``) fails the whole run
+    closed otherwise, exactly as it must for a real, unverified batch.
     """
 
     plan = WAVE_3_1_PLANS_BY_INTENT[intent_id]
@@ -273,9 +341,10 @@ async def _run_real_plan(intent_id: QuestionIntentID, scope: DevScope):
     executor = PlanExecutor(registry=registry, now=lambda: _NOW)
     return await executor.run(
         plan=plan,
-        context=_step_context(scope),
+        context=_step_context(scope, subject_set_scopes=subject_set_scopes),
         run_id="run-1",
-        subject_entity_id="proj-1",
+        subject_entity_id="proj-1" if not subject_set_scopes else None,
+        subject_set_fingerprint=subject_set_fingerprint,
     )
 
 
@@ -375,6 +444,9 @@ _INTENT_SCOPES = {
     QuestionIntentID.TEAM_HEALTH: _team_scope,
     QuestionIntentID.TEAM_WORKLOAD_BALANCE: _team_scope,
     QuestionIntentID.OPERATIONAL_DEFICIENCY_INVENTORY: _project_scope,
+    # CHAOS-3393: ctx.scope stays org-level for a portfolio run -- the
+    # batch itself rides subject_set_scopes (see the test body below).
+    QuestionIntentID.PORTFOLIO_STATUS: _org_scope,
 }
 
 
@@ -383,14 +455,16 @@ _WAVE_3_1_INTENT_IDS: list[QuestionIntentID] = sorted(
 )
 
 #: The exact SourceClass every WAVE_3_1_PLANS_BY_INTENT plan's step(s) emit
-#: -- health.project.v1/health.team.v1/balance.team_workload.v1 all wire
-#: HealthProfileResult through HEALTH_PROFILE; deficiency.operational.v1
-#: wires OperationalDeficiencyInventory through DEFICIENCY_INVENTORY.
+#: -- health.project.v1/health.team.v1/balance.team_workload.v1/
+#: status.portfolio.v1 all wire HealthProfileResult-derived content through
+#: HEALTH_PROFILE; deficiency.operational.v1 wires
+#: OperationalDeficiencyInventory through DEFICIENCY_INVENTORY.
 _EXPECTED_SOURCE_CLASS = {
     QuestionIntentID.PROJECT_HEALTH: "health_profile",
     QuestionIntentID.TEAM_HEALTH: "health_profile",
     QuestionIntentID.TEAM_WORKLOAD_BALANCE: "health_profile",
     QuestionIntentID.OPERATIONAL_DEFICIENCY_INVENTORY: "deficiency_inventory",
+    QuestionIntentID.PORTFOLIO_STATUS: "health_profile",
 }
 
 
@@ -400,7 +474,7 @@ async def test_every_wave_3_1_intent_persists_through_the_real_write_path(
     persistence, intent_id: QuestionIntentID
 ) -> None:
     """The live crash, reproduced and closed: a REAL plan-governed run for
-    each of the four newly-wired intents must persist cleanly through the
+    each of the five newly-wired intents must persist cleanly through the
     REAL DevPersistenceService, not raise DevPersistenceValidationError --
     and (codex MED finding) the committed rows must be independently
     re-readable afterward, with the exact observation source_class/count,
@@ -410,7 +484,23 @@ async def test_every_wave_3_1_intent_persists_through_the_real_write_path(
 
     maker, org_id, user_id = persistence
     scope_factory = _INTENT_SCOPES[intent_id]
-    result = await _run_real_plan(intent_id, scope_factory())
+    subject_set_scopes = (
+        (_project_scope(),) if intent_id is QuestionIntentID.PORTFOLIO_STATUS else ()
+    )
+    # CHAOS-3393 codex HIGH-1: the batch's own caller-authorized receipt --
+    # recomputed from the SAME canonical formula the executor cross-checks
+    # against, never a hand-authored literal.
+    subject_set_fingerprint = (
+        _compute_subject_set_fingerprint(EntityKind.PROJECT, ["proj-1"])
+        if intent_id is QuestionIntentID.PORTFOLIO_STATUS
+        else None
+    )
+    result = await _run_real_plan(
+        intent_id,
+        scope_factory(),
+        subject_set_scopes=subject_set_scopes,
+        subject_set_fingerprint=subject_set_fingerprint,
+    )
 
     assert len(result.observations) >= 1
     run_id = await _persist(maker, org_id, user_id, result)

@@ -266,6 +266,20 @@ var acknowledgedBlindSpots = []AcknowledgedBlindSpot{
 			"TestScheduledMaterializerRoleBoundary proves the domain/coordinator split.",
 	},
 	{
+		Role: RoleDomain, Table: "sync_run_unit_effect_snapshots", Privilege: PrivInsert,
+		Why: "providersync/prepared_route_snapshot.go:304 executes insertPreparedRouteSnapshotSQL " +
+			"on a pgx.Tx the mutate closure receives as a PARAMETER -- mutateGenerationJournalTx " +
+			"(generation_journal.go:407) begins it from PostgresRepository.Pool -- so pool taint " +
+			"stops at the closure boundary and the site is invisible to this analysis, the same " +
+			"wiring hop as the sync_run_units INSERT above. That pool IS the domain pool: " +
+			"cmd/dev-health-worker/provider_sync.go:467 constructs the repository with " +
+			"pools.Domain. The privilege is exercised, not over-declared: " +
+			"TestPostgresPreparedRouteSnapshotRunsUnderTheRestrictedDomainRole prepares a snapshot " +
+			"through a pool logged in as the restricted domain role, which fails if the INSERT " +
+			"grant is absent. The SELECT and DELETE on this table run straight off the pool and " +
+			"are traced normally; only the INSERT sits behind the transaction boundary.",
+	},
+	{
 		Role: RoleCoordinator, Table: "feature_flags", Privilege: PrivUpdate,
 		Why: "scheduler/sync/materializer.go locks canonical_incident_ingestion with SELECT FOR " +
 			"UPDATE inside the coordinator occurrence transaction; no feature row is mutated.",

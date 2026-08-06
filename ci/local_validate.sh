@@ -226,13 +226,48 @@ PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_p
 # thing actually contended) rather than to this worktree — matching the team's
 # current manual "ps aux" convention, which is host-wide, not per-worktree.
 #
-# Uses mkdir, not flock(1): flock(1) does not exist on stock macOS, the target dev
-# platform (verified: `command -v flock` fails here), and mkdir is atomic on every
-# POSIX filesystem with no separate check-then-create step. A run killed with
-# `kill -9` leaves the lock DIRECTORY behind (mkdir, unlike flock, has no
-# release-on-process-exit), so staleness is reclaimed by PID liveness (`kill -0`)
-# — the same "a run that dies before its EXIT trap fires is reclaimed by the next
-# run" precedent ch_create_scratch() already applies to the scratch db.
+# --- Lock primitive: a symlink, not a directory (CHAOS-3403 adversarial-review fix) --
+# Uses `ln -s`, not `mkdir` + separate metadata files, and not `flock(1)` — flock(1)
+# does not exist on stock macOS, the target dev platform (verified: `command -v
+# flock` fails here).
+#
+# The earlier mkdir-based design had a real, reviewer-confirmed atomicity gap:
+# `mkdir "${LOCK_DIR}"` published the lock's EXISTENCE before `pid`/`cwd` were
+# written into it as separate files. A contender arriving in that window saw a
+# directory with no pid file yet, concluded "stale" (lock_holder_alive() checked
+# `-f "${LOCK_DIR}/pid"` first), and `rm -rf`'d the just-acquired lock out from
+# under its rightful owner — two gates then run concurrently, exactly the failure
+# this whole ticket exists to prevent. `ln -s <metadata> "${LOCK_DIR}"` closes this
+# structurally rather than by narrowing the window: `symlink(2)` is a single
+# syscall that atomically creates the name AND its content together — the target
+# string IS the metadata (`pid|start-time|cwd`), computed before the syscall runs.
+# There is no instant at which the lock exists but is unpopulated: readers only
+# ever observe "does not exist" or "exists with complete valid metadata already in
+# place". `ln -s` on a name that already exists fails immediately, unmodified,
+# with no partial state — the same all-or-nothing guarantee `mkdir` gave for
+# existence alone, now extended to existence-plus-content in one step.
+#
+# This also structurally closes a second reviewer-confirmed gap: reclaiming a
+# stale lock previously ran `rm -rf` on a directory whose name (LOCK_DIR) is
+# environment-overridable — a typo'd or mistaken override pointing at, say, a
+# worktree root would have its entire contents recursively deleted the moment
+# this script judged the (unrelated) directory "stale". A symlink has no
+# contents to recurse into: reclaiming/releasing is always `rm -f` on a single
+# name, and reclaim_stale_lock() below refuses to touch LOCK_DIR at all if it
+# exists as anything other than a symlink (a real file or directory there means
+# LOCK_DIR is pointed somewhere it should not be — this dies loudly instead of
+# guessing).
+#
+# PID-reuse hardening: `kill -0 <pid>` only proves *something* holds that PID
+# right now, not that it is the same process that created the lock. After
+# `kill -9`, the OS can and eventually will reuse that PID for an unrelated
+# process, which would make a stale lock look healthy indefinitely (the next
+# gate would then wait out the full LOCK_WAIT_SECS against a false owner every
+# time). The metadata records `ps -o lstart=` (the owning process's start time)
+# alongside its PID; lock_holder_alive() requires BOTH kill -0 AND a re-queried
+# lstart for that PID to match what was recorded at acquire time. A reused PID
+# almost never has an identical start time (second-granularity), so this is
+# treated as dead and reclaimed rather than trusted.
 #
 # Semantics: bounded blocking wait, not pure block-forever or pure fail-fast.
 # Blocking suits agents — they can fire-and-wait rather than hand-writing a
@@ -246,64 +281,106 @@ PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_p
 # keying host-wide mutual exclusion on an inherited env var repeats exactly that
 # class of bug: two agents with different ambient TMPDIR (a sandbox, a
 # session-scoped scratch dir, anyone who exports it) would silently acquire two
-# DIFFERENT lock directories and both proceed, with no error and no diagnostic —
-# the worst possible failure shape for a mutex. /tmp is fixed and shared by every
+# DIFFERENT lock names and both proceed, with no error and no diagnostic — the
+# worst possible failure shape for a mutex. /tmp is fixed and shared by every
 # process on the host regardless of its shell's TMPDIR. LOCK_DIR itself is still
-# explicitly overridable (tests need this to avoid colliding with a real gate).
+# explicitly overridable (tests need this to avoid colliding with a real gate) —
+# guarded below against the most catastrophic accidental values.
 LOCK_DIR="${LOCK_DIR:-/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock}"
 LOCK_WAIT_SECS="${LOCK_WAIT_SECS:-1800}"
+# Whole seconds only: acquire_lock's retry loop does `waited=$((waited +
+# LOCK_POLL_SECS))`, bash integer arithmetic — a fractional override (e.g.
+# "0.5") is a syntax error there ("invalid arithmetic operator"), not a
+# silently-truncated value. Found while tuning a regression test; every real
+# caller only ever needs whole-second polling, so this is documented rather
+# than made fractional-safe.
 LOCK_POLL_SECS="${LOCK_POLL_SECS:-2}"
 LOCK_HELD=0
 
-lock_holder_alive() {
-  local pid
-  [ -f "${LOCK_DIR}/pid" ] || return 1
-  pid="$(cat "${LOCK_DIR}/pid" 2>/dev/null)"
-  [ -n "${pid}" ] || return 1
-  kill -0 "${pid}" 2>/dev/null
+case "${LOCK_DIR}" in
+"" | "/" | "${ROOT}" | "${HOME:-__unset__}")
+  # die() is defined further down (with the other output helpers) and this
+  # guard must run before any of that is available, so it does not call die()
+  # — it prints the same shape of fatal message directly and exits the same way.
+  printf '\nFATAL: refusing to use LOCK_DIR=%s — looks like an accidental override (empty, root, the worktree, or $HOME). Set LOCK_DIR to a dedicated path.\n' "${LOCK_DIR}" >&2
+  exit 2
+  ;;
+esac
+
+# Packs this process's identity into the exact string that becomes the lock
+# symlink's target — the ONLY thing written by acquire, and the whole reason
+# publication is atomic (see header comment above). '|'-delimited; a worktree
+# path containing a literal '|' is not supported (pathological, not defended).
+lock_owner_metadata() {
+  local lstart
+  lstart="$(ps -o lstart= -p "$$" 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//')"
+  printf '%s|%s|%s' "$$" "${lstart}" "${ROOT}"
 }
 
-# Reclaim only on PROOF the recorded PID is dead — never on age/heuristics.
-# mkdir is still the sole arbiter of who actually wins: if two runs both judge the
-# lock stale and both race to reclaim, at most one mkdir succeeds and the loser
-# loops back and observes the winner's fresh pid/cwd.
+# Parses the CURRENT lock symlink's target into LOCK_OWNER_{PID,LSTART,CWD}.
+# Always re-reads from disk — never caches across calls — so every check reflects
+# whatever is actually there right now, not what used to be there.
+parse_lock_owner() {
+  local target
+  target="$(readlink "${LOCK_DIR}" 2>/dev/null)" || return 1
+  [ -n "${target}" ] || return 1
+  IFS='|' read -r LOCK_OWNER_PID LOCK_OWNER_LSTART LOCK_OWNER_CWD <<<"${target}"
+  [ -n "${LOCK_OWNER_PID}" ]
+}
+
+lock_holder_alive() {
+  parse_lock_owner || return 1
+  kill -0 "${LOCK_OWNER_PID}" 2>/dev/null || return 1
+  local current_lstart
+  current_lstart="$(ps -o lstart= -p "${LOCK_OWNER_PID}" 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//')"
+  [ -n "${current_lstart}" ] && [ "${current_lstart}" = "${LOCK_OWNER_LSTART}" ]
+}
+
+# Reclaim only on PROOF the recorded owner is dead — never on age/heuristics, and
+# NEVER on anything but a symlink of our own format (a stray real file or
+# directory at LOCK_DIR means the path is wrong, not that a lock is stale — this
+# dies loudly rather than deleting something it does not understand).
+# `ln -s` (in acquire_lock) is still the sole arbiter of who actually wins: if two
+# runs both judge the lock stale and both race to reclaim + recreate, at most one
+# `ln -s` succeeds and the loser loops back and observes the winner's fresh
+# metadata via a fresh parse_lock_owner() call, not stale in-memory state.
 reclaim_stale_lock() {
-  if [ -d "${LOCK_DIR}" ] && ! lock_holder_alive; then
-    printf '   %s stale lock at %s (PID %s not running) — reclaiming.\n' \
-      "$(c_yellow 'NOTE:')" "${LOCK_DIR}" "$(cat "${LOCK_DIR}/pid" 2>/dev/null || echo '?')"
-    rm -rf "${LOCK_DIR}"
+  if [ -L "${LOCK_DIR}" ]; then
+    if ! lock_holder_alive; then
+      printf '   %s stale lock at %s (PID %s not running) — reclaiming.\n' \
+        "$(c_yellow 'NOTE:')" "${LOCK_DIR}" "${LOCK_OWNER_PID:-?}"
+      rm -f "${LOCK_DIR}"
+    fi
+  elif [ -e "${LOCK_DIR}" ]; then
+    die "LOCK_DIR ${LOCK_DIR} exists and is not a lock symlink — refusing to touch it. Check for a mistaken LOCK_DIR override before removing it by hand."
   fi
 }
 
 acquire_lock() {
   banner "single-flight lock (${LOCK_DIR})"
   reclaim_stale_lock
-  if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
-    local waited=0 owner_pid owner_cwd
-    owner_pid="$(cat "${LOCK_DIR}/pid" 2>/dev/null || echo '?')"
-    owner_cwd="$(cat "${LOCK_DIR}/cwd" 2>/dev/null || echo '?')"
+  if ! ln -s "$(lock_owner_metadata)" "${LOCK_DIR}" 2>/dev/null; then
+    local waited=0
+    parse_lock_owner || true
     printf '   gate already running in %s, PID %s — waiting (LOCK_WAIT_SECS=%s; set 0 to fail fast)...\n' \
-      "${owner_cwd}" "${owner_pid}" "${LOCK_WAIT_SECS}"
-    while ! mkdir "${LOCK_DIR}" 2>/dev/null; do
+      "${LOCK_OWNER_CWD:-?}" "${LOCK_OWNER_PID:-?}" "${LOCK_WAIT_SECS}"
+    while ! ln -s "$(lock_owner_metadata)" "${LOCK_DIR}" 2>/dev/null; do
       if [ "${waited}" -ge "${LOCK_WAIT_SECS}" ]; then
-        owner_pid="$(cat "${LOCK_DIR}/pid" 2>/dev/null || echo '?')"
-        owner_cwd="$(cat "${LOCK_DIR}/cwd" 2>/dev/null || echo '?')"
-        die "gate already running in ${owner_cwd}, PID ${owner_pid} — timed out after ${LOCK_WAIT_SECS}s waiting for ${LOCK_DIR}. If that PID is not actually running local_validate.sh, remove ${LOCK_DIR} by hand."
+        parse_lock_owner || true
+        die "gate already running in ${LOCK_OWNER_CWD:-?}, PID ${LOCK_OWNER_PID:-?} — timed out after ${LOCK_WAIT_SECS}s waiting for ${LOCK_DIR}. If that PID is not actually running local_validate.sh, remove ${LOCK_DIR} by hand."
       fi
       sleep "${LOCK_POLL_SECS}"
       waited=$((waited + LOCK_POLL_SECS))
       reclaim_stale_lock
     done
   fi
-  printf '%s\n' "$$" >"${LOCK_DIR}/pid"
-  printf '%s\n' "${ROOT}" >"${LOCK_DIR}/cwd"
   LOCK_HELD=1
   printf '   %s %s (PID %s)\n' "$(c_green 'lock acquired:')" "${LOCK_DIR}" "$$"
 }
 
 release_lock() {
   if [ "${LOCK_HELD}" = "1" ]; then
-    rm -rf "${LOCK_DIR}"
+    rm -f "${LOCK_DIR}"
   fi
 }
 
@@ -311,10 +388,18 @@ release_lock() {
 # EXIT` would silently replace this one, which is why ch_create_scratch() below
 # does NOT set its own trap and instead relies on this handler calling
 # cleanup_scratch() unconditionally; cleanup_scratch() itself no-ops when
-# SCRATCH_CREATED was never set).
+# SCRATCH_CREATED was never set). release_lock() runs BEFORE cleanup_scratch(),
+# not after: cleanup_scratch() shells out to an unbounded `docker exec` — if
+# Docker or ClickHouse is hung during SIGINT/SIGTERM, that call can block
+# indefinitely, and if release_lock() ran second it would never run at all,
+# wedging the host mutex for every other gate over a stuck ClickHouse cleanup
+# that has nothing to do with the lock. Releasing first means the worst case of
+# a hung docker exec is a lingering scratch database (already handled — the next
+# run from this same worktree reclaims it, see the CONCURRENCY CONTRACT header)
+# rather than a wedged mutex for the whole host.
 on_exit() {
-  cleanup_scratch
   release_lock
+  cleanup_scratch
 }
 trap on_exit EXIT
 
@@ -663,9 +748,43 @@ if [ "${1:-}" = "--lock-probe" ]; then
   shift
   hold_secs="${1:-0}"
   acquire_lock
-  printf 'lock-probe: acquired (pid %s)\n' "$$"
+  # High-resolution timestamps (bash's own EPOCHREALTIME builtin, no external
+  # dependency) so a test can assert non-overlapping [acquire, release)
+  # intervals across many concurrent probes — the actual atomicity property,
+  # not just "eventually both ran". Test-only instrumentation; falls back to
+  # second resolution on a bash old enough to lack the builtin rather than
+  # failing the probe outright.
+  printf 'lock-probe: acquired (pid %s) at %s\n' "$$" "${EPOCHREALTIME:-$(date +%s)}"
   sleep "${hold_secs}"
-  printf 'lock-probe: releasing (pid %s)\n' "$$"
+  printf 'lock-probe: releasing (pid %s) at %s\n' "$$" "${EPOCHREALTIME:-$(date +%s)}"
+  exit 0
+fi
+
+# Test-only harness hook (CHAOS-3403 adversarial-review fix): proves
+# release_lock() runs BEFORE cleanup_scratch() inside the consolidated on_exit()
+# trap, by swapping cleanup_scratch() for a stand-in that sleeps and then writes
+# a marker file. A test can then observe the real lock symlink disappear (via
+# the real release_lock()) strictly before the marker appears — i.e. the mutex
+# is free before the slow step even finishes, not after. Never invoked by
+# main(); only by tests/tooling/test_local_validate_lock.py.
+if [ "${1:-}" = "--lock-probe-exit-order" ]; then
+  shift
+  hold_secs="${1:?hold_secs required}"
+  cleanup_delay="${2:?cleanup_delay required}"
+  marker="${3:?marker path required}"
+  cleanup_scratch() {
+    sleep "${cleanup_delay}"
+    : >"${marker}"
+  }
+  acquire_lock
+  printf 'lock-probe-exit-order: acquired (pid %s)\n' "$$"
+  # Without an explicit hold, acquire-then-immediately-exit leaves the lock
+  # symlink existing for a near-zero window (a handful of shell statements,
+  # no I/O wait) before on_exit() removes it — too short for an external
+  # poll loop to reliably observe "it existed" at all, which produced
+  # exactly that flaky non-observation during this hook's own development.
+  # hold_secs makes the window a real, controllable duration to poll for.
+  sleep "${hold_secs}"
   exit 0
 fi
 

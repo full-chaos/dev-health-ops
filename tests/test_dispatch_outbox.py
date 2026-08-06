@@ -41,6 +41,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     observe_due_outbox_rows,
     upsert_outbox_wakeup,
 )
+from tests._helpers import sync_postgres_test_url
 
 
 @pytest.fixture
@@ -899,7 +900,7 @@ def test_backoff_seconds_sequence_is_capped():
     reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
 )
 def test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible():
-    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(sync_postgres_test_url())
     Base.metadata.create_all(engine)
     run_id = None
     integration_id = None
@@ -993,7 +994,7 @@ def test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible()
     reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
 )
 def test_real_postgres_route_change_fences_claim_from_another_session():
-    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(sync_postgres_test_url())
     Base.metadata.create_all(engine)
     run_id = None
     integration_id = None
@@ -1083,7 +1084,7 @@ def test_real_postgres_route_change_fences_claim_from_another_session():
     reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
 )
 def test_real_postgres_publish_lock_blocks_route_change_until_commit():
-    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(sync_postgres_test_url())
     Base.metadata.create_all(engine)
     run_id = None
     integration_id = None

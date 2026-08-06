@@ -35,6 +35,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_STATUS_PENDING,
     upsert_outbox_wakeup,
 )
+from tests._helpers import sync_postgres_test_url
 
 
 @pytest.fixture
@@ -242,7 +243,7 @@ def test_parity_capture_recovery_clears_real_postgres_statement_failure():
         _recover_sync_dispatch_parity_capture_transaction,
     )
 
-    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(sync_postgres_test_url())
     try:
         with Session(engine) as session:
             with pytest.raises(DBAPIError):

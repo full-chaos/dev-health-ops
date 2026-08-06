@@ -16,6 +16,7 @@ from dev_health_ops.api.services.sync_coverage import (
 from dev_health_ops.models.integrations import Integration
 from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.models.sync_coverage import SyncCoverageProjection
+from tests._helpers import sync_postgres_test_url
 
 
 @pytest.mark.skipif(
@@ -25,7 +26,7 @@ from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 def test_invalidation_waits_for_inflight_projection_publication():
     """A rebuild cannot publish over an invalidation that began mid-scan."""
 
-    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(sync_postgres_test_url())
     org_id = str(uuid.uuid4())
     integration_id: uuid.UUID | None = None
     config_id: uuid.UUID | None = None

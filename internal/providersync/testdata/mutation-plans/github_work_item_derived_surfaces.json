@@ -412,6 +412,57 @@
      "./internal/providersync/"
     ]
    ]
+  },
+  {
+   "id": "B1a-newer-persisted-version-conflicts",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "\tcase actual.After(expected):\n\t\treturn EffectConflict, true",
+   "replace": "\tcase actual.After(expected):\n\t\treturn EffectAbsent, true",
+   "rationale": "a NEWER persisted version must CONFLICT. Answering Absent makes the committer rewrite an older generation that the store then discards, so the next readback answers Absent again -- an unterminating rewrite loop, and on plain-MergeTree state_durations each pass also appends a row. This is the branch a two-way `!Equal -> Absent` comparator lacks entirely.",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "B1b-older-persisted-version-is-absent-not-conflict",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "\tcase actual.Before(expected):\n\t\treturn EffectAbsent, true",
+   "replace": "\tcase actual.Before(expected):\n\t\treturn EffectConflict, true",
+   "rationale": "an OLDER persisted version means our write never landed, which is the normal pre-write state; reporting Conflict there would refuse to write instead of writing",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "B1c-version-order-precedes-value-comparison",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "\tif verdict, decided := githubWorkItemDerivedVersionOrder(\n\t\tactual.ComputedAt, githubWorkItemDerivedSeconds(expected.ComputedAt),\n\t); decided {\n\t\treturn verdict\n\t}\n\tif actual.TeamName != expected.TeamName ||",
+   "replace": "\tif actual.TeamName != expected.TeamName ||",
+   "rationale": "version ordering must run BEFORE any value comparison: with an older persisted row the values legitimately differ, and comparing them first reports Conflict where Absent is correct",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ]
+   ]
   }
  ]
 }

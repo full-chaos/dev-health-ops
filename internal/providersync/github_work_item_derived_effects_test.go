@@ -21,6 +21,7 @@ import (
 var (
 	githubDerivedEffectComputedAt = time.Date(2026, 8, 5, 0, 30, 0, 0, time.UTC)
 	githubDerivedEffectStaleAt    = time.Date(2026, 8, 4, 0, 30, 0, 0, time.UTC)
+	githubDerivedEffectNewerAt    = time.Date(2026, 8, 6, 0, 30, 0, 0, time.UTC)
 )
 
 func githubDerivedEffectCoverageRow() githubEstimateCoverageMetricsDailyRow {
@@ -43,6 +44,17 @@ func TestCompareGitHubEstimateCoverageVersionClauseCoverage(t *testing.T) {
 	}{
 		{"identical single row is exact", nil, 1, EffectExact},
 		{"absent when nothing read back", nil, 0, EffectAbsent},
+		{
+			// THE WEDGE CASE. A byte-identical recompute where only computed_at
+			// moved -- the steady state for a producer re-run per backfill day.
+			// Values all agree and the persisted stamp is NEWER. A two-way
+			// `!Equal -> Absent` answers Absent here, the committer rewrites the
+			// OLDER generation, the store keeps the newer one, and the readback
+			// answers Absent forever. It must be Conflict.
+			name:   "newer persisted version with identical values conflicts, never absent",
+			mutate: func(row *githubEstimateCoverageMetricsDailyRow) { row.ComputedAt = githubDerivedEffectNewerAt },
+			found:  1, want: EffectConflict,
+		},
 		{
 			// The load-bearing ordering case: duplicates AND a stale version.
 			// A comparator that checked staleness first would answer Absent
@@ -152,6 +164,17 @@ func TestCompareGitHubWorkItemStateDurationVersionClauseCoverage(t *testing.T) {
 		{"identical grouped row is exact", nil, 1, EffectExact},
 		{"absent when the group is empty", nil, 0, EffectAbsent},
 		{
+			// THE WEDGE CASE. A byte-identical recompute where only computed_at
+			// moved -- the steady state for a producer re-run per backfill day.
+			// Values all agree and the persisted stamp is NEWER. A two-way
+			// `!Equal -> Absent` answers Absent here, the committer rewrites the
+			// OLDER generation, the store keeps the newer one, and the readback
+			// answers Absent forever. It must be Conflict.
+			name:   "newer persisted version with identical values conflicts, never absent",
+			mutate: func(row *githubWorkItemStateDurationDailyRow) { row.ComputedAt = githubDerivedEffectNewerAt },
+			found:  1, want: EffectConflict,
+		},
+		{
 			// GROUP BY the full natural key cannot return two rows, so this is
 			// a wiring defect. It must never be answered with a rewrite.
 			name:   "more than one group conflicts even when stale",
@@ -226,6 +249,17 @@ func TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage(t *testing.T)
 	}{
 		{"identical single row is exact", nil, 1, EffectExact},
 		{"absent when nothing read back", nil, 0, EffectAbsent},
+		{
+			// THE WEDGE CASE. A byte-identical recompute where only computed_at
+			// moved -- the steady state for a producer re-run per backfill day.
+			// Values all agree and the persisted stamp is NEWER. A two-way
+			// `!Equal -> Absent` answers Absent here, the committer rewrites the
+			// OLDER generation, the store keeps the newer one, and the readback
+			// answers Absent forever. It must be Conflict.
+			name:   "newer persisted version with identical values conflicts, never absent",
+			mutate: func(row *githubWorkItemTeamAttributionRow) { row.ComputedAt = githubDerivedEffectNewerAt },
+			found:  1, want: EffectConflict,
+		},
 		{
 			// This table has no PARTITION BY, so FINAL deduplicates globally
 			// and two survivors mean the sorting-key fence is wrong.

@@ -307,6 +307,125 @@
           "./internal/providersync/"
         ]
       ]
+    },
+    {
+      "id": "M17-success-clears-the-budget-first-deferred-timestamp",
+      "file": "internal/providersync/repository_postgres.go",
+      "find": "    budget_first_deferred_at = NULL,\n    first_blocked_at = NULL,",
+      "replace": "    first_blocked_at = NULL,",
+      "rationale": "Obligation #1, isolated to the TIMESTAMP half of the budget pair -- M10 drops the counter, this drops the wall clock. They fail differently: `_budget_deferral_exhausted` reads budget_first_deferred_at for its SIX-HOUR cap, so a surviving stamp terminalizes the unit's NEXT budget deferral off a resolved episode's start instant even with budget_deferrals correctly zeroed. A pair-level mutation cannot tell the two clauses apart.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestCompleteUnitSQLClearsEveryEpisodeColumn$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M18-lease-repair-clears-the-budget-first-deferred-timestamp",
+      "file": "internal/syncreconciler/lease_repair.go",
+      "find": "\tbudget_deferrals = 0,\n\tbudget_first_deferred_at = NULL,",
+      "replace": "\tbudget_deferrals = 0,",
+      "rationale": "Obligation #1, the lease-repair half of the same split: M12 drops the counter clause, this drops the wall-clock clause. An expired lease is not a budget episode, so a unit Python budget-deferred and Go then lease-repaired must come back with BOTH budget columns reset, not one.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestExpiredLeaseRetryStampClearsEveryEpisodeColumn$",
+          "./internal/syncreconciler/"
+        ]
+      ]
+    },
+    {
+      "id": "M19-lease-repair-retry-stamp-must-overwrite-the-category",
+      "file": "internal/syncreconciler/lease_repair.go",
+      "find": "\tresult = jsonb_build_object(\n\t\t'error_category', 'worker_lost',\n\t\t'retry_count', unit.expired_lease_retry_count + 1,\n\t\t'retry_reason', 'expired_lease',\n\t\t'next_retry_at', to_jsonb($4::timestamptz),\n\t\t'retry_exhausted', FALSE,\n\t\t'retry_surfaces', to_jsonb($5::text[]),\n\t\t'last_lease_expired_at', to_jsonb($3::timestamptz)\n\t),",
+      "replace": "\tresult = (jsonb_build_object(\n\t\t'error_category', 'worker_lost',\n\t\t'retry_count', unit.expired_lease_retry_count + 1,\n\t\t'retry_reason', 'expired_lease',\n\t\t'next_retry_at', to_jsonb($4::timestamptz),\n\t\t'retry_exhausted', FALSE,\n\t\t'retry_surfaces', to_jsonb($5::text[]),\n\t\t'last_lease_expired_at', to_jsonb($3::timestamptz)\n\t) || COALESCE(unit.result::jsonb, '{}'::jsonb)),",
+      "rationale": "Obligation #2 (FORBIDDEN PATTERN) for THIS package's stamp; M13 only covered providersync's. jsonb `||` resolves duplicate keys in favour of its RIGHT operand, so merging the prior document on the right PRESERVES a stale 'budget_deferred' and makes stale counters terminalization-eligible. This mutation is also the one that exposed the guard's own defect: the previous regexp detector spanned jsonb_build_object's arguments with `[^)]*`, stopped at the first nested `to_jsonb(...)`, never reached the `||`, and SURVIVED this. The parenthesis-aware detector in internal/testsupport/sqlshape kills it.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestNoLeaseRepairStampPreservesAPriorErrorCategory$",
+          "./internal/syncreconciler/"
+        ]
+      ]
+    },
+    {
+      "id": "M20-watermark-now-ceiling",
+      "file": "internal/providersync/watermark_write_boundary.go",
+      "find": "\tceiling := now.UTC()\n",
+      "replace": "\tceiling := now.UTC().AddDate(100, 0, 0)\n",
+      "rationale": "C10(c) first ceiling, isolated from M14's second one. This keeps the window_end clamp intact and removes only the `now` clamp, which is the ONLY ceiling a nil coverageUpperBound has -- the shape every route that prefers a provider-derived watermark hits. A skewed source record then writes a FUTURE watermark that the monotonic upsert defends forever, and the planner plans nothing from that dataset again.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestNormalizeWatermarkWriteClampsToBothCeilings$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M21-watermark-tighter-ceiling-wins",
+      "file": "internal/providersync/watermark_write_boundary.go",
+      "find": "\t\tif upper.Before(ceiling) {\n",
+      "replace": "\t\tif upper.After(ceiling) {\n",
+      "rationale": "C10(c) min-vs-max flip. Both ceilings are still consulted, so M14 and M20 cannot see this: what changes is WHICH one binds. Choosing the looser ceiling lets a window end in the future raise the now ceiling, which is exactly the case a provider-reported future bound produces.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestNormalizeWatermarkWriteClampsToBothCeilings$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M22-watermark-write-is-utc",
+      "file": "internal/providersync/watermark_write_boundary.go",
+      "find": "\tvalue := incoming.UTC()\n",
+      "replace": "\tvalue := incoming\n",
+      "rationale": "C10(c) representation clause. time.Time comparisons are instant-based, so this changes no clamp verdict and no stored timestamptz -- every value assertion in the clamp table still passes. What it changes is the offset the clamp warning's RFC3339Nano fields print in, for a provider-supplied timestamp arriving in the provider's own zone, and it diverges from Python's _normalize_watermark_write. TestNormalizeWatermarkWriteReturnsUTC is the only thing that observes it, which is precisely why the mutation is listed.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestNormalizeWatermarkWriteReturnsUTC$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M23-watermark-clamp-comparison-direction",
+      "file": "internal/providersync/watermark_write_boundary.go",
+      "find": "\tif !value.After(ceiling) {\n",
+      "replace": "\tif !value.Before(ceiling) {\n",
+      "rationale": "C10(c) boundary clause. Inverts which side of the ceiling passes through untouched: a value comfortably INSIDE both ceilings is raised TO the ceiling, so the boundary that exists to stop a watermark claiming unread data becomes the thing that advances it. Neither ceiling is removed, so M14/M20/M21 do not cover this.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestNormalizeWatermarkWriteClampsToBothCeilings$",
+          "./internal/providersync/"
+        ]
+      ]
     }
   ]
 }

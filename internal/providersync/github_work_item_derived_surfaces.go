@@ -301,8 +301,13 @@ func githubEstimateCoverageKeyLess(left, right githubEstimateCoverageKey) bool {
 // D16: the Python composite calls this inside its `for d in days` loop while
 // the function itself takes no day, so a multi-day backfill recomputes and
 // rewrites byte-identical rows once per day. This builder reproduces the
-// per-call result exactly; the repetition is a property of the caller and is
-// pinned at the route seam, not smoothed over here.
+// per-call result exactly; the repetition is a property of the CALLER, not of
+// this function, and is tracked as CHAOS-3494.
+//
+// It is NOT pinned here, and no oracle case covers it: proving it needs a
+// multi-day driver, which arrives with the deriver that owns the day loop.
+// Claiming a pin at a seam this PR does not contain would read as coverage
+// that does not exist.
 func buildGitHubWorkItemTeamAttributions(
 	claim Claim,
 	rows githubWorkItemRows,
@@ -577,6 +582,25 @@ func marshalGitHubWorkItemDerivedRows(rows any) ([]json.RawMessage, error) {
 	return result, nil
 }
 
+// assertGitHubWorkItemDerivedTenancy refuses a row that does not belong to the
+// claim, and a row whose created_at is missing.
+//
+// It is called BEFORE each builder's own window/terminal skips, deliberately.
+// A foreign-tenant row that happens to fall outside the window would otherwise
+// be silently skipped rather than refused, so whether a cross-tenant leak
+// raises would depend on the row's dates -- the check would hold only for the
+// rows that were going to be counted anyway, which is the opposite of a
+// tenancy fence. Asserting first makes the guarantee unconditional.
+//
+// DIVERGENCE FROM PYTHON, at-site: the CreatedAt.IsZero() clause hard-fails,
+// while Python accepts datetime(1,1,1) and carries it through. Go cannot
+// distinguish "absent" from "zero instant" -- time.Time's zero value IS
+// 0001-01-01 -- and every consumer here does date arithmetic against
+// created_at, so a zero would silently place the item before every window
+// rather than announce itself. Refusing is the safer half of the divergence
+// and it is a REJECTION, never a wrong number. No oracle case covers it,
+// because constructing one would require Python to accept an input this
+// function rejects; it is asserted by the unit test instead.
 func assertGitHubWorkItemDerivedTenancy(claim Claim, item githubWorkItemRow) error {
 	if item.OrgID != claim.OrgID || item.Provider != claim.Provider ||
 		item.CreatedAt.IsZero() {

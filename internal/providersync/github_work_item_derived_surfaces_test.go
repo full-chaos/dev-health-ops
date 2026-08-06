@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -248,6 +249,191 @@ func TestGitHubTeamAttributionDedupeTieBreaksByOrder(t *testing.T) {
 	)
 	if len(deduped) != 1 || deduped[0].Evidence != "assignee_membership=m2" {
 		t.Fatalf("equal versions must keep the LAST row, got %+v", deduped)
+	}
+}
+
+// inspectGitHubWorkItemDerivedRows had no test at all, so the precedence it
+// encodes -- conflict beats absent beats exact -- was unasserted while every
+// batch readback in the package depends on it.
+//
+// The precedence is not cosmetic. The committer treats Absent as "write this",
+// so a batch containing one CONFLICTING row that reported Absent would be
+// rewritten straight over data that disagrees with it. Both orders are tested
+// because a verdict that wins only when it arrives first is not precedence, and
+// the natural mutant (swap the two arms) is invisible to a single ordering.
+func TestInspectGitHubWorkItemDerivedRowsTakesTheWeakestVerdict(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		inspections []EffectInspection
+		want        EffectInspection
+	}{
+		{"empty batch is exact", nil, EffectExact},
+		{"all exact", []EffectInspection{EffectExact, EffectExact}, EffectExact},
+		{"one absent", []EffectInspection{EffectExact, EffectAbsent}, EffectAbsent},
+		{"absent then exact", []EffectInspection{EffectAbsent, EffectExact}, EffectAbsent},
+		{"one conflict", []EffectInspection{EffectExact, EffectConflict}, EffectConflict},
+		{
+			"conflict BEFORE absent",
+			[]EffectInspection{EffectConflict, EffectAbsent}, EffectConflict,
+		},
+		{
+			// The ordering that catches an inverted precedence: absent is seen
+			// first and must NOT win.
+			"absent BEFORE conflict",
+			[]EffectInspection{EffectAbsent, EffectConflict}, EffectConflict,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			index := 0
+			got, err := inspectGitHubWorkItemDerivedRows(
+				tt.inspections,
+				func(inspection EffectInspection) (EffectInspection, error) {
+					index++
+					return inspection, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("verdict = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("inspection error is a conflict", func(t *testing.T) {
+		got, err := inspectGitHubWorkItemDerivedRows(
+			[]EffectInspection{EffectExact},
+			func(EffectInspection) (EffectInspection, error) {
+				return EffectExact, ErrInvalidConfiguration
+			},
+		)
+		if !errors.Is(err, ErrInvalidConfiguration) || got != EffectConflict {
+			t.Fatalf("got (%v, %v), want (EffectConflict, ErrInvalidConfiguration)", got, err)
+		}
+	})
+
+	t.Run("unknown verdict is rejected", func(t *testing.T) {
+		got, err := inspectGitHubWorkItemDerivedRows(
+			[]EffectInspection{EffectExact},
+			func(EffectInspection) (EffectInspection, error) {
+				return EffectInspection("not-a-verdict"), nil
+			},
+		)
+		if !errors.Is(err, ErrInvalidConfiguration) || got != EffectConflict {
+			t.Fatalf("got (%v, %v), want (EffectConflict, ErrInvalidConfiguration)", got, err)
+		}
+	})
+}
+
+// assertGitHubWorkItemDerivedTenancy has THREE clauses and, before this test,
+// deleting its entire body survived every test in the package: no fixture
+// carried a foreign org, a foreign provider or a zero created_at, so the fence
+// guarded nothing that was ever exercised.
+//
+// Each clause is mutated independently. A single "wrong row is rejected" case
+// would be satisfied by any one clause surviving, which is exactly how a
+// compound predicate keeps a dead clause hidden.
+func TestAssertGitHubWorkItemDerivedTenancyRejectsEachClause(t *testing.T) {
+	claim := githubWorkItemOracleClaim()
+	valid := githubWorkItemRow{
+		WorkItemID: "acme/api#1", Provider: claim.Provider, Title: "t", Type: "issue",
+		Status: "todo", ProjectID: stringPointer("acme/api"),
+		CreatedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC),
+		OrgID:     claim.OrgID,
+	}
+	if err := assertGitHubWorkItemDerivedTenancy(claim, valid); err != nil {
+		t.Fatalf("the valid row must pass, else every case below is vacuous: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name   string
+		mutate func(githubWorkItemRow) githubWorkItemRow
+	}{
+		{"foreign org", func(row githubWorkItemRow) githubWorkItemRow {
+			row.OrgID = "org-other"
+			return row
+		}},
+		{"empty org", func(row githubWorkItemRow) githubWorkItemRow {
+			row.OrgID = ""
+			return row
+		}},
+		{"foreign provider", func(row githubWorkItemRow) githubWorkItemRow {
+			row.Provider = "gitlab"
+			return row
+		}},
+		{
+			// Go's zero time.Time IS 0001-01-01, so "absent" and "the zero
+			// instant" are the same value. Python accepts datetime(1,1,1);
+			// this port refuses it rather than silently sorting the item
+			// before every window.
+			"zero created_at",
+			func(row githubWorkItemRow) githubWorkItemRow {
+				row.CreatedAt = time.Time{}
+				return row
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := assertGitHubWorkItemDerivedTenancy(claim, tt.mutate(valid)); !errors.Is(
+				err, ErrInvalidConfiguration,
+			) {
+				t.Errorf("got %v, want ErrInvalidConfiguration", err)
+			}
+		})
+	}
+}
+
+// The assertion must run BEFORE the window and terminal skips, or a
+// foreign-tenant row that falls outside the window is silently skipped instead
+// of refused -- making the tenancy guarantee depend on the row's dates.
+//
+// Every builder is checked, because each has its own skip and each could
+// regress independently. The row is placed OUTSIDE the day window on purpose:
+// with an in-window row all three would raise even if the assertion sat after
+// the skip, and the ordering would stay unmeasured.
+func TestGitHubWorkItemDerivedBuildersAssertTenancyBeforeSkipping(t *testing.T) {
+	claim := githubWorkItemOracleClaim()
+	day := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	computedAt := time.Date(2026, 8, 5, 0, 30, 0, 0, time.UTC)
+	foreign := githubWorkItemRow{
+		WorkItemID: "acme/api#99", Provider: "github", Title: "t", Type: "issue",
+		Status: "todo", ProjectID: stringPointer("acme/api"),
+		// Created AFTER the window ends, so every builder's own skip would
+		// drop it before ever looking at the tenant.
+		CreatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+		OrgID:     "org-other",
+	}
+	rows := githubWorkItemRows{
+		WorkItems: []githubWorkItemRow{foreign},
+		StatusTransitions: []githubWorkItemTransitionRow{{
+			WorkItemID: "acme/api#99", Provider: "github",
+			OccurredAt: time.Date(2026, 9, 1, 6, 0, 0, 0, time.UTC),
+			FromStatus: "todo", ToStatus: "in_progress", OrgID: claim.OrgID,
+		}},
+	}
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{})
+	if _, err := buildGitHubWorkItemDerivedSurfaces(
+		claim, rows, day, computedAt, derived,
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("composite: got %v, want ErrInvalidConfiguration", err)
+	}
+	if _, err := buildGitHubEstimateCoverageMetricsDaily(
+		claim, rows, day, day.AddDate(0, 0, 1), computedAt, derived,
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Errorf("estimate coverage: got %v, want ErrInvalidConfiguration", err)
+	}
+	if _, err := buildGitHubWorkItemTeamAttributions(
+		claim, rows, computedAt, derived,
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Errorf("team attributions: got %v, want ErrInvalidConfiguration", err)
+	}
+	if _, err := buildGitHubWorkItemStateDurationsDaily(
+		claim, rows, day, day.AddDate(0, 0, 1), computedAt, derived,
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Errorf("state durations: got %v, want ErrInvalidConfiguration", err)
 	}
 }
 

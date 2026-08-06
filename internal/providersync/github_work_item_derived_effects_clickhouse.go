@@ -258,6 +258,11 @@ unestimated_count, backlog_size, ratio, computed_at, org_id)`)
 	if err != nil {
 		return err
 	}
+	// Abort is a no-op once Send succeeds, so this only fires on an early
+	// return -- an Append error, a lease loss, or a Day parse failure. Without
+	// it those paths leak the prepared batch's connection, exactly as every
+	// sibling adapter in this package already guards against.
+	defer batch.Abort()
 	for _, row := range rows {
 		day, err := row.Day.time()
 		if err != nil {
@@ -381,6 +386,11 @@ is_primary, confidence, evidence, computed_at)`)
 	if err != nil {
 		return err
 	}
+	// Abort is a no-op once Send succeeds, so this only fires on an early
+	// return -- an Append error, a lease loss, or a Day parse failure. Without
+	// it those paths leak the prepared batch's connection, exactly as every
+	// sibling adapter in this package already guards against.
+	defer batch.Abort()
 	for _, row := range rows {
 		if err := batch.Append(
 			identity.OrgID, githubWorkItemDerivedRepoID(row.RepoID), row.WorkItemID,
@@ -491,6 +501,11 @@ items_touched, computed_at, avg_wip, org_id)`)
 	if err != nil {
 		return err
 	}
+	// Abort is a no-op once Send succeeds, so this only fires on an early
+	// return -- an Append error, a lease loss, or a Day parse failure. Without
+	// it those paths leak the prepared batch's connection, exactly as every
+	// sibling adapter in this package already guards against.
+	defer batch.Abort()
 	for _, row := range rows {
 		day, err := row.Day.time()
 		if err != nil {

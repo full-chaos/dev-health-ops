@@ -68,6 +68,8 @@
 #   Force a specific scratch db name (rarely needed — the default is already
 #   unique per worktree):
 #     SCRATCH_DB=my_custom_scratch bash ci/local_validate.sh
+#   By default a blocked run waits up to LOCK_WAIT_SECS=1800 (30 minutes) for a
+#   concurrent gate to release the lock, then fails with an actionable message.
 #   Fail fast instead of waiting if another gate already holds the lock:
 #     LOCK_WAIT_SECS=0 bash ci/local_validate.sh
 #
@@ -201,11 +203,14 @@ DEVHOPS="${ROOT}/.venv/bin/dev-hops"
 PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL)
 
 # --- Single-flight lock (CHAOS-3403). -----------------------------------------------
-# ops/AGENTS.md documents this gate as single-flight, but nothing enforced it:
-# every operator/agent had to `ps aux | grep local_validate` before launching — a
-# time-of-check-to-time-of-use race. One collision had to be killed by hand and two
-# near-misses were caught only by a human watching `ps` in real time, in both cases
-# AFTER a correct check had already gone stale in the seconds before launch.
+# The ops-local-validate skill (.claude/skills/ops-local-validate/SKILL.md) documented
+# this gate as single-flight, machine-wide — but that was an operator convention, not
+# anything enforced: every operator/agent had to `ps aux | grep local_validate` before
+# launching — a time-of-check-to-time-of-use race. One collision had to be killed by
+# hand and two near-misses were caught only by a human watching `ps` in real time, in
+# both cases AFTER a correct check had already gone stale in the seconds before
+# launch. ops/AGENTS.md's "Pre-push validation gate" section now states the contract
+# too; this lock is what makes it actually true instead of merely documented.
 #
 # RESIDUAL MECHANISM (investigated for CHAOS-3403 — not assumed): the CONCURRENCY
 # CONTRACT above already gives every worktree its own scratch ClickHouse database
@@ -225,6 +230,14 @@ PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_p
 # The lock below is a mutex on that shared resource, scoped to CH_CONTAINER (the
 # thing actually contended) rather than to this worktree — matching the team's
 # current manual "ps aux" convention, which is host-wide, not per-worktree.
+#
+# THROUGHPUT TRADE-OFF: this re-serializes gates across worktrees that a prior fix
+# (commit 3d3ca881b2, the per-worktree scratch db above) deliberately let run
+# concurrently. That trade is not free. Observed, not benchmarked: a full gate run
+# end-to-end is on the order of 15 minutes; the unit-suite tier alone is on the
+# order of 180s. With N worktrees contending for the same CH_CONTAINER, the
+# worst-case wait for the last one is on the order of (N-1) x that full-run time —
+# an order-of-magnitude figure, not a guarantee.
 #
 # --- Lock primitive: a symlink, not a directory (CHAOS-3403 adversarial-review fix) --
 # Uses `ln -s`, not `mkdir` + separate metadata files, and not `flock(1)` — flock(1)

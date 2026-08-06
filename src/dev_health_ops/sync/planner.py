@@ -763,6 +763,29 @@ def _effective_heavy_max_window_days() -> int:
     return min_cap_days
 
 
+def heavy_ratchet_net_advance_seconds() -> int:
+    """How far a successful capped HEAVY tick moves the watermark, in seconds.
+
+    CHAOS-3430: this is NOT the window cap. The incremental read subtracts
+    ``SYNC_WATERMARK_OVERLAP`` from the stored watermark, so a capped window
+    spans ``[W - overlap, W - overlap + cap]`` and the next watermark lands at
+    its END — a net forward movement of ``cap - overlap`` per tick, not ``cap``.
+
+    Anything estimating how many scheduled ticks a trailing dataset still needs
+    must divide by THIS, not by the cap. Dividing by the cap understates the
+    remaining catch-up by the ratio between the two: with a six-day overlap on a
+    seven-day cap, by a factor of seven.
+
+    Exposed from the planner rather than recomputed by callers so the estimate
+    can never drift from the window arithmetic it describes — the same reason
+    :func:`_effective_heavy_max_window_days` is the single source for the cap.
+    The clamp in that function guarantees a positive result; the floor here is a
+    belt-and-braces guard so a caller dividing by this can never hit zero.
+    """
+    cap_seconds = _effective_heavy_max_window_days() * _SECONDS_PER_DAY
+    return max(1, cap_seconds - _watermark_overlap_seconds())
+
+
 def _watermark_stamping_window(
     window_start: datetime | None,
     window_end: datetime,

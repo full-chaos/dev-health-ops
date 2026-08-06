@@ -13,6 +13,9 @@
   "user_alias": "primary.degraded-readiness-user",
   "subject_class": "n/a",
   "subject_ref": null,
+  "expected_mention_texts": [
+    "meridian/web-app"
+  ],
   "invariants": [
     {
       "category": "no-silent-degraded-readiness",

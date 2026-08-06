@@ -19,9 +19,14 @@ re-exercise those same seams through an extra layer of indirection.
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevStreamEvent
+from scripts.acceptance.corpus.principals import (
+    BRIDGED_PROVISIONING_MARKER,
+    SEEDED_PROVISIONING_MARKER,
+)
 from scripts.acceptance.corpus.sse_client import SseFrame
 from tests.acceptance.test_wave4_corpus_runner_live import (
     _public_outcome_from_events,
@@ -103,3 +108,33 @@ class TestPublicOutcomeFromEvents:
         outcome = _public_outcome_from_events(events)
         assert outcome == "answered_with_gaps"
         assert outcome != "answered"
+
+
+class TestReceiptRecordsProvisioningMode:
+    """Adversarial round 3: the marker used to live only in a free-text
+    ``detail`` string, and deleting that fragment left every test green.
+
+    A receipt is evidence. Evidence that cannot distinguish a run against
+    seeded credentials from one that took the temporary admin-set-password
+    bridge is weaker than it looks -- the bridge mutates a digest-covered
+    column, so the two are not equivalent runs.
+    """
+
+    def test_the_runner_records_a_named_provisioning_check(self) -> None:
+        # Absolute, derived from this file: a relative path would depend on
+        # cwd, and a source-reading assertion that cannot find its source is
+        # exactly the "measurement that did not happen" shape. read_text
+        # raises loudly if it is ever wrong.
+        source = (
+            Path(__file__).with_name("test_wave4_corpus_runner_live.py")
+        ).read_text(encoding="utf-8")
+        assert "provisioned_via_" in source, (
+            "the runner no longer records a named provisioning-mode check -- "
+            "receipts can no longer say which credential path produced them"
+        )
+        assert 'category="provisioning-mode"' in source
+
+    def test_the_two_markers_are_distinguishable(self) -> None:
+        assert BRIDGED_PROVISIONING_MARKER != SEEDED_PROVISIONING_MARKER
+        assert BRIDGED_PROVISIONING_MARKER
+        assert SEEDED_PROVISIONING_MARKER

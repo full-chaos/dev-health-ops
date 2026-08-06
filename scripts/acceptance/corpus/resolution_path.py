@@ -91,6 +91,7 @@ __all__ = [
     "ResolutionPath",
     "ResolutionPathError",
     "ResolutionLedgerEntry",
+    "attach_mention_texts",
     "classify_match_kind",
     "derive_resolution_path",
 ]
@@ -231,6 +232,100 @@ def classify_match_kind(
         "language utterance rather than the normalized resolver-input span, "
         "that is the likely cause -- see this module's CALLER CONTRACT."
     )
+
+
+def attach_mention_texts(
+    entries: Sequence[ResolutionLedgerEntry], mention_texts: Sequence[str]
+) -> list[ResolutionLedgerEntry]:
+    """Attach each mention's declared lookup text to its ledger entries.
+
+    CHAOS-3462 B6 closes the gap this module's docstring named as its own
+    residual: ``DevResolutionEntry`` never persists the mention span, so the
+    docker-exec ledger read returns entries with ``mention_text=None`` and
+    every single-shot ``exact_match`` was unclassifiable --
+    ``deterministic-exact`` was dead vocabulary for the whole corpus. The
+    case now DECLARES the spans (``expected_mention_texts``), derived from
+    production's own ``QuestionInterpreter`` rather than hand-authored, and
+    this function threads them onto the entries the exec plane returned.
+
+    ORDERING CONTRACT, and why positional mapping is sound here rather than
+    a guess: ``subject_preflight._build_ledger`` builds entries by
+    ``zip(mentions, resolutions, strict=True)`` and stamps ``entry_ordinal``
+    from that index, and ``_inner_ledger_query`` orders by
+    ``entry_ordinal``. So distinct ``mention_id`` values, in first-seen
+    order, correspond one-to-one with the question's mentions in the order
+    the interpreter produced them -- which is the order
+    ``expected_mention_texts`` is declared in, asserted against the real
+    interpreter by the corpus guard test.
+
+    THE TWO COUNT MISMATCHES ARE NOT SYMMETRIC, and treating them as if they
+    were is a defect this function had until it was attacked directly:
+
+    * MORE observed mentions than declared -> RAISE. The declaration is
+      genuinely short, so at least one real mention would get no span, and
+      positional mapping past the end is meaningless. That is a corpus
+      defect to fix, not to absorb.
+    * FEWER observed than declared -> attach NOTHING, and let
+      ``derive_resolution_path`` proceed on the raw entries. This is a
+      LEGITIMATE shape, not drift. A PROCEED ledgers every mention
+      (``_build_ledger`` zips with ``strict=True``) and ``append_resolution``
+      only flushes, so a partial PROCEED write is not possible -- a failure
+      there rolls back to ZERO rows, which lands in the empty-ledger branch
+      of :func:`derive_resolution_path`, not here. A NON-EMPTY short ledger
+      therefore comes from the TERMINATE path, which persists ONLY a
+      ``terminating_resolution_entry``, and ``_terminate`` sets that solely
+      for ``ambiguous_candidates``. Such an entry never needs a span: its
+      mention's final outcome is not ``exact_match``, so
+      ``derive_resolution_path`` short-circuits to ``miss-clarification``
+      without ever consulting ``mention_text``. Raising here would turn a
+      correct, classifiable run RED with a message blaming the case author
+      for drift that did not happen -- reproduced with a two-mention case
+      that terminates ambiguous on one of them.
+
+      Residual, stated rather than assumed away: if a short ledger ever DID
+      carry an ``exact_match``, this returns it unattached and
+      :func:`derive_resolution_path` raises its "no mention_text was
+      supplied" error -- a true failure, but one whose message points at the
+      wrong cause. No known code path produces that shape today.
+
+    Attaching positionally in that short case would be worse than attaching
+    nothing: the surviving entry is not necessarily the FIRST mention, so
+    the mapping could silently pair a real mention with another mention's
+    span.
+    """
+
+    order: list[str] = []
+    for entry in entries:
+        if entry.mention_id not in order:
+            order.append(entry.mention_id)
+    if len(order) > len(mention_texts):
+        raise ResolutionPathError(
+            f"the ledger carries {len(order)} distinct mention(s) "
+            f"({order!r}) but the case declares only {len(mention_texts)} "
+            f"expected_mention_texts ({list(mention_texts)!r}) -- at least "
+            "one real mention would get no span. The case's declaration has "
+            "drifted from what the interpreter produces for its question; "
+            "regenerate it from the interpreter."
+        )
+    if len(order) < len(mention_texts):
+        # Partial (terminating) ledger -- see the docstring. Nothing to
+        # attach, and nothing that needs attaching.
+        return list(entries)
+    text_by_mention = dict(zip(order, mention_texts, strict=True))
+    return [
+        ResolutionLedgerEntry(
+            outcome=entry.outcome,
+            mention_id=entry.mention_id,
+            committed_label=entry.committed_label,
+            committed_canonical_id=entry.committed_canonical_id,
+            mention_text=(
+                entry.mention_text
+                if entry.mention_text is not None
+                else text_by_mention[entry.mention_id]
+            ),
+        )
+        for entry in entries
+    ]
 
 
 def derive_resolution_path(

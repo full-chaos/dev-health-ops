@@ -15,6 +15,7 @@ import pytest
 from scripts.acceptance.corpus.resolution_path import (
     ResolutionLedgerEntry,
     ResolutionPathError,
+    attach_mention_texts,
     classify_match_kind,
     derive_resolution_path,
 )
@@ -248,3 +249,116 @@ class TestDeriveResolutionPath:
         entries = [_entry("something_new")]
         with pytest.raises(ResolutionPathError):
             derive_resolution_path(entries)
+
+
+class TestAttachMentionTexts:
+    """CHAOS-3462 B6: thread the case-declared spans onto exec-plane entries.
+
+    The exec plane cannot return them -- ``DevResolutionEntry`` never
+    persists the mention span -- so before B6 every single-shot
+    ``exact_match`` was unclassifiable and ``deterministic-exact`` was dead
+    vocabulary for the entire corpus.
+    """
+
+    def test_single_mention_gets_its_span(self) -> None:
+        entries = [
+            ResolutionLedgerEntry(
+                outcome="exact_match",
+                mention_id="m1",
+                committed_label="meridian/web-app",
+            )
+        ]
+        attached = attach_mention_texts(entries, ["meridian/web-app"])
+        assert attached[0].mention_text == "meridian/web-app"
+        # And the whole point: it is now classifiable.
+        assert derive_resolution_path(attached) == "deterministic-exact"
+
+    def test_the_unattached_entry_is_unclassifiable(self) -> None:
+        """The negative control -- this is the B6 defect itself. Without the
+        span the same ledger raises, which is what made ~46 cases red."""
+
+        entries = [
+            ResolutionLedgerEntry(
+                outcome="exact_match",
+                mention_id="m1",
+                committed_label="meridian/web-app",
+            )
+        ]
+        with pytest.raises(ResolutionPathError):
+            derive_resolution_path(entries)
+
+    def test_spans_are_assigned_by_first_seen_mention_order(self) -> None:
+        entries = [
+            ResolutionLedgerEntry(outcome="ambiguous_candidates", mention_id="m1"),
+            ResolutionLedgerEntry(
+                outcome="exact_match", mention_id="m2", committed_label="second"
+            ),
+            ResolutionLedgerEntry(
+                outcome="exact_match", mention_id="m1", committed_label="first"
+            ),
+        ]
+        attached = attach_mention_texts(entries, ["alpha", "beta"])
+        by_id = {(e.mention_id, e.mention_text) for e in attached}
+        assert ("m1", "alpha") in by_id
+        assert ("m2", "beta") in by_id
+
+    def test_more_observed_mentions_than_declared_raises(self) -> None:
+        """A short declaration would leave a real mention with no span, and
+        positional mapping past the end is meaningless."""
+
+        entries = [
+            ResolutionLedgerEntry(outcome="exact_match", mention_id="m1"),
+            ResolutionLedgerEntry(outcome="exact_match", mention_id="m2"),
+        ]
+        with pytest.raises(ResolutionPathError, match="drifted"):
+            attach_mention_texts(entries, ["only-one"])
+
+    def test_a_partial_terminating_ledger_does_not_raise(self) -> None:
+        """The asymmetry, found by attacking this function directly.
+
+        A two-mention case that TERMINATES ambiguous persists only the
+        terminating entry, so the ledger carries one mention while the case
+        declares two. That is legitimate -- a PROCEED always ledgers every
+        mention, so a short ledger can only come from the TERMINATE path,
+        which persists only an ambiguous_candidates entry. Raising would
+        turn a correct, classifiable run RED and blame the case author for
+        drift that did not happen.
+        """
+
+        partial = [
+            ResolutionLedgerEntry(outcome="ambiguous_candidates", mention_id="m2")
+        ]
+        attached = attach_mention_texts(partial, ["span-one", "span-two"])
+        # Nothing attached -- and nothing needed attaching, because a
+        # non-exact_match final entry short-circuits before mention_text is
+        # ever consulted.
+        assert attached[0].mention_text is None
+        assert derive_resolution_path(attached) == "miss-clarification"
+
+    def test_the_partial_case_is_not_mispaired(self) -> None:
+        """Attaching positionally in the short case would be worse than
+        attaching nothing: the surviving entry is not necessarily the FIRST
+        mention, so span-one could be pinned to mention two."""
+
+        partial = [
+            ResolutionLedgerEntry(outcome="ambiguous_candidates", mention_id="m2")
+        ]
+        assert attach_mention_texts(partial, ["span-one", "span-two"])[
+            0
+        ].mention_text != ("span-one")
+
+    def test_an_already_populated_mention_text_is_not_overwritten(self) -> None:
+        entries = [
+            ResolutionLedgerEntry(
+                outcome="exact_match",
+                mention_id="m1",
+                committed_label="x",
+                mention_text="already-there",
+            )
+        ]
+        assert attach_mention_texts(entries, ["declared"])[0].mention_text == (
+            "already-there"
+        )
+
+    def test_empty_ledger_with_empty_declaration_is_a_no_op(self) -> None:
+        assert attach_mention_texts([], []) == []

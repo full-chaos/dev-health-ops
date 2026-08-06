@@ -70,15 +70,24 @@ Both fail loud (``DbVerifyUnavailableError``) if the exec plane itself
 cannot be reached at all (docker/compose missing, non-zero exit, unparseable
 output) -- distinct from :func:`derive_resolution_path`'s own honest
 ``None``, which applies only once the exec plane genuinely reached the
-ledger and found it empty (a non-subject-shaped case). A residual, honestly
-documented limitation: entries the exec plane returns carry no
-``mention_text`` (``DevResolutionEntry`` never persists the original mention
-span -- see ``resolution_path.py``'s module docstring); a single-shot
-``exact_match`` entry with no prior candidate offer therefore cannot be
-classified exact-vs-alias without it, and ``test_corpus_case`` records that
-as a named, failed assertion (never a silent guess) rather than crashing --
-closeable once a corpus case declares its own expected mention text (Lane
-2b schema addition, not decided here).
+ledger and found it empty (a non-subject-shaped case).
+
+CLOSED (CHAOS-3462 B6): entries the exec plane returns still carry no
+``mention_text`` -- ``DevResolutionEntry`` never persists the original span
+-- so a single-shot ``exact_match`` used to be unclassifiable, which made
+``deterministic-exact`` DEAD VOCABULARY for the whole corpus: ~46 cases were
+red on ``resolution_path_classifiable`` no matter what their invariants or
+profile said. The fix is the schema addition ``resolution_path.py``'s own
+docstring anticipated: each case declares ``expected_mention_texts``, and
+``attach_mention_texts`` threads them onto the entries by first-seen mention
+order. The declared spans are DERIVED FROM THE PRODUCER (production's
+``QuestionInterpreter``, whose ``normalized_lookup_text`` is exactly what
+reached the resolver) and pinned against it by a corpus guard test, so a
+question edited by one word fails the unit gate rather than the live run.
+The two count mismatches are asymmetric: more observed mentions than
+declared raises (a real mention would get no span), while fewer attaches
+nothing and proceeds (a short ledger can only be a terminating
+``ambiguous_candidates`` entry, which never needs a span).
 
 Merge-order note: this repo's Lane 2a merges before Lane 2b, so
 ``tests/acceptance/world/ask-dev-world.v1/corpus/`` may not exist, or may be
@@ -112,7 +121,11 @@ from dev_health_ops.api.dev.contracts import (
 )
 from dev_health_ops.api.dev.terminal_frames import PUBLIC_OUTCOME_BY_ERROR_CODE
 from dev_health_ops.llm.agent.provider_scripts import current_role, load_role_script
-from scripts.acceptance.corpus.arming import NotArmedError, require_armed
+from scripts.acceptance.corpus.arming import (
+    ArmedButScrubbedError,
+    NotArmedError,
+    require_armed,
+)
 from scripts.acceptance.corpus.case_schema import (
     CorpusCase,
     load_corpus_cases,
@@ -127,6 +140,13 @@ from scripts.acceptance.corpus.db_verify import (
     verify_world_digest_via_exec,
 )
 from scripts.acceptance.corpus.invariants import InvariantContext, evaluate_invariant
+from scripts.acceptance.corpus.principals import (
+    BRIDGE_ENV_VAR,
+    SEEDED_PROVISIONING_MARKER,
+    PrincipalDirectory,
+    PrincipalSession,
+    PrincipalSessions,
+)
 from scripts.acceptance.corpus.quota import QuotaBudget, estimate_run_cost_microusd
 from scripts.acceptance.corpus.receipt import (
     Wave4CaseRecorder,
@@ -134,6 +154,7 @@ from scripts.acceptance.corpus.receipt import (
 )
 from scripts.acceptance.corpus.resolution_path import (
     ResolutionPathError,
+    attach_mention_texts,
     derive_resolution_path,
 )
 from scripts.acceptance.corpus.script_inventory import check_script_inventory
@@ -190,8 +211,8 @@ def _load_resolution_profiles() -> dict[str, Any]:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _armed_or_throw() -> None:
-    """Skip (never fail) when nobody asked for this run at all.
+def _armed_or_throw(scrubbed_ambient_env_names: tuple[str, ...]) -> None:
+    """Skip when nobody asked for this run at all -- FAIL when they did.
 
     This module IS collected by the standard, always-on unit-tier gate
     (``ci/local_validate.sh`` runs the whole ``tests/`` directory
@@ -206,10 +227,27 @@ def _armed_or_throw() -> None:
     here"). "Armed-or-THROW" still holds for everything downstream of this
     check: once armed, the script-inventory/world-digest/quota guards below
     never skip, only fail loud.
+
+    CHAOS-3462 B1 -- THE THIRD STATE: the paragraph above was written as if
+    there were only two ("armed" and "nobody asked"). The Phase 2 exit
+    evidence run found a third and it was silently taking the skip branch.
+    CHAOS-3402's ``tests/_env_isolation.py`` scrub deletes
+    ``ASK_DEV_LIVE_ACCEPTANCE`` in ``pytest_configure``, before this fixture
+    (or this module) exists, so a correctly-armed operator run reported
+    ``144 skipped``, exit 0 -- a green session for a run that touched
+    nothing. ``scrubbed_ambient_env_names`` (tests/conftest.py) is the
+    scrub's own record of what it REMOVED, which is evidence of arming that
+    survives the deletion of the arming variable itself; an
+    ``ArmedButScrubbedError`` from that evidence is a hard FAIL, never a
+    skip. ``scripts/acceptance/run_wave4_corpus.sh`` is the standing fix
+    (it exports the ``DEV_HEALTH_TEST_ENV_ALLOW`` exemption); this branch is
+    the belt to that braces, for a run invoked some other way.
     """
 
     try:
-        require_armed()
+        require_armed(scrubbed_names=scrubbed_ambient_env_names)
+    except ArmedButScrubbedError as exc:
+        pytest.fail(str(exc), pytrace=False)
     except NotArmedError as exc:
         pytest.skip(str(exc))
 
@@ -266,13 +304,27 @@ def quota_budget() -> QuotaBudget:
     return QuotaBudget.from_env()
 
 
+def _api_base_url() -> str:
+    return os.getenv("ASK_DEV_ACCEPTANCE_API_URL", "http://127.0.0.1:18080")
+
+
+def _superuser_password() -> str:
+    return os.getenv("TEST_SUPERUSER_PASSWORD", "devhealth123")
+
+
 @pytest.fixture(scope="session")
 def acceptance_api() -> tuple[AcceptanceApi, str]:
-    api = AcceptanceApi(
-        os.getenv("ASK_DEV_ACCEPTANCE_API_URL", "http://127.0.0.1:18080")
-    )
+    """The ADMIN session -- used only to provision per-case principals.
+
+    CHAOS-3462 B5: this is no longer the session cases execute under. It
+    logs in as the acceptance superuser because that is the identity allowed
+    to call ``POST /api/v1/admin/users/{id}/password``; the cases themselves
+    run under ``principal_sessions`` below.
+    """
+
+    api = AcceptanceApi(_api_base_url())
     email = os.getenv("TEST_SUPERUSER_EMAIL", "admin@devhealth.example")
-    password = os.getenv("TEST_SUPERUSER_PASSWORD", "devhealth123")
+    password = _superuser_password()
     login = api.request(
         "POST", "/api/v1/auth/login", {"email": email, "password": password}
     )
@@ -285,6 +337,59 @@ def acceptance_api() -> tuple[AcceptanceApi, str]:
     if not org_id:
         raise AcceptanceFailure("login returned no user.org_id")
     return api, org_id
+
+
+@pytest.fixture(scope="session")
+def principal_sessions(
+    acceptance_api: tuple[AcceptanceApi, str],
+    _world_digest_pin: str,
+) -> PrincipalSessions:
+    """Per-case principal selection (CHAOS-3462 B5).
+
+    Before this existed, all 93 active cases ran as the acceptance superuser
+    in one org, so the cross-tenant and entitlement families asserted
+    nothing about the identities they name. Each case's ``org_alias`` /
+    ``user_alias`` now resolves through ``world.json`` to a real principal,
+    which the runner authenticates as. See ``principals.py`` for why this is
+    a genuine login rather than ``/api/v1/admin/impersonate`` (the dev
+    routers do not honor impersonation, and would silently evaluate
+    entitlement and readiness against the superuser's org instead).
+
+    THE ``_world_digest_pin`` DEPENDENCY IS LOAD-BEARING, NOT DECORATIVE.
+    Provisioning writes a real ``password_hash`` onto world-seeded users,
+    and ``compute_world_digest`` hashes ``SELECT *`` from ``users`` with
+    only ``_VOLATILE_COLUMNS`` excluded -- ``password_hash`` is NOT in that
+    exclusion set. So the very act of selecting a principal mutates a
+    digested column. Declaring the dependency pins the ordering (digest
+    verified first, against a world nobody has touched) instead of relying
+    on the incidental "autouse session fixtures instantiate before
+    requested ones" rule, which a future edit could silently invert.
+
+    RESIDUAL, STATED RATHER THAN PAPERED OVER: this makes the FIRST armed
+    run against a freshly-seeded stack correct, and a SECOND run against
+    the same stack report a ``postgres.users`` digest mismatch caused by
+    the first run's own provisioning. Re-runs therefore need a fresh
+    seed/restore. The durable fix belongs to the world-seeding lane
+    (CHAOS-3219 B2/B3), and there are only two honest shapes for it: seed
+    the password in ``_build_auth_fixture`` so the pin includes it, or
+    exclude ``password_hash`` from the digest -- which is defensible on its
+    own terms, since a bcrypt hash is salted and therefore can never
+    reproduce across two generations of the same world anyway.
+    """
+
+    admin_api, _ = acceptance_api
+    return PrincipalSessions(
+        admin_api=admin_api,
+        admin_password=_superuser_password(),
+        api_factory=lambda: AcceptanceApi(_api_base_url()),
+        directory=PrincipalDirectory.from_world(_WORLD_DIR / "world.json"),
+        # Team-lead ruling 2026-08-06: credentials belong in the world
+        # generation (CHAOS-3463) and password_hash STAYS digested. Setting
+        # a password at run time mutates a digested column, so it is opt-in
+        # and marks every receipt -- a bridged run must never be mistaken
+        # for a clean one.
+        allow_password_bridge=os.getenv(BRIDGE_ENV_VAR) == "1",
+    )
 
 
 def _scope(org_id: str) -> dict[str, Any]:
@@ -420,12 +525,20 @@ def test_declared_blocked_case(case: CorpusCase) -> None:
 def test_corpus_case(
     case: CorpusCase,
     acceptance_api: tuple[AcceptanceApi, str],
+    principal_sessions: PrincipalSessions,
     resolution_profiles: dict[str, Any],
     quota_budget: QuotaBudget,
     compose_context: ComposeContext,
     _world_digest_pin: str,
 ) -> None:
-    api, org_id = acceptance_api
+    admin_api, _admin_org_id = acceptance_api
+    # CHAOS-3462 B5: resolved BEFORE the quota reservation and any HTTP
+    # traffic, so an unresolvable principal costs nothing and fails at the
+    # earliest honest point. `session_for` never falls back to the admin
+    # session -- an unknown/missing/incoherent alias raises.
+    session: PrincipalSession = principal_sessions.session_for(case)
+    api = session.api
+    org_id = session.org_id
     expectations = resolve_case_expectations(case, resolution_profiles)
     cost = estimate_run_cost_microusd(input_tokens=8_000, output_tokens=3_000)
     quota_budget.reserve(case_id=case.id, requests=1, cost_microusd=cost)
@@ -519,13 +632,24 @@ def test_corpus_case(
             compose_context, run_id=run_id
         )
         try:
-            resolution_path = derive_resolution_path(ledger_entries)
+            # CHAOS-3462 B6: the exec plane cannot return the mention span
+            # (DevResolutionEntry never persists it), so the CASE supplies
+            # it -- spans derived from production's own QuestionInterpreter
+            # and pinned against it by the corpus guard test. Without this,
+            # every single-shot exact_match was unclassifiable and
+            # `deterministic-exact` was dead vocabulary for the whole
+            # corpus. More observed mentions than declared raises; fewer
+            # attaches nothing (a terminating ambiguous entry needs no span).
+            resolution_path = derive_resolution_path(
+                attach_mention_texts(ledger_entries, case.expected_mention_texts)
+                if case.expected_mention_texts
+                else ledger_entries
+            )
         except ResolutionPathError as exc:
-            # See the module docstring's residual-limitation note: a
-            # single-shot exact_match entry with no prior candidate offer
-            # needs mention_text this wire-only case object does not yet
-            # carry (Lane 2b schema addition). Recorded as a named, failed
-            # assertion -- never silently swallowed into a guessed path.
+            # Still recorded as a named, failed assertion rather than
+            # silently swallowed into a guessed path: after B6 this should
+            # only fire on a real drift between the case's declared spans
+            # and what the run actually resolved.
             resolution_path = None
             ledger_classification_error = str(exc)
 
@@ -556,6 +680,42 @@ def test_corpus_case(
         question=case.question,
         subject_class=case.subject_class,
         resolution_profile_ref=case.resolution_profile_ref,
+    )
+    # CHAOS-3462 B5, recorded as a real checked assertion rather than left
+    # implicit: this case executed under its OWN declared principal's token,
+    # not the admin token used to provision it. Without this, a future
+    # refactor that reintroduced the superuser fallback would leave every
+    # receipt looking exactly the same as one from a correctly-scoped run.
+    recorder.check(
+        category="declared-principal",
+        name="ran_as_declared_principal",
+        condition=(
+            api is not admin_api
+            and api.token is not None
+            and api.token != admin_api.token
+        ),
+        detail=(
+            f"org_alias={session.principal.org_alias!r} "
+            f"user_alias={session.principal.user_alias!r} "
+            f"email={session.principal.email!r} org_id={org_id!r}"
+        ),
+    )
+    # Adversarial round 3: the provisioning mode used to live only inside the
+    # free text above, where deleting the fragment left every test green. It
+    # is now its own NAMED, always-recorded check, so the receipt says which
+    # credential path produced it in a field a reader can key on -- and a
+    # test asserts the name is present for an executed case.
+    recorder.check(
+        category="provisioning-mode",
+        name=f"provisioned_via_{principal_sessions.provisioning_mode}",
+        condition=True,
+        detail=(
+            "credentials came from the world seed"
+            if principal_sessions.provisioning_mode == SEEDED_PROVISIONING_MARKER
+            else "TEMPORARY admin-set-password bridge: this run mutated a "
+            "digest-covered column and is NOT equivalent to a run against "
+            "seeded credentials"
+        ),
     )
     if ledger_classification_error is not None:
         recorder.check(

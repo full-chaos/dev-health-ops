@@ -21,18 +21,10 @@
       "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
       "executable_today": true,
       "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
-      "executable_today": true
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "CHAOS-3377 contradiction backstop: reuses sources.json's 'conflicting' fixture row (probe/source-conflicting-ci, two contemporaneous CI runs for the same repo with opposite conclusions) so material grounding exists but contradicts itself past the trust threshold -- answer must be withheld ('Inconsistent result'), not silently pick a side. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"Is meridian/web-app's CI passing, definitively?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]"
+  "notes": "CHAOS-3377 contradiction backstop: reuses sources.json's 'conflicting' fixture row (probe/source-conflicting-ci, two contemporaneous CI runs for the same repo with opposite conclusions) so material grounding exists but contradicts itself past the trust threshold -- answer must be withheld ('Inconsistent result'), not silently pick a side. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"Is meridian/web-app's CI passing, definitively?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]",
+  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462 B6, adversarial round 3). The primary subject commits exact_match, but resolution_path is a WHOLE-RUN scalar and this question also names an incidental untyped bare-name mention that never resolves -- derive_resolution_path returns miss-clarification if ANY mention fails to commit, so the run answers normally and would still be stamped miss-clarification. Rather than falsify the profile to match a derivation that cannot express this case's claim, the profile keeps the true expectation (deterministic-exact) and this invariant is removed -- the same disposition B4 used throughout. Every other invariant is untouched."
 }

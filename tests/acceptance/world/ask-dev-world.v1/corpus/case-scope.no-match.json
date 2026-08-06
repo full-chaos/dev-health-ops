@@ -6,13 +6,16 @@
   "status": "active",
   "blocked_by": null,
   "proves": [
-    "group 1 bullet 11; P0-B MISSING item \u2014 scope.no-match webstate"
+    "group 1 bullet 11; P0-B MISSING item — scope.no-match webstate"
   ],
   "question": "What is the status of the Ask Dev project?",
   "org_alias": "primary",
   "user_alias": "primary.ordinary",
   "subject_class": "no-match",
   "subject_ref": "subject.no-match.ask-dev-project",
+  "expected_mention_texts": [
+    "ask dev"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

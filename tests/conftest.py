@@ -17,7 +17,28 @@ from tests._env_isolation import (
     scrub_ambient_env,
 )
 
+#: Env var carrying the scrub record across a process boundary (CHAOS-3462).
+#: Deliberately NOT a name any ``src/`` module reads and not in
+#: ``.env.example``, so it is absent from ``SCRUB_ENV_NAMES`` and the scrub
+#: never deletes its own record.
+SCRUB_RECORD_ENV = "DEV_HEALTH_TEST_SCRUBBED_ENV_NAMES"
+
+#: Pre-scrub values that mean "the operator deliberately turned this OFF".
+#: A name scrubbed while holding one of these is NOT recorded, because the
+#: record's only consumer asks "did someone intend to switch this on".
+#:
+#: Without this, ``ASK_DEV_LIVE_ACCEPTANCE=0`` -- an explicit REFUSAL to arm
+#: -- was recorded identically to ``=1`` and the corpus runner concluded the
+#: run had been armed and scrubbed, turning a deliberately disarmed run RED
+#: (reproduced). The record can only ever carry names, never values: it is
+#: exported to child processes, and several scrubbed names hold real
+#: credentials.
+_DISABLING_VALUES = frozenset({"", "0", "false", "no", "off"})
+
 _SCRUBBED_ENV_NAMES: list[str] = []
+#: The union of this process's scrub and any inherited from a parent (an
+#: xdist controller). See :func:`scrubbed_env_names`.
+_SCRUB_RECORD: list[str] = []
 _KEPT_ENV_NAMES: list[str] = []
 #: Scrub-list names still present in ``os.environ`` immediately AFTER the scrub.
 #: Must stay empty. Snapshotted at configure time rather than read live at
@@ -136,11 +157,92 @@ def pytest_configure(config):
 
     kept = exempted_names() | lane_conditional_keeps()
     _KEPT_ENV_NAMES[:] = sorted(kept)
+    inherited = _inherited_scrub_record()
+    # Snapshot values BEFORE the scrub so the record can distinguish "was set
+    # to something meaningful" from "was explicitly set to off". Kept process
+    # local and never exported -- see _DISABLING_VALUES.
+    prescrub = {
+        name: os.environ[name] for name in SCRUB_ENV_NAMES if name in os.environ
+    }
     _SCRUBBED_ENV_NAMES[:] = scrub_ambient_env(os.environ, exempt=kept)
+    # CHAOS-3462: carry the record ACROSS the process boundary. The list
+    # above is process-local, but an xdist controller scrubs and then spawns
+    # workers whose environment no longer has the variables -- so a worker's
+    # own scrub removes nothing and records nothing, and it cannot tell
+    # "never set" from "the controller ate it". Writing the union into an
+    # env var the scrub itself does not touch (it is read by no src/ module
+    # and absent from .env.example, so it is not in SCRUB_ENV_NAMES) makes
+    # the evidence survive the fork, which is exactly what the corpus
+    # runner's armed-but-scrubbed guard needs. Unioned, never overwritten,
+    # so a worker cannot erase what the controller recorded.
+    enabling = {
+        name
+        for name in _SCRUBBED_ENV_NAMES
+        if prescrub.get(name, "").strip().casefold() not in _DISABLING_VALUES
+    }
+    _SCRUB_RECORD[:] = sorted(inherited | enabling)
+    if _SCRUB_RECORD:
+        os.environ[SCRUB_RECORD_ENV] = ",".join(_SCRUB_RECORD)
     _POST_SCRUB_RESIDUE[:] = sorted(
         name for name in SCRUB_ENV_NAMES if name not in kept and name in os.environ
     )
     _SCRUB_RAN = True
+
+
+def _inherited_scrub_record() -> set[str]:
+    """The parent's scrub record -- trusted ONLY inside an xdist worker.
+
+    The record exists to cross exactly one boundary: an xdist controller
+    scrubs, then spawns workers whose environment no longer carries the
+    variables, so a worker cannot otherwise tell "never set" from "the
+    controller ate it". ``PYTEST_XDIST_WORKER`` is present in workers and
+    absent everywhere else, which makes it a precise test for that boundary.
+
+    Trusting the value unconditionally was wrong, and reproducibly so: with
+    ``DEV_HEALTH_TEST_SCRUBBED_ENV_NAMES=ASK_DEV_LIVE_ACCEPTANCE`` exported
+    by anything at all -- a stale value, a nested pytest, a copy-pasted
+    shell line -- an ordinary UNARMED contributor run turned RED, because
+    the corpus runner concluded it had been armed and scrubbed. That is a
+    false red on the standing unit gate, produced by an env var a caller can
+    set to any value they like. Gating on the worker sentinel keeps the
+    xdist recovery path and removes the forgery surface for every other run.
+    """
+
+    if "PYTEST_XDIST_WORKER" not in os.environ:
+        return set()
+    raw = os.environ.get(SCRUB_RECORD_ENV, "")
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def scrubbed_env_names() -> tuple[str, ...]:
+    """Names the CHAOS-3402 scrub removed, in THIS process or an ancestor.
+
+    A name appears here only if it was PRESENT in some process's environment
+    and then deleted, which makes this list positive evidence about what the
+    invoking shell was carrying -- evidence that survives the deletion of
+    the variables themselves. CHAOS-3462 B1 needs exactly that: the live
+    corpus runner's arming flag is in ``SCRUB_ENV_NAMES``, so a
+    correctly-armed run has no other way to know it was armed.
+
+    Includes the record inherited from a parent process (see
+    :data:`SCRUB_RECORD_ENV`), because under xdist the process that does the
+    scrubbing is the controller and the process that runs the tests is a
+    worker. Reporting only this process's own scrub would make every worker
+    look like a clean, never-armed run.
+
+    Public (unlike the private lists it reads) because it is a supported
+    read for test modules, and returns a tuple so a caller cannot mutate the
+    record.
+    """
+
+    return tuple(_SCRUB_RECORD)
+
+
+@pytest.fixture(scope="session")
+def scrubbed_ambient_env_names() -> tuple[str, ...]:
+    """Fixture form of :func:`scrubbed_env_names`."""
+
+    return scrubbed_env_names()
 
 
 def pytest_report_header(config):

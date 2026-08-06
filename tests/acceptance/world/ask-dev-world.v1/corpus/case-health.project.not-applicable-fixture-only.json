@@ -13,6 +13,9 @@
   "user_alias": "primary.ordinary",
   "subject_class": "exact",
   "subject_ref": "subject.bounded-set.web-app-and-api-gateway",
+  "expected_mention_texts": [
+    "meridian/api-gateway"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

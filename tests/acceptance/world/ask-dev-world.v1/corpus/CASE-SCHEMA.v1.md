@@ -213,6 +213,162 @@ lowercase repo slug like `meridian/web-app` extracts **zero** mentions and
 silently degrades to org-wide behavior. Every case's `question` must be
 checked against this before assuming `resolution_path` is non-null.
 
+### The null-profile-value rule, generalized (CHAOS-3462 B4)
+
+The rule §1 states for `scope_resolution_outcome_in` applies to **every**
+`*_in` checker, and is now enforced mechanically rather than by review:
+
+> **Never wire an `*_in` invariant onto a case whose profile value for the
+> cited `from_profile` key is `null`.**
+
+`invariants._resolve_allowed` turns a null profile value into
+`allowed=[None]`, and every `*_in` checker independently and deliberately
+refuses to match an unobserved `None` — so the check fails by construction,
+on every run, on every stack. The Phase 2 exit evidence run found 26 active
+cases in exactly that state via `resolution_path_in`, which made
+"invariant floor green on 93" unreachable as authored.
+
+`tests/acceptance/corpus/test_corpus_invariants_are_satisfiable.py` now
+fails the unit gate if any active case reintroduces it, and also fails if
+`invariants.py` grows a new `*_in` checker the guard does not yet know
+about. Note the guard correctly permits a null profile value **beside a
+literal non-null `allowed` entry** — `_resolve_allowed` is additive, so that
+combination is still satisfiable.
+
+**Deciding between the two remedies is a code question, not a judgment
+call.** Run production's own `extract_mentions` against the case's exact
+`question` text, and check where the terminal fires relative to the ledger
+write:
+
+| Observation | `resolution_path` | Remedy |
+| --- | --- | --- |
+| zero extractable mentions | genuinely `null` | REMOVE the invariant |
+| terminal fires before `orchestrator.run()` (e.g. the org/model capability gate, which rejects in a FastAPI **dependency**) | genuinely `null` | REMOVE the invariant |
+| terminal fires after extraction but before ledger construction (e.g. the oversized `> MAX_MENTIONS` rejection, `_terminate(ledger=None)`) | genuinely `null` | REMOVE the invariant |
+| mention extracted AND preflight reaches PROCEED | real, non-null | DEFINE the value in the profile |
+
+A mention-bearing question is **not** on its own evidence of a written
+ledger — the second and third rows above both have extractable mentions and
+still write nothing. Record the disposition and its evidence on the case in
+a `$comment_resolution_path_invariant` field.
+
+**Removing the last invariant is not allowed.** If the unpassable check was
+a case's ONLY invariant, replace it rather than deleting it: prefer
+`public_outcome_in` wired to the profile's own non-null
+`expected_public_outcome` (a real terminal assertion), and fall back to the
+bare `no_internal_error` floor only when no non-null profile value exists.
+An active case with zero invariants is rejected by the loader, and would be
+a silent coverage hole even if it were not.
+
+## `expected_mention_texts` — schema addition (CHAOS-3462 B6)
+
+```jsonc
+"expected_mention_texts": ["meridian/web-app"],   // REQUIRED iff the case declares resolution_path_in
+```
+
+**Why it exists.** `DevResolutionEntry` never persists the original mention
+span, so the docker-exec ledger read returns entries with
+`mention_text = None`. `derive_resolution_path` raises for any single-shot
+`exact_match` without it, the runner records a failed
+`resolution_path_classifiable` check, and the case goes red. The effect was
+not marginal: **`deterministic-exact` and `deterministic-alias` were
+unproducible by the runner in every case, in every catalog world** — roughly
+46 active cases were red for a reason unrelated to the product, and
+`resolution_path_in` could only pass where the profile said
+`miss-clarification`. This is the schema addition `resolution_path.py`'s own
+docstring anticipated ("closeable once a corpus case declares its own
+expected mention text").
+
+**The loader enforces the pairing:** a case declaring `resolution_path_in`
+with no `expected_mention_texts` is a `CaseSchemaError`, because such a case
+cannot report a real result.
+
+### Deriving the value — binding method
+
+**Generate it from the producer. Never hand-author it.**
+
+* The producer is **`QuestionInterpreter.interpret`**, driven with the
+  runner's real request shape. It is **not** `extract_mentions`: the
+  interpreter additionally mints untyped bare-name mentions
+  (`_add_untyped_mentions`), so `"Update the ticket status to Done"` yields
+  **zero** mentions under `extract_mentions` and **one** under `interpret`.
+  Three case dispositions were made wrong by using the narrower function; do
+  not repeat it.
+* The value is each mention's **`normalized_lookup_text`**, not its surface
+  span. `resolution_path.py`'s CALLER CONTRACT is explicit that it needs
+  "the exact, already-normalized span that reached the resolver", and that a
+  raw natural-language utterance raises rather than silently misclassifying.
+* **Never** source it from `subjects.json`'s `mentions` array. Those are
+  human-readable descriptive phrases ("the web-app repo"), not resolver
+  input — the same CALLER CONTRACT calls this out by name.
+
+### Ordering and multi-mention cases
+
+Declare **every** mention the question produces, in interpreter order — not
+just the one the resolution targets. `attach_mention_texts` maps declared
+spans onto distinct `mention_id`s in first-seen order, which is sound
+because `subject_preflight._build_ledger` builds entries via
+`zip(mentions, resolutions, strict=True)` and `_inner_ledger_query` orders
+by `entry_ordinal`. Ten active cases produce more than one mention; a
+single declared span would leave the others unclassifiable.
+
+The two count mismatches are **not symmetric**:
+
+* **more observed mentions than declared → raises.** The declaration is
+  short, so a real mention would get no span, and positional mapping past
+  the end is meaningless.
+* **fewer observed than declared → attaches nothing and proceeds.** This is
+  legitimate, not drift: a PROCEED ledgers every mention, so a short ledger
+  means the run TERMINATED, and a terminating entry is only ever
+  `ambiguous_candidates` — whose mention never needs a span, because a
+  non-`exact_match` final entry short-circuits to `miss-clarification`.
+  Raising here would red a correct run and blame the case author.
+
+Neither direction ever truncates or pads: mis-pairing would attach the wrong
+span to a real mention, and `classify_match_kind` would then either raise for
+a bogus reason or — worse — classify against text that never reached the
+resolver.
+
+### Drift guard
+
+`tests/acceptance/corpus/test_corpus_invariants_are_satisfiable.py` asserts
+every declared list equals, exactly and in order, what the live interpreter
+yields for that question. A question edited by one word therefore fails the
+unit gate rather than the live run. Regenerate from the interpreter; do not
+patch the JSON by hand.
+
+## `org_alias` / `user_alias` are load-bearing (CHAOS-3462 B5)
+
+These are not documentation. The runner resolves both through `world.json`
+and **authenticates as that principal** for the case
+(`scripts/acceptance/corpus/principals.py`). A missing, unknown, or
+incoherent pair (e.g. `user_alias: sibling.ordinary` with
+`org_alias: primary`) fails the case loudly — it never silently falls back
+to the acceptance superuser, which is what previously made the cross-tenant
+and entitlement families assert nothing about the identities they name.
+
+Two consequences for case authoring:
+
+* the pair must agree with `world.json` — the user's own `org_alias` there
+  is authoritative, and a case cannot reassign a user to another org;
+* impersonation is deliberately NOT used: the `/api/v1/dev/**` routers read
+  the raw JWT claims and ignore the impersonation context (GraphQL does
+  honor it — the asymmetry is filed as CHAOS-3472), so an impersonated case
+  would evaluate entitlement and readiness against the superuser's org and
+  go green for the wrong principal;
+* credentials are **seeded at world-generation time** (team-lead ruling
+  2026-08-06, CHAOS-3463), and `password_hash` **stays in the world
+  digest** — the snapshot/restore model makes hashes frozen bytes restored
+  identically per boot, so credential tampering registers as drift, which is
+  what the digest is for. Until that lands, world users have
+  `password_hash=None` and cannot log in at all, so the runner offers a
+  TEMPORARY bridge: `ASK_DEV_ACCEPTANCE_ALLOW_PASSWORD_BRIDGE=1` opts into
+  setting a password via `POST /api/v1/admin/users/{id}/password`. It is
+  opt-in because it mutates a digest-covered column, and every receipt from
+  such a run is stamped `provisioning=admin-set-password-bridge` so a
+  bridged run can never be mistaken for one against properly seeded
+  credentials. Remove the bridge when CHAOS-3463 lands.
+
 ## `status: "declared-blocked"` cases
 
 Mirrors the `world.json` / `sources.json` precedent (`DECLARED_BLOCKED_STATUS`,

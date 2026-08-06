@@ -13,6 +13,9 @@
   "user_alias": "sibling.ordinary",
   "subject_class": "exact",
   "subject_ref": "subject.tenant.sibling-only-private-repo",
+  "expected_mention_texts": [
+    "sibling-only/private-repo"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",

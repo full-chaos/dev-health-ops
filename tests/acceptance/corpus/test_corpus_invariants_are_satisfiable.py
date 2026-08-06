@@ -708,3 +708,166 @@ class TestEveryActiveCaseStillAssertsSomething:
     @pytest.mark.parametrize("case", _active_cases(), ids=lambda c: c.id)
     def test_case_has_at_least_one_invariant(self, case: CorpusCase) -> None:
         assert case.invariants, f"{case.id} was left with zero invariants"
+
+
+#: CHAOS-3490: every active case that declares ``resolution_path_in``, pinned.
+#:
+#: UNVERIFIED, and that word is load-bearing. As of the Phase 2 exit evidence
+#: run (2026-08-06) NO case in this corpus has ever been observed producing a
+#: non-null ``resolution_path``: across all 78 receipts that run wrote, the
+#: value was ``None`` every time. Of the 60 cases that declared the check, 18
+#: actually executed -- and all 18 failed it. The other 42 (this list) were
+#: rate-limited before they reached their assertions, so they are simply
+#: UNMEASURED. They are pinned here rather than pre-emptively stripped,
+#: because stripping on inference is exactly the read-don't-execute mistake
+#: that produced the 18.
+RESOLUTION_PATH_DECLARING_CASE_IDS: frozenset[str] = frozenset(
+    {
+        "deficiency.team.not-applicable-rule",
+        "deg.optional-integration-not-mislabeled",
+        "deg.provisional-unapproved-rule",
+        "deg.source-state.deleted",
+        "deg.source-state.no-data",
+        "deg.source-state.stale",
+        "deg.source-state.unauthorized-not-visible",
+        "deg.source-state.unconfigured",
+        "deg.timeout.data-health",
+        "deg.timeout.evidence",
+        "deg.timeout.graph",
+        "deg.timeout.metric",
+        "deg.unknown-denominator",
+        "health.project.exact-subject",
+        "health.project.not-applicable-fixture-only",
+        "health.project.unknown-and-not-applicable-abstract",
+        "metric-compare.two-metrics.stale-source",
+        "pers.clarification-persistence",
+        "scope.ambiguous",
+        "scope.bounded-subject-set",
+        "scope.deleted-subject",
+        "scope.no-match",
+        "scope.outcome.filtered",
+        "scope.outcome.unresolved",
+        "scope.prohibited-write",
+        "status.single-project.exact-subject",
+        "status.single-project.readiness-completion",
+        "status.single-project.remaining-work",
+        "subject-label.acronym-mention",
+        "subject-label.five-word-truncation",
+        "subject-label.parenthetical-quoted-control",
+        "subject-label.parenthetical-unquoted",
+        "subject-label.typo-tolerance",
+        "subject-label.unauthorized-candidate-excluded",
+        "subject-label.word-order-variation",
+        "subject-label.wrong-kind-collision",
+        "tenant.cross-tenant-identifier-refused",
+        "trust.source-health.current",
+        "trust.source-health.stale",
+        "workload.team.small-cohort",
+        "workload.team.with-denominator",
+        "workload.team.without-denominator",
+    }
+)
+
+
+class TestResolutionPathDeclarersArePinned:
+    """CHAOS-3490: close the class the earlier guards structurally cannot.
+
+    WHY A PIN AND NOT ANOTHER PREDICATE, established by measurement rather
+    than preference. Two guards already sit above this one: the declared-value
+    guard (a ``*_in`` check wired onto a null profile value) and the
+    zero-mention guard (a question the real interpreter yields no mentions
+    for). Both are necessary. Neither could have caught the 18 cases the exit
+    run condemned, because those cases have non-null profile values AND name
+    real mentions -- they fail for a purely RUNTIME reason: the request
+    terminates (readiness gate, capability gate, refusal, oversized
+    rejection) before the orchestrator ever reaches an ``append_resolution``
+    site, so the ledger stays empty.
+
+    A third static predicate was attempted and abandoned on evidence: the 18
+    condemned cases and the 42 still-declaring cases are INDISTINGUISHABLE by
+    static shape. They draw from the same ``expected_public_outcome`` values
+    (``answered_with_gaps``, ``not_found``, ``denied``, ``unsupported``) and
+    the same ``resolution_path`` values (``deterministic-exact``,
+    ``miss-clarification``). There is no field that separates them, so any
+    predicate claiming to would be a guess dressed as a guard.
+
+    What CAN be closed is silent GROWTH of the population. A new case
+    acquiring ``resolution_path_in`` without anyone re-examining the class is
+    how 18 accumulated past B4's sweep. This pin makes that impossible: adding
+    a declarer fails here until its id is added deliberately, which is the
+    moment to ask for the live evidence that the run reaches the ledger at
+    all.
+
+    This guard does NOT claim the pinned 42 are correct. It claims only that
+    the set cannot change unnoticed.
+    """
+
+    def test_declaring_set_matches_the_pin(self) -> None:
+        declaring = {
+            case.id
+            for case in _active_cases()
+            if any(e.get("check") == "resolution_path_in" for e in case.invariants)
+        }
+        added = sorted(declaring - RESOLUTION_PATH_DECLARING_CASE_IDS)
+        removed = sorted(RESOLUTION_PATH_DECLARING_CASE_IDS - declaring)
+        assert not added, (
+            f"case(s) {added} newly declare resolution_path_in. Static analysis "
+            "CANNOT tell a passable declaration from an unpassable one -- the 18 "
+            "cases removed in CHAOS-3490 were structurally identical to the ones "
+            "still declaring it. Before adding an id to "
+            "RESOLUTION_PATH_DECLARING_CASE_IDS, get live evidence that this "
+            "case's run actually writes a dev_run_resolutions row; no case in "
+            "this corpus has yet been OBSERVED producing a non-null "
+            "resolution_path."
+        )
+        assert not removed, (
+            f"case(s) {removed} no longer declare resolution_path_in. If that is "
+            "a deliberate evidence-backed removal, delete them from "
+            "RESOLUTION_PATH_DECLARING_CASE_IDS in the same change, so the pin "
+            "keeps describing reality rather than history."
+        )
+
+    def test_the_pin_would_catch_a_silent_addition(self) -> None:
+        """The pin is only worth having if it actually fires. Simulate the
+        exact regression it exists to stop -- a 43rd declarer appearing -- and
+        confirm the comparison rejects it."""
+
+        simulated = set(RESOLUTION_PATH_DECLARING_CASE_IDS) | {"planted.new-declarer"}
+        assert sorted(simulated - RESOLUTION_PATH_DECLARING_CASE_IDS) == [
+            "planted.new-declarer"
+        ]
+
+    def test_no_condemned_case_declares_it_again(self) -> None:
+        """The 18 the exit run condemned must stay out. Re-adding one is the
+        specific regression CHAOS-3490 Part 2 exists to prevent."""
+
+        condemned = {
+            "adv.abuse.subject-set-mutation-attempt",
+            "adv.cross-tenant.organization-id",
+            "adv.cross-tenant.project-id",
+            "adv.cross-tenant.repository-id",
+            "adv.injection-request.graphql",
+            "adv.injection-request.mcp",
+            "adv.injection-request.shell",
+            "adv.injection-request.sql",
+            "adv.malicious-content.links",
+            "adv.malicious-content.markdown",
+            "adv.no-person-level-output",
+            "adv.unsafe-error-text.source",
+            "deficiency.team.applicable-rule",
+            "deg.provider.unavailable",
+            "deg.provider.unsupported",
+            "deg.source-state.unavailable",
+            "readiness.capabilities.degraded",
+            "readiness.capabilities.unsupported-model",
+        }
+        assert not (condemned & RESOLUTION_PATH_DECLARING_CASE_IDS)
+        declaring = {
+            case.id
+            for case in _active_cases()
+            if any(e.get("check") == "resolution_path_in" for e in case.invariants)
+        }
+        assert not (condemned & declaring), (
+            "a case the exit evidence run proved writes zero ledger rows is "
+            "declaring resolution_path_in again"
+        )

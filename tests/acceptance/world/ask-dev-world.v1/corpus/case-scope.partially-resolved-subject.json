@@ -10,7 +10,7 @@
   ],
   "question": "What's the status of the platform team's mobile squad?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-3",
   "subject_class": "partially-resolved",
   "subject_ref": "subject.partially-resolved.platform-mobile-squad",
   "invariants": [
@@ -28,5 +28,6 @@
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
   "notes": "Teams catalog is flat (no sub-team edge) -- 'mobile squad' cannot resolve narrower than its parent 'platform' team. This IS the partially-resolved condition, not a fixture gap.",
-  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462, adversarial round 2). Established by executing the REAL producer -- QuestionInterpreter.interpret plus SubjectPreflight.run with this runner's exact request shape -- not by reading the question. interpret returns ZERO mentions, so preflight takes the proceeded_organization_wide PROCEED with ledger=None, orchestrator's append_resolution sites require a non-None ledger, and zero dev_run_resolutions rows exist. derive_resolution_path([]) is None and resolution_path_in never matches None, so this check could not pass in ANY catalog world. The profile's declared value is left untouched: it is wrong for a separate, larger reason tracked as the mention_text blocker, and silently rewriting it here to force green would falsify the expectation rather than fix it."
+  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462, adversarial round 2). Established by executing the REAL producer -- QuestionInterpreter.interpret plus SubjectPreflight.run with this runner's exact request shape -- not by reading the question. interpret returns ZERO mentions, so preflight takes the proceeded_organization_wide PROCEED with ledger=None, orchestrator's append_resolution sites require a non-None ledger, and zero dev_run_resolutions rows exist. derive_resolution_path([]) is None and resolution_path_in never matches None, so this check could not pass in ANY catalog world. The profile's declared value is left untouched: it is wrong for a separate, larger reason tracked as the mention_text blocker, and silently rewriting it here to force green would falsify the expectation rather than fix it.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 58 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

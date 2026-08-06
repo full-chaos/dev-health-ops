@@ -10,7 +10,7 @@
   ],
   "question": "Is the evidence search for the repo \"meridian/web-app\" going to return anything soon?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-4",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
   "expected_mention_texts": [
@@ -37,5 +37,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": "deg.timeout.evidence",
-  "notes": "Same 'no dedicated per-stage timeout fault type exists today' honesty basis as deg.timeout.graph/metric/data-health. Stands in for an evidence-search-stage timeout using the EXISTING slow-response mechanism: round 0 issues a real, immediate tool_call to search_evidence.v1 (wire name search_evidence_v1, arguments query='meridian/web-app'/limit=10, matching production_runtime.py's real search_evidence executor signature -- request.query/request.limit), then fires_from_round=1 applies the 4000ms slow-response delay to the round immediately after. Honesty caveat: identical to deg.timeout.graph/metric's -- the fault mechanism delays the provider's own decide() round-trip, not literal server-side tool execution latency, so this is a plausible, explicitly-flagged proxy for 'evidence search itself timed out', not a literal one. Subject resolves EXACT via the quoted noun-adjacent span 'the repo \"meridian/web-app\"', independent of and prior to the fault."
+  "notes": "Same 'no dedicated per-stage timeout fault type exists today' honesty basis as deg.timeout.graph/metric/data-health. Stands in for an evidence-search-stage timeout using the EXISTING slow-response mechanism: round 0 issues a real, immediate tool_call to search_evidence.v1 (wire name search_evidence_v1, arguments query='meridian/web-app'/limit=10, matching production_runtime.py's real search_evidence executor signature -- request.query/request.limit), then fires_from_round=1 applies the 4000ms slow-response delay to the round immediately after. Honesty caveat: identical to deg.timeout.graph/metric's -- the fault mechanism delays the provider's own decide() round-trip, not literal server-side tool execution latency, so this is a plausible, explicitly-flagged proxy for 'evidence search itself timed out', not a literal one. Subject resolves EXACT via the quoted noun-adjacent span 'the repo \"meridian/web-app\"', independent of and prior to the fault.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 31 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

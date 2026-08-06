@@ -247,8 +247,8 @@
           "row_count": 2
         },
         "primary": {
-          "content_hash": "8668ef133e2de4fc0a5fc0d2d045e68defa2b66bd5ed79ddee3d6644ea4e10b0",
-          "row_count": 6
+          "content_hash": "7142a2780497681554652ebcf589933f68939910246039ae4f145e711dead659",
+          "row_count": 12
         },
         "sibling": {
           "content_hash": "136c6c6b0e6b1c48a4ec9451a99dabd7adf54e62772a82e25e234ec91179e04e",
@@ -313,13 +313,13 @@
       },
       "users": {
         "world": {
-          "content_hash": "a2890779896ffe2d5b96b1aa94272e8f242eb02a94762d03de3d403b3f6aa347",
-          "row_count": 10
+          "content_hash": "df4e0a0db42e97d146baaa64b0340459f34b140ccdc3b497c22f16d95a7eb291",
+          "row_count": 16
         }
       }
     }
   },
-  "digest": "dbc7f13e7a3167ea8a3a7ae52175d3c903a537217d301ea150e79253ba0625a1",
+  "digest": "9341364cf9b2bb96b32ddbcdb2446d70d4450a2329d8edf6db67e35711239278",
   "master_seed": 3219000,
   "schema_version": "ask_dev_world.v1"
 }

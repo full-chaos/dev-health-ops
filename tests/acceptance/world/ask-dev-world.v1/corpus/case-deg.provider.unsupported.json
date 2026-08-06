@@ -24,19 +24,10 @@
       "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
       "executable_today": true,
       "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path.",
-      "executable_today": true
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
   "notes": "Reuses readiness.capabilities.unsupported-model's exact mechanism/user (world.json's unsupported-model-profile via user_alias primary.unsupported-model-user, readiness: unsupported_model, intent: readiness_probe -- DevCapabilitiesReadiness.unsupported_model) rather than inventing a new profile, per this batch's instructions, but asks a DIFFERENT, non-duplicate question ('Would you be able to summarize...' vs. readiness.capabilities.unsupported-model's 'Please give me the status of...'). This id's contribution to the deg.provider family is framing the SAME structural readiness gate as a 'provider degradation' scenario (group 9, degradation and trust) rather than a 'capability certification' scenario (group 1, readiness family) -- same underlying code path (production_runtime.py's _resolve_provider_selection raises DevRuntimeUnavailable(code='model_not_supported'); terminal_frames.py's PUBLIC_OUTCOME_BY_ERROR_CODE table maps 'model_not_supported' -> PublicOutcome.UNSUPPORTED), two registry vantage points over one real fixture, deliberately not re-derived. Subject is n/a for the same reason as readiness.capabilities.unsupported-model: the readiness/capability gate is evaluated before any subject mention is ever parsed, so no ScopeResolutionOutcome value is asserted.",
-  "$comment_resolution_path_invariant": "resolution_path_in RESTORED (CHAOS-3462, adversarial round 2). Its removal earlier in this branch was justified by the org/model capability gate short-circuiting before the orchestrator -- which is FALSE for this case: provider_profile_override has zero references in src/, and the model_not_supported gate is driven by the ORG's provider certification, not by any per-user field, so it cannot fire for one primary user and not the others on the same stack. That is the same fact this branch used to justify the OPPOSITE disposition for the sibling cases, which is how the contradiction was caught. Executed: the correctly quoted repo \"meridian/web-app\" mention takes the ordinary singular proceeded_committed_subject PROCEED and writes one row."
+  "$comment_resolution_path_invariant": "FALSIFIED BY EXECUTION (CHAOS-3490, 2026-08-06). The adversarial-round-2 reasoning recorded here previously claimed resolution_path_in was RESTORED because 'the correctly quoted repo \"meridian/web-app\" mention takes the ordinary singular proceeded_committed_subject PROCEED and writes one row.' The Phase 2 exit evidence run executed this case against the real stack and observed resolution_path = None -- zero dev_run_resolutions rows. The claim was established by READING the question rather than running it, which is the same failure mode CHAOS-3462 B4 exists to correct. The check is removed and this note is kept, not deleted, so the corrected record survives."
 }

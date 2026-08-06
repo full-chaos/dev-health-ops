@@ -10,7 +10,7 @@
   ],
   "question": "What's the status of the repo \"meridian/web-app\" for the platform team?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-6",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
   "expected_mention_texts": [
@@ -39,5 +39,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Explicit team-filter mention alongside a resolved repo entity -> ScopeResolutionService.FILTERED (scope_service.py: teams-resolved branch without org fallback). Dedicated P0-B outcome-value producer per corpus-registry-v1.md's cross-reference table; conceptually related to scope.partially-resolved-subject but a distinct code path (explicit team filter, not sub-team narrowing). [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"What's the status of meridian/web-app for the platform team?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]"
+  "notes": "Explicit team-filter mention alongside a resolved repo entity -> ScopeResolutionService.FILTERED (scope_service.py: teams-resolved branch without org fallback). Dedicated P0-B outcome-value producer per corpus-registry-v1.md's cross-reference table; conceptually related to scope.partially-resolved-subject but a distinct code path (explicit team filter, not sub-team narrowing). [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"What's the status of meridian/web-app for the platform team?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 54 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

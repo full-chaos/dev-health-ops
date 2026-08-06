@@ -614,12 +614,31 @@ def world_manifest_contract_hash(manifest: WorldManifest) -> str:
 
 #: The world principals the Wave 4 corpus actually binds `user_alias` to
 #: (CHAOS-3462 runner lane, confirmed 2026-08-06). Credentials are seeded for
-#: EVERY world.json user; these four are the contract MINIMUM, asserted at mint
+#: EVERY world.json user; these are the contract MINIMUM, asserted at mint
 #: time to exist, be seeded, and log into the org world.json derives for them.
 #: A future world edit that drops or re-orgs one fails the mint -- not the
 #: evidence run, and not the corpus at 2am.
+#:
+#: CHAOS-3490 added ``primary.ordinary-2``..``-7``, the ordinary-primary POOL.
+#: Cases are spread round-robin over ``primary.ordinary`` plus those six
+#: because production caps one user at ``requests_per_user_per_15_minutes=20``
+#: (``DevCapabilityLimits``, ``le=20``, "may only be configured downward")
+#: while 85 of the corpus's 91 active cases named the single alias above --
+#: exactly 20 reached their assertions and the other 65 died on HTTP 429.
+#:
+#: EVERY pool member is asserted here, not a sampled subset. Sampling was
+#: considered and rejected: an unproven member does not fail at boot, it fails
+#: partway through the corpus as an unexplained 401 on whichever cases happened
+#: to land on it -- the "measurement that did not happen" shape this proof
+#: exists to prevent. Six extra logins at boot is a trivial price.
 CORPUS_CONTRACT_USER_ALIASES: tuple[str, ...] = (
     "primary.ordinary",
+    "primary.ordinary-2",
+    "primary.ordinary-3",
+    "primary.ordinary-4",
+    "primary.ordinary-5",
+    "primary.ordinary-6",
+    "primary.ordinary-7",
     "sibling.ordinary",
     "primary.degraded-readiness-user",
     "primary.unsupported-model-user",

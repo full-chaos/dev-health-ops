@@ -10,7 +10,7 @@
   ],
   "question": "Is the data for the repo \"legacy-billing\" still being tracked?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-4",
   "subject_class": "deleted",
   "subject_ref": "subject.deleted.legacy-billing",
   "expected_mention_texts": [
@@ -55,5 +55,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Deliberately does NOT re-derive a new fixture: sources.json's matrix has no dedicated 'deleted' state row (the 9-state corpus registry list realizes 'deleted' entirely through subjects.json's own deleted class instead -- see subjects.json's subject.deleted.legacy-billing, already grounding the already-authored scope.deleted-subject case). Same underlying mechanism (projects.is_active=0 on the most recent ReplacingMergeTree(updated_at) version excludes it from the CHAOS-3380 identity catalog's is_active=1 filter -> ScopeResolutionOutcome.unresolved) and therefore the SAME expected terminal as scope.deleted-subject (not_found / unresolved / miss-clarification, mirrored verbatim in this batch's resolution-profile fragment rather than re-derived). This case's distinct contribution is the source-state framing of the question (asking whether the underlying DATA is still tracked, not the scope-resolution framing scope.deleted-subject already covers with 'What's the status of...') -- deliberately different question text for global uniqueness."
+  "notes": "Deliberately does NOT re-derive a new fixture: sources.json's matrix has no dedicated 'deleted' state row (the 9-state corpus registry list realizes 'deleted' entirely through subjects.json's own deleted class instead -- see subjects.json's subject.deleted.legacy-billing, already grounding the already-authored scope.deleted-subject case). Same underlying mechanism (projects.is_active=0 on the most recent ReplacingMergeTree(updated_at) version excludes it from the CHAOS-3380 identity catalog's is_active=1 filter -> ScopeResolutionOutcome.unresolved) and therefore the SAME expected terminal as scope.deleted-subject (not_found / unresolved / miss-clarification, mirrored verbatim in this batch's resolution-profile fragment rather than re-derived). This case's distinct contribution is the source-state framing of the question (asking whether the underlying DATA is still tracked, not the scope-resolution framing scope.deleted-subject already covers with 'What's the status of...') -- deliberately different question text for global uniqueness.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 24 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

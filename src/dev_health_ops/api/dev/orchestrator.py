@@ -1251,19 +1251,43 @@ class DevOrchestrator:
                         # resolution ledger, subject sets, intent -- and
                         # unlike the two preflight rollback sites below,
                         # nothing re-persists them afterward. It is kept
-                        # anyway, deliberately: `record_frame` can only
-                        # reach this handler with a POISONED session when
-                        # some earlier write already failed mid-flush (those
-                        # telemetry writes are not savepoint-isolated), and
-                        # in exactly that case dropping this rollback would
-                        # trade a specific, user-visible terminal
-                        # (`scope_not_found`, a clarification) for a generic
-                        # `internal_error` from
-                        # streaming.stream_orchestrator plus a
-                        # force_terminal_fallback hop. Forensic rows are
-                        # worth less than the terminal the user actually
-                        # sees, and both failures have to coincide for
-                        # either cost to be paid.
+                        # anyway, and round 3's frequency objection does not
+                        # survive contact with what a poisoned session
+                        # actually means. Two cases, and only one costs
+                        # anything:
+                        #
+                        # * Session POISONED -- one earlier failure is enough:
+                        #   none of the telemetry writes (record_run_
+                        #   diagnostics, append_tool_call, append_resolution,
+                        #   record_subject_set, record_intent) is
+                        #   savepoint-isolated, and a mid-flush failure in any
+                        #   of them makes record_error_message and
+                        #   record_frame fail in turn, landing here with
+                        #   error_message_written False. Those forensic rows
+                        #   are ALREADY unrecoverable: the transaction cannot
+                        #   commit, so nothing flushed on it will ever land,
+                        #   with or without this rollback. The rollback
+                        #   discards nothing that had a future, and buys back
+                        #   a specific, user-visible terminal
+                        #   (`scope_not_found`, a clarification) in place of a
+                        #   generic `internal_error` from
+                        #   streaming.stream_orchestrator plus a
+                        #   force_terminal_fallback hop. Proven by
+                        #   test_chaos_3441_a_poisoned_session_has_already_lost_its_rows.
+                        # * Session HEALTHY -- only here does the rollback
+                        #   destroy rows that would otherwise have committed,
+                        #   and reaching it takes TWO independent failures:
+                        #   record_error_message failing inside its own
+                        #   savepoint AND record_frame failing inside its own.
+                        #
+                        # The incremental cost is the two-failure case; the
+                        # benefit covers the one-failure case. Telling them
+                        # apart in code would mean asking the session whether
+                        # it needs a rollback, and that cannot live inside
+                        # PersistenceRunRecorder.rollback(): the two preflight
+                        # call sites below re-persist rows immediately after
+                        # their own rollback, so a rollback that silently
+                        # became a no-op would double-write them.
                         await self._recorder.rollback()
                     # else: record_answer (answer is not None) or
                     # record_error_message (CHAOS-3423 Codex adversarial

@@ -49,7 +49,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from sqlalchemy import event, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, PendingRollbackError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.dev import terminal_frames as dev_terminal_frames
@@ -679,4 +679,89 @@ async def test_chaos_3441_transcript_writes_leave_no_unflushed_state(
                 question="And a fresh submission on the same conversation?",
                 scope_snapshot={},
             ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_chaos_3441_a_poisoned_session_has_already_lost_its_rows(
+    seeded,
+) -> None:
+    """Evidence for the one design decision this ticket declines to change:
+    ``orchestrator.finish()`` keeping its ``rollback()`` on the
+    no-transcript-row branch (Codex adversarial review rounds 1-3, MEDIUM).
+
+    The objection is that the rollback discards the run's already-flushed
+    forensic rows -- diagnostics, tool calls, the resolution ledger -- and
+    that one failure in a non-savepointed telemetry write is enough to reach
+    it, not two. The first half is true and is now stated in that handler.
+    The second half does not cost anything, and this is why: once a write
+    outside a savepoint fails mid-flush, the transaction cannot commit at
+    all, so every row already flushed on it is gone whether or not anyone
+    calls rollback. The rollback only destroys rows with a future in the
+    other case -- a HEALTHY session, which needs record_error_message and
+    record_frame to fail independently inside their own savepoints.
+
+    Asserted here on the real thing: a stage diagnostic flushed, then a
+    non-savepointed telemetry write failing mid-flush, then a commit that
+    cannot happen and a database with nothing in it.
+    """
+
+    _engine, maker, org_id, user_id = seeded
+    _conversation_id, run_id = await _seed_run(maker, org_id, user_id)
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        await service.append_stage_diagnostic(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            ordinal=1,
+            stage_id="resolving_subjects",
+            status="completed",
+            latency_ms=12,
+            counts={"candidates": 3},
+        )
+
+        # A second, later diagnostic fails at the database. append_stage_
+        # diagnostic is NOT savepoint-isolated, so this poisons the session.
+        await session.execute(
+            text(
+                """
+                CREATE TRIGGER chaos_3441_diagnostic_fault
+                BEFORE INSERT ON dev_run_stage_diagnostics
+                WHEN NEW.ordinal = 2
+                BEGIN
+                    SELECT RAISE(ABORT, 'simulated diagnostic storage failure');
+                END
+                """
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await service.append_stage_diagnostic(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                ordinal=2,
+                stage_id="planning",
+                status="completed",
+                latency_ms=8,
+                counts={},
+            )
+
+        # No rollback() called here, deliberately: the point is that the
+        # rows are already lost without one.
+        with pytest.raises(PendingRollbackError):
+            await session.commit()
+
+    async with maker() as reader:
+        diagnostics = (
+            await reader.scalars(
+                select(DevRunStageDiagnostic).where(
+                    DevRunStageDiagnostic.run_id == run_id
+                )
+            )
+        ).all()
+        assert diagnostics == [], (
+            "a poisoned transaction cannot commit, so the rows flushed on it "
+            "were already lost before anything called rollback()"
         )

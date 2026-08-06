@@ -3601,6 +3601,16 @@ class DevPersistenceService:
         )
         for conversation in stranded:
             conversation.expires_at = now
+        # CHAOS-3441 Codex adversarial review round 3 (MEDIUM, confirmed):
+        # flushed here rather than left dirty for whatever the caller does
+        # next. Every mutating method on this service returns with nothing
+        # pending, and that is load-bearing, not tidiness:
+        # SessionTransaction._take_snapshot() flushes pending state BEFORE
+        # emitting a SAVEPOINT, so a stamp left dirty here would be emitted
+        # by the next operation's savepoint entry -- outside that savepoint,
+        # where a failure poisons the whole transaction and takes the
+        # unrelated rows already flushed on it (see record_frame).
+        await self.session.flush()
         logger.info(
             "ask_dev_ephemeral_expiry_backfill_completed",
             extra={"stamped": len(stranded)},

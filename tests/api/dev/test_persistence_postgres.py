@@ -1482,3 +1482,127 @@ async def test_chaos_3441_savepoint_recovers_an_aborted_transaction(
                 select(DevAnswerFrame).where(DevAnswerFrame.run_id == run_id)
             )
         ) is None
+
+
+@pytest.mark.asyncio
+async def test_chaos_3441_narrative_savepoint_recovers_an_aborted_transaction(
+    postgres_persistence: tuple[
+        async_sessionmaker[AsyncSession], AsyncEngine, uuid.UUID, uuid.UUID
+    ],
+) -> None:
+    """The same proof for ``record_narrative`` (Codex adversarial review
+    round 3: the frame proof did not cover it).
+
+    A narrative failure is the worst place to lose the outer transaction --
+    by the time it runs, the transcript row AND the frame are already
+    flushed on it -- so its savepoint has to open before its own ownership
+    and frame-lookup SELECTs, and be able to recover a transaction the
+    server has aborted. Fault injected into the frame-lookup SELECT this
+    time, so the proof covers a different statement than the frame test.
+    """
+
+    maker, engine, org_id, user_id = postgres_persistence
+    fault_armed = {"value": False}
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute", retval=True)
+    def _abort_the_frame_lookup(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> tuple[str, Any]:
+        if (
+            fault_armed["value"]
+            and statement.lstrip().upper().startswith("SELECT")
+            and "FROM dev_answer_frames" in statement
+        ):
+            return statement + " AND 1 / 0 = 0", parameters
+        return statement, parameters
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="What is the status of this project?",
+            scope_snapshot={},
+        )
+        await session.commit()
+        run_id = accepted.run.id
+
+        frame_payload = _frame_payload(run_id=run_id, outcome="not_found")
+        frame = await service.record_frame(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            frame_id=uuid.UUID(frame_payload["frame_id"]),
+            public_outcome="not_found",
+            payload=frame_payload,
+        )
+
+        narrative_id = uuid.uuid4()
+        narrative_payload: dict[str, Any] = {
+            "schema_version": "dev_narrative.v1",
+            "narrative_id": str(narrative_id),
+            "run_id": str(run_id),
+            "frame_id": str(frame.frame_id),
+            "mode": "deterministic_fallback",
+            "referenced_fact_ids": [],
+            "referenced_section_ids": [],
+            "provider_metadata": None,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "validation_warnings": [],
+        }
+
+        fault_armed["value"] = True
+        try:
+            with pytest.raises(DBAPIError) as raised:
+                await service.record_narrative(
+                    org_id=org_id,
+                    user_id=user_id,
+                    run_id=run_id,
+                    narrative_id=narrative_id,
+                    frame_id=frame.frame_id,
+                    mode="deterministic_fallback",
+                    provider_fingerprint=None,
+                    narrative_text="A safe presentation summary.",
+                    payload=narrative_payload,
+                )
+        finally:
+            fault_armed["value"] = False
+        assert "division by zero" in str(raised.value.orig).lower()
+
+        run = await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="failed",
+            safe_error_code="scope_not_found",
+        )
+        assert run is not None
+        await session.commit()
+
+    async with maker() as reader:
+        # The frame flushed before the aborted narrative call survives, and
+        # its run reached a terminal state on the same session.
+        surviving = await reader.scalar(
+            select(DevAnswerFrame).where(DevAnswerFrame.run_id == run_id)
+        )
+        assert surviving is not None
+        assert surviving.frame_id == frame.frame_id
+        assert (
+            await reader.scalar(
+                select(DevRunNarrative).where(DevRunNarrative.run_id == run_id)
+            )
+        ) is None
+        run_row = await reader.get(DevRun, run_id)
+        assert run_row is not None
+        assert run_row.state == "failed"
+        assert run_row.contract_generation == "v2"
